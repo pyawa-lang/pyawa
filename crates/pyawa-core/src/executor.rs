@@ -612,7 +612,13 @@ pub(crate) fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Opti
 
 // ---- `BC-23` 的边界检查（`TS-10`…`TS-13`） ----
 
-/// 渲染一个标签给消息用：类型对象给名字、二元组给 `外[内]`、其余给 `Any`。
+/// 渲染一个标签给消息用：类型对象给名字、二元组给 `外[内]`、
+/// **union 标签**给 `Union[成员, 成员]`、其余给 `Any`。
+///
+/// union 标签形态（`TS-46`／`BC-24`）：元组首项是字符串 `"Union"`、其后是成员标签
+/// `("Union", 标签, 标签, …)`——成员递归渲染（类型对象／`"Any"`／嵌套 union／`(外, 内)`）；
+/// 首项是**类型对象**的二元素元组**不是** union，仍走 `外[内]`（区分逻辑在
+/// `protocol::boundary_accepts`）。
 pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> String {
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
@@ -626,6 +632,20 @@ pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> Strin
     if label_type == builtin_type(instance, "tuple") {
         // SAFETY: 类型身份刚确认。
         let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
+        // `TS-46`／`BC-24`：union 标签 ⇒ `Union[成员, 成员]`（成员用同一函数递归渲染）。
+        if let Some(head) = parts.item(0) {
+            // SAFETY: 元组元素存活。
+            let head_is_union_marker = unsafe { head.as_ref() }.ty() == builtin_type(instance, "str")
+                // SAFETY: 类型身份刚确认。
+                && unsafe { &*head.as_ptr().cast::<StrObject>() }.value() == "Union";
+            if head_is_union_marker {
+                let members = (1..parts.len())
+                    .filter_map(|index| parts.item(index))
+                    .map(|member| render_label(instance, member))
+                    .collect::<Vec<_>>();
+                return format!("Union[{}]", members.join(", "));
+            }
+        }
         if parts.len() == 2 {
             return format!(
                 "{}[{}]",

@@ -752,11 +752,16 @@ pub(super) fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<Str
             // `_pydecimal.py` 的 `self.traps = dict((s, int(s in traps)) for s in …)`
             // 正是 `AssignAttr` ⇒ 先前的 `_ => {}` 漏收 ⇒ `flags` 没变 cell ⇒ emitter 的
             // 生成器表达式自由变量断言在**合法程序**上 panic ✓）。
-            Statement::AssignAttr { value, .. }
-            | Statement::AssignSubscript { value, .. }
-            | Statement::Annotation {
-                annotation: value, ..
+            Statement::AssignAttr { value, .. } | Statement::AssignSubscript { value, .. } => {
+                walk(value, out)
+            }
+            // `TS-47`：`Type` 源是编译期类型标签（`Constant` 里没有表达式可走）；
+            // `Expression` 源（纯模式／回退）照旧走。
+            Statement::Annotation {
+                annotation: AnnotationSource::Expression(value),
+                ..
             } => walk(value, out),
+            Statement::Annotation { .. } => {}
             Statement::YieldFrom(value, _) => walk(value, out),
             Statement::AssignTuple { targets, value, .. } => {
                 walk(value, out);
@@ -952,10 +957,16 @@ fn collect_class_locals_statement(emitter: &mut Emitter, statement: &Statement) 
         Statement::Assign { value, .. }
         | Statement::AugAssign { value, .. }
         | Statement::AssignAttr { value, .. }
-        | Statement::AssignSubscript { value, .. }
-        | Statement::Annotation {
-            annotation: value, ..
+        | Statement::AssignSubscript { value, .. } => {
+            collect_class_locals_expression(emitter, value)
+        }
+        // `TS-47`：`Type` 源是编译期类型标签（`Constant` 里没有表达式可走）；
+        // `Expression` 源（纯模式／回退）照旧走。
+        Statement::Annotation {
+            annotation: AnnotationSource::Expression(value),
+            ..
         } => collect_class_locals_expression(emitter, value),
+        Statement::Annotation { .. } => {}
         Statement::AssignTuple { targets, value, .. } => {
             collect_class_locals_expression(emitter, value);
             for (target, _) in targets {

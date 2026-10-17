@@ -925,6 +925,7 @@ pub(crate) fn escape_non_ascii(text: &str) -> String {
 ///   `IN` 按顺序比对帧的局部槽 `0..`（形参），`OUT` 比对**栈顶**（**不**弹出——后面紧跟
 ///   `RETURN_VALUE`）
 /// * 标签形态：类型对象 ⇒ 子类型判定（`TS-29`）；字符串 `"Any"` ⇒ 双向相容（`TS-28`）；
+///   union 标签 `("Union", 成员…)` ⇒ **任一成员**相容即可（`TS-46`；形态定义见 `BC-24`）；
 ///   二元组 `(外类型, 内标签)` ⇒ 只看**外类型**（`TS-13` 默认浅层；`TS-31` 的深层档位随后补，
 ///   `TS-30` 的不变性因此只体现在外类型上）
 /// * 失败抛 `TypeBoundaryError`，消息含 `TS-11` 的四要素：方向、期望、实际、位置（文件名＋行号）
@@ -1002,7 +1003,7 @@ pub(crate) fn boundary_check(
 /// `TS-47` 的**运行期**赋值检查：`CHECK_ASSIGNMENT`（`BC-65`）。
 ///
 /// * oparg（`BC-65`）是**常量表下标**，常量**必须**是**单标签元组**——标签形态与
-///   `CHECK_BOUNDARY_*` 完全一致（类型对象／`"Any"`／`(外, 内)`），因此**复用**
+///   `CHECK_BOUNDARY_*` 完全一致（类型对象／`"Any"`／`(外, 内)`／union，`BC-24`），因此**复用**
 ///   [`boundary_accepts`] 的相容判定（`TS-28`…`TS-31`／`TS-13`）
 /// * 被检查的是**栈顶**（即将赋给已标注变量的值）：读而**不**弹出——后面那条
 ///   `STORE_FAST`／`STORE_NAME` 还要用它
@@ -1060,6 +1061,34 @@ pub(crate) fn assignment_check(
     Err(raise_builtin(instance, "TypeAssignmentError", &message))
 }
 
+/// **`TS-46`／union 标签**的形态判定：`("Union", 成员…)` —— 元组且**首项是字符串 `"Union"`**。
+///
+/// * 是 union ⇒ 返回那个元组（首项 `"Union"`、其后 ≥1 个成员标签）。
+/// * 不是 union ⇒ `None`。**两种元组形态靠首项的类型区分**：首项是**类型对象**的是既有复合标签
+///   `(外, 内)`（`TS-31` 深层档位），首项是**字符串** `"Union"` 的才是 union——所以既有复合标签
+///   的语义（含 `elements_accepted` 的内层递归）**不受影响**。
+///
+/// 首项判**字符串值**（不是"任意 str"）：别的字符串首项（如 `("Any", int)`）仍按原来的未知标签拒绝。
+fn union_members<'a>(instance: &Instance, label: NonNull<Header>) -> Option<&'a TupleObject> {
+    // SAFETY: label 由常量表／栈持有，存活；返回的引用只在本次判定内使用。
+    let label_type = unsafe { label.as_ref() }.ty();
+    if label_type != builtin_type(instance, "tuple") {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认。
+    let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
+    let head = parts.item(0)?;
+    // SAFETY: 元组元素存活。
+    if unsafe { head.as_ref() }.ty() != builtin_type(instance, "str") {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认。
+    if unsafe { &*head.as_ptr().cast::<StrObject>() }.value() != "Union" {
+        return None;
+    }
+    Some(parts)
+}
+
 /// 一条标签是否接受这个**实际值**（`TS-28`…`TS-30`／`TS-13` 的浅层口径）。
 pub(crate) fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, label: NonNull<Header>) -> bool {
     // SAFETY: actual 由调用方保证存活。
@@ -1069,6 +1098,14 @@ pub(crate) fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, lab
     if label_type == builtin_type(instance, "str") {
         // SAFETY: 类型身份刚确认。
         return unsafe { &*label.as_ptr().cast::<StrObject>() }.value() == "Any";
+    }
+    // **`TS-46`**：union 标签（`T?` ＝ `T | None` 的运行期形态）——**任一成员**接受即接受。
+    // 成员可递归：类型对象／`"Any"`／嵌套 union／既有 `(外, 内)` 复合标签（成员级语义照旧）。
+    if let Some(members) = union_members(instance, label) {
+        // 首项之后必须**至少一个**成员（接口契约）；只有首项的畸形标签不放行。
+        return (1..members.len())
+            .filter_map(|index| members.item(index))
+            .any(|member| boundary_accepts(instance, actual, member));
     }
     if is_type_object(instance, label_type) {
         // SAFETY: label 是类型对象。

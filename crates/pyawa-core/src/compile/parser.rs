@@ -1661,17 +1661,20 @@ pub(super) fn parse_statements(
                 // 根子 ✓，另有一大片模块里零散带注解 ✓）。
                 if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                     *cursor += 1;
-                    // 解析注解 ✓（task-21：**留进 AST** ✓ —— 类体里会收集成 `__annotate__` ✓）
-                    // `TS-46`：扩展模式下变量／类属性标注位置的 `T?` 也在这一条通道上收。
-                    let (annotation, after_annotation) = parse_annotation_expression(lexed, *cursor)?;
+                    // `TS-47`：扩展模式下先把标注按**编译期类型标签**收（`T?` 以及嵌套在
+                    // 变量／类属性标注里的 `?`，如 `x: list[int?]`，在这一次收口）；判不出类型
+                    // 表达式时回退到表达式通道（`.pyawa` 仍接受 `.py` 能接受的任意注解表达式）。
+                    // 纯 Python 模式永远走表达式通道（`TS-5`：`.py` 产物逐字节不变）。
+                    let (annotation, after_annotation, annotation_span) =
+                        parse_annotation_source(lexed, *cursor)?;
                     *cursor = after_annotation;
                     // **注解声明**：名字目标才收 ✓（`x: int`／`x: int = 1` ✓）。
                     if let Expression::Name(name, name_span) = &chain {
                         statements.push(Statement::Annotation {
                             name: name.clone(),
                             name_span: *name_span,
-                            annotation: annotation.clone(),
-                            span: name_span.to(annotation.span()),
+                            annotation,
+                            span: name_span.to(annotation_span),
                         });
                     }
                     if tokens.get(*cursor) == Some(&Lexeme::Assign) {
@@ -2220,14 +2223,48 @@ pub(super) fn parse_else_block(
     Ok((body, cursor + 1))
 }
 
-/// 解析**变量／类属性标注位置**的注解表达式（`x: T = …`、类体里的 `next: T`）。
+/// 解析**变量／类属性标注位置**的注解，返回「来源 ＋ 游标 ＋ 注解跨度」（`TS-47`／`TS-46`）。
+///
+/// 扩展模式下**先试**类型语法 [`parse_type_at`]：解析成功、且紧跟一个合法的"注解结束"词素
+/// （`=`／语句结尾）⇒ [`AnnotationSource::Type`] —— 这份**编译期类型标签**既用于类体
+/// `__annotate__` 的发射，也是 `TS-47` 运行期赋值检查（`CHECK_ASSIGNMENT`）的标签来源。
+/// 这一条同时**收口** `TS-46` round 4 的留缺：嵌套在变量／类属性标注里的 `?`
+/// （`x: list[int?]`）现在由 [`parse_type_at`] 自己吃掉。
+///
+/// 判不出类型（例如 `x: 1 + 2`／`x: (int)`）⇒ **回退**表达式通道 ⇒ `.pyawa` 仍接受 `.py`
+/// 能接受的任意注解表达式（纯增量）。纯 Python 模式**永远**走表达式通道（`TS-5`）。
+fn parse_annotation_source(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(AnnotationSource, usize, Span), CompileError> {
+    if lexed.mode == Mode::Extension {
+        if let Ok((label, after)) = parse_type_at(lexed, cursor) {
+            // "注解结束"：`=`（带值形式）或语句结尾。别的词素 ⇒ 这段类型语法只是**前缀**，
+            // 整条注解其实是更大的表达式 ⇒ 回退（不静默截断）。
+            let terminated = matches!(
+                lexed.lexemes.get(after),
+                Some(Lexeme::Assign)
+                    | Some(Lexeme::Newline)
+                    | Some(Lexeme::Semicolon)
+                    | Some(Lexeme::Dedent)
+                    | Some(Lexeme::End)
+            );
+            if terminated && after > cursor {
+                let span = lexed.spans[cursor].to(lexed.spans[after - 1]);
+                return Ok((AnnotationSource::Type(label), after, span));
+            }
+        }
+    }
+    let (expression, after) = parse_annotation_expression(lexed, cursor)?;
+    let span = expression.span();
+    Ok((AnnotationSource::Expression(expression), after, span))
+}
+
+/// 解析**表达式形态**的注解（变量／类属性标注位置的兼容通道）。
 ///
 /// `TS-46`：扩展模式下，表达式解析完**紧跟** `?` 时把整段包成 `T | None` —— **复用 `|` 表达式
-/// 节点** ⇒ 与手写 `T | None` 同码（`__annotate__` 单元的产物逐项一致 ✓）。纯 Python 模式
-/// 走不到这一支（`?` 在词法期就报 `Syntax`，`BC-15` ✓），既有源码**逐字节不变** ✓。
-///
-/// **如实留缺**：**嵌套**在变量／类属性标注里的 `?`（如 `x: list[int?]`）本轮不接 ——
-/// 那里由表达式语法自己报错，**不**静默解释成别的意思；等 `TS-47` 统一标注表示时收口。
+/// 节点** ⇒ 与手写 `T | None` 同码。纯 Python 模式走不到这一支
+/// （`?` 在词法期就报 `Syntax`，`BC-15` ✓），既有源码**逐字节不变** ✓。
 fn parse_annotation_expression(
     lexed: &Lexed,
     cursor: usize,

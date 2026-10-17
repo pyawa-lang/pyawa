@@ -59,9 +59,15 @@ pub(super) struct Emitter {
     /// 模块收尾还需不需要补 `LOAD_CONST None; RETURN_VALUE`。
     /// 实测：末尾的 `if/else` 两个分支都 `return` ⇒ **没有**可落到末尾的路径 ⇒ 参照不再补。
     pub(super) epilogue_needed: bool,
-    /// **类体里收集到的注解声明** ✓（task-21 ✓，PEP 649）：`(名字, 注解表达式, 跨度)` ✓ ——
+    /// **类体里收集到的注解声明** ✓（task-21 ✓，PEP 649）：`(名字, 注解来源, 跨度)` ✓ ——
     /// 类体收尾时统一发 `__annotate_func__` ✓（`annotate_unit` 那一族的类体版 ✓）。
-    pub(super) class_annotations: Vec<(String, Expression, Span)>,
+    /// `TS-47`：来源是二选一（`Expression` ＝ 纯模式／回退；`Type` ＝ 扩展模式的编译期标签 ✓）。
+    pub(super) class_annotations: Vec<(String, AnnotationSource, Span)>,
+    /// **`TS-47` 的已标注变量表**（本作用域）：名字 ⇒ 编译期类型标签（`BC-24` 的形态）。
+    /// 按**发射顺序**登记（`Statement::Annotation` 的 `Type` 源登记）；赋值时据此发
+    /// `CHECK_ASSIGNMENT`（`BC-65`）。**纯模式永远为空**（`TS-5`：不产生任何检查）；
+    /// 未标注的名字**不**登记（`TS-2`：不推断）。`Vec` 保序（重复标注按后者覆盖）。
+    pub(super) assignment_labels: Vec<(String, Constant)>,
     /// **类体 `__annotate__` 单元的自由变量** ✓（task-24 泛型外壳 ✓）：注解里引用的类型参数名 ✓
     /// （声明序 ✓）⇒ 收尾造 `__annotate_func__` 时要压闭包元组 ＋ `SET_FUNCTION_ATTRIBUTE 8` ✓。
     /// 普通类是空表 ✓（行为不变 ✓）。
@@ -1247,6 +1253,49 @@ impl Emitter {
         self.unit.varnames.len() - 1
     }
 
+    /// **`TS-47`／`BC-65`**：登记本作用域的一个**已标注变量**（名字 ⇒ 编译期类型标签）。
+    ///
+    /// 只在**扩展模式**生效（`TS-5`：纯 Python 模式不产生任何检查 ⇒ 表永远为空）。
+    /// 重复标注按**后者**覆盖（Python 允许对同一名字重写标注；此后赋值按新标签查）。
+    pub(super) fn register_assignment_label(&mut self, name: &str, label: Constant) {
+        if self.mode != Mode::Extension {
+            return;
+        }
+        if let Some(entry) = self
+            .assignment_labels
+            .iter_mut()
+            .find(|(candidate, _)| candidate == name)
+        {
+            entry.1 = label;
+        } else {
+            self.assignment_labels.push((name.to_owned(), label));
+        }
+    }
+
+    /// **`TS-47` 的运行期一半**（`BC-65`）：对**名字目标**的赋值，在 `STORE_*` **之前**发一条
+    /// `CHECK_ASSIGNMENT <常量下标>`。
+    ///
+    /// - oparg 是常量表下标，常量是**单标签元组**（标签形态同 `BC-24`：类型对象／`"Any"`／
+    ///   `(外, 内)`／union 元组）——执行器读栈顶**不弹**（紧随的存储还要用这个值）；
+    /// - 只在扩展模式、且名字在本作用域**已标注**时发：**未标注的名字不推断**（`TS-2`）；
+    /// - 常量下标走 [`Self::intern_constant`] ＋ [`Self::emit_indexed`]（`> 255` 自动 `EXTENDED_ARG`，
+    ///   与 `CHECK_BOUNDARY_*` 的进池口径一致，不做 `as u8` 截断）。
+    pub(super) fn emit_assignment_check(&mut self, span: Span, name: &str) {
+        if self.mode != Mode::Extension {
+            return;
+        }
+        let Some((_, label)) = self
+            .assignment_labels
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+        else {
+            return;
+        };
+        let label = label.clone();
+        let index = self.intern_constant(Constant::Tuple(vec![label]));
+        self.emit_indexed(span, "CHECK_ASSIGNMENT", index);
+    }
+
     pub(super) fn emit_statement(
         &mut self,
         statement: &Statement,
@@ -1262,17 +1311,36 @@ impl Emitter {
             self.epilogue_needed = true;
         }
         match statement {
-            // **注解声明** ✓（task-21）：类体里**收集**（收尾统一发 `__annotate_func__` ✓），
-            // 运行期**不发指令** ✓（参照同：类体里只有赋值那半边发 ✓）。
+            // **注解声明** ✓（task-21）：类体里**收集**（收尾统一发 `__annotate_func__` ✓）；
+            // **`TS-47`**：`Type` 源同时登记进本作用域的"已标注变量表"⇒ 之后的赋值要发
+            // `CHECK_ASSIGNMENT`（`BC-65`）。运行期本身**不发指令** ✓（参照同：类体里只有
+            // 赋值那半边发 ✓）。
             Statement::Annotation {
                 name,
                 annotation,
                 span,
                 ..
             } => {
-                if self.kind == ScopeKind::Class {
-                    self.class_annotations
-                        .push((name.clone(), annotation.clone(), *span));
+                match annotation {
+                    AnnotationSource::Expression(expression) => {
+                        if self.kind == ScopeKind::Class {
+                            self.class_annotations.push((
+                                name.clone(),
+                                AnnotationSource::Expression(expression.clone()),
+                                *span,
+                            ));
+                        }
+                    }
+                    AnnotationSource::Type(label) => {
+                        self.register_assignment_label(name, label.clone());
+                        if self.kind == ScopeKind::Class {
+                            self.class_annotations.push((
+                                name.clone(),
+                                AnnotationSource::Type(label.clone()),
+                                *span,
+                            ));
+                        }
+                    }
                 }
                 self.epilogue_span = *span;
                 return Ok(());
@@ -2411,6 +2479,9 @@ impl Emitter {
                             opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
                             oparg,
                         );
+                        // **`TS-47`／`BC-65`**：`x += v` 的结果同样要过已标注变量的赋值检查
+                        // （检查读栈顶不弹 ⇒ 下面的 `STORE_*` 照旧拿得到结果）。
+                        self.emit_assignment_check(*name_span, name);
                         if let Some(slot) = deref {
                             self.emit_indexed(*name_span, "STORE_DEREF", slot);
                         } else if self.kind == ScopeKind::Function
@@ -2559,6 +2630,10 @@ impl Emitter {
                         // 收尾两条也**一律取目标**（同上，实测 `x = a + 1` 的收尾是 `(0,1)`）
                 self.epilogue_span = *target_span;
                 let _ = span;
+                // **`TS-47`／`BC-65`**：已标注变量的赋值 ⇒ 在 `STORE_*` **之前**检查栈顶
+                // （读而不弹）。名字目标在模块／类体／函数三档都走这里；属性／下标目标
+                // 本轮**不发**（如实留缺：那些不是名字目标的赋值检查随后补）。
+                self.emit_assignment_check(*target_span, target);
                 match self.kind {
                     ScopeKind::Module | ScopeKind::Class => {
                         // **走统一入口**（第 117 轮）：`global` 声明的名字发 `STORE_GLOBAL` ✓
@@ -4019,6 +4094,7 @@ impl Emitter {
             label_origins: Vec::new(),
             epilogue_needed: false,
             class_annotations: Vec::new(),
+            assignment_labels: Vec::new(),
             annotate_freevars: Vec::new(),
             in_condition: false,
             suppress_chain_tail: false,
@@ -4891,6 +4967,7 @@ impl Emitter {
             in_condition: false,
             epilogue_needed: false,
             class_annotations: Vec::new(),
+            assignment_labels: Vec::new(),
         annotate_freevars: Vec::new(),
             epilogue_span: span,
             last_span: span,
@@ -4989,7 +5066,7 @@ impl Emitter {
     pub(super) fn class_annotate_unit(
         &self,
         qualname: &str,
-        annotations: &[(String, Expression, Span)],
+        annotations: &[(String, AnnotationSource, Span)],
         // **自由变量**（task-24 泛型类 ✓）：注解里引用的类型参数名 ✓（声明序 ✓）。普通类空表 ✓。
         freevars: &[String],
         span: Span,
@@ -5042,6 +5119,7 @@ impl Emitter {
             in_condition: false,
             epilogue_needed: false,
             class_annotations: Vec::new(),
+            assignment_labels: Vec::new(),
         annotate_freevars: Vec::new(),
             epilogue_span: span,
             last_span: span,
@@ -5095,7 +5173,14 @@ impl Emitter {
         emitter.emit_named(span, "BUILD_MAP", 0);
         for (name, annotation, annotation_span) in annotations {
             // 值先压 ✓；键取**注解声明**那一段的位点 ✓。
-            emitter.emit_expression(annotation)?;
+            // `TS-47`：两种来源各自一条发射通道（`Type` 源是编译期标签 ⇒ `emit_annotation_expression`；
+            // `Expression` 源是普通表达式 ⇒ `emit_expression`）——不合并、不错位。
+            match annotation {
+                AnnotationSource::Expression(expression) => emitter.emit_expression(expression)?,
+                AnnotationSource::Type(label) => {
+                    emitter.emit_annotation_expression(label, *annotation_span, None)
+                }
+            }
             emitter.emit_named(*annotation_span, "COPY", 2);
             let key = emitter.intern_constant(Constant::Str(name.clone()));
             emitter.emit_indexed(*annotation_span, "LOAD_CONST", key);
@@ -8030,9 +8115,13 @@ fn collect_constant_names(annotation: &Constant, out: &mut Vec<String>) {
 fn collect_class_annotation_names(body: &[Statement], out: &mut Vec<String>) {
     for statement in body {
         match statement {
-            Statement::Annotation { annotation, .. } => {
-                super::symbols::collect_names_in_expression(annotation, out)
-            }
+            Statement::Annotation { annotation, .. } => match annotation {
+                AnnotationSource::Expression(expression) => {
+                    super::symbols::collect_names_in_expression(expression, out)
+                }
+                // `TS-47`：`Type` 源是编译期标签 —— 名字在 `Constant` 里（没有表达式可走）。
+                AnnotationSource::Type(label) => collect_constant_names(label, out),
+            },
             Statement::If {
                 then_body,
                 else_body,

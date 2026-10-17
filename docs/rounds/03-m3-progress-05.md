@@ -854,3 +854,44 @@
 1. `compile/` 写手：变量／类属性标注的**编译期类型标签**（扩展模式 `?` 与手写联合统一成同一份标签；`T?` 的"None 通过、否则按 T 检查"）；emitter 对扩展模式下已标注变量的赋值发 `CHECK_ASSIGNMENT`（初始标注赋值＋后续赋值；浅层裸标签／深层带内层，`TS-31`）。
 2. `executor/` 写手：union 标签形态（`("Union", …)` 之类，实现 `TS-46` 的运行期检查语义）＋回归测试；顺带挑一条挂账 bug（executor/ 子目录内）。
 3. 并行线：socket 等用户拍板；未拍板则先取挂账 bug／`sys.audit` no-op 侦察结论复用。
+
+---
+
+## round 5（会话 06 · M4-A 批第 2 轮）落地 ✓ —— TS-47 运行期发射 ＋ union 标签
+
+- **HEAD**：`e542d35`（`dev`，已推送 origin ✓）—— 本笔＝round 5；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮不涉及 import 面 ⇒ 与 round 4 持平）
+- **M4 判据进展**：TS-47 的**运行期半边已生效**（扩展模式下已标注变量的赋值会发 `CHECK_ASSIGNMENT`；`T?` 的 "None 或成员" 语义在**边界**与**赋值**两条路同时生效）。**编译期静态检查器／`TS-48`／`TS-50` 未开始**（下一轮）；**`T-BC-8`／`T-BC-9` 的显式验收归档与渐进保证验收（`T-TS-1`）未开始**（下一轮起）。
+
+### task-A3（TS-47 运行期发射）✓
+
+- `Statement::Annotation` 改为 `AnnotationSource::{Expression, Type}`：纯模式（及扩展模式判不出类型时的回退）走 `Expression`（`.py` 产物**逐字节不变**，`TS-5`）；扩展模式下判定为类型语法时走 `Type(Constant)`——它同时是类体 `__annotate__` 的发射来源与 `BC-24` 标签来源（一处真相）。
+- 变量／类属性标注位（扩展模式）：先试 `parse_type_at`，**结束符**是 `=`／`Newline`／`Semicolon`／`Dedent`／`End` 才采用，否则回退表达式通道 ⇒ **收口 round 4 的留缺**：`x: list[int?]` 这类嵌套 `?` 现在可解析，且 `T?` 与手写 `T | None` 是**同一份**标签。
+- emitter：每作用域 `assignment_labels`（按发射顺序登记、重复标注后者覆盖）；`Assign`／`AugAssign` 的**名字目标**在 `STORE_*` **之前**发 `CHECK_ASSIGNMENT`（标签打包成单标签元组进常量池、走 `emit_indexed` 无 `as u8` 截断）；纯模式表恒空（`TS-5`）；未标注名字不登记（`TS-2`）。
+- `instantiate_constant`：`AnnUnion` 从 `"Any"` 改为 **union 标签元组** `("Union", 左, 右)`（左右递归；其它不可静态判定的注解形状仍 `"Any"` ⇒ 平台类型 `TS-48`）。
+- 验收：新建 `crates/pyawa-core/tests/assignment_emission.rs` **7 用例**（后续赋值抛 `TypeAssignmentError`／初始标注赋值／纯模式不检查／检查只发给已标注名字且只在扩展模式／嵌套 `?` 编得过／模块级变量／`T?` 端到端）；`type_nullable` 9／`compile` 4／`lib_compile` 1／`boundary` 8 全绿；`tools/quickcheck.sh` 绿；`cargo test -p pyawa-core` 全量 61 组全绿；`cargo check -p pyawa-core --lib --tests` 0 警告。
+- **如实边界** ✗：① 属性／下标目标、链式／解包／`for` 目标本轮**不发**检查；② **函数形参的注解不登记**（只收 `Statement::Annotation`）⇒ 形参在函数体内被重新赋错类型时不报；③ **模块级标注＋函数内 `global x` 赋值不检查**（`assignment_labels` 每作用域一份，函数作用域没有模块级表）；④ 类体里的标注也会登记（略宽于 `TS-47` 的"模块级／函数局部"；扩展模式特有、无参照）。
+
+### task-A4（union 标签执行器语义）✓
+
+- `crates/pyawa-core/src/executor/protocol.rs`：新增 `union_members` 形态判定（**元组 ＋ 首项是字符串 `"Union"` ＋ ≥1 成员**）与 `boundary_accepts` 的 union 分支（**任一成员相容即接受**；成员递归：类型对象／`"Any"`／嵌套 union／既有 `(外, 内)`）；既有非 union 分支**零变化**（首项是类型对象的元组仍是 `TS-31` 的复合标签）。
+- `crates/pyawa-core/src/executor.rs` 的 `render_label`：union 渲染成 `Union[成员, 成员]`，失败消息的 expected 不再退化成 `Any`（`TS-11` 的期望元素保真）。
+- 规格：`docs/SPEC-bytecode.md` 的 **`BC-24`** 补 union 标签形态定义（一处真相；`BC-65` 改为指向 `BC-24`，去掉重复枚举）。
+- 验收：新建 `crates/pyawa-core/tests/union_labels.rs` **6 用例**（`Union[int,NoneType]` 收 `None`／`int`／`bool`、拒 `str`；嵌套 union；`"Any"` 成员；非 union 形态零回归；`CHECK_ASSIGNMENT` 与 `CHECK_BOUNDARY_IN` 两路同语义；`(list,int)` 不被误判成 union）；`boundary` 8 全绿。
+
+### 集成验收（Lead）
+
+- 聚焦测试由 Lead 独立复跑全绿（7／8／4／1／9／6）；`T?` 端到端（`x: int? = None` 过、`= "s"` 抛 `TypeAssignmentError`）由扩展模式真实执行验证 ✓。
+- 十项闸门：`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4482s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（17s）／`cargo test --workspace`（454s）／`tests/ci/check.py` 14/14／stability **146 个二进制 × 679 项 × 3 次计数完全一致**（`MS-25`，1349s）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1914s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 并行线：socket（仍待用户拍板）＋挂账 bug（本轮只定位，下一轮落地）
+
+- **socket 并行线（`P3-29`）**：上一轮侦察已报；**A1–A4 四个拍板点仍等用户口径**，未开工（不替未写规格做决定）。
+- **挂账 bug `warnings.catch_warnings(record=True)` ⇒ StackUnderflow**：本轮只做**定位**（未改 src；工作区冻结跑闸门）——根因**在 `compile/`**：`with` 体在值栈上留 2 格／项（上下文＋`__exit__`），但发 body 时**没有计入 `handler_depth`** ⇒ body 内嵌套 `try` 的异常表 `depth` 少 2，`dispatch_raise` 误弹 with 的两格 ⇒ 退出 `CALL 3` 时栈空。最小复现已**脱离 `warnings`**（纯 `.py` 的 `with C(): try: raise … except …`），建议修法＝`Statement::With` 发 body 前后 `handler_depth += 2*items.len()` 并 save/restore（`crates/pyawa-core/src/compile/emitter.rs` 一带）。定位材料在 `target/recon/warnings_recon.md`（**不进 git**）。**下一轮由 `compile/` 写手落地**（含 with＋return／break／for 组合回归）。
+
+### 下一轮（round 6）计划＝M4-A 批第 3 轮
+
+1. `compile/` 写手：先落挂账 bug 的 3~5 行修法＋回归；再做 **TS-47 编译期静态检查器**（新 `compile/typecheck.rs`）＋**`TS-48`**（平台类型＝未标注／相容一切／禁止推断）＋**`TS-50`** 收束；`CompileError` 新变体与 `pyawa-abi`／`executor/import.rs` 的映射。
+2. 验收测试写手（只写新测试文件）：**`T-TS-1` 渐进保证**（`TS-9` 要求的可执行验收）＋`T-TS-3`／`T-TS-7` —— M4 判据② 的直接证据。
+3. 并行线：socket 等用户拍板；未拍板不启。

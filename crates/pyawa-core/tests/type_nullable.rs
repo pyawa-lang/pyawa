@@ -122,19 +122,33 @@ fn adjacent_rule_binds_the_suffix_to_the_nearest_type_expression() {    // `list
     );
 }
 
-/// ② 的补充：`|` 的**右操作数**也吃后缀（`A | B?`）。两条通道的结合方向**不同**，分开钉：
-/// - **类型位置**（形参／返回值）：后缀作用于紧邻的 `B` ⇒ `A | (B | None)`（规格口径）；
-/// - **表达式通道**（变量／类属性标注）：本轮实现是"整段表达式解析完再包" ⇒ `(A | B) | None`
-///   —— 联合运算可结合、运行期结果相同；`TS-47` 统一标注表示时收口。
+/// ② 的补充：`|` 的**右操作数**也吃后缀（`A | B?`）。
+///
+/// **`TS-47` 起**变量／类属性标注也统一成**编译期类型标签** ⇒ `A | B?` 的 `?` 落在**紧邻的
+/// `B`** 上，联合成员与手写 `A | B | None` **相同**（`|` 的结合方向只改变 `BINARY_OP` 的先后，
+/// 运行期结果是同一个 `types.UnionType`；本测试按"成员相同 ＋ 指令数相同"验，不按逐字节同码）。
 #[test]
 fn union_right_operand_takes_the_nullable_suffix() {
-    // 表达式通道：与手写左结合 `A | B | None` 逐项等价。
-    assert_eq!(
-        project(&extension("class C:\n    x: int | list[str]?\n")),
-        project(&extension("class C:\n    x: int | list[str] | None\n")),
-        "表达式通道的 `A | B?` 应当等于手写 `A | B | None`"
+    let sugar = extension("class C:\n    x: int | list[str]?\n");
+    let written = extension("class C:\n    x: int | list[str] | None\n");
+    let sugar_annotate = find_annotate(&sugar).expect("类体里应当有 `__annotate__` 单元");
+    let written_annotate = find_annotate(&written).expect("类体里应当有 `__annotate__` 单元");
+    // `?` 真的落到了 `B` 上（否则成员里会少一个 `None` ⇒ 指令数不同）。
+    assert_ne!(
+        project(&sugar),
+        project(&extension("class C:\n    x: int | list[str]\n")),
+        "`A | B?` 必须比 `A | B` 多一个联合成员"
     );
-    // 类型位置：能解析，且后缀确实落在 `B` 上（比 `A | B` 多一次 `BINARY_OP 7`）。
+    assert_eq!(
+        sugar_annotate.code.len(),
+        written_annotate.code.len(),
+        "`A | B?` 与 `A | B | None` 是同一个三成员联合（指令数相同）"
+    );
+    assert_eq!(
+        sugar_annotate.names, written_annotate.names,
+        "`A | B?` 与手写联合的成员名字必须相同"
+    );
+    // 类型位置（形参／返回值）：后缀确实落在 `B` 上（比 `A | B` 多一次 `BINARY_OP 7`）。
     let with_suffix = extension("def f(x: int | list[str]?) -> None: return x\n");
     let without = extension("def f(x: int | list[str]) -> None: return x\n");
     let with_annotate = find_annotate(&with_suffix).expect("应当有 `__annotate__` 单元");
@@ -146,7 +160,7 @@ fn union_right_operand_takes_the_nullable_suffix() {
     );
 }
 
-/// 变量／类属性**赋值**形式的标注（`x: T? = …`）：走表达式通道，同样等价。
+/// 变量／类属性**赋值**形式的标注（`x: T? = …`）：同样按编译期类型标签收，等价。
 #[test]
 fn nullable_suffix_on_annotated_assignment() {
     let sugar = extension("class C:\n    xs: list[int]? = None\n");
@@ -156,28 +170,29 @@ fn nullable_suffix_on_annotated_assignment() {
         project(&written),
         "`xs: list[int]? = None` 必须与手写联合一致"
     );
-    // 模块级与函数局部的标注位置同样能收（注解本层不发射 ⇒ 语法面成立即可）。
+    // 模块级与函数局部的标注位置同样能收（`TS-47` 起它们还登记进赋值检查表）。
     extension("x: int? = 1\n");
     extension("def g():\n    y: int? = 1\n    return y\n");
 }
 
-/// **如实留缺**（本轮范围）：**嵌套**在变量／类属性标注里的 `?`（`x: list[int?]`）还没接 ——
-/// 解析期按语法错报出（不静默解释成别的意思）；轮到 `TS-47` 统一标注表示时收口。
+/// **`TS-47` 收口**：**嵌套**在变量／类属性标注里的 `?`（`x: list[int?]`）现在按类型标签解析
+/// ⇒ 扩展模式编得过、且与手写 `list[int | None]` 等价；纯 Python 模式仍报 `Syntax`（`BC-15`）。
 #[test]
-fn nested_suffix_inside_variable_annotation_is_reported_not_guessed() {
-    let result = compile(
-        "x: list[int?] = None\n",
-        "<t>",
-        Mode::Extension,
-        CheckTier::Shallow,
-        0,
+fn nested_suffix_inside_variable_annotation_is_supported() {
+    let sugar = extension("x: list[int?] = None\n");
+    let written = extension("x: list[int | None] = None\n");
+    assert_eq!(
+        project(&sugar),
+        project(&written),
+        "`x: list[int?]` 必须与手写 `x: list[int | None]` 同码"
     );
+    // 纯 Python 模式：`?` 根本不是合法词素（`BC-15`）——嵌套位置也一样。
     assert!(
         matches!(
-            result,
-            Err(CompileError::Syntax(_)) | Err(CompileError::Unsupported(_))
+            pure_python("x: list[int?] = None\n"),
+            Err(CompileError::Syntax(_))
         ),
-        "嵌套在变量标注里的 `?` 本轮应如实报错（不猜语义），实际 {result:?}"
+        "纯 Python 模式下嵌套位置同样必须报 `Syntax`"
     );
 }
 
@@ -270,12 +285,13 @@ fn sources_without_the_suffix_are_unchanged_in_both_modes() {
     );
     assert_eq!(project(&pure_unit), project(&extension_unit));
 
-    // 模式只影响 `?` 的词素识别 ⇒ 不带 `?` 的源码两模式必须同产物。
+    // 模式只影响 `?` 的词素识别 ＋ `TS-47` 的赋值检查发射 ⇒ **没有变量标注赋值**的源码
+    // 两模式必须同产物。`x: int = 1` 不在此列：`TS-47` 起扩展模式会多一条 `CHECK_ASSIGNMENT`
+    // （那是**有意的**代码生成差异，`BC-65`；发射面的验收在 `tests/assignment_emission.rs`）。
     let sources = [
         "x = 1\n",
         "def f(x: int | None) -> int: return x\n",
         "class C:\n    x: int | None\n",
-        "x: int = 1\n",
     ];
     for source in sources {
         let pure = pure_python(source)
