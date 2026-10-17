@@ -6,7 +6,8 @@
 
 ## 现在
 
-- **HEAD**：`2caed5d`（`dev`，**已推送** origin ✓）—— 判据② 冲刺：语料 235→407 ＋ 覆盖率仪器接闸门 ⇒ **判据② 裁定达成**
+- **HEAD**：`3e4e7a4`（`dev`）—— M3 收尾：CM-4 合约 23 节补齐（`SPEC-c-modules.md` §5.2.10–§5.2.32）＋ 判据② 裁定达成（语料 407／M3-COVERAGE 硬门）
+  - **M3 阶段边界**：本笔之后 `dev` 以 `--no-ff` 收录进 `main` ＋ **tag `m3`**（按 `branch-rule.md`，合并提交＝阶段边界）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
