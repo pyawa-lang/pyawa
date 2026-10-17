@@ -284,3 +284,41 @@
   difflib 后要 `_signal`＋enum；subprocess→`_posixsubprocess`；multiprocessing/test.support→
   `os.getcwd`；pickle→内建 `dir`；urllib.request→`sys._getframe`。
 - overlay 上限复测脚本已备好（`target/recon/ceiling_rerun.sh`，未跑——等树稳定 ✓）。
+
+## Round 4（posix C 模块面第一格）落地 ✓
+
+- **HEAD**：`f838bb3`（`dev`，**已推送** origin ✓）—— task-10（getcwd/getcwdb/readlink）＋ docs 收口
+- **判据①**（重建 conformance 后实测 ✓）：**通过 344 ＋ 参照口径 17 ＝ 361 ÷ 628 ⇒ 57.5%**
+  （区间 360–362；round 3 末 358 ⇒ **+3**＝`sysconfig`＋`sysconfig.__main__`＋`_aix_support` ✓）
+  - 战役累计：208 → 296 → 306 → 341 → 358 → **361**
+- **round 3 后的 overlay 上限复测**（`target/recon/ceiling_overlay2.txt` ✓）：**341/628**——前三大族
+  ＝`_signal`（52）／`os.getcwd`（49 ⇒ 本轮已收首格）／`_socket`（42）；其余：`sys._getframe` depth（9）／
+  CJK（22）／genexp 自由变量 panic（6，**decimal 一族**）／`unicodedata`（6）／内建 `dir`（6）／
+  `_operator`（2）／`__classdict__` cellvars（2，calendar/mailbox）。
+
+## task-10 落地 ✓（posix.getcwd／getcwdb／readlink ⇒ sysconfig 族直通）
+
+- **修法** ✓：`readlink` 走能力域槽（`fs.rs:117` 的槽此前填 `None`）：`instance/fs.rs` 两段式出参
+  `fs_readlink` ＋ `runtime/fs_posix.rs` provider（照 `fs_stat` 范本）＋ `posix_module.rs`
+  `readlink_native`（参照签名 `(path, *, dir_fd=None)`；errno 口径照参照：ENOENT/EINVAL/ELOOP）。
+  `getcwd`／`getcwdb` 走 `std::env::current_dir()` **最小路径**（不在 T-CX-4 禁止面 ✓；原则路线
+  `CpFsVtable` 槽留后续轮 ✗ 如实记）。
+- **顺带修** ✓：①`posix.__all__` 的**陈旧空覆盖**（末尾一段把整张表冲掉 ⇒ 实测恒 `[]`——本层
+  `import *` 不看 `__all__` 所以没露出来）；②`io_module.rs` 的 `strerror` 补
+  EINVAL/ELOOP/ENAMETOOLONG，`fs_error` 拆 `fs_error_with_display`（bytes 路径文案；errno⇒类名/文案
+  映射仍一处真相 ✓）。
+- **语料陷阱照办** ✓：conformance harness 的 fs provider 补 `harness_readlink`（否则被测侧恒
+  「槽未实现」＝假阳性）＋ 一条语料 `posix_cwd_readlink.py`。
+- **验收** ✓：17 行探针两侧逐行一致（含 str/bytes 路径、`/proc/self/exe`、错误形态）＋
+  `posix_fs_shapes.rs` 1 例 ✓；收账 3 文件（`sysconfig/__init__.py`／`__main__.py`／`_aix_support.py`）
+  逐字节与上游一致 ✓，两道必检 3/3 ✓。
+- **如实记** ✗：①`sysconfig.get_paths()` 运行期仍撞 `sys.abiflags`（`sys` 面缺名——不影响 import
+  判据口径，但运行期调 `get_paths` 的模块还会红）；②`readlink(dir_fd≠None)` 如实
+  `NotImplementedError`（`CP-21` 未接线）；③`getcwdb` 非 UTF-8 cwd 走 lossy。
+- **参照纠错** ✓：`os.readlink` **没有 `strict` 参数**（3.14.4 实测传 `strict` 报 unexpected keyword；
+  任务书里那条「strict 照参照签名」按实测口径收回 ✓）。
+
+## round 4 期间的用户交互与决策
+
+- **enum 路线（`_signal` 族 52 格的前置）已问用户、暂未收到答复**（询问被打断）⇒ round 5 先走
+  无前置的小格批（task-11）；enum 决策悬而未决，**不替用户拍板** ✓。
