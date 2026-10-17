@@ -715,3 +715,60 @@
 3. socket 真 I/O（`P3-29` 后续轮，能力域槽位）；CJK `_codecs_*`（22 格）；`_operator` 真描述符类型
    （方案 B）；`find_syncable` 的并发 race（工具 bug）。
 4. `multiprocessing` 12/23 子模块（下一层 `_io` 真文件流）→ `_multiprocessing`／`mmap` 等的 C 面战役。
+
+## M3 判据② 冲刺（会话 05-C：语料化＋机检仪器）落地 ✓ —— **判据② 可裁定并裁定：达成**
+
+- **口径（Lead 立，机检，用户可否决）**：判据② ＝「对拍无新差异（含 `MS-13` ② 的 `Lib/` 语料）」的
+  可操作化五条——①语料总量 ≥400；②`Lib/` 覆盖 ≥150 个不同可 import 模块；③`Lib/test/` 来源用例 ≥40；
+  ④两侧对拍 **0 新差异 · 0 未登记差异 · 自检 100% 绿**（含 `PYAWA_DANGLING=1`）；⑤`MS-14` 报告四要素
+  齐备。**全部由 `tools/corpus_coverage.py` 机检（已接进 `tests/ci/check.py` 成为 M3-COVERAGE 硬门）。**
+- **实测（仪器五项全 PASS）** ✓：①**407/400** ②**150/150**（不同模块）③**50/40** ④**407 通过 · 0 已知 ·
+  0 新**，自检 407/407 ✓ ⑤四要素 ✓
+  - 语料：**235 → 407**（+172）；来源格式＝manifest **第 5 列**（`Lib/` 165 行／`Lib/test/` 50 行／
+    自建 `-` 192 行）
+  - 判据① 保持 **451/628 ＝ 71.8%**（未动代码语义，只加语料/仪器）
+
+## 落地内容
+
+### ① 覆盖率仪器（`tools/corpus_coverage.py`，681 行，纯标准库，0.08 s）
+- 五项逐条 `[PASS|FAIL]`＋非零退出；`--verbose` 给「已覆盖 24→150 模块／未覆盖 536→386 模块」全表；
+  兼容路径：legacy 散文来源**只识别、不计入 PASS**（禁止第二真相）——来源判定只认 manifest 第 5 列。
+- **接进闸门** ✓：`tests/ci/check.py` 加 M3-COVERAGE 外挂（照 P3-NUMBERS 先例，FAIL 即红）；
+  顺带修正该脚本汇总行只数 `len(checks)` 的失真（现 14 项全 PASS）。
+- 自测四情形（`target/abi-boundary/cov_selftest.log`）：达标 PASS／4 列行 FAIL（待补）／来源不可解析
+  FAIL／`Lib/test` 分流不串 ② PASS ✓。
+
+### ② manifest 来源列（格式 A）＋ harness 放宽
+- `crates/pyawa-abi/tests/conformance.rs`：4 列断言 → **4 或 5 列**（第 5 列**不参与比对语义**，
+  注释写明来源判定归仪器）；自测 235×4 全绿＋混排 5 列绿＋还原逐字节（sha256 一致）✓。
+- 来源审计：29 条 `lib_*` 用脚本核「声明来源 == 语料真的 import 的模块」（0 不一致）；14 条
+  `libtest_*` 逐字片段由 `tools/check_lib_corpus.py` 核（守卫扩到 **25 条语料／32 段正文** ✓）。
+
+### ③ 第三批语料（+172 条）
+- `lib3_*` **126**（新量的 **435/523** 可 import 清单里逐模块铺开，126 个**新覆盖**模块）＋
+  `lib3x_*` **10**（语义加强：colorsys 往返／bisect insort／heapq／textwrap 选项／json separators／
+  struct／base64／datetime／stat 族／token）＋ `Lib/test` **36**（17 import 驱动＋19 逐字片段）。
+- **宁少勿假** ✓：剔除/降级的条目（注解不落 `__annotations__`／类或模块 `__name__` 赋值不生效／
+  `str(异常实例)` 走对象 repr／复数字面量 `2j` 解析不了／`ast.parse` 缺 `compile`／`re` 的
+  `DELETE_SUBSCR`／`base64.b32/b16` 缺 `byteorder`／`date` 比较／`OrderedDict.move_to_end`／
+  带别名的点分子模块 import）**全部不进语料**，如实挂账 ✓。
+- **CX-1 会扫语料正文** 的坑 ✓：整文件拷含 `GH-####` 的 `tsan.py` 被判「悬空编号」⇒ 改 import 驱动。
+
+### ④ harness 探针归一修复（`MS-9`／`MS-11`）
+- 写手实测到的不对称：参照侧 probe 行过 `MS-9` 归一、被测侧取原始值 ⇒ 探针含 `0x…` 时假阳性。
+  修：`parse_observation` 的 `probe=` 行统一 `normalize`（与 stdout/stderr/参照侧**一处真相**）；
+  配套把 `normalize_addresses` 改**幂等**（否则二次归一 `0xADDR`→`0xADDRR` 反造新假阳性——实测坑）；
+  新增 `probes_are_normalized_identically_on_both_sides`（两侧不同地址归一同值＋raw 反证＋幂等）。
+- 回归：conformance **5 passed**、报告 **407 通过 · 0 已知 · 0 新** ✓。
+- **顺带清理** ✓：`tests/conformance/corpus/zz_repro.py`（旧 scratch，不在清单、无引用）删除；
+  `corpus_helper.py` 保留（被 `import_module.py` import）。
+
+## 判据② 裁定（如实交代）
+
+- **达成** ✓：五条机检全 PASS，`tests/ci/check.py` 的 M3-COVERAGE 硬门已开（此后任何人把语料改坏、
+  或来源列缺填，都会当场红）。
+- **口径边界如实记** ✗：①「≥150 模块」是 Lead 立的可操作化阈值，**不是** `MS-13` ②「Lib/ 与
+  Lib/test 中可编译部分」的 100% 覆盖——现覆盖 150/435≈34%（按可 import 模块计）；后续按回归需要
+  继续扩（P3-27 保持 open，作为**回归扩张**项，不阻塞判据②）。②语料里**没有**已知差异条目
+  （0 已知 · 0 新）——实测到但未实现的语义一律走 §9 挂账、不进差异清单（`MS-19` 的「尚未实现不是
+  差异」口径）。③单/双次读数：conformance 407 条为**全量**（无抽样），自检 407/407 同源可信（`MS-12`）。
