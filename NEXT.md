@@ -6,16 +6,16 @@
 
 ## 现在
 
-- **HEAD**：`9d5b40b`（`dev`，**已推送** origin ✓）—— round 6（`_socket` 最小面 ⇒ import socket 通）＋ docs 收口
+- **HEAD**：`d89d0ff`（`dev`，**已推送** origin ✓）—— round 7+8（`_signal`/`_posixsubprocess`/`select` ＋ `__file__`）＋ docs 收口
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
-  **通过 357 ＋ 参照口径 17 ＝ 374 ÷ 628 ⇒ 59.6%**（区间 373–375；阈值 67% ＝ 421，还差 47）
-  - 战役累计：208 → 296 → 306 → 341 → 358 → 361 → 372 → **374**（本会话 +78）；进度指标：`Lib/` **440** 文件 ⇒ 358 能 import（81.4%）
+  **通过 362 ＋ 参照口径 17 ＝ 379 ÷ 628 ⇒ 60.4%**（区间 378–380；阈值 67% ＝ 421，还差 42）
+  - 战役累计：208 → 296 → 306 → 341 → 358 → 361 → 372 → 374 → **379**（本会话 +83）；进度指标：`Lib/` **446** 文件 ⇒ 363 能 import（81.4%）
   - 判据② **推进中**：语料 **234**（conformance 234 通过 · 0 已知差异 · 0 新差异 ✓）⇒ **尚未能裁定**
     （P3-27 未完，如实 ✓）
 
-## 下一手（round 7：**enum 决策已升级给用户**（影响 100+ 格）；并行可收 select／CJK）
+## 下一手（round 9：core import 两格——循环相对导入回退＋失败模块残留（multiprocessing 24＋asyncio 48 同根））
 
 round 3 后 overlay 复测（`target/recon/ceiling_overlay2.txt`）：**341/628**；前三大族＝`_signal`（52）／`os.getcwd`（49，round 4 已收首格 sysconfig 族）／`_socket`（42）。round 5（task-11，进行中）＝内建 `dir`（6）＋`_operator` 别名（2）＋genexp 自由变量 panic（decimal 一族）＋`__classdict__` cellvars（calendar/mailbox）。之后按依赖序：
 1. **`posix.getcwd`／`posix.readlink`**（sysconfig 族直通 ✅ 实测）：`readlink` 能力域槽已存在只是填

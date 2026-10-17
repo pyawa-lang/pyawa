@@ -410,3 +410,60 @@
   （`__members__`＋成员实例属性）——**这两族只能靠「修 VM 换回真 enum」或更深的假货**，超出 Lead
   授权口径 ⇒ **升级给用户三选一**：①换回真 enum（还清债务）；②深挖假货（不推荐：`__members__` 要
   int 子类实例，等于把真 enum 的难点在假货里重做一遍）；③暂缓，先收 CJK（22）／`select` 等。
+
+## Round 7＋8（C 模块最小面战役 ＋ `__file__`）落地 ✓
+
+- **HEAD**：`d89d0ff`（`dev`，**已推送** origin ✓）—— `_signal`/`_posixsubprocess`/`select` 三模块最小面
+  ＋ `__file__` 修复 ＋ 收账 5 个 Lib 文件
+- **判据①**（重建 conformance 后实测 ✓）：**通过 362 ＋ 参照口径 17 ＝ 379 ÷ 628 ⇒ 60.4%**
+  （区间 378–380；round 6 末 374 ⇒ **+5**＝`signal`＋`selectors`＋`subprocess`＋`ftplib`/`mailbox`/`poplib` ✓）
+  - 战役累计：208 → 296 → 306 → 341 → 358 → 361 → 372 → 374 → **379**（本会话 +83；距 421 还差 42）
+  - 进度指标：`Lib/` **450** 文件 ⇒ 363 能 import（80.7%）
+
+## task-13 落地 ✓（`_signal` 最小面 ⇒ `import signal` 通；asyncio 族 118 格的第一闸拆掉）
+
+- 侦察 ✓：导入期必需＝`signal`＋`getsignal`（`@_wraps` 装饰期读 `__doc__`）；`from _signal import *`
+  的**导出面**决定四个可选包装是否定义 ⇒ **收窄**（45 常量＋2 函数）⇒ 少接线 ✓。参照 `dir(_signal)` 71 名。
+- 实现 ✓：45 常量**真值照参照**（`NSIG=65` 单一真相点）；`signal`/`getsignal` 完整参数校验语义（**16 条
+  TypeError/ValueError 文案两侧逐字一致**，含 bool handler 边界）；**诚实边界**：校验过后一律
+  `NotImplementedError`——`getsignal` **实测定案不返回 `None`**（参照对有效号码从不给 `None`）✓。
+- 链侦察 ✓：`_signal` 族 118→0；asyncio／multiprocessing／subprocess 的下一格**同根＝`_posixsubprocess`**（
+  multiprocessing 表层报错被吞成 `cannot import name 'context'`，用副本解开会诊钉死）；`test.support` 族
+  新暴露 `__file__` 缺失（32 格）。
+
+## task-15 落地 ✓（`_posixsubprocess`＋`select`＋posix wait 族 ⇒ `import subprocess` 通）
+
+- 侦察 ✓（三格同收）：①`fork_exec` 只绑定不调用 ✓；②`class _del_safe` **类体导入期读** `os.waitpid`/
+  `waitstatus_to_exitcode`/`WIFSTOPPED`/`WSTOPSIG`/`WNOHANG`（本仓全缺）；③`import select`＋`import selectors`。
+- 实现 ✓：`_posixsubprocess`（`fork_exec` 22 参＋kwarg 拒绝文案，调用如实未接线）；`select` **收窄面**
+  （只导 `PIPE_BUF`＋`select`，**刻意不导** poll/epoll ⇒ `selectors` 走 `SelectSelector` 回退——参照本机
+  EpollSelector，**已知偏差**钉在抽例；导出外壳反而挡 import：`_can_use` 的 except 元组不含
+  `NotImplementedError`）；posix wait 族（`WNOHANG` 常量＋`WIFSTOPPED`/`WSTOPSIG`/
+  `waitstatus_to_exitcode` **纯逻辑真实现**、逐值对参照；`waitpid` 如实未接线）。
+- 收账 ✓：`Lib/{selectors,subprocess}.py` 同步；**顺带解锁** `socketserver`/`logging.config`（overlay 口径，
+  未同步——链上还有格）；抽例 2 例全绿 ✓。
+
+## task-14 落地 ✓（模块帧 `__file__` ⇒ 脚本/文件模块/包三形）
+
+- 参照口径 ✓（先实测）：脚本本体＝**绝对路径且不解析符号链接**；文件模块/包＝**加载时路径原样**；
+  Rust 侧内建模块不装（参照 builtin 同理 ✓）。
+- 实现 ✓：`executor/import.rs`（文件加载装 `__file__`）＋`bin/pyawa.rs`（CLI 经**既有** `pa_pushstring`/
+  `pa_setglobal` 注入，**零 ABI 改动** ✓）。**`__package__`/`__spec__`/`__loader__` 未做（如实记）**：
+  grep 证实导入期无人读、相对导入有 `__name__`/`__path__` 回退 ✓。
+- 收账如实 ✗：**Lib 口径 0 收**（`test/support/__init__.py` 不在库且依赖 `unittest` 整包——后续轮）；
+  **overlay 口径** test.support 族 **20 个里 11 个 import 通**（修前 0 ✓）。顺带收 `ftplib`/`mailbox`/`poplib`
+  （socket/subprocess 链下游）✓。
+
+## round 7/8 的过程事实（如实记）
+
+- **并发测量坑再现** ✓：round 7 的 slowcheck 第 5 项（stability）红＝round 8 两名队员的在飞改动撞进闸门
+  （conformance/lib_compile 挂在连跑里）⇒ 等两人都汇报、树稳定后重跑 ⇒ **十项全绿**（860s）✓——
+  **并发时闸门读数不作数**，稳定后统一终审是对的口径 ✓。
+- **ds-socket-camp 挖出的下一层（round 9 弹药，都有最小复现）** ✗：
+  1. **循环相对导入缺回退**：`from . import context`（context 正在导入中）——CPython 靠 `IMPORT_FROM`
+     失败时回退查 `sys.modules[完整名]`（issue #17636）；本仓没有 ⇒ multiprocessing 族 24 格卡这。
+     复现 `target/recon/circprobe/`。
+  2. **失败模块残留 `sys.modules`**：`import ssl` 失败后不把半截模块移除 ⇒ `try/except ImportError` 的
+     `ssl=None` 分支失效 ⇒ asyncio 族 48 格卡这。复现 `target/recon/badprobe/`。
+  3. `pty`⇒`termios`；`test.support.os_helper`⇒`sys.abiflags`；`sys.acquire_lock`、`set.union`、
+     lexer 代理转义 `\U0000dc80`（core 可修面）。
