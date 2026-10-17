@@ -578,3 +578,46 @@
   字典。**B6（换 `Lib/enum.py` 真本）等 G6 族处理完再做** ✓（假货本轮未动，还挂着
   socket/signal/calendar 的绿）。
 - **收账** ✓：`webbrowser.py` 同步（SLICE 已补）；`enum_real_shapes` 抽例两侧逐行一致 ✓。
+
+## Round 12（enum 真本落地＋类型级描述符）落地 ✓
+
+- **HEAD**：`23a7532`（`dev`，**已推送** origin ✓）—— enum B5＋B6（换真本）＋描述符/sys 面
+- **判据①**（重建 conformance 后实测，提交态 ✓）：**通过 371 ＋ 参照口径 17 ＝ 388 ÷ 628 ⇒ 61.8%**
+  （区间 387–389；round 11 末 386 ⇒ **+2**＝`mimetypes`＋`http.client` ✓）
+  - 战役累计：208 → … → 382 → 386 → **388**（本会话 +92；距 421 还差 33）
+  - 进度指标：`Lib/` **450** 文件 ⇒ 372 能 import（82.7%）；**CX-8 例外清单归零**（enum.py 换真本 ✓ 清债点）
+
+## task-22 落地 ✓（enum 换真货 B5＋B6——**`Lib/enum.py` 已是上游逐字节真本**）
+
+- **B5 四格** ✓：G6 元类 property（类属性访问补 `type.__getattribute__` 次序——元类数据描述符优先）⇒
+  `Color.__members__` 给映射内容（http/re/socket/calendar/signal/pstats/inspect/py_compile 全转绿 ✓）；
+  `dict.update` 补映射协议；**B5-3 真凶**＝`type.__new__` 缺「类体 `__new__` 自动包 staticmethod」⇒ 补包＋
+  三条分派路径剥壳；int 子类算术 dunder 优先（`IntFlag` 组合伪成员正确）；G3 数据类 `__str__`/`__repr__` 面。
+- **B6 换本** ✓：13 个 importer 换前全绿、换后 **14 个（+http.client，无减少）** ✓；假货的 `_convert_`/
+  `global_enum` 两笔过渡债随文件消失 ✓。
+- **顺带真 bug** ✓：①链式赋值给 `global` 名字误发 `STORE_NAME`（`mimetypes` 形状）⇒ 统一 `emit_store_name`；
+  ②`object.__str__` 只走 repr 槽 ⇒ 改走 `__repr__` 覆写＋原生函数指针防自递归。
+- **http.server 立据（⚠ 新挖内存安全 bug，未修）** ✗：`BaseHTTPRequestHandler` 类体执行期 **SIGSEGV**
+  （gdb：`iterator_type_for → is_subtype(毒化指针) → TypeObject::mro`——有 TypeObject 被引用时被释放）；
+  触发链刚被 mimetypes 修通 ⇒ 按红灯停手，**单列下一轮内存安全格**。
+- **收账** ✓：`mimetypes.py`＋`http.client`（`HTTPStatus.OK.phrase` 等语义两侧对拍 ✓）；`enum_shapes`
+  抽例按真本重钉＋改名（不再叫 `fake_enum` ✓）。
+
+## task-23 落地 ✓（类型级方法描述符 3 名＋sys 两格）
+
+- **方案 A**（照 `int.bit_length` 先例）：`list.append`（receiver-first 转调 `list_append_native`，子类可绑）／
+  `int.__add__`（右非 int ⇒ `NotImplemented`）／`float.__getformat__`（纯函数真实现
+  `'IEEE, little-endian'`）——16 条错误文案逐行对参照 ✓。
+- **sys 两格**：`abiflags=''`＋`_clear_type_descriptors(type,/)`（幂等 no-op 如实标偏差）。
+- **链上下一格（如实）**：`multiprocessing` ⇒ **`dict.update` 要接 (k,v) 可迭代**（`__init__.py:23`）；
+  `asyncio` ⇒ **`itertools.chain.from_iterable`**；`test.support` ⇒ **`_imp.acquire_lock`** 族
+  （前缀二分钉到 `check_sanitizer` → `sysconfig.get_config_var` → `_bootstrap._setup(sys,_imp)`）。
+- **方案 A 已知偏差** ✗：`type(list.append)` 仍是 `builtin_function_or_method`（参照 method_descriptor）⇒
+  `_extra_reducers` 两 key 合并——真描述符＝方案 B 单独立项。
+
+## round 12 过程事实
+
+- **换本带红了一个老测试** ✓：`enum_shapes.rs` 的 `fake_enum_surface_used_by_re` 钉的是假货面 ⇒ 换本后
+  slowcheck 第 3 项红 ⇒ 按**参照实测**重钉（非按我们输出凑）＋改名，顺带修出 `object.__str__` 真语义差 ✓
+  ——**换真本必须连带清掉钉假货的旧断言**，这条经验入档。
+- 两任务的 `arithmetic.rs` 改动交叠 ⇒ 合一笔战役提交（消息分列两单元）✓。
