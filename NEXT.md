@@ -3,13 +3,21 @@
 > 规则见 `agents-rules/round-rule.md`：**一轮一落地**（每轮以「提交」或「撤回＋一条改变计划的事实」结束 ✓）。
 > **本页是会话交接单页**（2026-10-18 ✓）：会话 07（Lead＋6 队员团队模式）已收 **round 10（M5 开局）／round 11／round 12（功能收口）／
 > round 13（M5 收口）**；逐轮复盘见 `docs/rounds/03-m3-progress-05.md` ✓（本笔追加「round 13」节）。
+> **会话 08**：**拆文件专项**（用户 2026-10-18 指示＝拆非生成的大文件；6 刀，见下）。
 
 ## 现在
 
-- **HEAD**：`42cadcb`（`dev`，本笔前，已推送 origin ✓）—— 本笔＝round 13：**M5 收口**（判据③ 阈值用户拍板＋状态同步；
-  `dev` 以 `--no-ff` 收录 `main` ＋ **tag `m5`**——合并提交见 `git log --merges -1`）。
-- **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓；以本笔提交为准）。
+- **HEAD**：`b6f3841`（`dev`，本笔前；本页先按实际 HEAD 对齐——上一版记的 `42cadcb` 已落后三笔）——
+  本笔＝**拆文件专项 1/6**：`executor/format.rs` 的 `advance_iterator`（1024 行，迭代器推进）**纯移动**到
+  `executor/iter_advance.rs`（与原块逐行一致 ✓）；`format.rs` 1358 → 334 行，调用方仍走
+  `crate::executor::advance_iterator`（父模块再导出）✓。
+- **工作区**：唯一未提交项 `tools/libtests_survey.py`（上轮 Lib/test 调查收尾：`PYTHONPATH`＋超时；
+  **与本专项无关**，本笔不碰）；专项自身的改动都随本笔提交 ⇒ 其余干净。
 - **stash**：**空** ✓
+- **拆文件专项清单（6 刀，按先易后难）**：① `format.rs` ✓ → ② `executor.rs`（`execute` 3394 行按 opcode 族）→
+  ③ `emitter.rs`（8557 行；两个巨型函数）→ ④ `parser.rs` → ⑤ `builtin_objects.rs`（6548 行）→
+  ⑥ `instance.rs`（`bootstrap_builtin_types` 1060 行）。每刀＝纯移动／分派等价，验收＝
+  `tools/quickcheck.sh` ＋ 提交前 `tools/slowcheck.sh` 十项。
 - **M5 已成立 ✓（判据①②③ 全绿，2026-10-18 收口）**：
   - **判据①（`T-CP-*` 全绿）✓**：矩阵 **13 绿／0 红**。可执行证据：`crates/pyawa-abi/tests/capability_acceptance.rs`（11）／
     `crates/pyawa-runtime/tests/two_providers.rs`（7）／`t_cp10_cancel.rs`（4）／`select_dup2_shapes.rs`（1）／

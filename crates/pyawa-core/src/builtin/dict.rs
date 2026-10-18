@@ -591,7 +591,7 @@ fn mapping_keys(
     unsafe { instance.release_object(view.as_ptr()) };
     let mut keys = Vec::new();
     loop {
-        match crate::executor::format::advance_iterator(instance, iterator, 0)? {
+        match crate::executor::advance_iterator(instance, iterator, 0)? {
             Some(item) => keys.push(item),
             None => break,
         }
