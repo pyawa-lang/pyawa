@@ -1894,17 +1894,11 @@ unsafe fn call_inner(
 }
 
 /// 取异常实例的类型名 ＋ 消息（供 `pa_errmsg` 用）。
+///
+/// 参照未捕获报错的尾行是 `str(exception)` 的口径（`KeyError: 'missing'` 的 repr 层也在里面）⇒
+/// **一处真相**在 core 的 `executor::exception_uncaught_text`（形态核与 `str` 槽复用都在那边）。
 fn exception_message(instance: &Instance, exception: NonNull<Header>) -> String {
-    // SAFETY: exception 是存活对象。
-    let ty = unsafe { exception.as_ref() }.ty();
-    // SAFETY: 类型名由注册表持有。
-    let name = unsafe { ty.as_ref() }.name();
-    // **走 core 的安全入口** ✓（第 193 轮：先核形状再读 ✓ —— 别再硬转 ✗）。
-    let message = instance.exception_message_of(exception);
-    match message {
-        Some(text) => format!("{name}: {text}"),
-        None => name.to_owned(),
-    }
+    pyawa_core::executor::exception_uncaught_text(instance, exception)
 }
 
 /// `pa_error(st, msg)`：宿主主动抛错（信息写进状态，由 `pa_errmsg` 取回）。

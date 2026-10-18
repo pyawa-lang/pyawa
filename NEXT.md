@@ -1,38 +1,39 @@
 # NEXT.md —— 续做状态（单页；长复盘进台账 `docs/rounds/`）
 
 > 规则见 `agents-rules/round-rule.md`：**一轮一落地**（每轮以「提交」或「撤回＋一条改变计划的事实」结束 ✓）。
-> **本页是会话交接单页**（2026-10-18 ✓）：会话 06（Lead＋队员团队模式）已收 **round 4–7**；
-> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` ✓（本笔追加「round 7」节）。
+> **本页是会话交接单页**（2026-10-18 ✓）：会话 06（Lead＋队员团队模式）已收 **round 4–8**；
+> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` ✓（本笔追加「round 8」节）。
 
 ## 现在
 
-- **HEAD**：`c111302`（`dev`，**已推送** origin ✓）—— 本笔＝round 7：M4 收口准备（判据归档＋状态同步）；提交后 HEAD 见 `git log -1`。
+- **HEAD**：`fb86bd8`（`dev`，**已推送** origin ✓）—— 本笔＝round 8：挂账 bug 清理轮（6 条收口 5 条）；提交后 HEAD 见 `git log -1`。
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓；以本笔提交为准）。
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；连测两次同值 ⇒ 区间 450–452；本轮无 import 面变化 ⇒ 与 round 6 持平）
-- **M4 判据（全绿 ✓，只差阶段收录）**：
-  - **判据①（`T-BC-8`／`T-BC-9` 可观测）✓**：可执行归档 `crates/pyawa-core/tests/m4_acceptance.rs`（3 例：
-    检查点在 `dis` 可见／端到端归责四要素／三条检查指令元数据）；`BC-25`①（"两侧皆标注处禁止发射"，
-    需跨模块静态信息）**仍未做**、已如实注记、不阻塞"可观测"。
-  - **判据②（渐进保证 `T-TS-1`）✓**：`crates/pyawa-core/tests/gradual_guarantee.rs`（20 例，17 对成对语料
-    ＋`T-TS-3`／`T-TS-7`）。
-  - **A 批**：`TS-46` ✓／`TS-47` ✓（编译期＋运行期两层）／`TS-48` ✓／`TS-50` ✓。
-- **round 7 落地**（详见台账本卷「round 7」节）：判据①② 归档测试＋「判据→测试」对照表进台账；
-  `README.md`／`PLAN-milestones.md`（§6 新增「M4 的要求」、§9.2 `P3-13`、§9.4 第 9 项）／
-  `DESIGN.md` §13 的 `12.` 行状态同步；顺带修正 `m4_acceptance.rs` 里一个**未定义测试编号**
-  （`T-BC-27` ⇒ `BC-27`，`CX-1` 当场抓到）。
-- **未修 bug（5 条，照旧挂账）**：`global`＋函数内 `import` ⇒ UnboundLocalError（`Counter.most_common`）·
-  `ChainMap.keys()` 静默空 · `KeyError` 消息少 repr · `functools.wraps` 不搬 `__name__` ·
-  PEP 604 union 注解 dataclass 的 `__builtins__` 面。另：`sys._getframe(depth>0)` 帧链缺口（既有台账项）
-  挡住 `warnings.warn` 端到端（`with` 嵌套 `try` 的 StackUnderflow 本体已于 round 6 修）。
+- **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；连测两次同值 ⇒ 区间 450–452；本轮只修 bug、不动 import 面 ⇒ 与 round 7 持平）
+- **M4 状态：判据①② 全绿 ✓、收口准备已完成（HEAD `fb86bd8`）——只差用户批准后的阶段收录**（`dev` `--no-ff` 收录 `main` ＋ tag `m4`）。
+  - 判据①（`T-BC-8`／`T-BC-9` 可观测）✓：`crates/pyawa-core/tests/m4_acceptance.rs`（3 例）。
+  - 判据②（渐进保证 `T-TS-1`）✓：`crates/pyawa-core/tests/gradual_guarantee.rs`（20 例，17 对成对语料）。
+  - A 批：`TS-46` ✓／`TS-47` ✓（编译期＋运行期两层）／`TS-48` ✓／`TS-50` ✓。
+  - 如实缺口：`BC-25`①"两侧皆标注处禁止发射"（需跨模块静态信息）**未做**（已注记、不阻塞"可观测"）。
+- **round 8 落地**（详见台账本卷「round 8」节）：挂账 bug **5/6 已修**（另 1 条定位后转专项）——
+  A `global`＋函数内 `import` 的 UnboundLocalError ✓（`symbols.rs` 四处 `slot_of`→`declare_local`）；
+  B PEP 604 `X | None` 运行期（`NB_OR` → `pep604_union_or`：None 归一 `NoneType`／union 摊平去重／非法组合仍 TypeError）✓；
+  C `GET_YIELD_FROM_ITER` 回退 `iter_value` ⇒ `ChainMap.keys()` 迭代 ✓；D 未捕获异常消息走 `str` 槽 ⇒ `KeyError: 'missing'` ✓；
+  E `functools.wraps` 不搬 `__name__`＝**已定位、未修**（正路＝`FunctionObject` 名字覆盖字段＋可写 getset 数据描述符）。
+  验收：5 条探针与 `python3` 3.14.4 对齐（E 的 b4 仍有差，如实）；新增测试 5 文件共 23 例；`cargo test -p pyawa-core`／`-p pyawa-abi`／quickcheck 全绿。
+- **未修 bug／未修缺口**：
+  - **E `functools.wraps.__name__`**（挂账第 5 条，转专项）：`setattr` 写实例字典被类型 `getattr` 槽遮蔽；正路需对象布局/GC＋属性通道＋类型注册。
+  - 函数对象 `__builtins__` 属性未接（`builtin/function.rs`）；显式 `Format.STRING` 的 `annotationlib.get_annotations` 撞 `types.FunctionType` 不可实例化。
+  - union 对象自身 `==`／`repr` 与参照有差（pre-existing）。
+  - `sys._getframe(depth>0)` 帧链缺口（挡住 `warnings.warn` 端到端）。
 
-## 下一轮开工顺序（round 8 ＝ M4 **阶段收录**，等用户批准）
+## 下一轮开工顺序（round 9）
 
-1. **必须先问**：`dev` 是否照先例以 `--no-ff` 收录 `main` ＋ 打 **tag `m4`** ＋ 推送？（`branch-rule.md`：
-   合并提交＝阶段边界；**未批准不合并**。）
-2. 批准后同笔：`PLAN-milestones.md` 的**兼容边界声明**追加**修订行**（"阶段边界必须更新本块"）；
-   `README.md` 当前状态改「**M0–M4 均已成立**」；`NEXT.md` 终态刷新；合并＋打标＋推送。
-3. 未批准时：转并行线（socket 等用户 A1–A4 拍板）或其余 5 条挂账 bug；不擅自合并。
+1. **M4 阶段收录：必须先问**——`dev`（现 `fb86bd8`）是否照先例以 **`--no-ff`** 收录 `main` ＋ 打 **tag `m4`** ＋推送？
+   批准后同笔：`PLAN-milestones.md` 的**兼容边界声明**追加修订行（阶段边界必须更新本块）；`README.md` 当前状态改
+   「**M0–M4 均已成立**」；`NEXT.md` 终态刷新；合并＋打标＋推送。
+2. 未批准则：接 **`functools.wraps` 类型级描述符专项**（先写清 `FunctionObject` 布局/GC 影响面与 getset 注册路径），
+   或 socket（仍等用户 A1–A4 拍板）。**不擅自合并**。
 
 ## M4 收口判据（唯一出处：`PLAN-milestones.md` §6）
 
@@ -57,8 +58,8 @@
 - **`__pyawa__` 缓存坑**：量之前 `rm -rf Lib/__pyawa__`（＋`target/**/__pyawa__`）。
 - **共享工作区**：`git commit -F - -- <显式路径>`；代码＋台账＋本页 **同笔**提交；提交前核对本页 HEAD／工作区两行；
   闸门用 `&&` 只看 exit code；slowcheck 十项全绿才提交。
-- **团队**：成员上限 8（队员已满 ⇒ 只唤醒旧成员，不再新 spawn）；`pyawa-core` 同时至多**两名**写手；
-  非 Rust 面／测试-only 写手可并行。
+- **团队**：成员上限 8（队员已满 ⇒ 只唤醒旧成员，不再新 spawn）；`pyawa-core` 同时至多**两名**写手（不同子目录）；
+  测试-only 写手可并行。
 - **编号**：新增 `P*-`／`T-*` 编号前先查是否**已定义**（`CX-1` 会抓"无定义处的引用"；墓碑算定义，`CX-19`）。
   现最大文档号：`BC-65`／`TS-50`／`T-BC-22`／`CP-37`／`CX-22`／`P3-31`。
 

@@ -987,3 +987,65 @@
 1. **报用户批准**：`dev` 以 `--no-ff` 收录 `main` ＋ 打 **tag `m4`** ＋ 推送（`branch-rule.md`：合并提交＝阶段边界）。
 2. 批准后同笔：`PLAN-milestones.md` 的**兼容边界声明**追加一条修订行（阶段边界必须更新本块）；`README.md` 状态改「M0–M4 均已成立」；`NEXT.md` 终态刷新。
 3. 未批准则：并行线（socket 待 A1–A4 拍板）／其余挂账 bug（5 条），不擅自合并。
+
+---
+
+## round 8（会话 06 · 挂账 bug 清理轮）落地 ✓ —— 六条挂账 bug 收口 5 条（1 条定位后转专项）
+
+- **HEAD**：`fb86bd8`（`dev`，已推送 origin ✓）—— 本笔＝round 8；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮只修 bug、不动 import 面 ⇒ 与 round 7 持平）
+- **背景**：M4 判据①② 已全绿、收口准备已完成（round 7），**阶段收录等用户批准**（不擅自合并）⇒ 本轮按目标里的并行线清挂账 bug；本轮**不动 M4 特性面**。
+
+### A：`global X` ＋ 函数内 `import X` ⇒ UnboundLocalError ✓
+
+- 根因：`crates/pyawa-core/src/compile/symbols.rs` 的 `collect_locals` 里 `import`／`from … import`、`for` 目标、`match` 捕获直接 `slot_of`，**绕过 `declare_local` 的 `global` 检查** ⇒ 名字进 `co_varnames`（读 `LOAD_FAST`、写 `STORE_GLOBAL` 两张表不一致）⇒ 读时 `UnboundLocalError`。受害者 `collections.Counter.most_common`。
+- 修法：上述四处改走 `declare_local`（`collect_for_target` 的局部口径、`collect_pattern_locals` 同步；`pre_intern` 口径不动）。
+- 验收：探针 `target/recon/bugs/b1_global_import.py` 修前 UnboundLocalError → 修后 `ok` rc0（与 `python3` 同）；`Counter("aab").most_common(1)` ⇒ `[('a', 2)]`；`global`＋`for`／`with … as`／`from … import` 三形状对拍一致。回归 `crates/pyawa-core/tests/global_import.rs` **4 例**（编译面钉 `heapq` 不进 `varnames`＋`STORE_GLOBAL`/`LOAD_GLOBAL`；`for`／`with` 目标端到端）。
+
+### B：PEP 604 `X | None` 运行期缺失（dataclass union 注解的 `__builtins__` 面）✓
+
+- 根因：`crates/pyawa-core/src/executor.rs` 的 `NB_OR` 只接"两操作数都是**类型对象**"；`None` 是 `NoneType` 实例 ⇒ `str | None` 抛 `TypeError: unsupported operand … 'type' and 'NoneType'` ⇒ dataclass 的 `annotationlib.get_annotations(FORWARDREF)` 回退去读 `annotate.__builtins__`（函数对象未接）⇒ 表面报 `'function' object has no attribute '__builtins__'`（如 `target/recon/bugs/b5_pep604.py`）。
+- 修法：`NB_OR` 改走新 `pep604_union_or`（约 150 行含注释）：类型/union/`None` 语境构 union、`None` 侧归一成 `NoneType` 类、union 再 `|` **摊平＋按 `==` 去重**、`None|None`／`int|5` 仍落算术报 `TypeError`。实测与 `python3` 3.14.4 逐例对齐（`int|None`、`None|int`、`int|str|None`、`(int|str)|None`、`None|(int|str)`、`int|(None|str)`、`int|int`⇒`int`、`(int|str)|int` 去重、`(int|str)|5`、`None|None`、`int|5`）。
+- 验收：探针 b5 修前 AttributeError → 修后 `C(a=None)`（与 `python3` 同）。回归 `crates/pyawa-core/tests/pep604_union.rs` **6 例**（手写字节码钉 `NB_OR` 与 `__args__`）＋ `crates/pyawa-core/tests/pep604_annotations.rs` **4 例**（union 成员表／摊平／`None|None` TypeError／类 `__annotations__` 可读）。
+- **连带如实记**：union 对象自身的 `==`／`repr` 与参照仍有差（`(int|str)==(int|str)` 本层 False、repr 是 `<UnionType object …>`）——**pre-existing**，不属本 bug 范围。
+
+### C：`collections.ChainMap` 的 `list(cm.keys())` 迭代失败 ✓
+
+- 根因：`crates/pyawa-core/src/executor.rs` 的 **`GET_YIELD_FROM_ITER`** 只走 `iterator_type_for`（只认内建容器），**没回退 `iter_value` 的 `__iter__` 协议**（`GET_ITER` 有回退）⇒ `yield from self._mapping`（`KeysView.__iter__`）炸；独立最小复现 `class I: def __iter__…; yield from I()` 同样报错（与 ChainMap 无关）。
+- 修法：该 handler 回退改用 `iter_value`（与 `GET_ITER` 同一处实现）。
+- 验收：探针 `target/recon/bugs/b2_chainmap.py` 修前「指令 16 …只接线了…」→ 修后 `1` + `['y','x']`（与 `python3` 同）。回归 `crates/pyawa-runtime/tests/chainmap_iteration.rs` **3 例**。
+
+### D：未捕获 `KeyError` 的消息少一层 repr ✓
+
+- 根因：`crates/pyawa-abi/src/lib.rs` 的 `exception_message` 取"首实参裸 str"（`Instance::exception_message_of`）⇒ 不走异常 **`str` 槽**；`exception_str` 的 KeyError repr 口径本来正确（catch 后 `repr`/`str` 已对齐）。
+- 修法：core 新增 `executor::exception_uncaught_text`（复用 `exception_str`＋与 `exception_message_of` 同款形状核；空串只给类型名），ABI 的 `exception_message` 改为调用它（一处真相在 core）。
+- 验收：探针 `target/recon/bugs/b3_keyerror_uncaught.py` 修前 `KeyError: missing` → 修后 `KeyError: 'missing'`（与参照同）；catch 后 `repr`/`str`/`args` 回归不变。回归 `crates/pyawa-runtime/tests/exception_message.rs` **6 例**。
+
+### E：`functools.wraps` 不搬 `__name__` —— **定位后转专项（本轮未修，不硬做）**
+
+- 根因：`setattr(f, '__name__', 'g')` 经 `executor/protocol.rs` 写进**实例字典**，而读取 `executor/attribute.rs` 第①步先走类型 `getattr` 槽（`function_getattr` 恒按 `code.name()` 给值）⇒ 写入被静默遮蔽（探针仍 `wrapper`；`f.__dict__` 里却有 `'__name__'`）。
+- **正路**：`FunctionObject` 加名字覆盖字段 ＋ `function_getattr` 先读覆盖 ＋ 在 function 类型注册**可写 getset 数据描述符**（`protocol.rs` 的 data-descriptor 分支已能调 setter）——触及对象布局/GC＋属性通道＋类型注册，属**类型级描述符专项一轮**；域内折中（先查实例字典）会让 `__dict__` 多出与参照不一致的键，**不做**。
+- 材料：`target/recon/bugs/b4_wraps.py`（不进 git）。
+
+### 六条挂账 bug 现状
+
+| # | bug | 状态 |
+|---|---|---|
+| 1 | `global`＋函数内 `import` ⇒ UnboundLocalError（`Counter.most_common`） | **已修（round 8 A）** |
+| 2 | `warnings.catch_warnings(record=True)` StackUnderflow（根因：`with` 内嵌 `try` 的异常表 depth） | **已修（round 6）**；原 `warnings.warn` 脚本另卡 `sys._getframe(depth>0)`（既有缺口） |
+| 3 | `ChainMap.keys()` 迭代失败 | **已修（round 8 C）** |
+| 4 | `KeyError` 未捕获消息少 repr | **已修（round 8 D）** |
+| 5 | `functools.wraps` 不搬 `__name__` | **已定位、转专项（未修）** |
+| 6 | PEP 604 union 注解 dataclass 的 `__builtins__` 面 | **已修（round 8 B）** |
+
+- **本轮新记的独立缺口（未修，交后续）**：函数对象 `__builtins__` 属性未接（`builtin/function.rs`；显式 `FORWARDREF` 现在能过、显式 `Format.STRING` 的 `annotationlib.get_annotations` 撞 `types.FunctionType` 不可实例化）· union 对象 `==`／`repr` 与参照有差（pre-existing）· `sys._getframe(depth>0)` 帧链。
+
+### 十项闸门
+
+`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4555s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（30s）／`cargo test --workspace`（468s）／`tests/ci/check.py` 14/14／stability **156 个二进制 × 737 项 × 3 次计数完全一致**（`MS-25`，1394s；较 round 7 的 151×714 增 23 项，正是本轮 bug 回归测试）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1916s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 下一轮（round 9）计划
+
+1. **M4 阶段收录**：**等用户批准**（`dev` `--no-ff` 收录 `main` ＋ tag `m4`）；批准后同笔更新「兼容边界声明」修订行、`README` 状态、`NEXT.md` 终态。
+2. 未批准则：接 `functools.wraps` 的类型级描述符专项（需先写清对象布局/GC 影响面），或 socket（仍等 A1–A4 拍板）。

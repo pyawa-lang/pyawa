@@ -1430,17 +1430,21 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 declare_local(emitter, name);
             }
             // `import a` 在函数里存的是**局部**（实测 `def f(): import a` ⇒ `STORE_FAST a`）
+            // —— 但**`global a` 声明的名字不是局部**（`global heapq; import heapq` ⇒
+            // `STORE_GLOBAL` ✓）：先前这里直接 `slot_of` ✗ 绕过 `declare_local` 的全局检查 ✗
+            // ⇒ `heapq` 进了 `varnames`（读按 `LOAD_FAST`、写按 `STORE_GLOBAL` 两张表不一致）
+            // ⇒ 读时 `UnboundLocalError`（`collections.Counter.most_common` 的实测原形）。
             Statement::Import { items, .. } => {
                 for (module, alias) in items {
                     let dest = alias.clone().unwrap_or_else(|| {
                         module.split('.').next().unwrap_or(module).to_owned()
                     });
-                    emitter.slot_of(&dest);
+                    declare_local(emitter, &dest);
                 }
             }
             Statement::ImportFrom { names, .. } => {
                 for (name, alias) in names {
-                    emitter.slot_of(alias.as_deref().unwrap_or(name));
+                    declare_local(emitter, alias.as_deref().unwrap_or(name));
                 }
             }
             Statement::AugAssign {
@@ -1463,7 +1467,9 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             } => {
                 // 可迭代对象**先求值** ✓ ⇒ 其中的推导式目标先成为局部 ✓
                 collect_comprehension_locals(emitter, iterable);
-                emitter.slot_of(target);
+                // **`global x` 声明的 `for x in …` 目标不是局部**（同 `import` 那一条：
+                // `slot_of` 会把它塞进 `varnames` ⇒ 读 `LOAD_FAST`／写 `STORE_GLOBAL` 不一致）。
+                declare_local(emitter, target);
                 // **元组目标** ✓（第 262 轮真 bug ✗）：`for key, value in …` 的**每个**名字都是本作用域的局部 ✓
                 // ⇒ 先前只声明了单个 `target` ✗ ⇒ 其余名字要**等到发射期**才被追加 ✗ ⇒ 而**序言**里的
                 // `MAKE_CELL` 槽号是按**当时**的 `varnames` 算的 ✗ ⇒ cell 槽**整体错位一格** ✗
@@ -1901,15 +1907,19 @@ pub(super) fn pre_intern_fstring(emitter: &mut Emitter, parts: &[FStringPart]) {
     }
 }
 
-/// **`for` 目标的登记**（第 289 轮）：名字 → 登记（`pre_intern` 与 `slot_of` 两种口径 ✓）；
+/// **`for` 目标的登记**（第 289 轮）：名字 → 登记（`pre_intern` 与"局部声明"两种口径 ✓）；
 /// **括号元组 → 递归**（每一层里的名字都算本作用域的局部 ✓）。
+///
+/// `pre_intern == false` 只在**函数作用域**的局部收集里用（`collect_locals`）⇒ 走
+/// [`declare_local`] 而不是 `slot_of`：**`global` 声明的名字不是局部**（否则会进 `varnames`
+/// ⇒ 读 `LOAD_FAST`／写 `STORE_GLOBAL` 两张表不一致）。
 fn collect_for_target(emitter: &mut Emitter, target: &ForTarget, pre_intern: bool) {
     match target {
         ForTarget::Name(name, _) => {
             if pre_intern {
                 pre_intern_target(emitter, name);
             } else {
-                emitter.slot_of(name);
+                declare_local(emitter, name);
             }
         }
         ForTarget::Group(items, _) => {
@@ -1950,11 +1960,12 @@ fn pre_intern_pattern(emitter: &mut Emitter, pattern: &Pattern) {
     }
 }
 
-/// **`match` 模式的局部槽**（第 290 轮）：捕获名照样占槽 ✓。
+/// **`match` 模式的局部槽**（第 290 轮）：捕获名照样占槽 ✓（`global` 声明的名字不是局部 ⇒
+/// 与 `import`／`for` 目标同一条口径，走 [`declare_local`]）。
 fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
     match pattern {
         Pattern::Capture(name, _) => {
-            emitter.slot_of(name);
+            declare_local(emitter, name);
         }
         Pattern::Or(alternatives, _) => {
             for alternative in alternatives {
