@@ -345,6 +345,12 @@
 | ~~**P3-29**~~ **首片已落地（round 10：`socketpair` 真 I/O；其余如实未接线）** | **`socket` 支**（**用户已拍板立项**，会话 05，排在 typing 收口之后）：`_socket`/`socket` 的最小面——`http.client`／`urllib.request`／`socketserver`／`asyncio` 的共同前置（上限诊断 overlay 口径 **41 个模块**压在这上面）；先 POSIX 域的无连接面（`socketpair`/`create_connection` 一族随后），逐条对参照 | `CM-14`、`DESIGN.md` §9 | 无（工作量大，单独立项 ✓） |
 | **P3-30** | **`random.Random(<seed>)` 的序列与参照不一致**（会话 05 语料侦察实测：`Random(42).random()` ⇒ 0.0838… vs 参照 0.6394…，参照文档保证同种子同序列 ⇒ **真差异**）：生成算法/种子混合口径要对齐 CPython 的 MT19937 init_by_array | `MS-19`、`MS-10` | 无 |
 | ~~**P3-31**~~ **已解除（round 3）** | **解析器缺口批**：**10 格全落**（嵌套元组目标／`.05` 前导点浮点／行内 if 分号表＋次行 else／`*` 后置关键字实参／`with … as (a,b)`／推导式模式目标／元组里的 `*`／带注解赋值非名字目标／制表符缩进／调用基底下标赋值）⇒ `difflib`／`gettext`／`xml.etree.ElementTree`／`tomllib`／`argparse` 等 11 个模块同步 ⇒ 判据① 341→358 ✓。剩余同族缺口（PEP 604 union 注解 dataclass 字段的 `__builtins__` 面）挂账后续。清单全文＝台账卷 `03-m3-progress-05.md` 的 task-7 表 ✓（一处真相，不重述） | `BC-14`、`CM-14` | 无 |
+| **P3-32** | **官方 `Lib/test` 的框架门槛**（`tools/libtests_survey.py` 实测 397 模块 **0 通过** ✗）：根因＝**`sys.exit` 缺失**（`unittest.main()` 结尾必用）＋ **`unittest.main()` 直接崩 `KeyError: 'dest'`**（选项解析路）⇒ 修好这两处，官方套件才**开始**跑 | `REQUIREMENTS` 的兼容承诺（保证层）＋ `MS-19` 判据补充 | 无 |
+| **P3-33** | **`sys.path` 不认 `PYTHONPATH`**（参照认 ✓、本层只有"脚本目录 ＋ `Lib`" ✗）⇒ `import test.support` 一类外部路径全灭；与 `IM-24`（`sys.path` 由 `site.py` 构造）的 C 层那半需补齐 | `IM-24`／`IM-26`、`MS-19` 判据补充 | 无 |
+| **P3-34** | **`complex` 类型面**：`1j` 字面量解析不了（状态 5）⇒ **52 个官方测试直接阻塞**（调查实测） | `TS-42`、`CM-27` | 无 |
+| **P3-35** | **合法 Python 被拒的语法缺口**（`MS-19` 判据补充：**必须修、不得登记为差异** ✗）：surrogate escape `\ud800` 类 **20 个**／同行 `try:`·`for:` **8 个**／解析器瑕疵（`语句结尾多出了 Some(Str(…))` 5、`async` 在列表里 1、`要冒号却得 Some(Dot)` 1） | `MS-19` 判据补充、`BC-15` | 无 |
+| **P3-36** | **`.pyac` `BadCodeSection`**（6 个官方测试触发 ✗）：代码段读不出来 ⇒ 缓存/序列化真 bug，按 `IM-18`…`IM-21` 的容器契约查 | `IM-18`…`IM-21` | 无 |
+| **P3-37** | **官方套件的缺模块**：`doctest`(15)／`unittest.mock`(12)／`gc`(10)／`unicodedata`(4)／`hashlib`(4) —— 按 `CM-14` 的 fan-in 取；`unittest.mock` 与 `P3-32` 同族（先修框架） | `CM-14`、`P3-14` | 无 |
 
 ### 9.3 文档侧待办
 
