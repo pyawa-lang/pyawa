@@ -70,7 +70,9 @@ fn empty_inline_suite_at_eof_is_a_plain_readable_error() {
     for (name, source) in EMPTY_SUITES {
         match compile_eof(source) {
             Ok(()) => panic!("{name}：空体必须报普通 CompileError，不许静默接受\n源码：{source:?}"),
-            Err(CompileError::Syntax(message)) | Err(CompileError::Unsupported(message)) => {
+            Err(CompileError::Syntax(message))
+            | Err(CompileError::Unsupported(message))
+            | Err(CompileError::TypeAssignment(message)) => {
                 assert!(
                     message.contains("缩进"),
                     "{name}：错误信息要可读（应指明\"体要缩进\"），实际 {message:?}"

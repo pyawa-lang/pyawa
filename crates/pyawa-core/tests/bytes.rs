@@ -313,7 +313,8 @@ fn run_source(vm: &Vm, source: &str, name: &str) -> Result<NonNull<Header>, Stri
     // 与夹具里的实测文本对不上）
     .map_err(|error| match error {
         pyawa_core::compile::CompileError::Syntax(text)
-        | pyawa_core::compile::CompileError::Unsupported(text) => text,
+        | pyawa_core::compile::CompileError::Unsupported(text)
+        | pyawa_core::compile::CompileError::TypeAssignment(text) => text,
     })?;
     let code = pyawa_core::compile::instantiate(&vm.instance, &unit);
     let namespace = vm.instance.new_dict();

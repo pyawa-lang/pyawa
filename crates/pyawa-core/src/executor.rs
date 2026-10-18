@@ -45,7 +45,7 @@ use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
     AsendObject, BoolObject, ExceptionObject,
-    GeneratorObject, IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject,
+    GeneratorObject, MethodObject, DictObject, FloatObject, FunctionObject,
     IntObject, ListObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
@@ -612,7 +612,13 @@ pub(crate) fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Opti
 
 // ---- `BC-23` 的边界检查（`TS-10`…`TS-13`） ----
 
-/// 渲染一个标签给消息用：类型对象给名字、二元组给 `外[内]`、其余给 `Any`。
+/// 渲染一个标签给消息用：类型对象给名字、二元组给 `外[内]`、
+/// **union 标签**给 `Union[成员, 成员]`、其余给 `Any`。
+///
+/// union 标签形态（`TS-46`／`BC-24`）：元组首项是字符串 `"Union"`、其后是成员标签
+/// `("Union", 标签, 标签, …)`——成员递归渲染（类型对象／`"Any"`／嵌套 union／`(外, 内)`）；
+/// 首项是**类型对象**的二元素元组**不是** union，仍走 `外[内]`（区分逻辑在
+/// `protocol::boundary_accepts`）。
 pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> String {
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
@@ -626,6 +632,20 @@ pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> Strin
     if label_type == builtin_type(instance, "tuple") {
         // SAFETY: 类型身份刚确认。
         let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
+        // `TS-46`／`BC-24`：union 标签 ⇒ `Union[成员, 成员]`（成员用同一函数递归渲染）。
+        if let Some(head) = parts.item(0) {
+            // SAFETY: 元组元素存活。
+            let head_is_union_marker = unsafe { head.as_ref() }.ty() == builtin_type(instance, "str")
+                // SAFETY: 类型身份刚确认。
+                && unsafe { &*head.as_ptr().cast::<StrObject>() }.value() == "Union";
+            if head_is_union_marker {
+                let members = (1..parts.len())
+                    .filter_map(|index| parts.item(index))
+                    .map(|member| render_label(instance, member))
+                    .collect::<Vec<_>>();
+                return format!("Union[{}]", members.join(", "));
+            }
+        }
         if parts.len() == 2 {
             return format!(
                 "{}[{}]",
@@ -642,6 +662,167 @@ pub(crate) fn type_name_of(instance: &Instance, ty: NonNull<TypeObject>) -> Stri
     let _ = instance;
     // SAFETY: ty 由注册表持有。
     unsafe { ty.as_ref() }.name().to_owned()
+}
+
+// ---- **`PEP 604`**：`X | None` 与 union 再 `|`（`NB_OR` 的类型/union 语境） ----
+
+/// `NB_OR` 一侧操作数的**类型/union 语境**视图（参照 3.14 实测口径）。
+enum OrOperand {
+    /// 类型对象 ⇒ 单成员。
+    Type(NonNull<Header>),
+    /// `types.UnionType` 实例 ⇒ 其 `__args__` 成员（按书写顺序）。
+    Union(Vec<NonNull<Header>>),
+    /// `None`。**只有**另一边是类型/union 时才当 `NoneType` 用；`None | None` 仍是 `TypeError`。
+    NoneValue,
+    /// 其余值（`5` 一类）。只在与 union 再 `|` 时成为成员。
+    Other(NonNull<Header>),
+}
+
+/// 是 `types.UnionType` 实例 ⇒ 取 `__args__` 的成员表（**借用**，不增减引用）；否则 `None`。
+fn union_args_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+    let union_type = instance.type_named("UnionType")?;
+    // SAFETY: object 是存活对象；类型身份下面刚比过。
+    if unsafe { object.as_ref() }.ty() != union_type {
+        return None;
+    }
+    let mapping = mounted_instance_dict(instance, object)?;
+    let args = instance.dict_get(mapping, "__args__")?;
+    if instance.type_of(args) != builtin_type(instance, "tuple") {
+        return None;
+    }
+    // SAFETY: 上面刚确认过是 `tuple`。
+    let tuple = unsafe { &*args.as_ptr().cast::<TupleObject>() };
+    Some((0..tuple.len()).filter_map(|index| tuple.item(index)).collect())
+}
+
+/// 一侧操作数的视图（`None` 先认，因为它既不是类型对象也不是 union）。
+fn or_operand(instance: &Instance, object: NonNull<Header>) -> OrOperand {
+    if object == instance.singletons().none() {
+        return OrOperand::NoneValue;
+    }
+    if instance.is_type_object(object) {
+        return OrOperand::Type(object);
+    }
+    match union_args_of(instance, object) {
+        Some(members) => OrOperand::Union(members),
+        None => OrOperand::Other(object),
+    }
+}
+
+/// 往 union 成员表里加一项：**去重**（参照对成员按 `==` 去重：`int | int` ⇒ `int`，
+/// `(int | int) | str` ⇒ `int | str`）+ 自己持一份引用。
+fn push_union_member(
+    instance: &Instance,
+    members: &mut Vec<NonNull<Header>>,
+    member: NonNull<Header>,
+) {
+    if members
+        .iter()
+        .any(|existing| values_equal_public(instance, *existing, member))
+    {
+        return;
+    }
+    instance.retain(member);
+    members.push(member);
+}
+
+/// 造一个 `types.UnionType` 实例：成员表按给定顺序进 `__args__`（成员是**新引用**，由本函数接手）。
+fn new_union_of(instance: &Instance, members: Vec<NonNull<Header>>) -> NonNull<Header> {
+    let union_type = instance
+        .type_named("UnionType")
+        .unwrap_or_else(|| instance.new_attribute_type("UnionType"));
+    let object = instance
+        .alloc(crate::builtin_objects::AttributeObject::new(
+            union_type,
+            RefCell::new(Some(instance.new_dict())),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    let args = instance.new_tuple(members);
+    // `set_attribute_value` 收**借用** ⇒ 交出去的元组引用随后还掉（字典自己持一份）。
+    let _ = instance.set_attribute_value(object, "__args__", args);
+    release(instance, args);
+    object
+}
+
+/// `NB_OR` 的 **`PEP 604`** 分支：`X | None`／`None | X`／union 再 `|`。
+///
+/// 返回 `None` ⇒ 这一对不该按类型/union 处理（落回算术：`1 | 2`、`int | 5` 的 `TypeError` 照旧）。
+/// 参照实测（3.14.4）的规则与顺序：
+/// * 类型／union 参与的 `|` ⇒ **扁平** union（`int | str | None` 的 `__args__` 是三项）；
+/// * `None` 只在与类型/union 同侧时当 `NoneType` 类用；`None | None` 不是 union；
+/// * union 再 `|` 会摊平并**去重**；`(int | str) | 5` 这类 union ＋ 任意值也成成员（参照行为）。
+fn pep604_union_or(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    let left_operand = or_operand(instance, left);
+    let right_operand = or_operand(instance, right);
+    // 先行排除"没有一方是类型/union"与"裸类型/None 对任意值"的组合 ⇒ 那些必须落回算术报 TypeError。
+    match (&left_operand, &right_operand) {
+        (OrOperand::Type(_), OrOperand::Other(_))
+        | (OrOperand::NoneValue, OrOperand::NoneValue)
+        | (OrOperand::NoneValue, OrOperand::Other(_))
+        | (OrOperand::Other(_), OrOperand::Type(_))
+        | (OrOperand::Other(_), OrOperand::NoneValue)
+        | (OrOperand::Other(_), OrOperand::Other(_)) => return None,
+        _ => {}
+    }
+    let mut members: Vec<NonNull<Header>> = Vec::new();
+    for operand in [left_operand, right_operand] {
+        match operand {
+            OrOperand::NoneValue => {
+                // `None` ⇒ `NoneType` 那个**类**（参照 `__args__` 里就是这个类）。
+                let none_type = instance.type_value(instance.singletons().none_type());
+                push_union_member(instance, &mut members, none_type);
+                release(instance, none_type);
+            }
+            OrOperand::Type(label) => push_union_member(instance, &mut members, label),
+            OrOperand::Union(items) => {
+                for item in items {
+                    push_union_member(instance, &mut members, item);
+                }
+            }
+            OrOperand::Other(value) => push_union_member(instance, &mut members, value),
+        }
+    }
+    // 去重后只剩一个成员 ⇒ 就是那个类型本身（参照：`int | int` 给 `int`）。
+    if members.len() == 1 {
+        return members.pop();
+    }
+    Some(new_union_of(instance, members))
+}
+
+/// **未捕获异常**的宿主诊断文本（`pa_errmsg` 用）：`<类型名>: <str(exception)>`。
+///
+/// 参照的未捕获报错尾行就是 `str(exception)` 的口径（`MS-8` 比到这一行）⇒ 用首实参的裸内容
+/// （`Instance::exception_message_of`）会漏掉 `KeyError` 的 repr 层：参照 `KeyError: 'missing'`、
+/// 本层先前给 `KeyError: missing`。`str` 槽的 KeyError 口径在 `builtin_objects::exception_str`
+/// 里已有（单实参 ⇒ 实参 repr）⇒ 这里直接复用，**不改**那个实现。
+///
+/// 形状核对照 `Instance::exception_message_of`（先核 `BaseException` 子类型与载荷大小，再读载荷）：
+/// 核不过 ⇒ **只给类型名**（绝不硬读）。`str` 渲染失败也只是退化成类型名。
+pub fn exception_uncaught_text(instance: &Instance, exception: NonNull<Header>) -> String {
+    // SAFETY: exception 由调用方保证存活。
+    let ty = unsafe { exception.as_ref() }.ty();
+    // SAFETY: ty 由注册表持有。
+    let type_object = unsafe { ty.as_ref() };
+    let type_name = type_object.name();
+    let is_exception = instance
+        .type_named("BaseException")
+        .is_none_or(|base| instance.is_subtype(ty, base));
+    if !is_exception
+        || type_object.instance_size()
+            != core::mem::size_of::<crate::builtin_objects::ExceptionObject>()
+    {
+        return type_name.to_owned();
+    }
+    // SAFETY: 形状刚核过（与 `exception_message_of` 同一套检查）。
+    match unsafe { crate::builtin_objects::exception_str(exception.as_ptr(), instance) } {
+        Ok(text) if !text.is_empty() => format!("{type_name}: {text}"),
+        _ => type_name.to_owned(),
+    }
 }
 
 /// **按对象抛**（`_codecs` 的错误处理器要用：`strict_errors` 就是"原样再抛" ✓）。
@@ -1339,6 +1520,11 @@ pub fn execute<'a>(
             // `BC-23`：边界检查的两条**专有**指令（`TS-10`…`TS-13`）
             "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" => {
                 boundary_check(instance, frame.get(), oparg as u8, opcode_number)?;
+            }
+            // `BC-65`：变量赋值的运行期检查（`TS-47`）——读栈顶**不**弹。
+            // oparg 是常量表下标：按 `usize` 传（`EXTENDED_ARG` 折出来的长下标不截断）。
+            "CHECK_ASSIGNMENT" => {
+                assignment_check(instance, frame.get(), oparg, opcode_number)?;
             }
             "LOAD_COMMON_CONSTANT" => {
                 // `BC-57`＋`SPEC-bytecode.md`：oparg 索引**固定表**（实测 `dis._common_constants`：
@@ -2120,11 +2306,17 @@ pub fn execute<'a>(
                 if ty == builtin_type(instance, "generator") || is_iterator_type(instance, ty) {
                     frame.get().push(iterable)?;
                 } else {
-                    match iterator_type_for(instance, iterable) {
-                        Ok(iterator_type) => {
-                            let iterator =
-                                instance.alloc(IteratorObject::new(iterator_type, iterable, Cell::new(0)));
-                            frame.get().push(iterator.into_raw().cast::<Header>())?;
+                    // **回退走 `iter_value`**（与 `GET_ITER` **同一处实现** ✓）：`iterator_type_for`
+                    // 只认内建容器 ✓ ⇒ 先前 `yield from <有 __iter__ 的自定义对象>` 报
+                    // `指令 16 …只接线了…的内建迭代器` ✗（真受害者：`ChainMap` 的 `KeysView.__iter__`
+                    // 就是 `yield from self._mapping` ✓ ⇒ `list(cm.keys())` 必炸 ✓）。
+                    match iter_value(instance, iterable) {
+                        Ok(iterator) => {
+                            // 迭代器可能**就是**入参（`iter(迭代器) is 它自己`）⇒ 别释放
+                            if iterator != iterable {
+                                release(instance, iterable);
+                            }
+                            frame.get().push(iterator)?;
                         }
                         Err(error) => {
                             release(instance, iterable);
@@ -4478,10 +4670,12 @@ Err(raise(instance, exception))
                         }
                         "NB_POWER" => arithmetic_public(instance, left, right, "**", opcode_number),
                         "NB_AND" => arithmetic_public(instance, left, right, "&", opcode_number),
-                        "NB_OR" if instance.is_type_object(left) && instance.is_type_object(right) =>
-                            // **类型的 `|`** ✓（第 214 轮）：`int | str` ⇒ 联合类型 ✓（`Lib/types.py` 的 `UnionType` ✓）。
-                            Ok(instance.new_union_type(left, right)),
-                        "NB_OR" => arithmetic_public(instance, left, right, "|", opcode_number),
+                        // **`PEP 604`**：`X | None`／`None | X`／union 再 `|` ⇒ union（参照口径）；
+                        // 不是类型/union 语境（`1 | 2`、`int | 5`）⇒ 落回算术（`TypeError` 消息照旧）。
+                        "NB_OR" => match pep604_union_or(instance, left, right) {
+                            Some(union) => Ok(union),
+                            None => arithmetic_public(instance, left, right, "|", opcode_number),
+                        },
                         "NB_XOR" => arithmetic_public(instance, left, right, "^", opcode_number),
                         // `@`（矩阵乘）：`arithmetic_public` 对 `@` 一律如实报参照实测的 `TypeError`
                         "NB_MATRIX_MULTIPLY" => {

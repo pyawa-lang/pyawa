@@ -245,6 +245,10 @@ acc ??= 0                             # 只在 None 时赋值
 
   **禁止**把它们实现为对普通可调用对象的调用（那等于退回方案 A）。
 - **BC-24** oparg **必须**足以定位签名条目（**建议**：常量表中的签名索引，或类型元数据表的偏移）。
+  **标签形态**（`BC-65` 同款）：**类型对象**（按子类型判定，`TS-29`）／字符串 `"Any"`（与一切类型
+  相容，`TS-28`）／二元组 `(外类型, 内标签)`（`TS-13` 浅层；`TS-31` 深层）／
+  **union 标签**（`TS-46`／`BC-65`）：以字符串 `"Union"` 为**首项**的元组
+  `("Union", 标签, 标签, …)` ⇒ **任一成员相容即相容**；成员可递归（成员本身可为上述任一形态）。
 - **BC-25** 发射规则两条**都**要满足：
   ① **只在标注／未标注的交界处发射**；两侧都已标注（静态可查）时**禁止**发射——
      否则就是把静态检查重复成运行期开销，违背"安全度由程序自己选择"的成本模型（`DESIGN.md` §6）；
@@ -258,6 +262,15 @@ acc ??= 0                             # 只在 None 时赋值
   `dis` 会按 `opname` 原样显示——**这正是选 B 的收益：检查点在反汇编里可见**。
 - **BC-29** 指令集**必须**有一个版本常量；**`.pyac` 头部必须携带它**，版本不符即判陈旧
   （`.pyac` 布局由 `SPEC-imports-and-modes.md` 定义）。指令集任何增删**必须**升版本。
+- **BC-65** **赋值检查指令**（Pyawa 专有；`TS-47` 的运行期一半）：
+  - 名字 **`CHECK_ASSIGNMENT`**；oparg ＝ **常量表下标**，该常量**必须**是**单标签元组**——
+    标签形态与 `BC-24` 相同。
+  - `stack_effect` ＝ **0**，`has_arg` 为真（`BC-27` 对专有指令的要求同款）。
+  - 语义：检查**栈顶**的值与该标签是否相容（`TS-28`…`TS-31`；粒度照 `TS-13` 的默认），
+    读而**不**弹出——随后的存储指令还要写这个值；失败抛 **`TypeAssignmentError`**
+    （`TS-47`：**`TypeError`** 的子类；与 `BC-26`／`TS-12` 的边界异常**同族、分工不同**）。
+  - 发射规则：**只**出现在扩展模式编译出的代码里（`TS-5`／`BC-25`② 同款）；
+    编号取空闲编号、不进 instrumented 区段（`BC-31`）。
 
 ---
 
@@ -521,7 +534,7 @@ acc ??= 0                             # 只在 None 时赋值
 | 格式化与 t-string | `CONVERT_VALUE`、`FORMAT_SIMPLE`、`FORMAT_WITH_SPEC`、`BUILD_TEMPLATE`、`BUILD_INTERPOLATION`（3.14 **无** `FORMAT_VALUE`） | **见 `BC-58`**（`CONVERT_VALUE`：`1`／`2`／`3` ＝ `str`／`repr`／`ascii`） |
 | 模式匹配 | `MATCH_CLASS`、`MATCH_MAPPING`、`MATCH_SEQUENCE`、`MATCH_KEYS` | 见 §11 |
 | PEP 695 泛型 | `CALL_INTRINSIC_1`／`_2` 的 typevar 一族（`INTRINSIC_TYPEVAR`=7、`INTRINSIC_PARAMSPEC`=8、`INTRINSIC_TYPEVARTUPLE`=9、`INTRINSIC_SUBSCRIPT_GENERIC`=10、`INTRINSIC_TYPEALIAS`=11；`INTRINSIC_TYPEVAR_WITH_BOUND`=2、`WITH_CONSTRAINTS`=3、`SET_FUNCTION_TYPE_PARAMS`=4、`SET_TYPEPARAM_DEFAULT`=5） | intrinsic 序号 |
-| **Pyawa 专有** | `CHECK_BOUNDARY_IN`、`CHECK_BOUNDARY_OUT`（`BC-23`） | 签名条目索引（`BC-24`） |
+| **Pyawa 专有** | `CHECK_BOUNDARY_IN`、`CHECK_BOUNDARY_OUT`（`BC-23`）、`CHECK_ASSIGNMENT`（`BC-65`） | 签名条目索引（`BC-24`）／标签条目索引（`BC-65`） |
 
 - **BC-50** 上表**禁止**依赖具体编号；名字**必须**从 `opmap` 取（`BC-30`）。
 - **BC-51** 某指令的**语义**若与 CPython 不同，**必须**在 §11 写明；
@@ -593,6 +606,7 @@ acc ??= 0                             # 只在 None 时赋值
 | `match` | 模式匹配族 | 模式**顺序**与守卫求值时机 |
 | f-string／t-string | 格式化与 t-string | `!r`／`!s`／`!a` 与格式规范的求值时机 |
 | **函数序言与返回** | **Pyawa 专有** | 入参检查在序言、返回值检查在返回前；发射条件见 `BC-25` |
+| **已标注变量的赋值** | **Pyawa 专有** | 运行期赋值检查（`TS-47`）；发射条件见 `BC-25`② 同款 |
 
 ---
 

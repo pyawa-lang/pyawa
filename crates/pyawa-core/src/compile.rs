@@ -261,6 +261,12 @@ pub enum CompileError {
     Syntax(String),
     /// 认识但还没接线（消息说明是哪一件）。
     Unsupported(String),
+    /// **编译期类型错**（`TS-47` 的静态那一半）：能静态判定的赋值不符。
+    ///
+    /// 与 [`CompileError::Syntax`]／[`CompileError::Unsupported`] 分开：这不是"语法不认识"、
+    /// 也不是"还没接线"，而是**程序写错了类型**（消息含变量名／期望／实际／位置）。
+    /// 导入时映射成 `TypeAssignmentError`（与运行期赋值检查同族，`TS-47`）。
+    TypeAssignment(String),
 }
 
 /// 源码里的一段跨度（行从 1 起、列从 0 起）。
@@ -308,13 +314,19 @@ pub fn compile(
     tier: CheckTier,
     optimization: u8,
 ) -> Result<CompiledUnit, CompileError> {
-    // `BC-14`：模式是显式入参。`BC-15` 要求纯 Python 模式拒绝扩展语法——而 `§13-12` 已决
-    // "扩展特性清单为空"，所以此刻两种模式的产物相同（`filename` 也还不进产物）。
+    // `BC-14`：模式是显式入参，词法期就按它分流（`TS-46` 的 `?` 只在扩展模式是词素）。
+    // `BC-15` 要求纯 Python 模式拒绝扩展语法 ⇒ 纯模式下 `?` 仍是词法期的 `Syntax` 错误。
     // `TS-31`：档位同层显式传入；深层档位目前不改发射（见 `CheckTier` 的说明）。
     // `IM-19`／`IM-21`：优化级同层显式传入，同样暂不改发射。
-    let _ = (filename, optimization);
-    let lexed = lex(source)?;
+    let _ = optimization;
+    let lexed = lex(source, mode)?;
     let statements = parse_module(&lexed)?;
+    // **`TS-47` 的编译期一半**（静态赋值检查）：**只在扩展模式**跑（`TS-5`：`.py` 的标注
+    // 不产生任何检查、产物逐字节不变）。能静态判定的不符在这里就报 `TypeAssignment`；
+    // 判不出的留给运行期 `CHECK_ASSIGNMENT`（`BC-65`）兜住。
+    if mode == Mode::Extension {
+        typecheck::check(&statements, filename)?;
+    }
     // 注意：**空模块与"只有 `pass` 的模块"在参照里都编得过**（实测：`RESUME; LOAD_CONST None;
     // RETURN_VALUE`）⇒ 这里**不能**因为"一条语句都没有"报错（`pass` 不产生指令、也不进语句表）
     let unit = compile_scope(
@@ -347,6 +359,8 @@ use self::emitter::*;
 
 mod parser;
 use self::parser::*;
+
+mod typecheck;
 
 pub(crate) mod lexer;
 use self::lexer::*;
@@ -453,6 +467,7 @@ fn compile_class_scope(
         handler_stack: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
         pending_condition_copies: Vec::new(),
@@ -463,6 +478,7 @@ fn compile_class_scope(
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
         class_annotations: Vec::new(),
+        assignment_labels: Vec::new(),
         annotate_freevars: annotate_freevars.to_vec(),
         epilogue_span: span,
         last_span: span,
@@ -724,6 +740,7 @@ fn compile_scope(
         handler_stack: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
         pending_condition_copies: Vec::new(),
@@ -741,6 +758,7 @@ fn compile_scope(
         in_condition: false,
         epilogue_needed: true,
         class_annotations: Vec::new(),
+        assignment_labels: Vec::new(),
         annotate_freevars: Vec::new(),
         epilogue_span: resume_span,
         last_span: resume_span,
@@ -1792,6 +1810,24 @@ struct TypeParam {
     default: Option<Expression>,
 }
 
+/// **变量／类属性标注的表示**（`TS-47` 的类型标签来源）。
+///
+/// 同一位置两种形态**二选一**（一处真相）：
+///
+/// - [`AnnotationSource::Expression`]：注解是一段**表达式**——纯 Python 模式**永远**走这条
+///   （`.py` 的产物因此逐字节不变，`TS-5`）；扩展模式下类型语法判不出来时也回退到这条
+///   （`.pyawa` 仍接受 `.py` 能接受的任意注解表达式，纯增量）。
+/// - [`AnnotationSource::Type`]：注解是一个**编译期类型标签**（`BC-24` 的形态：类型名／`"Any"`／
+///   `(外, 内)`／`AnnUnion`）——只在扩展模式（`.pyawa`）判得出来时使用。它同时是 `TS-47`
+///   运行期赋值检查（`CHECK_ASSIGNMENT`，`BC-65`）的标签来源。
+///
+/// `TS-46` 的 `T?` 在解析期就统一成 `AnnUnion{T, NoneType}` ⇒ 两种写法在这里是**同一份**标签。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AnnotationSource {
+    Expression(Expression),
+    Type(Constant),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
     /// **链式赋值**（`a = b = c = x` ✓，目标按**从左到右**存 ✓）。
@@ -1845,10 +1881,13 @@ enum Statement {
     /// **带注解声明的名字** ✓（task-21 ✓，PEP 649）：`x: int`／`x: int = 1` 的**注解那一半** ✓ ——
     /// 类体里收集成 `__annotate__`（惰性求值 ✓）；类体之外**不发指令** ✓（参照同：模块级模块体收
     /// `__annotate__` 那一套随后接 ✓）。
+    ///
+    /// `TS-47`：扩展模式下注解是**编译期类型标签**（[`AnnotationSource::Type`]）⇒ 这个名字
+    /// 此后被赋值时发射器要发 `CHECK_ASSIGNMENT`（`BC-65`）；纯模式仍是表达式（不产生检查）。
     Annotation {
         name: String,
         name_span: Span,
-        annotation: Expression,
+        annotation: AnnotationSource,
         span: Span,
     },
     Return(Expression, Span),
@@ -2346,16 +2385,26 @@ fn instantiate_constant(
         // **`...` 也是单例** ✓（第 177 轮）⇒ 同样交一份新引用 ✓。
         Constant::Ellipsis => Some(instance.retain(instance.singletons().ellipsis())),
         Constant::Int(value) => Some(instance.new_int(*value)),
-        // **注解形状 → 边界标签** ✓（第 287 轮）：它们**会**进常量池（`CHECK_BOUNDARY_IN` 的标签就是注解 ✓）
+        // **注解形状 → 边界／赋值标签** ✓（第 287 轮）：它们**会**进常量池
+        // （`CHECK_BOUNDARY_IN` 与 `CHECK_ASSIGNMENT` 的标签就是注解 ✓）。
         // —— 单实参那种已在上面的解析里折回 `Tuple([外, 内])` ✓（`TS-31` 的深层档位照旧 ✓）；
         // 这里只处理**新形状**：
         // - `X[a, b, …]` ⇒ **只按外层类型浅比** ✓（多实参的深层语义 `TS-31` 没定义 ⇒ 不乱发明 ✓）；
-        // - `A | B`／`A.B`／`[a, b]`／前向引用串 ⇒ 静态解析不了 ⇒ 按 `Any`（**放行** ✓，并如实记 ✓）。
+        // - `A | B` ⇒ **union 标签** `("Union", 左标签, 右标签)` ✓（`TS-46`／`TS-47`：值为 `None`
+        //   或任一成员接受即通过）。左／右**递归**实例化 ⇒ 嵌套 union 允许嵌套元组；
+        //   成员可以是类型对象／`"Any"` 字符串／`(外, 内)` 复合标签。**形态是与执行器
+        //   `boundary_accepts` 的契约**（两半必须同轮落地）——`T?` 与手写 `T | None` 都走这里 ✓；
+        // - `A.B`／`[a, b]`／前向引用串 ⇒ 静态解析不了 ⇒ 按 `Any`（**放行** ✓，并如实记 ✓）。
+        Constant::AnnUnion { left, right } => {
+            let marker = instance.new_str("Union");
+            let left = instantiate_constant(instance, left)?;
+            let right = instantiate_constant(instance, right)?;
+            Some(instance.new_tuple(vec![marker, left, right]))
+        }
         Constant::AnnSubscript { base, .. } => instantiate_constant(instance, base),
-        Constant::AnnUnion { .. }
-        | Constant::AnnList(_)
-        | Constant::AnnAttribute { .. }
-        | Constant::AnnString(_) => Some(instance.new_str("Any")),
+        Constant::AnnList(_) | Constant::AnnAttribute { .. } | Constant::AnnString(_) => {
+            Some(instance.new_str("Any"))
+        }
         // **任意精度字面量** ✓（`TS-45` 的载荷 ＋ `P1-11` 的字面量面 ✓）：
         // 十进制串 → `IntValue` ✓（装得下 `i64` 的会降级走单例 ✓）。
         Constant::BigInt(text) => instance

@@ -95,12 +95,18 @@ pub(super) enum Lexeme {
     LeftShift,
     /// `>>`
     RightShift,
+    /// **`?`**（`TS-46` 的可空后缀；**只在扩展模式**下才会产生 —— 纯 Python 模式仍在下面
+    /// 的"不认识的字符"臂报 `Syntax` ⇒ `BC-15` 直接成立 ✓）。
+    Question,
 }
 
 /// 词法结果：单元 ＋ 与它**一一对应**的跨度。
 pub(super) struct Lexed {
     pub(super) lexemes: Vec<Lexeme>,
     pub(super) spans: Vec<Span>,
+    /// **编译模式**（`BC-14` 的显式入参，词法期就带进来）：决定扩展词素（`?`）认不认；
+    /// 语法层要判"扩展语法"时直接读它（免得给整张 parser 加参数）。
+    pub(super) mode: Mode,
 }
 
 /// 解一个 `bytes` 字面量里的转义（`characters` 从**反斜杠**那一位开始）。
@@ -249,7 +255,7 @@ pub(super) fn lex_bytes_escape(characters: &[char], position: usize) -> Result<(
     }
 }
 
-pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
+pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
     let characters: Vec<char> = source.chars().collect();
     let mut index = 0usize;
     let mut lexemes = Vec::new();
@@ -991,6 +997,14 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                     column!(index)
                 )));
             }
+            // **`?`**（`TS-46`）：**只**在扩展模式下是词素；纯 Python 模式落到下面的
+            // `other` 臂当场报 `Syntax`（`BC-15` 的拒绝面就靠这一条，不另设分支）。
+            '?' if mode == Mode::Extension => {
+                let start = column!(index);
+                lexemes.push(Lexeme::Question);
+                spans.push(Span::new(line, line, start, start + 1));
+                index += 1;
+            }
             other => {
                 return Err(CompileError::Syntax(format!(
                     "不认识的字符 {other:?}（第 {line} 行，列 {}）",
@@ -1007,7 +1021,7 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
     }
     lexemes.push(Lexeme::End);
     spans.push(end_span);
-    Ok(Lexed { lexemes, spans })
+    Ok(Lexed { lexemes, spans, mode })
 }
 
 // ---- 语法 ----
@@ -1073,7 +1087,8 @@ fn public_kind(lexeme: &Lexeme) -> PythonTokenKind {
 /// **公开的词法入口** ✓：源码（`str` ✓）⇒ 词法单元流 ✓；词法错按**消息**回 ✓
 /// （调用方按参照把 `SyntaxError` 报出去 ✓）。
 pub fn python_tokens(source: &str) -> Result<Vec<PythonToken>, String> {
-    let lexed = lex(source).map_err(|error| format!("{error:?}"))?;
+    // `_tokenize` 是**纯 Python** 的视图（`.py` 语料）⇒ 固定纯模式（`?` 不是合法 token ✓）。
+    let lexed = lex(source, Mode::PurePython).map_err(|error| format!("{error:?}"))?;
     Ok(lexed
         .lexemes
         .iter()

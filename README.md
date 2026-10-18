@@ -4,7 +4,7 @@
 核心是**像 Lua 一样易嵌入**：宿主直接实现沙箱接口、脚本不可信且不可逃逸、纯 Python 库逐字可用。
 另提供**程序级可选的安全谱**（渐进类型，非强制）。**目标不是更快的 Python。**
 
-当前状态：**M0 · M1 · M2 均已成立**。
+当前状态：**M0 · M1 · M2 · M3 · M4 均已成立**。
 
 - **M0**（文档集）：13 份全部写出（状态列见 `docs/SPEC-INDEX.md` §1）；两条判据（`CX-1` 编号零悬空
   ＋重复定义、`CX-2` 文档集状态一致）由 `tests/ci/check.py` 承载，当前 **12/12 绿**
@@ -19,10 +19,18 @@
   `MS-8` 的比对项**齐**（退出码／stdout／stderr／未捕获异常 ＋ 探针）；`MS-12` 自检 **112/112**；
   `MS-13` 的语料下限**逐面满足**（可执行判据 `tools/check_corpus_floor.py`）；`MS-25` 连跑三次数值一致。
   在册已知差异 3 条（`DIV-1`／`DIV-2`／`DIV-8`）**全属 `MS-19` 的合法类**，且当前**无语料命中**
+- **M4**（类型系统，`docs/PLAN-milestones.md` §6）：扩展模式（`.pyawa`）的渐进类型 **A 批（类型链）**——
+  `TS-46`（`T?`）→ `TS-47`＋`TS-48`（变量标注即静态类型／平台类型）→ `TS-50`（收束）。两层检查：
+  **编译期静态检查器**（`crates/pyawa-core/src/compile/typecheck.rs`，`CompileError::TypeAssignment`）＋
+  **运行期** `CHECK_ASSIGNMENT`（`BC-65`）／`TypeAssignmentError`。判据①（`T-BC-8`／`T-BC-9` 可观测）的
+  可执行归档见 `crates/pyawa-core/tests/m4_acceptance.rs`；判据②（**渐进保证** `T-TS-1`）见
+  `crates/pyawa-core/tests/gradual_guarantee.rs`。`.py` 下同源码**合法且惰性**（`BC-15`／`TS-5`，编译产物逐字节不变）。
+  如实缺口：`BC-25`①（"两侧皆标注处禁止发射"，需跨模块静态信息）未做；`TS-50` 部分形态与类体/嵌套函数边界未覆盖
+  （台账卷 05 的 round 4–7 节）
 - **缺口**：**规格内已无未写小节**（原先两处——`SPEC-bytecode.md` 的"超出 §10 的指令"与
   `SPEC-c-modules.md` 的"逐模块合约表"——**均已落地**：前者为按需流程、后者为维护中的表）；
   `PLAN-milestones.md` §10 里的 **harness 实现**与**基线语料下限**也均已落地，
-  余下只有 **M4…M6 的可执行判据**（M3 判据① **已达标：451/628 ＝ 71.8%** ✓ 仪器 `tools/lib_import_ratio.py`；判据② **已裁定达成** ✓ 仪器 `tools/corpus_coverage.py`）。这是 `v0` 的既定含义
+  余下只有 **M5…M6 的可执行判据**（M3 判据① **已达标：451/628 ＝ 71.8%** ✓ 仪器 `tools/lib_import_ratio.py`；判据② **已裁定达成** ✓ 仪器 `tools/corpus_coverage.py`）。这是 `v0` 的既定含义
 
 ## 文档（`docs/`，全部平铺）
 

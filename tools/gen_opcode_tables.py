@@ -132,12 +132,16 @@ def generate() -> str:
 
     fitted = fit_stack_effects()
     free = free_opcodes()
-    if len(free) < 2:
+    if len(free) < 3:
         raise SystemExit("BC-31 失败：instrumented 区段之下没有足够的空闲编号")
-    boundary_in, boundary_out = free[-1], free[-2]
+    boundary_in, boundary_out, assignment = free[-1], free[-2], free[-3]
 
-    # T-BC-11：`opmap` ＝ 基线 ∪ 专有指令（额外项**仅**这两条）
-    proprietary = [("CHECK_BOUNDARY_IN", boundary_in), ("CHECK_BOUNDARY_OUT", boundary_out)]
+    # T-BC-11：`opmap` ＝ 基线 ∪ 专有指令（额外项**仅**这三条）
+    proprietary = [
+        ("CHECK_BOUNDARY_IN", boundary_in),
+        ("CHECK_BOUNDARY_OUT", boundary_out),
+        ("CHECK_ASSIGNMENT", assignment),
+    ]
     # BC-39：`COMPARE_OP` 的 oparg 对应 `opcode.cmp_op` 的六元组
     cmp_op = list(opcode.cmp_op)
     by_name = sorted(list(opmap.items()) + proprietary)
@@ -147,8 +151,9 @@ def generate() -> str:
     for family in ("arg", "const", "name", "jump", "free", "local", "exc"):
         predicate = getattr(_opcode, f"has_{family}")
         has[family] = sorted(op for op in opmap.values() if predicate(op))
-    # BC-24：两条专有指令都带 oparg（签名条目索引），因此进 `has_arg`——否则 `dis` 不会按带参格式化
-    has["arg"] = sorted(set(has["arg"]) | {boundary_in, boundary_out})
+    # BC-24／BC-65：三条专有指令都带 oparg（签名或标签条目下标），因此进 `has_arg`——
+    # 否则 `dis` 不会按带参格式化
+    has["arg"] = sorted(set(has["arg"]) | {boundary_in, boundary_out, assignment})
 
     # 注意：`opcode._inline_cache_entries` 的键是**指令名**（str），不是编号。
     cache = sorted(
@@ -185,7 +190,9 @@ def generate() -> str:
         "",
         "/// `BC-40`：指令集版本常量——增删指令、语义变化、cache 宽度变化**必须**递增；",
         "/// `BC-41` 要求它随 `.pyac` 头部一起判陈旧。取值由实现维护。",
-        "pub const INSTRUCTION_SET_VERSION: u32 = 1;",
+        "///",
+        "/// 版本 2：新增 Pyawa 专有指令 `CHECK_ASSIGNMENT`（`BC-65`／`TS-47`）。",
+        "pub const INSTRUCTION_SET_VERSION: u32 = 2;",
         "",
         f"/// `BC-30`（实测）：有参指令的编号下界。",
         f"pub const HAVE_ARGUMENT: u16 = {HAVE_ARGUMENT};",
@@ -209,6 +216,7 @@ def generate() -> str:
         "pub static PYAWA_SPECIFIC: &[(&str, u16)] = &[",
         f'    ("CHECK_BOUNDARY_IN", {boundary_in}),',
         f'    ("CHECK_BOUNDARY_OUT", {boundary_out}),',
+        f'    ("CHECK_ASSIGNMENT", {assignment}),',
         "];",
         "",
         "/// `BC-35`：inline cache 宽度（只列非零项；发射方**必须**留等宽零填充槽）。",
@@ -277,7 +285,8 @@ def generate() -> str:
     ]
     entries = [(op, rule) for op, (rule, _) in sorted(fitted.items())]
     entries += [(boundary_out, {"kind": "const", "value": 0}),
-                (boundary_in, {"kind": "const", "value": 0})]
+                (boundary_in, {"kind": "const", "value": 0}),
+                (assignment, {"kind": "const", "value": 0})]
     entries.sort()
     lines.append(emit_items([f"({op}, {emit_rule(rule)})" for op, rule in entries], 2))
     lines += [

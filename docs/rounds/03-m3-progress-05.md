@@ -807,3 +807,271 @@
 - **判据② 的口径**：语料覆盖按 Lead 立的可操作化阈值（总量 ≥400／Lib 模块 ≥150／Lib.test ≥40）机检；
   `MS-13` ② 的字面"可编译部分全量"未追求 100%（现覆盖 150/435≈34% 可 import 模块）——P3-27 转
   **回归扩张**项、不阻塞判据 ✓。
+
+---
+
+## round 4（会话 06 · M4-A 批第 1 轮）落地 ✓ —— TS-46 可空标注 ＋ TS-47 运行期地基
+
+- **HEAD**：`7db1b4e`（`dev`，已推送 origin ✓）—— 本笔＝M4-A 批第 1 轮（TS-46 ＋ TS-47 运行期地基）；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**＋清 `Lib/__pyawa__` 后实测 ✓）：
+  **通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；连测两次同值，区间 450–452 ✓；本轮不涉及 import 面，与 M3 收尾持平 ✓）。
+- **M4 判据进展**：判据①（T-BC-8／T-BC-9 可观测）＝**未开始**（本轮只到运行期地基，编译器尚未发射检查指令）；判据②（渐进保证）＝**未开始**（随 TS-47 静态检查器一起做）。
+- **写手分工**（pyawa-core **两名**写手、不同子目录）：A＝`compile/`（lexer／parser／compile.rs＋新测试）；B＝根文件（`instance.rs`／`opcode_metadata.rs`）＋`executor/`（dispatch／protocol）＋指令表生成器。侦察（只写 `target/recon/`、非 Rust 面）＝socket。
+
+### task-A1：TS-46 可空类型标注 `T?` ✓
+
+- **词法**：新增 `Lexeme::Question` ＋ `Lexed.mode: Mode` ＋ `lex(source, mode)`；`?` **只在扩展模式**成为词素 ⇒ 纯 Python 模式仍走原「不认识的字符」臂报 `CompileError::Syntax`（`BC-15` 直接成立）；`python_tokens` 固定纯模式（`_tokenize` 是 `.py` 视图）。
+- **语法**：`parse_type_primary` 加后置 `?`（`T?` ⇒ `Constant::AnnUnion{T, NoneType}`）；相邻规则两例成立——`list[int]?`＝`list[int] | None`、`list[int?]`＝`list[int | None]`。变量／类属性标注位新增 `parse_annotation_expression`：**仅扩展模式**下把紧跟的 `?` 包成既有 `Binary(BitOr, T, None)` ⇒ 与手写 `T | None` 同码；f-string 三条重词法路径透传 mode。
+- **验收**：新建 `crates/pyawa-core/tests/type_nullable.rs` **9 用例**：① 形参＋返回值 `int?` 与 `int | None` 产物等价（code／constants／names 递归投影，**不比位置表**——`?` 与 `None` 长度不同、位点本就不可能相同，已写进测试头注）；② 相邻规则两例＋「两者不是一回事」反证；③ 类属性 `next: Node?` 的 `__annotate__` 单元等价；④ 纯模式三种标注位置均 `Err(Syntax)`；⑤ 无 `?` 源码产物不变（硬编码 `x = 1` 指令流）。
+- **如实边界** ✗：变量／类属性标注里**嵌套**的 `?`（`x: list[int?]`）本轮**报 Syntax**、不猜语义（待 TS-47 统一标注表示时收口）；表达式通道的 `A | B?` 结合方向是 `(A|B)|None`（联合可结合，与手写 `A | B | None` 逐字节等价），类型位（形参／返回值）才是规格的 `A | (B|None)`。
+
+### task-A2：TS-47 运行期地基——`TypeAssignmentError` ＋ `CHECK_ASSIGNMENT` ✓
+
+- 新异常 **`TypeAssignmentError`**：`instance.rs` 走 `alloc_type_raw` ＋ 显式登记基类 **`TypeError`**（与 `TypeBoundaryError` 同路、分工不同；`TS-47`：既有 `except TypeError` 仍能兜住）。
+- 新指令 **`CHECK_ASSIGNMENT`**（**`BC-65`**，Pyawa 专有，编号 **231**）：oparg＝**常量表下标**、常量必须是**单标签元组**（标签形态同 `BC-24`：类型对象／`"Any"`／`(外, 内)`）；`stack_effect`＝0、`has_arg`；读**栈顶不弹**（随后存储指令还要用它）；复用 `boundary_accepts` 的相容判定；失败抛 `TypeAssignmentError`，消息含 expected／got／`(文件名: line N)`。
+- **指令表**：`tools/gen_opcode_tables.py` 生成（**未手改** `opcode_metadata.rs`）；`INSTRUCTION_SET_VERSION` **1→2**（`BC-40`：指令增删必须递增）；生成器重跑幂等（前后 md5 一致、语义 diff 仅版本与 CHECK_ASSIGNMENT 相关项）。
+- **规格记录**（按 `SPEC-bytecode.md` §12 的「按需补指令」流程）：§4.1 新增 **`BC-65`** 条款、§10「Pyawa 专有」行、§11 映射行。**CX-19 口径**：新编号取当前最大+1＝**BC-65**（BC-64 已被「脚本线程的让出时机」占用 ⇒ 任务书原写的 BC-64 是旧读数，当场更正）。
+- **验收**：新建 `crates/pyawa-core/tests/assignment_check.rs` **7 用例**（元数据／异常是 `TypeError` 子类／int 接受 `bool ⊂ int`／拒 str 且消息含四要素（本异常不套方向）／`"Any"` 放行／复合标签外类型／栈不弹）；`opcode_tables`／`bytecode_decode`／`boundary`／`compile`／`pyac` 全绿；`cargo check --workspace --all-targets` 0 警告；`tests/ci/check.py` 14 项全 PASS。
+- **如实边界** ✗：**编译器尚未发射** `CHECK_ASSIGNMENT`（下一轮接 emitter）；`.py` 与既有源产物字节不变（除 `.pyc`／`.pyac` 头部版本号）。
+- **文档侧待办（交原文档负责人）** ✗：`docs/DESIGN.md` §13 的 `12.` 行仍写「已落地三条：`BC-62`／`TS-46`／`TS-47`」——实际 `BC-62` 未做、`TS-46` 只到语法面、`TS-47` 只到运行期地基。按用户口径（文档事实由原文档负责人维护）不在本轮改，仅在此记账。
+
+### 并行线侦察：P3-29 socket 真 I/O（task-3）✓ 只读结论
+
+- **现状**：`_socket` 的导入面／常量／异常／方法名**真**（`crates/pyawa-stdlib/src/_socket_module.rs`：常量 49-170／28 函数 199-229／socket 类 235-341），I/O 面**全如实 `NotImplementedError`**（510-585）；`Lib/socket.py` 运行期还缺 `_accept`／`family`／`type`／`proto`／`timeout`（类面 dir 32→27）。
+- **能力面**：**不必新增域、ABI 零改动**——`net` 域已在 `SPEC-capabilities.md` §4／§9.2，`PA_DOMAIN_NET` 已在 `pa.h`；缺的是 capabilities／core／runtime 三件套实现（照 fs／clock 先例）。**规格缺口**：§9.2 无 `socketpair`／`getaddrinfo` 槽、地址裸字节布局未定义 ⇒ 新槽按 §1 归属规则要先领 CP 编号（现最大 CP-37）⇒ **是"替未写规格做决定"，已报用户拍板**。
+- **反直觉发现**：P3-29 **不抬判据①**（socket 族模块导入面早已清零）；`http.client` 另卡 `sys.audit`、`asyncio` 另卡 `time.get_clock_info`＋`select` 真实现、`sock.family` 依赖 `super()` 非函数描述符（P3-17 同族欠账）。
+- **首片建议**：`socketpair(AF_UNIX, SOCK_STREAM)`（唯一可对参照逐字节验收的真 I/O 形状：参照已实测 `b'hi'`；pyawa 现报未接线）；② `AF_INET` 客户端面作第二片（需地址线格式）。
+- **待用户拍板（已报）**：A1 `socketpair` 新槽（领 CP）／改 ②；A2 `getaddrinfo`（加槽／纯数值收窄／推迟）；A3 地址线格式（IPv4 4B＋端口 2B 大端 推荐）；A4 fd 语义（沿用 fs 先例 推荐）。Lead 已可自决：B1 `PA_ASYNC_OK` 声明、B2 `sys.audit` 先落 no-op、B3 errno 映射、B4 非法参数 errno。
+- 侦察全文／探针：`target/recon/socket_recon.md` ＋ `target/recon/sock_*.py`（**不进 git**，只作下一轮弹药）。
+
+### 挂账真 bug（本轮未修，6 条；复现见本卷 task-5B 侦察节）
+
+`global`＋函数内 `import` ⇒ UnboundLocalError（`Counter.most_common`）· `warnings.catch_warnings(record=True)` StackUnderflow · `ChainMap.keys()` 静默空 · `KeyError` 消息少 repr · `functools.wraps` 不搬 `__name__` · PEP 604 union 注解 dataclass 的 `__builtins__` 面。**下一轮起按 executor/ 与 compile/ 分域插空派**。
+
+### 下一轮（round 5）计划＝M4-A 批第 2 轮：TS-47 运行期发射
+
+1. `compile/` 写手：变量／类属性标注的**编译期类型标签**（扩展模式 `?` 与手写联合统一成同一份标签；`T?` 的"None 通过、否则按 T 检查"）；emitter 对扩展模式下已标注变量的赋值发 `CHECK_ASSIGNMENT`（初始标注赋值＋后续赋值；浅层裸标签／深层带内层，`TS-31`）。
+2. `executor/` 写手：union 标签形态（`("Union", …)` 之类，实现 `TS-46` 的运行期检查语义）＋回归测试；顺带挑一条挂账 bug（executor/ 子目录内）。
+3. 并行线：socket 等用户拍板；未拍板则先取挂账 bug／`sys.audit` no-op 侦察结论复用。
+
+---
+
+## round 5（会话 06 · M4-A 批第 2 轮）落地 ✓ —— TS-47 运行期发射 ＋ union 标签
+
+- **HEAD**：`e542d35`（`dev`，已推送 origin ✓）—— 本笔＝round 5；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮不涉及 import 面 ⇒ 与 round 4 持平）
+- **M4 判据进展**：TS-47 的**运行期半边已生效**（扩展模式下已标注变量的赋值会发 `CHECK_ASSIGNMENT`；`T?` 的 "None 或成员" 语义在**边界**与**赋值**两条路同时生效）。**编译期静态检查器／`TS-48`／`TS-50` 未开始**（下一轮）；**`T-BC-8`／`T-BC-9` 的显式验收归档与渐进保证验收（`T-TS-1`）未开始**（下一轮起）。
+
+### task-A3（TS-47 运行期发射）✓
+
+- `Statement::Annotation` 改为 `AnnotationSource::{Expression, Type}`：纯模式（及扩展模式判不出类型时的回退）走 `Expression`（`.py` 产物**逐字节不变**，`TS-5`）；扩展模式下判定为类型语法时走 `Type(Constant)`——它同时是类体 `__annotate__` 的发射来源与 `BC-24` 标签来源（一处真相）。
+- 变量／类属性标注位（扩展模式）：先试 `parse_type_at`，**结束符**是 `=`／`Newline`／`Semicolon`／`Dedent`／`End` 才采用，否则回退表达式通道 ⇒ **收口 round 4 的留缺**：`x: list[int?]` 这类嵌套 `?` 现在可解析，且 `T?` 与手写 `T | None` 是**同一份**标签。
+- emitter：每作用域 `assignment_labels`（按发射顺序登记、重复标注后者覆盖）；`Assign`／`AugAssign` 的**名字目标**在 `STORE_*` **之前**发 `CHECK_ASSIGNMENT`（标签打包成单标签元组进常量池、走 `emit_indexed` 无 `as u8` 截断）；纯模式表恒空（`TS-5`）；未标注名字不登记（`TS-2`）。
+- `instantiate_constant`：`AnnUnion` 从 `"Any"` 改为 **union 标签元组** `("Union", 左, 右)`（左右递归；其它不可静态判定的注解形状仍 `"Any"` ⇒ 平台类型 `TS-48`）。
+- 验收：新建 `crates/pyawa-core/tests/assignment_emission.rs` **7 用例**（后续赋值抛 `TypeAssignmentError`／初始标注赋值／纯模式不检查／检查只发给已标注名字且只在扩展模式／嵌套 `?` 编得过／模块级变量／`T?` 端到端）；`type_nullable` 9／`compile` 4／`lib_compile` 1／`boundary` 8 全绿；`tools/quickcheck.sh` 绿；`cargo test -p pyawa-core` 全量 61 组全绿；`cargo check -p pyawa-core --lib --tests` 0 警告。
+- **如实边界** ✗：① 属性／下标目标、链式／解包／`for` 目标本轮**不发**检查；② **函数形参的注解不登记**（只收 `Statement::Annotation`）⇒ 形参在函数体内被重新赋错类型时不报；③ **模块级标注＋函数内 `global x` 赋值不检查**（`assignment_labels` 每作用域一份，函数作用域没有模块级表）；④ 类体里的标注也会登记（略宽于 `TS-47` 的"模块级／函数局部"；扩展模式特有、无参照）。
+
+### task-A4（union 标签执行器语义）✓
+
+- `crates/pyawa-core/src/executor/protocol.rs`：新增 `union_members` 形态判定（**元组 ＋ 首项是字符串 `"Union"` ＋ ≥1 成员**）与 `boundary_accepts` 的 union 分支（**任一成员相容即接受**；成员递归：类型对象／`"Any"`／嵌套 union／既有 `(外, 内)`）；既有非 union 分支**零变化**（首项是类型对象的元组仍是 `TS-31` 的复合标签）。
+- `crates/pyawa-core/src/executor.rs` 的 `render_label`：union 渲染成 `Union[成员, 成员]`，失败消息的 expected 不再退化成 `Any`（`TS-11` 的期望元素保真）。
+- 规格：`docs/SPEC-bytecode.md` 的 **`BC-24`** 补 union 标签形态定义（一处真相；`BC-65` 改为指向 `BC-24`，去掉重复枚举）。
+- 验收：新建 `crates/pyawa-core/tests/union_labels.rs` **6 用例**（`Union[int,NoneType]` 收 `None`／`int`／`bool`、拒 `str`；嵌套 union；`"Any"` 成员；非 union 形态零回归；`CHECK_ASSIGNMENT` 与 `CHECK_BOUNDARY_IN` 两路同语义；`(list,int)` 不被误判成 union）；`boundary` 8 全绿。
+
+### 集成验收（Lead）
+
+- 聚焦测试由 Lead 独立复跑全绿（7／8／4／1／9／6）；`T?` 端到端（`x: int? = None` 过、`= "s"` 抛 `TypeAssignmentError`）由扩展模式真实执行验证 ✓。
+- 十项闸门：`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4482s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（17s）／`cargo test --workspace`（454s）／`tests/ci/check.py` 14/14／stability **146 个二进制 × 679 项 × 3 次计数完全一致**（`MS-25`，1349s）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1914s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 并行线：socket（仍待用户拍板）＋挂账 bug（本轮只定位，下一轮落地）
+
+- **socket 并行线（`P3-29`）**：上一轮侦察已报；**A1–A4 四个拍板点仍等用户口径**，未开工（不替未写规格做决定）。
+- **挂账 bug `warnings.catch_warnings(record=True)` ⇒ StackUnderflow**：本轮只做**定位**（未改 src；工作区冻结跑闸门）——根因**在 `compile/`**：`with` 体在值栈上留 2 格／项（上下文＋`__exit__`），但发 body 时**没有计入 `handler_depth`** ⇒ body 内嵌套 `try` 的异常表 `depth` 少 2，`dispatch_raise` 误弹 with 的两格 ⇒ 退出 `CALL 3` 时栈空。最小复现已**脱离 `warnings`**（纯 `.py` 的 `with C(): try: raise … except …`），建议修法＝`Statement::With` 发 body 前后 `handler_depth += 2*items.len()` 并 save/restore（`crates/pyawa-core/src/compile/emitter.rs` 一带）。定位材料在 `target/recon/warnings_recon.md`（**不进 git**）。**下一轮由 `compile/` 写手落地**（含 with＋return／break／for 组合回归）。
+
+### 下一轮（round 6）计划＝M4-A 批第 3 轮
+
+1. `compile/` 写手：先落挂账 bug 的 3~5 行修法＋回归；再做 **TS-47 编译期静态检查器**（新 `compile/typecheck.rs`）＋**`TS-48`**（平台类型＝未标注／相容一切／禁止推断）＋**`TS-50`** 收束；`CompileError` 新变体与 `pyawa-abi`／`executor/import.rs` 的映射。
+2. 验收测试写手（只写新测试文件）：**`T-TS-1` 渐进保证**（`TS-9` 要求的可执行验收）＋`T-TS-3`／`T-TS-7` —— M4 判据② 的直接证据。
+3. 并行线：socket 等用户拍板；未拍板不启。
+
+---
+
+## round 6（会话 06 · M4-A 批第 3 轮）落地 ✓ —— TS-47 静态检查器 ＋ TS-48 ＋ TS-50 ＋ 渐进保证验收 ＋ 挂账 bug ＋ sys.audit
+
+- **HEAD**：`97b04ae`（`dev`，已推送 origin ✓）—— 本笔＝round 6；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮无 import 面变化 ⇒ 与 round 5 持平）
+- **M4 判据进展**：
+  - **TS-47 两层齐** ✓：编译期静态检查器（本笔）＋ 运行期 `CHECK_ASSIGNMENT`（round 5）。
+  - **TS-48** ✓（平台类型＝未标注／判不出 ⇒ `Any`，与一切相容、**禁止推断**）；**TS-50** ✓（两种收窄形态）。
+  - **M4 判据②（渐进保证）有了可执行验收** ✓：`T-TS-1` 20 例（17 对成对语料）＋`T-TS-3`／`T-TS-7`（`tests/gradual_guarantee.rs`）。
+  - **M4 判据①（`T-BC-8`／`T-BC-9` 可观测）**：可执行证据已在（`tests/boundary.rs` 的发射条件／四要素消息、`tests/assignment_check.rs` 的指令元数据与消息、`tests/type_check.rs` 的静态报错位置）——**归档表与收口陈述留 round 7**。
+
+### task-A5（TS-47 编译期一半 ＋ TS-48 ＋ TS-50）✓
+
+- 新增 `crates/pyawa-core/src/compile/typecheck.rs`（872 行，纯静态视图、**不改发射/运行期**）：在 `compile()` 的 `Mode::Extension` 分支调用；`.py` 根本不进来（`TS-5`）。
+- **`TS-47`**：变量标注后赋值按相容关系检查，**能静态判定**的不符报新变体 `CompileError::TypeAssignment(String)`，消息含变量名／期望／实际／文件名行号＋`TS-47` 引用；判不出的放行给运行期（`TS-47`②）。
+- **`TS-48`／`TS-2`**：未标注／判不出的表达式＝平台类型 `Any`，与一切相容、**不推断**；RHS 只推断字面量与已标注名字。
+- **`TS-50`**：`if x is None:` 且分支必然走掉 ⇒ 其后收窄；`if x is not None:` ⇒ 分支内（含 `else`）收窄；只对名字、`assert` 不作依据、不改变任何发射/运行期行为。
+- **映射**：`pyawa-abi` 的 `pa_exec_string` ⇒ `PA_ERR_SYNTAX`＋消息（`AB-20`：2＝"编译期错误"）；`executor/import.rs` 两处 match 臂 ⇒ 导入含类型错的模块抛 `TypeAssignmentError`（当前加载器只编纯模式 ⇒ 该臂**暂不可达**，为穷尽性与将来 `.pyawa` 导入通道先写好，已注记）；`eof_inline_suite`／`bytes` 测试补臂。
+- **验收**：新 `crates/pyawa-core/tests/type_check.rs` **7 用例**（静态报错／平台类型放行／相容通过／`bool⊂int`／纯模式不查／TS-50 三形态＋`assert` 不窄化／未标注不查）；Round 5 的 `assignment_emission.rs` ②⑤⑦ 的 RHS 经批准改成"静态判不出的来源"（运行期断言保留），被移出的"静态可判定字面量不符"全部进了 `type_check.rs` 当**编译期拒绝**断言（静态/运行两层覆盖都不丢）。
+- **如实边界** ✗：**类体**不查；**嵌套函数读外层函数局部**不建模（判不出按 `Any` 放行）；函数返回值/形参的**边界**检查不在此模块（`BC-23`…族）；TS-50 未覆盖 `None is x` 反序／`== None`／`and`/`or` 复合守卫／`not (x is None)`／`isinstance`/`match` 窄化；`global x` 的静态检查已做但 round 5 运行期未发射（静态略严于运行期，`TS-7` 下"类型错误"允许）；CLI 以 NULL chunkname 调 `pa_exec_string` ⇒ 消息文件名显示 `<string>`（`pyawa-runtime/src/bin` 不在写域，如实挂账）。
+
+### task-A6（渐进保证可执行验收，`T-TS-1`／`T-TS-3`／`T-TS-7`）✓
+
+- 新建 `crates/pyawa-core/tests/gradual_guarantee.rs`（**只新增测试文件**、未改 src）：`T-TS-1` ＝ **17 对**「注解版／全去标注版」端到端比较，判定照 `TS-7` 原文——去注解版必须编译过且无类型错误（`T-TS-3`）；注解版类型错误（运行期两类／编译期 `TypeAssignment`）允许；都返回 ⇒ 返回投影相等；其它异常 ⇒ 类名＋消息相等。覆盖模块级/局部、入参＋返回边界、`T?`、`list[int]` 深标签、TS-50 收窄、`bool⊂int`、平台类型来源、未标注不推断、其它异常一致。
+- `T-TS-3`：未标注程序在 Extension(Shallow/Deep)＋Pure 三配置无类型错误；`T-TS-7`：两模式注解可读（`__annotate__`／`__annotations__`）、校验只在扩展模式。
+- 反空转护栏：正确注解版必须真跑出预期值；静态分类**显式**匹配 `CompileError::TypeAssignment`（其它编译错误一律不算类型错误）。新增钉子：静态可判不符必须报该变体、正确赋值/去注解版编得过。
+- 验收：`--test gradual_guarantee` **20 passed**（连跑 3 次计数一致）；实测 17 对里**恰 2 条**走编译期 `TypeAssignment`（其余类型错误由运行期归责异常兜住）⇒ 编译期分支真实被走到。
+- **如实边界** ✗：形参注解不登记（形参体内重赋值不检，round 5 遗留）；属性/下标/链式/解包/for 目标不发检查；类体标注与 `global` 组合；生成器/协程内标注赋值；显式 `Any`；嵌套容器深标签成对 —— 均未覆盖。`T-TS-2`／`T-TS-4` 按一处真相指向 `tests/boundary.rs`（已覆盖）。
+
+### 挂账 bug：`with` 体内嵌 `try` ⇒ StackUnderflow ✓（根因修）
+
+- **根因**（round 5 侦察定位）：`compile/emitter.rs` 的 `Statement::With` 臂发 body 时没把 with 留在栈上的 `2×项数` 格记进异常表 `depth` ⇒ 体内嵌套 `try` 的条目少 2 ⇒ `dispatch_raise` 误弹 with 两格 ⇒ 退出 `CALL 3` 栈空。
+- **修法**：新增 `with_depth` 字段（**没并进 `handler_depth`**——后者还给 `break`/`continue` 数 `POP_EXCEPT`，`for: with: break` 会多发 `POP_EXCEPT`）；体期 `+= 2*items.len()`、`record_exception` 记 `depth` 时加上，出体 restore。`compile.rs` 两处构造器加字段清零（机械必需）。
+- **验收**：新增 `crates/pyawa-runtime/tests/warnings_catch.rs` **3 用例**（最小复现＋对照＋多项 with／with+return/for+try／`warnings` 记录），期望值全部由本机 `python3` 3.14.4 对拍；最小复现修前 `StackUnderflow` rc1 → 修后 rc0。
+- **如实边界** ✗：原始 `warnings.warn("boom")` 脚本越过本 bug 后**另卡**既有 `sys._getframe(depth>0)` 缺口（台账卷 04，非本 bug）⇒ 第 3 例改走 `warnings.warn_explicit`（同一 `with`/`try` 发射面），原始版本待帧链接通后再补。
+
+### 并行线：`sys.audit` no-op ✓（P3-29 侦察 B2）
+
+- `crates/pyawa-stdlib/src/sys_module.rs`：新增 `audit(event, *args)`，**无 hook 可注册 ⇒ 合法调用恒 no-op 返回 `None`**（当前真语义）；参数校验与参照 3.14.4 逐字一致。**未加** `addaudithook`／`_audit`，未发明 hook 机制。
+- `docs/SPEC-c-modules.md` §5.2.3 增加 `audit` 合约条目：明确"审计机制未实现；no-op 是无 hook 时的真语义、不是审计已实现"。
+- 验收：新 `crates/pyawa-runtime/tests/sys_audit_shapes.rs` **2 用例**（与参照逐字对拍＋如实边界钉子）；探针证据：`HTTPConnection(...).connect()` 从卡 `audit` 属性错**推进到**下一个真实缺口 `_socket.getaddrinfo` 未接线（P3-29 进度证据）。
+- **遗留**：真审计机制（hook 注册＋回调）仍未实现，需另立项。
+
+### 十项闸门
+
+`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4516s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（29s）／`cargo test --workspace`（463s）／`tests/ci/check.py` 14/14／stability **150 个二进制 × 711 项 × 3 次计数完全一致**（`MS-25`，1383s；较 round 5 的 146×679 增加 32 项，正是本轮新增测试）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1899s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 下一轮（round 7）计划＝M4 **收口**
+
+1. **判据①② 归档**：写 `T-BC-8`／`T-BC-9` 与 `T-TS-1` 的「判据 → 测试名／命令」对照（进台账/`PLAN` 状态注），把 `T-BC-8` 的 `BC-25`①（"两侧皆标注处禁止发射"需跨模块静态信息）**仍未做**如实写清。
+2. **状态同步**：`PLAN-milestones.md` §9.2 加 M4 收口注；`README.md` 当前状态改"M0–M4 均已成立"；修 `DESIGN.md` §13 的 `12.` 行"已落地三条"旧陈述（与实际一致：A 批已落、`BC-62`/`BC-63` 未做）。
+3. **报用户批准**后：`dev` 以 `--no-ff` 收录 `main` ＋ 打 **tag `m4`** ＋ 推送；`NEXT.md` 刷新。
+4. 并行线：socket 等用户拍板 A1–A4；未拍板不动。
+
+---
+
+## round 7（会话 06 · M4 收口准备轮）落地 ✓ —— 判据① 归档 ＋ 状态同步
+
+- **HEAD**：`c111302`（`dev`，已推送 origin ✓）—— 本笔＝round 7；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮无 import 面变化 ⇒ 与 round 6 持平）
+- **M4 判据归档（判据 → 可执行证据 → 实测）**：
+
+| 判据（唯一出处 `PLAN-milestones.md` §6 的 M4 行） | 可执行证据 | 实测 |
+|---|---|---|
+| ① `T-BC-8`（检查点可见） | `crates/pyawa-core/tests/m4_acceptance.rs::tbc8_checkpoints_are_visible_at_annotated_boundaries`（`dis` 口径：标注边界可见 `CHECK_BOUNDARY_IN/OUT`、已标注变量赋值可见 `CHECK_ASSIGNMENT`；未标注／纯模式不可见） | ✓ |
+| ① `T-BC-9`（归责信息完整） | 同上 `::tbc9_type_errors_carry_direction_expected_actual_and_position`（端到端坏实参/坏返回 ⇒ `TypeBoundaryError` 带方向 argument/return；坏赋值 ⇒ `TypeAssignmentError`；消息含期望/实际/文件名+真行号；两者均 `TypeError` 子类且互异） | ✓ |
+| ① 支撑（检查指令元数据 `dis` 可见） | 同上 `::bc27_check_instruction_metadata_is_dis_visible`（`has_arg`／`stack_effect=0`／`opname` 可读）＋既有 `tests/boundary.rs`／`tests/assignment_check.rs` | ✓ |
+| ② **渐进保证 `T-TS-1`** | `crates/pyawa-core/tests/gradual_guarantee.rs`（17 对成对语料＋`T-TS-3`／`T-TS-7`，20 例；显式区分编译期 `TypeAssignment` 与运行期归责异常） | ✓ |
+| 支撑 | `tests/type_check.rs`（7）／`tests/assignment_emission.rs`（7）／`tests/type_nullable.rs`（9）／`tests/union_labels.rs`（6） | ✓ |
+
+- **`BC-25`① 如实缺口**：`T-BC-8` 的"两侧皆标注处**禁止**发射"需**跨模块静态信息** ⇒ **未实现**（现状"函数带标注就保守发射"），归档测试**不作断言**、只注记；不阻塞判据① 的"可观测"。
+- **本轮修正**：`m4_acceptance.rs` 初稿把聚合元数据测试写成 `T-BC-27`（**该编号未定义**，`BC-27` 是条款、不是测试号）⇒ 已按 `CX-1` 改回 `BC-27` 并注明"不发明新测试编号"；`tests/ci/check.py` 复跑 **14/14** ✓。
+
+### 状态同步（M4 判据口径的落点）
+
+- `README.md`：当前状态补「**M4（类型系统）判据①② 已通过**（阶段收录 `main`＋tag 待批准后执行）」＋ M4 条目（两层检查／判据测试指路／如实缺口）；"余下只有 M4…M6 的可执行判据"改 **M5…M6**。
+- `docs/PLAN-milestones.md`：§6 新增「**M4 的要求**」块（范围／两层检查／判据证据／如实缺口）；§9.2 的 `P3-13` 行补 M4 阶段落地与仍未落地项；§9.4 第 9 项标 A 批已落地（M4）。
+- `docs/DESIGN.md` §13 的 `12.` 行：把旧的「已落地三条：`BC-62`／`TS-46`／`TS-47`」（与实际不符）改成实际状态——A 批 `TS-46`／`TS-47`／`TS-48`／`TS-50` 已落地（M4）；B 批 `BC-62`／`BC-63`＋`TS-49` **未做**。
+
+### 十项闸门
+
+`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4518s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（29s）／`cargo test --workspace`（462s）／`tests/ci/check.py` 14/14／stability **151 个二进制 × 714 项 × 3 次计数完全一致**（`MS-25`，1383s；较 round 6 的 150×711 增 3 项，正是本轮新增的 `m4_acceptance.rs`）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1900s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 下一轮（round 8）＝M4 **阶段收录**（等用户批准）
+
+1. **报用户批准**：`dev` 以 `--no-ff` 收录 `main` ＋ 打 **tag `m4`** ＋ 推送（`branch-rule.md`：合并提交＝阶段边界）。
+2. 批准后同笔：`PLAN-milestones.md` 的**兼容边界声明**追加一条修订行（阶段边界必须更新本块）；`README.md` 状态改「M0–M4 均已成立」；`NEXT.md` 终态刷新。
+3. 未批准则：并行线（socket 待 A1–A4 拍板）／其余挂账 bug（5 条），不擅自合并。
+
+---
+
+## round 8（会话 06 · 挂账 bug 清理轮）落地 ✓ —— 六条挂账 bug 收口 5 条（1 条定位后转专项）
+
+- **HEAD**：`fb86bd8`（`dev`，已推送 origin ✓）—— 本笔＝round 8；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮只修 bug、不动 import 面 ⇒ 与 round 7 持平）
+- **背景**：M4 判据①② 已全绿、收口准备已完成（round 7），**阶段收录等用户批准**（不擅自合并）⇒ 本轮按目标里的并行线清挂账 bug；本轮**不动 M4 特性面**。
+
+### A：`global X` ＋ 函数内 `import X` ⇒ UnboundLocalError ✓
+
+- 根因：`crates/pyawa-core/src/compile/symbols.rs` 的 `collect_locals` 里 `import`／`from … import`、`for` 目标、`match` 捕获直接 `slot_of`，**绕过 `declare_local` 的 `global` 检查** ⇒ 名字进 `co_varnames`（读 `LOAD_FAST`、写 `STORE_GLOBAL` 两张表不一致）⇒ 读时 `UnboundLocalError`。受害者 `collections.Counter.most_common`。
+- 修法：上述四处改走 `declare_local`（`collect_for_target` 的局部口径、`collect_pattern_locals` 同步；`pre_intern` 口径不动）。
+- 验收：探针 `target/recon/bugs/b1_global_import.py` 修前 UnboundLocalError → 修后 `ok` rc0（与 `python3` 同）；`Counter("aab").most_common(1)` ⇒ `[('a', 2)]`；`global`＋`for`／`with … as`／`from … import` 三形状对拍一致。回归 `crates/pyawa-core/tests/global_import.rs` **4 例**（编译面钉 `heapq` 不进 `varnames`＋`STORE_GLOBAL`/`LOAD_GLOBAL`；`for`／`with` 目标端到端）。
+
+### B：PEP 604 `X | None` 运行期缺失（dataclass union 注解的 `__builtins__` 面）✓
+
+- 根因：`crates/pyawa-core/src/executor.rs` 的 `NB_OR` 只接"两操作数都是**类型对象**"；`None` 是 `NoneType` 实例 ⇒ `str | None` 抛 `TypeError: unsupported operand … 'type' and 'NoneType'` ⇒ dataclass 的 `annotationlib.get_annotations(FORWARDREF)` 回退去读 `annotate.__builtins__`（函数对象未接）⇒ 表面报 `'function' object has no attribute '__builtins__'`（如 `target/recon/bugs/b5_pep604.py`）。
+- 修法：`NB_OR` 改走新 `pep604_union_or`（约 150 行含注释）：类型/union/`None` 语境构 union、`None` 侧归一成 `NoneType` 类、union 再 `|` **摊平＋按 `==` 去重**、`None|None`／`int|5` 仍落算术报 `TypeError`。实测与 `python3` 3.14.4 逐例对齐（`int|None`、`None|int`、`int|str|None`、`(int|str)|None`、`None|(int|str)`、`int|(None|str)`、`int|int`⇒`int`、`(int|str)|int` 去重、`(int|str)|5`、`None|None`、`int|5`）。
+- 验收：探针 b5 修前 AttributeError → 修后 `C(a=None)`（与 `python3` 同）。回归 `crates/pyawa-core/tests/pep604_union.rs` **6 例**（手写字节码钉 `NB_OR` 与 `__args__`）＋ `crates/pyawa-core/tests/pep604_annotations.rs` **4 例**（union 成员表／摊平／`None|None` TypeError／类 `__annotations__` 可读）。
+- **连带如实记**：union 对象自身的 `==`／`repr` 与参照仍有差（`(int|str)==(int|str)` 本层 False、repr 是 `<UnionType object …>`）——**pre-existing**，不属本 bug 范围。
+
+### C：`collections.ChainMap` 的 `list(cm.keys())` 迭代失败 ✓
+
+- 根因：`crates/pyawa-core/src/executor.rs` 的 **`GET_YIELD_FROM_ITER`** 只走 `iterator_type_for`（只认内建容器），**没回退 `iter_value` 的 `__iter__` 协议**（`GET_ITER` 有回退）⇒ `yield from self._mapping`（`KeysView.__iter__`）炸；独立最小复现 `class I: def __iter__…; yield from I()` 同样报错（与 ChainMap 无关）。
+- 修法：该 handler 回退改用 `iter_value`（与 `GET_ITER` 同一处实现）。
+- 验收：探针 `target/recon/bugs/b2_chainmap.py` 修前「指令 16 …只接线了…」→ 修后 `1` + `['y','x']`（与 `python3` 同）。回归 `crates/pyawa-runtime/tests/chainmap_iteration.rs` **3 例**。
+
+### D：未捕获 `KeyError` 的消息少一层 repr ✓
+
+- 根因：`crates/pyawa-abi/src/lib.rs` 的 `exception_message` 取"首实参裸 str"（`Instance::exception_message_of`）⇒ 不走异常 **`str` 槽**；`exception_str` 的 KeyError repr 口径本来正确（catch 后 `repr`/`str` 已对齐）。
+- 修法：core 新增 `executor::exception_uncaught_text`（复用 `exception_str`＋与 `exception_message_of` 同款形状核；空串只给类型名），ABI 的 `exception_message` 改为调用它（一处真相在 core）。
+- 验收：探针 `target/recon/bugs/b3_keyerror_uncaught.py` 修前 `KeyError: missing` → 修后 `KeyError: 'missing'`（与参照同）；catch 后 `repr`/`str`/`args` 回归不变。回归 `crates/pyawa-runtime/tests/exception_message.rs` **6 例**。
+
+### E：`functools.wraps` 不搬 `__name__` —— **定位后转专项（本轮未修，不硬做）**
+
+- 根因：`setattr(f, '__name__', 'g')` 经 `executor/protocol.rs` 写进**实例字典**，而读取 `executor/attribute.rs` 第①步先走类型 `getattr` 槽（`function_getattr` 恒按 `code.name()` 给值）⇒ 写入被静默遮蔽（探针仍 `wrapper`；`f.__dict__` 里却有 `'__name__'`）。
+- **正路**：`FunctionObject` 加名字覆盖字段 ＋ `function_getattr` 先读覆盖 ＋ 在 function 类型注册**可写 getset 数据描述符**（`protocol.rs` 的 data-descriptor 分支已能调 setter）——触及对象布局/GC＋属性通道＋类型注册，属**类型级描述符专项一轮**；域内折中（先查实例字典）会让 `__dict__` 多出与参照不一致的键，**不做**。
+- 材料：`target/recon/bugs/b4_wraps.py`（不进 git）。
+
+### 六条挂账 bug 现状
+
+| # | bug | 状态 |
+|---|---|---|
+| 1 | `global`＋函数内 `import` ⇒ UnboundLocalError（`Counter.most_common`） | **已修（round 8 A）** |
+| 2 | `warnings.catch_warnings(record=True)` StackUnderflow（根因：`with` 内嵌 `try` 的异常表 depth） | **已修（round 6）**；原 `warnings.warn` 脚本另卡 `sys._getframe(depth>0)`（既有缺口） |
+| 3 | `ChainMap.keys()` 迭代失败 | **已修（round 8 C）** |
+| 4 | `KeyError` 未捕获消息少 repr | **已修（round 8 D）** |
+| 5 | `functools.wraps` 不搬 `__name__` | **已定位、转专项（未修）** |
+| 6 | PEP 604 union 注解 dataclass 的 `__builtins__` 面 | **已修（round 8 B）** |
+
+- **本轮新记的独立缺口（未修，交后续）**：函数对象 `__builtins__` 属性未接（`builtin/function.rs`；显式 `FORWARDREF` 现在能过、显式 `Format.STRING` 的 `annotationlib.get_annotations` 撞 `types.FunctionType` 不可实例化）· union 对象 `==`／`repr` 与参照有差（pre-existing）· `sys._getframe(depth>0)` 帧链。
+
+### 十项闸门
+
+`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4555s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（30s）／`cargo test --workspace`（468s）／`tests/ci/check.py` 14/14／stability **156 个二进制 × 737 项 × 3 次计数完全一致**（`MS-25`，1394s；较 round 7 的 151×714 增 23 项，正是本轮 bug 回归测试）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1916s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 下一轮（round 9）计划
+
+1. **M4 阶段收录**：**等用户批准**（`dev` `--no-ff` 收录 `main` ＋ tag `m4`）；批准后同笔更新「兼容边界声明」修订行、`README` 状态、`NEXT.md` 终态。
+2. 未批准则：接 `functools.wraps` 的类型级描述符专项（需先写清对象布局/GC 影响面），或 socket（仍等 A1–A4 拍板）。
+
+---
+
+## round 9（会话 06 · M4 阶段收录）落地 ✓ —— 用户批准后 `--no-ff` 收录 `main` ＋ **tag `m4`**
+
+- **用户批准**：2026-10-18「M4 允许收口」✓（`agents-rules/branch-rule.md`：合并提交＝阶段边界，收口前已报批）。
+- **阶段边界**：`dev` @ `59dfbb3` 以 **`--no-ff`** 收录进 `main`（合并提交见 `git log --merges -1`；两分支/标签均推送 origin ✓）＋ **tag `m4`**。
+- **工作区**：干净 ✓（以本笔提交为准）；`main` 树与 `dev` 树一致（合并后应复核 `git diff main dev` 为空）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；只改文档，与 round 8 持平）。
+- **M4 收口清单（全绿）**：
+  - 判据①（`T-BC-8`／`T-BC-9` 可观测）✓：`crates/pyawa-core/tests/m4_acceptance.rs`（3 例）；
+  - 判据②（渐进保证 `T-TS-1`）✓：`crates/pyawa-core/tests/gradual_guarantee.rs`（20 例）；
+  - A 批：`TS-46` ✓／`TS-47` ✓（编译期静态检查器 ＋ 运行期 `CHECK_ASSIGNMENT` 两层）／`TS-48` ✓／`TS-50` ✓；
+  - 状态同步：`README.md` 当前状态改「**M0–M4 均已成立**」；`PLAN-milestones.md` 的**兼容边界声明**追加 M4 阶段边界修订行；
+    `docs/DESIGN.md` §13 的 `12.` 行已在 round 7 纠正（A 批已落/B 批未做）；`docs/ROUNDS.md` 计数同步。
+- **保证层边界（如实）**：M4 只保证**扩展模式（`.pyawa`）**下 A 批类型链的判据；扩展模式**没有参照实现**（`MS-13` ③），
+  验收靠"两种写法互相对拍＋端到端行为"；`.py` 下标注**合法且惰性**（`BC-15`／`TS-5`，产物逐字节不变）。
+- **如实缺口（不阻塞判据，已多处记账）**：`BC-25`①"两侧皆标注处禁止发射"需跨模块静态信息 ⇒ **未做**（现按"该函数带标注保守发射"）；
+  `TS-50` 部分形态未覆盖（`None is x` 反序／`== None`／`and`/`or` 复合守卫／`not (is None)`／`isinstance`／`match`）；
+  类体不查、嵌套函数读外层局部不建模、形参注解不登记；`functools.wraps.__name__`（挂账 bug 第 5 条）已定位未修（转类型级描述符专项）；
+  函数对象 `__builtins__` 未接；union 对象 `==`／`repr` 与参照有差；`sys._getframe(depth>0)` 帧链缺口。
+- **下一阶段（未开工）**：**M5 能力层正式化**（`SPEC-capabilities` 的 `T-CP-*`；socket 真 I/O＝`P3-29` 仍等用户 A1–A4 拍板）·
+  **扩展特性 B 批**（`BC-62`／`BC-63`＋`TS-49`）· 剩余挂账/缺口按 `NEXT.md` 队列取。
+
+- **闸门**：本轮**只改文档**（代码树与 round 8 提交态一致）⇒ round 8 的 slowcheck **十项全绿**（4555s）对代码树有效；
+  本轮提交前 `python3 tests/ci/check.py` **14/14** ✓。合并按 `branch-rule.md` 的 `--no-ff` 执行（阶段边界）。

@@ -231,9 +231,10 @@ fn descriptors_match() {
 }
 
 #[test]
-fn boundary_instructions_take_free_numbers() {
+fn proprietary_instructions_take_free_numbers() {
     let fixture = fixture();
-    assert_eq!(meta::PYAWA_SPECIFIC.len(), 2, "BC-23／BC-31：两条专有指令");
+    // `BC-23` 两条边界检查 ＋ `BC-65` 一条赋值检查
+    assert_eq!(meta::PYAWA_SPECIFIC.len(), 3, "BC-23／BC-65／BC-31：三条专有指令");
 
     let baseline = fixture.key("opmap").as_obj();
     let baseline_names: BTreeSet<String> =

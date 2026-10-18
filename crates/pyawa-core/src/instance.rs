@@ -864,6 +864,22 @@ impl Instance {
             "TS-12：TypeBoundaryError 的基类是 TypeError"
         );
 
+        // **Pyawa 专有**异常：`TypeAssignmentError`（`TS-47`／`BC-65`：**必须**是 `TypeError`
+        // 的子类；与边界的 `TypeBoundaryError`（`TS-12`）**同族、分工不同**）。
+        // 与上一条同路：`alloc_type_raw` ＋ 显式登记基类，不混进"照表注册"那条路。
+        let assignment_error_type = self.alloc_type_raw(
+            "TypeAssignmentError",
+            core::mem::size_of::<ExceptionObject>(),
+            ExceptionObject::slots()
+                .with_new(crate::builtin_objects::exception_new)
+                .with_repr(crate::builtin_objects::exception_repr)
+                .with_str(crate::builtin_objects::exception_str),
+        );
+        assert!(
+            self.register_bases(assignment_error_type, vec![type_error]).is_some(),
+            "TS-47：TypeAssignmentError 的基类是 TypeError"
+        );
+
         // **`cell`**（`BC-45`）：cell 是**独立对象**（`GC_TRACKED`，经 traverse／clear 入链），
         // 但它在 `TS-42` 的探测表里挂在 `Ladder::Later`（Python 层可见性排后面）⇒ 引导期
         // **不会**自动注册。帧的 cell 槽与 `MAKE_CELL`／`LOAD_DEREF` 一族都要它存在，故在这里
