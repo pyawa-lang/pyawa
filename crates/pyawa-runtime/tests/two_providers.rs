@@ -27,15 +27,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS, PA_DOMAIN_NET};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAIN_NET};
 use pyawa_abi::status::PA_OK;
 use pyawa_abi::{
     pa_create, pa_destroy, pa_errmsg, pa_exec_string, pa_host, pa_setcapability,
     pa_setcapability_async, pa_state, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::{CapStatus, CpFsVtable, Handle};
+use pyawa_capabilities::clock::CpClockVtable;
 use pyawa_capabilities::net::CpNetVtable;
 use pyawa_core::CapabilityCallError;
+use pyawa_runtime::clock_system::SystemClock;
 use pyawa_runtime::fs_posix::{PosixFs, RestrictedFs};
 use pyawa_runtime::net_posix::PosixNet;
 
@@ -194,6 +196,9 @@ fn run(kind: ProviderKind, root: &Path) -> Observation {
     // provider 同样必须在 state 之前声明（vtable 的 `state` 裸指针借用它）。
     let net_provider = PosixNet::new();
     let net_table = net_provider.vtable();
+    // **`clock` 域**：`T-CP-10` 起 `select` 的空列表＋正 timeout 真睡（分片走 `sleep_ns`）⇒ 必须提供。
+    let clock_provider = SystemClock::new();
+    let clock_table = clock_provider.vtable();
 
     let host = pa_host {
         abi_size: PA_ABI_SIZE,
@@ -227,6 +232,28 @@ fn run(kind: ProviderKind, root: &Path) -> Observation {
             PA_OK,
             "注册 `net` 域实现失败"
         );
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_CLOCK, PA_ASYNC_OK),
+            PA_OK,
+            "声明 `clock` 域异步分类失败"
+        );
+        assert_eq!(
+            pa_setcapability(
+                state,
+                PA_DOMAIN_CLOCK,
+                (&clock_table as *const CpClockVtable).cast(),
+            ),
+            PA_OK,
+            "注册 `clock` 域实现失败"
+        );
+        // **`CP-22`**：实例 cwd 是实例状态。真实档 ＝ 宿主 cwd（guest 绝对名即宿主绝对名）；
+        // 受限档 ＝ chroot 的 `/`（guest 根 ＝ provider 根）——显式给，别依赖"进程 cwd 恰好等于根"。
+        match kind {
+            ProviderKind::Real => {
+                (&*state).instance().set_path_cwd(root.to_string_lossy().as_bytes())
+            }
+            ProviderKind::Restricted => (&*state).instance().set_path_cwd(b"/"),
+        }
         // **组合根装配**（`CM-14`）：与 CLI 同款 ⇒ 脚本可以用 `print`／`import`。
         pyawa_stdlib::install((&*state).instance(), "probe", &[]);
         pyawa_stdlib::set_module_search_path(
@@ -587,6 +614,8 @@ fn close_is_idempotent_and_closed_handles_fail_on_both_providers() {
     let restricted_state = unsafe { state_with_fs(&restricted_table) };
     // SAFETY: 只借用；`restricted_state` 尚未销毁。
     let restricted_instance = unsafe { &*restricted_state }.instance();
+    // **`CP-22`**：受限 provider 的实例 cwd 是 chroot 根（`/`）；相对名相对根解析。
+    restricted_instance.set_path_cwd(b"/");
     let handle = restricted_instance
         .fs_open(b"close.txt", 0, 0)
         .expect("受限档 open 应当成功");

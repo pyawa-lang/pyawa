@@ -786,6 +786,9 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
         // **`fs` 域**：harness 自己当提供者 —— 写标准流 ⇒ 父进程捕获得到 ✓
         //（`CM-26` 的链路完整：`print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓，**不是**临时 sink ✓）
         let fs_table = CpFsVtable {
+            // **`CP-30`**：注册时校验公共头 —— harness 也是宿主，必须填三份契约共用的版本号。
+            version: PA_ABI_VERSION,
+            size: core::mem::size_of::<CpFsVtable>() as u32,
             write: Some(harness_write),
             open: Some(harness_open),
             read: Some(harness_read),
@@ -812,6 +815,9 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
 
         // **`clock` 域**（第 317 轮）：`time` 模块经它取钟 ⇒ harness 也给一个（`std::time` 直取 ✓）。
         let clock_table = CpClockVtable {
+            // **`CP-30`**：同 `fs` —— 公共头必须合法，否则注册被拒。
+            version: PA_ABI_VERSION,
+            size: core::mem::size_of::<CpClockVtable>() as u32,
             now_ns: Some(harness_now_ns),
             monotonic_ns: Some(harness_monotonic_ns),
             ..CpClockVtable::UNIMPLEMENTED

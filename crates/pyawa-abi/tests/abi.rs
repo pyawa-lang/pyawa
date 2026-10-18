@@ -1220,7 +1220,18 @@ fn a_capability_domain_needs_its_async_classification_first() {
     let mut state: *mut pa_state = core::ptr::null_mut();
     // SAFETY: 按契约传参。
     assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
-    let fake_vtable = 0x1234usize as *const c_void;
+    // **`CP-30`**：`pa_setcapability` 在注册时读 vtable 公共头 `(version, size)` ⇒ 这里必须给一张
+    // **真实的**最小表（先前传魔法指针 `0x1234` 的写法在新校验下会解引用非法地址）。
+    #[repr(C)]
+    struct FakeVtable {
+        version: u32,
+        size: u32,
+    }
+    let fake_table = FakeVtable {
+        version: PA_ABI_VERSION,
+        size: size_of::<FakeVtable>() as u32,
+    };
+    let fake_vtable = (&fake_table as *const FakeVtable).cast::<c_void>();
     // SAFETY: state 存活。
     unsafe {
         // AB-34／CP-25／T-AB-6：没声明异步分类就注册 ⇒ 必须失败

@@ -151,7 +151,7 @@ def verdict(label, fn):
         print(label, "!!", type(exc).__name__, "未接线" in str(exc))
 
 verdict("fork_exec", lambda: _posixsubprocess.fork_exec(*range(22)))
-verdict("select", lambda: select.select([], [], []))
+verdict("select", lambda: select.select([], [], [], 0))
 verdict("select-timeout", lambda: select.select([], [], [], 0))
 verdict("waitpid", lambda: posix.waitpid(1, posix.WNOHANG))
 print("select-narrowed", hasattr(select, "poll"), hasattr(select, "epoll"), hasattr(select, "POLLIN"), hasattr(select, "EPOLLIN"), hasattr(select, "error"))

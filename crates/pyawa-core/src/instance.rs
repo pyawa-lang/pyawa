@@ -17,6 +17,8 @@ mod fs;
 
 mod net;
 
+mod path;
+
 mod refcount;
 
 mod util;
@@ -37,6 +39,7 @@ mod alloc;
 mod containers;
 mod state;
 mod capability_table;
+mod wait;
 
 use crate::bigint::IntValue;
 use crate::executor::ExecError;
@@ -194,11 +197,22 @@ pub struct Instance {
     gc_running: Cell<bool>,
     /// **`OM-11` 的 `repr` 递归守卫**（`CX-3`：按实例存）：正在生成 `repr` 的对象地址。
     repr_guard: RefCell<Vec<usize>>,
+    /// **`CP-22`：实例 cwd**（`SPEC-capabilities.md`；`os.chdir` 的落点）。
+    ///
+    /// guest 绝对形态（`/` ＝ 根能力的根）；`None` ＝ 尚未设置 ⇒ 首次解析时取宿主进程 cwd
+    /// 作为初值（**过渡口径**：`CP-24` 的残余权威，正路是宿主创建实例时显式给，见
+    /// `instance/path.rs` 的模块文档）。
+    path_cwd: RefCell<Option<Vec<u8>>>,
     /// **`AB-5`①／`CX-3`**：本实例被请求中断（`pa_interrupt` 的落点）。
     ///
     /// **按实例**存——`CX-3` 禁止进程级共享；执行器每条指令检查一次，
     /// 于是"执行类函数随即返回"（`PA_ERR_INTERRUPT`）成立。
-    interrupted: Cell<bool>,
+    /// **`AB-5`①**：中断请求标志。
+    ///
+    /// **原子**（round 12）：`pa_interrupt` 的契约是宿主在执行中从**另一线程**请求中断
+    /// （DESIGN §7.2 的"VM 线程等待能力结果时宿主必须能中断"）⇒ 普通 `Cell<bool>` 跨线程
+    /// 读写是数据竞争；用 `AtomicBool` 让"执行中另一线程 `pa_interrupt`"有明确定义。
+    interrupted: core::sync::atomic::AtomicBool,
 }
 
 impl Instance {

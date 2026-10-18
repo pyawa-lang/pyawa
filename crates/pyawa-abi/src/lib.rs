@@ -95,6 +95,76 @@ pub fn version_compatible(host_version: u32) -> bool {
     (host_version >> 16) == PA_ABI_MAJOR
 }
 
+// ---- `CP-30`：域 vtable 的公共头与注册时校验 ----
+
+/// `CP-30`：**所有域 vtable 的公共头**字节数 —— `version: u32` ＋ `size: u32`（`repr(C)` 前两字段）。
+///
+/// 注册入口只按这个**公共头**读（本 ABI 不解释各域形状，`AB-32`）；逐域槽位形状归
+/// `docs/SPEC-capabilities.md`（`CP-`）与 `pyawa-capabilities` crate。
+pub const PA_CAPABILITY_HEADER_SIZE: u32 = 8;
+
+/// `CP-30`：vtable `size` 字段的**合理性上限**（拒绝"荒唐尺寸"这种明显撒谎／写坏的宿主）。
+///
+/// 这是注册入口能做的**通用**上界：本 crate 不依赖各域形状（`AB-32`／反了会成环）⇒ 逐域
+/// **最小**尺寸由**消费方**按 `AB-43` 的 `min(宿主 size, 自身 size)` 再兜一层（如实留在报告里）。
+pub const PA_CAPABILITY_MAX_SIZE: u32 = 4096;
+
+/// `AB-41` 在**能力接口注册**这一面的兼容判定：**主版本相同**，且宿主的次版本**不高于**运行时。
+///
+/// - 宿主次版本**较低** ⇒ 它的函数表在表尾少了几个较新的追加槽位 ⇒ 运行时**仍可用**（旧宿主可用）；
+/// - 宿主次版本**较高** ⇒ 它期望运行时提供较新的追加槽位，而运行时没有 ⇒ **必须失败**
+///   （`AB-41` 只承诺"旧宿主仍可用"，不承诺"新宿主对旧运行时可用"）。
+pub fn capability_version_compatible(host_version: u32) -> bool {
+    let host_major = host_version >> 16;
+    let host_minor = host_version & 0xFFFF;
+    host_major == PA_ABI_MAJOR && host_minor <= PA_ABI_MINOR
+}
+
+/// 读一个域 vtable 的**公共头** `(version, size)`（`CP-30`）。
+///
+/// # Safety
+///
+/// 调用方（`pa_setcapability` 的宿主契约）**必须**保证 `implementation` 指向一个在本次调用期间
+/// 有效、且至少可读 [`PA_CAPABILITY_HEADER_SIZE`] 字节的对象——这是 `CP-30` 对宿主的义务。
+/// 用 `read_unaligned`：宿主可能把 vtable 放在任意对齐的存储里（`AB-43` 只约束字节布局）。
+unsafe fn capability_header(implementation: *const c_void) -> (u32, u32) {
+    // SAFETY: 由调用方按本函数 Safety 段保证可读 8 字节。
+    let version = unsafe { (implementation.cast::<u32>()).read_unaligned() };
+    // SAFETY: 同上（偏移 4 字节仍在公共头内）。
+    let size = unsafe { (implementation.cast::<u32>()).add(1).read_unaligned() };
+    (version, size)
+}
+
+/// `CP-30`＋`AB-41`：校验一个 vtable 公共头；合法返 `Ok`，不合法返**可诊断的原因**。
+fn validate_capability_header(host_version: u32, host_size: u32) -> Result<(), String> {
+    if host_size < PA_CAPABILITY_HEADER_SIZE {
+        return Err(format!(
+            "vtable 头尺寸不合法：宿主声明 size={host_size}，最小 {PA_CAPABILITY_HEADER_SIZE} 字节（CP-30）"
+        ));
+    }
+    if host_size > PA_CAPABILITY_MAX_SIZE {
+        return Err(format!(
+            "vtable 头尺寸不合法：宿主声明 size={host_size}，超过合理上限 {PA_CAPABILITY_MAX_SIZE}（CP-30）"
+        ));
+    }
+    if !capability_version_compatible(host_version) {
+        let host_major = host_version >> 16;
+        let host_minor = host_version & 0xFFFF;
+        if host_major != PA_ABI_MAJOR {
+            return Err(format!(
+                "ABI 版本不兼容：宿主能力接口 {}（主 {host_major}）、运行时 {}（主 {}）；主版本不符必须失败（AB-41）",
+                version_string(host_version),
+                version_string(PA_ABI_VERSION),
+                PA_ABI_MAJOR
+            ));
+        }
+        return Err(format!(
+            "ABI 版本不兼容：宿主能力接口次版本 {host_minor} 高于运行时 {PA_ABI_MINOR}（AB-41：运行时没有较新的追加槽位）"
+        ));
+    }
+    Ok(())
+}
+
 /// 版本不兼容时的**可诊断**信息（`AB-40`：**禁止**静默降级）。
 ///
 /// 这里只负责"造出这份信息"；它**经由哪条路**交回宿主（`pa_errmsg` 还是别处）
@@ -2691,14 +2761,27 @@ pub unsafe extern "C" fn pa_setcapability_async(
 
 /// `pa_setcapability(st, domain, impl)`：注册某个域的实现（`AB-32`／`AB-33`）。
 ///
-/// `impl` 是该域的 vtable 指针（**形状引 `CP-`**，本层只存不解释）；`impl == NULL` 表示
-/// 该域**整域未实现**（`CP-2`：调用时报"未实现"，**禁止**在创建实例时拒绝）。
+/// `impl` 是该域的 vtable 指针；`impl == NULL` 表示该域**整域未实现**（`CP-2`：调用时报"未实现"，
+/// **禁止**在创建实例时拒绝）。
+///
+/// **`CP-30`**：非 `NULL` 时**注册即校验**宿主 vtable 的公共头 `(version, size)`（所有域同一布局）：
+///
+/// - `size` 必须 `>=` [`PA_CAPABILITY_HEADER_SIZE`] 且 `<=` [`PA_CAPABILITY_MAX_SIZE`]；
+/// - `version` 按 `AB-41` 判定（见 [`capability_version_compatible`]）：**主版本不符**／
+///   宿主次版本**高于**运行时 ⇒ 注册失败；宿主的**同主、次版本较低** ⇒ 允许（旧宿主仍可用）。
+///
+/// 失败返回 [`status::PA_ERR_ABI`]（`AB-40`：ABI 版本或尺寸不兼容），并把**可诊断的原因**写进
+/// 实例消息（宿主用 `pa_errmsg` 取回）；**不改动**已注册的旧实现（失败不落半截状态）。
 ///
 /// **`CP-25`**：该域若尚未显式声明异步分类，注册**必须失败**（`T-AB-6`）——默认值就是数据竞争。
 ///
+/// **0 哨兵不进注册路径**：`CpFsVtable::UNIMPLEMENTED` 一类"未填"表是**内部默认值**（`version: 0`），
+/// 它们不该经本入口注册；真 host 必须把 `version` 填成 `PA_ABI_VERSION`、`size` 填成自己的结构体字节数。
+///
 /// # Safety
 ///
-/// 同 [`pa_gettop`]；`implementation` 指向宿主的 vtable（生命周期由宿主负责）。
+/// 同 [`pa_gettop`]；`implementation` 指向宿主的 vtable（生命周期由宿主负责，且在本次调用期间
+/// 至少可读公共头 [`PA_CAPABILITY_HEADER_SIZE`] 字节）。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_setcapability(
     state: *mut pa_state,
@@ -2713,6 +2796,17 @@ pub unsafe extern "C" fn pa_setcapability(
         if state.capabilities[index].classification.is_none() {
             // `CP-25`：缺失即注册失败，禁止默认值
             return status::PA_ERR_INVALID;
+        }
+        // `CP-30`：注册时校验 vtable 公共头（`NULL` ＝ 整域未实现 ⇒ 不解释、直接放行，CP-2）。
+        if !implementation.is_null() {
+            // SAFETY: 宿主按本函数 Safety 段保证指针有效、至少可读公共头 8 字节。
+            let (host_version, host_size) = unsafe { capability_header(implementation) };
+            if let Err(reason) = validate_capability_header(host_version, host_size) {
+                state.set_message(&format!(
+                    "能力域 {domain} 注册失败（CP-30／AB-41）：{reason}"
+                ));
+                return status::PA_ERR_ABI;
+            }
         }
         state.capabilities[index].implementation = implementation;
         state

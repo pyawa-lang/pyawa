@@ -1,62 +1,63 @@
 # NEXT.md —— 续做状态（单页；长复盘进台账 `docs/rounds/`）
 
 > 规则见 `agents-rules/round-rule.md`：**一轮一落地**（每轮以「提交」或「撤回＋一条改变计划的事实」结束 ✓）。
-> **本页是会话交接单页**（2026-10-18 ✓）：会话 07（Lead＋6 队员团队模式）已收 **round 10（M5 开局）／round 11（M5 续）**；
-> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` ✓（本笔追加「round 11」节）。
+> **本页是会话交接单页**（2026-10-18 ✓）：会话 07（Lead＋6 队员团队模式）已收 **round 10（M5 开局）／round 11／round 12（M5 功能收口）**；
+> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` ✓（本笔追加「round 12」节）。
 
 ## 现在
 
-- **HEAD**：`4b17d1c`（`dev`，本笔前，已推送 origin ✓）—— 本笔＝round 11：**CP-31 实例能力表（T-CP-3／7 收口）＋编码委派**。
+- **HEAD**：`ed7a185`（`dev`，本笔前，已推送 origin ✓）—— 本笔＝round 12：**`T-CP-10` 收口（矩阵 13/13）＋路径解析＋版本校验＋tw/kr codecs**。
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓；以本笔提交为准）。
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
-  **通过 444 ＋参照口径 17 ＝ 461 ÷ 628 ⇒ 73.4%**（阈值 421/67% ✓；单次 461，按口径报区间 460–462；
-  原始两次独立测量同值 461；上一轮 459 ⇒ **+2**：`encodings.gb2312`＋`encodings.gbk`）。
+- **判据①（Lib import ratio）**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
+  **通过 449 ＋参照口径 17 ＝ 466 ÷ 628 ⇒ 74.2%**（阈值 421/67% ✓；单次 466，按口径报区间 465–467；
+  上一轮 461 ⇒ **+5**：`encodings.{big5,cp950,euc_kr,cp949,johab}`）。
 - **M5 判据进展（如实）**：
-  - **判据① 矩阵（`T-CP-*`）＝12 绿／1 红**，仅剩 **`T-CP-10`**（取消令牌／worker／可取消等待；`CP-26`…`CP-28`／`CP-35`）；
-    另有 `CP-21`／`CP-32` 机制债（VM 侧路径解析；受限 provider 现仍是过渡档）⇒ **M5 判据① 未达成**。
-  - **判据② ✓**（`two_providers.rs`：同一脚本逐字节相同、真实 `PosixFs` vs 受限 `RestrictedFs`、写法不变；仍是可执行证据）。
-  - **判据③**：`P3-28` 三档基线**已量** ✓（数字唯一出处＝`DESIGN.md` §9 的 M5 小节）；**阈值仍待用户拍板** ⇒ 判据③ 尚未裁定。
-- **本轮落地（round 11）**：
-  - **`CP-31` 统一实例能力表**：`crates/pyawa-core/src/instance/capability_table.rs`（fd→(domain, provider_handle)、
-    从 3 起、free-list、dup/dup2 引用计数、`Drop for Instance` 逐条 close）＋fs/net 适配层改换算
-    （fs/net 共用一张表）；**T-CP-7 收口**；T-CP-3 的 core 入口 `capability_select`／`capability_dup2`／`Instance::POLL*`。
-  - **T-CP-3 收口**：`net_posix.rs` 的 `CpNetVtable.poll` 真 `poll(2)`＋`select_module.rs` 真接线（元素 int/`fileno()`、
-    返回原对象、参照错误形状）＋`posix_module.rs` 的 `os.dup`/`os.dup2`；`select_dup2_shapes.rs` 与 `python3 -S`
-    逐字节一致；`two_providers.rs` 的 T-CP-3 缺口探针转正。
-  - **C 面**：core 编码委派（一处：`instance/convert.rs`；内置 4 编码快路径，其余 `_codecs.lookup`）⇒
-    `str.encode('cp932')`／`bytes.decode('cp932')` 端到端；`_codecs.lookup` lazy `encodings`；**`_codecs_cn`**（gb2312／gbk＋cp936 别名，
-    表 `codec_tables/cn.txt` 709 KB 可复现）；`multibyte_codecs.rs` 2 例对拍。
-  - **小件**：`site_import_shapes.rs`（`import site`＋`sys.copyright` 逐字节＝参照 3.14.4 回归测试）。
-- **未修 bug／缺口（round 12 的取活队列）**：
-  ① **`T-CP-10`**（最后一条红）：取消令牌＋worker＋可取消等待（`CP-26`…`CP-28`／`CP-35`）；`clock` 域 `sleep_ns` 未接
-  ⇒ `select` 空列表＋正 timeout **不真睡**（立即返回空集，如实偏差）；`pa_interrupt` 与在途可异步化调用的协作未做。
-  ② `CP-21`／`CP-32` VM 侧路径解析（受限 provider 正路）＋`CP-22` cwd 实例状态；`CP-30` 注册时版本校验；
-  fs／clock vtable `version` 仍为 1 未对齐 `PA_ABI_VERSION`（1.1）。
-  ③ `dup`／`dup2` 到 0／1／2 未接（标准流不占表槽）；`_socket.socket(fileno=外部 fd)` 只认表内 fd；`inheritable` 不生效。
-  ④ C 面剩余：`_codecs_tw/kr/hk`、gb18030／hz、utf-16／32、`unicode_escape` 族、`xmlcharrefreplace` 等错误处理器；
-  `str.encode` 未知关键字仍静默忽略（pre-existing）。
-  ⑤ B 批：括号内复合语句／`??=` 非名字目标；描述符：`__annotate__` 可写（卡 `cell.cell_contents`）／`__type_params__`／类级未绑定直调。
-  ⑥ 既有：函数对象 `__builtins__` 未接 · union 对象 `==`／`repr` 有差 · `sys._getframe(depth>0)` · `OSError.errno` 属性未填
-  （`os.read` 的异常实例上无 `.errno`；socket 线已记）· `os.lseek` 缺。
+  - **判据①（`T-CP-*` 全绿）✓ 达成**：矩阵 **13 绿／0 红**（round 12 收 `T-CP-10`）。
+    证据：`capability_acceptance.rs`（11 passed）／`two_providers.rs`（7 passed）／`select_dup2_shapes.rs`（1）／
+    `t_cp10_cancel.rs`（4）／`capability_registration.rs`（6）／`check.py` 的 T-CX-4（T-CP-6／13）。
+  - **判据② ✓**（`two_providers.rs`：同一脚本逐字节相同、真实 `PosixFs` vs 受限 `RestrictedFs`、写法不变）。
+  - **判据③ 待用户拍板**：`P3-28` 三档基线已量（数字唯一出处＝`DESIGN.md` §9 的 M5 小节）；
+    "启动延迟与常驻内存升为阻塞项"的**阈值**需用户决定 ⇒ 判据③ 尚未裁定。
+- **本轮落地（round 12）**：
+  - **`T-CP-10`**：`instance/wait.rs` 的 **VM 侧 10 ms 时间片可取消等待**（不改 ABI；`CP-27/28`）；`interrupted`
+    原子化（`AtomicBool`）；`clock.sleep_ns` 真实现；`time.sleep`＋`select` 真睡/可取消；中断 ⇒ `PA_ERR_INTERRUPT`
+    （实测挂起 300 ms 后中断 302.5 ms 返回、后续语句不执行）。
+  - **`CP-21`／`CP-32`**：`instance/path.rs` VM 侧解析（guest 绝对名＋`.`/`..` 夹根＋逐段 readlink、ELOOP 上限 40）；
+    `RestrictedFs` 退化为根映射（夹根判定搬 VM）；`path_resolution.rs` 的 **NaiveFs 反证**（零检查 provider 下逃逸全 `ENOENT`）；
+    `CP-22` 部分（实例 cwd 状态，`os.getcwd/chdir` stdlib 面未接）。
+  - **`CP-30`**：`pa_setcapability` 注册时校验 vtable `(version,size)`（`AB-41`；失败 `PA_ERR_ABI` 可诊断）；
+    fs/clock/net vtable `version` 对齐 `PA_ABI_VERSION`（1.1）。
+  - **C 面**：`_codecs_tw`（big5／cp950）＋`_codecs_kr`（euc_kr／cp949／johab）；4 族跨查表、按族 `getcodec`；
+    `multibyte_codecs.rs` 3 例对拍（113 行输出逐字节＝参照 3.14.4）。
+- **未修 bug／缺口（不阻塞 M5 收口，留后续队列）**：
+  ① `CP-22` 的 `os.getcwd／os.chdir` stdlib 面未接（cwd 初值取宿主进程 cwd 是过渡口径）。
+  ② `CP-21` 的"逐段 Dir 能力链"理想形态未实现（v1＝guest 绝对名＋provider 根映射；行为满足 T-CP-4）。
+  ③ `T-CP-10` 未覆盖：`net.recv/send` 等无 timeout 阻塞槽位、provider 内部长内核操作（只在调用之间可取消）；
+     Python 层 `KeyboardInterrupt` 投递（本层 `pa_interrupt` 是宿主级中断，如实差异）。
+  ④ `AB-43` 的消费方有界读取（`min(宿主 size, 自身 size)`）未做；`CpClockVtable::UNIMPLEMENTED` 的 `version:1` 哨兵待统一。
+  ⑤ 上轮遗留：`dup／dup2` 到 0／1／2 未接；`OSError.errno` 属性未填；`os.lseek` 缺；`_codecs_hk`／iso2022／
+     gb18030／hz 未做；B 批（括号内复合语句／`??=` 非名字目标）与描述符（`__annotate__` 可写／`__type_params__`）剩余形态。
 
-## 下一阶段（M5 收口前最后一轮功能轮 = round 12；顺序见 `PLAN-milestones.md` §9.4）
+## 下一阶段（round 13 = **M5 收口轮**，必须用户批准）
 
-1. **`T-CP-10`**：取消令牌＋worker＋可取消等待（`CP-26`…`CP-28`／`CP-35`）；`clock` `sleep_ns` 接线 ⇒ `select` 真睡眠；
-   中断路径（`pa_interrupt` → 在途调用"已取消"返回、无后续副作用、脚本不悬挂）。
-2. **`CP-21`／`CP-32`** VM 侧路径解析（受限 provider 正路）＋`CP-22` cwd 实例状态；`CP-30` 注册时版本校验；
-   fs／clock vtable `version` 对齐。
-3. 收尾：M5 判据①②③ 全绿（③ 阈值需用户拍板）⇒ 更新 `PLAN`／`README` 状态 ⇒ **报用户批准**后 `--no-ff` 收录 `main` ＋ tag `m5`。
+1. **判据③ 阈值**：把"启动延迟／常驻内存升为阻塞项"的阈值提案报用户拍板，并写进 `PLAN`／`DESIGN`（一处真相）。
+2. 更新 `README`／`PLAN` 状态为 **M0–M5 均已成立**（`DESIGN.md` §13-17 的"提示项"→"阻塞项"记录）。
+3. **报用户批准**后：`--no-ff` 收录 `main` ＋ **tag `m5`**（`agents-rules/branch-rule.md`：收口前必须批准）。
+4. 不阻塞收口的后续队列见上"未修 bug／缺口"。
 
 ## 本战役的关键口径（新会话必读）
 
 - **判据① 分子测量**：先 `tools/cargo.sh test -p pyawa-abi --test conformance --no-run`（重建）再 `rm -rf Lib/__pyawa__`，
-  然后 `python3 tools/lib_import_ratio.py`；**禁止 `| tail`**；单次 ±1 ⇒ 报区间；并发测量无效。**本轮实测 461/628＝73.4%**。
+  然后 `python3 tools/lib_import_ratio.py`；**禁止 `| tail`**；单次 ±1 ⇒ 报区间；并发测量无效。**本轮实测 466/628＝74.2%**。
 - **ABI／接口版本**：`PA_ABI_VERSION`＝**1.1**（`PA_ABI_MAJOR=1`／`PA_ABI_MINOR=1`；`CP-30`／`AB-39` 共用号）；
-  `include/pa.h` 同步；**指令集版本** `INSTRUCTION_SET_VERSION`＝**2**。
-- **`fd` 语义（`CP-31` 已落地）**：`fd`＝实例能力表下标，动态段从 **3** 起（0／1／2 标准流不占槽）；fs／net **共用一张表**；
-  `dup`／`dup2` 是表项复制＋按 `(domain, provider_handle)` 引用计数（归零才调 provider close）；`dup2` 到 0／1／2 **未接** ⇒ EBADF。
-- **`select` 现状**：`fs` 域 fd（含 0／1／2）恒就绪；`net` 域 fd 走 `CpNetVtable.poll`；**空列表＋正 timeout 不真睡**（`T-CP-10`）。
+  `pa_setcapability` **注册时校验** vtable 公共头（`version` 主版本＋次版本方向、`size` 8–4096）；**指令集版本** `INSTRUCTION_SET_VERSION`＝**2**。
+- **`fd` 语义（`CP-31`）**：`fd`＝实例能力表下标，动态段从 **3** 起（0／1／2 标准流不占槽）；fs／net 共用一张表；
+  `dup`／`dup2` 表项复制＋按 `(domain, provider_handle)` 引用计数（归零才调 provider close）；`dup2` 到 0／1／2 **未接** ⇒ EBADF。
+- **路径解析（`CP-21`/`CP-32`，round 12）**：VM 侧 guest 绝对路径空间解析（cwd＋`.`/`..` 夹根＋逐段 `readlink`、深度 40）；
+  provider 只做根映射、不再夹根；`readlink` 槽缺失时降级纯词法（如实记）。
+- **取消（`T-CP-10`，round 12）**：VM 侧 10 ms 时间片轮询式可取消等待；中断 ⇒ `ExecError::Interrupted` ⇒ `PA_ERR_INTERRUPT`；
+  `select` 空列表＋正 timeout 真睡；无 timeout 的阻塞 `recv/send` 尚不可取消（如实记）。
 - **编号现最大**：`BC-65`／`TS-50`／`T-BC-22`／`CP-39`／`CX-22`／`P3-31`（新增前先查已定义；墓碑算定义）。
 - **扩展特性边界**：`.py` 下扩展语法是词法期 `Syntax`（`BC-15`）；扩展模式**没有参照实现**（`MS-13` ③）；
   `.py` 产物**逐字节不变**（`TS-5`，`cargo test -p pyawa-core --test compile` 守）。

@@ -349,7 +349,10 @@
    ⚠ M1 的 48 µs／1.05 ms／3.4 MB 是"**无 site／无导入系统**"时量的（`DESIGN.md` §9 的注 ✓）⇒ **已重量** ✓。
 2. **判据①**：`SPEC-capabilities` §11 的 **`T-CP-*` 逐条核对**。**round 10 进度：10 绿／3 红**
    （红＝`T-CP-3` 的 `os.dup2`＋`select` 面、`T-CP-7` 后半的实例销毁关句柄、`T-CP-10` 取消令牌/worker；
-   另有 `CP-21`／`CP-32` 的 VM 侧路径解析机制债）⇒ **未全绿**，见台账 round 10 的 13 行矩阵。
+   另有 `CP-21`／`CP-32` 的 VM 侧路径解析机制债）⇒ **round 11 收 T-CP-3／7（12 绿／1 红）**；
+   **round 12：`T-CP-10` 收口 ⇒ 13 绿／0 红 ✓**（证据：`capability_acceptance.rs` 11 passed／
+   `two_providers.rs` 7 passed／`select_dup2_shapes.rs` 1 passed／`t_cp10_cancel.rs` 4 passed／
+   `capability_acceptance.rs` 的 T-CP-10 可取消等待测试；`CP-21`／`CP-32` 机制债 round 12 另落，见台账）。
 3. **判据②**：写"**同一脚本、两种 provider**"的**可执行验收**（真实 provider vs 受限 provider ⇒ **写法不变** ✓；
    受限档按 `T-CP-4`／`T-CP-5`／`T-CP-7` 的形状造 ✓）。**已落地（round 10）** ✓：
    `crates/pyawa-runtime/tests/two_providers.rs`（同一脚本逐字节相同、归一后观察完全一致）。
@@ -367,6 +370,12 @@
 > **round 11 状态小结（2026-10-18）** ✓：**`CP-31` 实例能力表落地** ⇒ `T-CP-3`／`T-CP-7` 收口
 > （矩阵 **12 绿／1 红**，仅剩 `T-CP-10`）；C 面 core 编码委派＋`_codecs_cn` ⇒ 判据① 461/628＝73.4%。
 > ⇒ M5 判据① 还差 `T-CP-10`（取消令牌/worker）＋`CP-21`／`CP-32` 机制债；细节见台账 round 11 节。
+>
+> **round 12 状态小结（2026-10-18）** ✓：**`T-CP-10` 收口 ⇒ `T-CP-*` 矩阵 13 绿／0 红 ✓**（M5 判据① 达成）；
+> `CP-21`／`CP-32` 的 VM 侧路径解析落地（`instance/path.rs`＋NaiveFs 反证；`RestrictedFs` 夹根逻辑删除）；
+> `CP-30` 注册时版本校验＋fs/clock/net vtable `version` 对齐 `PA_ABI_VERSION`（1.1）；
+> C 面 `_codecs_tw`／`_codecs_kr` ⇒ 判据①（Lib import ratio）466/628＝74.2%。
+> ⇒ **M5 判据② 早已 ✓；判据③ 的阈值仍待用户拍板**（基线数字见 `DESIGN.md` §9）；细节见台账 round 12 节。
 
 > **M1–M4 期（历史，仅供追溯）**：下面的 1–9 保留原样，**不再作为取活依据** ✗。
 

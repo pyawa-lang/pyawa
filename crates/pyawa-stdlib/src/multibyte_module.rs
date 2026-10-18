@@ -36,19 +36,25 @@
 //!   `read`／`write` 由 `codecs.StreamReader`／`StreamWriter`（纯 Python）按 `self.decode`／
 //!   `self.encode` 的元组契约实现 ⇒ 这里不需要重复实现 ✓（照参照的 MRO 逐字）。
 //!
-//! ## 已落族
+//! ## 已落族（4 族／14 个 `Lib/encodings/*` 模块）
 //!
-//! - **`_codecs_jp`**（round 10）：7 个 `Lib/encodings/*` 模块 —— `cp932`／`euc_jp`／
-//!   `euc_jis_2004`／`euc_jisx0213`／`shift_jis`／`shift_jis_2004`／`shift_jisx0213`；
-//! - **`_codecs_cn`**（round 11）：2 个 —— `gb2312`／`gbk`（`cp936` 是 `gbk` 的别名，不另设模块 ✓）。
+//! - **`_codecs_jp`**（round 10，7 个）：`cp932`／`euc_jp`／`euc_jis_2004`／`euc_jisx0213`／
+//!   `shift_jis`／`shift_jis_2004`／`shift_jisx0213`；
+//! - **`_codecs_cn`**（round 11，2 个）：`gb2312`／`gbk`（`cp936` 是 `gbk` 的别名，不另设模块 ✓）；
+//! - **`_codecs_tw`**（round 12，2 个）：`big5`／`cp950`；
+//! - **`_codecs_kr`**（round 12，3 个）：`euc_kr`／`cp949`／`johab`。
 //!
-//! 数据文件：`codec_tables/jp.txt`／`codec_tables/cn.txt`，同一条生成命令分别 `--family jp`／`--family cn`。
+//! 数据文件：`codec_tables/{jp,cn,tw,kr}.txt`，同一条生成命令 `--family {jp,cn,tw,kr} --emit`。
+//! **吸收态长前缀**（`L` 行）：`euc_kr` 的谚文分解是 **8 字节**定长序列，解码器对
+//! `a4d4` 之后**任何**字节都还报 `incomplete` ⇒ BFS 展开会指数爆炸，生成器把它记成
+//! 「长前缀 → 总长」，本引擎一步跳到总长再查表（错误分型/`replace` 跨度与逐层展开等价 ✓）。
 //!
 //! ## 如实缺口（`CM-6`，不伪造）
 //!
-//! - `_codecs_tw`／`_codecs_kr`／`_codecs_hk` 的表**尚未生成** ⇒ 对应 `import encodings.big5`
-//!   一族仍报 `No module named '_codecs_tw'`／`_codecs_kr`／`_codecs_hk`；`gb18030`（4 字节区间）
-//!   与 `hz`（有状态 7-bit）需要各自的表示，生成器明确拒绝（理由在 `tools/gen_codec_tables.py`）。
+//! - `_codecs_hk` 的表**尚未生成** ⇒ `import encodings.big5hkscs` 仍报 `No module named '_codecs_hk'`；
+//!   `gb18030`（4 字节区间 ≈ 110 万码位）与 `hz`（有状态 7-bit）需要各自的表示，生成器明确拒绝
+//!   （理由在 `tools/gen_codec_tables.py`）；`_codecs_iso2022`（`euc_jp` 的 ISO-2022 族）未做 ⇒
+//!   `import encodings.iso2022_*` 仍失败。
 //! - **自定义错误处理器**（`codecs.register_error` 注册的名字）调用时如实报
 //!   `NotImplementedError`（本层的异常对象不带 `object`／`start`／`end` 结构化字段）；
 //!   未注册的名字照参照报 `LookupError: unknown error handler name '...'` ✓。
@@ -73,12 +79,16 @@ const BUFFER_ATTRIBUTE: &str = "buffer";
 /// 「没有第二个码位」的哨兵（解码结果最多 2 个码位：JIS X 0213 的组合字符）。
 const NO_SECOND: u32 = u32::MAX;
 
-/// 各族的生成表（生成路径见模块头）：`jp`＝JIS 族、`cn`＝GB 族。
+/// 各族的生成表（生成路径见模块头）：`jp`＝JIS 族、`cn`＝GB 族、`tw`＝Big5 族、`kr`＝韩文族。
 const JP_SOURCE: &str = include_str!("codec_tables/jp.txt");
 const CN_SOURCE: &str = include_str!("codec_tables/cn.txt");
+const TW_SOURCE: &str = include_str!("codec_tables/tw.txt");
+const KR_SOURCE: &str = include_str!("codec_tables/kr.txt");
 
 static JP_TABLES: OnceLock<Vec<CodecTable>> = OnceLock::new();
 static CN_TABLES: OnceLock<Vec<CodecTable>> = OnceLock::new();
+static TW_TABLES: OnceLock<Vec<CodecTable>> = OnceLock::new();
+static KR_TABLES: OnceLock<Vec<CodecTable>> = OnceLock::new();
 
 // ---- 表结构 -----------------------------------------------------------------------------------
 
@@ -87,15 +97,18 @@ struct CodecTable {
     /// 参照里的编码名（`cp932` 一族；错误文案与 `getcodec` 都用它）。
     name: &'static str,
     /// 编码方向：`(码位, 打包字节序列)`，按码位升序（二分查找）。
-    encode: Vec<(u32, u64)>,
+    encode: Vec<(u32, u128)>,
     /// 解码方向：`(打包字节序列, [码位1, 码位2])`，按键升序（二分查找）；`NO_SECOND` = 单码位。
     decode: Vec<(u128, [u32; 2])>,
     /// **两码位组合字符**的编码方向：键 `(码位1 << 32) | 码位2`，值同 `encode` 的打包（JIS X 0213）。
-    encode_pairs: Vec<(u64, u64)>,
+    encode_pairs: Vec<(u64, u128)>,
     /// 组合字符的**首码位**集合（增量编码器要把末尾这种字符留到下一段 ✓）。
     pair_starts: HashSet<u32>,
     /// **前缀状态 → 期望总字节数**（区分 `incomplete` 与 `illegal` 的结构信息；见生成脚本的 `X` 行）。
     expectations: HashMap<u128, usize>,
+    /// **吸收态长前缀 → 期望总字节数**（`L` 行；`euc_kr` 的谚文 8 字节分解）：命中时引擎
+    /// **一步跳到总长**再查表（不逐层展开 —— 那会指数爆炸 ✓）。
+    long_prefixes: HashMap<u128, usize>,
     /// 最长字节序列长度。
     max_sequence: usize,
 }
@@ -109,20 +122,23 @@ fn pack_key(sequence: &[u8]) -> u128 {
     ((sequence.len() as u128) << 120) | bytes
 }
 
-/// 打包编码方向的值（`(长度 << 56) | 字节`；本族最长 3 字节 ✓）。
-fn pack_encoded(sequence: &[u8]) -> u64 {
-    let mut bytes: u64 = 0;
+/// 打包编码方向的值（`(长度 << 120) | 字节`；`euc_kr` 最长 **8** 字节 ⇒ 用 `u128` ✓）。
+fn pack_encoded(sequence: &[u8]) -> u128 {
+    let mut bytes: u128 = 0;
     for byte in sequence {
-        bytes = (bytes << 8) | u64::from(*byte);
+        bytes = (bytes << 8) | u128::from(*byte);
     }
-    ((sequence.len() as u64) << 56) | bytes
+    ((sequence.len() as u128) << 120) | bytes
 }
 
-/// 解开编码方向的值（**新分配**；`Vec` 只为返回形态统一，长度 ≤ 7）。
-fn unpack_encoded(value: u64) -> Vec<u8> {
-    let length = (value >> 56) as usize;
-    let bytes = (value & ((1u64 << 56) - 1)).to_be_bytes();
-    bytes[8 - length..].to_vec()
+/// 解开编码方向的值（**新分配**；`Vec` 只为返回形态统一，长度 ≤ 14）。
+fn unpack_encoded(value: u128) -> Vec<u8> {
+    let length = (value >> 120) as usize;
+    let mut out = Vec::with_capacity(length);
+    for position in (0..length).rev() {
+        out.push(((value >> (8 * position)) & 0xFF) as u8);
+    }
+    out
 }
 
 fn parse_hex(text: &str) -> Option<u64> {
@@ -143,10 +159,11 @@ fn parse_hex_bytes(text: &str) -> Option<Vec<u8>> {
 /// 收尾一张表（算前缀集合与最大长度）。
 fn finish_table(
     name: &'static str,
-    encode: Vec<(u32, u64)>,
+    encode: Vec<(u32, u128)>,
     decode: Vec<(u128, [u32; 2])>,
-    encode_pairs: Vec<(u64, u64)>,
+    encode_pairs: Vec<(u64, u128)>,
     expectations: HashMap<u128, usize>,
+    long_prefixes: HashMap<u128, usize>,
 ) -> CodecTable {
     let mut max_sequence = 0usize;
     for (key, _) in &decode {
@@ -163,6 +180,7 @@ fn finish_table(
         encode_pairs,
         pair_starts,
         expectations,
+        long_prefixes,
         max_sequence,
     }
 }
@@ -172,10 +190,11 @@ fn finish_table(
 /// 生成物**不可能**有语法错 ⇒ 这里的 `expect` 是"生成物与解析器版本一致"的自检（改格式必须两边一起改）。
 fn parse_tables(source: &'static str) -> Vec<CodecTable> {
     let mut tables: Vec<CodecTable> = Vec::new();
-    let mut encode: Vec<(u32, u64)> = Vec::new();
+    let mut encode: Vec<(u32, u128)> = Vec::new();
     let mut decode: Vec<(u128, [u32; 2])> = Vec::new();
-    let mut encode_pairs: Vec<(u64, u64)> = Vec::new();
+    let mut encode_pairs: Vec<(u64, u128)> = Vec::new();
     let mut expectations: HashMap<u128, usize> = HashMap::new();
+    let mut long_prefixes: HashMap<u128, usize> = HashMap::new();
     let mut current: Option<&'static str> = None;
     for line in source.lines() {
         let line = line.trim();
@@ -190,6 +209,7 @@ fn parse_tables(source: &'static str) -> Vec<CodecTable> {
                     core::mem::take(&mut decode),
                     core::mem::take(&mut encode_pairs),
                     core::mem::take(&mut expectations),
+                    core::mem::take(&mut long_prefixes),
                 ));
             }
             current = Some(rest.trim());
@@ -202,6 +222,17 @@ fn parse_tables(source: &'static str) -> Vec<CodecTable> {
                 .expect("E 行码位不是合法 u32");
             let sequence = parse_hex_bytes(fields.next().expect("E 行缺字节")).expect("E 行字节不是合法十六进制");
             encode.push((codepoint, pack_encoded(&sequence)));
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("L ") {
+            let mut fields = rest.split_whitespace();
+            let prefix = parse_hex_bytes(fields.next().expect("L 行缺前缀")).expect("L 行前缀不是合法十六进制");
+            let total = fields
+                .next()
+                .and_then(parse_hex)
+                .and_then(|value| usize::try_from(value).ok())
+                .expect("L 行缺期望长度");
+            long_prefixes.insert(pack_key(&prefix), total);
             continue;
         }
         if let Some(rest) = line.strip_prefix("X ") {
@@ -250,7 +281,14 @@ fn parse_tables(source: &'static str) -> Vec<CodecTable> {
         panic!("生成表里有无法解析的行：{line}");
     }
     if let Some(name) = current.take() {
-        tables.push(finish_table(name, encode, decode, encode_pairs, expectations));
+        tables.push(finish_table(
+            name,
+            encode,
+            decode,
+            encode_pairs,
+            expectations,
+            long_prefixes,
+        ));
     }
     for table in &tables {
         debug_assert!(table.encode.is_sorted_by_key(|entry| entry.0));
@@ -270,12 +308,41 @@ fn cn_tables() -> &'static Vec<CodecTable> {
     CN_TABLES.get_or_init(|| parse_tables(CN_SOURCE))
 }
 
-/// 按编码名取表：**跨族**查（各族的编码名不重名 ✓）；都没有 ⇒ `None`（`getcodec` 报 `LookupError`）。
-fn table_for(name: &str) -> Option<&'static CodecTable> {
+/// `_codecs_tw` 族的表（同上）。
+fn tw_tables() -> &'static Vec<CodecTable> {
+    TW_TABLES.get_or_init(|| parse_tables(TW_SOURCE))
+}
+
+/// `_codecs_kr` 族的表（同上）。
+fn kr_tables() -> &'static Vec<CodecTable> {
+    KR_TABLES.get_or_init(|| parse_tables(KR_SOURCE))
+}
+
+/// 已落地**全部族**的表（跨族查；各族编码名不重名 ✓）。
+fn all_tables() -> impl Iterator<Item = &'static CodecTable> {
     jp_tables()
         .iter()
         .chain(cn_tables().iter())
-        .find(|table| table.name == name)
+        .chain(tw_tables().iter())
+        .chain(kr_tables().iter())
+}
+
+/// 按编码名取表：**跨族**查（各族的编码名不重名 ✓）；都没有 ⇒ `None`。
+fn table_for(name: &str) -> Option<&'static CodecTable> {
+    all_tables().find(|table| table.name == name)
+}
+
+/// 按**族**取表：照参照，`_codecs_tw.getcodec('gbk')` 必须报 `LookupError: no such codec is
+/// supported.`（**不跨族** ✓ —— 参照每个 `_codecs_*` 只认自己那几张表）。
+fn table_for_family(family: &str, name: &str) -> Option<&'static CodecTable> {
+    let tables: &'static [CodecTable] = match family {
+        "jp" => jp_tables(),
+        "cn" => cn_tables(),
+        "tw" => tw_tables(),
+        "kr" => kr_tables(),
+        _ => return None,
+    };
+    tables.iter().find(|table| table.name == name)
 }
 
 // ---- 编解码循环（状态机） ---------------------------------------------------------------------
@@ -308,6 +375,25 @@ fn decode_step(table: &CodecTable, input: &[u8], position: usize) -> DecodeStep 
                 cps: table.decode[index].1,
                 used: depth,
             };
+        }
+        // **吸收态长前缀**（`L` 行）：一步跳到总长再查表（`euc_kr` 的 8 字节谚文分解）✓。
+        if let Some(expected) = table.long_prefixes.get(&key) {
+            let expected = *expected;
+            if position + expected > input.len() {
+                return DecodeStep::Incomplete { end: input.len() };
+            }
+            let mut full = bytes;
+            for offset in depth..expected {
+                full = (full << 8) | u128::from(input[position + offset]);
+            }
+            let full_key = ((expected as u128) << 120) | full;
+            if let Ok(index) = table.decode.binary_search_by_key(&full_key, |entry| entry.0) {
+                return DecodeStep::Text {
+                    cps: table.decode[index].1,
+                    used: expected,
+                };
+            }
+            return DecodeStep::Illegal;
         }
         let Some(expected) = table.expectations.get(&key) else {
             return DecodeStep::Illegal;
@@ -688,12 +774,12 @@ fn build_multibyte_codec_class(instance: &Instance) -> Result<NonNull<Header>, E
     )
 }
 
-/// **`getcodec(name)`**（`_codecs_jp` 等各族的共同入口）⇒ 一个 `MultibyteCodec` 实例 ✓。
-pub(crate) fn getcodec_native(
+/// **`getcodec(name)`** 的公共实现（各族入口见下面的 `getcodec_{jp,cn,tw,kr}_native`）✓。
+/// `getcodec` 的**按族**实现（`family` 为 `""` ⇒ 跨族，仅供内部/诊断；各族模块走下面的包装）。
+fn getcodec_in_family(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
+    family: &str,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let Some(value) = args.first().copied() else {
         return Err(instance.raise_builtin_error(
@@ -710,7 +796,12 @@ pub(crate) fn getcodec_native(
             ),
         ));
     };
-    let Some(table) = table_for(&name) else {
+    let table = if family.is_empty() {
+        table_for(&name)
+    } else {
+        table_for_family(family, &name)
+    };
+    let Some(table) = table else {
         return Err(instance.raise_builtin_error("LookupError", "no such codec is supported."));
     };
     let class = build_multibyte_codec_class(instance)?;
@@ -718,6 +809,43 @@ pub(crate) fn getcodec_native(
     let name_value = instance.new_str(table.name);
     let _ = instance.set_attribute_value(codec, CODEC_NAME_ATTRIBUTE, name_value);
     Ok(codec)
+}
+
+/// 四个族的 `getcodec` **NativeFn 包装**（参照每个 `_codecs_*` 只认自己那几张表 ✓）。
+pub(crate) fn getcodec_jp_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    getcodec_in_family(instance, "jp", args)
+}
+
+pub(crate) fn getcodec_cn_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    getcodec_in_family(instance, "cn", args)
+}
+
+pub(crate) fn getcodec_tw_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    getcodec_in_family(instance, "tw", args)
+}
+
+pub(crate) fn getcodec_kr_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    getcodec_in_family(instance, "kr", args)
 }
 
 // ---- 增量编解码器 -----------------------------------------------------------------------------
@@ -1071,9 +1199,5 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
 
 /// 已落地族的**全部编码名**（测试／诊断用；`getcodec` 的可用集合）。
 pub fn supported_codecs() -> Vec<&'static str> {
-    jp_tables()
-        .iter()
-        .chain(cn_tables().iter())
-        .map(|table| table.name)
-        .collect()
+    all_tables().map(|table| table.name).collect()
 }

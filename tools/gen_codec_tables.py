@@ -43,6 +43,9 @@
   （`illegal`）分得比前缀集合更细 —— 例如 `euc_jp` 的 `b'\x8f\xa1'` 在输入末尾报 `incomplete`
   （结构上还要第 3 字节），而 `b'\x8f\xa1\x20'` 报 `illegal`。本工具对每个**合法前缀**用两个
   填充字节探出「该状态期望的总字节数」（`X` 行；只支持**定长状态机**，状态依赖的编码会明确报错）。
+- **吸收态长前缀**（`L` 行；round 12 为 `euc_kr` 引进）：某些前缀之后任何字节都还报
+  `incomplete`（CPython 在等一条定长长序列，如 `euc_kr` 的 8 字节谚文分解）⇒ BFS 直接展开会
+  指数爆炸，本工具把它记成「长前缀 → 期望总长」，映射取参照 `encode` 反向并逐条 `decode` 核对。
 - **未支持**（本工具会明确拒绝，不静默生成半张表）：`gb18030`（4 字节区间 ≈ 110 万码位，
   需要专用线性表示）、`hz`（有状态 7-bit 编解码）、`big5hkscs`（属 `_codecs_hk`，另一族）。
 
@@ -116,32 +119,130 @@ def encode_map(codec: str) -> dict[int, bytes]:
     return table
 
 
-def decode_map(codec: str) -> tuple[dict[bytes, str], list[bytes]]:
+def decode_map(
+    codec: str, encoded: dict[int, bytes]
+) -> tuple[dict[bytes, str], list[bytes], dict[bytes, int]]:
     """参照的**解码方向**：字节序列 → 完整解码结果（BFS 只走合法前缀 ✓）。
 
-    同时收集**全部合法前缀**（`incomplete` 的那些）——错误分型（`incomplete`／`illegal`）
-    要用它们推出每个状态的期望字节数（见 [`expectation_map`]）。
+    返回 `(表, 全部合法前缀, 长前缀表)`：
+
+    - **合法前缀**（`incomplete` 的那些）——错误分型（`incomplete`／`illegal`）要用它们推出
+      每个状态的期望字节数（见 [`expectation_map`]）。
+    - **长前缀**（`long_prefixes`）：**吸收态** —— 该前缀的 256 个单字节扩展**全部**仍报
+      `incomplete`，**且再扩一层也还全部** `incomplete`（否则只是"还差几个字节"的普通状态，
+      如 `euc_jp` 的 `8f`）。那是 CPython 状态机在等一条**定长**长序列（本族只有 `euc_kr` 的
+      谚文分解：`a4d4` 之后还要 6 字节、整整 8 字节才查表）。吸收态若照常 BFS 展开会指数爆炸
+      （256^6）✗ ⇒ 记成「长前缀 → 期望总长」，由 Rust 引擎**一步跳到总长**再查表 ✓。
+      长分支的**按位字母表**从参照 encode 结果里取（每个偏移上出现过哪些字节），再对**全部跨积**
+      逐条问参照 `decode` ⇒ 规范组合与"仅解码"组合都收 ✓（`euc_kr`：11172 条组合里 8822 条来自
+      encode、其余是仅解码项，**不能只抄 encode 反向** ✗）。该分支的"字母表完备"由 `euc_kr` 的
+      逐位替换闭包探测（把每位的双字节码在 `a1a1..fefe` 全范围替换，可解码的组合恰好落在字母表内）
+      交叉验证；`check_maps` 守住"每条 encode 结果都在长分支解码表里"。
     """
     table: dict[bytes, str] = {}
     all_prefixes: list[bytes] = []
+    long_prefixes: dict[bytes, int] = {}
+
+    def probe(prefix: bytes) -> tuple[list[tuple[bytes, str]], list[bytes]]:
+        """一个前缀的 256 个单字节扩展：`(成功解码的, 仍 incomplete 的)`。"""
+        successes: list[tuple[bytes, str]] = []
+        incompletes: list[bytes] = []
+        for byte in range(256):
+            sequence = prefix + bytes([byte])
+            if len(sequence) > MAX_SEQUENCE:
+                raise SystemExit(f"✗ {codec}: 序列超过 {MAX_SEQUENCE} 字节：{sequence.hex()}")
+            try:
+                successes.append((sequence, sequence.decode(codec)))
+            except UnicodeDecodeError as error:
+                if "incomplete multibyte sequence" in str(error):
+                    incompletes.append(sequence)
+        return successes, incompletes
+
+    def is_absorbing(prefix: bytes) -> bool:
+        """真吸收态：自己的扩展全 incomplete，**且**每个子前缀的扩展也全 incomplete。"""
+        _, incompletes = probe(prefix)
+        if len(incompletes) != 256:
+            return False
+        for child in incompletes:
+            _, child_incompletes = probe(child)
+            if len(child_incompletes) != 256:
+                return False
+        return True
+
     prefixes = [b""]
     while prefixes:
         next_prefixes: list[bytes] = []
         for prefix in prefixes:
-            for byte in range(256):
-                sequence = prefix + bytes([byte])
-                if len(sequence) > MAX_SEQUENCE:
-                    raise SystemExit(f"✗ {codec}: 序列超过 {MAX_SEQUENCE} 字节：{sequence.hex()}")
-                try:
-                    decoded = sequence.decode(codec)
-                except UnicodeDecodeError as error:
-                    if "incomplete multibyte sequence" in str(error):
-                        next_prefixes.append(sequence)
-                    continue
+            successes, incompletes = probe(prefix)
+            for sequence, decoded in successes:
                 table[sequence] = decoded
+            if prefix and len(incompletes) == 256:
+                if is_absorbing(prefix):
+                    # 真吸收态：不再展开（`probe` 已经确认 256 个扩展全 incomplete）
+                    long_prefixes[prefix] = 0  # 真实总长待下面按参照 encode 结果定
+                    continue
+                # 只是"字节不够"的普通状态（如 euc_jp 的 8f）⇒ 照常展开 ✓
+            next_prefixes.extend(incompletes)
         all_prefixes.extend(next_prefixes)
         prefixes = next_prefixes
-    return table, all_prefixes
+    for prefix in list(long_prefixes):
+        encoded_candidates = [
+            sequence
+            for sequence in encoded.values()
+            if len(sequence) > len(prefix) and sequence.startswith(prefix)
+        ]
+        if not encoded_candidates:
+            raise SystemExit(f"✗ {codec}: 吸收态前缀 {prefix.hex()} 在编码表里没有候选长序列")
+        expected = max(len(sequence) for sequence in encoded_candidates)
+        if any(len(sequence) != expected for sequence in encoded_candidates):
+            raise SystemExit(
+                f"✗ {codec}: 吸收态前缀 {prefix.hex()} 的长序列长度不一致（本工具只支持定长）"
+            )
+        long_prefixes[prefix] = expected
+        # **按位字母表**：长分支的每个偏移上有哪些字节，从参照 encode 结果里取。解码器对每位的
+        # 取值集合做校验 ⇒ **全部跨积**逐条问参照 decode（**不能只抄 encode 反向** ✗：`euc_kr`
+        # 的 8 字节分支有 11172 条组合，encode 只覆盖其中 8822 条规范组合，其余是"仅解码"项）。
+        alphabets = [
+            sorted({sequence[offset] for sequence in encoded_candidates})
+            for offset in range(len(prefix), expected)
+        ]
+        combinations = 1
+        for alphabet in alphabets:
+            combinations *= len(alphabet)
+        if combinations > 2_000_000:
+            raise SystemExit(
+                f"✗ {codec}: 吸收态前缀 {prefix.hex()} 的跨积 {combinations} 太大（不支持）"
+            )
+        decoded_long: set[bytes] = set()
+
+        def enumerate_long(offset: int, current: list[int]) -> None:
+            if offset == len(alphabets):
+                sequence = prefix + bytes(current)
+                try:
+                    text = sequence.decode(codec)
+                except UnicodeDecodeError as error:
+                    if "incomplete multibyte sequence" in str(error):
+                        raise SystemExit(
+                            f"✗ {codec}: 长序列 {sequence.hex()} 仍报 incomplete（吸收态假设被打破）"
+                        )
+                    return
+                if len(text) != 1:
+                    raise SystemExit(f"✗ {codec}: 长序列 {sequence.hex()} 解出 {text!r}（不是单码位）")
+                table[sequence] = text
+                decoded_long.add(sequence)
+                return
+            for byte in alphabets[offset]:
+                current.append(byte)
+                enumerate_long(offset + 1, current)
+                current.pop()
+
+        enumerate_long(0, [])
+        missing = [sequence for sequence in encoded_candidates if sequence not in decoded_long]
+        if missing:
+            raise SystemExit(
+                f"✗ {codec}: 编码结果 {missing[0].hex()} 不在长分支解码表里（跨积字母表不全）"
+            )
+    return table, all_prefixes, long_prefixes
 
 
 def expectation_map(codec: str, prefixes: list[bytes]) -> dict[bytes, int]:
@@ -207,12 +308,21 @@ def check_maps(codec: str, encoded: dict[int, bytes], decoded: dict[bytes, str])
     ③ 记录多码位解码条数（Rust 表要能装下）。
     """
     problems: list[str] = []
-    multi = 0
+    encoded_values = set(encoded.values())
+    # **合法前缀集合**：吸收态下编码结果可以是"解码器眼中的前缀"（参照自身就不对称：`euc_kr` 的
+    # `U+3164` 编成 `a4d4`，而 `b'\xa4\xd4'` 解出来是 `incomplete`）⇒ 编码值只要"在解码表里
+    # **或**是解码表某条序列的真前缀"就算自洽 ✓（这是参照的既有形态，不是我们的偏差）。
+    decoded_prefixes: set[bytes] = set()
+    for sequence in decoded:
+        for length in range(1, len(sequence)):
+            decoded_prefixes.add(sequence[:length])
     for codepoint, sequence in encoded.items():
-        if sequence not in decoded:
-            problems.append(f"编码 {codepoint:04X}→{sequence.hex()} 不在解码表里")
+        if sequence not in decoded and sequence not in decoded_prefixes:
+            problems.append(f"编码 {codepoint:04X}→{sequence.hex()} 不在解码表里（也不是前缀）")
         if len(problems) > 5:
             break
+    # **如实口径**：解码表允许**比编码表多**（参照固有：`euc_jp` 的 `8fa2b7` 解 `~`、`johab` 有 17 条
+    # 仅解码项；吸收态长分支已逐条核对回 encode 反向 ✓）⇒ 这里**不**要求 decode ⊂ encode。
     for sequence, text in decoded.items():
         if len(text) > 2:
             multi += 1
@@ -234,12 +344,13 @@ def family_text(family: str, codecs: list[str]) -> tuple[str, str]:
     lines.append("# 格式：`@ <codec>` 块开始；`E <码位:hex> <字节:hex>` 编码方向；")
     lines.append("#       `D <字节:hex> <码位:hex>[ <码位:hex>]` 解码方向（JIS X 0213 组合字符可两个码位）；")
     lines.append("#       `P <码位1:hex> <码位2:hex> <字节:hex>` 两码位组合字符的编码方向；")
-    lines.append("#       `X <前缀:hex> <期望总长>` 前缀状态的结构长度（错误分型 incomplete／illegal 用）。")
+    lines.append("#       `X <前缀:hex> <期望总长>` 前缀状态的结构长度（错误分型 incomplete／illegal 用）；")
+    lines.append("#       `L <前缀:hex> <总长>` 吸收态长前缀（euc_kr 谚文 8 字节：引擎一步跳到总长再查表）。")
     summary: list[str] = []
     bodies: list[tuple[str, list[str], list[str]]] = []
     for codec in codecs:
         encoded = encode_map(codec)
-        decoded, prefixes = decode_map(codec)
+        decoded, prefixes, long_prefixes = decode_map(codec, encoded)
         expectations = expectation_map(codec, prefixes)
         pairs = pair_encode_map(codec, decoded)
         problems = check_maps(codec, encoded, decoded)
@@ -250,7 +361,7 @@ def family_text(family: str, codecs: list[str]) -> tuple[str, str]:
         multi = sum(1 for text in decoded.values() if len(text) > 1)
         summary.append(
             f"  {codec}: 可编码码位 {len(encoded)}；可解码序列 {len(decoded)}；组合字符 {len(pairs)} 对；"
-            f"前缀状态 {len(expectations)} 个（最长 "
+            f"前缀状态 {len(expectations)} 个；长前缀（吸收态）{len(long_prefixes)} 个（最长 "
             f"{max((len(sequence) for sequence in decoded), default=0)} 字节）"
         )
         encoded_lines = [
@@ -269,14 +380,19 @@ def family_text(family: str, codecs: list[str]) -> tuple[str, str]:
             f"X {prefix.hex()} {expectations[prefix]}"
             for prefix in sorted(expectations, key=lambda value: (len(value), value))
         ]
-        bodies.append((codec, encoded_lines, decoded_lines, pair_lines, expectation_lines))
-    for codec, encoded_lines, decoded_lines, pair_lines, expectation_lines in bodies:
+        long_lines = [
+            f"L {prefix.hex()} {long_prefixes[prefix]}"
+            for prefix in sorted(long_prefixes, key=lambda value: (len(value), value))
+        ]
+        bodies.append((codec, encoded_lines, decoded_lines, pair_lines, expectation_lines, long_lines))
+    for codec, encoded_lines, decoded_lines, pair_lines, expectation_lines, long_lines in bodies:
         lines.append("")
         lines.append(f"@ {codec}")
         lines.extend(encoded_lines)
         lines.extend(decoded_lines)
         lines.extend(pair_lines)
         lines.extend(expectation_lines)
+        lines.extend(long_lines)
     lines.append("")
     return "\n".join(lines), "\n".join(summary)
 

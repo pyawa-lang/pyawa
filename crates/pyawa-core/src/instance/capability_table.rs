@@ -31,9 +31,10 @@
 //! - **混合列表**：两域按上面的口径分流后合并；只要有 `fs` 就绪项，就**不阻塞**（`timeout` 归 0）；
 //! - **域查不到／已关 fd** ⇒ `EBADF` 形状的机器错误（`CP-18`）。
 //!
-//! **如实缺口**（不在此伪造）：空 fd 列表 ＋ 正时长的 `select`（"纯睡眠"）**不真睡**——
-//! `clock` 域的 `sleep_ns` 槽还没接，且真睡眠的取消令牌属 `T-CP-10`（见 `SPEC-capabilities.md`
-//! `CP-27`）；现在立即返回空就绪集，行为与参照不同（调用方拿不到"等到了"的语义）。
+//! **`T-CP-10`（round 12 起）**：本文件只给**非阻塞**的 [`Instance::capability_select`]（轮询语义）；
+//! 真等待与**可取消**在 [`Instance::capability_select_cancellable`]（`instance/wait.rs`）：空 fd 列表
+//! ＋ 正 timeout 会按 `clock.sleep_ns` 分片**真睡**、片间查中断（`CP-27`）；被 `pa_interrupt` 取消时
+//! 返回 `Ok(None)`（`CP-28`），调用方转既有中断口径（`PA_ERR_INTERRUPT`）。
 //!
 //! # 公开路径
 //!

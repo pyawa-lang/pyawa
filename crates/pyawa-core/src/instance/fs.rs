@@ -8,10 +8,14 @@
 //! 不透明句柄：
 //!
 //! ```text
-//! fs_open(path)  → provider.open(相对名字) → provider 句柄 → 能力表分配 fd  → 返回 fd(int)
+//! fs_open(path)  → VM 路径解析（CP-21/CP-32）→ provider.open(guest 绝对名) → provider 句柄
+//!                → 能力表分配 fd → 返回 fd(int)
 //! fs_read(fd)    → 能力表查 fd → (fs 域, provider 句柄) → provider.read(句柄)
 //! fs_close(fd)   → 能力表释放表项 → 别名计数归零时才调 provider.close（`CP-17`）
 //! ```
+//!
+//! 名字类方法（`open`／`stat`／`readlink`／`unlink`／`rmdir`）一律先经 `instance/path.rs` 的
+//! VM 解析器（`CP-21`／`CP-32`：`..`／符号链接夹根在 VM，provider 只做根映射）。
 //!
 //! **标准流（0／1／2）不占表槽**（沿用 `_io` 的 `STDOUT_HANDLE`／`STDERR_HANDLE` 约定）：
 //! 这些 `fd` 直接当 provider 句柄透传（`PosixFs` 的 `write` 特判句柄 1／2）。
@@ -59,8 +63,15 @@ impl Instance {
         }
     }
 
-    /// **经 `fs` 域打开文件**：provider 句柄 → **能力表分配的新 `fd`**（`CP-31`）。
+    /// **经 `fs` 域打开文件**：名字先经 **VM 路径解析器**（`CP-21`／`CP-32`），再交给 provider；
+    /// provider 句柄 → **能力表分配的新 `fd`**（`CP-31`）。
     pub fn fs_open(&self, path: &[u8], flags: i32, mode: u32) -> Result<u64, CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        self.fs_open_raw(&resolved, flags, mode)
+    }
+
+    /// `fs_open` 的 provider 直达面（**名字已解析**；只允许本层的适配方法调用）。
+    fn fs_open_raw(&self, path: &[u8], flags: i32, mode: u32) -> Result<u64, CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
         let open = table.open.ok_or(CapabilityCallError::NotImplemented)?;
         let mut handle = pyawa_capabilities::fs::Handle(0);
@@ -77,8 +88,17 @@ impl Instance {
         }
     }
 
-    /// **经 `fs` 域取元信息**（`stat(name)`；按名字，不经过能力表）。
+    /// **经 `fs` 域取元信息**（`stat(name)`；按名字，不经过能力表；名字先经 VM 解析器）。
     pub fn fs_stat(&self, path: &[u8]) -> Result<pyawa_capabilities::fs::FileInfo, CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        self.fs_stat_raw(&resolved)
+    }
+
+    /// `fs_stat` 的 provider 直达面（**名字已解析**）。
+    fn fs_stat_raw(
+        &self,
+        path: &[u8],
+    ) -> Result<pyawa_capabilities::fs::FileInfo, CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
         let stat = table.stat.ok_or(CapabilityCallError::NotImplemented)?;
         let mut info = pyawa_capabilities::fs::FileInfo {
@@ -100,9 +120,17 @@ impl Instance {
 
     /// **经 `fs` 域读符号链接目标**（`readlink`；按名字，不经过能力表）。
     ///
+    /// 名字先经 VM 解析器（**不跟随最后一段** —— `readlink` 要的就是链接本身）。
+    pub fn fs_readlink(&self, path: &[u8]) -> Result<Vec<u8>, CapabilityCallError> {
+        let resolved = self.resolve_path_parent(path)?;
+        self.fs_readlink_raw(&resolved)
+    }
+
+    /// `readlink` 的 provider 直达面（**名字已解析**）—— VM 解析器自己也要用它探测符号链接。
+    ///
     /// **出参两段式**（与 `listdir` 同一约定）：`out_len` 回的是**目标的总字节数** ⇒ provider 只写
     /// `min(总长, 容量)`，调用方看到总长超容量就按新容量重试（`runtime/src/fs_posix.rs` 同款契约）。
-    pub fn fs_readlink(&self, path: &[u8]) -> Result<Vec<u8>, CapabilityCallError> {
+    pub(crate) fn fs_readlink_raw(&self, path: &[u8]) -> Result<Vec<u8>, CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
         let readlink = table.readlink.ok_or(CapabilityCallError::NotImplemented)?;
         // 初始容量取 Linux 的 `PATH_MAX` 一带（超长目标按 provider 报的总长再要一次）。
@@ -237,8 +265,14 @@ impl Instance {
         }
     }
 
-    /// **经 `fs` 域删除文件**（按名字，不经过能力表）。
+    /// **经 `fs` 域删除文件**（按名字，不经过能力表；名字先经 VM 解析器，**不跟随最后一段**）。
     pub fn fs_unlink(&self, path: &[u8]) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path_parent(path)?;
+        self.fs_unlink_raw(&resolved)
+    }
+
+    /// `fs_unlink` 的 provider 直达面（**名字已解析**）。
+    fn fs_unlink_raw(&self, path: &[u8]) -> Result<(), CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
         let unlink = table.unlink.ok_or(CapabilityCallError::NotImplemented)?;
         let mut errno = 0i32;
@@ -253,6 +287,12 @@ impl Instance {
 
     /// **经 `fs` 域删除目录**（按名字；与 [`Instance::fs_unlink`] 同一条口径）。
     pub fn fs_rmdir(&self, path: &[u8]) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path_parent(path)?;
+        self.fs_rmdir_raw(&resolved)
+    }
+
+    /// `fs_rmdir` 的 provider 直达面（**名字已解析**）。
+    fn fs_rmdir_raw(&self, path: &[u8]) -> Result<(), CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
         let rmdir = table.rmdir.ok_or(CapabilityCallError::NotImplemented)?;
         let mut errno = 0i32;

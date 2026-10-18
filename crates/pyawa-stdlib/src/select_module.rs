@@ -14,11 +14,17 @@
 //!   负 timeout ⇒ `ValueError: timeout must be non-negative`；`NaN` ⇒ `ValueError: Invalid value NaN (not a number)`；
 //!   机器错误（已关 fd）⇒ `OSError`（`CP-18` 的 `EBADF` 形状）。
 //!
+//! ## 可取消等待（`T-CP-10`，round 12）
+//!
+//! 等待经 `Instance::capability_select_cancellable`：**空 fd 列表 ＋ 正 timeout 真睡**（`clock.sleep_ns`
+//! 分片，与参照同量级）；`net` fd 的 `poll` 也按片调用。执行中宿主 `pa_interrupt` ⇒ 调用返回"已取消"
+//! ⇒ 本模块转成 `ExecError::Interrupted` ⇒ `pa_exec_*` 返回 `PA_ERR_INTERRUPT`（**既有中断口径**）。
+//! **如实差异**：参照的 Ctrl-C 会投 Python `KeyboardInterrupt`，本层的 `pa_interrupt` 是宿主级中断，
+//! 脚本里 `except KeyboardInterrupt` 捕不到（`T-CP-10` 的验收口径是"已取消返回、不悬挂、无后续副作用"）。
+//!
 //! ## 如实偏差（不假装 ✓）
 //!
-//! - **空 fd 列表 ＋ 正 timeout 不真睡**：`clock` 的 `sleep_ns` 槽未接、真睡眠的取消令牌属
-//!   `T-CP-10` ⇒ core 现在**立即返回空就绪集**（参照会睡满）。`net` fd 的等待走 `poll(2)`，
-//!   那一路是真等 ✓。
+//! - `net` 的**无 timeout 阻塞槽位**（`recv` 等）仍不可取消（见 `instance/wait.rs` 的"尚未覆盖"）。
 //! - **不导出** `poll`／`epoll`／`devpoll`／`kqueue`（`Lib/selectors.py` 的 `hasattr(select, 'poll')`
 //!   守卫会去真构造 selector；`NotImplementedError` 不在 `_can_use` 的 `except` 里 ⇒ 反而会挡
 //!   `import selectors` ✗）。收窄后它走 `SelectSelector` 回退（**如实偏差**：参照本机
@@ -135,8 +141,21 @@ fn select_native(
     }
 
     // VM 侧入口（`fs` 恒就绪 ／ `net` 走 poll 槽；错误形状见 `capability_table.rs` ✓）。
-    let ready = match instance.capability_select(&inputs[0], &inputs[1], &inputs[2], timeout_ns) {
-        Ok(ready) => ready,
+    // **`T-CP-10`**：可取消版——分片等待，片间查实例中断；被中断 ⇒ 归还输入引用后转
+    // `ExecError::Interrupted`（`PA_ERR_INTERRUPT`，CP-28 的"已取消"、无后续副作用）。
+    let ready = match instance.capability_select_cancellable(
+        &inputs[0],
+        &inputs[1],
+        &inputs[2],
+        timeout_ns,
+    ) {
+        Ok(Some(ready)) => ready,
+        Ok(None) => {
+            for list in &lists {
+                release_entries(instance, list);
+            }
+            return Err(pyawa_core::ExecError::Interrupted);
+        }
         Err(error) => {
             for list in &lists {
                 release_entries(instance, list);

@@ -3,7 +3,7 @@
 //! 实际输出**（不拿我们自己的输出当标准 ✓）：把下面的 `*_SCRIPT` 原样交给参照解释器，取其 stdout
 //! 钉成 `*_OUTPUT`，再让 Pyawa 跑同一脚本逐字节比较。
 //!
-//! 两个 test 分别守两半：
+//! **三个 test** 分别守三代落地面：
 //!
 //! 1. `multibyte_codec_family_matches_the_reference_byte_for_byte`（round 10）：`_multibytecodec`
 //!    ＋ `_codecs_jp` 一族 —— 7 个 `Lib/encodings/*` 真 import；`getcodec` 的
@@ -17,9 +17,16 @@
 //!    `bytes.decode` 的关键字形态；`encodings` **charmap 族**（cp1252）经委派可用；第二族
 //!    `_codecs_cn`（`gb2312`／`gbk`，`cp936` 别名）；`import codecs` 后 `codecs.lookup('cp932')`
 //!    的 **lazy `encodings`** 语义（脚本里此前没导入 encodings）。
+//! 3. `tw_and_kr_families_match_the_reference_byte_for_byte`（round 12）：**`_codecs_tw`**（`big5`／
+//!    `cp950`）＋**`_codecs_kr`**（`euc_kr`／`cp949`／`johab`）—— 5 个模块真 import、`getcodec`
+//!    返回形态与**按族限定**（`_codecs_tw.getcodec('gbk')` ⇒ `LookupError: no such codec is
+//!    supported.`）、`str.encode`／`bytes.decode` 委派与 errors 三态、`incomplete`／`illegal`
+//!    分型、别名、非文本编码器守卫；另含 **`euc_kr` 的 8 字节谚文分解**（吸收态长前缀：截断报
+//!    `incomplete`、凑满 8 字节不匹配报 `illegal`、`ignore`／`replace` 的跨度，以及参照自身的
+//!    `U+3164`→`a4d4` 不对称）。
 //!
 //! 表数据与引擎的**生成路径**见 `crates/pyawa-stdlib/src/multibyte_module.rs` 模块头
-//! （`python3 tools/gen_codec_tables.py --family jp --emit` ／ `--family cn --emit`）；
+//! （`python3 tools/gen_codec_tables.py --family {jp,cn,tw,kr} --emit`）；
 //! 委派口径见 `crates/pyawa-core/src/instance/convert.rs` 的 `builtin_encoding` 注释。
 
 fn run(name: &str, script: &str) -> String {
@@ -648,5 +655,261 @@ fn core_encoding_delegation_matches_the_reference_byte_for_byte() {
     assert_eq!(
         stdout, DELEGATION_OUTPUT,
         "core 的编码委派（str.encode／bytes.decode／str()）或 `codecs.lookup` lazy 语义与参照不一致"
+    );
+}
+
+
+// ---- round 12：`_codecs_tw`（big5／cp950）＋ `_codecs_kr`（euc_kr／cp949／johab） ------------
+
+/// 同一脚本两侧跑（含 `euc_kr` 的 8 字节谚文分解与按族限定的 `getcodec`）。
+const TW_KR_SCRIPT: &str = r##""""round 12 对拍：`_codecs_tw`（big5／cp950）＋`_codecs_kr`（euc_kr／cp949／johab）——
+同引擎加族后，`import encodings.*`、`codecs.lookup(...)`、`str.encode`／`bytes.decode` 委派路径
+与参照 `python3` 逐字节一致。"""
+
+import codecs
+
+import encodings.big5
+import encodings.cp949
+import encodings.cp950
+import encodings.euc_kr
+import encodings.johab
+
+# ---- ① 5 个模块真 import＋module-level codec 编解码 ----
+CASES = [
+    ("big5", "中文測試"),
+    ("cp950", "中文測試"),
+    ("euc_kr", "한국어테스트"),
+    ("cp949", "한국어테스트"),
+    ("johab", "한국어테스트"),
+]
+for name, text in CASES:
+    module = getattr(encodings, name)
+    encoded = module.codec.encode(text)
+    decoded = module.codec.decode(encoded[0])
+    print("module", name, encoded, decoded, decoded == text)
+
+# ---- ② `_codecs_tw`／`_codecs_kr` 的 getcodec 返回形态与往返 ----
+import _codecs_kr
+import _codecs_tw
+
+for family, name, text in [
+    (_codecs_tw, "big5", "中文測試"),
+    (_codecs_tw, "cp950", "中文測試"),
+    (_codecs_kr, "euc_kr", "한국어"),
+    (_codecs_kr, "cp949", "한국어"),
+    (_codecs_kr, "johab", "한국어"),
+]:
+    codec = family.getcodec(name)
+    encoded, used = codec.encode(text)
+    decoded, eaten = codec.decode(encoded)
+    print("getcodec", name, encoded, used, decoded, eaten)
+try:
+    _codecs_tw.getcodec("gbk")
+except LookupError as error:
+    print("getcodec-unknown", type(error).__name__, ":", error)
+
+# ---- ③ `str.encode`／`bytes.decode` 委派路径＋errors 三态 ----
+ENCODE_ERRORS = [
+    ("big5", "中\u2603文"),
+    ("cp950", "中\u2603文"),
+    ("euc_kr", "한\u2603국"),
+    ("cp949", "한\u2603국"),
+    ("johab", "한\u2603국"),
+]
+for name, text in ENCODE_ERRORS:
+    for errors in ("ignore", "replace"):
+        print("encode", name, errors, text.encode(name, errors))
+    try:
+        text.encode(name)
+    except UnicodeEncodeError as error:
+        print("encode", name, "strict", str(error))
+    except Exception as error:  # noqa: BLE001
+        print("encode", name, "strict-other", type(error).__name__, str(error))
+
+DECODE_ERRORS = [
+    ("big5", b"\xa4\xa4\x81"),
+    ("cp950", b"\xa4\xa4\x81"),
+    ("euc_kr", b"\xb0\xa1\x81"),
+    ("cp949", b"\xb0\xa1\x81"),
+    ("johab", b"\xb0\xa1\x81"),
+]
+for name, raw in DECODE_ERRORS:
+    for errors in ("ignore", "replace"):
+        print("decode", name, errors, raw.decode(name, errors))
+    try:
+        raw.decode(name)
+    except UnicodeDecodeError as error:
+        print("decode", name, "strict", str(error))
+    except Exception as error:  # noqa: BLE001
+        print("decode", name, "strict-other", type(error).__name__, str(error))
+
+# 单字节非法/截断的分型（incomplete vs illegal）
+for name in ("big5", "cp950", "euc_kr", "cp949", "johab"):
+    for raw in (b"\x81", b"\x81\x20", b"\xff"):
+        try:
+            print("decode-shape", name, raw, raw.decode(name))
+        except UnicodeDecodeError as error:
+            print("decode-shape", name, raw, str(error))
+        for errors in ("ignore", "replace"):
+            print("decode-shape", name, raw, errors, repr(raw.decode(name, errors)))
+
+# ---- ④ euc_kr 的 8 字节谚文分解（吸收态长前缀） ----
+codec = _codecs_kr.getcodec("euc_kr")
+jamo = "\uac02"
+encoded = jamo.encode("euc_kr")
+print("jamo", encoded, len(encoded), encoded.decode("euc_kr"))
+valid = bytes((0xA4, 0xD4, 0xA4, 0xA1, 0xA4, 0xBF, 0xA4, 0xA2))
+print("jamo-valid", valid.decode("euc_kr"), codec.decode(valid))
+for raw in (valid, valid[:7], valid[:6], valid[:2], bytes((0xA4, 0xD4, 0, 0, 0, 0, 0, 0))):
+    for errors in ("strict", "ignore", "replace"):
+        try:
+            print("jamo", raw.hex(), errors, repr(codec.decode(raw, errors)))
+        except UnicodeDecodeError as error:
+            print("jamo", raw.hex(), errors, str(error))
+# 参照自身的不对称：U+3164 编成 a4d4，而 b'\\xa4\\xd4' 解出来是 incomplete
+filler = "\u3164"
+print("jamo-asym", filler.encode("euc_kr"))
+try:
+    bytes((0xA4, 0xD4)).decode("euc_kr")
+except UnicodeDecodeError as error:
+    print("jamo-asym", str(error))
+
+# ---- ⑤ 注册表路径（lookup／别名）与 charmap 之外的委派 ----
+for name in ("big5", "cp950", "euc_kr", "cp949", "johab"):
+    info = codecs.lookup(name)
+    text = "中文" if name in ("big5", "cp950") else "한국"
+    encoded = info.encode(text)
+    print("lookup", name, info.name, encoded, info.decode(encoded[0]))
+print("alias", codecs.lookup("csbig5").name, codecs.lookup("uhc").name, codecs.lookup("ksc5601").name)
+
+# ---- ⑥ 非文本编码器守卫（委派路径的边界仍然照参照） ----
+for name, action in [("rot13", "encode"), ("hex", "decode")]:
+    try:
+        "abc".encode(name) if action == "encode" else b"abc".decode(name)
+    except LookupError as error:
+        print("non-text", name, type(error).__name__, ":", error)"##;
+
+/// 参照 `python3` 3.14.4 对 `TW_KR_SCRIPT` 的实际 stdout。
+const TW_KR_OUTPUT: &str = r##"module big5 (b'\xa4\xa4\xa4\xe5\xb4\xfa\xb8\xd5', 4) ('中文測試', 8) False
+module cp950 (b'\xa4\xa4\xa4\xe5\xb4\xfa\xb8\xd5', 4) ('中文測試', 8) False
+module euc_kr (b'\xc7\xd1\xb1\xb9\xbe\xee\xc5\xd7\xbd\xba\xc6\xae', 6) ('한국어테스트', 12) False
+module cp949 (b'\xc7\xd1\xb1\xb9\xbe\xee\xc5\xd7\xbd\xba\xc6\xae', 6) ('한국어테스트', 12) False
+module johab (b'\xd0e\x8a\x82\xb4\xe1\xc9A\xafa\xcba', 6) ('한국어테스트', 12) False
+getcodec big5 b'\xa4\xa4\xa4\xe5\xb4\xfa\xb8\xd5' 4 中文測試 8
+getcodec cp950 b'\xa4\xa4\xa4\xe5\xb4\xfa\xb8\xd5' 4 中文測試 8
+getcodec euc_kr b'\xc7\xd1\xb1\xb9\xbe\xee' 3 한국어 6
+getcodec cp949 b'\xc7\xd1\xb1\xb9\xbe\xee' 3 한국어 6
+getcodec johab b'\xd0e\x8a\x82\xb4\xe1' 3 한국어 6
+getcodec-unknown LookupError : no such codec is supported.
+encode big5 ignore b'\xa4\xa4\xa4\xe5'
+encode big5 replace b'\xa4\xa4?\xa4\xe5'
+encode big5 strict 'big5' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+encode cp950 ignore b'\xa4\xa4\xa4\xe5'
+encode cp950 replace b'\xa4\xa4?\xa4\xe5'
+encode cp950 strict 'cp950' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+encode euc_kr ignore b'\xc7\xd1\xb1\xb9'
+encode euc_kr replace b'\xc7\xd1?\xb1\xb9'
+encode euc_kr strict 'euc_kr' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+encode cp949 ignore b'\xc7\xd1\xb1\xb9'
+encode cp949 replace b'\xc7\xd1?\xb1\xb9'
+encode cp949 strict 'cp949' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+encode johab ignore b'\xd0e\x8a\x82'
+encode johab replace b'\xd0e?\x8a\x82'
+encode johab strict 'johab' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+decode big5 ignore 中
+decode big5 replace 中�
+decode big5 strict 'big5' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+decode cp950 ignore 中
+decode cp950 replace 中�
+decode cp950 strict 'cp950' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+decode euc_kr ignore 가
+decode euc_kr replace 가�
+decode euc_kr strict 'euc_kr' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+decode cp949 ignore 가
+decode cp949 replace 가�
+decode cp949 strict 'cp949' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+decode johab ignore 쌰
+decode johab replace 쌰�
+decode johab strict 'johab' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+decode-shape big5 b'\x81' 'big5' codec can't decode byte 0x81 in position 0: incomplete multibyte sequence
+decode-shape big5 b'\x81' ignore ''
+decode-shape big5 b'\x81' replace '�'
+decode-shape big5 b'\x81 ' 'big5' codec can't decode byte 0x81 in position 0: illegal multibyte sequence
+decode-shape big5 b'\x81 ' ignore ' '
+decode-shape big5 b'\x81 ' replace '� '
+decode-shape big5 b'\xff' 'big5' codec can't decode byte 0xff in position 0: incomplete multibyte sequence
+decode-shape big5 b'\xff' ignore ''
+decode-shape big5 b'\xff' replace '�'
+decode-shape cp950 b'\x81' 'cp950' codec can't decode byte 0x81 in position 0: incomplete multibyte sequence
+decode-shape cp950 b'\x81' ignore ''
+decode-shape cp950 b'\x81' replace '�'
+decode-shape cp950 b'\x81 ' 'cp950' codec can't decode byte 0x81 in position 0: illegal multibyte sequence
+decode-shape cp950 b'\x81 ' ignore ' '
+decode-shape cp950 b'\x81 ' replace '� '
+decode-shape cp950 b'\xff' 'cp950' codec can't decode byte 0xff in position 0: incomplete multibyte sequence
+decode-shape cp950 b'\xff' ignore ''
+decode-shape cp950 b'\xff' replace '�'
+decode-shape euc_kr b'\x81' 'euc_kr' codec can't decode byte 0x81 in position 0: incomplete multibyte sequence
+decode-shape euc_kr b'\x81' ignore ''
+decode-shape euc_kr b'\x81' replace '�'
+decode-shape euc_kr b'\x81 ' 'euc_kr' codec can't decode byte 0x81 in position 0: illegal multibyte sequence
+decode-shape euc_kr b'\x81 ' ignore ' '
+decode-shape euc_kr b'\x81 ' replace '� '
+decode-shape euc_kr b'\xff' 'euc_kr' codec can't decode byte 0xff in position 0: incomplete multibyte sequence
+decode-shape euc_kr b'\xff' ignore ''
+decode-shape euc_kr b'\xff' replace '�'
+decode-shape cp949 b'\x81' 'cp949' codec can't decode byte 0x81 in position 0: incomplete multibyte sequence
+decode-shape cp949 b'\x81' ignore ''
+decode-shape cp949 b'\x81' replace '�'
+decode-shape cp949 b'\x81 ' 'cp949' codec can't decode byte 0x81 in position 0: illegal multibyte sequence
+decode-shape cp949 b'\x81 ' ignore ' '
+decode-shape cp949 b'\x81 ' replace '� '
+decode-shape cp949 b'\xff' 'cp949' codec can't decode byte 0xff in position 0: incomplete multibyte sequence
+decode-shape cp949 b'\xff' ignore ''
+decode-shape cp949 b'\xff' replace '�'
+decode-shape johab b'\x81' 'johab' codec can't decode byte 0x81 in position 0: incomplete multibyte sequence
+decode-shape johab b'\x81' ignore ''
+decode-shape johab b'\x81' replace '�'
+decode-shape johab b'\x81 ' 'johab' codec can't decode byte 0x81 in position 0: illegal multibyte sequence
+decode-shape johab b'\x81 ' ignore ' '
+decode-shape johab b'\x81 ' replace '� '
+decode-shape johab b'\xff' 'johab' codec can't decode byte 0xff in position 0: incomplete multibyte sequence
+decode-shape johab b'\xff' ignore ''
+decode-shape johab b'\xff' replace '�'
+jamo b'\xa4\xd4\xa4\xa1\xa4\xbf\xa4\xa2' 8 갂
+jamo-valid 갂 ('갂', 8)
+jamo a4d4a4a1a4bfa4a2 strict ('갂', 8)
+jamo a4d4a4a1a4bfa4a2 ignore ('갂', 8)
+jamo a4d4a4a1a4bfa4a2 replace ('갂', 8)
+jamo a4d4a4a1a4bfa4 strict 'euc_kr' codec can't decode bytes in position 0-6: incomplete multibyte sequence
+jamo a4d4a4a1a4bfa4 ignore ('', 7)
+jamo a4d4a4a1a4bfa4 replace ('�', 7)
+jamo a4d4a4a1a4bf strict 'euc_kr' codec can't decode bytes in position 0-5: incomplete multibyte sequence
+jamo a4d4a4a1a4bf ignore ('', 6)
+jamo a4d4a4a1a4bf replace ('�', 6)
+jamo a4d4 strict 'euc_kr' codec can't decode bytes in position 0-1: incomplete multibyte sequence
+jamo a4d4 ignore ('', 2)
+jamo a4d4 replace ('�', 2)
+jamo a4d4000000000000 strict 'euc_kr' codec can't decode byte 0xa4 in position 0: illegal multibyte sequence
+jamo a4d4000000000000 ignore ('\x00\x00\x00\x00\x00\x00', 8)
+jamo a4d4000000000000 replace ('��\x00\x00\x00\x00\x00\x00', 8)
+jamo-asym b'\xa4\xd4'
+jamo-asym 'euc_kr' codec can't decode bytes in position 0-1: incomplete multibyte sequence
+lookup big5 big5 (b'\xa4\xa4\xa4\xe5', 2) ('中文', 4)
+lookup cp950 cp950 (b'\xa4\xa4\xa4\xe5', 2) ('中文', 4)
+lookup euc_kr euc_kr (b'\xc7\xd1\xb1\xb9', 2) ('한국', 4)
+lookup cp949 cp949 (b'\xc7\xd1\xb1\xb9', 2) ('한국', 4)
+lookup johab johab (b'\xd0e\x8a\x82', 2) ('한국', 4)
+alias big5 cp949 euc_kr
+non-text rot13 LookupError : 'rot13' is not a text encoding; use codecs.encode() to handle arbitrary codecs
+non-text hex LookupError : 'hex' is not a text encoding; use codecs.decode() to handle arbitrary codecs
+"##;
+
+#[test]
+fn tw_and_kr_families_match_the_reference_byte_for_byte() {
+    let stdout = run("tw-kr", TW_KR_SCRIPT);
+    assert_eq!(
+        stdout, TW_KR_OUTPUT,
+        "`_codecs_tw`／`_codecs_kr` 一族的输出与参照不一致（逐字节对拍）"
     );
 }

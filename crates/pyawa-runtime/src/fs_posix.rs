@@ -46,7 +46,9 @@ impl PosixFs {
     /// **调用方必须保证** `self` 活得比该 vtable 久（CLI 里就是一个栈上局部）。
     pub fn vtable(&self) -> CpFsVtable {
         CpFsVtable {
-            version: 1,
+            // **`CP-30`／`AB-39`**：能力接口与嵌入 API／宿主对象契约**共用** `PA_ABI_VERSION`
+            // （`ABI` 侧的注册校验由别的线接；这里只填对值）。
+            version: pyawa_abi::PA_ABI_VERSION,
             size: core::mem::size_of::<CpFsVtable>() as u32,
             state: (self as *const Self).cast_mut().cast::<c_void>(),
             open: Some(fs_open),
@@ -630,19 +632,19 @@ extern "C" fn fs_close(
 // 受限 provider（M5 判据② 的"受限档"；`T-CP-4`／`T-CP-5`）
 // --------------------------------------------------------------------------- #
 
-/// **受限 provider**：根能力 ＝ 一个宿主机目录（chroot 语义）。
+/// **受限 provider**：根能力 ＝ 一个宿主机目录（chroot 语义的**名字空间映射层**）。
 ///
 /// 形状照 `DESIGN.md` §7.4 与 `SPEC-capabilities.md` §7：
-/// - 相对名字相对**根能力**解析；绝对路径按 chroot 语义（`/proc` ⇒ `<根>/proc`）；
-/// - `..` 与符号链接**出不了根**：越界一律 `ENOENT`（`CP-6`：不发明"权限"类别；
-///   `CP-23`：看不见 ＝ 不存在）；
-/// - 额外的**只读根**（如工作区的 `Lib/`）供 import 读模块文件；落在只读根上的写 ⇒ `EACCES`
-///   （真实机器错误，不是"未实现"，`CP-5`）。
 ///
-/// **如实缺口（M5 矩阵里单列，不在此假装满足）**：`CP-21`／`CP-32` 要求路径解析在 **VM 侧**、
-/// provider 只回答"这个能力对象被允许做什么"（`CP-7` '权威在 provider、判定在 VM'）。本类型是
-/// **过渡档**：解析暂在 provider 内完成的。⇒ "同一脚本在受限档下写法不变"（`T-CP-11`）可以成立，
-/// 但 **不等于** `CP-21`／`CP-32` 已满足。
+/// - **判定在 VM**（`CP-7`／`CP-21`／`CP-32`）：`..` 归一、符号链接解析、根处夹住都由
+///   `pyawa-core` 的 `instance/path.rs` 完成 ⇒ 本 provider 收到的名字**已经是** guest 绝对名
+///   （不含越界 `..`、不含未解析的逃逸链接）。本类型**不再做**任何夹根判定 —— 只把
+///   guest 名字空间**映射**到自己的权威目录；
+/// - 映射：命中某个允许根的**宿主绝对前缀**（如 `<root>/a`、`<Lib>/os.py`）⇒ 用那个根；
+///   其它绝对路径 ⇒ chroot 语义（`/proc` ⇒ `<根>/proc`）；相对名字 ⇒ 相对主根；
+/// - 额外的**只读根**（如工作区的 `Lib/`）供 import 读模块文件；落在只读根上的写 ⇒ `EACCES`
+///   （真实机器错误，不是"未实现"，`CP-5`）——这是**根权限策略**，不是路径判定；
+/// - `CP-23`：根下没有的路径（`/proc`、`/dev`、`/sys`）就是 `ENOENT`（看不见 ＝ 不存在）。
 pub struct RestrictedFs {
     /// 根能力（canonical 主根，可写）。
     root: PathBuf,
@@ -705,53 +707,25 @@ impl RestrictedFs {
         (self.root.clone(), raw.to_path_buf())
     }
 
-    /// 词法归一：`.` 丢掉、`..` 弹栈、**到根就停**（chroot：`/..` 仍是 `/`）。
-    fn normalize(rest: &Path) -> PathBuf {
-        let mut stack: Vec<std::ffi::OsString> = Vec::new();
-        for component in rest.components() {
-            match component {
-                std::path::Component::CurDir
-                | std::path::Component::RootDir
-                | std::path::Component::Prefix(_) => {}
-                std::path::Component::ParentDir => {
-                    stack.pop();
-                }
-                std::path::Component::Normal(part) => stack.push(part.to_os_string()),
-            }
-        }
-        let mut resolved = PathBuf::new();
-        for part in stack {
-            resolved.push(part);
-        }
-        resolved
-    }
-
-    /// 解析一个名字 ⇒ 宿主路径（canonical 前缀 ＋ 未跟随的最后一段，视 `leaf`）。
+    /// 把 **VM 已解析的 guest 名字**映射成宿主路径（**不做** `..`／符号链接判定——
+    /// 那是 VM 的职责：`CP-21`／`CP-32`）。
     ///
-    /// `leaf == false`：跟随最后一段的符号链接（`open`／`stat` 的 POSIX 语义）；
-    /// `leaf == true`：**不**跟随最后一段（`readlink`／`unlink`／`mkdir`／`rename` 要动链接本身）。
-    fn resolve(&self, name: &str, leaf: bool, for_write: bool) -> Result<PathBuf, i32> {
+    /// `leaf` 参数保留只为对齐 vtable 的叶子语义（VM 已在解析器里处理"跟不跟随最后一段"）；
+    /// 映射规则见类型文档。**只读根上的写**返回真实机器错误 `EACCES`（根权限策略）。
+    fn resolve(&self, name: &str, _leaf: bool, for_write: bool) -> Result<PathBuf, i32> {
         let (base, rest) = self.base_of(name);
-        let relative = Self::normalize(&rest);
-        let candidate = base.join(&relative);
-        let confined = if leaf {
-            parent_confined(&candidate, &base)?
-        } else {
-            follow_confined(&candidate, &base)?
-        };
-        // 只读根上的写 ⇒ 真实机器错误（`CP-6`：不发明"权限不足"这一类别之外的通道，
-        // 这里就是 POSIX 自己的 `EACCES`）。
-        if for_write && !confined.starts_with(&self.root) {
+        let mapped = base.join(rest);
+        if for_write && !mapped.starts_with(&self.root) {
             return Err(fallback_errno("EACCES"));
         }
-        Ok(confined)
+        Ok(mapped)
     }
 
-    /// 本 provider 的 vtable（`CP-30`；`state` 指回自己，名字类槽位做根内的解析）。
+    /// 本 provider 的 vtable（`CP-30`；`state` 指回自己，名字类槽位做根映射）。
     pub fn vtable(&self) -> CpFsVtable {
         let mut table = self.inner.vtable();
         table.state = (self as *const Self).cast_mut().cast::<c_void>();
-        // 名字类槽位：先解析再交给内层真实现。
+        // 名字类槽位：把 VM 解析后的 guest 名字映射到根，再交给内层真实现。
         table.open = Some(restricted_open);
         table.stat = Some(restricted_stat);
         table.mkdir = Some(restricted_mkdir);
@@ -770,51 +744,6 @@ impl RestrictedFs {
         table.close = Some(restricted_close);
         table
     }
-}
-
-/// `candidate` 的最终宿主归属必须仍在 `base` 内（`CP-21` 的安全核心：`..`／符号链接跳不出去）。
-fn within(candidate: &Path, base: &Path) -> bool {
-    candidate.starts_with(base)
-}
-
-/// 跟随最后一段的符号链接（`open`／`stat`）：存在 ⇒ canonical 后核归属；
-/// 不存在（`open` 的 `CREAT` 一族）⇒ **父目录**必须存在且在根内。
-fn follow_confined(candidate: &Path, base: &Path) -> Result<PathBuf, i32> {
-    match std::fs::canonicalize(candidate) {
-        Ok(canonical) => {
-            if !within(&canonical, base) {
-                // 符号链接把目标带出了根 ⇒ 在受限档里它**不存在**（`CP-23` 的"看不见"）。
-                return Err(fallback_errno("ENOENT"));
-            }
-            Ok(canonical)
-        }
-        Err(_) => {
-            let parent = candidate.parent().ok_or_else(|| fallback_errno("ENOENT"))?;
-            let name = candidate.file_name().ok_or_else(|| fallback_errno("ENOENT"))?;
-            let canonical_parent =
-                std::fs::canonicalize(parent).map_err(|error| errno_of(&error))?;
-            if !within(&canonical_parent, base) {
-                return Err(fallback_errno("ENOENT"));
-            }
-            Ok(canonical_parent.join(name))
-        }
-    }
-}
-
-/// **不**跟随最后一段（`readlink`／`unlink`／`mkdir`／`rename`）：父目录必须存在且在根内，
-/// 最后一段原样保留（于是"删符号链接本身"这类操作仍然做得，且碰不到根外目标）。
-fn parent_confined(candidate: &Path, base: &Path) -> Result<PathBuf, i32> {
-    if candidate == base {
-        // 根目录本身（`"/"`／所有段都折叠掉）：交给宿主按 POSIX 报错（`EISDIR`／`EINVAL`）。
-        return Ok(candidate.to_path_buf());
-    }
-    let parent = candidate.parent().ok_or_else(|| fallback_errno("ENOENT"))?;
-    let name = candidate.file_name().ok_or_else(|| fallback_errno("ENOENT"))?;
-    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| errno_of(&error))?;
-    if !within(&canonical_parent, base) {
-        return Err(fallback_errno("ENOENT"));
-    }
-    Ok(canonical_parent.join(name))
 }
 
 /// `name`／`len` → 文本（UTF-8；非 UTF-8 借 `EINVAL`；与 [`path_of`] 同一条口径）。
@@ -839,7 +768,8 @@ fn write_intent(flags: i32) -> bool {
         || flags & (open_flag::APPEND | open_flag::TRUNC | open_flag::CREAT) != 0
 }
 
-/// 名字类槽位的解析样板：出错就把 `errno` 写进出参并返回 `Machine`（`CP-5` 两条通道之一）。
+/// 名字类槽位的映射样板：把 VM 已解析的 guest 名字映射成宿主路径；出错就把 `errno`
+/// 写进出参并返回 `Machine`（`CP-5` 两条通道之一）。
 macro_rules! resolve_name {
     ($state:expr, $name:expr, $len:expr, $leaf:expr, $for_write:expr, $errno_out:expr) => {{
         // SAFETY: provider 由注册方保证活到 vtable 使用期（契约同 `PosixFs::vtable`）。

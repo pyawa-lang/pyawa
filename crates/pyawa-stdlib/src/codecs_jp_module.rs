@@ -37,7 +37,7 @@ fn make_native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<He
 /// 建 `_codecs_jp` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
-    let function = make_native(instance, "getcodec", crate::multibyte_module::getcodec_native);
+    let function = make_native(instance, "getcodec", crate::multibyte_module::getcodec_jp_native);
     instance.dict_set(namespace, "getcodec", function);
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);

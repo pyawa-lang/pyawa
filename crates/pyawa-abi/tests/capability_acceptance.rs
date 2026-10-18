@@ -2,7 +2,8 @@
 //!
 //! 本文件只验**能力形状层 ＋ ABI 注册 ＋ VM 侧适配层**能独立验的条目：
 //! `T-CP-1`／`T-CP-2`／`T-CP-5`（映射的一半）／`T-CP-7`（互不可见＋销毁兜底释放）／
-//! `T-CP-8`／`T-CP-9`／`T-CP-12`（通道的一半）／`T-CP-3`（`select` 的 core 分流域）。
+//! `T-CP-8`／`T-CP-9`／`T-CP-12`（通道的一半）／`T-CP-3`（`select` 的 core 分流域）／
+//! `T-CP-10`（可取消等待的 core 语义：分片／已取消／未开始／无后续 provider 调用）。
 //!
 //! **不**在这里验的（有专门的可执行验收，别在本文件重复造第二个真相）：
 //! - `T-CP-4`／`T-CP-5`（真 provider）／`T-CP-7`（真 provider 的残留句柄半边）／
@@ -10,7 +11,8 @@
 //!   ⇒ `crates/pyawa-runtime/tests/two_providers.rs`（真实 `PosixFs` vs 受限 `RestrictedFs`）；
 //! - `T-CP-3` 的 Python 面（`select.select`／`os.dup`／`os.dup2`）⇒ 同文件
 //!   `crates/pyawa-runtime/tests/two_providers.rs`（e2e）＋ `crates/pyawa-runtime/tests/select_dup2_shapes.rs`；
-//! - `T-CP-10`（当前**红**：取消令牌／worker／可取消等待未做，round 12；缺口见 M5 矩阵，不在此伪造绿）；
+//! - `T-CP-10` 的 **e2e**（挂起中另一线程 `pa_interrupt` ⇒ ≤2 s 返回／真 CLI 真睡）⇒
+//!   `crates/pyawa-runtime/tests/t_cp10_cancel.rs`（真实例、真 provider、真 CLI）；
 //! - `T-CP-6`／`T-CP-13`（静态检查 ⇒ `python3 tests/ci/check.py` 的 `T-CX-4`）。
 //!
 //! **做法**：自造 vtable（`CP-12`：形状层只含类型与函数指针；测试侧当"宿主"）。这样每条断言都
@@ -33,6 +35,17 @@ use pyawa_core::CapabilityCallError;
 // --------------------------------------------------------------------------- #
 // 基建：建实例、注册 vtable、跑一段脚本并取回未捕获异常
 // --------------------------------------------------------------------------- #
+
+/// **`CP-30`**：注册路径会读并校验 vtable 公共头 `(version, size)` ⇒ 测试侧当"宿主"的表必须
+/// 填**合法头**。`CpFsVtable::UNIMPLEMENTED` 的 `version: 0` 是"未填"哨兵，**不能**直接进注册路径；
+/// 这里以它为底、把公共头换成 `PA_ABI_VERSION` ＋ 本结构体字节数（槽位仍全 `None`，语义不变）。
+fn valid_fs_table() -> CpFsVtable {
+    CpFsVtable {
+        version: PA_ABI_VERSION,
+        size: core::mem::size_of::<CpFsVtable>() as u32,
+        ..CpFsVtable::UNIMPLEMENTED
+    }
+}
 
 /// 建一个可用实例（`AB-55` 的 C 形态入口；失败即 panic——本文件不测创建失败那条）。
 fn new_state() -> *mut pa_state {
@@ -205,7 +218,7 @@ extern "C" fn missing_open(
 
 /// 一个只接 `write` 的 vtable（`CP-3`：其余槽位保持"未实现"）。
 fn write_only_vtable() -> CpFsVtable {
-    CpFsVtable { write: Some(sink_write), ..CpFsVtable::UNIMPLEMENTED }
+    CpFsVtable { write: Some(sink_write), ..valid_fs_table() }
 }
 
 // --------------------------------------------------------------------------- #
@@ -284,7 +297,7 @@ fn refusal_is_a_machine_error_distinct_from_unimplemented() {
         open: Some(refuse_open),
         stat: Some(refuse_stat),
         write: Some(sink_write),
-        ..CpFsVtable::UNIMPLEMENTED
+        ..valid_fs_table()
     };
     let state = new_state();
     // SAFETY: `refused` 活到测试末尾；地址在 state 存活期内有效。
@@ -323,7 +336,7 @@ fn refusal_is_a_machine_error_distinct_from_unimplemented() {
     assert!(message.contains("[Errno 13]"), "消息要带机器错误（errno）：{message}");
 
     // 另一个实例：域已注册但槽位未实现。
-    let unimplemented_table = CpFsVtable::UNIMPLEMENTED;
+    let unimplemented_table = valid_fs_table();
     let other = new_state();
     // SAFETY: 同上。
     unsafe {
@@ -356,7 +369,7 @@ fn missing_special_roots_are_file_not_found_not_unimplemented() {
     let empty_machine = CpFsVtable {
         open: Some(missing_open),
         write: Some(sink_write),
-        ..CpFsVtable::UNIMPLEMENTED
+        ..valid_fs_table()
     };
     let state = new_state();
     // SAFETY: `empty_machine` 活到测试末尾；`state` 由 `new_state` 交回、尚未销毁。
@@ -372,7 +385,7 @@ fn missing_special_roots_are_file_not_found_not_unimplemented() {
     assert!(!message.contains("未实现"), "`CP-23`：禁止表现为未实现：{message}");
 
     // 对照：槽位**未实现**是另一条通道（不是 FileNotFoundError）——这是"两种失败之分"的判据。
-    let unimplemented = CpFsVtable::UNIMPLEMENTED;
+    let unimplemented = valid_fs_table();
     let other = new_state();
     // SAFETY: 同上。
     unsafe {
@@ -434,7 +447,7 @@ extern "C" fn write_counter_b(
 }
 
 fn counter(table: extern "C" fn(*mut c_void, Handle, *const u8, usize, *mut usize, *mut i32) -> CapStatus) -> CpFsVtable {
-    CpFsVtable { write: Some(table), ..CpFsVtable::UNIMPLEMENTED }
+    CpFsVtable { write: Some(table), ..valid_fs_table() }
 }
 
 /// **`T-CP-7`**（前半）：两个实例的**能力表互不可见**（`CP-13`）；销毁其中一个不影响另一个。
@@ -697,7 +710,7 @@ fn close_is_idempotent_and_operations_after_close_fail_with_machine_errors() {
         open: Some(open),
         read: Some(read),
         close: Some(close),
-        ..CpFsVtable::UNIMPLEMENTED
+        ..valid_fs_table()
     };
     let state = new_state();
     // SAFETY: `table` 活到测试末尾；地址在 state 存活期内有效。
@@ -772,7 +785,7 @@ fn instance_destroy_closes_every_provider_handle_exactly_once() {
     let table = CpFsVtable {
         open: Some(open),
         close: Some(close),
-        ..CpFsVtable::UNIMPLEMENTED
+        ..valid_fs_table()
     };
     let state = new_state();
     // SAFETY: `table` 活到 state 销毁之后。
@@ -811,7 +824,10 @@ fn dup_aliases_close_the_provider_handle_only_when_the_count_hits_zero() {
     ) -> CapStatus {
         // SAFETY: 契约同 `SPEC-capabilities.md` §9.1。
         let bytes = unsafe { core::slice::from_raw_parts(name, len) };
-        let id = match bytes {
+        // **`CP-21`／`CP-32`**：`fs` 名字类方法先经 VM 解析器 ⇒ provider 收到的是 **guest 绝对名**
+        // （如 `/…/one`）⇒ 按**最后一段**匹配（测试自己的句柄映射，不是"绝对路径再解释"）。
+        let last = bytes.rsplit(|byte| *byte == b'/').next().unwrap_or(bytes);
+        let id = match last {
             b"one" => 500,
             b"two" => 501,
             _ => {
@@ -858,7 +874,7 @@ fn dup_aliases_close_the_provider_handle_only_when_the_count_hits_zero() {
         open: Some(open),
         read: Some(read),
         close: Some(close),
-        ..CpFsVtable::UNIMPLEMENTED
+        ..valid_fs_table()
     };
     let state = new_state();
     // SAFETY: `table` 活到 state 销毁之后。
@@ -935,6 +951,15 @@ fn select_routes_fs_fds_always_ready_and_net_fds_through_poll() {
     use pyawa_capabilities::net::{
         CapStatus as NetStatus, CpNetVtable, PollFd, SocketHandle,
     };
+
+    /// **`CP-30`**：net 域测试表同样要带合法公共头（理由见文件顶部 `valid_fs_table`）。
+    fn valid_net_table() -> CpNetVtable {
+        CpNetVtable {
+            version: PA_ABI_VERSION,
+            size: core::mem::size_of::<CpNetVtable>() as u32,
+            ..CpNetVtable::UNIMPLEMENTED
+        }
+    }
 
     static POLL_CALLS: Mutex<Vec<(usize, i64)>> = Mutex::new(Vec::new());
 
@@ -1057,14 +1082,14 @@ fn select_routes_fs_fds_always_ready_and_net_fds_through_poll() {
         open: Some(fs_open_stub),
         read: Some(fs_read_stub),
         write: Some(sink_write),
-        ..CpFsVtable::UNIMPLEMENTED
+        ..valid_fs_table()
     };
     let net_table = CpNetVtable {
         socketpair: Some(net_socketpair),
         send: Some(net_send),
         poll: Some(net_poll),
         close: Some(net_close),
-        ..CpNetVtable::UNIMPLEMENTED
+        ..valid_net_table()
     };
     let state = new_state();
     // SAFETY: `state` 活到本测试末尾；两张表也比 state 活得久。
@@ -1154,13 +1179,13 @@ fn select_routes_fs_fds_always_ready_and_net_fds_through_poll() {
     // `poll` 槽为 `None` ⇒ 如实 `NotImplemented`（CP-3／CP-5）。
     let net_table_without_poll = CpNetVtable {
         socketpair: Some(net_socketpair),
-        ..CpNetVtable::UNIMPLEMENTED
+        ..valid_net_table()
     };
     let other = new_state();
     let other_fs = CpFsVtable {
         open: Some(fs_open_stub),
         write: Some(sink_write),
-        ..CpFsVtable::UNIMPLEMENTED
+        ..valid_fs_table()
     };
     // SAFETY: 两张表都活到 `other` 销毁之后。
     unsafe {
@@ -1192,4 +1217,139 @@ fn select_routes_fs_fds_always_ready_and_net_fds_through_poll() {
         assert_eq!(pa_destroy(state), PA_OK);
         assert_eq!(pa_destroy(other), PA_OK);
     }
+}
+
+// --------------------------------------------------------------------------- #
+// T-CP-10（`CP-27`／`CP-28`）：可取消等待的 core 语义
+// --------------------------------------------------------------------------- #
+
+/// **`T-CP-10`**（VM 侧机制面；e2e 见 `crates/pyawa-runtime/tests/t_cp10_cancel.rs`）。
+///
+/// 判据（`CP-27`／`CP-28`）：
+/// - **`CP-27`** 长等待被切成**有界片**（每片 ≤ 10 ms）⇒ 不会无限阻塞、片间可取消；
+/// - **`CP-28`** 三值：已完成（`Ok(true)`）／已取消（`Ok(false)`）；"未开始"＝进入时已中断
+///   ⇒ 直接已取消且**不发起** provider 调用；
+/// - 取消之后**不再有该调用的后续副作用**（不调 provider、不再睡眠）；
+/// - `select` 的空列表＋正 timeout 走**同一条**可取消等待（round 11 前是立即返回）。
+#[test]
+fn cancellable_sleep_is_sliced_and_cancellable() {
+    use pyawa_capabilities::clock::{CapStatus as ClockStatus, CpClockVtable};
+    use std::time::{Duration, Instant};
+
+    /// provider 实际收到的片长（ns）。
+    static SLICES: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+    /// 片长上限（与 `instance/wait.rs` 的 `CANCEL_SLICE_NS` 同值；形状断言用）。
+    const MAX_SLICE_NS: i64 = 10_000_000;
+
+    extern "C" fn sleep_slice(
+        _state: *mut c_void,
+        ns: i64,
+        _errno_out: *mut i32,
+    ) -> ClockStatus {
+        SLICES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(ns);
+        if ns > 0 {
+            std::thread::sleep(Duration::from_nanos(ns as u64));
+        }
+        ClockStatus::Ok
+    }
+
+    let table = CpClockVtable {
+        version: PA_ABI_VERSION,
+        size: core::mem::size_of::<CpClockVtable>() as u32,
+        state: core::ptr::null_mut(),
+        now_ns: None,
+        monotonic_ns: None,
+        sleep_ns: Some(sleep_slice),
+    };
+    let instance = pyawa_core::Instance::new();
+    assert!(
+        instance.set_capability(
+            pyawa_capabilities::DOMAIN_CLOCK,
+            (&table as *const CpClockVtable).cast(),
+            Some(PA_ASYNC_OK),
+        ),
+        "注册 `clock` 域（可异步化）应当成功"
+    );
+    let recorded = || {
+        SLICES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    };
+
+    // ① 已完成：25 ms ⇒ 至少 3 片、每片 (0, 10ms]、墙钟不少于请求量（CP-27 分片）。
+    SLICES.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    let started = Instant::now();
+    assert_eq!(instance.cancellable_sleep_ns(25_000_000), Ok(true), "睡满 ⇒ 已完成");
+    let elapsed = started.elapsed();
+    let slices = recorded();
+    assert!(slices.len() >= 3, "25 ms 应被切成 ≥3 片：{slices:?}");
+    assert!(
+        slices.iter().all(|ns| *ns > 0 && *ns <= MAX_SLICE_NS),
+        "CP-27：每片必须有界（≤10 ms）且为正：{slices:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(25),
+        "CP-27：合计等待不得短于请求量（实测 {elapsed:?}；片长 {slices:?}）"
+    );
+
+    // ② 未开始：进入前已中断 ⇒ 已取消，且**不发起任何 provider 调用**（CP-28 的"未开始"）。
+    instance.request_interrupt();
+    SLICES.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    assert_eq!(
+        instance.cancellable_sleep_ns(10_000_000_000),
+        Ok(false),
+        "CP-28：已中断 ⇒ 直接已取消"
+    );
+    assert!(recorded().is_empty(), "CP-28 未开始：不许调 provider 的 sleep 槽");
+    instance.clear_interrupt();
+
+    // ③ 片间取消：另一线程 ~6 ms 后请求中断 ⇒ 快速返回"已取消"，返回后不再发起新片。
+    SLICES.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    let address = &instance as *const pyawa_core::Instance as usize;
+    let interrupter = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(6));
+        // SAFETY: `instance` 活到本测试末尾（`join` 在它 drop 之前）；`request_interrupt` 只写
+        // 原子标志（`AB-5`① 的"执行中从另一线程请求中断"正是契约要求的用法）。
+        unsafe { (*(address as *const pyawa_core::Instance)).request_interrupt() };
+    });
+    let started = Instant::now();
+    assert_eq!(
+        instance.cancellable_sleep_ns(2_000_000_000),
+        Ok(false),
+        "CP-28：片间被中断 ⇒ 已取消"
+    );
+    let elapsed = started.elapsed();
+    interrupter.join().expect("中断线程不该 panic");
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "CP-27：取消延迟应在片长量级（实测 {elapsed:?}）"
+    );
+    let after_cancel = recorded().len();
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        recorded().len(),
+        after_cancel,
+        "CP-28：取消之后不得再发起 provider 调用（无后续副作用）"
+    );
+    instance.clear_interrupt();
+
+    // ④ `select` 的空列表＋正 timeout 走同一可取消等待：先"已完成"，再"已取消"。
+    assert!(
+        instance
+            .capability_select_cancellable(&[], &[], &[], Some(20_000_000))
+            .expect("select 可取消等待应成功")
+            .is_some(),
+        "空列表＋20 ms ⇒ 睡满后返回空就绪集（round 11 前是立即返回）"
+    );
+    instance.request_interrupt();
+    assert_eq!(
+        instance.capability_select_cancellable(&[], &[], &[], Some(10_000_000_000)),
+        Ok(None),
+        "CP-28：预置中断 ⇒ select 等待直接已取消"
+    );
+    instance.clear_interrupt();
 }
