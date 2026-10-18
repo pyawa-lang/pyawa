@@ -7,16 +7,15 @@
 
 ## 现在
 
-- **HEAD**：`444d994`（`dev`，本笔前）—— 本笔＝**拆文件专项 3/6**：`compile/emitter.rs`（8557 行）拆成
-  `compile/emitter/` 20 个文件（19 域＋`mod.rs`；最大 `defs.rs` 2083 行）。两个巨型函数
-  `emit_statement`（2236 行）／`emit_expression`（1617 行）按**语句／表达式族**拆到 `stmt_*`／`expr_*` 文件，
-  `mod.rs` 只留分派与 pre-match 逻辑（`epilogue_needed` 语义原样保留）；其余方法按域搬到
-  `primitives`／`jumps`／`defs`／`patterns`／`control`／`compare`／`fstrings`。
+- **HEAD**：`d17e949`（`dev`，本笔前）—— 本笔＝**拆文件专项 4/6**：`compile/parser.rs`（5129 行）拆成
+  `compile/parser/` 9 个文件（8 域＋`mod.rs`；最大 `statements.rs` 2018 行）。按**域**搬：statements／
+  expressions／atoms／fstrings／lambdas／types／targets／patterns；`parse_statements`（1766 行）**原样**
+  留在 `statements.rs`（尚未拆函数——如实记）。
 - **工作区**：唯一未提交项 `tools/libtests_survey.py`（上轮 Lib/test 调查收尾：`PYTHONPATH`＋超时；
   **与本专项无关**，本笔不碰）；专项自身的改动都随本笔提交 ⇒ 其余干净。
 - **stash**：**空** ✓
 - **拆文件专项清单（6 刀）**：① `format.rs` ✓ → ② `builtin_objects.rs` ✓ → ③ `emitter.rs` ✓ →
-  ④ `parser.rs`（5129 行）→ ⑤ `executor.rs`（`execute` 3394 行按 opcode 族）→
+  ④ `parser.rs` ✓ → ⑤ `executor.rs`（`execute` 3394 行按 opcode 族）→
   ⑥ `instance.rs`（`bootstrap_builtin_types` 1060 行）。每刀＝纯移动／分派等价，验收＝
   `tools/quickcheck.sh` ＋ 提交前 `tools/slowcheck.sh` 十项。
 - **M5 已成立 ✓（判据①②③ 全绿，2026-10-18 收口）**：
