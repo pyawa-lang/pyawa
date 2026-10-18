@@ -15,6 +15,8 @@ use crate::flags;
 /// **只漏不放** 的实验开关 ✓（第 238 轮，仅供对照实验 ✓）：`PYAWA_LEAK_MODE` **只读一次** ✓。
 mod fs;
 
+mod net;
+
 mod refcount;
 
 mod util;

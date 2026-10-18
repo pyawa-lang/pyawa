@@ -4591,6 +4591,20 @@ Err(raise(instance, exception))
                     release(instance, names);
                 }
 
+                // **装饰器形态的 `self_or_null` 槽**（`@p.setter`／`@p.deleter`、`@classmethod` 一族 ✓）：
+                // `@dec def f` 编译成 `[dec, 被装饰函数] CALL 0` ✓ —— 参照语义是"这一格并入**位置实参表**" ✓。
+                // 而本层 `call_callable` 对**绑定方法**用的是它**自己的** `this` 并**忽略**这一格 ✗
+                // （那是内部调用的绑定约定 ✓，不能全局改 ✗ —— 实测会导致 `import re`／`import json` 回归 ✗）。
+                // ⇒ 只在 `CALL` 这一处、只对 `method` 并入 ✓（内部 `call_callable` 调用点不受影响 ✓）。
+                let mut args = args;
+                let mut bound_self = bound_self;
+                if let Some(self_object) = bound_self {
+                    // SAFETY: callable 是帧值栈上的存活对象。
+                    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "method") {
+                        args.insert(0, self_object);
+                        bound_self = None;
+                    }
+                }
                 let result = call_callable(
                     instance,
                     callable,

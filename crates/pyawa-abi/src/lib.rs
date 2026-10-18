@@ -77,7 +77,10 @@ pub mod status {
 /// ABI 主版本（`AB-41`：改既有槽位语义／删函数／改结构体字段形状 ⇒ 主版本 +1，旧宿主 `create` 必须失败）。
 pub const PA_ABI_MAJOR: u32 = 1;
 /// ABI 次版本（`AB-41`：**末尾追加**函数 ⇒ 次版本 +1，旧宿主仍可用）。
-pub const PA_ABI_MINOR: u32 = 0;
+///
+/// **1**（`P3-29`，2026-10-18）：`net` 域 vtable 加 `socketpair` 槽（`CP-38`）——那是对**能力接口**
+/// 的追加式改动，按 `AB-39` 三份契约共用一个版本号 ⇒ 本号随 `CP-30` 升次版本。
+pub const PA_ABI_MINOR: u32 = 1;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 

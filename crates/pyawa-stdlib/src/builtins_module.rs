@@ -348,6 +348,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "Ellipsis", instance.singletons().ellipsis());
     instance.dict_set(namespace, "NotImplemented", instance.not_implemented());
 
+    // **类型级描述符安装** ✓（`P3-17` 同族 ＋ `functools.wraps.__name__` 的正路）：
+    // function 的 `__name__`／`__qualname__`／`__doc__`／`__module__` 可写 getset 数据描述符、
+    // property 的 `__set__`／`__delete__`、staticmethod／classmethod 的 `__get__`。
+    // 实现与**幂等**都在 core 的 `executor::protocol::install_builtin_descriptors` ✓ ——
+    // 那里与上面这些安装段同一口径（类型字典 ✓、按实例 ✓、`OM-15` ✓）。
+    pyawa_core::executor::protocol::install_builtin_descriptors(instance);
+
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace
@@ -1829,15 +1836,46 @@ fn import_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let Some(name) = args.first().and_then(|value| instance.text_of(*value)).map(|text| text.to_owned())
     else {
         return Err(instance.raise_builtin_error("TypeError", "__import__() 的第一个实参要是 str"));
     };
-    let level = args
-        .get(4)
-        .and_then(|value| instance.int_of(*value))
+    // **kwargs 面**（task-6 修 ✗）：先前的实现**整个忽略关键字** ⇒
+    // `__import__(name, fromlist=['*'], level=0)`（`Lib/encodings/__init__.py:100` 的写法 ✓）
+    // 的 `fromlist` 被当成空 ⇒ 返回顶层包 ⇒ `encodings.search_function` 取 `mod.getregentry`
+    // 拿到包 ⇒ `AttributeError` ⇒ `codecs.lookup('cp932')` 一族**全部**查不到 ✗（同一条因也挡
+    // 住 charmap 族）。这里照签名把 `fromlist`／`level` 两格从关键字补上；`globals`／`locals`
+    // 按参照忽略 ✓（本层不用它们），其余名字照参照报 `TypeError` ✓。
+    let mut fromlist_value = args.get(3).copied();
+    let mut level_value = args.get(4).copied();
+    for (key, value) in kwargs {
+        let Some(keyword) = instance.text_of(*key) else {
+            return Err(instance.raise_builtin_error("TypeError", "keywords must be strings"));
+        };
+        match keyword {
+            "globals" | "locals" => {}
+            "fromlist" => {
+                if fromlist_value.is_none() {
+                    fromlist_value = Some(*value);
+                }
+            }
+            "level" => {
+                if level_value.is_none() {
+                    level_value = Some(*value);
+                }
+            }
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("__import__() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
+    }
+    let level = level_value
+        .and_then(|value| instance.int_of(value))
         .and_then(|value| value.to_i64())
         .unwrap_or(0);
     if level != 0 {
@@ -1846,11 +1884,11 @@ fn import_native(
             what: "__import__：相对导入（level != 0）尚未接线",
         });
     }
-    let fromlist_empty = match args.get(3) {
+    let fromlist_empty = match fromlist_value {
         None => true,
-        Some(value) => match instance.tuple_items(*value) {
+        Some(value) => match instance.tuple_items(value) {
             Some(items) => items.is_empty(),
-            None => !instance.truth_of(*value),
+            None => !instance.truth_of(value),
         },
     };
     let top = name.split('.').next().unwrap_or(&name).to_owned();

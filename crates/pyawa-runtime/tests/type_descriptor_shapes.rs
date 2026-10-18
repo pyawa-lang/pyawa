@@ -137,3 +137,53 @@ fn type_descriptor_names_are_present_and_callable() {
     let stdout = run("type_descriptor_presence", PRESENCE_SCRIPT);
     assert_eq!(stdout, PRESENCE_EXPECTED, "{stdout}");
 }
+
+/// **`P3-17` 同族的存在性／可调用性**（`functools.wraps.__name__` 正路）：两侧逐行一致。
+///
+/// 只钉"名字在、可调用、语义成立"（方案 A 下 `type(...)` 类别**必然**与参照不同 ⇒ 不钉 ✗；
+/// 逐条语义与文案见 `descriptor_protocol.rs` ✓）。
+const WRITABLE_DESCRIPTORS_SCRIPT: &str = r#"import functools
+
+print("sm:", hasattr(staticmethod(lambda: 1), "__get__"), callable(staticmethod(lambda: 1).__get__))
+print("cm:", hasattr(classmethod(lambda cls: 1), "__get__"), callable(classmethod(lambda cls: 1).__get__))
+p = property(lambda self: 1)
+print("prop:", hasattr(p, "__get__"), hasattr(p, "__set__"), hasattr(p, "__delete__"))
+print("prop callable:", callable(p.__get__), callable(p.__set__), callable(p.__delete__))
+
+
+def f():
+    pass
+
+
+FD = type(f).__dict__
+print("func:", hasattr(FD["__name__"], "__set__"), hasattr(FD["__qualname__"], "__set__"), hasattr(FD["__doc__"], "__set__"), hasattr(FD["__module__"], "__set__"))
+
+
+def g():
+    "doc"
+
+
+@functools.wraps(g)
+def h():
+    pass
+
+
+print("wraps:", h.__name__ == g.__name__, h.__qualname__ == g.__qualname__, h.__doc__ == g.__doc__)
+h.__name__ = "zz"
+print("wraps writable:", h.__name__)
+"#;
+
+/// 参照（`python3` 3.14.4 实测 ✓，逐行）。
+const WRITABLE_DESCRIPTORS_EXPECTED: &str = "sm: True True\n\
+cm: True True\n\
+prop: True True True\n\
+prop callable: True True True\n\
+func: True True True True\n\
+wraps: True True True\n\
+wraps writable: zz\n";
+
+#[test]
+fn writable_descriptor_names_are_present_and_work() {
+    let stdout = run("writable-descriptors", WRITABLE_DESCRIPTORS_SCRIPT);
+    assert_eq!(stdout, WRITABLE_DESCRIPTORS_EXPECTED, "{stdout}");
+}

@@ -299,7 +299,13 @@ pub(crate) fn attribute_lookup(
     // 实例那条由"查它自己的类"自然覆盖 ✓（`Lib/collections/__init__.py` 那一族 **31** 个模块卡在这 ✓）。
     if name == "__module__" && instance.is_type_object(object) {
         // 类型字典里自己写了就用它 ✓（用户类 ✓）；否则给 `builtins` ✓。
-        if let Some(own) = instance.type_lookup(object.cast::<crate::TypeObject>(), "__module__") {
+        // **只认 `str`** ✓（`P3-17` 之后 `function` 类型字典里也有一个 `__module__` 的
+        // **可写描述符对象** ✓ —— 那是给**函数实例**用的 ✗ ⇒ `function.__module__` 这个
+        // **类级**读法仍该回 `'builtins'` ✓，不能把描述符对象交出去 ✗）。
+        if let Some(own) = instance
+            .type_lookup(object.cast::<crate::TypeObject>(), "__module__")
+            .filter(|own| instance.text_of(*own).is_some())
+        {
             return Ok(Attribute::Owned(instance.retain(own)));
         }
         return Ok(Attribute::Owned(instance.new_str("builtins")));
@@ -349,6 +355,34 @@ pub(crate) fn attribute_lookup(
             // **描述符对象本身** ✗（`class R: __get__…` ＋ `class E: r = R()` ⇒ `E.r` 给 `<R object …>` ✗，
             // 参照给 `__get__(None, E)` 的结果 ✓；而 `E().r` 走另一条路 ✓、一直是好的 ✓）。
             if !instance.is_type_object(object) {
+                // **数据描述符优先于实例字典** ✓（`P3-17` 正路的前提；参照 `type.__getattribute__`
+                // 的顺序是「数据描述符 → 实例字典 → 非数据描述符」✓）：
+                // `function.__name__` 一类**可写 getset** 与 `property` 都是数据描述符 ✓ ——
+                // 它们存在类型 MRO 上时，实例字典里同名的项**不得**把它们遮住 ✓。
+                // 非数据描述符（普通函数 ✓）仍由实例字典优先 ✓ —— 与上方 ① 的口径一致 ✓。
+                if let Some(descriptor) = instance.type_lookup(object_type, name) {
+                    // SAFETY: descriptor 由类型字典持有，存活。
+                    let descriptor_type = unsafe { descriptor.as_ref() }.ty();
+                    let data_descriptor =
+                        instance.type_lookup(descriptor_type, "__set__").is_some()
+                            || instance.type_lookup(descriptor_type, "__delete__").is_some();
+                    if data_descriptor {
+                        if let Some(get) = instance.type_lookup(descriptor_type, "__get__") {
+                            let this = instance.retain(object);
+                            let owner = object_type.cast::<Header>();
+                            instance.retain(owner);
+                            let result = crate::executor::call_callable(
+                                instance,
+                                get,
+                                Some(descriptor),
+                                vec![this, owner],
+                                Vec::new(),
+                                0,
+                            )?;
+                            return Ok(Attribute::Value(result));
+                        }
+                    }
+                }
                 return Ok(Attribute::Value(value));
             }
         }

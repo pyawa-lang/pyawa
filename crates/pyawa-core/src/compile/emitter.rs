@@ -2678,6 +2678,30 @@ impl Emitter {
                 }
                 Ok(())
             }
+            // **`BC-63` 空合并赋值 `a ??= b`**（语句）：`a` 只读一次；`None` 时才执行 `a = b`
+            //（含 `TS-47` 的运行期 `CHECK_ASSIGNMENT`：`TS-49` 说它**不改变标注类型**，检查照原标注）。
+            //
+            // 形态：`<读 a>; POP_JUMP_IF_NOT_NONE 结束; <b>; [CHECK_ASSIGNMENT]; STORE a; 结束:`
+            Statement::NullCoalesceAssign {
+                name,
+                name_span,
+                value,
+                span,
+            } => {
+                let end = self.new_label();
+                self.emit_expression(&Expression::Name(name.clone(), *name_span))?;
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("POP_JUMP_IF_NOT_NONE").expect("条件跳转在表里"),
+                    end,
+                );
+                self.emit_expression(value)?;
+                self.epilogue_span = *name_span;
+                self.emit_assignment_check(*name_span, name);
+                self.emit_store_name(*name_span, name);
+                self.mark_label(end);
+                Ok(())
+            }
             Statement::Expression(value, span) => {
                 // **裸常量表达式语句整个丢掉** ✓（第 178 轮实证 ✓）：参照对 `...`／`1` 这种**一条都不发** ✗
                 // （模块／类体／函数里都一样 ✓ —— 实测 `...` 与 `1` 的 `co_consts` 里连常量都没有 ✓）。
@@ -7320,6 +7344,57 @@ impl Emitter {
                 self.last_span = *span;
                 Ok(())
             }
+            // **`BC-63` 空合并 `a ?? b`**：`a` 求值一次、**只判 `None`**；不是 `None` ⇒ 取 `a`，
+            // 否则取 `b`（`b` 惰性求值）。`or`／`and` 的"看真假"与它无关（`0`／`''` 都算有值）。
+            Expression::NullCoalesce(left, right, span) => {
+                let end = self.new_label();
+                let take_left = self.new_label();
+                self.emit_expression(left)?;
+                // `COPY 1` 复制一份来判，判完**不弹原值**（不是 None 时它就是结果）
+                self.emit_named(*span, "COPY", 1);
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("POP_JUMP_IF_NOT_NONE").expect("条件跳转在表里"),
+                    take_left,
+                );
+                // `None` 分支：丢掉左值、求右值
+                self.emit_named(*span, "POP_TOP", 0);
+                self.emit_expression(right)?;
+                self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("跳转在表里"), end);
+                self.mark_label(take_left);
+                self.mark_label(end);
+                Ok(())
+            }
+            // **`BC-63` 空安全后缀链**：`receiver?.…`／`receiver?[…]`。
+            // 骨架：`<receiver>; COPY 1; POP_JUMP_IF_NOT_NONE 有值; POP_TOP; LOAD_CONST None;
+            //        JUMP_FORWARD 结束; 有值: <rest（基底＝栈顶那个值）>; 结束:`。
+            // `rest` 里的 [`Expression::ChainSubject`] 是**零发射占位**（值已经压在栈顶）。
+            Expression::SafeChain {
+                receiver,
+                rest,
+                span,
+            } => {
+                let end = self.new_label();
+                let some = self.new_label();
+                self.emit_expression(receiver)?;
+                self.emit_named(*span, "COPY", 1);
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("POP_JUMP_IF_NOT_NONE").expect("条件跳转在表里"),
+                    some,
+                );
+                // `None` ⇒ 整段后缀链短路：丢掉接收者、结果 `None`、不再求值（含实参）
+                self.emit_named(*span, "POP_TOP", 0);
+                let index = self.intern_constant(Constant::None);
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("跳转在表里"), end);
+                self.mark_label(some);
+                self.emit_expression(rest)?;
+                self.mark_label(end);
+                Ok(())
+            }
+            // 空安全链的**基底占位**：外层 `SafeChain` 已经把值压在栈顶 ⇒ 这里**什么都不发**。
+            Expression::ChainSubject(_) => Ok(()),
             Expression::Lambda {
                 parameters,
                 kwonly,
@@ -7333,8 +7408,33 @@ impl Emitter {
                     ScopeKind::Class => format!("{}.<lambda>", self.qualname),
                     ScopeKind::Function => format!("{}.<locals>.<lambda>", self.qualname),
                 };
-                let returned = Statement::Return((**body).clone(), body.span());
-                let unit = [returned];
+                // **`BC-62`**：体有两种形态 —— 表达式（原有）／语句序列（扩展模式新形态）。
+                // 语句序列编译成一个函数单元：**末表达式**的那条表达式语句变成 `Return`，
+                // 没有末表达式就 `Return None`（与 `def` 末尾的隐式返回同形）。
+                let unit: Vec<Statement> = match body {
+                    LambdaBody::Expression(expression) => {
+                        vec![Statement::Return((**expression).clone(), expression.span())]
+                    }
+                    LambdaBody::Statements(statements) => {
+                        let mut unit = statements.clone();
+                        let tail = match unit.pop() {
+                            Some(Statement::Expression(expression, expression_span)) => {
+                                Statement::Return(expression, expression_span)
+                            }
+                            other => {
+                                if let Some(statement) = other {
+                                    unit.push(statement);
+                                }
+                                Statement::Return(
+                                    Expression::Constant(Constant::None, *span),
+                                    *span,
+                                )
+                            }
+                        };
+                        unit.push(tail);
+                        unit
+                    }
+                };
                 // **lambda 的闭包**（第 297 轮）：它要的自由变量 = 体内引用的名字（扣掉自己的形参）
                 // ∩（本层 `varnames`／`cellvars`／`freevars`）；实测 `return lambda: x` ⇒
                 // lambda `co_freevars=('x',)`、外层 `cellvars=('x',)`、元组 `LOAD_FAST_BORROW 0` ✓
@@ -7342,7 +7442,7 @@ impl Emitter {
                 // 再与本层 cell／free 表求交 ✓（`collect_lambda_demands` 是"在语句里找 lambda"，
                 // 用在这里会找不到 ✗ —— 第 297 轮踩过）
                 let mut inner_names: Vec<String> = Vec::new();
-                collect_names_in_expression(body, &mut inner_names);
+                collect_names_in_lambda_body(body, &mut inner_names);
                 let mut lambda_freevars: Vec<String> = Vec::new();
                 for name in inner_names {
                     let is_parameter = parameters.iter().any(|item| item.name == name)

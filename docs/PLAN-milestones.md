@@ -297,7 +297,7 @@
 | **P3-15** | **导出 Unicode 数据表**（`unidata_version` 锁定参照实现 ＋ 探测导出） | `CM-13`、`CM-22`…`CM-24` | 无。**已落地**：`tools/gen_unicode.py` 探测导出 → `unicode_tables.rs`（`unidata_version` ＝ **16.0.0**，与参照一致）＋ **四张区段表**（通用类别 4099 段／双向类别 2300 段／组合类 590 段／东亚宽度 600 段，共用一个二分查找）＋ Rust 夹具（抽样：类别 7190、双向 4095、组合 1059、东亚宽度 1151，均含每段首尾）＋ 三张**稀疏**表（`decimal` 760 项／`digit` 888 项／`numeric` 2002 项，值记成**约分对**——`numeric` 的内部表示就是分数，分母可以大到 `2^59` 故用 `u64`）＋ 第四张稀疏表 `decomposition`（**17085** 项，值是十六进制序列，兼容分解带 `<tag>` 前缀——标记是值的一部分）＋ 验收九条（版本锁定、四张区段表抽样对拍、四表覆盖全域 ＋ 区段连续、类别集合一致、越界给 `None`、**四张稀疏表穷尽对拍**〔`numeric` 逐位重现参照浮点〕、稀疏表结构不变量、分解表的标记集合）。生成器另加一条**规模哨兵**（稀疏表项数 ≥ 10 万即报错）。**未落地**：`name` 一族数据表、`unicodedata` 模块面本身（它挂在 `locale` 能力域下） |
 
 | **P3-16** | **WASM 目标**（`§13-11` 已决：**需要**）：待定三件——能力层的 **provider 形态**、**ABI 面**（同一 `pa_*` 面在 wasm 上怎么落）、**构建目标** | `§13-11`、`SPEC-capabilities.md`、`SPEC-c-abi.md` | 无（已决"要"；**时机与待定项见 §9.4 第 8 项**） |
-| **P3-17** | **描述符协议剩余**：`property.__set__`／`__delete__`（**数据描述符写** —— `@x.setter` 现在仍写进**实例字典** ✗）＋ `staticmethod.__get__`／`classmethod.__get__`（`Lib/abc.py` 的 `class abstractclassmethod(classmethod)` 要它；`Lib/` 里 `classmethod` 遍地都是） | `OM-11`、`TS-41` | 无（第 279 轮已接线 `property.__get__` ✓；这三条是同一处的**续** ✓） |
+| ~~**P3-17**~~ **主体已落地（round 10；未覆盖形态见台账 round 10）** | **描述符协议剩余**：`property.__set__`／`__delete__`（**数据描述符写** —— `@x.setter` 现在仍写进**实例字典** ✗）＋ `staticmethod.__get__`／`classmethod.__get__`（`Lib/abc.py` 的 `class abstractclassmethod(classmethod)` 要它；`Lib/` 里 `classmethod` 遍地都是） | `OM-11`、`TS-41` | 无（第 279 轮已接线 `property.__get__` ✓；这三条是同一处的**续** ✓） |
 | **P3-18** | **容器类型的 `__contains__` 面（dunder 面）＋ 先修它的前置**：`y.__contains__(x)` 与 `_collections_abc._check_methods(C, "__contains__")` 查的是**类型字典** ⇒ 内建容器类型要有这一条，且**在实例上取用要绑定 `self`**（`collections` 那一族 **12** 个模块压在上面）；**前置**：第 283 轮实测 「类体帧的**帧槽悬垂**」——`PYAWA_DANGLING=1` 在 `HEAD` 上就能复现（`frame_clear` ← `build_class_native` ← `load_module`；另有 `method_clear` 一支），普通模式只是**没被踩到** ⇒ 一旦多挂几条类型字典项就会**变致命**（实测 3/4 次 SIGSEGV）⇒ **先修悬垂、再落 dunder 面** | `OM-11`、`TS-41`、`MS-25` | 无（第 283 轮已定位到具体调用链 ＋ 逐条排除法；见 `ROUNDS.md` 第 283／284 轮）|
 | **P3-19** | **类型对象的引用计数欠账**：谁会**多放一份**（把注册表里的类型对象减到 0 ✓）？第 284 轮已把**症状**挡住 ✓（通用释放路径不释放注册类型 ✓）并让两种诊断口全绿 ✓；抓手：`PYAWA_LEAK_MODE`／`PYAWA_RULER` 对照实验 ✓，再给类型对象加**最小计数断言**（归零即报地点 ✓）；嫌疑面：类体帧（`__class__` 那一节／`LOAD_NAME` 的命名空间 ✓）、`run_class_body` 的帧建立与清理 ✓ | `OM-15`、`OM-16`、`MS-25` | 无（第 284 轮已把「归零即释放」这条挡住 ✓，欠计数本身待查 ✓）|
 | **P3-20** | **嵌套 `try` 会截断外层块**（第 294 轮已把病灶钉到指令级：嵌套那档的**处理块**没有体那条路那条「只发余部、不发作用域收尾」的规矩 ⇒ 处理块里也发了 `LOAD_CONST None; RETURN_VALUE`；两次修法（跳回余部起点／同口径跳块尾）分别撞上 `StackUnderflow` 与 `SIGSEGV × 57`，均已撤回）（第 293 轮定位、**未修**）：`try` 那一臂在发处理块**之前**就 `emit_rest_and_tail(余部)`，而处理块跑完之后的落点与余部的相对位置不成立 ⇒ **余部被跳过**。最小复现见 `ROUNDS.md` 第 293 轮；**受害者 `Lib/types.py`**（`except ImportError:` 里嵌 `try/except TypeError as exc:` ⇒ 其后 30+ 个定义全丢）⇒ 也是 `enum` 一族当前卡点的根因 | `BC-23`、`MS-25` | 无（形状与诊断都已钉死）|
@@ -309,10 +309,10 @@
   `~~DIV-4~~` PEP 695（`Lib/typing` 可用时）、`~~DIV-5~~` 映射模式的映射协议
   （与 `MATCH_MAPPING`／`MATCH_KEYS` 的协议面同批）、`~~DIV-6~~` `__traceback__`
   （`BC-60` 的 traceback 面落地时）、`~~DIV-7~~` 空元组单例（**已修**：`OM-23` ＋ `tests/singletons.rs`）。
-| **P3-28** | **实例体量的三档实测**（回答"有多像 Lua"：能不能开多个实例）：① 裸实例 ② 导入 `site` ＋ 常用模块的实例 ③ **N 个实例并行**（每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/footprint_*`（现只有裸档） | `DESIGN.md` §9 的实测基线 ＋ `M5` 的体量阻塞项 | 无（**现在可开工** ✓ —— 它是 **`M5` 判据③（体量升为阻塞项）的阻塞前置** ✓） |
+| ~~**P3-28**~~ **已完成（round 10；数字见 `DESIGN.md` §9）** | **实例体量的三档实测**（回答"有多像 Lua"：能不能开多个实例）：① 裸实例 ② 导入 `site` ＋ 常用模块的实例 ③ **N 个实例并行**（每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/footprint_*`（现只有裸档） | `DESIGN.md` §9 的实测基线 ＋ `M5` 的体量阻塞项 | 无（**现在可开工** ✓ —— 它是 **`M5` 判据③（体量升为阻塞项）的阻塞前置** ✓） |
 | **P3-26** | **判据① 的驱动量＝C 模块缺口，不是批量搬运**（**改口径**：整包批量同步实测 **0 个可搬** ✗ ——`find_syncable` 判的是"逐字节拷进来后能否 import"，而包的导入链要**整套 C 模块**就位）。可导入面由 `CM-14` 的 fan-in 顺序决定（`DESIGN.md` §9 的曲线：前 5 个 ⇒ 67%、20 个 ⇒ 80%）；**同步是解锁的结果，不得当手段**。当前靶子＝把前 5 个（`sys`／`itertools`／`time`／`errno`／`builtins`）的面补到能支撑 `Lib/` 导入，并继续按 `next_work.py` 的报错签名队列取活 | `CM-14`／`CM-15`、`DESIGN.md` §9 | 无 |
 | **P3-27** | **`Lib/test` 语料化**（**主体已落，转回归扩张**）（**判据② 的前提**）：三批共落 **407 条**（自建 192 ＋ `Lib/` 165 ＋ `Lib/test/` 50；覆盖 **150** 个不同可 import 模块），来源列格式 A（manifest 第 5 列）＋出处守卫；**机检仪器** `tools/corpus_coverage.py`（五项：总量≥400／Lib 覆盖≥150／Lib.test≥40／对拍 0 新差异·自检绿／MS-14 四要素）已接进 `tests/ci/check.py` 成 **M3-COVERAGE 硬门** ⇒ **判据② 已裁定达成** ✓。此后按回归需要继续扩覆盖（不阻塞判据） | `MS-13` ②、`MS-14` | 无（机检仪器已就位 ✓） |
-| **P3-29** | **`socket` 支**（**用户已拍板立项**，会话 05，排在 typing 收口之后）：`_socket`/`socket` 的最小面——`http.client`／`urllib.request`／`socketserver`／`asyncio` 的共同前置（上限诊断 overlay 口径 **41 个模块**压在这上面）；先 POSIX 域的无连接面（`socketpair`/`create_connection` 一族随后），逐条对参照 | `CM-14`、`DESIGN.md` §9 | 无（工作量大，单独立项 ✓） |
+| ~~**P3-29**~~ **首片已落地（round 10：`socketpair` 真 I/O；其余如实未接线）** | **`socket` 支**（**用户已拍板立项**，会话 05，排在 typing 收口之后）：`_socket`/`socket` 的最小面——`http.client`／`urllib.request`／`socketserver`／`asyncio` 的共同前置（上限诊断 overlay 口径 **41 个模块**压在这上面）；先 POSIX 域的无连接面（`socketpair`/`create_connection` 一族随后），逐条对参照 | `CM-14`、`DESIGN.md` §9 | 无（工作量大，单独立项 ✓） |
 | **P3-30** | **`random.Random(<seed>)` 的序列与参照不一致**（会话 05 语料侦察实测：`Random(42).random()` ⇒ 0.0838… vs 参照 0.6394…，参照文档保证同种子同序列 ⇒ **真差异**）：生成算法/种子混合口径要对齐 CPython 的 MT19937 init_by_array | `MS-19`、`MS-10` | 无 |
 | ~~**P3-31**~~ **已解除（round 3）** | **解析器缺口批**：**10 格全落**（嵌套元组目标／`.05` 前导点浮点／行内 if 分号表＋次行 else／`*` 后置关键字实参／`with … as (a,b)`／推导式模式目标／元组里的 `*`／带注解赋值非名字目标／制表符缩进／调用基底下标赋值）⇒ `difflib`／`gettext`／`xml.etree.ElementTree`／`tomllib`／`argparse` 等 11 个模块同步 ⇒ 判据① 341→358 ✓。剩余同族缺口（PEP 604 union 注解 dataclass 字段的 `__builtins__` 面）挂账后续。清单全文＝台账卷 `03-m3-progress-05.md` 的 task-7 表 ✓（一处真相，不重述） | `BC-14`、`CM-14` | 无 |
 
@@ -344,17 +344,25 @@
 **M5 开局顺序（2026-10-18 起，给 Team Lead）** ✓
 
 1. **`P3-28` 实例体量三档实测**：① 裸实例 ② 导入 `site` ＋常用模块的实例 ③ **N 个实例并行**
-   （每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/measure_footprint.py`（现只有裸档 ✗）。
-   ⚠ M1 的 48 µs／1.05 ms／3.4 MB 是"**无 site／无导入系统**"时量的（`DESIGN.md` §9 的注 ✓）⇒ **现在必须重量** ✗。
-   ⇒ 它是 **M5 判据③ 的阻塞前置** ✓。
-2. **判据①**：`SPEC-capabilities` §11 的 **`T-CP-*` 逐条核对**（现 `T-CP-1…9+`）⇒ 全绿 ✓。
+   （每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/measure_footprint.py`。**已完成（round 10）** ✓：
+   三档数字见 `DESIGN.md` §9 的 M5 小节（一处真相，本处不重述）。
+   ⚠ M1 的 48 µs／1.05 ms／3.4 MB 是"**无 site／无导入系统**"时量的（`DESIGN.md` §9 的注 ✓）⇒ **已重量** ✓。
+2. **判据①**：`SPEC-capabilities` §11 的 **`T-CP-*` 逐条核对**。**round 10 进度：10 绿／3 红**
+   （红＝`T-CP-3` 的 `os.dup2`＋`select` 面、`T-CP-7` 后半的实例销毁关句柄、`T-CP-10` 取消令牌/worker；
+   另有 `CP-21`／`CP-32` 的 VM 侧路径解析机制债）⇒ **未全绿**，见台账 round 10 的 13 行矩阵。
 3. **判据②**：写"**同一脚本、两种 provider**"的**可执行验收**（真实 provider vs 受限 provider ⇒ **写法不变** ✓；
-   受限档按 `T-CP-4`／`T-CP-5`／`T-CP-7` 的形状造 ✓）。
-4. **并行线**（不同写域 ✓）：**B 批**（`BC-62` 多语句 `lambda` · `BC-63`＋`TS-49` 空安全操作符 —— **未做** ✗，
-   动词法与发射器）· **类型级描述符专项**（`functools.wraps.__name__` 正路 ＋ `P3-17` 同族）·
-   **C 面**（CJK `_codecs_*`／`unittest.mock`／`multiprocessing.heap`／`xmlrpc`）。
-5. **socket 首片（已拍板 ✓）**：`socketpair`，按 **`CP-38`**（槽）／**`CP-39`**（地址线 v1）；先给
-   `CpNetVtable` 加槽 ＋ 接口版本随 `CP-30` 升 ✓；`getaddrinfo`／DNS **不在首片** ✗（A2 推迟 ✓）。
+   受限档按 `T-CP-4`／`T-CP-5`／`T-CP-7` 的形状造 ✓）。**已落地（round 10）** ✓：
+   `crates/pyawa-runtime/tests/two_providers.rs`（同一脚本逐字节相同、归一后观察完全一致）。
+4. **并行线**（不同写域 ✓）：**B 批** ✓（`BC-62` 多语句 `lambda` · `BC-63`＋`TS-49` 空安全操作符——round 10 落地）·
+   **类型级描述符专项** ✓（`functools.wraps.__name__` 正路 ＋ `P3-17` 同族——round 10 主体落地）·
+   **C 面**（CJK `_codecs_*`——round 10 落 `_codecs_jp` 一族；`unittest.mock`／`multiprocessing.heap`／`xmlrpc` 未做）。
+5. **socket 首片（已拍板 ✓）**：`socketpair`，按 **`CP-38`**（槽）／**`CP-39`**（地址线 v1）；`CpNetVtable` 填槽 ＋
+   接口版本随 `CP-30` 升（`PA_ABI_VERSION` 1.0 ⇒ 1.1 ✓）。**首片已落地（round 10）** ✓：`socket.socketpair()`
+   端到端真 I/O；`getaddrinfo`／DNS **仍在首片外** ✗（A2 推迟 ✓）；`connect`／`bind`／`poll` 一族如实未接线。
+
+> **round 10 状态小结（2026-10-18）** ✓：1 ✓ · 2 **部分**（10/13 绿）· 3 ✓ · 4 ✓（B 批／描述符主体／C 面 jp 族）·
+> 5 ✓（socketpair 首片）。⇒ **M5 判据①②③ 尚未全绿**（③ 的阈值仍待用户拍板）；细节与未修清单见
+> `NEXT.md` 与 `docs/rounds/03-m3-progress-05.md` 的 round 10 节。
 
 > **M1–M4 期（历史，仅供追溯）**：下面的 1–9 保留原样，**不再作为取活依据** ✗。
 
@@ -435,8 +443,7 @@
      `tests/type_check.rs`／`tests/assignment_emission.rs`／`tests/type_nullable.rs`；落地口径与如实缺口见
      §6 的「M4 的要求」。
    - **B 批（表达式／词法链）**：`BC-62`（多语句 `lambda`）· `BC-63`＋`TS-49`（空安全操作符）。
-     —— **未做** ✗（规格已定 ✓；都要动**词法与发射器** ✓）。
-     两者都要动**词法与发射器**。
+     —— **已落地（round 10）** ✓（规格已定 ✓；词法／发射器／类型检查一起改；未覆盖形态见台账 round 10）。
    - **验收**（各特性的条款里各自写了）：`BC-62` 对拍 `def` 版 · `TS-46` 对拍 `T | None` ·
      `BC-63` 对拍它条款里的等价写法表 · `TS-47`／`TS-50` 走"**编译期尽力 ＋ 运行期兜住**"。
    - **并列的两项**（同样"规格已定、实现未做"，第 276 轮补记）：

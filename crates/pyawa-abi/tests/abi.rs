@@ -72,7 +72,10 @@ fn mismatch_message_is_diagnosable() {
     };
     let message = mismatch.message();
     assert!(message.contains("2.3"), "含宿主版本：{message}");
-    assert!(message.contains("1.0"), "含运行时版本：{message}");
+    assert!(
+        message.contains(&pyawa_abi::version_string(PA_ABI_VERSION)),
+        "含运行时版本：{message}"
+    );
 }
 
 #[test]
@@ -164,7 +167,10 @@ fn version_mismatch_hands_out_a_diagnostic_instance() {
     // SAFETY: state 由 pa_create 交回且尚未销毁。
     let message = unsafe { CStr::from_ptr(pa_errmsg(state)) }.to_str().unwrap();
     assert!(message.contains("2.7"), "含宿主版本：{message}");
-    assert!(message.contains("1.0"), "含运行时版本：{message}");
+    assert!(
+        message.contains(&pyawa_abi::version_string(PA_ABI_VERSION)),
+        "含运行时版本：{message}"
+    );
     // AB-56：其余调用一律 PA_ERR_ABI
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_interrupt(state) }, PA_ERR_ABI);

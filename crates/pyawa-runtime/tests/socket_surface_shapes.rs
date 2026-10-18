@@ -208,13 +208,13 @@ pure-inet_aton !! NotImplementedError True
 pure-CMSG_LEN !! NotImplementedError True
 cap-gethostname !! NotImplementedError True
 cap-getaddrinfo !! NotImplementedError True
-cap-socketpair !! NotImplementedError True
-cls-construct !! NotImplementedError True
-wire-construct !! NotImplementedError True
+cap-socketpair => returned tuple
+cls-construct => returned socket
+wire-construct => returned socket
 wire-create_connection !! NotImplementedError True
 wire-create_server !! NotImplementedError True
 wire-has-socketpair True
-subclass-construct !! NotImplementedError True
+subclass-construct => returned ProbeSocket
 "#;
 
 #[test]

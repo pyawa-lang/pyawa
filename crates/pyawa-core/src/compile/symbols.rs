@@ -94,6 +94,13 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                     pre_intern_target(emitter, target);
                 }
             }
+            // **`BC-63` 的 `a ??= b`**：右值照常预登记；名字目标按局部／cell 分流（同 `Assign`）。
+            Statement::NullCoalesceAssign { name, value, .. } => {
+                pre_intern_expression(emitter, value);
+                if emitter.deref_slot(name).is_none() {
+                    pre_intern_target(emitter, name);
+                }
+            }
             Statement::Return(value, _) | Statement::Expression(value, _) => {
                 pre_intern_expression(emitter, value);
             }
@@ -624,7 +631,7 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
         } => {
             // lambda 体里引用的名字，扣掉它自己的形参（那些是它自己的局部）
             let mut inner = Vec::new();
-            collect_names_in_expression(body, &mut inner);
+            collect_names_in_lambda_body(body, &mut inner);
             for name in &inner {
                 let is_parameter = parameters.iter().any(|item| item.name == *name)
                     || kwonly.iter().any(|item| item.name == *name)
@@ -682,7 +689,107 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
                 collect_names_in_expression(part, out);
             }
         }
+        // **`BC-63`**：两个操作数都在本层求值 ⇒ 照常收
+        Expression::NullCoalesce(left, right, _) => {
+            collect_names_in_expression(left, out);
+            collect_names_in_expression(right, out);
+        }
+        Expression::SafeChain { receiver, rest, .. } => {
+            collect_names_in_expression(receiver, out);
+            collect_names_in_expression(rest, out);
+        }
+        Expression::ChainSubject(_) => {}
         _ => {}
+    }
+}
+
+/// **`lambda` 的体**对外层**需要**的名字（`BC-62` 的两种形态共用；`Lambda` 的闭包分析走它）。
+///
+/// **语句形态**要先扣掉体内**赋过值**的名字：`x = …` 让 `x` 成为 lambda 自己的局部
+/// （`STORE_FAST`），**不是**对外层 cell 的需求 —— 不扣的话 `x` 会被外层标成 cell，
+/// 体内的赋值会变成 `STORE_DEREF`（写坏外层局部的同名变量）。
+pub(super) fn collect_names_in_lambda_body(body: &LambdaBody, out: &mut Vec<String>) {
+    match body {
+        LambdaBody::Expression(expression) => collect_names_in_expression(expression, out),
+        LambdaBody::Statements(statements) => {
+            let mut inner = Vec::new();
+            collect_names_in_lambda_statements(statements, &mut inner);
+            let mut locals = std::collections::HashSet::new();
+            collect_lambda_local_names(statements, &mut locals);
+            for name in inner {
+                if !locals.contains(&name) && !out.iter().any(|item| item == &name) {
+                    out.push(name);
+                }
+            }
+        }
+    }
+}
+
+/// lambda 体内**被赋过值**的名字（它们是 lambda 的局部，不是外层需求）。
+fn collect_lambda_local_names(
+    statements: &[Statement],
+    out: &mut std::collections::HashSet<String>,
+) {
+    for statement in statements {
+        match statement {
+            Statement::Assign { target, .. } => {
+                out.insert(target.clone());
+            }
+            Statement::AugAssign {
+                target: AugTarget::Name(name, _),
+                ..
+            } => {
+                out.insert(name.clone());
+            }
+            Statement::NullCoalesceAssign { name, .. } => {
+                out.insert(name.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// lambda 体内**简单语句**里的名字：只收"读"的那一半。
+///
+/// 赋值目标（`y = …` 的 `y`）是 **lambda 自己的局部** ⇒ 不是对外层的需求；但属性／下标目标的
+/// **基底**（`self.x = …` 的 `self`、`a[i] = …` 的 `a`／`i`）照收 ✓。
+fn collect_names_in_lambda_statements(statements: &[Statement], out: &mut Vec<String>) {
+    for statement in statements {
+        match statement {
+            Statement::Expression(value, _) | Statement::Assign { value, .. } => {
+                collect_names_in_expression(value, out);
+            }
+            Statement::AssignAttr { object, value, .. } => {
+                collect_names_in_expression(object, out);
+                collect_names_in_expression(value, out);
+            }
+            Statement::AssignSubscript {
+                container,
+                key,
+                value,
+                ..
+            } => {
+                collect_names_in_expression(container, out);
+                collect_names_in_expression(key, out);
+                collect_names_in_expression(value, out);
+            }
+            Statement::AugAssign { target, value, .. } => {
+                match target {
+                    // 名字目标：`x += 1` 的 `x` 是本 lambda 的局部（有赋值就是局部）⇒ 不收
+                    AugTarget::Name(..) => {}
+                    AugTarget::Attribute { object, .. } => {
+                        collect_names_in_expression(object, out);
+                    }
+                    AugTarget::Subscript { container, key, .. } => {
+                        collect_names_in_expression(container, out);
+                        collect_names_in_expression(key, out);
+                    }
+                }
+                collect_names_in_expression(value, out);
+            }
+            // 其余语句形态本轮不进 lambda 体（解析器挡住）；漏了也按"没有需求"处理。
+            _ => {}
+        }
     }
 }
 
@@ -1418,6 +1525,12 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 collect_comprehension_locals(emitter, value);
                 declare_local(emitter, target);
             }
+            // **`BC-63` 的 `a ??= b`**（`BC-62` 的 lambda 体内也会出现）：`a` 仍是本作用域的局部
+            // （`declare_local` 会跳过 `global` 名，与 `Assign` 同口径）。
+            Statement::NullCoalesceAssign { name, value, .. } => {
+                collect_comprehension_locals(emitter, value);
+                declare_local(emitter, name);
+            }
             // **函数里嵌套的 `def`**：名字是局部（实测 `def outer(): def inner(): …` ⇒
             // `co_varnames = ('inner',)`）——少了这条，收尾重算 `varnames` 时会把名字丢掉 ✗
             // **类的名字也是本作用域的局部** ✓（第 202 轮真 bug ✗：先前漏了这一支 ⇒
@@ -1750,6 +1863,17 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
                 pre_intern_expression(emitter, argument);
             }
         }
+        // **`BC-63`**：两个操作数都在本作用域求值（顺序：先左后右）；空安全链的 `rest` 里
+        // 属性名照常预登记（`ChainSubject` 本身不发指令、也不进名字表）。
+        Expression::NullCoalesce(left, right, _) => {
+            pre_intern_expression(emitter, left);
+            pre_intern_expression(emitter, right);
+        }
+        Expression::SafeChain { receiver, rest, .. } => {
+            pre_intern_expression(emitter, receiver);
+            pre_intern_expression(emitter, rest);
+        }
+        Expression::ChainSubject(_) => {}
     }
 }
 

@@ -11,6 +11,7 @@ use pyawa_abi::{pa_host, pa_state, safe, status};
 
 pub mod clock_system;
 pub mod fs_posix;
+pub mod net_posix;
 pub mod pyac;
 
 /// **`§15.4`**：`paL_newstate()`——`pa_create` ＋ 真实机器 provider 的便捷入口（C 形态）。

@@ -568,6 +568,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 构建串：必须含 `pyawa`
     let version = instance.new_str(&version_string());
     instance.dict_set(namespace, "version", version);
+    // **`copyright`**（M5 体量实测的窄修 ✓）：`Lib/site.py:467-469` 的 `setcopyright()` 直接取
+    // `sys.copyright` ⇒ 缺这个属性时 `import site` 在**模块级**就
+    // `AttributeError: 'module' object has no attribute 'copyright'` ✗（实测 ✓，P3-28 ② 的前置）。
+    // 值＝**参照 3.14.4 的原文** ✓（`Lib/` 逐字同步自 CPython ⇒ 该声明随库走；`sys.copyright` 属
+    // `DESIGN.md` §9 的"实现观测面"，这里只保证**存在且为 str**，不声称 Pyawa 自身的版权归属）。
+    let copyright = instance.new_str(
+        "Copyright (c) 2001 Python Software Foundation.\nAll Rights Reserved.\n\n\
+         Copyright (c) 2000 BeOpen.com.\nAll Rights Reserved.\n\n\
+         Copyright (c) 1995-2001 Corporation for National Research Initiatives.\nAll Rights Reserved.\n\n\
+         Copyright (c) 1991-1995 Stichting Mathematisch Centrum, Amsterdam.\nAll Rights Reserved.",
+    );
+    instance.dict_set(namespace, "copyright", copyright);
     // **前缀一族** ✓（第 196 轮）：`Lib/site.py` 一导入就用 `sys.prefix` ✓。
     // **真值来源** ✓：与参照**同一路数** —— 由**可执行文件的位置**推 ✓（`current_exe` 的父目录 ✓）；
     // 推不出来就退到 `"."` ✓（**如实**：本层还没有"安装前缀"这个概念 ✓）。

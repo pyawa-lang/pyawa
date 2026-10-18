@@ -629,6 +629,21 @@ py_object! {
         /// **`__annotations__` 的缓存**（实测：同一函数的 `f.__annotations__` 是**同一对象**，
         /// 且 `__annotate__` 只被调用**一次**）。
         annotations_cache: RefCell<Option<NonNull<Header>>>,
+        // **可写属性的覆盖值组**（`py_object!` 第二臂：`new` 不收它们 ✓）：
+        // 参照 3.14 实测：`f.__name__ = …`／`f.__qualname__ = …`／`f.__doc__ = …`／
+        // `f.__module__ = …` **不**写进实例字典 ✓（`f.__dict__` 仍是 `{}` ✓），也不碰
+        // code object —— 是函数对象自己的槽 ✓。`None` ＝ 用 code object／`__globals__`
+        // 的默认值；`Some(None 单例)` ＝ 显式覆盖成 `None`（`del f.__doc__` 之后就是它 ✓）。
+        {
+            /// `__name__` 的覆盖值。
+            name_override: RefCell<Option<NonNull<Header>>>,
+            /// `__qualname__` 的覆盖值。
+            qualname_override: RefCell<Option<NonNull<Header>>>,
+            /// `__doc__` 的覆盖值（`del` 之后是 `Some(None 单例)` ✓）。
+            doc_override: RefCell<Option<NonNull<Header>>>,
+            /// `__module__` 的覆盖值（`del` 之后是 `Some(None 单例)` ✓）。
+            module_override: RefCell<Option<NonNull<Header>>>,
+        }
     }
 }
 
@@ -2553,7 +2568,7 @@ pub unsafe fn slice_repr(ptr: *mut Header, _instance: &Instance) -> Result<Strin
 
 /// `slice(...)`：`slice(stop)`／`slice(start, stop[, step])`（实测的三种形态）。
 pub unsafe fn classmethod_new(
-    _class: NonNull<crate::TypeObject>,
+    class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
@@ -2564,15 +2579,166 @@ pub unsafe fn classmethod_new(
         None => instance.singletons().none(),
     };
     instance.retain(function);
-    let ty = instance
-        .type_named("classmethod")
-        .expect("引导期已登记 classmethod 类型");
+    // **用调用方给的那个类** ✓（同 `staticmethod_new` ✓；`Lib/abc.py` 的
+    // `class abstractclassmethod(classmethod)` 就靠这条 ✓）。
+    let ty = class;
     // **走宏生成的 `new`** ✓（它接收字段作参数 ✓）：这样既符合规范 ✓，也消掉「never used」警告 ✓
     //（第 158 轮的教训 ✓：直接写字面量会绕过它 ✗）。
     Ok(instance
         .alloc_payload(ClassMethodObject::new(ty, function))
         .cast::<Header>())
 }
+
+/// **`staticmethod.__get__`／`classmethod.__get__` 的实参口径**（`P3-17`）
+///
+/// 参照 3.14.4 实测：
+/// - 实参个数 1 或 2 ✓（0 ⇒ `TypeError: __get__ expected at least 1 argument, got 0`；
+///   3+ ⇒ `TypeError: __get__ expected at most 2 arguments, got N` ✓）；
+/// - `obj is None` **且** `owner` 缺省或 `None` ⇒ `TypeError: __get__(None, None) is invalid` ✓；
+/// - `owner` 显式 `None` 与"缺省"同义 ✓。
+
+/// **内建"包装对象"的载荷布局核对**（防止把 Python 子类实例当内建载荷读 ⇒ UB／崩溃 ✗）。
+///
+/// 本层 `class X(classmethod)` 这类**内建类型的 Python 子类**目前落在**通用 `AttributeObject`
+/// 布局**上（`classes.rs` 的 `AB-58` 布局表只纳了容器／数值族 ✗）⇒ 载荷里**没有**被包的
+/// 函数 ✗。描述符 `__get__` 若照 `ClassMethodObject` 强转就会读到 NULL（实测 abort ✗）。
+/// 判据：**类型同名**（正常路径 ✓），或**实例尺寸与该内建类型一致**（将来的"布局沿用"档 ✓）。
+/// 两者都不满足 ⇒ 回一句可定位的 `TypeError`（**不崩** ✓，也不伪装成差异 ✓）。
+pub(crate) fn builtin_wrapper_layout_ok(
+    instance: &Instance,
+    wrapper: NonNull<Header>,
+    base_name: &str,
+    expected_size: usize,
+) -> bool {
+    let wrapper_type = instance.type_of(wrapper);
+    if instance.type_name(wrapper_type) == base_name {
+        return true;
+    }
+    // SAFETY: wrapper_type 由注册表持有。
+    unsafe { wrapper_type.as_ref() }.instance_size() == expected_size
+}
+
+/// "内建包装对象的 Python 子类还没有布局支持" 的统一错误（**如实报未接线** ✓）。
+pub(crate) fn wrapper_layout_unsupported(
+    instance: &Instance,
+    wrapper: NonNull<Header>,
+    base_name: &str,
+) -> crate::ExecError {
+    let actual = instance.type_name(instance.type_of(wrapper));
+    instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "'{actual}' 是 '{base_name}' 的 Python 子类，本层还没有它的布局支持 \
+             （{base_name} 的载荷不可用）"
+        ),
+    )
+}
+
+fn descriptor_get_target(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+) -> Result<(Option<NonNull<Header>>, Option<NonNull<Header>>), crate::ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__get__ expected at least 1 argument, got 0",
+        ));
+    }
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("__get__ expected at most 2 arguments, got {}", args.len()),
+        ));
+    }
+    let none = instance.singletons().none();
+    let obj = args.first().copied().filter(|value| *value != none);
+    let owner = args.get(1).copied().filter(|value| *value != none);
+    if obj.is_none() && owner.is_none() {
+        return Err(instance.raise_builtin_error("TypeError", "__get__(None, None) is invalid"));
+    }
+    Ok((obj, owner))
+}
+
+/// **`staticmethod.__get__(obj, owner=None)`** ✓（`P3-17`）：交回**被包的函数本身** ✓
+/// （类访问与实例访问一样 ✓；参照实测 `S.__dict__['s'].__get__(None, S)` 就是那个函数 ✓）。
+pub unsafe fn staticmethod_descriptor_get(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(wrapper) = bound else {
+        // 类级取用（`staticmethod.__get__(wrapper, obj, owner)`）本层没接线 ⇒ 如实报缺 self。
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' for 'staticmethod' objects needs an argument",
+        ));
+    };
+    // 实参校验照参照（含 `__get__(None, None) is invalid` ✓）。
+    let _ = descriptor_get_target(instance, args)?;
+    // **布局核对**（Python 子类实例可能是通用布局 ⇒ 不能当 `StaticMethodObject` 读 ✓）。
+    if !builtin_wrapper_layout_ok(
+        instance,
+        wrapper,
+        "staticmethod",
+        core::mem::size_of::<StaticMethodObject>(),
+    ) {
+        return Err(wrapper_layout_unsupported(instance, wrapper, "staticmethod"));
+    }
+    // SAFETY: 布局核对过（类型同名或实例尺寸一致）⇒ 可以按 `StaticMethodObject` 读载荷。
+    let inner = unsafe { &*wrapper.as_ptr().cast::<StaticMethodObject>() }.function();
+    Ok(instance.retain(inner))
+}
+
+/// **`classmethod.__get__(obj, owner=None)`** ✓（`P3-17`）：交回**绑到类上的方法** ✓。
+///
+/// 参照实测：`obj is None` ⇒ 绑到 `owner` ✓；`obj` 是实例 ⇒ 绑到 `owner`（缺省则 `type(obj)` ✓）；
+/// `owner` 不要求是类型（`classmethod.__get__(inst, 42)` 就给 `42` 绑上 ✓）。
+/// 这条是 `Lib/abc.py` 的 `class abstractclassmethod(classmethod)` 之所以能工作的基础 ✓。
+pub unsafe fn classmethod_descriptor_get(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(wrapper) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' for 'classmethod' objects needs an argument",
+        ));
+    };
+    let (obj, owner) = descriptor_get_target(instance, args)?;
+    // **布局核对**（同 `staticmethod.__get__` ✓）：子类实例不该被当 `ClassMethodObject` 读 ✓。
+    if !builtin_wrapper_layout_ok(
+        instance,
+        wrapper,
+        "classmethod",
+        core::mem::size_of::<ClassMethodObject>(),
+    ) {
+        return Err(wrapper_layout_unsupported(instance, wrapper, "classmethod"));
+    }
+    // `owner` 缺省时：`obj is None` 那条已被 `descriptor_get_target` 挡掉 ⇒ 这里 obj 一定在 ✓。
+    let this = match owner {
+        Some(owner) => owner,
+        None => instance
+            .type_of(obj.expect("上面保证 obj 存在"))
+            .cast::<Header>(),
+    };
+    // SAFETY: 绑定契约保证 `wrapper` 是存活的 classmethod 对象。
+    let inner = unsafe { &*wrapper.as_ptr().cast::<ClassMethodObject>() }.function();
+    // 绑定方法对象要各持一份引用（`OM-16`）。
+    instance.retain(inner);
+    instance.retain(this);
+    Ok(instance
+        .alloc(MethodObject::new(
+            instance.type_named("method").expect("method 已登记"),
+            inner,
+            this,
+        ))
+        .into_raw()
+        .cast::<Header>())
+}
+
 
 pub unsafe fn slice_new(
     class: NonNull<crate::TypeObject>,
@@ -2791,29 +2957,34 @@ pub unsafe fn method_getattr(
             let function = object.function();
             // SAFETY: function 由方法对象持有。
             let function_type = unsafe { function.as_ref() }.ty();
-            if let Some(found) = instance.type_lookup(function_type, name) {
-                return Some(instance.retain(found));
-            }
             if Some(function_type) == instance.type_named("function") {
+                // **`P3-17` 之后函数类型字典里也有了这几格（数据描述符对象 ✓）** ⇒ 不能像先前那样
+                // `type_lookup` 直接交出去（会把**描述符对象**当值交出去 ✗）⇒ 走 `function_getattr`
+                // 的**值**面（覆盖字段优先 ✓ —— 与 `f.__name__` 同一处真相 ✓）。
                 // SAFETY: 刚确认是 Python 函数。
-                let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
-                // SAFETY: 函数持有 code object 的一份引用。
-                let code = function_ref.code();
-                let text = match name {
-                    "__name__" => unsafe { code.cast::<crate::CodeObject>().as_ref() }.name(),
-                    _ => unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname(),
+                return unsafe {
+                    crate::builtin::function::function_getattr(function.as_ptr(), name, instance)
                 };
-                // SAFETY: 同上。
-                let value = instance.new_str(text);
-                return Some(value);
             }
-            None
+            // 非 Python 函数（原生绑定方法一类）：退回类型字典里的现成条目 ✓。
+            instance
+                .type_lookup(function_type, name)
+                .map(|found| instance.retain(found))
         }
         "__module__" | "__annotations__" | "__defaults__" | "__kwdefaults__" | "__code__"
         | "__globals__" | "__dict__" | "__type_params__" => {
             let function = object.function();
             // SAFETY: function 由方法对象持有。
             let function_type = unsafe { function.as_ref() }.ty();
+            if Some(function_type) == instance.type_named("function") {
+                // SAFETY: 刚确认是 Python 函数。
+                let from_getattr = unsafe {
+                    crate::builtin::function::function_getattr(function.as_ptr(), name, instance)
+                };
+                if from_getattr.is_some() {
+                    return from_getattr;
+                }
+            }
             instance.type_lookup(function_type, name).map(|found| instance.retain(found))
         }
         _ => None,
@@ -3126,7 +3297,7 @@ unsafe fn staticmethod_clear(ptr: *mut Header, instance: &Instance) {
 }
 
 pub unsafe fn staticmethod_new(
-    _class: NonNull<crate::TypeObject>,
+    class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
@@ -3137,9 +3308,10 @@ pub unsafe fn staticmethod_new(
         None => instance.singletons().none(),
     };
     instance.retain(function);
-    let ty = instance
-        .type_named("staticmethod")
-        .expect("引导期已登记 staticmethod 类型");
+    // **用调用方给的那个类** ✓（`P3-17` 修 ✗）：`class X(staticmethod)` 的子类实例必须带着
+    // **自己的类型**（参照 `type(X(f)) is X` ✓）；先前这里硬取 `type_named("staticmethod")` ✗
+    // ⇒ 子类实例会报成基类类型 ✗（布局已由 `classes.rs` 的 AB-58 表沿用 ✓）。
+    let ty = class;
     // **走宏生成的 `new`** ✓（它接收字段作参数 ✓）：这样既符合规范 ✓，也消掉「never used」警告 ✓
     //（第 158 轮的教训 ✓：直接写字面量会绕过它 ✗）。
     Ok(instance
@@ -3901,6 +4073,52 @@ impl FunctionObject {
 
     pub fn set_globals(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
         self.globals.replace(value)
+    }
+
+    /// **`__name__` 的覆盖值**（**借用**；`None` ⇒ 用 code object 的名字 ✓）。
+    ///
+    /// 四个覆盖值都由 `function.__dict__` 里的 `function_attribute_descriptor` 的
+    /// `__set__`／`__delete__` 写（**数据描述符**语义 ✓，与参照的 getset／member descriptor 同形 ✓）。
+    pub fn name_override(&self) -> Option<NonNull<Header>> {
+        *self.name_override.borrow()
+    }
+
+    /// 换 `__name__` 覆盖值，返回旧值（**调用方负责归还**）。
+    pub fn set_name_override(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.name_override.replace(value)
+    }
+
+    /// **`__qualname__` 的覆盖值**（**借用**；`None` ⇒ code object 的 qualname ✓）。
+    pub fn qualname_override(&self) -> Option<NonNull<Header>> {
+        *self.qualname_override.borrow()
+    }
+
+    /// 换 `__qualname__` 覆盖值，返回旧值（**调用方负责归还**）。
+    pub fn set_qualname_override(
+        &self,
+        value: Option<NonNull<Header>>,
+    ) -> Option<NonNull<Header>> {
+        self.qualname_override.replace(value)
+    }
+
+    /// **`__doc__` 的覆盖值**（**借用**；`None` ⇒ code object 的文档串 ✓）。
+    pub fn doc_override(&self) -> Option<NonNull<Header>> {
+        *self.doc_override.borrow()
+    }
+
+    /// 换 `__doc__` 覆盖值，返回旧值（**调用方负责归还**）。
+    pub fn set_doc_override(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.doc_override.replace(value)
+    }
+
+    /// **`__module__` 的覆盖值**（**借用**；`None` ⇒ 从 `__globals__` 取 ✓）。
+    pub fn module_override(&self) -> Option<NonNull<Header>> {
+        *self.module_override.borrow()
+    }
+
+    /// 换 `__module__` 覆盖值，返回旧值（**调用方负责归还**）。
+    pub fn set_module_override(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.module_override.replace(value)
     }
 }
 

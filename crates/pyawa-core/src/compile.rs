@@ -1216,12 +1216,16 @@ enum Expression {
     },
     /// **`lambda`**（3.14 实测：嵌套单元 `co_name`／`co_qualname` 都是 `<lambda>`，
     /// 体就是"求值那条表达式再 `RETURN_VALUE`"；`def` 与它共用 `emit_function_object`）。
+    ///
+    /// **`BC-62`**（扩展模式）：`body` 多一种形态 —— `( 语句… 末表达式 )`（[`LambdaBody::Statements`]）。
+    /// 纯 Python 模式**永远**只有 [`LambdaBody::Expression`]（新形态在解析期就报 `SyntaxError`，
+    /// `BC-15`）⇒ `.py` 产物逐字节不变（`TS-5`）。
     Lambda {
         parameters: Vec<Parameter>,
         kwonly: Vec<Parameter>,
         varargs: Option<String>,
         varkw: Option<String>,
-        body: Box<Expression>,
+        body: LambdaBody,
         span: Span,
     },
     /// **`not`**（实测：`LOAD …; TO_BOOL; UNARY_NOT`；常量在编译期折成 `bool`）。
@@ -1285,6 +1289,47 @@ enum Expression {
         callee_span: Span,
         span: Span,
     },
+    /// **`a ?? b` 空合并**（`BC-63`，**扩展模式**）：`a` **只求值一次**、**只判 `None`**（不看真假）；
+    /// 右结合 ⇒ `a ?? b ?? c` ＝ `a ?? (b ?? c)`。发射见 `emitter.rs` 的对应臂。
+    NullCoalesce(Box<Expression>, Box<Expression>, Span),
+    /// **空安全后缀链**（`BC-63`，**扩展模式**）：`receiver?.attr…`／`receiver?[键]…`。
+    ///
+    /// 语义：`receiver` 求值一次；为 `None` ⇒ **整段 `rest` 不求值**、结果是 `None`；
+    /// 否则把 `receiver` 的值当作 `rest` 的**基底**（`rest` 里用 [`Expression::ChainSubject`]
+    /// 占位，发射时它**不压栈** —— 值已经在外层压好了）。
+    ///
+    /// `rest` 里可以再嵌 `SafeChain`（`a?.b?.c`）：递归下来的每个安全点各自守它后面那段链 ✓。
+    SafeChain {
+        receiver: Box<Expression>,
+        rest: Box<Expression>,
+        span: Span,
+    },
+    /// **空安全链的基底占位**（`BC-63` 的内部节点）：发射时**什么都不发** —— 它代表
+    /// "外层 `SafeChain` 已经压在栈顶的那个值"。只出现在 [`Expression::SafeChain`] 的 `rest` 里，
+    /// 用户源码不可能解析出它 ⇒ 解析器之外不产生。
+    ChainSubject(Span),
+}
+
+/// **`lambda` 的体**（`BC-62`）。
+///
+/// - [`LambdaBody::Expression`]：纯 Python 模式的**唯一**形态（行为与产物都与 `BC-62` 之前一致）；
+/// - [`LambdaBody::Statements`]：扩展模式的 `( 语句… 末表达式 )` 新形态。`def` 的套件规则**不**
+///   借用 ⇒ 这里只是"一串简单语句"，**末表达式**的值是返回值，没有末表达式 ⇒ `None`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LambdaBody {
+    Expression(Box<Expression>),
+    Statements(Vec<Statement>),
+}
+
+impl LambdaBody {
+    fn span(&self) -> Span {
+        match self {
+            LambdaBody::Expression(expression) => expression.span(),
+            LambdaBody::Statements(statements) => {
+                statements_last_end(statements).unwrap_or(Span::new(1, 1, 0, 0))
+            }
+        }
+    }
 }
 
 /// 本层接线的比较运算符（`dis` 的 `cmp_op` 下标与实测提示位见 [`CompareOperator::oparg`]）。
@@ -1356,7 +1401,10 @@ impl Expression {
             | Expression::Compare(_, _, _, span)
             | Expression::ChainedCompare { span, .. }
             | Expression::Conditional { span, .. }
-            | Expression::Call { span, .. } => *span,
+            | Expression::Call { span, .. }
+            | Expression::NullCoalesce(_, _, span)
+            | Expression::SafeChain { span, .. }
+            | Expression::ChainSubject(span) => *span,
         }
     }
 }
@@ -1495,6 +1543,15 @@ fn expressions_have_yield(expression: &Expression) -> bool {
             expressions_have_yield(value) || expressions_have_yield(index)
         }
         Expression::Walrus { value, .. } => expressions_have_yield(value),
+        // **`BC-63`**：空合并／空安全链两个操作数都在本层求值 ⇒ 照常下潜
+        Expression::NullCoalesce(left, right, _) => {
+            expressions_have_yield(left) || expressions_have_yield(right)
+        }
+        Expression::SafeChain { receiver, rest, .. } => {
+            expressions_have_yield(receiver) || expressions_have_yield(rest)
+        }
+        // 空安全链的基底占位不是真表达式（不可能是 `yield`）
+        Expression::ChainSubject(_) => false,
         Expression::BoolOp { values, .. } => values.iter().any(expressions_have_yield),
         Expression::Call {
             function,
@@ -1522,7 +1579,7 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
             ..
         } => {
             let mut inner = Vec::new();
-            collect_names_in_expression(body, &mut inner);
+            collect_names_in_lambda_body(body, &mut inner);
             for name in &inner {
                 let is_parameter = parameters.iter().any(|item| item.name == *name)
                     || kwonly.iter().any(|item| item.name == *name)
@@ -1533,6 +1590,16 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
                 }
             }
         }
+        // **`BC-63`**：两个操作数都在本层求值 ⇒ 里面的 lambda 也照常收需求
+        Expression::NullCoalesce(left, right, _) => {
+            find_lambda_demands(left, out);
+            find_lambda_demands(right, out);
+        }
+        Expression::SafeChain { receiver, rest, .. } => {
+            find_lambda_demands(receiver, out);
+            find_lambda_demands(rest, out);
+        }
+        Expression::ChainSubject(_) => {}
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
         | Expression::TupleLiteral(items, _) => {
@@ -2072,6 +2139,20 @@ enum Statement {
         /// **PEP 695 类型参数**（task-24 ✓）：`def f[T]` 的 `[T]` ✓（同 `Class` 那一格 ✓）。
         type_params: Vec<TypeParam>,
     },
+    /// **`a ??= b` 空合并赋值**（`BC-63`，**扩展模式**；语句形态）。
+    ///
+    /// 语义（`SPEC-bytecode.md` 的等价写法）：`a` 为 `None` 时执行 `a = b`，否则**什么都不做**；
+    /// `a` **只求值一次**。发射＝`<读 a>; POP_JUMP_IF_NOT_NONE end; <b>; [CHECK_ASSIGNMENT]; STORE; end`。
+    /// `TS-49`：**不改变 `a` 的标注类型**（运行期 `CHECK_ASSIGNMENT` 仍按原标注查，`TS-47`）。
+    ///
+    /// **本轮边界**：只接**名字目标**（`x ??= v`）。属性／下标目标（`obj.x ??= v`）要求
+    /// "目标只求值一次"，语义与发射都要多一层临时量 ⇒ **如实报未接线**（见解析器报错文案）。
+    NullCoalesceAssign {
+        name: String,
+        name_span: Span,
+        value: Expression,
+        span: Span,
+    },
 }
 
 
@@ -2086,6 +2167,10 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::FString { .. } => Ok(None),
         Expression::SetLiteral(_, _) => Ok(None),
         Expression::Lambda { .. } => Ok(None),
+        // **`BC-63`**：带运行期语义（判 `None`／短路）⇒ 不折
+        Expression::NullCoalesce(..) => Ok(None),
+        Expression::SafeChain { .. } => Ok(None),
+        Expression::ChainSubject(_) => Ok(None),
         // 海象**不做常量折叠**（它带副作用 ⇒ 折了就丢了写目标 ✓）
         Expression::Walrus { .. } => Ok(None),
         Expression::Starred(_, _) => Ok(None),
@@ -2219,6 +2304,10 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Lambda { .. } => None,
         Expression::Walrus { .. } => None,
         Expression::Starred(_, _) => None,
+        // **`BC-63`**：不是常量（各有运行期分支）⇒ 没有"最左叶子"
+        Expression::NullCoalesce(..)
+        | Expression::SafeChain { .. }
+        | Expression::ChainSubject(_) => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::BigInt(text, _) => Some(Constant::BigInt(text.clone())),
         Expression::Float(_, _) => None,

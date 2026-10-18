@@ -1163,3 +1163,195 @@ pub(crate) fn elements_accepted(
     }
     true
 }
+
+// --------------------------------------------------------------------------- #
+// **类型级描述符安装**（`P3-17` 同族 ＋ `functools.wraps.__name__` 的正路）
+// --------------------------------------------------------------------------- #
+//
+// 内建类型的"方法面"分两处：`OM-11` 的 `getattr` 槽（实例属性）＋**类型字典**（描述符协议）。
+// 后者的既有安装点全在 `pyawa-stdlib` 的 `builtins_module`（`function.__get__`、
+// `property.__get__`、各类型 `__new__` …）；本次新增的四族描述符
+// （function 的可写 getset、property 的 `__set__`／`__delete__`、
+// staticmethod／classmethod 的 `__get__`）集中在**这里**做一个**幂等安装器** ✓，
+// 由 `builtins_module::build` **追加一行**调用 ✓。
+//
+// 为什么描述符的 native 实现在 core、安装器也在 core：`FunctionObject` 的覆盖字段与
+// `AttributeObject` 的 `_kind` 都是 core 的私有载荷 ✓ ⇒ stdlib 只负责"建 `builtins` 时调一下" ✓
+// （依赖方向不变：stdlib → core ✓）。
+
+/// 函数可写属性的描述符类型名。
+///
+/// **如实登记（方案 A 的类别偏差）**：参照里 `function.__dict__['__name__']` 的类型是
+/// `getset_descriptor`（`__doc__` 是 `member_descriptor`），本层四合一用自建类型 ⇒
+/// `type(f.__class__.__dict__['__name__']).__name__` 与参照**不同** ✗；语义面（可写、
+/// 数据描述符、错误文案）逐条对齐 ✓。抽例**不钉** `type(...)` 类别 ✓。
+pub const FUNCTION_ATTRIBUTE_DESCRIPTOR_TYPE: &str = "function_attribute_descriptor";
+
+/// 造一个原生函数对象（类型字典里的"方法"用 ✓；借用者负责交一份新引用 ✓）。
+fn descriptor_native(
+    instance: &Instance,
+    name: &'static str,
+    handler: crate::NativeFn,
+) -> NonNull<Header> {
+    let ty = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    instance
+        .alloc(crate::BuiltinFunctionObject::new(
+            ty,
+            name,
+            core::cell::Cell::new(handler),
+        ))
+        .into_raw()
+        .cast::<Header>()
+}
+
+/// 幂等：把 `handler` 装进 `ty` **自己的**类型字典（已有自己的就跳过 ✓）。
+fn install_type_method(
+    instance: &Instance,
+    ty: NonNull<TypeObject>,
+    name: &'static str,
+    handler: crate::NativeFn,
+) {
+    if instance
+        .type_lookup_owner(ty, name)
+        .is_some_and(|(owner, _)| owner == ty)
+    {
+        return;
+    }
+    let native = descriptor_native(instance, name, handler);
+    instance.set_type_attribute(ty, name, native);
+}
+
+/// **function 的四个可写属性**：把 `getset` 数据描述符装进 `function` 的类型字典 ✓
+/// （`f.__name__ = …` 走 `instance_attribute_set` 的数据描述符分支 ⇒ 调这里的 `__set__` ✓）。
+fn install_function_attribute_descriptors(instance: &Instance) {
+    let Some(function_type) = instance.type_named("function") else {
+        return;
+    };
+    // 幂等哨兵：`function` **自己的**命名空间里已经有 `__name__` 就不再装 ✓。
+    if instance
+        .type_lookup_owner(function_type, "__name__")
+        .is_some_and(|(owner, _)| owner == function_type)
+    {
+        return;
+    }
+    let descriptor_type = match instance.type_named(FUNCTION_ATTRIBUTE_DESCRIPTOR_TYPE) {
+        Some(existing) => existing,
+        None => instance.new_attribute_type(FUNCTION_ATTRIBUTE_DESCRIPTOR_TYPE),
+    };
+    install_type_method(
+        instance,
+        descriptor_type,
+        "__get__",
+        crate::builtin::function::function_attribute_descriptor_get as crate::NativeFn,
+    );
+    install_type_method(
+        instance,
+        descriptor_type,
+        "__set__",
+        crate::builtin::function::function_attribute_descriptor_set as crate::NativeFn,
+    );
+    install_type_method(
+        instance,
+        descriptor_type,
+        "__delete__",
+        crate::builtin::function::function_attribute_descriptor_delete as crate::NativeFn,
+    );
+    for (attribute, kind) in [
+        ("__name__", "name"),
+        ("__qualname__", "qualname"),
+        ("__doc__", "doc"),
+        ("__module__", "module"),
+        // **`__annotate__` 暂不装** ✗（`P3-17` 如实登记）：参照里它也可写，但本层 `cell` 对象
+        // 还没有 `cell_contents`（`Lib/dataclasses.py:1298` 的 slots 路径要用它 ✗）⇒ 一旦
+        // `fn.__annotate__ = …` 真的写进字段，`dataclasses` 的 `_update_func_cell_for__class__`
+        // 就会踩到那个缺口 ⇒ `import asyncio`（`asyncio.graph` 的 `slots=True` dataclass）
+        // 当场 `AttributeError: 'cell' object has no attribute 'cell_contents'` ✗。
+        // 保持 HEAD 的"写进实例字典、读仍落到 code/字段默认值"的旧行为，直到 cell 面接线 ✓。
+    ] {
+        // 描述符实例的 `_kind` 存在**内联属性字典**里 ✓（与 `getset_descriptor` 的既有手法同形 ✓）。
+        let kind_mapping = instance.new_dict();
+        let kind_text = instance.new_str(kind);
+        // `dict_set` 是**借用**口径（自己另存一份 ✓）⇒ 交出去之后这份要还 ✓（`OM-16`）。
+        instance.dict_set(kind_mapping, "_kind", kind_text);
+        // SAFETY: kind_text 是上面刚造的新引用、字典已另存一份。
+        unsafe { instance.release_object(kind_text.as_ptr()) };
+        let descriptor = instance.alloc(crate::AttributeObject::new(
+            descriptor_type,
+            RefCell::new(Some(kind_mapping)),
+        ));
+        instance.set_type_attribute(
+            function_type,
+            attribute,
+            descriptor.into_raw().cast::<Header>(),
+        );
+    }
+}
+
+/// **property 的数据描述符面**：`__set__`／`__delete__`（`__get__` 若 stdlib 已装则不重复 ✓）。
+fn install_property_descriptors(instance: &Instance) {
+    let Some(property_type) = instance.type_named("property") else {
+        return;
+    };
+    install_type_method(
+        instance,
+        property_type,
+        "__get__",
+        crate::builtin::property::property_descriptor_get as crate::NativeFn,
+    );
+    install_type_method(
+        instance,
+        property_type,
+        "__set__",
+        crate::builtin::property::property_descriptor_set as crate::NativeFn,
+    );
+    install_type_method(
+        instance,
+        property_type,
+        "__delete__",
+        crate::builtin::property::property_descriptor_delete as crate::NativeFn,
+    );
+}
+
+/// **staticmethod／classmethod 的 `__get__`**（`Lib/abc.py` 的
+/// `class abstractclassmethod(classmethod)` 靠 classmethod 的类型字典项经 MRO 继承 ✓）。
+fn install_static_and_classmethod_descriptors(instance: &Instance) {
+    if let Some(ty) = instance.type_named("staticmethod") {
+        install_type_method(
+            instance,
+            ty,
+            "__get__",
+            crate::builtin_objects::staticmethod_descriptor_get as crate::NativeFn,
+        );
+    }
+    if let Some(ty) = instance.type_named("classmethod") {
+        // **补齐基类**（`P3-17` 顺带修的真缺口 ✓）：`classmethod` 类型在引导期是
+        // `alloc_type_raw` 建的，**漏了** `register_bases` ✗ ⇒ MRO 为空 ⇒
+        // `type_lookup(classmethod, "__get__")` 连**自己**的命名空间都看不到 ✗
+        //（参照里 `classmethod` 继承 `object` ✓；`staticmethod`／`property` 都注册了基类 ✓）。
+        // 修复放在**本安装器**里（不动引导期代码 ✓）：只在 MRO 为空时补一次 ✓，幂等 ✓。
+        let mro_is_empty = unsafe { ty.as_ref() }.mro().is_empty();
+        if mro_is_empty {
+            if let Some(object_type) = instance.type_named("object") {
+                instance.register_bases(ty, vec![object_type]);
+            }
+        }
+        install_type_method(
+            instance,
+            ty,
+            "__get__",
+            crate::builtin_objects::classmethod_descriptor_get as crate::NativeFn,
+        );
+    }
+}
+
+/// **`P3-17` 同族 ＋ `functools.wraps.__name__` 正路的幂等安装器**（每个 `Instance` 各装一次 ✓）。
+///
+/// 调用点：`pyawa-stdlib` 的 `builtins_module::build`（`OM-15`：类型表按实例存放 ✓，
+/// 所以**不能**做成进程级一次性 ✓）。
+pub fn install_builtin_descriptors(instance: &Instance) {
+    install_function_attribute_descriptors(instance);
+    install_property_descriptors(instance);
+    install_static_and_classmethod_descriptors(instance);
+}
