@@ -7,16 +7,19 @@
 
 ## 现在
 
-- **HEAD**：`38f177e`（`dev`，本笔前）—— 本笔＝**拆文件专项 5/6**：`executor.rs`（4865 行）的 `execute`
-  （3394 行、95 个分派臂）按 **opcode 族**拆到 `executor/step_*.rs` 15 个文件（最大 `step_calls.rs` 726 行）；
-  `executor.rs` 只剩 1587 行（循环骨架 ＋ 分派 ＋ 收尾）。分派臂原样搬入各族函数，参数按实际引用裁剪；
-  原 `_ => NotImplemented` 兜底保留在 `executor.rs` 的分派里。
+- **HEAD**：`a1c3657`（`dev`，本笔前）—— 本笔＝**拆文件专项 6/6**：`instance.rs`（2279 行）拆到既有子模块
+  （`bootstrap`／`alloc`／`refcount`／`gc`）＋ 新文件 `quarantine.rs`／`drop.rs`／`quote.rs`；父文件只剩
+  **222 行**（数据定义＋模块声明）。`bootstrap_builtin_types`（1060 行）**原样**留在 `bootstrap.rs`（未拆函数——
+  与 `parser/statements.rs` 的 `parse_statements` 一并如实登记为剩余项）。
 - **工作区**：唯一未提交项 `tools/libtests_survey.py`（上轮 Lib/test 调查收尾：`PYTHONPATH`＋超时；
   **与本专项无关**，本笔不碰）；专项自身的改动都随本笔提交 ⇒ 其余干净。
 - **stash**：**空** ✓
-- **拆文件专项清单（6 刀）**：① `format.rs` ✓ → ② `builtin_objects.rs` ✓ → ③ `emitter.rs` ✓ →
-  ④ `parser.rs` ✓ → ⑤ `executor.rs` ✓ → ⑥ `instance.rs`（`bootstrap_builtin_types` 1060 行）。
-  每刀＝纯移动／分派等价，验收＝`tools/quickcheck.sh` ＋ 提交前 `tools/slowcheck.sh` 十项。
+- **拆文件专项清单（6 刀，全部落地）**：① `format.rs` ✓ → ② `builtin_objects.rs` ✓ → ③ `emitter.rs` ✓ →
+  ④ `parser.rs` ✓ → ⑤ `executor.rs` ✓ → ⑥ `instance.rs` ✓。每刀＝纯移动／分派等价，验收＝
+  `tools/quickcheck.sh` ＋ 提交前 `tools/slowcheck.sh` 十项。
+- **剩余的两个巨型函数**（本轮**未**拆，如实登记）：`parser/statements.rs` 的 `parse_statements`（1766 行）、
+  `instance/bootstrap.rs` 的 `bootstrap_builtin_types`（1060 行）；两者所在**文件**已可读，但函数内部分派／
+  顺序注册尚未拆。
 - **M5 已成立 ✓（判据①②③ 全绿，2026-10-18 收口）**：
   - **判据①（`T-CP-*` 全绿）✓**：矩阵 **13 绿／0 红**。可执行证据：`crates/pyawa-abi/tests/capability_acceptance.rs`（11）／
     `crates/pyawa-runtime/tests/two_providers.rs`（7）／`t_cp10_cancel.rs`（4）／`select_dup2_shapes.rs`（1）／

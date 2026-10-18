@@ -234,3 +234,154 @@ impl Instance {
         ty
     }
 }
+
+impl Instance {
+    /// **OM-14**：把**自定义载荷**（宿主类型）放进本实例成为对象——**新引用**。
+    ///
+    /// 载荷类型必须满足：`size_of::<T>()` 与该类型的 `instance_size` 一致（**OM-5**：头部在
+    /// 第一个字段），且它自己的 `dealloc` 槽要与这里的布局相配。宿主类型走这条。
+    pub fn alloc_payload<T: crate::PyObject>(&self, payload: T) -> NonNull<T> {
+        self.alloc(payload).into_raw()
+    }
+
+    // ---- 容器载荷的**安全**面（`pyawa-stdlib` 是 `forbid(unsafe_code)`，它只能走这些）----
+
+    /// 往 `dict` 里按**字符串**键写一个值（**接管** `value` 的引用，`OM-16`）。
+    ///
+    /// 键已存在则替换（旧值由这里释放）。给 stdlib 建模块用。
+    /// **口径（第 275 轮按用户裁定改为"借用" ✓）**：`dict_set` **自己**为字典那一份 `incref` ✓
+    /// —— 与 CPython 的 `PyDict_SetItem` 一致 ✓。**调用方不必**先 `retain` ✓，也**不必**交出所有权 ✓
+    /// （先前是"接管一份引用" ✗ ⇒ 每个"把查找结果直接交给字典"的站点都得自己记得 `retain` ✗
+    ///  ⇒ 实测同类站点 100+ 处、已漏出至少两处 ✗ ⇒ `MS-25` 的悬垂条目就是这么来的 ✓）。
+    /// **僵尸写探测**（第 88 轮）：要写的对象**已经在释放登记里** ⇒ 旧主人还在写 ✓ ⇒ 当场报出
+    /// **是谁释放的、哪个 Python 现场** ✓（`PYAWA_ZOMBIE_TRACE=1` 才开 ✓）。
+    pub(crate) fn zombie_probe(&self, object: NonNull<Header>) {
+        if !self.zombie_trace.get() {
+            return;
+        }
+        if let Some((name, site)) = self
+            .freed_sites
+            .borrow()
+            .get(&(object.as_ptr() as usize))
+            .cloned()
+        {
+            panic!(
+                // **连 Rust 回溯一起打** ✓（第 91 轮）：光有 Python 现场还不足以指认**谁把 `str`
+                // 传进来** ✗（类型检查也没用 ✗ —— 那块内存的表头自己已经烂了 ✓，`type_of` 读不出真类型 ✓）。
+                // 回溯里就会出现"哪条 Rust 路径调了 `dict_set`" ✓。
+                "[僵尸写] 正在写一个**已释放**的对象 {:#x}（{name}；释放于 {site}）✗；写入方：{}\n{}",
+                object.as_ptr() as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+    }
+
+    /// 直接分配一个 `int` 对象（**不查单例表**）。
+    ///
+    /// `new_int` 与 `new_int_value` **不能互相调**（非单例值会来回递归到爆栈——
+    /// 第 200 轮实测踩过：`300` 一路 `new_int` ↔ `new_int_value`）。
+    pub(crate) fn alloc_int(&self, value: IntValue) -> NonNull<Header> {
+        let int_type = self.singletons().int_type();
+        self.alloc(IntObject::new(int_type, value))
+            .into_raw()
+            .cast::<Header>()
+    }
+
+    /// 在**本实例**的堆上分配一个对象，返回**新引用**（**OM-16**）。
+    ///
+    /// `value` 由 `T::new(ty, …)` 构造（见 [`crate::py_object!`]）；类型取自它的头部。
+    /// **OM-1**：对象只属于本实例，不能跨实例共享。
+    /// **OM-26**：分配计数达阈值时自动触发一次回收。
+    pub fn alloc<'a, T: PyObject>(&'a self, value: T) -> Owned<'a, T> {
+        let ptr = self.adopt(value);
+        self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
+        if self.gc_alloc_count.get() >= self.gc_threshold.get().0 {
+            // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
+            // **开关**（第 93 轮，`PYAWA_NO_GC=1` 才跳过 ✓）：用来判定"刚造好就是垃圾"是不是
+            // **这次回收**干的 ✓ —— 若关掉之后崩就没了 ✓，那病灶就在"回收与刚分配对象"的时序上 ✓。
+            if crate::diag::flag_off("PYAWA_NO_GC") {
+                self.collect();
+            }
+        }
+
+        Owned::new(ptr, self)
+    }
+
+    /// 把一个已构造好的对象交给本实例托管（记账 ＋ 入链 ＋ 标 `GC_TRACKED`），
+    /// 返回它的指针；**引用由实例自己持有**。
+    ///
+    /// 引导期（`Instance::new` 造单例时）用不了 `Owned`——那需要先借出 `&Instance`。
+    pub(crate) fn adopt<T: PyObject>(&self, value: T) -> NonNull<T> {
+        let ty = value.header().ty();
+        let size = core::mem::size_of::<T>();
+        debug_assert_eq!(
+            size,
+            // SAFETY: ty 由某个实例的类型注册表持有（OM-15），在实例存活期间有效；
+            // 这里在 debug 下用它校验类型元数据与 Rust 布局一致。
+            unsafe { ty.as_ref() }.instance_size,
+            "类型的 instance_size 与 Rust 布局不一致"
+        );
+
+        // **哨兵方案已撤** ✗（第 241 轮）：`adopt` 与"宏生成的 `dealloc`"**不是一一对应**的 ✗ ——
+        // `Box` 分配出来的**类型对象**也走同一个宏 ✓ ⇒ 在那里读"尾部魔数"读的是**邻居内存** ✗ ⇒ **假阳性** ✓
+        //（实测：`type` 对象 size=248 时报越界 ✗，回溯直指 `TypeObject::dealloc` ✓）。
+        // 要真做，得先让每块内存**带"有没有哨兵"的出处位** ✓ ⇒ 随后再做 ✓。
+        let ptr = NonNull::from(Box::leak(Box::new(value)));
+        let header = ptr.cast::<Header>();
+
+        // **OM-12**：可成环的类型必须标记 GC_TRACKED。本层用"是否提供 traverse 槽位"判定；
+        // 类型对象自身也会成环（bases／dict），但它的 traverse／clear 待接线后再补标记。
+        let tracked = unsafe { ty.as_ref() }.slots.traverse.is_some();
+        if tracked {
+            // SAFETY: header 指向刚刚分配、尚未交给其他代码的对象。
+            unsafe { header.as_ref() }.set_flag(flags::GC_TRACKED);
+        }
+
+        if self.zombie_trace.get() {
+            // **分配时清掉释放登记** ✓（第 92 轮纠错 ✓）：登记表按**地址**记 ✓，而地址会被复用 ✗
+            // ⇒ 不清就会**假阳性** ✓（实测：刚造好的字典被指认为"已释放" ✗，而它的 `rc` 明明是 1 ✓）。
+            // 清掉之后，命中就只剩一种含义：**释放之后没再分配过** ⇒ 可靠 ✓。
+            self.freed_sites
+                .borrow_mut()
+                .remove(&(header.as_ptr() as usize));
+        }
+        self.live.borrow_mut().insert(header.as_ptr() as usize);
+        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        if tracked {
+            self.link_gc(header);
+        }
+        ptr
+    }
+
+    pub(crate) fn alloc_type_raw(
+        &self,
+        name: &'static str,
+        instance_size: usize,
+        slots: Slots,
+    ) -> NonNull<TypeObject> {
+        // 引导期（元类型自身）还没有类型可指，先用悬垂但非空的指针占位；随后立刻写回自指。
+        let ty = self
+            .metatype
+            .get()
+            .unwrap_or_else(NonNull::<TypeObject>::dangling);
+        let object = TypeObject::new(
+            ty,
+            name,
+            RefCell::new(Vec::new()),
+            RefCell::new(Vec::new()),
+            Cell::new(0),
+            slots,
+            RefCell::new(None),
+            instance_size,
+            Cell::new(None),
+            Cell::new(None),
+        );
+        let ptr = NonNull::from(Box::leak(Box::new(object)));
+        // 类型对象也走同一本账（OM-3），但由注册表持有：不进 `live`，销毁时统一释放（OM-2）。
+        self.bytes_allocated
+            .set(self.bytes_allocated.get() + core::mem::size_of::<TypeObject>());
+        self.types.borrow_mut().push(ptr);
+        ptr
+    }
+}
