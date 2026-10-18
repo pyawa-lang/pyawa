@@ -1,5 +1,6 @@
 //! **M5 判据②** 的可执行验收：**同一脚本、两种 provider、写法不变**
-//! （`SPEC-capabilities.md` §11 的 `T-CP-11`；也覆盖 `T-CP-4`／`T-CP-5`／`T-CP-12`／`T-CP-7` 的真实现面）。
+//! （`SPEC-capabilities.md` §11 的 `T-CP-11`；也覆盖 `T-CP-4`／`T-CP-5`／`T-CP-12` 的真实现面、
+//! `T-CP-7` 后半的销毁兜底释放、`T-CP-3` 的 Python 面 `select`／`os.dup`／`os.dup2`）。
 //!
 //! # 两档 provider
 //!
@@ -26,15 +27,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS, PA_DOMAIN_NET};
 use pyawa_abi::status::PA_OK;
 use pyawa_abi::{
     pa_create, pa_destroy, pa_errmsg, pa_exec_string, pa_host, pa_setcapability,
     pa_setcapability_async, pa_state, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::{CapStatus, CpFsVtable, Handle};
+use pyawa_capabilities::net::CpNetVtable;
 use pyawa_core::CapabilityCallError;
 use pyawa_runtime::fs_posix::{PosixFs, RestrictedFs};
+use pyawa_runtime::net_posix::PosixNet;
 
 // --------------------------------------------------------------------------- #
 // 夹具与观察通道
@@ -187,6 +190,10 @@ fn run(kind: ProviderKind, root: &Path) -> Observation {
     *INNER_WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
         Some((original_write, table.state as usize));
     table.write = Some(recording_write);
+    // **`net` 域**：与 CLI 同款（`T-CP-3` 的 `select`／`os.dup` 脚本要用 socketpair）。
+    // provider 同样必须在 state 之前声明（vtable 的 `state` 裸指针借用它）。
+    let net_provider = PosixNet::new();
+    let net_table = net_provider.vtable();
 
     let host = pa_host {
         abi_size: PA_ABI_SIZE,
@@ -209,6 +216,16 @@ fn run(kind: ProviderKind, root: &Path) -> Observation {
             pa_setcapability(state, PA_DOMAIN_FS, (&table as *const CpFsVtable).cast()),
             PA_OK,
             "注册 `fs` 域实现失败"
+        );
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_NET, PA_ASYNC_OK),
+            PA_OK,
+            "声明 `net` 域异步分类失败"
+        );
+        assert_eq!(
+            pa_setcapability(state, PA_DOMAIN_NET, (&net_table as *const CpNetVtable).cast()),
+            PA_OK,
+            "注册 `net` 域实现失败"
         );
         // **组合根装配**（`CM-14`）：与 CLI 同款 ⇒ 脚本可以用 `print`／`import`。
         pyawa_stdlib::install((&*state).instance(), "probe", &[]);
@@ -592,22 +609,15 @@ fn close_is_idempotent_and_closed_handles_fail_on_both_providers() {
 }
 
 // --------------------------------------------------------------------------- #
-// T-CP-7 后半（`CP-19`）的**缺口探针**：当前红，如实留证据
+// T-CP-7 后半（`CP-19`）：实例销毁兜底释放全部能力表条目
 // --------------------------------------------------------------------------- #
 
-/// **`T-CP-7` 后半的缺口探针**（`CP-19`／`CP-31；**当前红**）。
+/// **`T-CP-7` 后半（`CP-19`／`CP-31`）**：实例销毁**必须**关闭它打开过的全部句柄。
 ///
-/// 现状：VM 侧**没有**能力表（`fd → 能力对象` 表还在 provider 里）⇒ `Instance`／`pa_destroy`
-/// 不知道这个实例开过哪些句柄 ⇒ 实例销毁**不会**关闭它们。本探针打开一个句柄、**不 close**
-/// 就销毁实例，然后断言 provider 手里还留着它——**这条断言通过 ＝ 缺口仍在**。
-///
-/// 标 `#[ignore]`：它表达的是"当前已知的红"，不是验收项。缺口修好后这条会失败 ⇒ 按新语义改成
-/// 正当断言（`== 0`）并去掉 `#[ignore]`。
-///
-/// 跑法：`cargo test -p pyawa-runtime --test two_providers -- --ignored`
+/// 本轮前：VM 侧没有 `fd → 能力对象` 表 ⇒ 销毁时不知道关哪些句柄（探针绿＝泄漏仍在）。
+/// 本轮：`CP-31` 的统一实例能力表落地，`Instance::drop` 兜底 `close_all` ⇒ 这里从探针转正。
 #[test]
-#[ignore = "`CP-19` 缺口探针：当前红（实例销毁不关闭 provider 句柄；等 `CP-31` 的 VM 侧能力表）"]
-fn gap_probe_instance_destroy_leaves_provider_handles_open() {
+fn instance_destroy_releases_every_provider_handle() {
     let base = std::env::temp_dir().join(format!(
         "pyawa-two-providers-residual-{}",
         std::process::id()
@@ -615,77 +625,175 @@ fn gap_probe_instance_destroy_leaves_provider_handles_open() {
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).expect("建临时目录");
     std::fs::write(base.join("leak.txt"), "payload\n").expect("写文件");
+    std::fs::write(base.join("second.txt"), "another\n").expect("写第二个文件");
 
     let provider = PosixFs::new();
     let table = provider.vtable();
     // SAFETY: `table` 活到 state 销毁之后。
     let state = unsafe { state_with_fs(&table) };
-    let path = base.join("leak.txt").to_string_lossy().into_owned();
     // SAFETY: 只借用；`state` 尚未销毁。
-    let handle = unsafe { &*state }
-        .instance()
-        .fs_open(path.as_bytes(), 0, 0)
-        .expect("open 应当成功");
-    assert!(handle >= 3, "真文件句柄从 3 起（1／2 是标准流）");
-    assert_eq!(provider.open_handle_count(), 1, "打开后 provider 里有 1 个句柄");
+    let instance = unsafe { &*state }.instance();
+    let first = base.join("leak.txt").to_string_lossy().into_owned();
+    let second = base.join("second.txt").to_string_lossy().into_owned();
+    let a = instance.fs_open(first.as_bytes(), 0, 0).expect("open a 应当成功");
+    let b = instance.fs_open(second.as_bytes(), 0, 0).expect("open b 应当成功");
+    assert!(a >= 3 && b >= 3, "`CP-31`：表 fd 从 3 起");
+    assert_ne!(a, b, "`CP-31`：两个能力对象占两个 fd");
+    assert_eq!(provider.open_handle_count(), 2, "打开后 provider 里有 2 个句柄");
     // 故意**不** close 就销毁实例：`CP-19` 要求这里兜底释放。
     // SAFETY: `state` 由 `state_with_fs` 交回、尚未销毁。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
-    assert!(
-        provider.open_handle_count() > 0,
-        "缺口已修（实例销毁把句柄关了）⇒ 把这条探针改成 `== 0` 的正当断言并去掉 #[ignore]"
+    assert_eq!(
+        provider.open_handle_count(),
+        0,
+        "`CP-19`：实例销毁必须关闭它打开过的全部 provider 句柄（无残留）"
     );
     let _ = std::fs::remove_dir_all(&base);
 }
 
-// --------------------------------------------------------------------------- #
-// T-CP-3 的**缺口探针**：当前红（如实留证据，不伪造绿）
-// --------------------------------------------------------------------------- #
-
-/// **`T-CP-3` 缺口探针**（`CP-14`／`CP-31`；**当前红**）。
-///
-/// 今天成立的一半：`_io.FileIO.fileno()` 返回的确实是 `int`（`CP-14` 的 `fd` 形状）。
-/// 仍红的两处：`os.dup2` 不存在（`CP-31` 的"能力表复制"没落地）、`select.select` 调用如实报
-/// `NotImplementedError`（`net` 域的 `poll` 槽 + 真 `select(2)` 未接线）。
-///
-/// 探针断言的是"**缺口仍在**"（因此通过 ＝ 红仍成立）；修好后这条会失败 ⇒ 改成正当断言并去掉
-/// `#[ignore]`。
-///
-/// 跑法：`cargo test -p pyawa-runtime --test two_providers -- --ignored`
+/// **`CP-31` 的 `dup`／`dup2` 别名语义**（真 provider 上验）：
+/// 同一 provider 句柄被多个 fd 别名时，关一个别名**不**调 provider `close`；计数归零才真释放。
 #[test]
-#[ignore = "`T-CP-3` 缺口探针：当前红（`os.dup2` 缺、`select.select` 未接线）"]
-fn gap_probe_tcp3_fd_int_surface() {
-    let fixture = fixture("tcp3");
-    let script = r#"import os
-import select
+fn dup_and_dup2_share_one_provider_handle_until_the_last_alias_closes() {
+    let base = std::env::temp_dir().join(format!(
+        "pyawa-two-providers-dup-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).expect("建临时目录");
+    std::fs::write(base.join("alpha.txt"), "alpha\n").expect("写文件");
+    std::fs::write(base.join("beta.txt"), "beta\n").expect("写第二个文件");
 
-print("dup2", hasattr(os, "dup2"))
+    let provider = PosixFs::new();
+    let table = provider.vtable();
+    // SAFETY: `table` 活到 state 销毁之后。
+    let state = unsafe { state_with_fs(&table) };
+    // SAFETY: 只借用；`state` 尚未销毁。
+    let instance = unsafe { &*state }.instance();
+    let alpha = base.join("alpha.txt").to_string_lossy().into_owned();
+    let beta = base.join("beta.txt").to_string_lossy().into_owned();
+    let a = instance.fs_open(alpha.as_bytes(), 0, 0).expect("open a");
+    assert_eq!(provider.open_handle_count(), 1);
+
+    // ---- `dup`：新 fd 指向**同一个** provider 句柄 ----
+    let duplicate = u64::try_from(instance.capability_dup(a as i64).expect("dup")).expect("fd");
+    assert!(duplicate >= 3 && duplicate != a, "`CP-31`：dup 分配新 fd");
+    assert_eq!(instance.capability_fd_count(), 2);
+    assert_eq!(provider.open_handle_count(), 1, "dup 不新增 provider 句柄");
+    assert_eq!(
+        instance.capability_domain(duplicate as i64),
+        Some(pyawa_capabilities::DOMAIN_FS)
+    );
+    let mut buffer = [0u8; 6];
+    assert_eq!(instance.fs_read(duplicate, &mut buffer), Ok(6));
+    assert_eq!(&buffer, b"alpha\n");
+    // 关一个别名：provider 句柄还在（另一个别名仍可用）。
+    assert_eq!(instance.fs_close(a), Ok(()));
+    assert_eq!(provider.open_handle_count(), 1, "`CP-17`：还有别名 ⇒ 不调 provider close");
+    assert_eq!(instance.fs_read(a, &mut buffer), Err(CapabilityCallError::Machine(9)), "关掉的 fd ⇒ EBADF");
+    // 别名共享**同一个**打开文件描述 ⇒ 先 seek 回开头再读（否则在 EOF 上读 0）。
+    assert_eq!(instance.fs_seek(duplicate, 0, 0), Ok(0));
+    let mut buffer = [0u8; 6];
+    assert_eq!(instance.fs_read(duplicate, &mut buffer), Ok(6), "另一个别名仍可用");
+    assert_eq!(instance.fs_close(duplicate), Ok(()));
+    assert_eq!(provider.open_handle_count(), 0, "最后一个别名关闭 ⇒ 真释放");
+
+    // ---- `dup2`：让 new 指向 old 的能力对象（先释放 new 原来的表项）----
+    let first = instance.fs_open(alpha.as_bytes(), 0, 0).expect("open first");
+    let second = instance.fs_open(beta.as_bytes(), 0, 0).expect("open second");
+    assert_eq!(provider.open_handle_count(), 2);
+    assert_eq!(
+        instance.capability_dup2(first as i64, second as i64),
+        Ok(second as i64),
+        "`CP-31`：dup2 返回 new；成功语义"
+    );
+    assert_eq!(provider.open_handle_count(), 1, "dup2 先释放 new 原表项 ⇒ provider 句柄少一个");
+    let mut buffer = [0u8; 6];
+    assert_eq!(instance.fs_read(second, &mut buffer), Ok(6), "new 现在指向 old 的能力");
+    assert_eq!(&buffer, b"alpha\n");
+    // 通过 `second` seek 回开头 ⇒ `first` 也跟着回开头（共享同一个打开文件描述）。
+    assert_eq!(instance.fs_seek(second, 0, 0), Ok(0));
+    let mut shared = [0u8; 2];
+    assert_eq!(instance.fs_read(first, &mut shared), Ok(2), "两个 fd 共享同一打开文件描述");
+    assert_eq!(&shared, b"al", "偏移共享：seek(second) 影响 first");
+    assert_eq!(instance.fs_close(first), Ok(()));
+    assert_eq!(provider.open_handle_count(), 1);
+    assert_eq!(instance.fs_close(second), Ok(()));
+    assert_eq!(provider.open_handle_count(), 0);
+
+    // ---- 销毁兜底：还有未关的别名也要全关 ----
+    let _leftover = instance.fs_open(alpha.as_bytes(), 0, 0).expect("open leftover");
+    let _alias = instance.capability_dup(_leftover as i64).expect("dup leftover");
+    assert_eq!(provider.open_handle_count(), 1);
+    // SAFETY: `state` 由 `state_with_fs` 交回、尚未销毁。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+    assert_eq!(provider.open_handle_count(), 0, "`CP-19`：销毁时按别名计数只 close 一次");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// --------------------------------------------------------------------------- #
+// T-CP-3（`CP-14`／`CP-31`）：`fd` 是 int；`select.select`／`os.dup`／`os.dup2` 照常工作
+// --------------------------------------------------------------------------- #
+
+/// **`T-CP-3` 的脚本**（round 11 socket 线接完 Python 面后转正补测；判据是"照常工作"）。
+///
+/// 覆盖：`select.select([socket_fd])` 的前后就绪变化／可写恒就绪／超时返回空集；常规文件 fd
+/// 恒可读（`fs` 域不进 poll）；`os.dup` 新 fd、`os.dup2` 返回目标 fd、两者**共享打开偏移**；
+/// 已关 fd ⇒ `OSError`（`CP-18` 的 `EBADF` 形状，经 core 的 `Err(Machine(EBADF))`）。
+const TCP3_SCRIPT: &str = r#"import os
+import select
+import socket
+
+print("tcp3-start")
+first, second = socket.socketpair()
+print("before", select.select([first], [], [], 0)[0])
+second.send(b"hi")
+print("after", select.select([first], [], [], 0)[0] == [first])
+print("recv", first.recv(2).decode())
+print("writable", select.select([], [first], [], 0)[1] == [first])
+print("timeout-empty", select.select([], [], [], 0.01))
+file_fd = os.open("greeting.txt", 0)
+print("file-readable", select.select([file_fd], [], [], 0)[0] == [file_fd])
+os.close(file_fd)
+fd = os.open("greeting.txt", 0)
+duplicate = os.dup(fd)
+print("dup", duplicate != fd, os.dup2(fd, duplicate) == duplicate)
+print("read1", os.read(fd, 2).decode())
+print("read2", os.read(duplicate, 2).decode())
+os.close(duplicate)
+os.close(fd)
 try:
-    select.select([], [], [], 0)
-except BaseException as exc:
-    print("select", type(exc).__name__)
-handle = open("greeting.txt")
-print("fileno-int", isinstance(handle.fileno(), int))
-handle.close()
-print("done")
+    select.select([fd], [], [], 0)
+except OSError as exc:
+    print("closed-fd", type(exc).__name__)
+print("tcp3-done")
 "#;
-    fixture.plant_script(script);
+
+/// 参照口径的期望行（`select`／`dup`／`dup2` 与 socket 线的 e2e 对拍一致）。
+const TCP3_EXPECTED: &str = "tcp3-start\n\
+before []\n\
+after True\n\
+recv hi\n\
+writable True\n\
+timeout-empty ([], [], [])\n\
+file-readable True\n\
+dup True True\n\
+read1 he\n\
+read2 ll\n\
+closed-fd OSError\n\
+tcp3-done";
+
+#[test]
+fn select_and_dup2_work_through_the_instance_capability_table() {
+    let fixture = fixture("tcp3");
+    fixture.plant_script(TCP3_SCRIPT);
     let real = run(ProviderKind::Real, &fixture.real);
-    assert_eq!(real.exit, 0, "探针脚本应当正常跑完：{real:?}");
-    assert!(
-        real.stdout.contains("dup2 False"),
-        "缺口已修（`os.dup2` 有了）⇒ 改成正当断言并去掉 #[ignore]：\n{}",
-        real.stdout
-    );
-    assert!(
-        real.stdout.contains("select NotImplementedError"),
-        "缺口已修（`select.select` 接线了）⇒ 改成正当断言并去掉 #[ignore]：\n{}",
-        real.stdout
-    );
-    // 已经成立的一半：`fd` 就是 `int`（`CP-14`）——这一条**不**是缺口。
-    assert!(
-        real.stdout.contains("fileno-int True"),
-        "`CP-14`：`fd` 必须是 `int`：\n{}",
-        real.stdout
+    assert_eq!(real.exit, 0, "`T-CP-3` 脚本应当正常退出：{real:?}");
+    assert_eq!(real.exception, None, "`T-CP-3` 脚本不该有未捕获异常：{real:?}");
+    eprintln!("[T-CP-3] 实测输出：\n{}", real.stdout);
+    assert_eq!(
+        real.stdout, TCP3_EXPECTED,
+        "`T-CP-3`：`select`／`os.dup`／`os.dup2` 必须在实例能力表上照常工作\n--- 实测 ---\n{}\n--- 期望 ---\n{}",
+        real.stdout, TCP3_EXPECTED
     );
 }

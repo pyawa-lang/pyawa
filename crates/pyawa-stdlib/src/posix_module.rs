@@ -13,6 +13,62 @@ use pyawa_core::{AttributeObject, Header, Instance};
 
 use crate::io_module::fs_error;
 
+
+/// **机器错误 ⇒ `OSError` 子类**（`CM-19`／`CM-20`：按 **errno 名**查表 ✓）。
+///
+/// 与 `io_module::fs_error` 同一口径，区别只是**没有路径后缀**（`os.dup`／`select` 这类调用没有
+/// "路径"可显示 ✓）。`strerror` 文案本地一小张（`io_module` 那张是私有的，不跨模块加宽可见性 ✓）。
+pub(crate) fn capability_error(
+    instance: &Instance,
+    error: pyawa_core::CapabilityCallError,
+) -> pyawa_core::ExecError {
+    match error {
+        pyawa_core::CapabilityCallError::NotRegistered => instance.raise_builtin_error(
+            "NotImplementedError",
+            "能力域未注册（CP-2），本轮未接线",
+        ),
+        pyawa_core::CapabilityCallError::NotImplemented => instance.raise_builtin_error(
+            "NotImplementedError",
+            "能力槽未实现（CP-5），本轮未接线",
+        ),
+        pyawa_core::CapabilityCallError::Machine(errno) => {
+            let name = crate::errno_map::ERRNO_ERRORCODE
+                .iter()
+                .find(|(number, _)| *number == errno as i64)
+                .map(|(_, name)| *name);
+            let class = name
+                .and_then(|name| {
+                    crate::errno_map::ERRNO_TO_CLASS
+                        .iter()
+                        .find(|(key, _)| *key == name)
+                        .map(|(_, class)| *class)
+                })
+                .unwrap_or("OSError");
+            let text = name.and_then(errno_text).unwrap_or("unknown error");
+            instance.raise_builtin_error(class, &format!("[Errno {errno}] {text}"))
+        }
+    }
+}
+
+fn errno_text(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "EBADF" => "Bad file descriptor",
+        "EINVAL" => "Invalid argument",
+        "ENOENT" => "No such file or directory",
+        "EACCES" => "Permission denied",
+        "EMFILE" => "Too many open files",
+        "ENFILE" => "Too many open files in system",
+        "EBUSY" => "Device or resource busy",
+        "ENOMEM" => "Cannot allocate memory",
+        "EPIPE" => "Broken pipe",
+        "EAGAIN" => "Resource temporarily unavailable",
+        "EOPNOTSUPP" => "Operation not supported",
+        "ENOTCONN" => "Transport endpoint is not connected",
+        "ECONNRESET" => "Connection reset by peer",
+        _ => return None,
+    })
+}
+
 /// 模块名（`posix`）。
 pub const NAME: &str = "posix";
 
@@ -191,6 +247,113 @@ fn close_native(
     // **返回 `None` 必须是新引用** ✗（第 280 轮修：先前交的是**借用**的单例 ✗ ⇒ 调用方按
     // "新引用"接管 ⇒ 单例被多释放一次 ⇒ 堆欠计数（`corrupted double-linked list` 这一类 ✓））。
     Ok(instance.new_none())
+}
+
+
+/// **`posix.dup(fd)`**（`CP-31` 的 `dup`）：复制能力表项 ⇒ 新 `fd`（两个 fd 指向**同一**能力对象）。
+///
+/// 形状照参照实测：关键字一律拒（`posix.dup() takes no keyword arguments`）、恰好 1 参、
+/// 实参要能当整数（`'str' object cannot be interpreted as an integer`）；失败 ⇒ `OSError` 形状。
+fn dup_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.dup() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("posix.dup() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let fd = descriptor_argument(instance, args[0])?;
+    match instance.capability_dup(fd) {
+        Ok(duplicate) => Ok(instance.new_int(duplicate)),
+        Err(error) => Err(capability_error(instance, error)),
+    }
+}
+
+/// **`posix.dup2(fd, fd2, inheritable=True)`**（`CP-31` 的表项复制）：让 `fd2` 指向 `fd` 的能力对象；
+/// `fd2` 原表项先按 `close` 语义释放。**返回 `fd2`**（参照 3.14 实测就是返回新 fd，不是 `None` ✓）。
+///
+/// 形状照参照 clinic：位置 2–3 个、关键字 `fd`／`fd2`／`inheritable`；`inheritable` **接受但不生效**
+/// （本层的 fd 不建模 `CLOEXEC`／`fork`／`exec`，`AB-` 面也没有继承语义 ⇒ 如实记缺口，不假装 ✓）。
+fn dup2_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if args.len() > 3 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("dup2() takes at most 3 arguments ({} given)", args.len()),
+        ));
+    }
+    let mut slots: [Option<NonNull<Header>>; 3] = [None; 3];
+    const KEYWORDS: [&str; 3] = ["fd", "fd2", "inheritable"];
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            return Err(instance.raise_builtin_error("TypeError", "keywords must be strings"));
+        };
+        let Some(index) = KEYWORDS.iter().position(|candidate| *candidate == name) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("dup2() got an unexpected keyword argument '{name}'"),
+            ));
+        };
+        if slots[index].is_some() || args.get(index).is_some() {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("dup2() got multiple values for argument '{name}'"),
+            ));
+        }
+        slots[index] = Some(*value);
+    }
+    let argument = |index: usize| slots[index].or_else(|| args.get(index).copied());
+    let Some(fd_value) = argument(0) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "dup2() missing required argument 'fd' (pos 1)",
+        ));
+    };
+    let Some(fd2_value) = argument(1) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "dup2() missing required argument 'fd2' (pos 2)",
+        ));
+    };
+    let fd = descriptor_argument(instance, fd_value)?;
+    let fd2 = descriptor_argument(instance, fd2_value)?;
+    if let Some(inheritable) = argument(2) {
+        // **接受但不生效**：本层不建模 `inherit` 位（如实记，不假装 ✓）。
+        let _ = instance.truth_of(inheritable);
+    }
+    match instance.capability_dup2(fd, fd2) {
+        Ok(duplicate) => Ok(instance.new_int(duplicate)),
+        Err(error) => Err(capability_error(instance, error)),
+    }
+}
+
+/// 整数实参（照参照：不是整数 ⇒ `'<类型>' object cannot be interpreted as an integer` ✓）。
+fn descriptor_argument(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<i64, pyawa_core::ExecError> {
+    if let Some(number) = instance.int_value(value) {
+        return Ok(number);
+    }
+    let name = instance.type_name(instance.type_of(value));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("'{name}' object cannot be interpreted as an integer"),
+    ))
 }
 
 fn read_native(
@@ -776,6 +939,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     for (name, handler) in [
         ("open", open_native as pyawa_core::NativeFn),
         ("close", close_native as pyawa_core::NativeFn),
+        // **`T-CP-3` 的 `fd` 面**（round 11）：`os.dup`／`os.dup2` 走实例能力表（`CP-31` 的表项复制 ✓）。
+        ("dup", dup_native as pyawa_core::NativeFn),
+        ("dup2", dup2_native as pyawa_core::NativeFn),
         ("read", read_native as pyawa_core::NativeFn),
         ("write", write_native as pyawa_core::NativeFn),
         ("unlink", unlink_native as pyawa_core::NativeFn),
@@ -839,6 +1005,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("stat_result"),
         instance.new_str("open"),
         instance.new_str("close"),
+        instance.new_str("dup"),
+        instance.new_str("dup2"),
         instance.new_str("read"),
         instance.new_str("write"),
         instance.new_str("unlink"),

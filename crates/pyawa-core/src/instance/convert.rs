@@ -235,119 +235,413 @@ impl Instance {
 ///（`Lib/zipfile` 用它解文件名 ✓；`encodings/cp437.py` 那条路要 namedtuple，见「未修 bug」✓）。
 pub(crate) const CP437: [char; 256] = ['\u{0}', '\u{1}', '\u{2}', '\u{3}', '\u{4}', '\u{5}', '\u{6}', '\u{7}', '\u{8}', '\u{9}', '\u{a}', '\u{b}', '\u{c}', '\u{d}', '\u{e}', '\u{f}', '\u{10}', '\u{11}', '\u{12}', '\u{13}', '\u{14}', '\u{15}', '\u{16}', '\u{17}', '\u{18}', '\u{19}', '\u{1a}', '\u{1b}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}', '\u{20}', '\u{21}', '\u{22}', '\u{23}', '\u{24}', '\u{25}', '\u{26}', '\u{27}', '\u{28}', '\u{29}', '\u{2a}', '\u{2b}', '\u{2c}', '\u{2d}', '\u{2e}', '\u{2f}', '\u{30}', '\u{31}', '\u{32}', '\u{33}', '\u{34}', '\u{35}', '\u{36}', '\u{37}', '\u{38}', '\u{39}', '\u{3a}', '\u{3b}', '\u{3c}', '\u{3d}', '\u{3e}', '\u{3f}', '\u{40}', '\u{41}', '\u{42}', '\u{43}', '\u{44}', '\u{45}', '\u{46}', '\u{47}', '\u{48}', '\u{49}', '\u{4a}', '\u{4b}', '\u{4c}', '\u{4d}', '\u{4e}', '\u{4f}', '\u{50}', '\u{51}', '\u{52}', '\u{53}', '\u{54}', '\u{55}', '\u{56}', '\u{57}', '\u{58}', '\u{59}', '\u{5a}', '\u{5b}', '\u{5c}', '\u{5d}', '\u{5e}', '\u{5f}', '\u{60}', '\u{61}', '\u{62}', '\u{63}', '\u{64}', '\u{65}', '\u{66}', '\u{67}', '\u{68}', '\u{69}', '\u{6a}', '\u{6b}', '\u{6c}', '\u{6d}', '\u{6e}', '\u{6f}', '\u{70}', '\u{71}', '\u{72}', '\u{73}', '\u{74}', '\u{75}', '\u{76}', '\u{77}', '\u{78}', '\u{79}', '\u{7a}', '\u{7b}', '\u{7c}', '\u{7d}', '\u{7e}', '\u{7f}', '\u{c7}', '\u{fc}', '\u{e9}', '\u{e2}', '\u{e4}', '\u{e0}', '\u{e5}', '\u{e7}', '\u{ea}', '\u{eb}', '\u{e8}', '\u{ef}', '\u{ee}', '\u{ec}', '\u{c4}', '\u{c5}', '\u{c9}', '\u{e6}', '\u{c6}', '\u{f4}', '\u{f6}', '\u{f2}', '\u{fb}', '\u{f9}', '\u{ff}', '\u{d6}', '\u{dc}', '\u{a2}', '\u{a3}', '\u{a5}', '\u{20a7}', '\u{192}', '\u{e1}', '\u{ed}', '\u{f3}', '\u{fa}', '\u{f1}', '\u{d1}', '\u{aa}', '\u{ba}', '\u{bf}', '\u{2310}', '\u{ac}', '\u{bd}', '\u{bc}', '\u{a1}', '\u{ab}', '\u{bb}', '\u{2591}', '\u{2592}', '\u{2593}', '\u{2502}', '\u{2524}', '\u{2561}', '\u{2562}', '\u{2556}', '\u{2555}', '\u{2563}', '\u{2551}', '\u{2557}', '\u{255d}', '\u{255c}', '\u{255b}', '\u{2510}', '\u{2514}', '\u{2534}', '\u{252c}', '\u{251c}', '\u{2500}', '\u{253c}', '\u{255e}', '\u{255f}', '\u{255a}', '\u{2554}', '\u{2569}', '\u{2566}', '\u{2560}', '\u{2550}', '\u{256c}', '\u{2567}', '\u{2568}', '\u{2564}', '\u{2565}', '\u{2559}', '\u{2558}', '\u{2552}', '\u{2553}', '\u{256b}', '\u{256a}', '\u{2518}', '\u{250c}', '\u{2588}', '\u{2584}', '\u{258c}', '\u{2590}', '\u{2580}', '\u{3b1}', '\u{df}', '\u{393}', '\u{3c0}', '\u{3a3}', '\u{3c3}', '\u{b5}', '\u{3c4}', '\u{3a6}', '\u{398}', '\u{3a9}', '\u{3b4}', '\u{221e}', '\u{3c6}', '\u{3b5}', '\u{2229}', '\u{2261}', '\u{b1}', '\u{2265}', '\u{2264}', '\u{2320}', '\u{2321}', '\u{f7}', '\u{2248}', '\u{b0}', '\u{2219}', '\u{b7}', '\u{221a}', '\u{207f}', '\u{b2}', '\u{25a0}', '\u{a0}'];
 
-/// **编码名归一**（`_codecs` 与 `bytes.decode`／`str.encode` 的**一处真相** ✓）。
-pub(crate) fn normalized_encoding(name: &str) -> String {
-    let lowered = name.to_ascii_lowercase().replace('_', "-");
+/// **内置快速路径的编码名归一**（`utf-8`／`ascii`／`latin-1`／`cp437` 四档 —— **一处真相** ✓）。
+///
+/// 两个旧实现各有一张白名单（`str.encode` 在 `builtin/str.rs`、`bytes.decode` 在这份文件 ✗）——
+/// task-9 把它们合到这里：内置四档走**快路径**（下面的 `encode_builtin`／`decode_builtin`），
+/// **其余一律委派** `_codecs.lookup`（见 [`Instance::encode_with_encoding_and_errors`]）。
+///
+/// 别名取参照 `_codecs.lookup` 与两张旧表的**并集**；不在表里的名字交给注册表（`encodings`
+/// 一族的别名更全，例如 `us`／`cp65001` 之外的 `ansi_x3.4_1986` 等 ✓）。
+pub(crate) fn builtin_encoding(name: &str) -> Option<&'static str> {
+    let lowered = name.to_ascii_lowercase().replace(['_', ' '], "-");
     match lowered.as_str() {
-        "utf8" | "u8" | "utf" => "utf-8".to_owned(),
-        "latin1" | "latin" | "iso-8859-1" | "iso8859-1" | "8859" | "cp819" | "l1" => "latin-1".to_owned(),
-        "us-ascii" | "646" | "ansi-x3.4-1968" => "ascii".to_owned(),
-        "437" | "ibm437" | "csibm437" | "cp-437" => "cp437".to_owned(),
-        other => other.to_owned(),
+        "utf-8" | "utf8" | "u8" | "utf" | "cp65001" => Some("utf-8"),
+        "ascii" | "us-ascii" | "646" | "ansi-x3.4-1968" => Some("ascii"),
+        "latin-1" | "latin1" | "latin" | "iso-8859-1" | "iso8859-1" | "8859" | "cp819" | "l1" => {
+            Some("latin-1")
+        }
+        "cp437" | "437" | "ibm437" | "csibm437" => Some("cp437"),
+        _ => None,
+    }
+}
+
+/// 错误处理器名字的分型（内置四档的**错误**路径，照参照）：
+/// `strict`／`ignore`／`replace` 在调用处各接一条；其余名字——参照的内建三条未接线的报
+/// `NotImplementedError`（如实，不伪造输出），**没注册过的**照参照报 `LookupError` ✓。
+fn builtin_error_handler_failure(instance: &Instance, codec: &str, handler: &str) -> ExecError {
+    if matches!(handler, "xmlcharrefreplace" | "backslashreplace" | "namereplace") {
+        instance.raise_builtin_error(
+            "NotImplementedError",
+            &format!(
+                "`{codec}` codec 的 `{handler}` 错误处理器尚未接线（只认 strict／ignore／replace）"
+            ),
+        )
+    } else {
+        instance.raise_builtin_error(
+            "LookupError",
+            &format!("unknown error handler name '{handler}'"),
+        )
+    }
+}
+
+/// 字符字面量（照参照的转义形态 ✓）：≤ `0xFF` 用 `\xNN`、BMP 用 `\uNNNN`、增补面用 `\UNNNNNNNN`。
+fn character_literal(codepoint: u32) -> String {
+    if codepoint <= 0xFF {
+        format!("\\x{codepoint:02x}")
+    } else if codepoint <= 0xFFFF {
+        format!("\\u{codepoint:04x}")
+    } else {
+        format!("\\U{codepoint:08x}")
+    }
+}
+
+/// **内置四档的编码快路径**（不碰注册表；语义与旧 `str_encode_native` 逐条一致 ✓）。
+fn encode_builtin(
+    instance: &Instance,
+    text: &str,
+    codec: &'static str,
+    errors: &str,
+) -> Result<Vec<u8>, ExecError> {
+    match codec {
+        "utf-8" => Ok(text.as_bytes().to_vec()),
+        "latin-1" => {
+            let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
+            for (position, character) in text.chars().enumerate() {
+                let code = character as u32;
+                if code <= 0xFF {
+                    bytes.push(code as u8);
+                    continue;
+                }
+                match errors {
+                    "ignore" => {}
+                    "replace" => bytes.push(b'?'),
+                    "strict" => {
+                        return Err(instance.raise_builtin_error(
+                            "UnicodeEncodeError",
+                            &format!(
+                                "'latin-1' codec can't encode character '{}' in position {position}: ordinal not in range(256)",
+                                character_literal(code)
+                            ),
+                        ))
+                    }
+                    other => return Err(builtin_error_handler_failure(instance, codec, other)),
+                }
+            }
+            Ok(bytes)
+        }
+        "ascii" => {
+            let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
+            for (position, character) in text.chars().enumerate() {
+                let code = character as u32;
+                if code < 0x80 {
+                    bytes.push(code as u8);
+                    continue;
+                }
+                match errors {
+                    "ignore" => {}
+                    "replace" => bytes.push(b'?'),
+                    "strict" => {
+                        return Err(instance.raise_builtin_error(
+                            "UnicodeEncodeError",
+                            &format!(
+                                "'ascii' codec can't encode character '{}' in position {position}: ordinal not in range(128)",
+                                character_literal(code)
+                            ),
+                        ))
+                    }
+                    other => return Err(builtin_error_handler_failure(instance, codec, other)),
+                }
+            }
+            Ok(bytes)
+        }
+        "cp437" => {
+            let table = crate::instance::CP437;
+            let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
+            for (position, character) in text.chars().enumerate() {
+                match table.iter().position(|candidate| *candidate == character) {
+                    Some(byte) => bytes.push(byte as u8),
+                    None => match errors {
+                        "ignore" => {}
+                        "replace" => bytes.push(b'?'),
+                        "strict" => {
+                            return Err(instance.raise_builtin_error(
+                                "UnicodeEncodeError",
+                                &format!(
+                                    // 参照的 cp437 走 **charmap** 编解码器 ⇒ 文案是 `'charmap' codec` ＋
+                                    // `character maps to <undefined>`（实测 ✓），不是 `'cp437' … no mapping`。
+                                    "'charmap' codec can't encode character '\\u{:04x}' in position {position}: character maps to <undefined>",
+                                    character as u32
+                                ),
+                            ))
+                        }
+                        other => return Err(builtin_error_handler_failure(instance, codec, other)),
+                    },
+                }
+            }
+            Ok(bytes)
+        }
+        _ => unreachable!("builtin_encoding 只回四档"),
+    }
+}
+
+/// UTF-8 解码错误的文案（照参照的分型：`invalid start byte`／`invalid continuation byte`／
+/// `unexpected end of data`；单字节用 `byte 0x.. in position N`、多字节用 `bytes in position N-M` ✓）。
+fn utf8_decode_error(instance: &Instance, value: &[u8], start: usize, error_len: Option<usize>) -> ExecError {
+    let byte = value.get(start).copied().unwrap_or(0);
+    let (reason, end) = match error_len {
+        None => ("unexpected end of data", value.len()),
+        Some(length) => {
+            // 起始字节合法（0xC2..=0xF4）但续字节非法 ⇒ continuation；否则 start
+            let reason = if (0xC2..=0xF4).contains(&byte) {
+                "invalid continuation byte"
+            } else {
+                "invalid start byte"
+            };
+            (reason, (start + length).min(value.len()))
+        }
+    };
+    let message = if end.saturating_sub(start) == 1 {
+        format!("'utf-8' codec can't decode byte 0x{byte:02x} in position {start}: {reason}")
+    } else {
+        format!(
+            "'utf-8' codec can't decode bytes in position {start}-{}: {reason}",
+            end.saturating_sub(1)
+        )
+    };
+    instance.raise_builtin_error("UnicodeDecodeError", &message)
+}
+
+/// **UTF-8 解码**（`errors` 三条：非法序列按**一个错误单元**跳过／替换成 `\uFFFD`；末尾截断序列
+/// 整段算一个单元 —— 与参照的 `replace` 口径一致 ✓）。
+fn decode_utf8_builtin(instance: &Instance, value: &[u8], errors: &str) -> Result<String, ExecError> {
+    let mut out = String::with_capacity(value.len());
+    let mut consumed = 0usize;
+    while consumed < value.len() {
+        match core::str::from_utf8(&value[consumed..]) {
+            Ok(rest) => {
+                out.push_str(rest);
+                consumed = value.len();
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                if valid > 0 {
+                    out.push_str(core::str::from_utf8(&value[consumed..consumed + valid]).unwrap_or(""));
+                    consumed += valid;
+                }
+                let span = error.error_len().unwrap_or(value.len() - consumed);
+                match errors {
+                    "strict" => return Err(utf8_decode_error(instance, value, consumed, error.error_len())),
+                    "ignore" => consumed += span,
+                    "replace" => {
+                        out.push('\u{fffd}');
+                        consumed += span;
+                    }
+                    other => return Err(builtin_error_handler_failure(instance, "utf-8", other)),
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// **内置四档的解码快路径**（不碰注册表；语义与旧实现逐条一致 ＋ 补上 `errors` 三态 ✓）。
+fn decode_builtin(
+    instance: &Instance,
+    value: &[u8],
+    codec: &'static str,
+    errors: &str,
+) -> Result<String, ExecError> {
+    match codec {
+        "utf-8" => decode_utf8_builtin(instance, value, errors),
+        "ascii" => {
+            let mut out = String::with_capacity(value.len());
+            for (index, byte) in value.iter().enumerate() {
+                if *byte < 0x80 {
+                    out.push(*byte as char);
+                    continue;
+                }
+                match errors {
+                    "ignore" => {}
+                    "replace" => out.push('\u{fffd}'),
+                    "strict" => {
+                        return Err(instance.raise_builtin_error(
+                            "UnicodeDecodeError",
+                            &format!(
+                                "'ascii' codec can't decode byte 0x{byte:02x} in position {index}: ordinal not in range(128)"
+                            ),
+                        ))
+                    }
+                    other => return Err(builtin_error_handler_failure(instance, codec, other)),
+                }
+            }
+            Ok(out)
+        }
+        "latin-1" => Ok(value.iter().map(|byte| *byte as char).collect()),
+        "cp437" => Ok(value
+            .iter()
+            .map(|byte| crate::instance::CP437[*byte as usize])
+            .collect()),
+        _ => unreachable!("builtin_encoding 只回四档"),
     }
 }
 
 impl Instance {
-    /// **按名字解字节** ✓（第 726 轮；`_codecs`／`bytes.decode` 的**一处真相** ✓）：
-    /// `utf-8`／`ascii`／`latin-1`／`cp437` ✓，其余**如实** `LookupError` ✓
-    /// （**如实口径** ✗：还没走 Python `encodings` 包 —— 那要 namedtuple，见台账 ✓）。
+    /// 调 `_codecs.lookup(encoding)`（**一处委派**：内置四档之外的名字全走它 ✓）。
+    ///
+    /// `_codecs.lookup` 自己会（①）查内建表、（②）问已注册的 search function、（③）**懒导入**
+    /// `encodings` 再问 —— 因此这里不需要知道任何编码清单 ✓（白名单只有 [`builtin_encoding`] 一张）。
+    fn codec_registry_lookup(&self, encoding: &str) -> Result<NonNull<Header>, ExecError> {
+        let unavailable = || {
+            self.raise_builtin_error("LookupError", &format!("unknown encoding: {encoding}"))
+        };
+        let Some(modules) = self.modules() else {
+            return Err(unavailable());
+        };
+        let Some(module) = self.dict_get(modules, "_codecs") else {
+            return Err(unavailable());
+        };
+        let Some(namespace) = crate::executor::protocol::mounted_instance_dict(self, module) else {
+            return Err(unavailable());
+        };
+        let Some(lookup) = self.dict_get(namespace, "lookup") else {
+            return Err(unavailable());
+        };
+        let name = self.new_str(encoding);
+        let result = crate::executor::call::call_value(self, lookup, &[name], &[]);
+        // SAFETY: `name` 是本函数刚拿到的**新引用** ✓。
+        unsafe { self.release_object(name.as_ptr()) };
+        result
+    }
+
+    /// 编码器返回值归一：注册表里的编解码器照参照交 `(bytes, 消耗数)` 二元组；本层的内建四档
+    /// `CodecInfo` 交裸 `bytes` ⇒ 两种形态都认 ✓（返回**新引用**）。
+    fn codec_output_value(&self, output: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
+        let Some(items) = self.tuple_items(output) else {
+            return Ok(output);
+        };
+        let Some(first) = items.first().copied() else {
+            return Ok(output);
+        };
+        let retained = self.retain(first);
+        // SAFETY: `output` 是调用方交来的**新引用** ⇒ 取完第一项就还掉 ✓。
+        unsafe { self.release_object(output.as_ptr()) };
+        Ok(retained)
+    }
+
+    /// 这个 `CodecInfo` 是不是**文本编码器**（`_is_text_encoding`；缺省 `True` ✓）。
+    ///
+    /// `rot13`／`base64` 一类是"任意对象编解码器"，`str.encode`／`bytes.decode` 碰到它们照参照报
+    /// `LookupError: 'x' is not a text encoding; use codecs.encode() to handle arbitrary codecs` ✓
+    /// （**不是** `TypeError`，实测 ✓；名字用**调用方给的原文**，`'ROT13'` 就报 `'ROT13'` ✓）。
+    fn codec_is_text_encoding(&self, info: NonNull<Header>) -> Result<bool, ExecError> {
+        let Some(flag) = self.attribute_optional_of(info, "_is_text_encoding")? else {
+            return Ok(true);
+        };
+        self.truthiness_of(flag)
+    }
+
+    /// **委派编码**：`_codecs.lookup(encoding).encode(text, errors)`（返回 bytes）。
+    fn delegate_encode(
+        &self,
+        text: &str,
+        encoding: &str,
+        errors: &str,
+    ) -> Result<NonNull<Header>, ExecError> {
+        let info = self.codec_registry_lookup(encoding)?;
+        if !self.codec_is_text_encoding(info)? {
+            return Err(self.raise_builtin_error(
+                "LookupError",
+                &format!(
+                    "'{encoding}' is not a text encoding; use codecs.encode() to handle arbitrary codecs"
+                ),
+            ));
+        }
+        let Some(method) = self.attribute_optional_of(info, "encode")? else {
+            return Err(self.raise_builtin_error(
+                "LookupError",
+                &format!("unknown encoding: {encoding}"),
+            ));
+        };
+        let text_value = self.new_str(text);
+        let errors_value = self.new_str(errors);
+        let result = crate::executor::call::call_value(self, method, &[text_value, errors_value], &[]);
+        // SAFETY: 两个实参是本函数的**新引用**（`call_value` 自己也 retain 过一份）⇒ 用完归还 ✓。
+        unsafe {
+            self.release_object(text_value.as_ptr());
+            self.release_object(errors_value.as_ptr());
+        }
+        self.codec_output_value(result?)
+    }
+
+    /// **委派解码**：`_codecs.lookup(encoding).decode(bytes, errors)`（返回 str）。
+    fn delegate_decode(
+        &self,
+        value: &[u8],
+        encoding: &str,
+        errors: &str,
+    ) -> Result<NonNull<Header>, ExecError> {
+        let info = self.codec_registry_lookup(encoding)?;
+        if !self.codec_is_text_encoding(info)? {
+            return Err(self.raise_builtin_error(
+                "LookupError",
+                &format!(
+                    "'{encoding}' is not a text encoding; use codecs.decode() to handle arbitrary codecs"
+                ),
+            ));
+        }
+        let Some(method) = self.attribute_optional_of(info, "decode")? else {
+            return Err(self.raise_builtin_error(
+                "LookupError",
+                &format!("unknown encoding: {encoding}"),
+            ));
+        };
+        let bytes_value = self.new_bytes(value);
+        let errors_value = self.new_str(errors);
+        let result = crate::executor::call::call_value(self, method, &[bytes_value, errors_value], &[]);
+        // SAFETY: 同上 —— 两个实参是本函数的新引用 ✓。
+        unsafe {
+            self.release_object(bytes_value.as_ptr());
+            self.release_object(errors_value.as_ptr());
+        }
+        self.codec_output_value(result?)
+    }
+
+    /// **按名字解字节** ✓（`bytes.decode`／`str(bytes, …)`／`_io` 的**一处真相** ✓）：
+    /// 内置四档走快路径，其余**委派 `_codecs.lookup` 注册表**（⇒ `Lib/encodings/*` 全族可用 ✓）。
     pub fn decode_with_encoding(
         &self,
         value: &[u8],
         encoding: &str,
     ) -> Result<NonNull<Header>, ExecError> {
-        match crate::instance::convert::normalized_encoding(encoding).as_str() {
-            "utf-8" => match core::str::from_utf8(value) {
-                Ok(text) => Ok(self.new_str(text)),
-                Err(_) => Err(self.raise_builtin_error(
-                    "UnicodeDecodeError",
-                    "'utf-8' codec can't decode the given bytes",
-                )),
-            },
-            "ascii" => {
-                for (index, byte) in value.iter().enumerate() {
-                    if *byte >= 0x80 {
-                        return Err(self.raise_builtin_error(
-                            "UnicodeDecodeError",
-                            &format!(
-                                "'ascii' codec can't decode byte 0x{byte:02x} in position {index}: ordinal not in range(128)"
-                            ),
-                        ));
-                    }
-                }
-                Ok(self.new_str(core::str::from_utf8(value).unwrap_or("")))
-            }
-            "latin-1" => {
-                let text: String = value.iter().map(|byte| *byte as char).collect();
-                Ok(self.new_str(&text))
-            }
-            "cp437" => {
-                let text: String = value
-                    .iter()
-                    .map(|byte| crate::instance::convert::CP437[*byte as usize])
-                    .collect();
-                Ok(self.new_str(&text))
-            }
-            other => Err(self.raise_builtin_error("LookupError", &format!("unknown encoding: {other}"))),
-        }
+        self.decode_with_encoding_and_errors(value, encoding, "strict")
     }
 
-    /// **按名字编文本** ✓（第 726 轮，与 [`Self::decode_with_encoding`] 同一处真相 ✓）。
+    /// [`Self::decode_with_encoding`] ＋ `errors`（照参照的 strict／ignore／replace ✓）。
+    pub fn decode_with_encoding_and_errors(
+        &self,
+        value: &[u8],
+        encoding: &str,
+        errors: &str,
+    ) -> Result<NonNull<Header>, ExecError> {
+        if let Some(codec) = builtin_encoding(encoding) {
+            let text = decode_builtin(self, value, codec, errors)?;
+            return Ok(self.new_str(&text));
+        }
+        self.delegate_decode(value, encoding, errors)
+    }
+
+    /// **按名字编文本** ✓（`str.encode`／`_io` 的**一处真相** ✓）：内置四档走快路径，
+    /// 其余委派 `_codecs.lookup` 注册表（返回 **bytes** ✓）。
     pub fn encode_with_encoding(
         &self,
         text: &str,
         encoding: &str,
     ) -> Result<NonNull<Header>, ExecError> {
-        match crate::instance::convert::normalized_encoding(encoding).as_str() {
-            "utf-8" => Ok(self.new_bytes(text.as_bytes())),
-            "latin-1" => {
-                for (index, character) in text.chars().enumerate() {
-                    if (character as u32) > 0xFF {
-                        return Err(self.raise_builtin_error(
-                            "UnicodeEncodeError",
-                            &format!(
-                                "'latin-1' codec can't encode character '\\u{:04x}' in position {index}: ordinal not in range(256)",
-                                character as u32
-                            ),
-                        ));
-                    }
-                }
-                Ok(self.new_bytes(&text.chars().map(|character| character as u8).collect::<Vec<u8>>()))
-            }
-            "ascii" => {
-                for (index, character) in text.chars().enumerate() {
-                    if (character as u32) > 0x7F {
-                        return Err(self.raise_builtin_error(
-                            "UnicodeEncodeError",
-                            &format!(
-                                "'ascii' codec can't encode character '\\u{:04x}' in position {index}: ordinal not in range(128)",
-                                character as u32
-                            ),
-                        ));
-                    }
-                }
-                Ok(self.new_bytes(text.as_bytes()))
-            }
-            "cp437" => {
-                let table = crate::instance::convert::CP437;
-                let mut out: Vec<u8> = Vec::with_capacity(text.len());
-                for (index, character) in text.chars().enumerate() {
-                    match table.iter().position(|candidate| *candidate == character) {
-                        Some(byte) => out.push(byte as u8),
-                        None => {
-                            return Err(self.raise_builtin_error(
-                                "UnicodeEncodeError",
-                                &format!(
-                                    "'cp437' codec can't encode character '\\u{:04x}' in position {index}: no mapping",
-                                    character as u32
-                                ),
-                            ))
-                        }
-                    }
-                }
-                Ok(self.new_bytes(&out))
-            }
-            other => Err(self.raise_builtin_error("LookupError", &format!("unknown encoding: {other}"))),
+        self.encode_with_encoding_and_errors(text, encoding, "strict")
+    }
+
+    /// [`Self::encode_with_encoding`] ＋ `errors`（照参照的 strict／ignore／replace ✓）。
+    pub fn encode_with_encoding_and_errors(
+        &self,
+        text: &str,
+        encoding: &str,
+        errors: &str,
+    ) -> Result<NonNull<Header>, ExecError> {
+        if let Some(codec) = builtin_encoding(encoding) {
+            let bytes = encode_builtin(self, text, codec, errors)?;
+            return Ok(self.new_bytes(&bytes));
         }
+        self.delegate_encode(text, encoding, errors)
     }
 }

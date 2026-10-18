@@ -18,6 +18,7 @@ impl Instance {
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
             capabilities: RefCell::new([CapabilityEntry::default(); pyawa_capabilities::DOMAIN_COUNT]),
+            capability_table: RefCell::new(super::capability_table::CapabilityTable::new()),
             modules: RefCell::new(None),
             singletons: OnceCell::new(),
             current_globals: Cell::new(None),

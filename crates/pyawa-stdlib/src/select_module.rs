@@ -1,22 +1,29 @@
-//! `select` 模块（**task-15 辅助格** ✓）：`import subprocess` 的模块级 `import select`，
-//! 以及 `Lib/selectors.py` 的 `SelectSelector` 回退路径（`_select = select.select` 在**类体**求值 ✓）。
+//! `select` 模块（**task-15 辅助格**起；round 11 起 `select.select` **真接线** ✓）。
 //!
-//! ## 为什么只有一小面（**刻意收窄** ✓）
+//! ## 本轮落地（`T-CP-3` 的 Python 可见面）
 //!
-//! 参照本机 `dir(select)` 公共名 33 个（`EPOLL*` 17／`POLL*` 12／`PIPE_BUF`／`epoll`／`error`／
-//! `poll`／`select`）。本轮**只导出** `PIPE_BUF`（真常量，`getattr(select, 'PIPE_BUF', 512)` 有它
-//! ⇒ `subprocess._PIPE_BUF` 与参照同值）与 `select`（名字＋元数校验，调用如实报未接线）。
+//! `select.select(rlist, wlist, xlist, timeout=None)` ⇒ `Instance::capability_select`
+//! （`CP-31` 统一实例能力表：`fd` 是表下标，`fs` 域 fd 恒就绪、`net` 域 fd 走 `poll` 槽）：
+//! - 返回**三个 `list`**（可读／可写／异常），元素是**调用方传进来的原对象**（`int` 或带
+//!   `fileno()` 的对象 —— 与参照 `PyObject_AsFileDescriptor` 同口径 ✓）；
+//! - `timeout=None` ⇒ 无限等待；`0` ⇒ 轮询；`>0` ⇒ 秒（`float`／`int`，内部换算成纳秒）；
+//! - 错误形状照参照实测：负 fd ⇒ `ValueError: file descriptor cannot be a negative integer (N)`；
+//!   `fd >= 1024` ⇒ `ValueError: filedescriptor out of range in select()`；
+//!   非法元素 ⇒ `TypeError: argument must be an int, or have a fileno() method.`；
+//!   非序列 ⇒ `TypeError: arguments 1-3 must be sequences`；
+//!   负 timeout ⇒ `ValueError: timeout must be non-negative`；`NaN` ⇒ `ValueError: Invalid value NaN (not a number)`；
+//!   机器错误（已关 fd）⇒ `OSError`（`CP-18` 的 `EBADF` 形状）。
 //!
-//! **不导出** `poll`／`epoll`／`devpoll`／`kqueue`：`Lib/selectors.py` 用 `hasattr(select, 'poll')`
-//! 一类守卫选实现 —— 导出外壳会让它去 `_can_use('epoll')` 里**真的构造** selector，
-//! 而 `NotImplementedError` **不在** `_can_use` 的 `except (TypeError, AttributeError, OSError)` 里
-//! ⇒ 反而会挡 `import selectors` ✗。收窄后它走 `SelectSelector` 回退（**如实偏差**：参照本机
-//! `DefaultSelector` 是 `EpollSelector`；语义少接线，不是假装有 ✓）。
+//! ## 如实偏差（不假装 ✓）
 //!
-//! ## 如实报错面（硬边界 ✓）
-//!
-//! 真 `select(2)`／`poll(2)`／`epoll_create(2)` 是能力域问题（`CM-8`）⇒ `select.select` 元数与
-//! 关键字校验过后**调用即** `NotImplementedError`（消息含"未接线"）——不返回假 ready 列表。
+//! - **空 fd 列表 ＋ 正 timeout 不真睡**：`clock` 的 `sleep_ns` 槽未接、真睡眠的取消令牌属
+//!   `T-CP-10` ⇒ core 现在**立即返回空就绪集**（参照会睡满）。`net` fd 的等待走 `poll(2)`，
+//!   那一路是真等 ✓。
+//! - **不导出** `poll`／`epoll`／`devpoll`／`kqueue`（`Lib/selectors.py` 的 `hasattr(select, 'poll')`
+//!   守卫会去真构造 selector；`NotImplementedError` 不在 `_can_use` 的 `except` 里 ⇒ 反而会挡
+//!   `import selectors` ✗）。收窄后它走 `SelectSelector` 回退（**如实偏差**：参照本机
+//!   `DefaultSelector` 是 `EpollSelector`）。
+//! - `select.error`（＝`OSError`）按参照登记 ✓。
 //!
 //! 本模块**不碰平台**（`CX-4` ⇒ `#![forbid(unsafe_code)]`）。
 
@@ -33,15 +40,23 @@ pub const DOC: &str = "This module supports asynchronous I/O on multiple file de
 /// `PIPE_BUF`（参照本机实测 **4096** ✓；`subprocess.py:243` 的 `getattr(select, 'PIPE_BUF', 512)` 读它 ✓）。
 const PIPE_BUF: i64 = 4096;
 
+/// 参照 `select(2)` 的 `FD_SETSIZE`（超过它的 fd 报 `ValueError`，照参照实测 ✓）。
+const SELECT_FD_LIMIT: i64 = 1024;
+
 /// 建 `select` 的命名空间（**新引用**的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     instance.dict_set(namespace, "PIPE_BUF", instance.new_int(PIPE_BUF));
     let select = make_native(instance, "select", select_native);
     instance.dict_set(namespace, "select", select);
+    // 参照：`select.error is OSError` ✓。
+    if let Some(oserror) = instance.type_named("OSError") {
+        instance.dict_set(namespace, "error", instance.type_value(oserror));
+    }
     let exports = instance.new_list(vec![
         instance.new_str("PIPE_BUF"),
         instance.new_str("select"),
+        instance.new_str("error"),
     ]);
     instance.dict_set(namespace, "__all__", exports);
     instance.dict_set(namespace, "__name__", instance.new_str(NAME));
@@ -61,9 +76,9 @@ fn make_native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<He
     object.into_raw().cast::<Header>()
 }
 
-/// `select.select(rlist, wlist, xlist, timeout=None)`：参照实测
-/// `select expected at least 3 arguments, got N`／`select expected at most 4 arguments, got N`、
-/// 关键字一律拒（`select.select() takes no keyword arguments`）⇒ 校验过后如实报未接线。
+/// `select.select(rlist, wlist, xlist, timeout=None)` —— 真接线（见模块文档 ✓）。
+///
+/// 元数与关键字校验沿用参照实测文案（`select expected at least 3 arguments, got N` 一类 ✓）。
 fn select_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -88,8 +103,173 @@ fn select_native(
             &format!("select expected at most 4 arguments, got {}", args.len()),
         ));
     }
+    let timeout_ns = select_timeout_ns(instance, args.get(3).copied())?;
+
+    // 三份列表：元素 → `fd`（同时保留**原对象**，返回时要原样交回 ✓）。
+    let mut lists: [Vec<(i64, NonNull<Header>)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for index in 0..3 {
+        match collect_fds(instance, args[index]) {
+            Ok(entries) => lists[index] = entries,
+            Err(error) => {
+                // 已收下的元素是 `iterable_items` 给的**新引用** ⇒ 出错路径也要归还 ✓。
+                for list in &lists {
+                    release_entries(instance, list);
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    // `fd` 范围校验照参照（放在 core 之前 ⇒ 与参照的 `ValueError` 形状一致 ✓）。
+    let mut inputs: [Vec<i64>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for index in 0..3 {
+        for (fd, _) in &lists[index] {
+            if let Err(error) = check_fd_range(instance, *fd) {
+                for list in &lists {
+                    release_entries(instance, list);
+                }
+                return Err(error);
+            }
+            inputs[index].push(*fd);
+        }
+    }
+
+    // VM 侧入口（`fs` 恒就绪 ／ `net` 走 poll 槽；错误形状见 `capability_table.rs` ✓）。
+    let ready = match instance.capability_select(&inputs[0], &inputs[1], &inputs[2], timeout_ns) {
+        Ok(ready) => ready,
+        Err(error) => {
+            for list in &lists {
+                release_entries(instance, list);
+            }
+            return Err(crate::posix_module::capability_error(instance, error));
+        }
+    };
+    let ready_lists = [&ready.0, &ready.1, &ready.2];
+
+    // 按**输入序**回填原对象（参照就是按输入序生成三个列表 ✓；core 的 ready 列表去重、顺序不承诺）。
+    let mut outputs: [Vec<NonNull<Header>>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for index in 0..3 {
+        for (fd, object) in &lists[index] {
+            if ready_lists[index].contains(fd) {
+                // 输出列表要自己那份引用；输入列表那份随后统一归还 ✓。
+                outputs[index].push(instance.retain(*object));
+            }
+        }
+    }
+    for list in &lists {
+        release_entries(instance, list);
+    }
+    let [read, write, error] = outputs.map(|items| instance.new_list(items));
+    Ok(instance.new_tuple(vec![read, write, error]))
+}
+
+/// 归还 `iterable_items` 给的那批**新引用**（`std::mem` 口径：每项一份 ✓）。
+fn release_entries(instance: &Instance, entries: &[(i64, NonNull<Header>)]) {
+    for (_, object) in entries {
+        instance.release(*object);
+    }
+}
+
+/// 把 `select` 的一个参数摊成 `(fd, 原对象)` 列表。
+///
+/// 元素口径照参照 `PyObject_AsFileDescriptor`：`int` ⇒ 直接用；否则**有 `fileno()` 就调它**；
+/// 都没有 ⇒ `TypeError: argument must be an int, or have a fileno() method.`。
+fn collect_fds(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Vec<(i64, NonNull<Header>)>, pyawa_core::ExecError> {
+    let Some(items) = instance.iterable_items(value) else {
+        return Err(instance.raise_builtin_error("TypeError", "arguments 1-3 must be sequences"));
+    };
+    let mut entries: Vec<(i64, NonNull<Header>)> = Vec::with_capacity(items.len());
+    for item in items {
+        match file_descriptor_of(instance, item) {
+            Ok(fd) => entries.push((fd, item)),
+            Err(error) => {
+                instance.release(item);
+                release_entries(instance, &entries);
+                return Err(error);
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// 一个元素 ⇒ `fd`（`int` 或带 `fileno()` 的对象；口径见 [`collect_fds`]）。
+fn file_descriptor_of(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<i64, pyawa_core::ExecError> {
+    if let Some(fd) = instance.int_value(value) {
+        return Ok(fd);
+    }
+    if let Some(fileno) = instance.attribute_optional_of(value, "fileno")? {
+        let outcome = pyawa_core::call_value(instance, fileno, &[], &[]);
+        instance.release(fileno);
+        let result = outcome?;
+        let converted = instance.int_value(result);
+        instance.release(result);
+        if let Some(fd) = converted {
+            return Ok(fd);
+        }
+    }
     Err(instance.raise_builtin_error(
-        "NotImplementedError",
-        "`select.select`：真 select(2) 属能力域（CM-8）问题，本轮未接线",
+        "TypeError",
+        "argument must be an int, or have a fileno() method.",
     ))
+}
+
+/// `fd` 的范围校验（照参照实测：负值与 `>= FD_SETSIZE` 都是 `ValueError`）。
+fn check_fd_range(instance: &Instance, fd: i64) -> Result<(), pyawa_core::ExecError> {
+    if fd < 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("file descriptor cannot be a negative integer ({fd})"),
+        ));
+    }
+    if fd >= SELECT_FD_LIMIT {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "filedescriptor out of range in select()",
+        ));
+    }
+    Ok(())
+}
+
+/// `timeout` ⇒ 纳秒（`None` ＝ 无限）。形状照参照实测（见模块文档 ✓）。
+fn select_timeout_ns(
+    instance: &Instance,
+    value: Option<NonNull<Header>>,
+) -> Result<Option<i64>, pyawa_core::ExecError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value == instance.singletons().none() {
+        return Ok(None);
+    }
+    let seconds = if let Some(integer) = instance.int_value(value) {
+        integer as f64
+    } else if let Some(number) = instance.float_value(value) {
+        number
+    } else {
+        return Err(instance.raise_builtin_error("TypeError", "timeout must be a float or None"));
+    };
+    if seconds.is_nan() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "Invalid value NaN (not a number)",
+        ));
+    }
+    if seconds < 0.0 {
+        return Err(instance.raise_builtin_error("ValueError", "timeout must be non-negative"));
+    }
+    // `time_t` 的秒上限（i64 纳秒换回秒）以外照参照报溢出 ✓。
+    if !seconds.is_finite() || seconds * 1e9 >= i64::MAX as f64 {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "timestamp out of range for platform time_t",
+        ));
+    }
+    // **向上取整**：不许比请求更早返回（与 `_socket` 的 ms 换算同一口径 ✓）。
+    Ok(Some((seconds * 1e9).ceil() as i64))
 }

@@ -36,6 +36,7 @@ mod registry;
 mod alloc;
 mod containers;
 mod state;
+mod capability_table;
 
 use crate::bigint::IntValue;
 use crate::executor::ExecError;
@@ -136,6 +137,12 @@ pub struct Instance {
     /// 存的是**不透明指针**（`AB-32`：本层只存不解释 ✓）；`fs` 域的形状解释见
     /// [`Instance::fs_vtable`]（`CP-12`：形状来自 `pyawa-capabilities` ✓）。
     capabilities: RefCell<[CapabilityEntry; pyawa_capabilities::DOMAIN_COUNT]>,
+    /// **`CP-31`**：每实例的 `fd → 能力对象` 表（`fd` ＝ 表下标）。
+    ///
+    /// 为什么在 `Instance` 上：`fd` 的分配／释放／复制（含 `dup2`）**必须**由 VM 侧完成
+    /// （`CP-31`），provider 只给不透明句柄；实例销毁由 `Drop` 兜底释放全部条目（`CP-19`）。
+    /// 实现与语义（别名计数、`select` 分流）见 `instance/capability_table.rs`。
+    capability_table: RefCell<capability_table::CapabilityTable>,
     /// **模块表**（`IM-`：`import` 查的就是这一份 ✓）。与 `sys.modules` 是**同一个 dict**
     /// （一处真相 ✓，由组合根装 ✓）；未装 ⇒ `import` 报"加载器未接" ✓。
     modules: RefCell<Option<NonNull<Header>>>,
@@ -2095,6 +2102,9 @@ impl Drop for Instance {
     /// **OM-2**：实例销毁**必须**释放其堆内全部内存，**无论循环是否被回收过**——
     /// 不依赖回收器先跑完。
     fn drop(&mut self) {
+        // **`CP-19`**：实例销毁**必须**释放全部能力表条目（逐条调 provider `close` 槽，
+        // 不依赖回收器先跑完）——与下面的内存回收路径无关，所以放最前面。
+        self.capability_close_all();
         // 正常路径下 `live` 已经空了。仍有残留 ⇒ 计数环或未交出的引用，
         // 此时**强制释放**：不调终结器、不再 clear（环的语义已由 §9 的回收器负责，
         // 走到这里说明调用方没有 collect，而不是回收器做不到）。

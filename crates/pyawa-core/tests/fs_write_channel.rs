@@ -176,7 +176,9 @@ fn fs_read_channel_reports_the_three_outcomes() {
     let handle = instance
         .fs_open(b"/hello.txt", pyawa_capabilities::fs::open_flag::RDONLY, 0)
         .expect("打开成功 ✓");
-    assert_eq!(handle, 41);
+    // **`CP-31`**：`fs_open` 返回的是**实例能力表分配的 `fd`**（从 3 起），
+    // 不是 provider 的不透明句柄（provider 句柄 41 只在 core↔vtable 之间流转）。
+    assert_eq!(handle, 3, "`CP-31`：第一个动态 fd 是 3");
     // 机器错误带 `errno`（`CP-3` ✓）
     assert_eq!(
         instance.fs_open(b"/nope", pyawa_capabilities::fs::open_flag::RDONLY, 0),

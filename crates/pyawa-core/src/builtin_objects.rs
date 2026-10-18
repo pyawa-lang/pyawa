@@ -5301,8 +5301,8 @@ pub unsafe fn str_new(
     // 这条正是 `Lib/re/_parser.py:235` 的 `str(string, 'latin1')`（**bytes 模式**的 tokenizer ✓）⇒
     // bytes 正则的解析器一直在读 **`repr(bytes)`** ✗（`rb'(?s)a'` 因此报
     // `global flags not at the start of the expression` ✗）。**一处真相** ✓：解码仍走
-    // `Instance::decode_with_encoding` ✓（`bytes.decode` 同一条 ✓）；`errors` 的语义**如实**同 `bytes.decode`
-    // （先只认 `strict` 的报错面 ✓，非 strict 口径随后补 ✓）。
+    // `Instance::decode_with_encoding_and_errors` ✓（`bytes.decode` 同一条 ✓）；`errors` 的
+    // strict／ignore／replace 三条真接（task-9 ✓）。
     if let Some(encoding_object) = args.get(1) {
         let Some(encoding) = instance.text_value(*encoding_object) else {
             let name = instance.type_name(instance.type_of(*encoding_object));
@@ -5311,13 +5311,20 @@ pub unsafe fn str_new(
                 &format!("str() argument 'encoding' must be str, not {name}"),
             ));
         };
+        // **`errors` 真接**（task-9 ✓）：先前只做类型检查、值被**整个忽略** ✗
+        // ⇒ `str(b'\xe9', 'ascii', 'replace')` 与参照不一致。现在把值传下去（与
+        // `bytes.decode` 同一条 `decode_with_encoding_and_errors` ✓ **一处真相**）。
+        let mut errors = "strict".to_owned();
         if let Some(errors_object) = args.get(2) {
-            if instance.text_value(*errors_object).is_none() {
-                let name = instance.type_name(instance.type_of(*errors_object));
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    &format!("str() argument 'errors' must be str, not {name}"),
-                ));
+            match instance.text_value(*errors_object) {
+                Some(text) => errors = text,
+                None => {
+                    let name = instance.type_name(instance.type_of(*errors_object));
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("str() argument 'errors' must be str, not {name}"),
+                    ));
+                }
             }
         }
         let Some(bytes) = instance.bytes_value(*value) else {
@@ -5330,9 +5337,9 @@ pub unsafe fn str_new(
             };
             return Err(instance.raise_builtin_error("TypeError", &message));
         };
-        let decoded = instance.decode_with_encoding(bytes, &encoding)?;
+        let decoded = instance.decode_with_encoding_and_errors(bytes, &encoding, &errors)?;
         let text = instance.text_value(decoded).unwrap_or_default();
-        // SAFETY: `decode_with_encoding` 交回的是**新引用** ✓ ⇒ 取完文本把这**一份**还掉 ✓。
+        // SAFETY: `decode_with_encoding_and_errors` 交回的是**新引用** ✓ ⇒ 取完文本把这**一份**还掉 ✓。
         unsafe { instance.release_object(decoded.as_ptr()) };
         return Ok(make_str(_class, instance, &text));
     }

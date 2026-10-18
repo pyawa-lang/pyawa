@@ -82,6 +82,9 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // （`import _codecs_jp, codecs` ＋ `class IncrementalEncoder(mbc.MultibyteIncrementalEncoder, …)`）。
         (multibyte_module::NAME, multibyte_module::build),
         (codecs_jp_module::NAME, codecs_jp_module::build),
+        // **`_codecs_cn`**（round 11 ✓）：`Lib/encodings/gb2312.py`／`gbk.py` 的底座
+        // （同一个共享引擎；`gb18030`／`hz` 未落地，见模块头）。
+        (codecs_cn_module::NAME, codecs_cn_module::build),
         (collections_module::NAME, collections_module::build),
         (tokenize_module::NAME, tokenize_module::build),
         (math_module::NAME, math_module::build),
@@ -397,6 +400,8 @@ pub mod codecs_module;
 pub mod multibyte_module;
 /// **`_codecs_jp`**（task-6 ✓）：`Lib/encodings/cp932.py` 一族的 `getcodec` 底座。
 pub mod codecs_jp_module;
+/// **`_codecs_cn`**（task-9 ✓）：`Lib/encodings/gb2312.py`／`gbk.py` 的 `getcodec` 底座。
+pub mod codecs_cn_module;
 pub mod math_module;
 pub mod contextvars_module;
 pub mod collections_module;

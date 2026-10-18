@@ -1,20 +1,26 @@
-//! **CJK 多字节编解码族（`_codecs_jp`）的对拍护栏**（task-6）：契约见 `docs/SPEC-c-modules.md` §5.2.18。
+//! **CJK 多字节编解码族的对拍护栏**（round 10 task-6 ＋ round 11 task-9）。
+//! 契约见 `docs/SPEC-c-modules.md` §5.2.18。期望值**全部取自参照 `python3` 3.14.4 对同一脚本的
+//! 实际输出**（不拿我们自己的输出当标准 ✓）：把下面的 `*_SCRIPT` 原样交给参照解释器，取其 stdout
+//! 钉成 `*_OUTPUT`，再让 Pyawa 跑同一脚本逐字节比较。
 //!
-//! 期望值**全部取自参照 `python3` 3.14.4 对同一脚本的实际输出**（不拿我们自己的输出当标准 ✓）：
-//! 生成方式＝把下面的 `REFERENCE_SCRIPT` 原样交给参照解释器，取其 stdout 钉成 `REFERENCE_OUTPUT`。
+//! 两个 test 分别守两半：
 //!
-//! 覆盖面（**真 import ＋真编解码**）：
-//!
-//! - `Lib/encodings/` 的 **7** 个多字节模块逐字同步后真 import：`cp932`／`euc_jp`／
-//!   `euc_jis_2004`／`euc_jisx0213`／`shift_jis`／`shift_jis_2004`／`shift_jisx0213`；
-//! - `_codecs_jp.getcodec(name)` 的 `(bytes, 消耗码位数)`／`(str, 消耗字节数)` 返回形态；
-//! - `errors=strict`／`ignore`／`replace` 三条 ＋ 错误文案（`illegal`／`incomplete` 分型、
-//!   `bytes in position 0-1` 复数形态、`\xNN`／`\uNNNN`／`\UNNNNNNNN` 字符字面量）；
-//! - JIS X 0213 的两码位组合字符（解码出 2 个码位；编码两码位合成一条序列）；
-//! - `codecs.lookup`／别名／增量编解码器（含跨 chunk 的组合字符留尾）／流 Reader／Writer。
+//! 1. `multibyte_codec_family_matches_the_reference_byte_for_byte`（round 10）：`_multibytecodec`
+//!    ＋ `_codecs_jp` 一族 —— 7 个 `Lib/encodings/*` 真 import；`getcodec` 的
+//!    `(bytes, 消耗码位数)`／`(str, 消耗字节数)` 返回形态；`errors` 三态与错误文案
+//!    （`illegal`／`incomplete` 分型、`bytes in position 0-1` 复数形态、字符字面量转义）；
+//!    JIS X 0213 两码位组合字符（解码 2 码位／编码合成 1 条序列，含跨 chunk 留尾）；
+//!    `codecs.lookup`／别名／增量编解码器／流 Reader・Writer。
+//! 2. `core_encoding_delegation_matches_the_reference_byte_for_byte`（round 11）：**core 的编码
+//!    委派** —— `str.encode`／`bytes.decode`／`str(bytes, enc, errors)` 对 7 个 jp 编码与内置四档
+//!    （utf-8／ascii／latin-1／cp437）的 `errors` 三态与错误文案；未知编码的 `LookupError`；
+//!    `bytes.decode` 的关键字形态；`encodings` **charmap 族**（cp1252）经委派可用；第二族
+//!    `_codecs_cn`（`gb2312`／`gbk`，`cp936` 别名）；`import codecs` 后 `codecs.lookup('cp932')`
+//!    的 **lazy `encodings`** 语义（脚本里此前没导入 encodings）。
 //!
 //! 表数据与引擎的**生成路径**见 `crates/pyawa-stdlib/src/multibyte_module.rs` 模块头
-//! （`python3 tools/gen_codec_tables.py --family jp --emit`）。
+//! （`python3 tools/gen_codec_tables.py --family jp --emit` ／ `--family cn --emit`）；
+//! 委派口径见 `crates/pyawa-core/src/instance/convert.rs` 的 `builtin_encoding` 注释。
 
 fn run(name: &str, script: &str) -> String {
     let root = std::env::temp_dir().join(format!("pyawa-multibyte-{}-{name}", std::process::id()));
@@ -36,8 +42,10 @@ fn run(name: &str, script: &str) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+// ---- round 10：`_multibytecodec` ＋ `_codecs_jp` 一族 -------------------------------------------
+
 /// 参照与 Pyawa 用同一份脚本（只有两侧都有的公开面：`_codecs_jp`／`encodings`／`codecs`／`io`）。
-const REFERENCE_SCRIPT: &str = r##""""CJK 多字节编解码族（`_codecs_jp`）的**参照对拍探针**：同一份脚本在参照 `python3` 与 Pyawa 上跑，
+const FAMILY_SCRIPT: &str = r##""""CJK 多字节编解码族（`_codecs_jp`）的**参照对拍探针**：同一份脚本在参照 `python3` 与 Pyawa 上跑，
 输出必须逐字节一致（测试里把参照输出钉成期望值）。只用两侧都有的公开面：`_codecs_jp`、
 `encodings.*`、`codecs`、`io.BytesIO`。"""
 
@@ -206,8 +214,8 @@ for raw in (b"\x8f", b"\x8f\xa1", b"\x8f\xa1\x20"):
     except UnicodeDecodeError as error:
         print("truncated", raw, "strict", str(error))"##;
 
-/// 参照 `python3` 3.14.4 对 `REFERENCE_SCRIPT` 的实际 stdout（**逐字节**对拍）。
-const REFERENCE_OUTPUT: &str = r##"cp932 (b'\x93\xfa\x96{\x8c\xea\x83e\x83X\x83g', 6) ('日本語テスト', 12)
+/// 参照 `python3` 3.14.4 对 `FAMILY_SCRIPT` 的实际 stdout（**逐字节**对拍）。
+const FAMILY_OUTPUT: &str = r##"cp932 (b'\x93\xfa\x96{\x8c\xea\x83e\x83X\x83g', 6) ('日本語テスト', 12)
 euc_jp (b'\xc6\xfc\xcb\xdc\xb8\xec\xa5\xc6\xa5\xb9\xa5\xc8', 6) ('日本語テスト', 12)
 euc_jis_2004 (b'\xc6\xfc\xcb\xdc\xb8\xec\xa5\xc6\xa5\xb9\xa5\xc8', 6) ('日本語テスト', 12)
 euc_jisx0213 (b'\xc6\xfc\xcb\xdc\xb8\xec\xa5\xc6\xa5\xb9\xa5\xc8', 6) ('日本語テスト', 12)
@@ -306,9 +314,339 @@ truncated b'\x8f\xa1 ' strict 'euc_jp' codec can't decode byte 0x8f in position 
 
 #[test]
 fn multibyte_codec_family_matches_the_reference_byte_for_byte() {
-    let stdout = run("family", REFERENCE_SCRIPT);
+    let stdout = run("family", FAMILY_SCRIPT);
     assert_eq!(
-        stdout, REFERENCE_OUTPUT,
+        stdout, FAMILY_OUTPUT,
         "`_codecs_jp` 一族的输出与参照不一致（逐字节对拍；先看上面 diff 的期望/实际）"
+    );
+}
+
+// ---- round 11：core 编码委派 ＋ `codecs.lookup` lazy encodings ---------------------------------
+
+/// 同一脚本两侧跑；**不预先** `import encodings` —— 第 ⑨ 段就是在验 lazy 语义。
+const DELEGATION_SCRIPT: &str = r##""""round 11 对拍：core 编码委派（`str.encode`／`bytes.decode`／`str(bytes, enc, errors)`）＋
+`codecs.lookup` lazy encodings。同一脚本两侧跑，输出必须逐字节一致。"""
+
+import codecs
+import sys
+
+CODECS = [
+    "cp932",
+    "euc_jp",
+    "euc_jis_2004",
+    "euc_jisx0213",
+    "shift_jis",
+    "shift_jis_2004",
+    "shift_jisx0213",
+]
+
+# ---- ① 7 个 jp 编码走 str.encode／bytes.decode 的往返 ----
+CASES = [
+    ("cp932", "日本語テスト"),
+    ("euc_jp", "あいうえお"),
+    ("euc_jis_2004", "漢字とかな"),
+    ("euc_jisx0213", "①②③④⑤"),
+    ("shift_jis", "ｱｲｳｴｵ"),
+    ("shift_jis_2004", "〜−"),
+    ("shift_jisx0213", "か\u309aき\u309a"),
+]
+for name, text in CASES:
+    encoded = text.encode(name)
+    decoded = encoded.decode(name)
+    print(name, encoded, decoded, decoded == text)
+
+# ---- ② errors 三态：编码方向（可编码＋不可编码混合） ----
+ENCODE_CASES = [
+    ("cp932", "あ\u2603い"),
+    ("euc_jp", "あ\u2603い"),
+    ("euc_jis_2004", "あ\u00a5い"),
+    ("euc_jisx0213", "\u203e"),
+    ("shift_jis", "あ\uff5eい"),
+    ("shift_jis_2004", "あ\uff5eい"),
+    ("shift_jisx0213", "\u00a5"),
+]
+for name, text in ENCODE_CASES:
+    for errors in ("ignore", "replace"):
+        print(name, "encode", errors, text.encode(name, errors))
+    try:
+        text.encode(name)
+    except UnicodeEncodeError as error:
+        print(name, "encode strict", str(error))
+    except Exception as error:  # noqa: BLE001
+        print(name, "encode strict other", type(error).__name__, str(error))
+
+# ---- ③ errors 三态：解码方向（含截断前缀与非法字节） ----
+DECODE_CASES = [
+    ("cp932", b"\x82\xa0\x81"),
+    ("euc_jp", b"\x82\xa0\x8f\xa1"),
+    ("euc_jis_2004", b"\xa4\xa2\xff"),
+    ("euc_jisx0213", b"\xa4\xa2\x8f"),
+    ("shift_jis", b"\x82\xa0\x80"),
+    ("shift_jis_2004", b"\x82\xa0\xff"),
+    ("shift_jisx0213", b"\x82\xa0\x81"),
+]
+for name, raw in DECODE_CASES:
+    for errors in ("ignore", "replace"):
+        print(name, "decode", errors, raw.decode(name, errors))
+    try:
+        raw.decode(name)
+    except UnicodeDecodeError as error:
+        print(name, "decode strict", str(error))
+    except Exception as error:  # noqa: BLE001
+        print(name, "decode strict other", type(error).__name__, str(error))
+
+# ---- ④ 内置四档的 errors 三态（快路径）与错误文案 ----
+BUILTIN_ENCODE = [
+    ("ascii", "abc\xe9"),
+    ("latin-1", "caf\u00e9\u20ac"),
+    ("cp437", "\u00c7\u3042"),
+    ("utf-8", "\u3042\u2603"),
+]
+for name, text in BUILTIN_ENCODE:
+    for errors in ("ignore", "replace"):
+        print("builtin", name, "encode", errors, text.encode(name, errors))
+    try:
+        text.encode(name)
+    except UnicodeEncodeError as error:
+        print("builtin", name, "encode strict", str(error))
+BUILTIN_DECODE = [
+    ("ascii", b"ab\xe9"),
+    ("latin-1", b"\xe9\xff"),
+    ("cp437", b"\x80\xff"),
+    ("utf-8", b"ab\xe3\x81"),
+    ("utf-8", b"ab\xe3\x28\xa1"),
+    ("utf-8", b"ab\xff"),
+]
+for name, raw in BUILTIN_DECODE:
+    for errors in ("ignore", "replace"):
+        print("builtin", name, "decode", errors, repr(raw.decode(name, errors)))
+    try:
+        raw.decode(name)
+    except UnicodeDecodeError as error:
+        print("builtin", name, "decode strict", str(error))
+
+# ---- ⑤ `str(bytes, encoding, errors)`（第三个实参真接） ----
+for raw, encoding, errors in [
+    (b"\xe9", "ascii", "replace"),
+    (b"\xe9", "ascii", "ignore"),
+    (b"\xe9", "latin-1", "strict"),
+    (b"\x82\xa0", "cp932", "strict"),
+    (b"\x82\xa0\x81", "cp932", "replace"),
+    (b"\x8f", "euc_jp", "ignore"),
+]:
+    print("str()", raw, encoding, errors, str(raw, encoding, errors))
+
+# ---- ⑥ 未知编码的 LookupError 文案／类型（保留调用方原样大小写） ----
+for name in ["NoSuch", "no such", "CP99999"]:
+    try:
+        "a".encode(name)
+    except LookupError as error:
+        print("unknown-encode", type(error).__name__, ":", error)
+    try:
+        b"a".decode(name)
+    except LookupError as error:
+        print("unknown-decode", type(error).__name__, ":", error)
+
+# ---- ⑦ bytes.decode 的关键字形态 ----
+print("kwargs-string", b"\x82\xa0".decode(encoding="cp932", errors="strict"))
+print("kwargs-errors", b"a".decode(errors="strict"))
+print("kwargs-positional-both", b"\x82\xa0".decode("cp932", "ignore"))
+
+# ---- ⑧ 委派给 `encodings` 的**非 jp** 编码（charmap 族） ----
+print("cp1252", "\u00e9\u20ac".encode("cp1252"), b"\xe9\x80".decode("cp1252"))
+print("cp1252-replace", "\u3042".encode("cp1252", "replace"))
+
+# ---- ⑨ `codecs.lookup` 的 lazy `encodings`（本进程此前**没**导入 encodings） ----
+print("lazy-before", "encodings" in sys.modules)
+print("lazy-name", codecs.lookup("cp932").name)
+print("lazy-after", "encodings" in sys.modules)
+print("lazy-encode", codecs.lookup("cp932").encode("\u3042"))
+print("lazy-decode", codecs.lookup("cp932").decode(b"\x82\xa0"))
+print("lazy-alias", codecs.lookup("932").name, codecs.lookup("mskanji").name)
+
+# ---- ⑩ errors 处理器名：未注册 ⇒ 照参照 LookupError（内置快路径与委派两路） ----
+for text, name in [("\u00e9", "ascii"), ("\u2603", "cp932")]:
+    try:
+        text.encode(name, "bogus-handler")
+    except LookupError as error:
+        print("bad-handler", name, type(error).__name__, ":", error)
+
+# ---- ⑪ 第二族 `_codecs_cn`（gb2312／gbk；`cp936` 是别名）走同一委派 ----
+import encodings.gb2312
+import encodings.gbk
+
+for name, text in [("gb2312", "中文测试"), ("gbk", "中文测试")]:
+    encoded = text.encode(name)
+    print("cn", name, encoded, encoded.decode(name), encoded.decode(name) == text)
+    for errors in ("ignore", "replace"):
+        print("cn", name, "encode", errors, "中\u2603文".encode(name, errors))
+        print("cn", name, "decode", errors, b"\xd6\xd0\x81".decode(name, errors))
+    try:
+        "中\u2603文".encode(name)
+    except UnicodeEncodeError as error:
+        print("cn", name, "encode strict", str(error))
+    try:
+        b"\xd6\xd0\x81".decode(name)
+    except UnicodeDecodeError as error:
+        print("cn", name, "decode strict", str(error))
+print("cn module-codec", encodings.gbk.codec.encode("中文"), encodings.gb2312.codec.decode(b"\xd6\xd0"))
+print("cn alias", codecs.lookup("cp936").name, codecs.lookup("936").name, "中文".encode("cp936"))
+try:
+    print("cn bytes-value", b"\x80".decode("gbk"))
+except UnicodeDecodeError as error:
+    print("cn bytes-value", "decode-err", type(error).__name__, ":", error)
+try:
+    print("cn euro", "\u20ac".encode("gbk"))
+except UnicodeEncodeError as error:
+    print("cn euro", "encode-err", type(error).__name__, ":", error)
+
+# ---- ⑫ 非文本编解码器（rot13／base64 一类）照参照报 LookupError（名字用调用方原文） ----
+for expr_name, action in [
+    ("rot13", "encode"),
+    ("ROT13", "encode"),
+    ("rot-13", "encode"),
+    ("base64", "encode"),
+    ("Hex", "decode"),
+]:
+    try:
+        if action == "encode":
+            "abc".encode(expr_name)
+        else:
+            b"abc".decode(expr_name)
+    except LookupError as error:
+        print("non-text", expr_name, action, type(error).__name__, ":", error)"##;
+
+/// 参照 `python3` 3.14.4 对 `DELEGATION_SCRIPT` 的实际 stdout。
+const DELEGATION_OUTPUT: &str = r##"cp932 b'\x93\xfa\x96{\x8c\xea\x83e\x83X\x83g' 日本語テスト True
+euc_jp b'\xa4\xa2\xa4\xa4\xa4\xa6\xa4\xa8\xa4\xaa' あいうえお True
+euc_jis_2004 b'\xb4\xc1\xbb\xfa\xa4\xc8\xa4\xab\xa4\xca' 漢字とかな True
+euc_jisx0213 b'\xad\xa1\xad\xa2\xad\xa3\xad\xa4\xad\xa5' ①②③④⑤ True
+shift_jis b'\xb1\xb2\xb3\xb4\xb5' ｱｲｳｴｵ True
+shift_jis_2004 b'\x81`\x81|' 〜− True
+shift_jisx0213 b'\x82\xf5\x82\xf6' か゚き゚ True
+cp932 encode ignore b'\x82\xa0\x82\xa2'
+cp932 encode replace b'\x82\xa0?\x82\xa2'
+cp932 encode strict 'cp932' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+euc_jp encode ignore b'\xa4\xa2\xa4\xa4'
+euc_jp encode replace b'\xa4\xa2?\xa4\xa4'
+euc_jp encode strict 'euc_jp' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+euc_jis_2004 encode ignore b'\xa4\xa2\xa4\xa4'
+euc_jis_2004 encode replace b'\xa4\xa2?\xa4\xa4'
+euc_jis_2004 encode strict 'euc_jis_2004' codec can't encode character '\xa5' in position 1: illegal multibyte sequence
+euc_jisx0213 encode ignore b''
+euc_jisx0213 encode replace b'?'
+euc_jisx0213 encode strict 'euc_jisx0213' codec can't encode character '\u203e' in position 0: illegal multibyte sequence
+shift_jis encode ignore b'\x82\xa0\x82\xa2'
+shift_jis encode replace b'\x82\xa0?\x82\xa2'
+shift_jis encode strict 'shift_jis' codec can't encode character '\uff5e' in position 1: illegal multibyte sequence
+shift_jis_2004 encode ignore b'\x82\xa0\x82\xa2'
+shift_jis_2004 encode replace b'\x82\xa0?\x82\xa2'
+shift_jis_2004 encode strict 'shift_jis_2004' codec can't encode character '\uff5e' in position 1: illegal multibyte sequence
+shift_jisx0213 encode ignore b'\\'
+shift_jisx0213 encode replace b'\\'
+cp932 decode ignore あ
+cp932 decode replace あ�
+cp932 decode strict 'cp932' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+euc_jp decode ignore 
+euc_jp decode replace ���
+euc_jp decode strict 'euc_jp' codec can't decode byte 0x82 in position 0: illegal multibyte sequence
+euc_jis_2004 decode ignore あ
+euc_jis_2004 decode replace あ�
+euc_jis_2004 decode strict 'euc_jis_2004' codec can't decode byte 0xff in position 2: incomplete multibyte sequence
+euc_jisx0213 decode ignore あ
+euc_jisx0213 decode replace あ�
+euc_jisx0213 decode strict 'euc_jisx0213' codec can't decode byte 0x8f in position 2: incomplete multibyte sequence
+shift_jis decode ignore あ
+shift_jis decode replace あ�
+shift_jis decode strict 'shift_jis' codec can't decode byte 0x80 in position 2: illegal multibyte sequence
+shift_jis_2004 decode ignore あ
+shift_jis_2004 decode replace あ�
+shift_jis_2004 decode strict 'shift_jis_2004' codec can't decode byte 0xff in position 2: illegal multibyte sequence
+shift_jisx0213 decode ignore あ
+shift_jisx0213 decode replace あ�
+shift_jisx0213 decode strict 'shift_jisx0213' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+builtin ascii encode ignore b'abc'
+builtin ascii encode replace b'abc?'
+builtin ascii encode strict 'ascii' codec can't encode character '\xe9' in position 3: ordinal not in range(128)
+builtin latin-1 encode ignore b'caf\xe9'
+builtin latin-1 encode replace b'caf\xe9?'
+builtin latin-1 encode strict 'latin-1' codec can't encode character '\u20ac' in position 4: ordinal not in range(256)
+builtin cp437 encode ignore b'\x80'
+builtin cp437 encode replace b'\x80?'
+builtin cp437 encode strict 'charmap' codec can't encode character '\u3042' in position 1: character maps to <undefined>
+builtin utf-8 encode ignore b'\xe3\x81\x82\xe2\x98\x83'
+builtin utf-8 encode replace b'\xe3\x81\x82\xe2\x98\x83'
+builtin ascii decode ignore 'ab'
+builtin ascii decode replace 'ab�'
+builtin ascii decode strict 'ascii' codec can't decode byte 0xe9 in position 2: ordinal not in range(128)
+builtin latin-1 decode ignore 'éÿ'
+builtin latin-1 decode replace 'éÿ'
+builtin cp437 decode ignore 'Ç\xa0'
+builtin cp437 decode replace 'Ç\xa0'
+builtin utf-8 decode ignore 'ab'
+builtin utf-8 decode replace 'ab�'
+builtin utf-8 decode strict 'utf-8' codec can't decode bytes in position 2-3: unexpected end of data
+builtin utf-8 decode ignore 'ab('
+builtin utf-8 decode replace 'ab�(�'
+builtin utf-8 decode strict 'utf-8' codec can't decode byte 0xe3 in position 2: invalid continuation byte
+builtin utf-8 decode ignore 'ab'
+builtin utf-8 decode replace 'ab�'
+builtin utf-8 decode strict 'utf-8' codec can't decode byte 0xff in position 2: invalid start byte
+str() b'\xe9' ascii replace �
+str() b'\xe9' ascii ignore 
+str() b'\xe9' latin-1 strict é
+str() b'\x82\xa0' cp932 strict あ
+str() b'\x82\xa0\x81' cp932 replace あ�
+str() b'\x8f' euc_jp ignore 
+unknown-encode LookupError : unknown encoding: NoSuch
+unknown-decode LookupError : unknown encoding: NoSuch
+unknown-encode LookupError : unknown encoding: no such
+unknown-decode LookupError : unknown encoding: no such
+unknown-encode LookupError : unknown encoding: CP99999
+unknown-decode LookupError : unknown encoding: CP99999
+kwargs-string あ
+kwargs-errors a
+kwargs-positional-both あ
+cp1252 b'\xe9\x80' é€
+cp1252-replace b'?'
+lazy-before True
+lazy-name cp932
+lazy-after True
+lazy-encode (b'\x82\xa0', 1)
+lazy-decode ('あ', 2)
+lazy-alias cp932 cp932
+bad-handler ascii LookupError : unknown error handler name 'bogus-handler'
+bad-handler cp932 LookupError : unknown error handler name 'bogus-handler'
+cn gb2312 b'\xd6\xd0\xce\xc4\xb2\xe2\xca\xd4' 中文测试 True
+cn gb2312 encode ignore b'\xd6\xd0\xce\xc4'
+cn gb2312 decode ignore 中
+cn gb2312 encode replace b'\xd6\xd0?\xce\xc4'
+cn gb2312 decode replace 中�
+cn gb2312 encode strict 'gb2312' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+cn gb2312 decode strict 'gb2312' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+cn gbk b'\xd6\xd0\xce\xc4\xb2\xe2\xca\xd4' 中文测试 True
+cn gbk encode ignore b'\xd6\xd0\xce\xc4'
+cn gbk decode ignore 中
+cn gbk encode replace b'\xd6\xd0?\xce\xc4'
+cn gbk decode replace 中�
+cn gbk encode strict 'gbk' codec can't encode character '\u2603' in position 1: illegal multibyte sequence
+cn gbk decode strict 'gbk' codec can't decode byte 0x81 in position 2: incomplete multibyte sequence
+cn module-codec (b'\xd6\xd0\xce\xc4', 2) ('中', 2)
+cn alias gbk gbk b'\xd6\xd0\xce\xc4'
+cn bytes-value decode-err UnicodeDecodeError : 'gbk' codec can't decode byte 0x80 in position 0: incomplete multibyte sequence
+cn euro encode-err UnicodeEncodeError : 'gbk' codec can't encode character '\u20ac' in position 0: illegal multibyte sequence
+non-text rot13 encode LookupError : 'rot13' is not a text encoding; use codecs.encode() to handle arbitrary codecs
+non-text ROT13 encode LookupError : 'ROT13' is not a text encoding; use codecs.encode() to handle arbitrary codecs
+non-text rot-13 encode LookupError : 'rot-13' is not a text encoding; use codecs.encode() to handle arbitrary codecs
+non-text base64 encode LookupError : 'base64' is not a text encoding; use codecs.encode() to handle arbitrary codecs
+non-text Hex decode LookupError : 'Hex' is not a text encoding; use codecs.decode() to handle arbitrary codecs
+"##;
+
+#[test]
+fn core_encoding_delegation_matches_the_reference_byte_for_byte() {
+    let stdout = run("delegation", DELEGATION_SCRIPT);
+    assert_eq!(
+        stdout, DELEGATION_OUTPUT,
+        "core 的编码委派（str.encode／bytes.decode／str()）或 `codecs.lookup` lazy 语义与参照不一致"
     );
 }

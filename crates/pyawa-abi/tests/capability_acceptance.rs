@@ -1,13 +1,16 @@
 //! **`T-CP-*` 的可执行验收**（M5 判据①：`SPEC-capabilities.md` §11）。
 //!
 //! 本文件只验**能力形状层 ＋ ABI 注册 ＋ VM 侧适配层**能独立验的条目：
-//! `T-CP-1`／`T-CP-2`／`T-CP-5`（映射的一半）／`T-CP-7`（互不可见的一半）／
-//! `T-CP-8`／`T-CP-9`／`T-CP-12`（通道的一半）。
+//! `T-CP-1`／`T-CP-2`／`T-CP-5`（映射的一半）／`T-CP-7`（互不可见＋销毁兜底释放）／
+//! `T-CP-8`／`T-CP-9`／`T-CP-12`（通道的一半）／`T-CP-3`（`select` 的 core 分流域）。
 //!
 //! **不**在这里验的（有专门的可执行验收，别在本文件重复造第二个真相）：
-//! - `T-CP-4`／`T-CP-5`／`T-CP-7`（残留句柄）／`T-CP-11`／`T-CP-12`（真 provider 的一半）
+//! - `T-CP-4`／`T-CP-5`（真 provider）／`T-CP-7`（真 provider 的残留句柄半边）／
+//!   `T-CP-11`／`T-CP-12`（真 provider 的一半）
 //!   ⇒ `crates/pyawa-runtime/tests/two_providers.rs`（真实 `PosixFs` vs 受限 `RestrictedFs`）；
-//! - `T-CP-3`／`T-CP-10`（当前**红**，缺口见 M5 矩阵，不在此伪造绿）；
+//! - `T-CP-3` 的 Python 面（`select.select`／`os.dup`／`os.dup2`）⇒ 同文件
+//!   `crates/pyawa-runtime/tests/two_providers.rs`（e2e）＋ `crates/pyawa-runtime/tests/select_dup2_shapes.rs`；
+//! - `T-CP-10`（当前**红**：取消令牌／worker／可取消等待未做，round 12；缺口见 M5 矩阵，不在此伪造绿）；
 //! - `T-CP-6`／`T-CP-13`（静态检查 ⇒ `python3 tests/ci/check.py` 的 `T-CX-4`）。
 //!
 //! **做法**：自造 vtable（`CP-12`：形状层只含类型与函数指针；测试侧当"宿主"）。这样每条断言都
@@ -436,9 +439,10 @@ fn counter(table: extern "C" fn(*mut c_void, Handle, *const u8, usize, *mut usiz
 
 /// **`T-CP-7`**（前半）：两个实例的**能力表互不可见**（`CP-13`）；销毁其中一个不影响另一个。
 ///
-/// 后半（销毁后无残留句柄，`CP-19`）**当前红**：VM 侧没有 `fd` 能力表（`CP-31` 未落地）⇒
-/// 句柄表在 provider 里 ⇒ 实例销毁不会关闭它打开过的句柄。缺口与证据见
-/// `crates/pyawa-runtime/tests/two_providers.rs` 的 `instance_destroy_does_not_close_provider_handles`。
+/// 后半（销毁后无残留句柄，`CP-19`）由 round 11 的 `CP-31` 统一能力表收口：
+/// - ABI 面：本文件 [`instance_destroy_closes_every_provider_handle_exactly_once`]；
+/// - 真 provider：`crates/pyawa-runtime/tests/two_providers.rs` 的
+///   `instance_destroy_releases_every_provider_handle`。
 #[test]
 fn instance_capability_tables_are_mutually_invisible() {
     let table_a = counter(write_counter_a);
@@ -631,7 +635,8 @@ fn async_slot_signatures_contain_only_raw_data() {
 #[test]
 fn close_is_idempotent_and_operations_after_close_fail_with_machine_errors() {
     static HANDLE_TABLE: Mutex<Vec<u64>> = Mutex::new(Vec::new());
-    static NEXT_HANDLE: Mutex<u64> = Mutex::new(3);
+    // provider 句柄从 300 起（**故意**与表 fd 3 不同）⇒ 证明适配层真的做了 fd→provider 句柄的换算。
+    static NEXT_HANDLE: Mutex<u64> = Mutex::new(300);
 
     extern "C" fn open(
         _state: *mut c_void,
@@ -712,4 +717,479 @@ fn close_is_idempotent_and_operations_after_close_fail_with_machine_errors() {
 
     // SAFETY: `state` 由 `new_state` 交回、尚未销毁。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// --------------------------------------------------------------------------- #
+// T-CP-7 后半／CP-19＋CP-31：销毁兜底释放、dup 别名计数、select 分流
+// --------------------------------------------------------------------------- #
+
+/// 宿主 errno 表的唯一真相（测试里不写第二个数字）。
+fn host_errno(name: &str) -> i32 {
+    pyawa_abi::platform_errno::HOST_ERRNO
+        .iter()
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| *value as i32)
+        .unwrap_or_else(|| panic!("宿主 errno 表里没有 {name}"))
+}
+
+/// **`T-CP-7` 后半（`CP-19`／`CP-31`）**：`pa_destroy` 必须把实例能力表里的句柄**逐个**
+/// 交回 provider 的 `close` 槽（不依赖回收器先跑完），且**每个 provider 句柄只关一次**。
+#[test]
+fn instance_destroy_closes_every_provider_handle_exactly_once() {
+    static CLOSED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+    static NEXT: Mutex<u64> = Mutex::new(100);
+
+    extern "C" fn open(
+        _state: *mut c_void,
+        _name: *const u8,
+        _len: usize,
+        _flags: i32,
+        _mode: u32,
+        out: *mut Handle,
+        _errno_out: *mut i32,
+    ) -> CapStatus {
+        let mut next = NEXT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let id = *next;
+        *next += 1;
+        if !out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out = Handle(id) };
+        }
+        CapStatus::Ok
+    }
+    extern "C" fn close(
+        _state: *mut c_void,
+        handle: Handle,
+        _errno_out: *mut i32,
+    ) -> CapStatus {
+        CLOSED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(handle.0);
+        CapStatus::Ok
+    }
+
+    let table = CpFsVtable {
+        open: Some(open),
+        close: Some(close),
+        ..CpFsVtable::UNIMPLEMENTED
+    };
+    let state = new_state();
+    // SAFETY: `table` 活到 state 销毁之后。
+    unsafe { register_fs(state, &table) };
+    // SAFETY: 只借用；`state` 尚未销毁。
+    let instance = unsafe { &*state }.instance();
+    // 同一 provider 句柄开两次 = 两个表项；dup 再加一个别名。
+    let first = instance.fs_open(b"a", 0, 0).expect("open a");
+    let second = instance.fs_open(b"b", 0, 0).expect("open b");
+    let alias = instance.capability_dup(first as i64).expect("dup");
+    assert_eq!(instance.capability_fd_count(), 3, "`CP-31`：三个表项");
+    // SAFETY: `state` 由 `new_state` 交回、尚未销毁。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+    let closed = CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    assert_eq!(
+        closed,
+        vec![100, 101],
+        "`CP-19`：销毁时按 provider 句柄逐个交回 close；两个表项 = 两次 open 的句柄 ⇒ 各关一次\
+         （dup 出来的别名不重复关）；实际 {closed:?}，second={second} alias={alias}"
+    );
+}
+
+/// **`CP-31` 的 `dup`／`dup2` 别名计数**（自造 vtable 上验 close 槽的调用次数）。
+#[test]
+fn dup_aliases_close_the_provider_handle_only_when_the_count_hits_zero() {
+    static CLOSED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+    extern "C" fn open(
+        _state: *mut c_void,
+        name: *const u8,
+        len: usize,
+        _flags: i32,
+        _mode: u32,
+        out: *mut Handle,
+        errno_out: *mut i32,
+    ) -> CapStatus {
+        // SAFETY: 契约同 `SPEC-capabilities.md` §9.1。
+        let bytes = unsafe { core::slice::from_raw_parts(name, len) };
+        let id = match bytes {
+            b"one" => 500,
+            b"two" => 501,
+            _ => {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *errno_out = host_errno("ENOENT") };
+                return CapStatus::Machine;
+            }
+        };
+        if !out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out = Handle(id) };
+        }
+        CapStatus::Ok
+    }
+    extern "C" fn close(
+        _state: *mut c_void,
+        handle: Handle,
+        _errno_out: *mut i32,
+    ) -> CapStatus {
+        CLOSED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(handle.0);
+        CapStatus::Ok
+    }
+
+    extern "C" fn read(
+        _state: *mut c_void,
+        _handle: Handle,
+        _out: *mut u8,
+        _capacity: usize,
+        _wanted: usize,
+        out_len: *mut usize,
+        _errno_out: *mut i32,
+    ) -> CapStatus {
+        if !out_len.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out_len = 0 };
+        }
+        CapStatus::Ok
+    }
+
+    let table = CpFsVtable {
+        open: Some(open),
+        read: Some(read),
+        close: Some(close),
+        ..CpFsVtable::UNIMPLEMENTED
+    };
+    let state = new_state();
+    // SAFETY: `table` 活到 state 销毁之后。
+    unsafe { register_fs(state, &table) };
+    // SAFETY: 只借用；`state` 尚未销毁。
+    let instance = unsafe { &*state }.instance();
+
+    // `dup`：两个 fd 一个 provider 句柄。
+    let fd = instance.fs_open(b"one", 0, 0).expect("open one");
+    let alias = u64::try_from(instance.capability_dup(fd as i64).expect("dup")).expect("fd");
+    assert_ne!(fd, alias);
+    assert_eq!(instance.fs_close(fd), Ok(()));
+    assert!(
+        CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty(),
+        "`CP-17`：还有别名 ⇒ provider close 不该被调"
+    );
+    assert_eq!(
+        instance.fs_read(fd, &mut [0u8; 1]),
+        Err(CapabilityCallError::Machine(host_errno("EBADF"))),
+        "`CP-18`：关掉的 fd ⇒ EBADF"
+    );
+    assert_eq!(instance.fs_close(alias), Ok(()));
+    assert_eq!(
+        CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_slice(),
+        &[500u64],
+        "最后一个别名关闭 ⇒ provider close 恰好一次"
+    );
+
+    // `dup2`：目标原有表项按 close 语义释放（目标若是最后别名 ⇒ 真关）。
+    let one = instance.fs_open(b"one", 0, 0).expect("open one");
+    let two = instance.fs_open(b"two", 0, 0).expect("open two");
+    assert_eq!(
+        instance.capability_dup2(one as i64, two as i64),
+        Ok(two as i64),
+        "dup2 返回 new"
+    );
+    assert_eq!(
+        CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_slice(),
+        &[500u64, 501],
+        "dup2 释放目标旧表项（501 是最后一个别名 ⇒ 真关）"
+    );
+    assert_eq!(instance.fs_close(one), Ok(()));
+    assert_eq!(
+        CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_slice(),
+        &[500u64, 501],
+        "500 还有 dup2 出来的别名 ⇒ 不重复关"
+    );
+    assert_eq!(instance.fs_close(two), Ok(()));
+    assert_eq!(
+        CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_slice(),
+        &[500u64, 501, 500],
+        "最后一个别名关闭 500"
+    );
+
+    // 非法/已关 fd ⇒ EBADF（CP-18）；close 自身幂等（CP-17）。
+    assert_eq!(
+        instance.fs_read(9_999, &mut [0u8; 1]),
+        Err(CapabilityCallError::Machine(host_errno("EBADF")))
+    );
+    assert_eq!(instance.fs_close(9_999), Ok(()), "`CP-17`：close 幂等（表里没有也成功）");
+    assert_eq!(
+        instance.capability_dup(9_999),
+        Err(CapabilityCallError::Machine(host_errno("EBADF")))
+    );
+
+    // SAFETY: `state` 由 `new_state` 交回、尚未销毁。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+/// `select` 的**分流**（`T-CP-3`／`CP-31`）：`fs` 域 fd 恒就绪、`net` 域 fd 走 `poll` 槽，
+/// 两域混合按此合并；无效 fd ⇒ `EBADF`；`poll` 槽 `None` ⇒ 如实 `NotImplemented`。
+#[test]
+fn select_routes_fs_fds_always_ready_and_net_fds_through_poll() {
+    use pyawa_capabilities::net::{
+        CapStatus as NetStatus, CpNetVtable, PollFd, SocketHandle,
+    };
+
+    static POLL_CALLS: Mutex<Vec<(usize, i64)>> = Mutex::new(Vec::new());
+
+    extern "C" fn net_socketpair(
+        _state: *mut c_void,
+        _family: i32,
+        _kind: i32,
+        _protocol: i32,
+        a: *mut SocketHandle,
+        b: *mut SocketHandle,
+        _errno_out: *mut i32,
+    ) -> NetStatus {
+        if !a.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *a = SocketHandle(700) };
+        }
+        if !b.is_null() {
+            // SAFETY: 同上。
+            unsafe { *b = SocketHandle(701) };
+        }
+        NetStatus::Ok
+    }
+
+    /// **回显** `events`：请求关心的就绪事件全置上（便于验证 core 的位映射与分流）。
+    extern "C" fn net_poll(
+        _state: *mut c_void,
+        fds: *const PollFd,
+        len: usize,
+        timeout_ns: i64,
+        out: *mut PollFd,
+        capacity: usize,
+        out_len: *mut usize,
+        _errno_out: *mut i32,
+    ) -> NetStatus {
+        POLL_CALLS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((len, timeout_ns));
+        if capacity < len || out.is_null() {
+            // 两段式出参：容量不够就只报总数（core 会扩缓冲重调）。
+            if !out_len.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out_len = len };
+            }
+            return NetStatus::Ok;
+        }
+        // SAFETY: 调用方按 `len` 给出输入、按 `capacity` 给出输出。
+        let inputs = unsafe { core::slice::from_raw_parts(fds, len) };
+        for (index, item) in inputs.iter().enumerate() {
+            // SAFETY: `index < capacity` 由上面的检查保证。
+            unsafe {
+                *out.add(index) = PollFd {
+                    handle: item.handle,
+                    events: item.events,
+                    revents: item.events,
+                };
+            }
+        }
+        if !out_len.is_null() {
+            // SAFETY: 同上。
+            unsafe { *out_len = len };
+        }
+        NetStatus::Ok
+    }
+
+    extern "C" fn net_close(
+        _state: *mut c_void,
+        _handle: SocketHandle,
+        _errno_out: *mut i32,
+    ) -> NetStatus {
+        NetStatus::Ok
+    }
+    extern "C" fn net_send(
+        _state: *mut c_void,
+        _handle: SocketHandle,
+        _bytes: *const u8,
+        _len: usize,
+        out_sent: *mut usize,
+        _errno_out: *mut i32,
+    ) -> NetStatus {
+        if !out_sent.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out_sent = 0 };
+        }
+        NetStatus::Ok
+    }
+
+    // `fs` 域只要 `open`（表 fd 由 core 分配）＋`write`（stdlib 的 stdout 通道）。
+    extern "C" fn fs_open_stub(
+        _state: *mut c_void,
+        _name: *const u8,
+        _len: usize,
+        _flags: i32,
+        _mode: u32,
+        out: *mut Handle,
+        _errno_out: *mut i32,
+    ) -> CapStatus {
+        if !out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out = Handle(42) };
+        }
+        CapStatus::Ok
+    }
+    extern "C" fn fs_read_stub(
+        _state: *mut c_void,
+        _handle: Handle,
+        _out: *mut u8,
+        _capacity: usize,
+        _wanted: usize,
+        out_len: *mut usize,
+        _errno_out: *mut i32,
+    ) -> CapStatus {
+        if !out_len.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out_len = 0 };
+        }
+        CapStatus::Ok
+    }
+    let fs_table = CpFsVtable {
+        open: Some(fs_open_stub),
+        read: Some(fs_read_stub),
+        write: Some(sink_write),
+        ..CpFsVtable::UNIMPLEMENTED
+    };
+    let net_table = CpNetVtable {
+        socketpair: Some(net_socketpair),
+        send: Some(net_send),
+        poll: Some(net_poll),
+        close: Some(net_close),
+        ..CpNetVtable::UNIMPLEMENTED
+    };
+    let state = new_state();
+    // SAFETY: `state` 活到本测试末尾；两张表也比 state 活得久。
+    unsafe {
+        register_fs(state, &fs_table);
+        assert_eq!(
+            pa_setcapability_async(state, pyawa_abi::capability::PA_DOMAIN_NET, PA_ASYNC_OK),
+            PA_OK
+        );
+        assert_eq!(
+            pa_setcapability(
+                state,
+                pyawa_abi::capability::PA_DOMAIN_NET,
+                (&net_table as *const CpNetVtable).cast(),
+            ),
+            PA_OK
+        );
+    }
+    // SAFETY: 只借用；`state` 尚未销毁。
+    let instance = unsafe { &*state }.instance();
+    let fs_fd = instance.fs_open(b"x", 0, 0).expect("open");
+    let (socket_a, _socket_b) = instance.net_socketpair(1, 1, 0).expect("socketpair");
+    assert_eq!(
+        instance.capability_domain(fs_fd as i64),
+        Some(pyawa_capabilities::DOMAIN_FS)
+    );
+    assert_eq!(
+        instance.capability_domain(socket_a as i64),
+        Some(pyawa_capabilities::DOMAIN_NET)
+    );
+    assert_ne!(fs_fd, socket_a, "`CP-31`：fs／net 同一个 fd 编号空间");
+
+    // 只有 fs fd ⇒ 恒就绪，且**不**调 net poll。
+    POLL_CALLS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    let ready = instance.capability_select(&[fs_fd as i64], &[], &[], None).expect("select");
+    assert_eq!(ready, (vec![fs_fd as i64], Vec::new(), Vec::new()));
+    assert!(
+        POLL_CALLS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty(),
+        "`CP-31`：fs 域不进 net poll"
+    );
+
+    // 只有 net fd ⇒ 走 poll（events 按列表映射：read→POLLIN、write→POLLOUT）。
+    POLL_CALLS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    let ready = instance
+        .capability_select(&[socket_a as i64], &[], &[], None)
+        .expect("select net read");
+    assert_eq!(ready.0, vec![socket_a as i64], "net 可读");
+    assert_eq!(
+        POLL_CALLS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone(),
+        vec![(1, -1)],
+        "`timeout_ns=None` ⇒ 无限等待传给 poll（-1）"
+    );
+
+    // 混合：fs 就绪 ⇒ poll 的 timeout 必须归 0（有就绪项就不阻塞）。
+    POLL_CALLS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    let ready = instance
+        .capability_select(&[fs_fd as i64, socket_a as i64], &[], &[], Some(999_999_999))
+        .expect("select mixed");
+    assert_eq!(ready.0.len(), 2, "混合列表：fs 恒就绪＋net 回显就绪");
+    assert_eq!(
+        POLL_CALLS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone(),
+        vec![(1, 0)],
+        "有 fs 就绪项 ⇒ timeout 归 0；只有 net fd 进 poll"
+    );
+
+    // 写就绪：write 列表 → POLLOUT。
+    let ready = instance
+        .capability_select(&[], &[socket_a as i64], &[], Some(0))
+        .expect("select write");
+    assert_eq!(ready.1, vec![socket_a as i64]);
+
+    // 无效 fd ⇒ EBADF（CP-18）。
+    assert_eq!(
+        instance.capability_select(&[9_999], &[], &[], Some(0)),
+        Err(CapabilityCallError::Machine(host_errno("EBADF")))
+    );
+    // 域不符：net 句柄当 fs fd 用 ⇒ EBADF；fs fd 当 net fd 用 ⇒ EBADF。
+    assert_eq!(
+        instance.fs_read(socket_a, &mut [0u8; 1]),
+        Err(CapabilityCallError::Machine(host_errno("EBADF")))
+    );
+    assert_eq!(
+        instance.net_send(fs_fd, b"x"),
+        Err(CapabilityCallError::Machine(host_errno("EBADF")))
+    );
+
+    // `poll` 槽为 `None` ⇒ 如实 `NotImplemented`（CP-3／CP-5）。
+    let net_table_without_poll = CpNetVtable {
+        socketpair: Some(net_socketpair),
+        ..CpNetVtable::UNIMPLEMENTED
+    };
+    let other = new_state();
+    let other_fs = CpFsVtable {
+        open: Some(fs_open_stub),
+        write: Some(sink_write),
+        ..CpFsVtable::UNIMPLEMENTED
+    };
+    // SAFETY: 两张表都活到 `other` 销毁之后。
+    unsafe {
+        register_fs(other, &other_fs);
+        assert_eq!(
+            pa_setcapability_async(other, pyawa_abi::capability::PA_DOMAIN_NET, PA_ASYNC_OK),
+            PA_OK
+        );
+        assert_eq!(
+            pa_setcapability(
+                other,
+                pyawa_abi::capability::PA_DOMAIN_NET,
+                (&net_table_without_poll as *const CpNetVtable).cast(),
+            ),
+            PA_OK
+        );
+    }
+    // SAFETY: 只借用；`other` 尚未销毁。
+    let other_instance = unsafe { &*other }.instance();
+    let (socket_c, _socket_d) = other_instance.net_socketpair(1, 1, 0).expect("socketpair");
+    assert_eq!(
+        other_instance.capability_select(&[socket_c as i64], &[], &[], Some(0)),
+        Err(CapabilityCallError::NotImplemented),
+        "`CP-3`：poll 槽未实现 ⇒ NotImplemented（不是假就绪）"
+    );
+
+    // SAFETY: 两个 state 都由 `new_state` 交回、尚未销毁。
+    unsafe {
+        assert_eq!(pa_destroy(state), PA_OK);
+        assert_eq!(pa_destroy(other), PA_OK);
+    }
 }

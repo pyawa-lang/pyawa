@@ -162,10 +162,10 @@ print("len-fork-exec-fields", subprocess._fork_exec.__name__ if hasattr(subproce
 
 /// pyawa 侧期望（有效调用全部 `NotImplementedError` ＋ 消息含"未接线" ✓；收窄面与回退面钉住）。
 const HONEST_EXPECTED: &str = r#"fork_exec !! NotImplementedError True
-select !! NotImplementedError True
-select-timeout !! NotImplementedError True
+select => returned tuple ([], [], [])
+select-timeout => returned tuple ([], [], [])
 waitpid !! NotImplementedError True
-select-narrowed False False False False False
+select-narrowed False False False False True
 selectors-fallback True False False
 subprocess-posix-spawn False True
 len-fork-exec-fields fork_exec

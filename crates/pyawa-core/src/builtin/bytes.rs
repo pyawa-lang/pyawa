@@ -67,29 +67,80 @@ pub(crate) fn bytes_hex_native(
     let text: String = value.iter().map(|byte| format!("{byte:02x}")).collect();
     Ok(instance.new_str(&text))
 }
-/// `bytes.decode(encoding='utf-8')`：第一刀只认 UTF-8；其余编码按实测报 `LookupError`。
+/// `bytes.decode(encoding='utf-8', errors='strict')` —— 参数解析后交给
+/// [`crate::Instance::decode_with_encoding_and_errors`]（**一处真相** ✓）。
+///
+/// **task-9**：先前这里**完全丢弃** `errors`（连位置实参都不读 ✗）⇒ `b'\xe9'.decode('ascii',
+/// 'replace')` 与参照不一致。现在位置／关键字两种写法都收（参照签名 ✓），编码名与实现仍只在
+/// `Instance` 那一处（内置四档快路径＋其余委派 `_codecs.lookup`）。
 pub(crate) fn bytes_decode_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let value = bytes_receiver(instance, bound)?;
-    let encoding = match args.first() {
-        None => "utf-8".to_owned(),
-        Some(argument) => match instance.text_value(*argument) {
-            Some(text) => text,
-            None => {
-                let name = instance.type_name(instance.type_of(*argument));
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    &format!("decode() argument 'encoding' must be str, not {name}"),
-                ));
-            }
-        },
-    };
-    // **一处真相** ✓（第 726 轮）：编码名与表都在 `Instance::decode_with_encoding` ✓。
-    instance.decode_with_encoding(&value, &encoding)
+    // 位置实参：`encoding`（可选）、`errors`（可选）；多给的照参照报 "takes at most 2 arguments" ✓。
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("decode() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    let mut encoding = "utf-8".to_owned();
+    if let Some(argument) = args.first() {
+        let Some(text) = instance.text_value(*argument) else {
+            let name = instance.type_name(instance.type_of(*argument));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("decode() argument 'encoding' must be str, not {name}"),
+            ));
+        };
+        encoding = text;
+    }
+    let mut errors = "strict".to_owned();
+    if let Some(argument) = args.get(1) {
+        let Some(text) = instance.text_value(*argument) else {
+            let name = instance.type_name(instance.type_of(*argument));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("decode() argument 'errors' must be str, not {name}"),
+            ));
+        };
+        errors = text;
+    }
+    // 关键字面同参照（`b'a'.decode(errors='strict')` 也要收 ✓）。**如实偏差**：位置与关键字
+    // **同时**给同一格时参照报 `TypeError: got multiple values`，本层简化为"关键字盖过位置"（
+    // 不静默丢值；差异只在病态写法，未伪造行为）。
+    for (key, argument) in kwargs {
+        let Some(keyword) = instance.text_of(*key) else {
+            continue;
+        };
+        match keyword {
+            "encoding" => match instance.text_value(*argument) {
+                Some(text) => encoding = text,
+                None => {
+                    let name = instance.type_name(instance.type_of(*argument));
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("decode() argument 'encoding' must be str, not {name}"),
+                    ));
+                }
+            },
+            "errors" => match instance.text_value(*argument) {
+                Some(text) => errors = text,
+                None => {
+                    let name = instance.type_name(instance.type_of(*argument));
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("decode() argument 'errors' must be str, not {name}"),
+                    ));
+                }
+            },
+            _ => {}
+        }
+    }
+    instance.decode_with_encoding_and_errors(&value, &encoding, &errors)
 }
 /// `bytes.maketrans(from, to)` ⇒ **256 字节**的查表 ✓（见上）。
 pub fn bytes_maketrans_native(

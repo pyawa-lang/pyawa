@@ -7,8 +7,11 @@
 //! - `CP-30`／`AB-39`：`version` ＝ `PA_ABI_VERSION`、`size` ＝ 结构体字节数。
 //!
 //! `send`／`recv` 走阻塞 `fd`；本文件不会在"对端无数据"时 `recv`（除 EOF 与容量 0 两例）。
+//!
+//! 另有 `poll` 槽的 provider 级验收（`T-CP-3` 的底座）：就绪／可写／超时／两段式出参／
+//! 未知句柄 `EBADF`。
 
-use pyawa_capabilities::net::{CapStatus, CpNetVtable, SocketHandle};
+use pyawa_capabilities::net::{CapStatus, CpNetVtable, PollFd, SocketHandle};
 use pyawa_runtime::net_posix::PosixNet;
 
 /// 按**名字**取宿主 errno（`CM-20`：映射按名字，不硬编码数字）。
@@ -88,7 +91,7 @@ fn the_vtable_declares_the_shared_abi_version_and_its_own_size() {
     assert!(table.connect.is_none(), "connect 不在首片");
     assert!(table.bind.is_none(), "bind 不在首片");
     assert!(table.listen.is_none(), "本片没有 listen 槽");
-    assert!(table.poll.is_none(), "poll 不在首片");
+    assert!(table.poll.is_some(), "`poll` 槽（T-CP-3 底座）本轮已实现");
 }
 
 /// `CP-38`：`socketpair` 之后 **send／recv 真往返**（AF_UNIX ＋ SOCK_STREAM）。
@@ -192,7 +195,6 @@ fn unimplemented_slots_are_absent_not_fake_success() {
         ("getpeername", table.getpeername.is_some()),
         ("getsockopt", table.getsockopt.is_some()),
         ("setsockopt", table.setsockopt.is_some()),
-        ("poll", table.poll.is_some()),
     ] {
         assert!(!present, "{name} 不在本片（CP-3：留 None 即未实现）");
     }
@@ -350,4 +352,175 @@ print("detach ok")
 "#,
     );
     assert_ok(&output, "detach");
+}
+
+
+// ---- `poll` 槽（`T-CP-3` 的 provider 底座）---------------------------------------------------
+//
+// 事件位是 **poll(2) 的平台值**；VM 侧 `select` 入口（tcp 线）负责 select 的 r/w/x → poll 事件
+// 与反向映射。`POLLIN=0x001`／`POLLOUT=0x004` 是 POSIX 公共取值。
+
+/// 可读（**一处真相**：core 的 `poll(2)` 事件位；provider 只透传原始位 ✓）。
+const POLL_IN: i32 = pyawa_core::Instance::POLLIN;
+/// 可写。
+const POLL_OUT: i32 = pyawa_core::Instance::POLLOUT;
+
+fn poll(
+    provider: &PosixNet,
+    fds: &[PollFd],
+    timeout_ns: i64,
+    capacity: usize,
+) -> Result<(Vec<PollFd>, usize), i32> {
+    let table = provider.vtable();
+    let poll = table.poll.expect("本片应当提供 poll 槽");
+    let mut out = vec![
+        PollFd {
+            handle: SocketHandle(0),
+            events: 0,
+            revents: 0,
+        };
+        capacity
+    ];
+    let mut out_len = 0usize;
+    let mut errno = 0i32;
+    let status = poll(
+        table.state,
+        fds.as_ptr(),
+        fds.len(),
+        timeout_ns,
+        out.as_mut_ptr(),
+        capacity,
+        &mut out_len,
+        &mut errno,
+    );
+    match status {
+        CapStatus::Ok => {
+            out.truncate(out_len.min(capacity));
+            Ok((out, out_len))
+        }
+        CapStatus::Machine => Err(errno),
+        CapStatus::Unimplemented => panic!("poll 槽不应是未实现"),
+    }
+}
+
+fn entry(handle: SocketHandle, events: i32) -> PollFd {
+    PollFd {
+        handle,
+        events,
+        revents: 0,
+    }
+}
+
+/// `T-CP-3` 的就绪面：`send` 之前不可读、之后可读；两个句柄都可写；空列表只做超时。
+#[test]
+fn poll_reports_readability_only_after_data_arrives_and_writability_always() {
+    let provider = PosixNet::new();
+    let (a, b) = pair(
+        &provider,
+        pyawa_capabilities::net::family::AF_UNIX,
+        pyawa_capabilities::net::socket_type::SOCK_STREAM,
+    )
+    .expect("pair");
+
+    // 还没数据：a 不可读（timeout 0 轮询）。
+    let (ready, total) = poll(&provider, &[entry(a, POLL_IN)], 0, 2).expect("poll");
+    assert_eq!(total, 0, "没数据时不应 ready");
+    assert!(ready.is_empty());
+
+    // b 写 -> a 可读。
+    assert_eq!(send(&provider, b, b"x").expect("send"), 1);
+    let (ready, total) = poll(&provider, &[entry(a, POLL_IN)], 0, 2).expect("poll");
+    assert_eq!(total, 1, "数据到了必须 ready");
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].handle, a);
+    assert_ne!(ready[0].revents & POLL_IN, 0, "revents 必须含可读位");
+
+    // 两端都可写（socketpair 的流 socket 未填满）。
+    let (ready, total) = poll(&provider, &[entry(a, POLL_OUT), entry(b, POLL_OUT)], 0, 2)
+        .expect("poll");
+    assert_eq!(total, 2, "两端都应可写");
+    assert!(ready.iter().all(|item| item.revents & POLL_OUT != 0));
+
+    close(&provider, a).expect("close a");
+    close(&provider, b).expect("close b");
+}
+
+/// 超时口径：`timeout_ns` 是**纳秒**，等满后返回空（不是无限阻塞、也不是立即返回）。
+#[test]
+fn poll_timeout_is_honoured_in_nanoseconds_and_returns_empty() {
+    let provider = PosixNet::new();
+    let (a, b) = pair(
+        &provider,
+        pyawa_capabilities::net::family::AF_UNIX,
+        pyawa_capabilities::net::socket_type::SOCK_STREAM,
+    )
+    .expect("pair");
+    let started = std::time::Instant::now();
+    let (ready, total) =
+        poll(&provider, &[entry(a, POLL_IN)], 30_000_000, 1).expect("poll 超时是成功");
+    let elapsed = started.elapsed();
+    assert_eq!(total, 0, "超时后应返回空集合");
+    assert!(ready.is_empty());
+    assert!(
+        elapsed >= std::time::Duration::from_millis(20),
+        "30ms 的等待被提前返回：{elapsed:?}"
+    );
+    close(&provider, a).expect("close a");
+    close(&provider, b).expect("close b");
+}
+
+/// 出参**两段式**（同 `fs` 的 `listdir`）：`out_len` 是**就绪项总数**，容量不够只写前几项。
+#[test]
+fn poll_reports_total_ready_count_beyond_the_output_capacity() {
+    let provider = PosixNet::new();
+    let (a, b) = pair(
+        &provider,
+        pyawa_capabilities::net::family::AF_UNIX,
+        pyawa_capabilities::net::socket_type::SOCK_STREAM,
+    )
+    .expect("pair");
+    assert_eq!(send(&provider, a, b"x").expect("send"), 1);
+    // b 可读（有数据）又可写；容量只给 1 项。
+    let (ready, total) = poll(&provider, &[entry(b, POLL_IN), entry(b, POLL_OUT)], 0, 1)
+        .expect("poll");
+    assert_eq!(total, 2, "两段式：总数要如实报 2");
+    assert_eq!(ready.len(), 1, "容量 1 只写 1 项");
+    assert_eq!(ready[0].handle, b);
+    close(&provider, a).expect("close a");
+    close(&provider, b).expect("close b");
+}
+
+/// 未知／已关句柄 ⇒ 机器错误 `EBADF`（`CP-18`；`CP-5`：不是"未实现"）。
+#[test]
+fn poll_on_unknown_or_closed_handle_is_ebadf() {
+    let provider = PosixNet::new();
+    assert_eq!(
+        poll(&provider, &[entry(SocketHandle(999_999), POLL_IN)], 0, 1),
+        Err(errno_named("EBADF")),
+        "未知句柄"
+    );
+    let (a, b) = pair(
+        &provider,
+        pyawa_capabilities::net::family::AF_UNIX,
+        pyawa_capabilities::net::socket_type::SOCK_STREAM,
+    )
+    .expect("pair");
+    close(&provider, a).expect("close a");
+    assert_eq!(
+        poll(&provider, &[entry(a, POLL_IN)], 0, 1),
+        Err(errno_named("EBADF")),
+        "已关句柄"
+    );
+    close(&provider, b).expect("close b");
+}
+
+/// 空 fd 列表 ＋ 有限超时：合法调用（只等待，按时返回空集合）。
+#[test]
+fn poll_with_no_handles_waits_and_returns_empty() {
+    let provider = PosixNet::new();
+    let started = std::time::Instant::now();
+    let (ready, total) = poll(&provider, &[], 20_000_000, 0).expect("空列表 poll 仍是成功");
+    assert_eq!(total, 0);
+    assert!(ready.is_empty());
+    assert!(started.elapsed() >= std::time::Duration::from_millis(10));
 }

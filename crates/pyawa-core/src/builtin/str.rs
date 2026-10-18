@@ -1087,11 +1087,13 @@ pub(crate) fn str_replace_native(
     Ok(instance.new_str(&text.replace(&from, &to)))
 }
 
-/// `str.encode(encoding='utf-8', errors='strict')` ✓（第 515 轮接线 ✗）。
+/// `str.encode(encoding='utf-8', errors='strict')` —— **薄包装**：解析参数后交给
+/// [`crate::Instance::encode_with_encoding_and_errors`]。
 ///
-/// 本层只接 **`utf-8`／`ascii`／`latin-1`** 三种（真正的 `_codecs` 表尚未接线 ✓），其余报
-/// `LookupError: unknown encoding: X` ✓；`errors` 接 `strict`／`ignore`／`replace` ✓。
-/// 报错文本照参照（对拍按 `MS-10` 比"异常类型 ＋ 消息" ✗ ⇒ 不能近似 ✓）。
+/// **一处委派**（task-9 ✅）：编码名白名单与实现都搬到了 `Instance`（`instance/convert.rs`）——
+/// 内置 `utf-8`／`ascii`／`latin-1`／`cp437` 走快路径，**其余委派 `_codecs.lookup` 注册表**
+/// （⇒ `'あ'.encode('cp932')` 与 `Lib/encodings/*` 全族可用 ✓）。先前这里另有一份 4 编码白名单 ✗
+/// （与 `bytes.decode` 那份重复 ⇒ 两处都得改才通）。
 pub(crate) fn str_encode_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1113,73 +1115,7 @@ pub(crate) fn str_encode_native(
     }
     let encoding = encoding.unwrap_or("utf-8");
     let errors = errors.unwrap_or("strict");
-    let normalized = encoding.to_ascii_lowercase().replace(['-', ' '], "_");
-    let codec = match normalized.as_str() {
-        "utf_8" | "utf8" | "u8" | "cp65001" => "utf-8",
-        "ascii" | "us_ascii" | "646" => "ascii",
-        "latin_1" | "latin1" | "iso_8859_1" | "iso8859_1" | "8859" | "cp819" => "latin-1",
-        // **`cp437`** ✓（第 726 轮）：`Lib/zipfile` 一族要它 ✓；表与 `bytes.decode` **同一处真相** ✓。
-        "cp437" | "437" | "ibm437" | "csibm437" => "cp437",
-        _ => {
-            return Err(instance.raise_builtin_error(
-                "LookupError",
-                &format!("unknown encoding: {encoding}"),
-            ))
-        }
-    };
-    let limit: u32 = if codec == "ascii" { 128 } else if codec == "cp437" { 0 } else { 256 };
-    let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
-    for (position, character) in text.chars().enumerate() {
-        if codec == "utf-8" {
-            let mut buffer = [0u8; 4];
-            bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
-            continue;
-        }
-        if codec == "cp437" {
-            match crate::instance::CP437
-                .iter()
-                .position(|candidate| *candidate == character)
-            {
-                Some(byte) => bytes.push(byte as u8),
-                None => match errors {
-                    "ignore" => {}
-                    "replace" => bytes.push(b'?'),
-                    _ => {
-                        return Err(instance.raise_builtin_error(
-                            "UnicodeEncodeError",
-                            &format!(
-                                "'cp437' codec can't encode character '\\u{:04x}' in position {position}: no mapping",
-                                character as u32
-                            ),
-                        ))
-                    }
-                },
-            }
-            continue;
-        }
-        let code = character as u32;
-        if code < limit {
-            bytes.push(code as u8);
-            continue;
-        }
-        match errors {
-            "ignore" => {}
-            "replace" => bytes.push(b'?'),
-            _ => {
-                // 转义形式照参照 ✓：**小于 256 用 `\xhh`** ✓、否则 `\uXXXX` ✓（先前一律 `\uXXXX` ✗）。
-                let escaped = if code < 256 {
-                    format!("\\x{code:02x}")
-                } else {
-                    format!("\\u{code:04x}")
-                };
-                let message = format!(
-                    "'{codec}' codec can't encode character '{escaped}' in position {position}: ordinal not in range({limit})"
-                );
-                return Err(instance.raise_builtin_error("UnicodeEncodeError", &message));
-            }
-        }
-    }
-    Ok(instance.new_bytes(&bytes))
+    instance.encode_with_encoding_and_errors(&text, encoding, errors)
 }
 
 /// `str.format(*args, **kwargs)` ✓（第 722 轮 ✓）：`Lib/base64.py:246` 的

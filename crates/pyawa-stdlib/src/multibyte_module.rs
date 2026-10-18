@@ -36,12 +36,19 @@
 //!   `read`／`write` 由 `codecs.StreamReader`／`StreamWriter`（纯 Python）按 `self.decode`／
 //!   `self.encode` 的元组契约实现 ⇒ 这里不需要重复实现 ✓（照参照的 MRO 逐字）。
 //!
+//! ## 已落族
+//!
+//! - **`_codecs_jp`**（round 10）：7 个 `Lib/encodings/*` 模块 —— `cp932`／`euc_jp`／
+//!   `euc_jis_2004`／`euc_jisx0213`／`shift_jis`／`shift_jis_2004`／`shift_jisx0213`；
+//! - **`_codecs_cn`**（round 11）：2 个 —— `gb2312`／`gbk`（`cp936` 是 `gbk` 的别名，不另设模块 ✓）。
+//!
+//! 数据文件：`codec_tables/jp.txt`／`codec_tables/cn.txt`，同一条生成命令分别 `--family jp`／`--family cn`。
+//!
 //! ## 如实缺口（`CM-6`，不伪造）
 //!
-//! - **只落 `_codecs_jp` 一族**（7 个 `Lib/encodings/*` 模块：`cp932`／`euc_jp`／
-//!   `euc_jis_2004`／`euc_jisx0213`／`shift_jis`／`shift_jis_2004`／`shift_jisx0213`）；
-//!   `_codecs_cn`／`_codecs_tw`／`_codecs_kr`／`_codecs_hk` 的表**尚未生成** ⇒ 对应
-//!   `import encodings.gbk` 一族仍报 `No module named '_codecs_cn'`（见 SPEC 的缺口节）。
+//! - `_codecs_tw`／`_codecs_kr`／`_codecs_hk` 的表**尚未生成** ⇒ 对应 `import encodings.big5`
+//!   一族仍报 `No module named '_codecs_tw'`／`_codecs_kr`／`_codecs_hk`；`gb18030`（4 字节区间）
+//!   与 `hz`（有状态 7-bit）需要各自的表示，生成器明确拒绝（理由在 `tools/gen_codec_tables.py`）。
 //! - **自定义错误处理器**（`codecs.register_error` 注册的名字）调用时如实报
 //!   `NotImplementedError`（本层的异常对象不带 `object`／`start`／`end` 结构化字段）；
 //!   未注册的名字照参照报 `LookupError: unknown error handler name '...'` ✓。
@@ -66,10 +73,12 @@ const BUFFER_ATTRIBUTE: &str = "buffer";
 /// 「没有第二个码位」的哨兵（解码结果最多 2 个码位：JIS X 0213 的组合字符）。
 const NO_SECOND: u32 = u32::MAX;
 
-/// `_codecs_jp` 族的生成表（生成路径见模块头）。
+/// 各族的生成表（生成路径见模块头）：`jp`＝JIS 族、`cn`＝GB 族。
 const JP_SOURCE: &str = include_str!("codec_tables/jp.txt");
+const CN_SOURCE: &str = include_str!("codec_tables/cn.txt");
 
 static JP_TABLES: OnceLock<Vec<CodecTable>> = OnceLock::new();
+static CN_TABLES: OnceLock<Vec<CodecTable>> = OnceLock::new();
 
 // ---- 表结构 -----------------------------------------------------------------------------------
 
@@ -256,9 +265,17 @@ fn jp_tables() -> &'static Vec<CodecTable> {
     JP_TABLES.get_or_init(|| parse_tables(JP_SOURCE))
 }
 
-/// 按编码名取表；不在本族里 ⇒ `None`（`getcodec` 报 `LookupError`）。
+/// `_codecs_cn` 族的表（同上）。
+fn cn_tables() -> &'static Vec<CodecTable> {
+    CN_TABLES.get_or_init(|| parse_tables(CN_SOURCE))
+}
+
+/// 按编码名取表：**跨族**查（各族的编码名不重名 ✓）；都没有 ⇒ `None`（`getcodec` 报 `LookupError`）。
 fn table_for(name: &str) -> Option<&'static CodecTable> {
-    jp_tables().iter().find(|table| table.name == name)
+    jp_tables()
+        .iter()
+        .chain(cn_tables().iter())
+        .find(|table| table.name == name)
 }
 
 // ---- 编解码循环（状态机） ---------------------------------------------------------------------
@@ -1052,7 +1069,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     namespace
 }
 
-/// 本族**已落地**的编码名（测试／诊断用；`getcodec` 的可用集合）。
+/// 已落地族的**全部编码名**（测试／诊断用；`getcodec` 的可用集合）。
 pub fn supported_codecs() -> Vec<&'static str> {
-    jp_tables().iter().map(|table| table.name).collect()
+    jp_tables()
+        .iter()
+        .chain(cn_tables().iter())
+        .map(|table| table.name)
+        .collect()
 }
