@@ -18,6 +18,8 @@ impl Instance {
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
             capabilities: RefCell::new([CapabilityEntry::default(); pyawa_capabilities::DOMAIN_COUNT]),
+            capability_table: RefCell::new(super::capability_table::CapabilityTable::new()),
+            path_cwd: RefCell::new(None),
             modules: RefCell::new(None),
             singletons: OnceCell::new(),
             current_globals: Cell::new(None),
@@ -38,7 +40,7 @@ impl Instance {
             gc_frozen: RefCell::new(HashSet::new()),
             gc_running: Cell::new(false),
             repr_guard: RefCell::new(Vec::new()),
-            interrupted: Cell::new(false),
+            interrupted: core::sync::atomic::AtomicBool::new(false),
         };
 
         // 元类型自指：类型对象的类型就是它自己（与 CPython 的 `PyType_Type` 同理）。

@@ -72,7 +72,10 @@ fn mismatch_message_is_diagnosable() {
     };
     let message = mismatch.message();
     assert!(message.contains("2.3"), "含宿主版本：{message}");
-    assert!(message.contains("1.0"), "含运行时版本：{message}");
+    assert!(
+        message.contains(&pyawa_abi::version_string(PA_ABI_VERSION)),
+        "含运行时版本：{message}"
+    );
 }
 
 #[test]
@@ -164,7 +167,10 @@ fn version_mismatch_hands_out_a_diagnostic_instance() {
     // SAFETY: state 由 pa_create 交回且尚未销毁。
     let message = unsafe { CStr::from_ptr(pa_errmsg(state)) }.to_str().unwrap();
     assert!(message.contains("2.7"), "含宿主版本：{message}");
-    assert!(message.contains("1.0"), "含运行时版本：{message}");
+    assert!(
+        message.contains(&pyawa_abi::version_string(PA_ABI_VERSION)),
+        "含运行时版本：{message}"
+    );
     // AB-56：其余调用一律 PA_ERR_ABI
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_interrupt(state) }, PA_ERR_ABI);
@@ -1214,7 +1220,18 @@ fn a_capability_domain_needs_its_async_classification_first() {
     let mut state: *mut pa_state = core::ptr::null_mut();
     // SAFETY: 按契约传参。
     assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
-    let fake_vtable = 0x1234usize as *const c_void;
+    // **`CP-30`**：`pa_setcapability` 在注册时读 vtable 公共头 `(version, size)` ⇒ 这里必须给一张
+    // **真实的**最小表（先前传魔法指针 `0x1234` 的写法在新校验下会解引用非法地址）。
+    #[repr(C)]
+    struct FakeVtable {
+        version: u32,
+        size: u32,
+    }
+    let fake_table = FakeVtable {
+        version: PA_ABI_VERSION,
+        size: size_of::<FakeVtable>() as u32,
+    };
+    let fake_vtable = (&fake_table as *const FakeVtable).cast::<c_void>();
     // SAFETY: state 存活。
     unsafe {
         // AB-34／CP-25／T-AB-6：没声明异步分类就注册 ⇒ 必须失败

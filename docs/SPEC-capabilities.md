@@ -88,6 +88,14 @@
 - **CP-37** **异步分类的粒度是"域"**（`§13-4` 已决）：取值**只有二值**——**可异步化**与
   **不可异步化**；**禁止**同一域内混合。若某域的槽位需要不同的可异步性，**必须拆域**
   （各自一个 vtable），**禁止**引入槽位级分类。拆域属能力域集合的变更，**必须**同步更新 §7.2 的域表。
+- **CP-38** **`socketpair` 槽**（`P3-29` 首片；**2026-10-18 用户拍板 A1**）：`socketpair(family, type, proto)` **必须**
+  返回**一对** socket 能力；**无地址**（local-only）⇒ **不适用** §9.2 的地址线格式；`fd` 语义同 `CP-31`
+  （`fd` ＝ 实例能力表下标 ✓）；按 `CP-37` 属 **`net` 域**（可异步化 ✓）。**注意**：这是对 `CpNetVtable` 的**加槽** ⇒
+  接口版本**必须**随之升（`CP-30`；ABI 尚未发布 ⇒ 依 `AB-44` 现在加槽成本最低 ✓）。
+- **CP-39** **`sockaddr` 的 v1 地址线格式**（**用户拍板 A3**）：`sockaddr` 走 §9.2 的"地址族编号 ＋ 裸字节"——
+  **IPv4 ＝ 4 字节地址 ＋ 2 字节端口，大端**；**v1 只支持 `AF_INET` 与 `AF_UNIX`**（`AF_UNIX` 路径按 `CP-21`
+  的根能力解析 ✓）；IPv6 及其它族**不在 v1**。**`getaddrinfo`／DNS 不在 v1**（**A2 推迟** ✓）：v1 只接受
+  **数字地址**。
 - **CP-10** 接口面只允许**裸数据**与**不透明句柄**：**禁止**泛型／单态化（`REQUIREMENTS.md` 后果 4）；可异步化路径上**禁止**传递或触碰 VM 对象（`DESIGN.md` §3 不变量 4）。
 - **CP-11** 每个能力调用点**必须** `catch_unwind`：Rust panic **禁止**穿过 provider 边界，宿主侧异常也**禁止**穿进 VM（`DESIGN.md` §3 不变量 3 的对偶）。
 - **CP-12** 接口 crate（能力形状）**必须**只含类型与函数指针，**禁止**含任何真实机器实现；真实机器实现只允许在独立运行时 crate（`DESIGN.md` §7）。
@@ -166,6 +174,7 @@
 | `getsockname(sock)` / `getpeername(sock)` | 地址 |
 | `getsockopt(sock, level, name)` / `setsockopt(sock, level, name, value)` | 选项 |
 | `poll(fds, timeout_ns)` | 就绪集合——`select.select`／`select.poll` 的底座 |
+| `socketpair(family, type, proto)` | 返回**一对** socket 能力（local-only，**无地址**）；语义见 `CP-38` |
 | `close(handle)` | 释放（CP-17） |
 
 地址**必须**是"地址族编号 ＋ 裸字节"，**禁止**在接口里出现 Python 对象。

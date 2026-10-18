@@ -78,6 +78,17 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (weakref_module::NAME, weakref_module::build),
         (thread_module::NAME, thread_module::build),
         (codecs_module::NAME, codecs_module::build),
+        // **`_multibytecodec`／`_codecs_jp`**（task-6 ✓）：`Lib/encodings/cp932.py` 一族的底座
+        // （`import _codecs_jp, codecs` ＋ `class IncrementalEncoder(mbc.MultibyteIncrementalEncoder, …)`）。
+        (multibyte_module::NAME, multibyte_module::build),
+        (codecs_jp_module::NAME, codecs_jp_module::build),
+        // **`_codecs_cn`**（round 11 ✓）：`Lib/encodings/gb2312.py`／`gbk.py` 的底座
+        // （同一个共享引擎；`gb18030`／`hz` 未落地，见模块头）。
+        (codecs_cn_module::NAME, codecs_cn_module::build),
+        // **`_codecs_tw`／`_codecs_kr`**（round 12 ✓）：`Lib/encodings/{big5,cp950}.py` 与
+        // `{euc_kr,cp949,johab}.py` 的底座（同引擎；`euc_kr` 的 8 字节谚文走"吸收态长前缀"）。
+        (codecs_tw_module::NAME, codecs_tw_module::build),
+        (codecs_kr_module::NAME, codecs_kr_module::build),
         (collections_module::NAME, collections_module::build),
         (tokenize_module::NAME, tokenize_module::build),
         (math_module::NAME, math_module::build),
@@ -388,6 +399,17 @@ pub mod weakref_module;
 pub mod thread_module;
 mod time_module;
 pub mod codecs_module;
+/// **`_multibytecodec`**（task-6 ✓）：CJK 多字节 `_codecs_*` 族的共享引擎（`MultibyteCodec`
+/// ＋ 增量编解码器 ＋ 流包装基类）。数据生成路径与缺口见模块头；本族已落 `_codecs_jp`。
+pub mod multibyte_module;
+/// **`_codecs_jp`**（task-6 ✓）：`Lib/encodings/cp932.py` 一族的 `getcodec` 底座。
+pub mod codecs_jp_module;
+/// **`_codecs_cn`**（task-9 ✓）：`Lib/encodings/gb2312.py`／`gbk.py` 的 `getcodec` 底座。
+pub mod codecs_cn_module;
+/// **`_codecs_tw`**（task-14 ✓）：`Lib/encodings/big5.py`／`cp950.py` 的 `getcodec` 底座。
+pub mod codecs_tw_module;
+/// **`_codecs_kr`**（task-14 ✓）：`Lib/encodings/euc_kr.py`／`cp949.py`／`johab.py` 的 `getcodec` 底座。
+pub mod codecs_kr_module;
 pub mod math_module;
 pub mod contextvars_module;
 pub mod collections_module;

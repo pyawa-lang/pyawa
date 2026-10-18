@@ -4,7 +4,7 @@
 核心是**像 Lua 一样易嵌入**：宿主直接实现沙箱接口、脚本不可信且不可逃逸、纯 Python 库逐字可用。
 另提供**程序级可选的安全谱**（渐进类型，非强制）。**目标不是更快的 Python。**
 
-当前状态：**M0 · M1 · M2 · M3 · M4 均已成立**。
+当前状态：**M0 · M1 · M2 · M3 · M4 · M5 均已成立**。
 
 - **M0**（文档集）：13 份全部写出（状态列见 `docs/SPEC-INDEX.md` §1）；两条判据（`CX-1` 编号零悬空
   ＋重复定义、`CX-2` 文档集状态一致）由 `tests/ci/check.py` 承载，当前 **12/12 绿**
@@ -27,6 +27,15 @@
   `crates/pyawa-core/tests/gradual_guarantee.rs`。`.py` 下同源码**合法且惰性**（`BC-15`／`TS-5`，编译产物逐字节不变）。
   如实缺口：`BC-25`①（"两侧皆标注处禁止发射"，需跨模块静态信息）未做；`TS-50` 部分形态与类体/嵌套函数边界未覆盖
   （台账卷 05 的 round 4–7 节）
+- **M5**（能力层正式化，`docs/PLAN-milestones.md` §6）：判据① `SPEC-capabilities.md` §11 的 `T-CP-*` **13/13 全绿**——
+  可执行归档 `crates/pyawa-abi/tests/capability_acceptance.rs`（11 例）／`crates/pyawa-runtime/tests/two_providers.rs`（7 例）／
+  `t_cp10_cancel.rs`（4 例）／`select_dup2_shapes.rs`（1 例）／`capability_registration.rs`（6 例），静态两条由
+  `tests/ci/check.py` 的 `T-CX-4` 承担；判据② **两 provider 写法不变**（同一脚本逐字节相同，真实 `PosixFs` vs 受限
+  `RestrictedFs`）；判据③ 启动延迟与常驻内存**升为阻塞项**（`§13-17` 已升），**阻塞阈值经用户拍板**——三档基线数字与
+  阈值的唯一出处是 `docs/DESIGN.md` §9 的「Pyawa（M5 实测基线）」末节（判据① Lib import ratio 466/628＝74.2%）。
+  如实缺口（不阻塞判据）：`CP-22` 的 `os.getcwd/chdir` stdlib 面未接；`CP-21` 的逐段 Dir 能力链为 v1 简化档；
+  `T-CP-10` 不含无 timeout 的阻塞 `recv/send` 与 Python 层 `KeyboardInterrupt` 投递；`AB-43` 消费方有界读取待做；
+  `dup/dup2` 到 0/1/2 未接；C 面 `_codecs_hk`／iso2022／gb18030／hz 未做（台账卷 05 的 round 12–13 节）
 - **缺口**：**规格内已无未写小节**（原先两处——`SPEC-bytecode.md` 的"超出 §10 的指令"与
   `SPEC-c-modules.md` 的"逐模块合约表"——**均已落地**：前者为按需流程、后者为维护中的表）；
   `PLAN-milestones.md` §10 里的 **harness 实现**与**基线语料下限**也均已落地，

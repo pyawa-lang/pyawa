@@ -29,10 +29,18 @@
 
 | 文件 | 作用 |
 |---|---|
-| `footprint_host.c` | M1 ② 的足迹测量宿主（`§13-17` 的提示项）：`pa_create`／`pa_exec_string` 的单调时钟时长 ＋ 本进程 RSS／`VmHWM`，打一行 `key=value` |
-| `measure_footprint.py` | 驱动：`cargo build` → `cc` 链静态库 → 跑宿主（debug／release 两档）→ 同轮现测 `python3 -c pass` 作对照。**缺 `cc`／`python3` 即红**，不跳过 |
+| `footprint_host.c` | 足迹测量宿主，三种模式：**裸档**（`footprint_host [iterations]`：`pa_create`／`pa_exec_string` 的单调时钟时长 ＋ 本进程 RSS／`VmHWM`）· **单进程多实例档**（`--multi <instances> <iterations>`：N 个 `pa_state` 同时存活，逐实例 RSS 曲线＋总常驻＋建／干活墙钟）· **测量脚手架**（`--spawn <program> [参数…]`：从小 C 进程 fork/exec 目标，报目标的墙钟与 `ru_maxrss`——直接由 Python 父进程 fork 会污染 `ru_maxrss`，见文件头） |
+| `measure_footprint.py` | 驱动（一条命令跑完三档）：**① 裸实例**（C 宿主／ABI 级，debug＋release）· **② 全栈单实例**（`pyawa` CLI 进程级，`+site`＋常用模块，同轮现测 CPython 对照）· **③ 多实例**（③a 单进程多实例＝裸 ABI ＋ ③b 多进程各一实例＝全栈 CLI，N=1/2/4/8，墙钟／并行度／峰值 RSS／总常驻）。`cargo build` → `cc` 链静态库 → 采数。**缺 `cc`／`python3`／`cargo` 即红**，不跳过 |
 
-数值的**唯一出处**是 `DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"（一处真相：这里只记怎么跑）。
+跑法（复跑就是重测；数字随工作树漂移）：
+
+```
+python3 tools/measure_footprint.py --profile both      # ① 两档 profile；②③ 只取 release
+```
+
+数值的**唯一出处**是 `DESIGN.md` §9 的两节实测基线：「Pyawa（M1 最小内核）实测基线」（M1 裸档的
+历史快照，原文不动）与「Pyawa（M5 实测基线：三档实例体量）」（`P3-28` 的重量，含 ②③ 的口径）。
+一处真相：这里只记怎么跑与脚本边界。
 
 ## 状态
 

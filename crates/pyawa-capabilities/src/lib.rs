@@ -6,6 +6,7 @@
 
 pub mod clock;
 pub mod fs;
+pub mod net;
 
 /// **能力域个数**（`CP-1`：与 `DESIGN.md` §7.3 的九域一一对应；顺序照 `SPEC-capabilities.md` §4 的表）。
 ///
@@ -18,3 +19,8 @@ pub const DOMAIN_FS: usize = 0;
 
 /// `clock` 域的编号（`SPEC-capabilities.md` §4 表里排第四 ⇒ 下标 3 ✓；对应 C 层模块 `time` ✓）。
 pub const DOMAIN_CLOCK: usize = 3;
+
+/// `net` 域的编号（`SPEC-capabilities.md` §4 表里排第二 ⇒ 下标 1 ✓；对应 C 层模块 `_socket`／`select` ✓）。
+///
+/// 与 `pyawa-abi::capability::PA_DOMAIN_NET`（`= 1`）**必须一致**（同一张表的注册投影，`AB-33`）。
+pub const DOMAIN_NET: usize = 1;

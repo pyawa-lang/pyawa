@@ -16,22 +16,36 @@
 //! - **28 个模块函数的名字与参数形态**：错参数报与参照同型的 `TypeError`
 //!   （`_socket.htons()` ⇒ `takes exactly one argument (0 given)` 一类 ✓）。
 //!
+//! ## 本轮接线面（`P3-29` 首片 ✓：`socketpair` 真 I/O）
+//!
+//! - **`_socket.socketpair(family=AF_UNIX, type=SOCK_STREAM, proto=0)`**：经 `net` 能力域的
+//!   `socketpair` 槽（`CP-38`）真发 `socketpair(2)`，返回**两个** `_socket.socket` 实例
+//!   （参照实测：返回的是 socket 对象而非裸 int ✓；`Lib/socket.py` 的 `socketpair()` 依赖
+//!   它们的 `detach()` ✓）。
+//! - **`_socket.socket` 的构造／`fileno`／`detach`／`send`／`recv`／`close`**：真接线
+//!   （状态放**实例属性** `_fd`／`_family`／`_type`／`_proto`，同 `_io`／`array` 先例 ✓）。
+//!   `fd` 是 `net` provider 的不透明句柄原样（`CP-31` 的统一实例能力表**未**落地，见
+//!   `crates/pyawa-core/src/instance/net.rs` 的模块文档）。
+//! - 机器错误 → `OSError` 子类（按 `errno_map` 的**名字**映射 ✓，`CM-19`／`CM-20`）。
+//!
 //! ## 如实报错面（硬边界 ✓：**禁止假装连接成功**）
 //!
-//! 网络／描述符 I/O 属**能力域**（`CM-8`：外部世界必须经能力层）——本轮**不做**任何真 syscall，
-//! 也不返回假 fd。所以：
+//! 网络／描述符 I/O 属**能力域**（`CM-8`：外部世界必须经能力层）。本片**只**接 `socketpair`
+//! 一族；其余仍**不做**真 syscall，也不返回假 fd：
 //!
-//! - **全部 28 个模块函数**：参数对了也**调用即** `NotImplementedError`（纯数据的那几个
-//!   —— `htons` 一族／`inet_*`／`CMSG_*` —— 同样如实报"未接线"，**不返回假值**）；
-//! - **`_socket.socket` 的一切方法**（`bind`／`connect`／`send`…）与**构造**：同样 `NotImplementedError`
-//!   （构造在参照里就要发 `socket(2)`）。
+//! - **其余模块函数**（`getaddrinfo`／`gethostname`／`create_connection` 一族…）与
+//!   `_socket.socket` 的其余方法（`bind`／`connect`／`sendto`…）：参数对了也**调用即**
+//!   `NotImplementedError`（纯数据的那几个 —— `htons` 一族／`inet_*`／`CMSG_*` —— 同样如实报
+//!   "未接线"，**不返回假值**）；
+//! - `flags != 0` 的 `send`／`recv`：如实报未接线（首片只做 flags=0）。
 //!
 //! ## 未落地（如实记）
 //!
 //! - `CAPI`：参照是 `PyCapsule`，VM 没有这个载荷 ⇒ **不登记**（不是"给个假的" ✗）。
-//! - `socket` 实例属性 `family`／`type`／`proto`／`timeout`：本轮只登记**方法名**；
+//! - `socket` 实例属性 `family`／`type`／`proto`／`timeout`：只登记**方法名**；
 //!   属性存取会 `AttributeError`（`Lib/socket.py` 只在运行期 `__repr__` 里用它们 ✓）。
-//! - 真 I/O 接线（`socketpair`／`create_connection` 一族）＝ `P3-29` 后续轮，走能力域槽位。
+//! - `connect`／`bind`／`listen`／`accept`／`sendto`／`recvfrom`／`getsockopt`／`poll` 一族
+//!   ＝ `P3-29` 后续片（要地址线 `CP-39` 与 `poll` 槽）。
 //!
 //! 本模块**不碰平台**（`CX-4`：`pyawa-stdlib/src` 在静态扫描范围内 ⇒ `#![forbid(unsafe_code)]`）。
 
@@ -225,7 +239,7 @@ const FUNCTIONS: &[(&str, Arity, NativeFn, Unwired)] = &[
     ("ntohs", Arity::PrefixExactlyOne, ntohs_stub, Unwired::Pure),
     ("setdefaulttimeout", Arity::PrefixExactlyOne, setdefaulttimeout_stub, Unwired::Capability),
     ("sethostname", Arity::DigitExactly(1), sethostname_stub, Unwired::Capability),
-    ("socketpair", Arity::DigitAtMost(3), socketpair_stub, Unwired::Capability),
+    ("socketpair", Arity::DigitAtMost(3), socketpair_native, Unwired::Capability),
 ];
 
 /// `_socket.socket` 的**公开方法面**（照参照 `dir(_socket.socket)` ✓；只登记、调用如实报错）。
@@ -325,10 +339,22 @@ fn build_socket_class(instance: &Instance) -> Result<NonNull<Header>, pyawa_core
         .expect("object 在引导期已登记")
         .cast::<Header>();
     let class_namespace = instance.new_dict();
-    let init = make_native(instance, "__init__", socket_init_stub);
-    instance.dict_set(class_namespace, "__init__", init);
+    // **其余方法面**先按"如实未接线"登记（`P3-29` 首片只接 `socketpair` 一族 ✓）。
     for name in SOCKET_METHODS {
         let function = make_native(instance, name, socket_method_stub);
+        instance.dict_set(class_namespace, name, function);
+    }
+    // **真 I/O 面**（`P3-29` 首片 ✓）：覆盖同名的如实桩 —— `Lib/socket.py` 的 `socketpair()`
+    // 一族要的正好是这几个 ✓（状态放实例属性，见 `socket_init_native` 的注释 ✓）。
+    for (name, handler) in [
+        ("__init__", socket_init_native as NativeFn),
+        ("close", socket_close_native as NativeFn),
+        ("detach", socket_detach_native as NativeFn),
+        ("fileno", socket_fileno_native as NativeFn),
+        ("send", socket_send_native as NativeFn),
+        ("recv", socket_recv_native as NativeFn),
+    ] {
+        let function = make_native(instance, name, handler);
         instance.dict_set(class_namespace, name, function);
     }
     build_class_from_parts(
@@ -556,20 +582,6 @@ socket_stub_fn!(ntohl_stub, "ntohl", Arity::PrefixExactlyOne, Unwired::Pure);
 socket_stub_fn!(ntohs_stub, "ntohs", Arity::PrefixExactlyOne, Unwired::Pure);
 socket_stub_fn!(setdefaulttimeout_stub, "setdefaulttimeout", Arity::PrefixExactlyOne, Unwired::Capability);
 socket_stub_fn!(sethostname_stub, "sethostname", Arity::DigitExactly(1), Unwired::Capability);
-socket_stub_fn!(socketpair_stub, "socketpair", Arity::DigitAtMost(3), Unwired::Capability);
-
-/// `_socket.socket.__init__`：构造在参照里就要发 `socket(2)` ⇒ 本轮如实报未接线。
-fn socket_init_stub(
-    instance: &Instance,
-    _bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    Err(instance.raise_builtin_error(
-        "NotImplementedError",
-        "`_socket.socket()`：构造需要 socket(2) 系统调用（能力域 CM-8），本轮未接线",
-    ))
-}
 
 /// `_socket.socket` 的方法面：调用即如实报未接线（**不假装连接成功、不返回假 fd**）。
 fn socket_method_stub(
@@ -582,4 +594,416 @@ fn socket_method_stub(
         "NotImplementedError",
         "`_socket.socket` 的 I/O 方法：真实套接字系统调用属能力域（CM-8），本轮未接线",
     ))
+}
+
+// ==== `P3-29` 首片：真 I/O（`socketpair` 一族）====================================================
+//
+// 状态全放**实例属性**（`_fd`／`_family`／`_type`／`_proto`）：与 `_io.FileIO`／`array.array`
+// 同一先例（**不**新增载荷类型 ✓；`AttributeObject` 的实例字典由类创建时的
+// `mark_external_instance_dict` 提供 ✓）。
+//
+// `fd` 是 provider 的不透明句柄**原样** —— `CP-31` 的"实例能力表统一编号"未落地
+// （见 `crates/pyawa-core/src/instance/net.rs` 的模块文档），本片如实记差距。
+
+/// 本文件常量表里按名字取一个整数（`INT_CONSTANTS` 是**唯一真相** ✓，禁止在实现里另抄数字）。
+fn constant(name: &str) -> i32 {
+    INT_CONSTANTS
+        .iter()
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| *value as i32)
+        .unwrap_or(0)
+}
+
+/// `self` 可能在 **`bound`**（属性通道）或 **`args[0]`**（建实例的隐式调用）——两条都接。
+fn this_of<'a>(
+    bound: Option<NonNull<Header>>,
+    args: &'a [NonNull<Header>],
+) -> Option<(NonNull<Header>, &'a [NonNull<Header>])> {
+    match bound {
+        Some(this) => Some((this, args)),
+        None => args.split_first().map(|(first, rest)| (*first, rest)),
+    }
+}
+
+fn socket_this(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    match this_of(bound, args) {
+        Some((this, _)) => Ok(this),
+        None => Err(type_error(
+            instance,
+            "`_socket.socket` 方法缺少 self".to_owned(),
+        )),
+    }
+}
+
+fn is_none_value(instance: &Instance, value: NonNull<Header>) -> bool {
+    value == instance.singletons().none()
+}
+
+/// 从实例属性读一个整数（缺失 ⇒ `None`）。
+fn socket_int_attribute(instance: &Instance, this: NonNull<Header>, name: &str) -> Option<i64> {
+    instance
+        .attribute_optional_of(this, name)
+        .ok()
+        .flatten()
+        .and_then(|value| instance.int_value(value))
+}
+
+/// 往实例属性写一个整数（`set_attribute_value` 是借用语义 ⇒ 自己那份要归还 ✓）。
+fn set_socket_int(instance: &Instance, this: NonNull<Header>, name: &str, value: i64) {
+    let object = instance.new_int(value);
+    let outcome = instance.set_attribute_value(this, name, object);
+    instance.release(object);
+    let _ = outcome;
+}
+
+/// 一条 socket 当前的 `fd`（`-1` ⇒ 已 close／detach，参照的"无 fd"形态 ✓）。
+///
+/// `_family`／`_type`／`_proto` 也写进实例属性（构造时 ✓）——本片没有读它们的公开面
+/// （参照的 `family`／`type`／`proto` 数据描述符不在首片），故不在这里取。
+fn socket_fd(instance: &Instance, this: NonNull<Header>) -> i64 {
+    socket_int_attribute(instance, this, "_fd").unwrap_or(-1)
+}
+
+/// 取整数实参；不是整数 ⇒ 照参照报 `TypeError`（`'str' object cannot be interpreted as an integer`）。
+fn socket_int(instance: &Instance, value: NonNull<Header>) -> Result<i64, pyawa_core::ExecError> {
+    if let Some(number) = instance.int_value(value) {
+        return Ok(number);
+    }
+    let name = instance.type_name(instance.type_of(value));
+    Err(type_error(
+        instance,
+        format!("'{name}' object cannot be interpreted as an integer"),
+    ))
+}
+
+/// 机器错误 ⇒ 参照口径的 `OSError` 子类（`CM-19`：按 **errno 名**查表 ✓；`CM-20`：映射按名字 ✓）。
+///
+/// 这**不是**第二份 errno 表：数字 → 名字 → 类名全部走 `errno_map`（生成物 ✓）；
+/// 只有 `strerror` 文案是本地一小张（`io_module` 的那张是私有的，跨模块不加宽可见性 ✓）。
+fn net_error(
+    instance: &Instance,
+    error: pyawa_core::CapabilityCallError,
+) -> pyawa_core::ExecError {
+    match error {
+        pyawa_core::CapabilityCallError::NotRegistered => instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket`：`net` 能力域未注册（`CP-2`），本轮未接线",
+        ),
+        pyawa_core::CapabilityCallError::NotImplemented => instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket`：`net` 域的该槽未实现（`CP-5`），本轮未接线",
+        ),
+        pyawa_core::CapabilityCallError::Machine(errno) => {
+            let name = crate::errno_map::ERRNO_ERRORCODE
+                .iter()
+                .find(|(number, _)| *number == errno as i64)
+                .map(|(_, name)| *name);
+            let class = name
+                .and_then(|name| {
+                    crate::errno_map::ERRNO_TO_CLASS
+                        .iter()
+                        .find(|(key, _)| *key == name)
+                        .map(|(_, class)| *class)
+                })
+                .unwrap_or("OSError");
+            let text = name.and_then(socket_strerror).unwrap_or("unknown error");
+            instance.raise_builtin_error(class, &format!("[Errno {errno}] {text}"))
+        }
+    }
+}
+
+fn socket_strerror(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "EBADF" => "Bad file descriptor",
+        "EOPNOTSUPP" => "Operation not supported",
+        "ENOTCONN" => "Transport endpoint is not connected",
+        "EPIPE" => "Broken pipe",
+        "ECONNRESET" => "Connection reset by peer",
+        "ECONNREFUSED" => "Connection refused",
+        "EINVAL" => "Invalid argument",
+        "EAFNOSUPPORT" => "Address family not supported by protocol",
+        "EAGAIN" => "Resource temporarily unavailable",
+        "EACCES" => "Permission denied",
+        "EMFILE" => "Too many open files",
+        "ENFILE" => "Too many open files in system",
+        "ENOMEM" => "Cannot allocate memory",
+        _ => return None,
+    })
+}
+
+/// 已 close／detach 的 socket 上操作 ⇒ `OSError(EBADF)`（`CP-18` 的 Python 侧形状 ✓）。
+fn raise_ebadf(instance: &Instance) -> pyawa_core::ExecError {
+    let errno = instance
+        .platform_constant("EBADF")
+        .unwrap_or(9) as i32;
+    net_error(instance, pyawa_core::CapabilityCallError::Machine(errno))
+}
+
+/// **`_socket.socket.__init__(self, family=-1, type=-1, proto=-1, fileno=None)`**。
+///
+/// - `fileno` 给了 ⇒ **接管**该 fd（`socketpair` 的 wrapper 路径：`a.detach()` 之后 ✓）；
+/// - 没给 ⇒ 经 `net` 域的 `socket` 槽真发 `socket(2)`（`-1` 取参照默认 `AF_INET/SOCK_STREAM/0` ✓）。
+fn socket_init_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some((this, positional)) = this_of(bound, args) else {
+        return Err(type_error(
+            instance,
+            "`_socket.socket.__init__` 缺少 self".to_owned(),
+        ));
+    };
+    if positional.len() > 4 {
+        return Err(type_error(
+            instance,
+            format!(
+                "`_socket.socket.__init__` takes at most 4 arguments ({} given)",
+                positional.len()
+            ),
+        ));
+    }
+    // 关键字面：family／type／proto／fileno（照参照签名 ✓）；与位置参数重复 ⇒ TypeError ✓。
+    let mut slots: [Option<NonNull<Header>>; 4] = [None; 4];
+    const KEYWORDS: [&str; 4] = ["family", "type", "proto", "fileno"];
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            return Err(type_error(instance, "keywords must be strings".to_owned()));
+        };
+        let Some(index) = KEYWORDS.iter().position(|candidate| *candidate == name) else {
+            return Err(type_error(
+                instance,
+                format!("`_socket.socket.__init__` got an unexpected keyword argument '{name}'"),
+            ));
+        };
+        if slots[index].is_some() || positional.get(index).is_some() {
+            return Err(type_error(
+                instance,
+                format!("`_socket.socket.__init__` got multiple values for argument '{name}'"),
+            ));
+        }
+        slots[index] = Some(*value);
+    }
+    let argument = |index: usize| slots[index].or_else(|| positional.get(index).copied());
+    // 缺省 -1（参照 `_socket` 的 C 签名默认值 ✓）；`None` 只对 fileno 有意义 ✓。
+    let as_int = |value: Option<NonNull<Header>>, default: i64| -> Result<i64, pyawa_core::ExecError> {
+        match value {
+            Some(value) if !is_none_value(instance, value) => socket_int(instance, value),
+            _ => Ok(default),
+        }
+    };
+    let family = as_int(argument(0), -1)?;
+    let kind = as_int(argument(1), -1)?;
+    let protocol = as_int(argument(2), -1)?;
+    let fileno_argument = argument(3).filter(|value| !is_none_value(instance, *value));
+    let (fd, family, kind, protocol) = match fileno_argument {
+        Some(value) => {
+            let fd = socket_int(instance, value)?;
+            (fd, family as i32, kind as i32, protocol as i32)
+        }
+        None => {
+            let family = if family < 0 { constant("AF_INET") } else { family as i32 };
+            let kind = if kind < 0 { constant("SOCK_STREAM") } else { kind as i32 };
+            let protocol = if protocol < 0 { 0 } else { protocol as i32 };
+            match instance.net_socket(family, kind, protocol) {
+                Ok(handle) => (handle as i64, family, kind, protocol),
+                Err(error) => return Err(net_error(instance, error)),
+            }
+        }
+    };
+    set_socket_int(instance, this, "_fd", fd);
+    set_socket_int(instance, this, "_family", i64::from(family));
+    set_socket_int(instance, this, "_type", i64::from(kind));
+    set_socket_int(instance, this, "_proto", i64::from(protocol));
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`_socket.socket.fileno()`**：返回 fd（已 close／detach ⇒ `-1`，参照一致 ✓）。
+fn socket_fileno_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let this = socket_this(instance, bound, args)?;
+    Ok(instance.new_int(socket_fd(instance, this)))
+}
+
+/// **`_socket.socket.detach()`**：交出 fd 并把对象置为"无 fd"（**不** close ✓，参照语义）。
+fn socket_detach_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let this = socket_this(instance, bound, args)?;
+    let fd = socket_fd(instance, this);
+    set_socket_int(instance, this, "_fd", -1);
+    Ok(instance.new_int(fd))
+}
+
+/// **`_socket.socket.close()`**：经 `net` 域 `close` 槽释放（`CP-17` 幂等 ✓）。
+fn socket_close_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let this = socket_this(instance, bound, args)?;
+    let fd = socket_fd(instance, this);
+    if fd >= 0 {
+        if let Err(error) = instance.net_close(fd as u64) {
+            return Err(net_error(instance, error));
+        }
+        set_socket_int(instance, this, "_fd", -1);
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`_socket.socket.send(data, flags=0)`**：经 `net` 域 `send` 槽发送；返回字节数。
+fn socket_send_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(type_error(instance, "`_socket.socket.send` 缺少 self".to_owned()));
+    };
+    let Some(data_value) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!("send() takes at least 1 argument ({} given)", rest.len()),
+        ));
+    };
+    // flags：首片只支持 0（其余如实报未接线，不假装支持 ✓）。
+    let flags = match rest.get(1).copied() {
+        Some(value) => socket_int(instance, value)?,
+        None => 0,
+    };
+    if flags != 0 {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket.socket.send`：`flags != 0` 的真 I/O 本轮未接线（首片只做 flags=0）",
+        ));
+    }
+    let Some(data) = instance.bytes_value(data_value) else {
+        let name = instance.type_name(instance.type_of(data_value));
+        return Err(type_error(
+            instance,
+            format!("a bytes-like object is required, not '{name}'"),
+        ));
+    };
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_send(fd as u64, data) {
+        Ok(sent) => Ok(instance.new_int(sent as i64)),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`_socket.socket.recv(bufsize, flags=0)`**：经 `net` 域 `recv` 槽接收；返回 `bytes`。
+fn socket_recv_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(type_error(instance, "`_socket.socket.recv` 缺少 self".to_owned()));
+    };
+    let Some(size_value) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!("recv() takes at least 1 argument ({} given)", rest.len()),
+        ));
+    };
+    let size = socket_int(instance, size_value)?;
+    if size < 0 {
+        return Err(instance.raise_builtin_error("ValueError", "negative buffersize in recv"));
+    }
+    let flags = match rest.get(1).copied() {
+        Some(value) => socket_int(instance, value)?,
+        None => 0,
+    };
+    if flags != 0 {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket.socket.recv`：`flags != 0` 的真 I/O 本轮未接线（首片只做 flags=0）",
+        ));
+    }
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    let mut buffer = vec![0u8; size as usize];
+    match instance.net_recv(fd as u64, &mut buffer) {
+        Ok(received) => Ok(instance.new_bytes(&buffer[..received])),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`_socket.socketpair(family=AF_UNIX, type=SOCK_STREAM, proto=0)`**（`CP-38`）。
+///
+/// 返回**两个** `_socket.socket` 实例（参照实测：返回 socket 对象而非裸 int ✓）。
+fn socketpair_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    check_arity(instance, "socketpair", Arity::DigitAtMost(3), args, kwargs)?;
+    let mut parameters = [constant("AF_UNIX"), constant("SOCK_STREAM"), 0i32];
+    for (index, value) in args.iter().take(3).enumerate() {
+        parameters[index] = socket_int(instance, *value)? as i32;
+    }
+    let (first, second) = match instance.net_socketpair(parameters[0], parameters[1], parameters[2])
+    {
+        Ok(pair) => pair,
+        Err(error) => return Err(net_error(instance, error)),
+    };
+    let Some(class) = socket_class_of(instance) else {
+        return Err(instance.raise_builtin_error(
+            "RuntimeError",
+            "`_socket.socket` 未登记（`_socket` 模块的类面缺失）",
+        ));
+    };
+    let mut created: Vec<NonNull<Header>> = Vec::with_capacity(2);
+    for fd in [first, second] {
+        let call_args = [
+            instance.new_int(i64::from(parameters[0])),
+            instance.new_int(i64::from(parameters[1])),
+            instance.new_int(i64::from(parameters[2])),
+            instance.new_int(fd as i64),
+        ];
+        let outcome = pyawa_core::call_value(instance, class, &call_args, &[]);
+        for argument in call_args {
+            instance.release(argument);
+        }
+        match outcome {
+            Ok(object) => created.push(object),
+            Err(error) => {
+                for object in created {
+                    instance.release(object);
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(instance.new_tuple(created))
+}
+
+/// 取 `_socket.socket` 类对象（**按实例的模块表查** —— 不建进程级静态表，`CP-13`／`OM-1` ✓）。
+fn socket_class_of(instance: &Instance) -> Option<NonNull<Header>> {
+    let modules = instance.modules()?;
+    let module = instance.dict_get(modules, NAME)?;
+    let namespace = pyawa_core::mounted_instance_dict(instance, module)?;
+    instance.dict_get(namespace, "socket")
 }

@@ -20,7 +20,7 @@
 #![allow(unsafe_code)] // 按项开许可的替代：本文件全是 FFI 入口胶水（调用 `unsafe extern "C"`）
 
 use core::ffi::{c_char, c_void};
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAIN_NET};
 use pyawa_abi::{
     pa_setcapability, pa_setcapability_async, pa_setglobal,
     pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host, pa_pushstring,
@@ -29,6 +29,7 @@ use pyawa_abi::{
 use pyawa_capabilities::fs::CapStatus;
 use pyawa_runtime::clock_system::SystemClock;
 use pyawa_runtime::fs_posix::PosixFs;
+use pyawa_runtime::net_posix::PosixNet;
 use std::ffi::CString;
 
 /// 用法／宿主侧错误的退出码（与脚本异常的 `1` 分开）。
@@ -96,6 +97,10 @@ fn main() {
     //（`SPEC-capabilities.md` §4 表第四项；分类是"可异步化" ✓）。
     let clock_provider = SystemClock::new();
     let clock_vtable = clock_provider.vtable();
+    // **`net` 域**（`P3-29` 首片）：`_socket` 的 `socketpair` 真 I/O 经它 ✓
+    // （`SPEC-capabilities.md` §4 表第二项；`CP-38`；分类"可异步化" ✓）。
+    let net_provider = PosixNet::new();
+    let net_vtable = net_provider.vtable();
     let source = match read_through_fs(&vtable, &path) {
         Ok(source) => source,
         Err(message) => {
@@ -138,6 +143,17 @@ fn main() {
         unsafe { pa_setcapability(state, PA_DOMAIN_CLOCK, clock_implementation) };
     if clock_async != status::PA_OK || clock_registered != status::PA_OK {
         eprintln!("pyawa: `clock` 域注册失败");
+        std::process::exit(EXIT_HOST);
+    }
+    // **`net` 域注册**（同一手法 ✓）
+    let net_implementation =
+        (&net_vtable as *const pyawa_capabilities::net::CpNetVtable).cast::<c_void>();
+    // SAFETY: `state` 已建成功；域号／分类取值都在表内。
+    let net_async = unsafe { pa_setcapability_async(state, PA_DOMAIN_NET, PA_ASYNC_OK) };
+    // SAFETY: 同上；`net_implementation` 指向活到本函数末尾的 vtable。
+    let net_registered = unsafe { pa_setcapability(state, PA_DOMAIN_NET, net_implementation) };
+    if net_async != status::PA_OK || net_registered != status::PA_OK {
+        eprintln!("pyawa: `net` 域注册失败");
         std::process::exit(EXIT_HOST);
     }
     if async_status != status::PA_OK || registered != status::PA_OK {

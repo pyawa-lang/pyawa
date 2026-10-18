@@ -23,8 +23,10 @@
 //!   其余 17 个函数（`alarm`／`pause`／`default_int_handler`／`setitimer`…）与 2 个类型
 //!   （`ItimerError`／`struct_siginfo`）**不导出** ⇒ `signal` 命名空间里没有这些名字
 //!   （参照在无这些名字的平台上走同一条路 ✓，但**本机参照有** ⇒ `HONEST_SCRIPT` 用 False 钉住"我们没有"）。
-//! - 原生函数的 `__doc__`：core 统一给**空串**（第 406 轮口径）⇒ `@_wraps` 可读、import 不受影响，
-//!   但包装函数 `.signal.__doc__` 读回 `None`（参照给 C 文档串）⇒ `HONEST_SCRIPT` 钉住 `None`。
+//! - 原生函数的 `__doc__`：core 统一给**空串**（第 406 轮口径）⇒ `@_wraps` 可读、import 不受影响；
+//!   **`P3-17` 之后 `@_wraps` 真的生效**（`wrapper.__doc__ = wrapped.__doc__` 走可写数据描述符 ✓）
+//!   ⇒ 包装函数 `.signal.__doc__` 读回**空串**（参照给 C 文档串；先前那个 `None` 是旧 setattr 被
+//!   getattr 槽遮蔽的假象 ✗）⇒ `HONEST_SCRIPT` 钉住空串。
 //! - 假货 enum 的成员是**普通 int**（与 `socket` 同一条口径）⇒ 不钉成员 repr／`_member_names_`
 //!   （假货不收别名 ✗）；钉 `_member_map_` 与值相等 ✓。
 
@@ -220,7 +222,7 @@ wrapper-getsignal !! NotImplementedError True
 wrapper-getsignal-usr1 !! NotImplementedError True
 narrowed-in-signal False False False False False
 narrowed-other False False False False False
-wrapper-doc None None
+wrapper-doc  
 "#;
 
 #[test]

@@ -107,6 +107,17 @@ pub(super) struct Lexed {
     /// **编译模式**（`BC-14` 的显式入参，词法期就带进来）：决定扩展词素（`?`）认不认；
     /// 语法层要判"扩展语法"时直接读它（免得给整张 parser 加参数）。
     pub(super) mode: Mode,
+    /// **括号内的物理换行**（`BC-62` 的多语句 `lambda` body 用）：值是"换行发生在第几个词素
+    /// **之前**"（即 `line_breaks` 里出现 `i` ⇒ 词素 `i-1` 与 `i` 之间有一个物理换行）。
+    ///
+    /// 为什么必须有它 ✗：括号内是**隐式续行**，参照（与本次词法器）**不发** `Newline` 词素
+    /// （`(...)` 里的多行表达式不能当语句边界 ✗）。但 `BC-62` 的 `( 语句… 末表达式 )` 要
+    /// **用换行分隔语句** ⇒ 只有把"哪儿有物理换行"记下来，`lambda` 体那一处才能区分
+    /// "多行表达式"（`(a +\n b)`）与"多条语句"（`(x = 1\n x)`）。
+    ///
+    /// **只在括号深度 > 0 时记**（深度 0 的换行本来就是 `Newline` 词素 ✓）；纯 Python 模式
+    /// 也照记，但只有扩展模式的 `lambda` 体读它 ⇒ `.py` 的解析与产物**逐字节不变**（`TS-5`）。
+    pub(super) line_breaks: Vec<usize>,
 }
 
 /// 解一个 `bytes` 字面量里的转义（`characters` 从**反斜杠**那一位开始）。
@@ -260,6 +271,8 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
     let mut index = 0usize;
     let mut lexemes = Vec::new();
     let mut spans = Vec::new();
+    // **括号内的物理换行**（`BC-62`；见 [`Lexed::line_breaks`]）：记录"换行发生在第几个词素之前"。
+    let mut line_breaks: Vec<usize> = Vec::new();
     let mut indents: Vec<usize> = vec![0];
     let mut at_line_start = true;
     let mut line: u32 = 1;
@@ -372,7 +385,9 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
             ' ' | '\r' | '\t' => index += 1,
             '\n' => {
                 if depth > 0 {
-                    // 隐式续行里的物理换行不进词法流（CPython 的 `NL` ✓）
+                    // 隐式续行里的物理换行不进词法流（CPython 的 `NL` ✓）——但**记一笔**，
+                    // `BC-62` 的多语句 lambda body 要据此切语句（见 `Lexed::line_breaks`）。
+                    line_breaks.push(lexemes.len());
                     index += 1;
                     line += 1;
                     line_start_index = index;
@@ -1021,7 +1036,7 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
     }
     lexemes.push(Lexeme::End);
     spans.push(end_span);
-    Ok(Lexed { lexemes, spans, mode })
+    Ok(Lexed { lexemes, spans, mode, line_breaks })
 }
 
 // ---- 语法 ----

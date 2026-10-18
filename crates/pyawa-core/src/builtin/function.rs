@@ -163,8 +163,12 @@ pub fn function_annotations(
 /// `__name__`／`__qualname__`／`__code__`／`__defaults__`（无默认值 ⇒ `None`）／
 /// `__kwdefaults__`（同上）／`__globals__`／`__annotate__`（PEP 649；**无注解 ⇒ `None`**）。
 ///
-/// **未接**：`__doc__`（本层不解析文档字符串 ⇒ 一律 `None`，与"没有文档字符串"的情形一致）、
-/// `__annotations__`（要调用 `__annotate__` 并**缓存**，另一笔——实测它的 `is` 稳定）。
+/// **可写属性**（`__name__`／`__qualname__`／`__doc__`／`__module__`）：先看函数对象上的
+/// **覆盖字段**（`functools.wraps` 的 `setattr` 就走这条 ✓；那四个字段由
+/// `function.__dict__` 里的 `function_attribute_descriptor` 写 ✓ —— 见本文件末尾的
+/// `function_attribute_descriptor_set`）；没覆盖才用 code object／`__globals__` 的默认值 ✓。
+/// **注意**：这条槽在实例字典之前跑 ✓ ⇒ 覆盖值不会被 `f.__dict__` 里同名的项遮住 ✓
+/// （与参照的**数据描述符优先于实例字典**同效 ✓）。
 /// 返回值一律**新引用**（调用方按 `OM-16` 接手）。
 pub unsafe fn function_getattr(
     ptr: *mut Header,
@@ -174,18 +178,35 @@ pub unsafe fn function_getattr(
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<FunctionObject>() };
     match name {
-        "__name__" | "__qualname__" => {
+        "__name__" => {
+            if let Some(override_value) = object.name_override() {
+                // SAFETY: 覆盖值由函数持有，调用方要自己那份。
+                unsafe { instance.incref_object(override_value.as_ptr()) };
+                return Some(override_value);
+            }
             let code = object.code();
             // SAFETY: code 由函数持有，存活。
             let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
-            let text = if name == "__name__" {
-                code.name()
-            } else {
-                code.qualname()
-            };
-            Some(instance.new_str(text))
+            Some(instance.new_str(code.name()))
+        }
+        "__qualname__" => {
+            if let Some(override_value) = object.qualname_override() {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(override_value.as_ptr()) };
+                return Some(override_value);
+            }
+            let code = object.code();
+            // SAFETY: code 由函数持有，存活。
+            let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
+            Some(instance.new_str(code.qualname()))
         }
         "__doc__" => {
+            // **覆盖值优先** ✓：`del f.__doc__` 之后参照给 `None`（不是 code 的文档串 ✓）。
+            if let Some(override_value) = object.doc_override() {
+                // SAFETY: 覆盖值由函数持有，调用方要自己那份。
+                unsafe { instance.incref_object(override_value.as_ptr()) };
+                return Some(override_value);
+            }
             let code = object.code();
             // SAFETY: code 由函数持有，存活。
             let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
@@ -253,6 +274,12 @@ pub unsafe fn function_getattr(
         // 动因：上限榜上 `object has no attribute '__module__'` × **67** 个模块 ✓ ——
         // `Lib/_collections_abc.py` 一族用 `getattr(x, "__module__")` 探 typing 别名 ✓。
         "__module__" => {
+            // **覆盖值优先** ✓（`functools.wraps` 的 `setattr(wrapper, "__module__", …)` ✓）。
+            if let Some(override_value) = object.module_override() {
+                // SAFETY: 覆盖值由函数持有，调用方要自己那份。
+                unsafe { instance.incref_object(override_value.as_ptr()) };
+                return Some(override_value);
+            }
             // 注意：`globals()` 给的是**命名空间字典本身** ⇒ 直接查 `__name__` ✓
             // （`module_text` 要的是**模块对象** ✗，第一版传错了 ⇒ 一律退回 `builtins` ✗）。
             let module = object
@@ -308,6 +335,18 @@ pub(crate) unsafe fn function_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*
     if let Some(value) = object.annotations_cache() {
         visit(value.as_ptr());
     }
+    // **可写属性的覆盖值**（`py_object!` 第二臂的四个默认字段 ✓）：持引用 ⇒ 必须走 GC ✓。
+    for value in [
+        object.name_override(),
+        object.qualname_override(),
+        object.doc_override(),
+        object.module_override(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        visit(value.as_ptr());
+    }
     for cell in object.closure() {
         visit(cell.as_ptr());
     }
@@ -345,15 +384,288 @@ pub(crate) unsafe fn function_clear(ptr: *mut Header, instance: &Instance) {
         // SAFETY: 同上。
         unsafe { instance.release_object(value.as_ptr()) };
     }
+    // **可写属性的覆盖值**（四个默认字段；`OM-12` 的"持引用字段必须被 clear 覆盖" ✓）。
+    for value in [
+        object.set_name_override(None),
+        object.set_qualname_override(None),
+        object.set_doc_override(None),
+        object.set_module_override(None),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
 }
 
 /// 函数的 `repr`：`<function demo at 0x…>`（实测）。
-pub unsafe fn function_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
+pub unsafe fn function_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<FunctionObject>() };
+    // **`__qualname__` 覆盖值优先** ✓（参照的 `repr` 用的就是 `__qualname__` ✓：
+    // `functools.wraps` 之后 `repr(f)` 与 `repr(g)` 同名 ✓）。
+    if let Some(override_value) = object.qualname_override() {
+        if let Some(text) = instance.text_of(override_value) {
+            return Ok(format!("<function {text} at {ptr:p}>"));
+        }
+    }
     // SAFETY: 函数持有 code object 的一份引用。
     let code = object.code();
     // SAFETY: 同上。
     let name = unsafe { code.cast::<crate::CodeObject>().as_ref() }.name();
     Ok(format!("<function {name} at {ptr:p}>"))
+}
+
+// --------------------------------------------------------------------------- #
+// **函数可写属性** ＝ **可写 getset 数据描述符**（`P3-17` 同族 ＋ `functools.wraps.__name__` 的正路 ✓）
+// --------------------------------------------------------------------------- #
+//
+// 参照 3.14.4 实测（逐条对拍，脚本见 `crates/pyawa-runtime/tests/function_attributes.rs`）：
+// `f.__name__`／`f.__qualname__`／`f.__doc__`／`f.__module__` 在 `function.__dict__` 里是
+// **数据描述符**（getset／member descriptor ✓）⇒ 赋值走 `__set__`、**不**进实例字典 ✓；
+// 读走 `__get__`，且**优先于实例字典** ✓。`__name__`／`__qualname__` 的 `__set__` 只收
+// `str`（子类也收 ✓），`del` 也走 `__set__(NULL)` ⇒ `TypeError: … must be set to a string object` ✓；
+// `__doc__`／`__module__` 不收类型限制、可以 `del`（`del` 之后读到 `None` ✓）。
+//
+// 本层实现：值存在 [`FunctionObject`] 的四个**覆盖字段**里（`py_object!` 第二臂 ✓，
+// 不进实例字典 ✓），描述符对象由 `executor::protocol::install_builtin_descriptors` 装进
+// `function` 的类型字典 ✓。**如实登记**：描述符**类型名**是自建的
+// `function_attribute_descriptor`（参照是 `getset_descriptor`／`member_descriptor`）——
+// 类别偏差按既有"方案 A"口径如实标 ✓，语义面逐条一致 ✓。
+
+/// 可写属性的种类（描述符实例的 `_kind` 字符串 ⇒ 这里的第一维 ✓）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FunctionAttributeKind {
+    Name,
+    Qualname,
+    Doc,
+    Module,
+}
+
+impl FunctionAttributeKind {
+    /// 从描述符实例的 `_kind` 取种类（**借用视图** ⇒ 立刻转成枚举 ✓）。
+    fn of(instance: &Instance, descriptor: NonNull<Header>) -> Option<Self> {
+        let kind = instance
+            .attribute_optional_of(descriptor, "_kind")
+            .ok()
+            .flatten()?;
+        match instance.text_of(kind)? {
+            "name" => Some(Self::Name),
+            "qualname" => Some(Self::Qualname),
+            "doc" => Some(Self::Doc),
+            "module" => Some(Self::Module),
+            _ => None,
+        }
+    }
+
+    /// Python 侧的属性名（错误消息与 `function_getattr` 的默认值都用它 ✓）。
+    fn attribute_name(self) -> &'static str {
+        match self {
+            Self::Name => "__name__",
+            Self::Qualname => "__qualname__",
+            Self::Doc => "__doc__",
+            Self::Module => "__module__",
+        }
+    }
+}
+
+/// 取函数对象；不是 `function` ⇒ 参照那句 `descriptor '…' for 'function' objects doesn't apply to a '…' object`。
+fn function_target(
+    instance: &Instance,
+    kind: FunctionAttributeKind,
+    target: NonNull<Header>,
+) -> Result<NonNull<Header>, ExecError> {
+    if instance.type_name(instance.type_of(target)) != "function" {
+        let actual = instance.type_name(instance.type_of(target));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "descriptor '{}' for 'function' objects doesn't apply to a '{actual}' object",
+                kind.attribute_name()
+            ),
+        ));
+    }
+    Ok(target)
+}
+
+/// 按种类换**覆盖字段**，返回旧值（**调用方负责归还**）。
+fn replace_override(
+    object: &FunctionObject,
+    kind: FunctionAttributeKind,
+    value: Option<NonNull<Header>>,
+) -> Option<NonNull<Header>> {
+    match kind {
+        FunctionAttributeKind::Name => object.set_name_override(value),
+        FunctionAttributeKind::Qualname => object.set_qualname_override(value),
+        FunctionAttributeKind::Doc => object.set_doc_override(value),
+        FunctionAttributeKind::Module => object.set_module_override(value),
+    }
+}
+
+/// **`function_attribute_descriptor.__get__(obj, owner=None)`** ✓。
+pub(crate) unsafe fn function_attribute_descriptor_get(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(descriptor) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' needs an argument",
+        ));
+    };
+    let Some(kind) = FunctionAttributeKind::of(instance, descriptor) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' 的 _kind 不合法",
+        ));
+    };
+    // **实参个数照参照** ✓（3.14.4 实测：0 ⇒ `__get__ expected at least 1 argument, got 0`；
+    // 3+ ⇒ `… at most 2 arguments, got N` ✓）。
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__get__ expected at least 1 argument, got 0",
+        ));
+    }
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("__get__ expected at most 2 arguments, got {}", args.len()),
+        ));
+    }
+    let none = instance.singletons().none();
+    let target = args[0];
+    // `descr.__get__(None, owner)` ⇒ 交回**描述符自己** ✓（参照 getset 的口径 ✓）；
+    // `owner` 缺省或也是 `None` ⇒ `TypeError: __get__(None, None) is invalid` ✓。
+    if target == none {
+        let owner_missing = args.len() < 2 || args[1] == none;
+        if owner_missing {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "__get__(None, None) is invalid",
+            ));
+        }
+        return Ok(instance.retain(descriptor));
+    }
+    let target = function_target(instance, kind, target)?;
+    // **一处真相**：默认值（code object／`__globals__`）由 `function_getattr` 给 ✓，
+    // 覆盖值的检查也在它里面（且优先）✓。
+    // SAFETY: 上面已确认 target 是函数对象。
+    unsafe { function_getattr(target.as_ptr(), kind.attribute_name(), instance) }.ok_or_else(|| {
+        instance.raise_builtin_error(
+            "AttributeError",
+            &format!("'function' object has no attribute {}", kind.attribute_name()),
+        )
+    })
+}
+
+/// **`function_attribute_descriptor.__set__(obj, value)`** ✓（写覆盖字段，**不**动实例字典 ✓）。
+pub(crate) unsafe fn function_attribute_descriptor_set(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(descriptor) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__set__' needs an argument",
+        ));
+    };
+    let Some(kind) = FunctionAttributeKind::of(instance, descriptor) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__set__' 的 _kind 不合法",
+        ));
+    };
+    // **实参个数照参照** ✓（实测：`__set__ expected 2 arguments, got N` ✓）。
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("__set__ expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    let target = args[0];
+    let value = args[1];
+    let target = function_target(instance, kind, target)?;
+    // 参照实测：`__name__`／`__qualname__` 只收 `str`（`str` 子类也收 ✓）；
+    // `__doc__`／`__module__` 什么对象都收 ✓。
+    match kind {
+        FunctionAttributeKind::Name | FunctionAttributeKind::Qualname => {
+            if instance.text_of(value).is_none() {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("{} must be set to a string object", kind.attribute_name()),
+                ));
+            }
+        }
+        // 参照实测：`__doc__`／`__module__` 的 `__set__` 不收类型限制 ✓。
+        FunctionAttributeKind::Doc | FunctionAttributeKind::Module => {}
+    }
+    // SAFETY: 上面已确认 target 是函数对象。
+    let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+    // **本函数接手一份新引用**（字段持有它 ✓）。
+    instance.retain(value);
+    let previous = replace_override(object, kind, Some(value));
+    if let Some(previous) = previous {
+        // SAFETY: previous 是旧覆盖值，由本函数负责归还。
+        unsafe { instance.release_object(previous.as_ptr()) };
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`function_attribute_descriptor.__delete__(obj)`** ✓。
+///
+/// 参照实测：`__name__`／`__qualname__` 抛 `TypeError: … must be set to a string object` ✓；
+/// `__doc__`／`__module__` **可以删**，删完读到 `None` ✓（⇒ 存一个显式的 `None` 覆盖 ✓，
+/// 不是"回到 code object 的默认值" ✗）。
+pub(crate) unsafe fn function_attribute_descriptor_delete(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(descriptor) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__delete__' needs an argument",
+        ));
+    };
+    let Some(kind) = FunctionAttributeKind::of(instance, descriptor) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__delete__' 的 _kind 不合法",
+        ));
+    };
+    // **实参个数照参照** ✓（实测 0 ⇒ `TypeError: expected 1 argument, got 0` ✓）。
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("expected 1 argument, got {}", args.len()),
+        ));
+    }
+    let target = args[0];
+    let target = function_target(instance, kind, target)?;
+    match kind {
+        // 参照的 `__set__` 收到 `NULL` 时就是这句（它把 `NULL` 当"不是 str" ✓）。
+        FunctionAttributeKind::Name | FunctionAttributeKind::Qualname => {
+            Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{} must be set to a string object", kind.attribute_name()),
+            ))
+        }
+        FunctionAttributeKind::Doc | FunctionAttributeKind::Module => {
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let none = instance.retain(instance.singletons().none());
+            if let Some(previous) = replace_override(object, kind, Some(none)) {
+                // SAFETY: previous 是旧覆盖值，由本函数负责归还。
+                unsafe { instance.release_object(previous.as_ptr()) };
+            }
+            Ok(instance.retain(instance.singletons().none()))
+        }
+    }
 }

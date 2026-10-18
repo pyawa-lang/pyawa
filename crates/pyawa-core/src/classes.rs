@@ -693,6 +693,12 @@ pub fn build_class_from_parts_with_keywords(
         [
             "dict", "list", "tuple", "set", "frozenset", "deque", "int", "str", "float", "bytes",
             "bytearray", "bool",
+            // **描述符三族**（`P3-17` 追加 ✓）：`class abstractclassmethod(classmethod)`／
+            // `abstractstaticmethod(staticmethod)`／`abstractproperty(property)`（`Lib/abc.py` ✓）
+            // 必须**沿用基类布局** ✓ —— 否则子类落到通用 `AttributeObject` 布局 ✗ ⇒ 载荷里没有
+            // 被包的函数／fget ✗ ⇒ 描述符 `__get__`／`__set__` 读不到东西（实测：强转读到 NULL ⇒ abort ✗）。
+            // 与上面容器／数值族同一判据（基类自带 `new` 槽 ✓）；行为同 `class D(dict)` ✓。
+            "classmethod", "staticmethod", "property",
         ]
             .iter()
             .find_map(|name| {

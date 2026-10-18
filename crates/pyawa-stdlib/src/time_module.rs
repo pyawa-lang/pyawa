@@ -4,7 +4,7 @@
 //! 全部**经 `clock` 域**取（`CX-4`：本 crate 不碰平台 ✓）。
 //!
 //! **如实登记的未接面** ✗（`CM-6`：未提供 ⇒ `ImportError`／未实现 ⇒ `NotImplementedError` ✓）：
-//! `sleep()`（vtable 里的 `sleep_ns` 槽位本轮仍为 `None` ⇒ 调它报未实现 ✓）、
+//! ~~`sleep()`~~ **round 12 已接**：经 `Instance::cancellable_sleep_ns`（`T-CP-10` 可取消等待）✓、
 //! `perf_counter*`／`process_time*`／`thread_time*`（要另外的钟 ✓）、
 //! `struct_time`／`gmtime`／`localtime`／`mktime`／`strftime`／`strptime`（要日历与时区表 ✓）、
 //! `timezone`／`altzone`／`daylight`／`tzname`／`tzset`（要时区库 ✓）。
@@ -121,17 +121,70 @@ fn perf_counter_ns_native(
     Ok(instance.new_int(value))
 }
 
-/// `time.sleep(seconds)`：`sleep_ns` 槽位本轮仍为 `None` ⇒ **如实报未实现** ✓（不假装睡过 ✓）。
+/// `time.sleep(seconds)`：经 `clock.sleep_ns` 分片可取消睡眠（`T-CP-10`，`CP-27`／`CP-28`）。
+///
+/// - 参数／错误形状照参照实测（`time.sleep() takes exactly one argument (N given)`、
+///   `'str' object cannot be interpreted as an integer or float`、`sleep length must be non-negative`、
+///   `Invalid value NaN (not a number)`、`OverflowError: timestamp out of range for platform time_t`）；
+/// - **中断**：`pa_interrupt` ⇒ `cancellable_sleep_ns` 返回"已取消" ⇒ 这里转
+///   `ExecError::Interrupted` ⇒ `pa_exec_*` 返回 `PA_ERR_INTERRUPT`（既有中断口径；参照是
+///   Python 层 `KeyboardInterrupt`，此为如实差异）；
+/// - `clock` 域/槽位未提供 ⇒ `NotImplementedError`（`CP-5` 的三态，与其它 `time` 函数同一口径）。
 fn sleep_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    Err(instance.raise_builtin_error(
-        "NotImplementedError",
-        "`time.sleep`：`clock` 域的 `sleep_ns` 槽位未提供",
-    ))
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "time.sleep() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("time.sleep() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let value = args[0];
+    let seconds = if let Some(integer) = instance.int_value(value) {
+        integer as f64
+    } else if let Some(number) = instance.float_value(value) {
+        number
+    } else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object cannot be interpreted as an integer or float"),
+        ));
+    };
+    if seconds.is_nan() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "Invalid value NaN (not a number)",
+        ));
+    }
+    if seconds < 0.0 {
+        return Err(instance.raise_builtin_error("ValueError", "sleep length must be non-negative"));
+    }
+    if !seconds.is_finite() || seconds * 1e9 >= i64::MAX as f64 {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "timestamp out of range for platform time_t",
+        ));
+    }
+    // 向上取整：不许比请求更早返回（与 `select` 的 timeout 换算同一口径）。
+    let total_ns = (seconds * 1e9).ceil() as i64;
+    match instance.cancellable_sleep_ns(total_ns) {
+        // `CP-28`：已取消 ⇒ 转成既有中断口径（`PA_ERR_INTERRUPT`）；其后的脚本指令一条都不跑。
+        Ok(false) => Err(ExecError::Interrupted),
+        Ok(true) => Ok(instance.new_none()),
+        // 三态错误（未注册／槽位未实现／机器错误）沿用 `clock_value` 的既有映射。
+        // 三态错误（未注册／槽位未实现／机器错误）沿用 `clock_value` 的既有映射（一定返回 `Err`）。
+        Err(error) => clock_value(instance, Err(error), "sleep").map(|_| instance.new_none()),
+    }
 }
 
 /// 建 `time` 模块的命名空间（**新引用** 的 `dict`）。

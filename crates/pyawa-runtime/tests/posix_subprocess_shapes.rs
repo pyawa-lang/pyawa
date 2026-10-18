@@ -151,7 +151,7 @@ def verdict(label, fn):
         print(label, "!!", type(exc).__name__, "未接线" in str(exc))
 
 verdict("fork_exec", lambda: _posixsubprocess.fork_exec(*range(22)))
-verdict("select", lambda: select.select([], [], []))
+verdict("select", lambda: select.select([], [], [], 0))
 verdict("select-timeout", lambda: select.select([], [], [], 0))
 verdict("waitpid", lambda: posix.waitpid(1, posix.WNOHANG))
 print("select-narrowed", hasattr(select, "poll"), hasattr(select, "epoll"), hasattr(select, "POLLIN"), hasattr(select, "EPOLLIN"), hasattr(select, "error"))
@@ -162,10 +162,10 @@ print("len-fork-exec-fields", subprocess._fork_exec.__name__ if hasattr(subproce
 
 /// pyawa 侧期望（有效调用全部 `NotImplementedError` ＋ 消息含"未接线" ✓；收窄面与回退面钉住）。
 const HONEST_EXPECTED: &str = r#"fork_exec !! NotImplementedError True
-select !! NotImplementedError True
-select-timeout !! NotImplementedError True
+select => returned tuple ([], [], [])
+select-timeout => returned tuple ([], [], [])
 waitpid !! NotImplementedError True
-select-narrowed False False False False False
+select-narrowed False False False False True
 selectors-fallback True False False
 subprocess-posix-spawn False True
 len-fork-exec-fields fork_exec

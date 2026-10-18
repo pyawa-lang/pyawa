@@ -26,12 +26,12 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 | `CX-2` | 已实现 | `T-CX-2`：§1 ↔ 根 `README.md` 计数 ② 任一 `README.md` 里的规格状态标注 |
 | `CX-3` | 已实现 | `T-CX-3`：`static mut`／`thread_local` 扫描 |
 | `CX-4` | 已实现 | `T-CX-4`：`std::fs`／`std::net`／libc／`#[cfg(target_os)]` 扫描 |
-| `CX-5` | 未实现 | 等 `pyawa-capabilities` 接线；该 crate 目前只有骨架 |
+| `CX-5` | 已实现 | **不设 `check.py` 专项扫描**：由 `T-CX-4`（`CX-4` 的平台依赖扫描）承担——能力接口 crate 无平台依赖即不可能含真实机器实现；`pyawa-capabilities` 现在只有类型与函数指针（`fs`／`clock`／`net` 形状） |
 | `CX-6` | 已实现 | `T-CX-5`：`Rc`／`Arc` 作对象引用的扫描 |
 | `CX-7` | 已实现 | `T-CX-9`：位常量可求值且不与 `RESERVED_MASK` 相交；`RESERVED_MASK` 引用白名单 |
 | `CX-8` | 未实现 | `Lib/` 在 M3 引入 |
 | `CX-9` | 未实现 | 依赖编译管线（M2） |
-| `CX-10` | 未实现 | 依赖能力接口接线 |
+| `CX-10` | 已实现 | **Rust 侧承担**：`crates/pyawa-abi/tests/capability_acceptance.rs` 的编译期断言（`T-CP-9`：可异步化槽位的精确 `extern "C"` 签名不含 VM 对象类型） |
 | `CX-11` | 未实现 | 依赖 `pyawa-abi` 落地 |
 | `CX-12` | 已实现 | **不设 `check.py` 扫描**：由 Rust 侧 `T-OM-9` 承担（`cargo test --workspace` 即 CI，断言"除 `clear` 外无释放路径"） |
 | `CX-13` | 已实现 | `crates/pyawa-stdlib/tests/sys.rs` 的 `the_identity_is_pyawa_not_cpython`：`implementation.name` 报 **`pyawa`**（并断言 **`!= "cpython"`**、`cache_tag` 用自己的值）；**Rust 侧承担**（`cargo test` 即 CI），同 `CX-12` 的先例 |

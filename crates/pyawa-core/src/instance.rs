@@ -15,6 +15,10 @@ use crate::flags;
 /// **只漏不放** 的实验开关 ✓（第 238 轮，仅供对照实验 ✓）：`PYAWA_LEAK_MODE` **只读一次** ✓。
 mod fs;
 
+mod net;
+
+mod path;
+
 mod refcount;
 
 mod util;
@@ -34,6 +38,8 @@ mod registry;
 mod alloc;
 mod containers;
 mod state;
+mod capability_table;
+mod wait;
 
 use crate::bigint::IntValue;
 use crate::executor::ExecError;
@@ -134,6 +140,12 @@ pub struct Instance {
     /// 存的是**不透明指针**（`AB-32`：本层只存不解释 ✓）；`fs` 域的形状解释见
     /// [`Instance::fs_vtable`]（`CP-12`：形状来自 `pyawa-capabilities` ✓）。
     capabilities: RefCell<[CapabilityEntry; pyawa_capabilities::DOMAIN_COUNT]>,
+    /// **`CP-31`**：每实例的 `fd → 能力对象` 表（`fd` ＝ 表下标）。
+    ///
+    /// 为什么在 `Instance` 上：`fd` 的分配／释放／复制（含 `dup2`）**必须**由 VM 侧完成
+    /// （`CP-31`），provider 只给不透明句柄；实例销毁由 `Drop` 兜底释放全部条目（`CP-19`）。
+    /// 实现与语义（别名计数、`select` 分流）见 `instance/capability_table.rs`。
+    capability_table: RefCell<capability_table::CapabilityTable>,
     /// **模块表**（`IM-`：`import` 查的就是这一份 ✓）。与 `sys.modules` 是**同一个 dict**
     /// （一处真相 ✓，由组合根装 ✓）；未装 ⇒ `import` 报"加载器未接" ✓。
     modules: RefCell<Option<NonNull<Header>>>,
@@ -185,11 +197,22 @@ pub struct Instance {
     gc_running: Cell<bool>,
     /// **`OM-11` 的 `repr` 递归守卫**（`CX-3`：按实例存）：正在生成 `repr` 的对象地址。
     repr_guard: RefCell<Vec<usize>>,
+    /// **`CP-22`：实例 cwd**（`SPEC-capabilities.md`；`os.chdir` 的落点）。
+    ///
+    /// guest 绝对形态（`/` ＝ 根能力的根）；`None` ＝ 尚未设置 ⇒ 首次解析时取宿主进程 cwd
+    /// 作为初值（**过渡口径**：`CP-24` 的残余权威，正路是宿主创建实例时显式给，见
+    /// `instance/path.rs` 的模块文档）。
+    path_cwd: RefCell<Option<Vec<u8>>>,
     /// **`AB-5`①／`CX-3`**：本实例被请求中断（`pa_interrupt` 的落点）。
     ///
     /// **按实例**存——`CX-3` 禁止进程级共享；执行器每条指令检查一次，
     /// 于是"执行类函数随即返回"（`PA_ERR_INTERRUPT`）成立。
-    interrupted: Cell<bool>,
+    /// **`AB-5`①**：中断请求标志。
+    ///
+    /// **原子**（round 12）：`pa_interrupt` 的契约是宿主在执行中从**另一线程**请求中断
+    /// （DESIGN §7.2 的"VM 线程等待能力结果时宿主必须能中断"）⇒ 普通 `Cell<bool>` 跨线程
+    /// 读写是数据竞争；用 `AtomicBool` 让"执行中另一线程 `pa_interrupt`"有明确定义。
+    interrupted: core::sync::atomic::AtomicBool,
 }
 
 impl Instance {
@@ -2093,6 +2116,9 @@ impl Drop for Instance {
     /// **OM-2**：实例销毁**必须**释放其堆内全部内存，**无论循环是否被回收过**——
     /// 不依赖回收器先跑完。
     fn drop(&mut self) {
+        // **`CP-19`**：实例销毁**必须**释放全部能力表条目（逐条调 provider `close` 槽，
+        // 不依赖回收器先跑完）——与下面的内存回收路径无关，所以放最前面。
+        self.capability_close_all();
         // 正常路径下 `live` 已经空了。仍有残留 ⇒ 计数环或未交出的引用，
         // 此时**强制释放**：不调终结器、不再 clear（环的语义已由 §9 的回收器负责，
         // 走到这里说明调用方没有 collect，而不是回收器做不到）。

@@ -162,7 +162,39 @@ fn register_native(
     Ok(instance.new_none())
 }
 
-/// **`lookup(encoding)`**：按注册顺序问每个查找函数；都没有 ⇒ `LookupError: unknown encoding: X` ✓。
+/// **按注册顺序问一遍 search function**：都没有 ⇒ `None`（`codecs.register` 的注册表）。
+///
+/// 直接转发调用方那个**对象**（借用 ⇒ `call_value` 自己 retain ✓）；返回的是**新引用**。
+fn ask_search_functions(
+    instance: &Instance,
+    query: NonNull<Header>,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let none = instance.singletons().none();
+    let Some(list) = module_state(instance, SEARCH_FUNCTIONS) else {
+        return Ok(None);
+    };
+    let Some(functions) = instance.list_items(list) else {
+        return Ok(None);
+    };
+    for function in functions {
+        let result = pyawa_core::executor::call::call_value(instance, function, &[query], &[])?;
+        if result == none {
+            // `call_value` 交的是**新引用** ⇒ 不要就当场还 ✓
+            instance.release(result);
+            continue;
+        }
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
+/// **`lookup(encoding)`**：内建表 → 注册的 search function → **懒导入 `encodings`** 再试 → 都没有
+/// ⇒ `LookupError: unknown encoding: X` ✓。
+///
+/// **懒导入**（task-9）：参照的 `_codecs.lookup` 在注册表未命中时会**自己**把 `encodings` 包导入
+/// （`encodings/__init__.py:161` 在导入期 `codecs.register(search_function)` ✓）⇒
+/// `import codecs; codecs.lookup('cp932')` **不需要**调用方先 `import encodings` ✓。先前本层要求
+/// 先导入 ⇒ 与参照不符 ✗。导入失败（找不到包）就照旧报 `LookupError`，不把"没这个包"当异常抛 ✓。
 fn lookup_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -172,31 +204,44 @@ fn lookup_native(
     let name = text_argument(instance, args, 0, "lookup")?;
     // **内建编码表优先** ✓（第 726 轮）：`ascii`／`latin-1`／`utf-8`／`cp437` ＋ 别名 ✓ —— 由
     // **Rust 造的 `CodecInfo` 类**交付 ✓（与 `_sre` 的 Pattern／Match 同例 ✓）。
-    // **如实口径** ✗：其余编码才走下面已注册的 search function ✓（还**不**查 `encodings` 包 ——
-    // 那要 `namedtuple`，见台账 ✓）。
     if let Some(canonical) = canonical_codec(&name) {
         return codec_info_of(instance, canonical);
     }
-    let none = instance.singletons().none();
-    // 直接转发调用方那个**对象**（借用 ⇒ `call_value` 自己 retain ✓）
-    if let (Some(list), Some(query)) = (module_state(instance, SEARCH_FUNCTIONS), args.first().copied())
-    {
-        if let Some(functions) = instance.list_items(list) {
-            for function in functions {
-                let result = pyawa_core::executor::call::call_value(instance, function, &[query], &[])?;
-                if result == none {
-                    // `call_value` 交的是**新引用** ⇒ 不要就当场还 ✓
-                    instance.release(result);
-                    continue;
-                }
-                return Ok(result);
-            }
-        }
+    // search function 收**归一后的名字**（照参照 ✓）；报错文案用调用方原文 ✓。
+    let normalized = normalize_encoding_name(&name);
+    let query = instance.new_str(&normalized);
+    let normalized_result = lookup_through_search_functions(instance, query);
+    // `.0` 是归一后的名字对象（新引用）⇒ 查完就还 ✓。
+    instance.release(query);
+    if let Some(found) = normalized_result? {
+        return Ok(found);
     }
     Err(instance.raise_builtin_error(
         "LookupError",
         &format!("unknown encoding: {name}"),
     ))
+}
+
+/// `lookup` 的后半：问注册的 search function（没有就**懒导入 `encodings`** 再问一遍）。
+fn lookup_through_search_functions(
+    instance: &Instance,
+    query: NonNull<Header>,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    if let Some(found) = ask_search_functions(instance, query)? {
+        return Ok(Some(found));
+    }
+    // **懒导入 `encodings`**（照参照 ✓）：它一导入就 `codecs.register(search_function)`。
+    match pyawa_core::executor::import::import_through_bridge(instance, "encodings") {
+        Ok(Some(_module)) => {
+            // `import_through_bridge` 交的是**借用**（模块表持着）⇒ 不释放 ✓
+            if let Some(found) = ask_search_functions(instance, query)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None) => {}
+        Err(error) => return Err(error),
+    }
+    Ok(None)
 }
 
 /// **`register_error(name, handler)`** ✓。
@@ -706,6 +751,30 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let doc = instance.new_str("Codec registry and base classes (Pyawa's built-in codecs).");
     instance.dict_set(namespace, "__doc__", doc);
     namespace
+}
+
+/// **`_codecs.lookup` 的名字归一**（照参照 C 侧 `codecs.c: normalize_encoding` ✓）：**转小写**、
+/// 非字母数字（`.` 除外）折叠成单个 `_`、去首尾 `_`。
+///
+/// 为什么必须在这里做 ✓：`search_function` 收的是**归一后的名字**（参照的 C 实现先归一 ✓）——
+/// 先前本层把调用方**原文**直接转给 search function ✗ ⇒ `codecs.lookup('ROT13')`／`lookup('Hex')`
+/// 在 `encodings` 里按大小写找模块 ⇒ 找不到 ✗（参照都能查 ✓）。**报错文案仍用调用方原文** ✓
+/// （`LookupError: unknown encoding: ROT13`）。
+fn normalize_encoding_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut punct = false;
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() || character == '.' {
+            if punct && !out.is_empty() {
+                out.push('_');
+            }
+            out.push(character.to_ascii_lowercase());
+            punct = false;
+        } else {
+            punct = true;
+        }
+    }
+    out
 }
 
 /// **编码名归一**（`_codecs.lookup` 的内建表口径 ✓；与 core 的 `normalized_encoding` 同一套别名 ✓）。

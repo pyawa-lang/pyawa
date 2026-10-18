@@ -57,14 +57,23 @@ struct Scope {
     is_module: bool,
 }
 
-/// 检查器（无状态，除了文件名：报错消息要带位置）。
+/// 检查器（除了文件名，还带 `TS-49` 要用的**类属性标注表**）。
 struct Checker<'a> {
     filename: &'a str,
+    /// **`TS-49` 的已知类型来源**：模块级 `class C:` 体里 `属性: 类型` 的注解。
+    /// `A?` 上的 `a?.b`（`b: B`）⇒ `B?` 要靠它；查不到（内建类型／未标注属性）⇒ 平台类型（`TS-48`）。
+    /// 类体本身仍**不做赋值检查**（与 M4 的口径一致），这里只读标注。
+    class_attributes: HashMap<String, HashMap<String, StaticType>>,
 }
 
 /// 检查一段源码（模块体）。只在扩展模式调用。
 pub(super) fn check(statements: &[Statement], filename: &str) -> Result<(), CompileError> {
-    let mut checker = Checker { filename };
+    let mut class_attributes = HashMap::new();
+    collect_class_attributes(statements, &mut class_attributes);
+    let mut checker = Checker {
+        filename,
+        class_attributes,
+    };
     let mut scope = Scope {
         declared: HashMap::new(),
         assigned: HashSet::new(),
@@ -74,6 +83,58 @@ pub(super) fn check(statements: &[Statement], filename: &str) -> Result<(), Comp
     };
     checker.check_block(statements, &mut scope, &HashMap::new())?;
     Ok(())
+}
+
+/// 收**类属性标注表**（`TS-49`；`class C:` 体里的 `属性: 类型` 与嵌套类）。
+fn collect_class_attributes(
+    statements: &[Statement],
+    out: &mut HashMap<String, HashMap<String, StaticType>>,
+) {
+    for statement in statements {
+        match statement {
+            Statement::Class { name, body, .. } => {
+                let mut attributes = HashMap::new();
+                for item in body {
+                    if let Statement::Annotation {
+                        name: attribute,
+                        annotation,
+                        ..
+                    } = item
+                    {
+                        attributes.insert(attribute.clone(), static_from_annotation(annotation));
+                    }
+                }
+                if !attributes.is_empty() {
+                    out.insert(name.clone(), attributes);
+                }
+                // 嵌套类照收（`class Outer: class Inner:` —— 名字按**内层类名**登记）
+                collect_class_attributes(body, out);
+            }
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_class_attributes(then_body, out);
+                collect_class_attributes(else_body, out);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                collect_class_attributes(body, out);
+                for handler in handlers {
+                    collect_class_attributes(&handler.body, out);
+                }
+                collect_class_attributes(else_body, out);
+                collect_class_attributes(finally_body, out);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Checker<'_> {
@@ -123,6 +184,16 @@ impl Checker<'_> {
                         self.check_assignment(name, *name_span, value, scope, &mut narrow)?;
                     }
                 }
+            }
+            // **`BC-63` 的 `a ??= b`**（`TS-49`）：**不改变 `a` 的标注类型** —— 但赋值本身仍按
+            // `TS-47` 查（`b` 与标注相容才算数；`a` 是未标注 ⇒ 平台类型，放行）。
+            Statement::NullCoalesceAssign {
+                name,
+                name_span,
+                value,
+                ..
+            } => {
+                self.check_assignment(name, *name_span, value, scope, &mut narrow)?;
             }
             Statement::If {
                 condition,
@@ -401,8 +472,130 @@ impl Checker<'_> {
             Expression::Constant(Constant::None, _) => StaticType::Label(type_label("NoneType")),
             Expression::Constant(Constant::Bool(_), _) => StaticType::Label(type_label("bool")),
             Expression::Name(name, _) => self.read_type(scope, narrow, name),
+            // **`BC-63`／`TS-49`**：空安全操作符的类型规则（见 `infer_null_safe`）。
+            Expression::NullCoalesce(left, right, _) => {
+                self.infer_null_coalesce(left, right, scope, narrow)
+            }
+            Expression::SafeChain { receiver, rest, .. } => {
+                let receiver_type = self.infer(receiver, scope, narrow);
+                self.infer_safe_chain(&receiver_type, rest, scope, narrow)
+            }
+            // 空安全链的基底占位只在 `SafeChain::rest` 里出现（那里由 `infer_safe_chain` 直接带
+            // 类型走，不经过 `infer`）⇒ 走到这里说明判不出，返回平台类型。
+            Expression::ChainSubject(_) => StaticType::Any,
             // 调用／属性／下标／容器字面量／运算… ⇒ 判不出，交运行期（`TS-47` ②）。
             _ => StaticType::Any,
+        }
+    }
+
+    /// **`a ?? b` 的结果类型**（`TS-49`）：
+    ///
+    /// - 任一侧是**平台类型** ⇒ **平台类型**（`TS-48`：静态判不了，交运行期兜）；
+    /// - 左侧**非可空**（已知、不含 `None`）⇒ 结果就是左侧类型（`TS-49`／`TS-50`：
+    ///   "收窄为 `T` 之后 `x ?? d` 在编译期即可判恒取左值"）；
+    /// - 否则两侧都已知 ⇒ 取**相容上界**：把两边的 union 成员并起来去重（`int? ?? int ⇒ int?`、
+    ///   `int ?? int ⇒ int`、`str ?? int ⇒ str | int`）。§13-9 的相容关系下并集是上界，
+  ///   这是实现层能给出的**保守但可静态判定**的写法（不推断平台类型，`TS-16`）。
+    fn infer_null_coalesce(
+        &self,
+        left: &Expression,
+        right: &Expression,
+        scope: &Scope,
+        narrow: &HashMap<String, StaticType>,
+    ) -> StaticType {
+        let left_type = self.infer(left, scope, narrow);
+        let right_type = self.infer(right, scope, narrow);
+        let (StaticType::Label(left_label), StaticType::Label(right_label)) =
+            (&left_type, &right_type)
+        else {
+            return StaticType::Any;
+        };
+        if label_has_any(left_label) || label_has_any(right_label) {
+            return StaticType::Any;
+        }
+        // 左侧非可空 ⇒ 恒取左值（结果沿用左侧的已知类型）
+        if !label_has_none(left_label) {
+            return StaticType::Label(left_label.clone());
+        }
+        StaticType::Label(join_labels(left_label, right_label))
+    }
+
+    /// **`receiver?.…` 的结果类型**（`TS-49`）：`receiver: A?` ⇒ 结果在"`A` 上的链类型"之上
+    /// 加回可空（`B?`）；`receiver: A`（非可空）⇒ 结果**不可空**（`B`，静态即可断言不是 `None`）。
+    fn infer_safe_chain(
+        &self,
+        receiver: &StaticType,
+        rest: &Expression,
+        scope: &Scope,
+        narrow: &HashMap<String, StaticType>,
+    ) -> StaticType {
+        let StaticType::Label(label) = receiver else {
+            return StaticType::Any;
+        };
+        if label_has_any(label) {
+            return StaticType::Any;
+        }
+        let Some(base) = narrowed_non_none(label) else {
+            // 接收者只可能是 `None` ⇒ 结果就是 `None`（链上什么都不做）
+            return StaticType::Label(type_label("NoneType"));
+        };
+        let inner = self.infer_chain_subject(rest, StaticType::Label(base), scope, narrow);
+        if label_has_none(label) {
+            make_nullable(inner)
+        } else {
+            inner
+        }
+    }
+
+    /// 走 `SafeChain::rest`：基底类型由 `subject` 提供（[`Expression::ChainSubject`] 就是它）。
+    fn infer_chain_subject(
+        &self,
+        expression: &Expression,
+        subject: StaticType,
+        scope: &Scope,
+        narrow: &HashMap<String, StaticType>,
+    ) -> StaticType {
+        match expression {
+            Expression::ChainSubject(_) => subject,
+            Expression::Attribute(target, name, _) => {
+                let target_type = self.infer_chain_subject(target, subject, scope, narrow);
+                self.attribute_type(&target_type, name)
+            }
+            Expression::Subscript(container, _, _) => {
+                let container_type = self.infer_chain_subject(container, subject, scope, narrow);
+                element_type(&container_type)
+            }
+            // 链上再出现安全点（`a?.b?.c`）：参数是**内层接收者**的类型，结果照 `infer_safe_chain`
+            Expression::SafeChain { receiver, rest, .. } => {
+                let receiver_type = self.infer_chain_subject(receiver, subject, scope, narrow);
+                self.infer_safe_chain(&receiver_type, rest, scope, narrow)
+            }
+            // 调用结果判不出（属性类型那一格只覆盖 `.名字`）
+            Expression::Call { .. } => StaticType::Any,
+            // 理论上不会出现（`rest` 只由后缀构成）；保守交运行期
+            other => self.infer(other, scope, narrow),
+        }
+    }
+
+    /// **属性访问的类型**（`TS-49` 的"已知类型"来源）：接收者的类名 ⇒ 类属性标注表里查。
+    /// 内建类型／未标注属性／判不出的接收者 ⇒ 平台类型（`TS-48`）。
+    fn attribute_type(&self, receiver: &StaticType, name: &str) -> StaticType {
+        let StaticType::Label(label) = receiver else {
+            return StaticType::Any;
+        };
+        let Some(base) = narrowed_non_none(label) else {
+            return StaticType::Any;
+        };
+        let Some(class_name) = simple_type_name(&base) else {
+            return StaticType::Any;
+        };
+        match self
+            .class_attributes
+            .get(class_name)
+            .and_then(|attributes| attributes.get(name))
+        {
+            Some(ty) => ty.clone(),
+            None => StaticType::Any,
         }
     }
 
@@ -472,6 +665,86 @@ fn static_from_annotation(annotation: &AnnotationSource) -> StaticType {
     match annotation {
         AnnotationSource::Type(label) => static_from_label(label),
         AnnotationSource::Expression(_) => StaticType::Any,
+    }
+}
+
+/// 标签（摊平 union 之后）里有没有 `"Any"` 成员 ⇒ 平台类型参与（`TS-48`／`TS-49`）。
+fn label_has_any(label: &Constant) -> bool {
+    let mut members = Vec::new();
+    flatten_union(label, &mut members);
+    members.iter().any(is_any)
+}
+
+/// 标签（摊平 union 之后）里有没有 `NoneType` ⇒ 可空。
+fn label_has_none(label: &Constant) -> bool {
+    let mut members = Vec::new();
+    flatten_union(label, &mut members);
+    members.iter().any(is_none_type)
+}
+
+/// 把类型**加上可空**（`TS-49`：`A?` 上的安全链结果 ⇒ `B?`）。平台类型保持平台类型（`TS-48`）。
+fn make_nullable(ty: StaticType) -> StaticType {
+    match ty {
+        StaticType::Any => StaticType::Any,
+        StaticType::Label(label) => {
+            if label_has_none(&label) || label_has_any(&label) {
+                StaticType::Label(label)
+            } else {
+                StaticType::Label(Constant::AnnUnion {
+                    left: Box::new(label),
+                    right: Box::new(type_label("NoneType")),
+                })
+            }
+        }
+    }
+}
+
+/// **`TS-49` 的"相容上界"**（实现口径）：把两边的 union 成员摊平、去重、按左侧顺序折回 union。
+fn join_labels(left: &Constant, right: &Constant) -> Constant {
+    let mut members = Vec::new();
+    flatten_union(left, &mut members);
+    flatten_union(right, &mut members);
+    let mut unique: Vec<Constant> = Vec::new();
+    for member in members {
+        if !unique.contains(&member) {
+            unique.push(member);
+        }
+    }
+    debug_assert!(!unique.is_empty(), "标签至少有一个成员");
+    build_union(unique)
+}
+
+/// **`?[i]`／`[i]` 的元素类型**（`TS-49` 的已知类型来源）：`list[T]?`／`tuple[T]` 的 `T`、
+/// `str` 的元素是 `str`、`bytes` 的元素是 `int`；判不出 ⇒ 平台类型（`TS-48`）。
+fn element_type(container: &StaticType) -> StaticType {
+    let StaticType::Label(label) = container else {
+        return StaticType::Any;
+    };
+    let Some(base) = narrowed_non_none(label) else {
+        return StaticType::Any;
+    };
+    if label_has_any(&base) {
+        return StaticType::Any;
+    }
+    match &base {
+        // `list[int]` 在标签里是**二元组** `(list, int)`（`BC-24` 的浅层形态）
+        Constant::Tuple(items) if items.len() == 2 => match simple_type_name(&items[0]) {
+            Some("list") | Some("tuple") => static_from_label(&items[1]),
+            _ => StaticType::Any,
+        },
+        Constant::AnnSubscript { base, arguments } => match simple_type_name(base) {
+            Some("list") | Some("tuple") => arguments
+                .first()
+                .map(static_from_label)
+                .unwrap_or(StaticType::Any),
+            _ => StaticType::Any,
+        },
+        Constant::Type(name) => match name.as_str() {
+            "str" => StaticType::Label(type_label("str")),
+            "bytes" => StaticType::Label(type_label("int")),
+            _ => StaticType::Any,
+        },
+        _ => StaticType::Any,
     }
 }
 
@@ -572,17 +845,19 @@ fn label_compatible(expected: &Constant, actual: &Constant) -> bool {
     if is_any(expected) || is_any(actual) {
         return true;
     }
+    // 实际是 union：**每个**成员都要被接受（静态上不知道运行期是哪一个）——先摊平实际那一侧，
+    // 再交给"期望 union 任一成员相容"的规则 ⇒ `int?` 赋给 `int?` 也必须通过（`TS-46`／`TS-49`
+    // 的结果类型就是 union，这要求 union-vs-union 是对称可接受的）。
+    if let Some(members) = union_members(actual) {
+        return members
+            .iter()
+            .all(|member| label_compatible(expected, member));
+    }
     // 期望是 union：任一成员相容即接受（`TS-46` 的 `T?` 就是这条）。
     if let Some(members) = union_members(expected) {
         return members
             .iter()
             .any(|member| label_compatible(member, actual));
-    }
-    // 实际是 union：**每个**成员都要被接受（静态上不知道运行期是哪一个）。
-    if let Some(members) = union_members(actual) {
-        return members
-            .iter()
-            .all(|member| label_compatible(expected, member));
     }
     let (Some(expected_name), Some(actual_name)) =
         (simple_type_name(expected), simple_type_name(actual))
@@ -661,6 +936,9 @@ fn collect_assigned(statements: &[Statement], out: &mut HashSet<String>) {
         match statement {
             Statement::Assign { target, .. } | Statement::Annotation { name: target, .. } => {
                 out.insert(target.clone());
+            }
+            Statement::NullCoalesceAssign { name, .. } => {
+                out.insert(name.clone());
             }
             Statement::AssignChained { targets, .. } => {
                 for target in targets {

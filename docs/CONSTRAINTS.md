@@ -43,12 +43,12 @@
 | **CX-2** | **状态一致**：任何**别处**标注规格状态或完成度的地方**必须**与 `SPEC-INDEX.md` §1 一致——① 根 `README.md` 的「已写 N 份／待写 M 份」计数；② 任一 `README.md`（含 `crates/*/`、`tests/*/`）里形如 `` `docs/SPEC-*.md`（`XX-`，<状态>） `` 的标注（`PLAN-milestones.md` 记作 `MS-`） | `PLAN-milestones.md` M0 判据② | **能** |
 | **CX-3** | **禁止全局可变状态**：`static mut`、进程级对象堆／类型注册表／单例；`thread_local` 极少化 | `DESIGN.md` §3 不变量 2、`OM-1`／`OM-4`／`OM-15`／`OM-23` | **能** |
 | **CX-4** | **VM 核心与能力接口 crate 无平台依赖**：禁 `std::fs`／`std::net`／libc、禁 `#[cfg(target_os)]` | `DESIGN.md` §7 原则 5、`CP-4`／`CP-12` | **能** |
-| **CX-5** | 能力接口 crate 内**不存在真实机器实现** | `CP-12` | **不能**：`pyawa-capabilities` 目前只有骨架，无从判定 |
+| **CX-5** | 能力接口 crate 内**不存在真实机器实现** | `CP-12` | **能**（由 `T-CX-4` 的平台依赖扫描承担；`pyawa-capabilities` 只有类型与函数指针） |
 | **CX-6** | **禁止**以 `Rc`／`Arc` 作对象引用；**禁止**业务代码裸写 incref／decref | `OM-17`／`OM-18` | **能** |
 | **CX-7** | `flags` 的 **4–7 位是预留区**，不得占用。**静态规则**：① `flags.rs` 内每个位常量的取值**必须可静态求值**——字面量、字面量之间的 `<<`／`>>`／`|`／`&`／`^`／`!`／`~`，以及对 `flags.rs` 内其他常量的引用；**求值不了即红**。这是"**保持可判定写法**"的要求，**不是**"只准写三种形态"——**禁止**因此把表达性写法改成不透明字面量。且该取值**禁止**与 `RESERVED_MASK` 相交（`RESERVED_MASK` 自身除外）；② `RESERVED_MASK` 的引用**只允许**出现在 `flags.rs` 与 `header.rs`。运行时断言（`OM-7`）保留 | `OM-7` | **能** |
 | **CX-8** | `Lib/` 与上游 CPython 3.14.x **文件哈希零差异**；例外清单**必须为空** | `DESIGN.md` §9、`REQUIREMENTS.md` 后果 10 | **不能**：`Lib/` 在 M3 引入 |
 | **CX-9** | 纯 Python 模式下扩展语法**必须**报 `SyntaxError`；扩展特性**必须**纯增量 | `DESIGN.md` §2.1、`BC-15` | **不能**：依赖编译管线（M2） |
-| **CX-10** | 跨线程的能力调用**不得**传 VM 对象（编译期断言槽位签名） | `CP-26`、`T-CP-9` | **不能**：依赖能力接口接线 |
+| **CX-10** | 跨线程的能力调用**不得**传 VM 对象（编译期断言槽位签名） | `CP-26`、`T-CP-9` | **能**（`crates/pyawa-abi/tests/capability_acceptance.rs` 的编译期签名断言，`T-CP-9`） |
 | **CX-11** | **panic 绝不允许跨 FFI 边界**（每个入口 `catch_unwind`） | `DESIGN.md` §3 不变量 3 | **不能**：依赖 `pyawa-abi` 落地 |
 | **CX-12** | 对象载荷中的引用**只能**在 `clear`／`traverse`／`dealloc` 内释放（`OM-40`）。**由 Rust 侧 `T-OM-9` 在 CI 中承担**（它断言"除 `clear` 外无释放路径"）；**不设 `check.py` 扫描**——`Instance` 自身的释放协议也必须调 `release_object`，任何按名规则都要一张会无限增长的豁免表 | `OM-40`、`T-OM-9` | **能**（由 `T-OM-9` 承担） |
 | **CX-13** | **不得谎报实现身份**：`sys.implementation.name` **必须**报 `pyawa`，`cache_tag` 用自己的值 | `REQUIREMENTS.md` 实现观测面、`DESIGN.md` §9 | **能**（由 Rust 侧承担：`crates/pyawa-stdlib/tests/sys.rs` 的 `the_identity_is_pyawa_not_cpython`，随 `cargo test` 跑——同 `CX-12` 的先例） |
