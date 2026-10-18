@@ -4,7 +4,7 @@
 //! 由来：第 55 轮给 `FunctionObject` 加 `annotate` 字段时漏了这两处 ⇒ GC 既看不到也不释放它
 //! （一处真实的泄漏，第 63 轮才发现）。这类错误靠人眼看不住，故扫源码把它钉死。
 //!
-//! **扫描范围**：`crates/pyawa-core/src/builtin_objects.rs`（`py_object!` 的集中地）。
+//! **扫描范围**：`crates/pyawa-core/src/builtin_objects/` 目录（`py_object!` 的集中地；拆域后逐文件纳入）。
 //! 判据刻意保守：只看**声明里就写得出引用**的字段类型（`NonNull<Header>`／
 //! `Option<NonNull<Header>>`／`Vec<NonNull<Header>>`／`RefCell<Option<NonNull<Header>>>`）；
 //! 藏在**枚举**里的引用（如 `ItStateObject` 的 `kind`）静态看不出来 ⇒ 不在这里管。
@@ -14,7 +14,19 @@
 /// **拆分后要从这里加一行** ✓（第 126 轮 `gc_field_coverage` 曾因 `deque_traverse` 搬到新文件而红 ✗）：
 /// `builtin/` 目录下**每新增一族**都要加进来 ✓，否则那一族的 `traverse`／`clear` 就**不在扫描面上** ✗。
 const SOURCE: &str = concat!(
-    include_str!("../src/builtin_objects.rs"),
+    include_str!("../src/builtin_objects/scalars.rs"),
+    include_str!("../src/builtin_objects/range_slice.rs"),
+    include_str!("../src/builtin_objects/containers.rs"),
+    include_str!("../src/builtin_objects/contextvars.rs"),
+    include_str!("../src/builtin_objects/thread.rs"),
+    include_str!("../src/builtin_objects/iterators.rs"),
+    include_str!("../src/builtin_objects/callables.rs"),
+    include_str!("../src/builtin_objects/exceptions.rs"),
+    include_str!("../src/builtin_objects/type_runtime.rs"),
+    include_str!("../src/builtin_objects/constructors.rs"),
+    include_str!("../src/builtin_objects/representations.rs"),
+    include_str!("../src/builtin_objects/formatting.rs"),
+    include_str!("../src/builtin_objects/memoryview.rs"),
     include_str!("../src/builtin/str.rs"),
     include_str!("../src/builtin/bytes.rs"),
     include_str!("../src/builtin/dict.rs"),
