@@ -1049,3 +1049,29 @@
 
 1. **M4 阶段收录**：**等用户批准**（`dev` `--no-ff` 收录 `main` ＋ tag `m4`）；批准后同笔更新「兼容边界声明」修订行、`README` 状态、`NEXT.md` 终态。
 2. 未批准则：接 `functools.wraps` 的类型级描述符专项（需先写清对象布局/GC 影响面），或 socket（仍等 A1–A4 拍板）。
+
+---
+
+## round 9（会话 06 · M4 阶段收录）落地 ✓ —— 用户批准后 `--no-ff` 收录 `main` ＋ **tag `m4`**
+
+- **用户批准**：2026-10-18「M4 允许收口」✓（`agents-rules/branch-rule.md`：合并提交＝阶段边界，收口前已报批）。
+- **阶段边界**：`dev` @ `59dfbb3` 以 **`--no-ff`** 收录进 `main`（合并提交见 `git log --merges -1`；两分支/标签均推送 origin ✓）＋ **tag `m4`**。
+- **工作区**：干净 ✓（以本笔提交为准）；`main` 树与 `dev` 树一致（合并后应复核 `git diff main dev` 为空）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；只改文档，与 round 8 持平）。
+- **M4 收口清单（全绿）**：
+  - 判据①（`T-BC-8`／`T-BC-9` 可观测）✓：`crates/pyawa-core/tests/m4_acceptance.rs`（3 例）；
+  - 判据②（渐进保证 `T-TS-1`）✓：`crates/pyawa-core/tests/gradual_guarantee.rs`（20 例）；
+  - A 批：`TS-46` ✓／`TS-47` ✓（编译期静态检查器 ＋ 运行期 `CHECK_ASSIGNMENT` 两层）／`TS-48` ✓／`TS-50` ✓；
+  - 状态同步：`README.md` 当前状态改「**M0–M4 均已成立**」；`PLAN-milestones.md` 的**兼容边界声明**追加 M4 阶段边界修订行；
+    `docs/DESIGN.md` §13 的 `12.` 行已在 round 7 纠正（A 批已落/B 批未做）；`docs/ROUNDS.md` 计数同步。
+- **保证层边界（如实）**：M4 只保证**扩展模式（`.pyawa`）**下 A 批类型链的判据；扩展模式**没有参照实现**（`MS-13` ③），
+  验收靠"两种写法互相对拍＋端到端行为"；`.py` 下标注**合法且惰性**（`BC-15`／`TS-5`，产物逐字节不变）。
+- **如实缺口（不阻塞判据，已多处记账）**：`BC-25`①"两侧皆标注处禁止发射"需跨模块静态信息 ⇒ **未做**（现按"该函数带标注保守发射"）；
+  `TS-50` 部分形态未覆盖（`None is x` 反序／`== None`／`and`/`or` 复合守卫／`not (is None)`／`isinstance`／`match`）；
+  类体不查、嵌套函数读外层局部不建模、形参注解不登记；`functools.wraps.__name__`（挂账 bug 第 5 条）已定位未修（转类型级描述符专项）；
+  函数对象 `__builtins__` 未接；union 对象 `==`／`repr` 与参照有差；`sys._getframe(depth>0)` 帧链缺口。
+- **下一阶段（未开工）**：**M5 能力层正式化**（`SPEC-capabilities` 的 `T-CP-*`；socket 真 I/O＝`P3-29` 仍等用户 A1–A4 拍板）·
+  **扩展特性 B 批**（`BC-62`／`BC-63`＋`TS-49`）· 剩余挂账/缺口按 `NEXT.md` 队列取。
+
+- **闸门**：本轮**只改文档**（代码树与 round 8 提交态一致）⇒ round 8 的 slowcheck **十项全绿**（4555s）对代码树有效；
+  本轮提交前 `python3 tests/ci/check.py` **14/14** ✓。合并按 `branch-rule.md` 的 `--no-ff` 执行（阶段边界）。
