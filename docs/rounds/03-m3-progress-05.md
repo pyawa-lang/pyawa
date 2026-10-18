@@ -1334,4 +1334,34 @@
 4. 顺带（不阻塞收口）：`CP-22` 的 `os.getcwd/chdir` stdlib 面、`AB-43` 消费方有界读取、`dup/dup2` 到 0/1/2、
    `_codecs_hk`／iso2022／gb18030/hz、B 批/描述符剩余形态。
 
+---
+
+## round 13（会话 07 · M5 收口）落地 ✓ —— 判据③ 阈值用户拍板，`dev` `--no-ff` 收录 `main` ＋ tag `m5`
+
+- **口径**：`HEAD`（本笔前）＝`42cadcb`；工作区起始干净；`check.py` 14/14。本轮**只改文档**＋git 阶段边界操作。
+- **用户批准（2026-10-18）**：① 判据③ 的阻塞阈值**按建议值拍板**（见下）；② **批准 M5 收口**
+  （`--no-ff` 收录 `main` ＋ tag `m5`）。
+- **判据③ 阈值（唯一出处＝`DESIGN.md` §9 的「Pyawa（M5 实测基线）」末节「判据③ 的阻塞阈值」）**：
+  裸 ABI 引导 ≤150 µs／执行 ≤10 µs／整程 ≤5 ms／峰 ≤8 MiB；CLI 单实例整程 裸 ≤60 ms／＋site ≤150 ms／
+  ＋site＋10 模块 ≤500 ms、峰 ≤32 MiB、vs CPython 同导入面 ≤20×（整程）／≤2.5×（峰）；
+  多实例每实例边际 ≤256 KiB／N=8 单进程总常驻 ≤8 MiB／并行度 N=4 ≥2.5、N=8 ≥2.0。
+  收口时实测（round 12 与 round 10 基线）**全部在阈值内**（复跑区间见 DESIGN §9）。
+- **M5 判据证据（收口时点复述，细节见 round 10–12 节）**：
+  ① `T-CP-*` **13 绿／0 红**（`capability_acceptance.rs` 11／`two_providers.rs` 7／`t_cp10_cancel.rs` 4／
+  `select_dup2_shapes.rs` 1／`capability_registration.rs` 6；静态两条 `check.py` 的 `T-CX-4`）；
+  ② **两 provider 写法不变**（同一脚本逐字节相同、MS-9 归一后观察完全一致）；
+  ③ 体量三档基线已量且**阻塞阈值经用户拍板**（上）。
+- **状态同步（本笔）**：`README` 当前状态改 **M0 · M1 · M2 · M3 · M4 · M5 均已成立**（补 M5 条：判据证据＋阈值出处＋如实缺口）；
+  `PLAN` §6 增「M5 的要求」（判据落点、证据清单、如实缺口）＋兼容边界声明刷新（可 import 466/628＝74.2%）＋
+  追加 **M5 阶段边界修订行**；`PLAN` §8 的 `§13-17` 改为**已决**（M1 提示项、M5 升为阻塞项，阈值出处同上）；
+  `PLAN` §9.4 追加 **round 13 状态小结**；`DESIGN` §13-17 记录已升；`NEXT.md` 终态与 M6 下一步。
+- **阶段边界**：`dev` @ `42cadcb` 以 **`--no-ff`** 收录进 `main`（合并提交见 `git log --merges -1`）＋ **tag `m5`**；
+  两分支/标签推送 origin ✓（合并后复核 `git diff main dev` 为空）。
+- **闸门**：本轮**只改文档** ⇒ round 12 的 `slowcheck` **十项全绿（4557 s）** 对代码树（`42cadcb`）有效；
+  本轮提交前 `python3 tests/ci/check.py` **14/14** ✓。
+- **M5 之后的队列**：M6 兼容性验收（`MS-14` 报告可发布、新差异为零）＋ M5 阶段如实缺口
+  （`CP-22` stdlib 面、`AB-43` 消费方有界读取、`dup/dup2` 到 0/1/2、`_codecs_hk`／iso2022／gb18030/hz、
+  B 批/描述符剩余形态、socket 的 `connect` 一族等）——见 `NEXT.md`。
+
+
 
