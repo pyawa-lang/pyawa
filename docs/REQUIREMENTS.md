@@ -94,6 +94,7 @@ Pyawa 本身不做数据/查询 DSL——它只负责"易嵌入"。具体 DSL �
 | 实现观测面 | `sys.implementation`/`platform`/`sysconfig`/`dis`/`sys.getrefcount` 等**必然有差异**；`sys.implementation.name` **必须报 `pyawa`**，让库走自己的纯 Python 回退路径 |
 | 生态边界 | 可用生态 ＝ **PyPI 上纯 Python 的那部分**；含 C 扩展的库需改写或不可用 |
 | 包管理 | **推迟（不急）**：不自建安装器/resolver；`sys.path`/`site-packages`/`.pth` 语义由 `site.py` 逐字同步自动生效 |
+| **socket 首片（`P3-29`）** | **已拍板（A1–A4）**：**A1** 新增 **`CP-38`**（`socketpair` 槽 ✓；vtable 加槽——ABI 未发布 ⇒ 现在最便宜 ✓）· **A2** `getaddrinfo` **推迟** ✓（v1 只数字地址，不做 DNS ✓）· **A3** 地址线 v1＝地址族编号＋裸字节；**IPv4＝4B 地址＋2B 端口大端**；**v1 只 `AF_INET`／`AF_UNIX`** ✓（`CP-39`）· **A4** `fd` 沿用 `fs` 先例（`CP-31`：fd 即实例能力表下标 ✓） |
 | 错误兼容 | **结构兼容**：异常类型与层级一致，traceback 格式自定 |
 | 工具链 | REPL、调试器/`sys.monitoring`、LSP/类型检查器、profiler |
 | 兼容性验收 | 暂不定 |
