@@ -194,6 +194,19 @@ impl Instance {
     /// 层次**不手写**：基类关系取自 `crate::builtin_types` 的探测表（`TS-41`），MRO 由
     /// **C3**（`OM-13`）算出。**禁止**为了省事直接写一份 MRO。
     pub(crate) fn bootstrap_builtin_types(&self) {
+        self.bootstrap_core_scalars();
+        self.bootstrap_containers_iters();
+        self.bootstrap_context_thread();
+        self.bootstrap_function_family();
+        self.bootstrap_errors_cells();
+        self.bootstrap_frame_singletons();
+        self.bootstrap_iterator_registration();
+        self.bootstrap_type_natives();
+        self.bootstrap_build_class();
+    }
+
+    /// 引导第 1 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_core_scalars(&self) {
         let object_type = self.alloc_type_raw(
             "object",
             core::mem::size_of::<PlainObject>(),
@@ -211,7 +224,7 @@ impl Instance {
         let metatype = self.metatype.get().expect("元类型在 Instance::new 里已引导");
         self.register_from_table(metatype);
 
-        let none_type = self.alloc_type_raw(
+        let _none_type = self.alloc_type_raw(
             "NoneType",
             core::mem::size_of::<NoneObject>(),
             Slots::new(NoneObject::dealloc)
@@ -230,7 +243,7 @@ impl Instance {
             self.register_bases(ellipsis_type, vec![object_type]).is_some(),
             "ellipsis 的基类是 object"
         );
-        let bool_type = self.alloc_type_raw(
+        let _bool_type = self.alloc_type_raw(
             "bool",
             core::mem::size_of::<BoolObject>(),
             Slots::new(BoolObject::dealloc)
@@ -238,7 +251,7 @@ impl Instance {
                 .with_repr(crate::builtin_objects::bool_repr)
                 .with_str(crate::builtin_objects::bool_repr),
         );
-        let int_type = self.alloc_type_raw(
+        let _int_type = self.alloc_type_raw(
             "int",
             core::mem::size_of::<IntObject>(),
             Slots::new(IntObject::dealloc)
@@ -248,7 +261,7 @@ impl Instance {
                 // **方法面**（第 195 轮）：`to_bytes`／`bit_length` ✓。
                 .with_getattr(crate::builtin::int::int_getattr),
         );
-        let float_type = self.alloc_type_raw(
+        let _float_type = self.alloc_type_raw(
             "float",
             core::mem::size_of::<FloatObject>(),
             Slots::new(FloatObject::dealloc)
@@ -258,7 +271,7 @@ impl Instance {
                 // **方法面**（第 352 轮）：`is_integer`／`as_integer_ratio` ✓。
                 .with_getattr(crate::builtin::float::float_getattr),
         );
-        let str_type = self.alloc_type_raw(
+        let _str_type = self.alloc_type_raw(
             "str",
             core::mem::size_of::<StrObject>(),
             Slots::new(StrObject::dealloc)
@@ -268,6 +281,11 @@ impl Instance {
                 // **方法面**（第 143 轮）：`Lib/` 里每个文件都在用字符串方法 ✓
                 .with_getattr(crate::builtin_objects::str_getattr),
         );
+    }
+
+    /// 引导第 2 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_containers_iters(&self) {
+        let object_type = self.type_named("object").expect("object 已登记");
 
         // **`slice`**（`P1-12` 的"索引／切片"；`TS-42` 把它排 M3+，但切片是这一档的判据）
         // **`classmethod`**（第 158 轮）：给 `Lib/abc.py` 的 `class abstractclassmethod(classmethod)` 用 ✓。
@@ -386,7 +404,7 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::classmethod_getattr),
         );
 
-        let slice_type = self.alloc_type_raw(
+        let _slice_type = self.alloc_type_raw(
             "slice",
             core::mem::size_of::<SliceObject>(),
             crate::builtin_objects::SliceObject::slots()
@@ -397,7 +415,7 @@ impl Instance {
         );
 
         // **`bytes`**（`P1-12`／`TS-42` 的"M2 之后、M3 之前"档：`marshal` 与 `co_code` 要它）
-        let bytes_type = self.alloc_type_raw(
+        let _bytes_type = self.alloc_type_raw(
             "bytes",
             core::mem::size_of::<BytesObject>(),
             crate::builtin_objects::BytesObject::slots()
@@ -413,7 +431,7 @@ impl Instance {
         // **`bytearray` 有自己的载荷** ✓（第 642 轮 ✗ 修）：`BytearrayObject`（`RefCell<Vec<u8>>` ✓ 可变的
         // 字节串 ✓）—— 先前借 `BytesObject`（`Vec<u8>` 不可变 ✗）⇒ `re._compiler` 的
         // `data[0:0] = …`／`mapping[i] = …` 全部报"下标赋值只接线了 list／dict" ✗。
-        let bytearray_type = self.alloc_type_raw(
+        let _bytearray_type = self.alloc_type_raw(
             "bytearray",
             core::mem::size_of::<crate::builtin_objects::BytearrayObject>(),
             crate::builtin_objects::BytearrayObject::slots()
@@ -440,10 +458,14 @@ impl Instance {
         // `NoDefaultType`（回单例 ✓）—— 与 `memoryview`／`bytearray` 同款：`builtin_types.rs` 里
         // 只是 `Ladder::Later` 占位 ✓，这里带槽建出来 ✓。
         crate::builtin::typing::build_typing_types(self);
+    }
+
+    /// 引导第 3 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_context_thread(&self) {
 
         // **`list_reverseiterator`** ✓（第 227 轮）：与其它内建迭代器同构 ✓（`IteratorObject` ＋ 那套槽 ✓）；
         // **方向由类型决定** ✓ ⇒ 不必给载荷加字段 ✓。
-        let list_reverseiterator_type = self.alloc_type_raw(
+        let _list_reverseiterator_type = self.alloc_type_raw(
             "list_reverseiterator",
             core::mem::size_of::<IteratorObject>(),
             IteratorObject::slots(),
@@ -451,7 +473,7 @@ impl Instance {
 
         // **`reversed`** ✓（第 727 轮）：`reversed(序列)` 的**通用惰性迭代器**（序列协议：
         // `__len__` ＋ `__getitem__` ✓）；`IteratorObject` 载荷 ＋ 类型区分方向 ✓。
-        let reversed_type = self.alloc_type_raw(
+        let _reversed_type = self.alloc_type_raw(
             "reversed",
             core::mem::size_of::<IteratorObject>(),
             IteratorObject::slots(),
@@ -459,7 +481,7 @@ impl Instance {
 
         // **`longrange_iterator`** ✓（第 228 轮）：`range()` 的**大整数上限**那一支；载荷与 `islice` 同构 ✓
         //（我们的 `range` 本来就是 `islice(count(…))` ✓），只是**类型不同** ✓ —— 参照也分成两个名字 ✓。
-        let longrange_iterator_type = self.alloc_type_raw(
+        let _longrange_iterator_type = self.alloc_type_raw(
             "longrange_iterator",
             core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
             crate::builtin_objects::ItStateObject::slots(),
@@ -467,7 +489,7 @@ impl Instance {
 
         // **`super`** ✓（第 233 轮）：**零参**形式 ✓ —— 载荷用 `AttributeObject`（存 `__thisclass__`／`__self__` ✓），
         // 查表走 `attribute_lookup` 里的**专用分支** ✓（要在那里才能造出"绑定方法" ✓）。
-        let super_type = self.alloc_type_raw(
+        let _super_type = self.alloc_type_raw(
             "super",
             core::mem::size_of::<crate::builtin_objects::AttributeObject>(),
             crate::builtin_objects::AttributeObject::slots(),
@@ -475,21 +497,21 @@ impl Instance {
 
         // **`zip`** ✓（第 229 轮）：载荷与 `zip_longest` 同构 ✓ —— **取最短** ✓。
         // 表里**早有 `zip` 这个名字** ✓（`builtin_types.rs` ✓）⇒ 不必加表条目 ✓。
-        let zip_type = self.alloc_type_raw(
+        let _zip_type = self.alloc_type_raw(
             "zip",
             core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
             crate::builtin_objects::ItStateObject::slots(),
         );
 
         // **`range_iterator`** ✓（第 228 轮）：`range()` 的**常规**那一支 ✓（参照的名字 ✓）。
-        let range_iterator_type = self.alloc_type_raw(
+        let _range_iterator_type = self.alloc_type_raw(
             "range_iterator",
             core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
             crate::builtin_objects::ItStateObject::slots(),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
-        let tuple_type = self.alloc_type_raw(
+        let _tuple_type = self.alloc_type_raw(
             "tuple",
             core::mem::size_of::<TupleObject>(),
             TupleObject::slots()
@@ -498,7 +520,7 @@ impl Instance {
                 // **方法面** ✓（task-26 ②）：`count`／`index`（实例路径绑 self ✓）。
                 .with_getattr(crate::builtin_objects::tuple_getattr)
         );
-        let list_type = self.alloc_type_raw(
+        let _list_type = self.alloc_type_raw(
             "list",
             core::mem::size_of::<ListObject>(),
             ListObject::slots()
@@ -510,7 +532,7 @@ impl Instance {
                 // **方法面**（第 143 轮）
                 .with_getattr(crate::builtin::list::list_getattr),
         );
-        let dict_type = self.alloc_type_raw(
+        let _dict_type = self.alloc_type_raw(
             "dict",
             core::mem::size_of::<DictObject>(),
             DictObject::slots()
@@ -525,7 +547,7 @@ impl Instance {
         //（照参照造出真正的 `memoryview` 随后补 ✓）。
         let mut memoryview_slots = crate::builtin_objects::BytesObject::slots();
         memoryview_slots.new = None;
-        let memoryview_type = self.alloc_type_raw(
+        let _memoryview_type = self.alloc_type_raw(
             "memoryview",
             core::mem::size_of::<crate::builtin_objects::BytesObject>(),
             memoryview_slots,
@@ -538,7 +560,7 @@ impl Instance {
         // 槽挂**构造** ✓／`repr` ✓／方法面（`__len__`／`__getitem__`／`__iter__` ✓）—— 先前 `range()`
         // 直接造 `islice(count(...))` 再改型成 `range_iterator` ✗ ⇒ `type(range(5))` 是迭代器 ✓、
         // `range(5)[1:3]` 报"切不了 range_iterator" ✗（`Lib/re` 就断在这 ✓）。
-        let range_type = self.alloc_type_raw(
+        let _range_type = self.alloc_type_raw(
             "range",
             core::mem::size_of::<crate::builtin_objects::RangeObject>(),
             crate::builtin_objects::RangeObject::slots()
@@ -563,7 +585,7 @@ impl Instance {
         // 只是**另一个类型对象** ✓（`abc.py:180` 要 `frozenset(abstracts)` ✓、
         // `_collections_abc.py:687` 要 `Set.register(frozenset)` ✓）。
         // **如实说** ✗：本层没有"不可变"这层语义 ✓（`frozenset` 的实例目前**仍可改** ✓，随后补 ✓）。
-        let frozenset_type = self.alloc_type_raw(
+        let _frozenset_type = self.alloc_type_raw(
             "frozenset",
             core::mem::size_of::<SetObject>(),
             SetObject::slots()
@@ -572,7 +594,7 @@ impl Instance {
                 .with_getattr(crate::builtin::set::set_getattr),
         );
 
-        let set_type = self.alloc_type_raw(
+        let _set_type = self.alloc_type_raw(
             "set",
             core::mem::size_of::<SetObject>(),
             SetObject::slots()
@@ -601,6 +623,10 @@ impl Instance {
             self.register_bases(deque_type, vec![deque_base]).is_some(),
             "OM-13：deque 的 MRO 应当可线性化"
         );
+    }
+
+    /// 引导第 4 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_function_family(&self) {
 
         // **`_contextvars` 的三个类型**（第 332 轮）：`ContextVar`／`Token`／`Context` ——
         // `Lib/contextvars.py` 只做 `from _contextvars import Context, ContextVar, Token, copy_context`
@@ -660,6 +686,11 @@ impl Instance {
                 "OM-13：ThreadHandle 的 MRO 应当可线性化"
             );
         }
+    }
+
+    /// 引导第 5 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_errors_cells(&self) {
+        let object_type = self.type_named("object").expect("object 已登记");
 
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
         let function_type = self.alloc_type_raw(
@@ -680,7 +711,7 @@ impl Instance {
         // 迭代器类型：名字**照探测表**取（`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）
         // 后两个的**可迭代对象**（`bytes`／`bytearray`）本身排在 M3+，故它们现在只是类型存在
         // （`TS-42` 的 M2 要求"迭代器对象"齐备），不会被 `GET_ITER` 选中。
-        let iterator_types: Vec<NonNull<TypeObject>> = [
+        let _iterator_types: Vec<NonNull<TypeObject>> = [
             "tuple_iterator",
             "list_iterator",
             "str_ascii_iterator",
@@ -700,7 +731,7 @@ impl Instance {
         .collect();
 
         // 原生可调用对象（`AB-24` 的宿主函数、`__build_class__` 一类内建函数的落点）
-        let builtin_function_type = self.alloc_type_raw(
+        let _builtin_function_type = self.alloc_type_raw(
             "builtin_function_or_method",
             core::mem::size_of::<BuiltinFunctionObject>(),
             BuiltinFunctionObject::slots()
@@ -709,7 +740,7 @@ impl Instance {
         );
 
         // 绑定方法（`OM-11` 的 `getattr` 查到函数时的产物）
-        let method_type = self.alloc_type_raw(
+        let _method_type = self.alloc_type_raw(
             "method",
             core::mem::size_of::<MethodObject>(),
             MethodObject::slots()
@@ -718,7 +749,7 @@ impl Instance {
         );
 
         // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表
-        let generator_type = self.alloc_type_raw(
+        let _generator_type = self.alloc_type_raw(
             "generator",
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
@@ -728,7 +759,7 @@ impl Instance {
 
         // 协程（`§10` 的生成器与协程族）：载荷与生成器同形（一个挂起的帧 ＋ 标志），
         // 名字与基类照探测表；`repr` 的词是 `coroutine`（实测 `<coroutine object f at 0x…>`）。
-        let coroutine_type = self.alloc_type_raw(
+        let _coroutine_type = self.alloc_type_raw(
             "coroutine",
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
@@ -738,7 +769,7 @@ impl Instance {
 
         // 异步生成器（`CO_ASYNC_GENERATOR`，实测 `0x200`）：载荷同样与生成器同形，
         // 类型名与基类照探测表（实测 `async_generator` → `object`）。
-        let async_generator_type = self.alloc_type_raw(
+        let _async_generator_type = self.alloc_type_raw(
             "async_generator",
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
@@ -811,6 +842,11 @@ impl Instance {
             }
             assert!(progressed, "TS-41：异常层次里有环或基类缺失");
         }
+    }
+
+    /// 引导第 6 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_frame_singletons(&self) {
+        let object_type = self.type_named("object").expect("object 已登记");
 
         // **Pyawa 专有**异常：`TypeBoundaryError`（`TS-12`：**必须**是 `TypeError` 的子类）。
         // 参照实现没有这个类 ⇒ 探测表（`TS-41`）里没有它，故与 `asend` 一样走
@@ -902,6 +938,51 @@ impl Instance {
                 "itertools 的迭代器类型基类是 object"
             );
         }
+    }
+
+    /// 引导第 7 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_iterator_registration(&self) {
+        let iterator_types: Vec<NonNull<TypeObject>> = [
+            "tuple_iterator",
+            "list_iterator",
+            "str_ascii_iterator",
+            "dict_keyiterator",
+            "set_iterator",
+            "bytes_iterator",
+            "bytearray_iterator",
+        ]
+        .iter()
+        .map(|name| self.type_named(name).expect("迭代器类型已登记"))
+        .collect();
+        let object_type = self.type_named("object").expect("object 已登记");
+        let none_type = self.type_named("NoneType").expect("NoneType 已登记");
+        let ellipsis_type = self.type_named("ellipsis").expect("ellipsis 已登记");
+        let bool_type = self.type_named("bool").expect("bool 已登记");
+        let int_type = self.type_named("int").expect("int 已登记");
+        let float_type = self.type_named("float").expect("float 已登记");
+        let str_type = self.type_named("str").expect("str 已登记");
+        let slice_type = self.type_named("slice").expect("slice 已登记");
+        let bytes_type = self.type_named("bytes").expect("bytes 已登记");
+        let bytearray_type = self.type_named("bytearray").expect("bytearray 已登记");
+        let memoryview_type = self.type_named("memoryview").expect("memoryview 已登记");
+        let list_reverseiterator_type = self.type_named("list_reverseiterator").expect("list_reverseiterator 已登记");
+        let reversed_type = self.type_named("reversed").expect("reversed 已登记");
+        let longrange_iterator_type = self.type_named("longrange_iterator").expect("longrange_iterator 已登记");
+        let super_type = self.type_named("super").expect("super 已登记");
+        let zip_type = self.type_named("zip").expect("zip 已登记");
+        let range_iterator_type = self.type_named("range_iterator").expect("range_iterator 已登记");
+        let tuple_type = self.type_named("tuple").expect("tuple 已登记");
+        let list_type = self.type_named("list").expect("list 已登记");
+        let dict_type = self.type_named("dict").expect("dict 已登记");
+        let range_type = self.type_named("range").expect("range 已登记");
+        let frozenset_type = self.type_named("frozenset").expect("frozenset 已登记");
+        let set_type = self.type_named("set").expect("set 已登记");
+        let function_type = self.type_named("function").expect("function 已登记");
+        let builtin_function_type = self.type_named("builtin_function_or_method").expect("builtin_function_or_method 已登记");
+        let method_type = self.type_named("method").expect("method 已登记");
+        let generator_type = self.type_named("generator").expect("generator 已登记");
+        let coroutine_type = self.type_named("coroutine").expect("coroutine 已登记");
+        let async_generator_type = self.type_named("async_generator").expect("async_generator 已登记");
 
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
@@ -1033,6 +1114,16 @@ impl Instance {
                 .is_ok(),
             "单例表在 Instance::new 里只设一次"
         );
+    }
+
+    /// 引导第 8 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_type_natives(&self) {
+        let object_type = self.type_named("object").expect("object 已登记");
+        let int_type = self.type_named("int").expect("int 已登记");
+        let float_type = self.type_named("float").expect("float 已登记");
+        let str_type = self.type_named("str").expect("str 已登记");
+        let bytes_type = self.type_named("bytes").expect("bytes 已登记");
+        let builtin_function_type = self.type_named("builtin_function_or_method").expect("builtin_function_or_method 已登记");
 
         // `TS-44`：`__format__` **没有槽位** ⇒ 内建类型在**类型字典**里放**原生可调用对象**
         // （`object` 那一层给默认：空规格 ⇒ `str(x)`、非空 ⇒ TypeError，消息实测）
@@ -1244,6 +1335,11 @@ impl Instance {
         // **`type.__annotations__` getset 描述符** ✓（task-20 ✓）：`annotationlib:1141` 读的就是
         // `type.__dict__["__annotations__"].__get__` ✓（类对象与模块对象两条路 ✓）。
         self.install_annotations_descriptor();
+    }
+
+    /// 引导第 9 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
+    fn bootstrap_build_class(&self) {
+        let builtin_function_type = self.type_named("builtin_function_or_method").expect("builtin_function_or_method 已登记");
 
         // `LOAD_BUILD_CLASS` 要压的内建（`__build_class__`）：造一个原生可调用对象按实例存
         let build_class = self.alloc(BuiltinFunctionObject::new(
@@ -1253,6 +1349,7 @@ impl Instance {
         ));
         self.build_class.set(Some(build_class.into_raw().cast::<Header>()));
     }
+
 
     /// 装 **`type.__annotations__`** 描述符 ✓（task-20 ✓，**幂等** ✓）。
     ///

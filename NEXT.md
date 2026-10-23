@@ -8,10 +8,11 @@
 
 ## 现在
 
-- **HEAD**：`c76d8a2`（`dev`，本笔前）—— 本笔＝**拆函数专项 4/9**：`parser/atoms.rs` 的 `parse_atom`
-  （592 行）把 6 个**大分支**（bytes／str／fstr／左花括号／左圆括号／左方括号）抽成独立函数
-  （保留原 `'atom:` 标号块 ⇒ `break 'atom` 语义不变；调用处 `parse_atom_*(lexed, cursor, span)?`），
-  主函数降到 ~120 行，最大分支 `parse_atom_leftbrace` 182 行。
+- **HEAD**：`90010fe`（`dev`，本笔前）—— 本笔＝**拆函数专项 5/6**：`instance/bootstrap.rs` 的
+  `bootstrap_builtin_types`（1060 行）按注册顺序拆成 **9 段**（core_scalars／containers_iters／
+  context_thread／function_family／errors_cells／frame_singletons／iterator_registration／type_natives／
+  build_class；最大 221 行）。跨段引用改由 `type_named("…")` 重新取；`_iterator_types` 在用到它的段
+  按名重算；其余段内局部变量保持原样。
 - **工作区**：唯一未提交项 `tools/libtests_survey.py`（上轮 Lib/test 调查收尾：`PYTHONPATH`＋超时；
   **与本专项无关**，本笔不碰）；专项自身的改动都随本笔提交 ⇒ 其余干净。
 - **stash**：**空** ✓
@@ -20,10 +21,8 @@
   `tools/quickcheck.sh` ＋ 提交前 `tools/slowcheck.sh` 十项。
 - **拆函数专项（已完成 4 批）**：① emitter 两个语句分派 ✓ → ② step_calls／step_exceptions／
   emit_expression_names ✓ → ③ advance_iterator／attribute_lookup ✓ → ④ parse_atom ✓。
-- **剩余两项（按原计划是“单独专项、中高风险”，本会话未动）**：⑤ `parser/statements.rs` 的
-  `parse_statements`（1767 行；需引入“解析一条语句”的上下文／`&mut` 状态）→ ⑥ `instance/bootstrap.rs`
-  的 `bootstrap_builtin_types`（1060 行；需把顺序注册的局部变量改成按名查表）。
-  暂不动：`lex`（772，内聚）与其余 300–500 行扁平分派族函数。
+- **剩余一项**：`parser/statements.rs` 的 `parse_statements`（1767 行；需引入“解析一条语句”的
+  上下文／`&mut` 状态，非纯移动）。暂不动：`lex`（772，内聚）与其余 300–500 行扁平分派族函数。
 - **M5 已成立 ✓（判据①②③ 全绿，2026-10-18 收口）**：
   - **判据①（`T-CP-*` 全绿）✓**：矩阵 **13 绿／0 红**。可执行证据：`crates/pyawa-abi/tests/capability_acceptance.rs`（11）／
     `crates/pyawa-runtime/tests/two_providers.rs`（7）／`t_cp10_cancel.rs`（4）／`select_dup2_shapes.rs`（1）／
