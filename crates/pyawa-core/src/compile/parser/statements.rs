@@ -227,16 +227,328 @@ pub(crate) fn parse_statements(
             });
             continue;
         }
+        let mut flow = StatementFlow::Continue;
         match tokens.get(*cursor) {
             Some(Lexeme::End) => break,
             Some(Lexeme::Dedent) => {
-                if depth == 0 {
-                    return Err(CompileError::Syntax("多余的缩进收尾".to_owned()));
-                }
-                break;
+                flow = parse_statement_dedent(lexed, cursor, depth)?;
             }
             // `class <名字> [(<基类…>)]: <体>`
             Some(Lexeme::Class) => {
+                flow = parse_statement_class(lexed, cursor, depth, in_function, decorators.clone(), &mut statements)?;
+            }
+            Some(Lexeme::Def) => {
+                flow = parse_statement_def(lexed, cursor, depth, decorators.clone(), decorators_first_line, async_def, &mut statements)?;
+            }
+            Some(Lexeme::For) => {
+                flow = parse_statement_for_loop(lexed, cursor, depth, in_function, async_for, &mut statements)?;
+            }
+            Some(Lexeme::While) => {
+                flow = parse_statement_while_loop(lexed, cursor, depth, in_function, &mut statements)?;
+            }
+            Some(Lexeme::Global) => {
+                flow = parse_statement_global(lexed, cursor, &mut statements)?;
+            }
+            Some(Lexeme::Nonlocal) => {
+                flow = parse_statement_nonlocal(lexed, cursor, &mut statements)?;
+            }
+            Some(Lexeme::If) => {
+                flow = parse_statement_if_stmt(lexed, cursor, depth, in_function, &mut statements)?;
+            }
+            Some(Lexeme::Raise) => {
+                flow = parse_statement_raise(lexed, cursor, &mut statements)?;
+            }
+            Some(Lexeme::Yield) => {
+                flow = parse_statement_yield(lexed, cursor, &mut statements)?;
+            }
+            Some(Lexeme::Return) => {
+                flow = parse_statement_return(lexed, cursor, in_function, &mut statements)?;
+            }
+            // **`pass`**：实测**不产生任何指令**（连 `NOP` 都没有）⇒ 解析掉就行
+            Some(Lexeme::Name(name)) if name == "break" => {
+                flow = parse_statement_kw_break(lexed, cursor, &mut statements)?;
+            }
+            Some(Lexeme::Name(name)) if name == "continue" => {
+                flow = parse_statement_kw_continue(lexed, cursor, &mut statements)?;
+            }
+            // **`del <目标> (, <目标>)*`**：目标用表达式解析（`Name`／`Attribute`／`Subscript` ✓），
+            // 形状在**发射期**校验（别的形状如实报未接线 ✓）
+            Some(Lexeme::Name(name)) if name == "del" => {
+                flow = parse_statement_kw_del(lexed, cursor, &mut statements)?;
+            }
+            // **`assert <测试> [, <消息>]`**：3.14 实测形态见发射臂
+            Some(Lexeme::Name(name)) if name == "assert" => {
+                flow = parse_statement_kw_assert(lexed, cursor, &mut statements)?;
+            }
+            Some(Lexeme::Name(name)) if name == "pass" => {
+                flow = parse_statement_kw_pass(lexed, cursor, &mut statements)?;
+            }
+            // **`import <模块> [as <名字>] (, …)*`**（3.14 实测形态见发射臂）
+            Some(Lexeme::Name(name)) if name == "import" => {
+                flow = parse_statement_kw_import(lexed, cursor, &mut statements)?;
+            }
+            // **`from <点*><模块> import <名字表> | *`**
+            Some(Lexeme::Name(name)) if name == "from" => {
+                flow = parse_statement_kw_from(lexed, cursor, &mut statements)?;
+            }
+            Some(Lexeme::Name(name)) if name == "with" => {
+                flow = parse_statement_kw_with(lexed, cursor, depth, in_function, async_with, &mut statements)?;
+            }
+            Some(Lexeme::Name(name)) if name == "try" => {
+                flow = parse_statement_kw_try(lexed, cursor, depth, in_function, &mut statements)?;
+            }
+            Some(Lexeme::Name(_)) => {
+                flow = parse_statement_name_target(lexed, cursor, depth, in_function, &mut statements)?;
+            }
+            // 字符串字面量单独成句：**文档字符串**那一条（作用域首句才当文档串；
+            // 其余位置的常量表达式语句，参照实现也会**丢掉**——实测 `def f(): x = 1; "s"; return x`
+            // 的 `co_consts` 里没有那个 `"s"`）
+            // 字面量单独成句（`Str` 是文档串那条；`Int`／`Bytes` 是**裸表达式语句**，
+            // 实测参照对纯常量表达式语句**不产生指令**——`def f(): x = 1; "s"; return x` 的
+            // `co_consts` 里没有那个 `"s"`。第 281 轮把后两种也放进来（此前报"不认识的语句开头"）
+            // **`(` 起头的语句**（第 111 轮）：`(a, b) = x`（带括号的元组目标 ✓）或普通的
+            //   括号表达式语句 ✓。实测：`(a, b) = x` ⇒ `UNPACK_SEQUENCE 2`，**目标跨度含括号** ✓；
+            //   `(a) = x` ⇒ 退化成普通赋值 ✓；`(a, b) = 1, 2` ⇒ 等长窥孔 ✓。
+            Some(Lexeme::LeftParen) => {
+                flow = parse_statement_left_paren(lexed, cursor, &mut statements)?;
+            }
+            // **`[` 起头的语句**（第 722 轮）：`[a, b] = x`（**列表目标**解包 ✓）或列表显示的
+            //   表达式语句 ✓。实测 `[dd, mm, yy, tm, tz] = data` ⇒ `UNPACK_SEQUENCE 5`，
+            //   目标跨度＝**整个列表显示**（含方括号 ✓），与 `(a, b) = x` 那条同一口径 ✓。
+            //   动因：`Lib/email/_parseaddr.py:97` 正是它 ✗ —— 先前报"不认识的语句开头
+            //   Some(LeftBracket)"✗，把 email 那一族压在下面 ✓。
+            Some(Lexeme::LeftBracket) => {
+                flow = parse_statement_left_bracket(lexed, cursor, &mut statements)?;
+            }
+            // **`*` 起头的语句**（第 722 轮）：`*a, b = x`（**首个目标带星**的解包 ✓）。
+            //   实测 `Lib/email/utils.py:319` 的 `*dtuple, tz = parsed_date_tz` 正是它 ✗ ——
+            //   先前报"不认识的语句开头 Some(Star)"✓。名字打头那支只覆盖 `a, *b, c = x`
+            //   （星号不在首位 ✗）⇒ 这里补首星那一路 ✓，其余交给同一个尾巴函数 ✓。
+            Some(Lexeme::Star) => {
+                flow = parse_statement_star(lexed, cursor, &mut statements)?;
+            }
+            // `Lexeme::Dot` 也收 ✓（第 177 轮）：`class C: ...` 这类**表达式语句** ✓（单个 `.` 会由
+            // 表达式解析器如实报错 ✓）。
+            Some(Lexeme::Str(_))
+            | Some(Lexeme::Int(_))
+            | Some(Lexeme::BigInt(_))
+            | Some(Lexeme::Bytes(_))
+            | Some(Lexeme::Dot) => {
+                let (expression, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                let span = expression.span();
+                statements.push(Statement::Expression(expression, span));
+                expect_statement_end(lexed, cursor)?;
+            }
+            other => {
+                return Err({
+                    // **不许裸索引** ✗（同上真 bug）：`other` 可以是 EOF（`None` ✓）之外的任何词法
+                    // 单元 ✓；跨度取不到就给**空跨度** ✓（游标已在 `End` 之后时不再 panic ✓）。
+                    let span = lexed.spans.get(*cursor).copied();
+                    CompileError::Syntax(format!(
+                        "不认识的语句开头 {other:?}（第 {} 行，列 {}-{}）",
+                        span.map(|span| span.line_start).unwrap_or(0),
+                        span.map(|span| span.col_start).unwrap_or(0),
+                        span.map(|span| span.col_end).unwrap_or(0)
+                    ))
+                });
+            }
+        }
+        match flow {
+            StatementFlow::Break => break,
+            StatementFlow::Continue => {}
+        }
+    }
+    Ok(statements)
+}
+
+/// 一段语句的最后一条的末尾跨度（`def` 的整段要用它收尾）。
+pub(crate) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
+    statements.last().map(|statement| match statement {
+        // **`match`**（第 290 轮）：跨度取**最后一条 `case` 的体**末尾 ✓（没有体就取整段 ✓）
+        Statement::Match { cases, span, .. } => cases
+            .iter()
+            .rev()
+            .find_map(|case| statements_last_end(&case.body))
+            .unwrap_or(*span),
+        Statement::Annotation { span, .. }
+        | Statement::TypeAlias { span, .. }
+        | Statement::Assign { span, .. }
+        | Statement::YieldFrom(_, span)
+        | Statement::Return(_, span)
+        | Statement::NonLocal(_, span)
+        | Statement::Global(_, span)
+        | Statement::Yield(_, span)
+        | Statement::Expression(_, span)
+        | Statement::Def { span, .. }
+        | Statement::Class { span, .. }
+        | Statement::Pass(span)
+        | Statement::Assert { span, .. }
+        | Statement::Delete { span, .. }
+        | Statement::AssignTuple { span, .. }
+        | Statement::AssignChained { span, .. }
+        | Statement::Import { span, .. }
+        | Statement::ImportFrom { span, .. }
+        | Statement::With { span, .. }
+        | Statement::Try { span, .. }
+        | Statement::Break(span)
+        | Statement::Continue(span)
+        | Statement::AugAssign { span, .. }
+        | Statement::AssignSubscript { span, .. }
+        | Statement::AssignAttr { span, .. }
+        | Statement::NullCoalesceAssign { span, .. }
+        | Statement::Raise { span, .. }
+        | Statement::If { span, .. }
+        | Statement::While { span, .. }
+        | Statement::For { span, .. } => *span,
+    })
+}
+
+/// 解析一个**缩进体**（`:` 换行 缩进 体 去缩进）；`cursor` 指着冒号。
+/// **冒号之后的"体"** ✓（第 188 轮）：既可能是**缩进块** ✓，也可能是**同一行的简单语句** ✓
+///（`if not m: return \'\'` ✓ —— `Lib/genericpath.py:107` 正是它 ✓；`def` 那边第 174 轮已接 ✓）。
+///
+/// 返回体，并把 `cursor` 停在**换行符之后** ✓。
+pub(crate) fn parse_body_after_colon(
+    lexed: &Lexed,
+    cursor: &mut usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<Vec<Statement>, CompileError> {
+    let tokens = &lexed.lexemes;
+    if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+        // **行内体** ✓：简单语句，到行尾即止 ✓（`stop_at_newline` ✓）。
+        let body = parse_statements(lexed, cursor, depth + 1, in_function, true)?;
+        // **行内空体必须报错** ✓（`if True:` 冒号后直接 EOF ⇒ 参照 `IndentationError` ✓，
+        // 不能静默编成空体 ✗ —— 与 for／while／def／class 同一条口径 ✓）。
+        if body.is_empty() {
+            return Err(CompileError::Syntax("体要缩进".to_owned()));
+        }
+        if tokens.get(*cursor) == Some(&Lexeme::Newline) {
+            *cursor += 1;
+        }
+        return Ok(body);
+    }
+    *cursor += 1;
+    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+        return Err(CompileError::Syntax("体要缩进".to_owned()));
+    }
+    *cursor += 1;
+    let body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
+    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
+    }
+    *cursor += 1;
+    Ok(body)
+}
+
+pub(crate) fn parse_suite(
+    lexed: &Lexed,
+    cursor: usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<(Vec<Statement>, usize), CompileError> {
+    let tokens = &lexed.lexemes;
+    let mut cursor = cursor;
+    if tokens.get(cursor) != Some(&Lexeme::Colon) {
+        return Err(CompileError::Syntax(format!(
+            "这里要冒号，实际 {:?}（第 {} 行，列 {}-{}）",
+            tokens.get(cursor),
+            lexed.spans[cursor].line_start,
+            lexed.spans[cursor].col_start,
+            lexed.spans[cursor].col_end
+        )));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Newline) {
+        return Err(CompileError::Syntax("冒号后面要换行".to_owned()));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Indent) {
+        return Err(CompileError::Syntax("体要缩进".to_owned()));
+    }
+    cursor += 1;
+    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
+    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
+        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
+    }
+    Ok((body, cursor + 1))
+}
+
+/// 解析 `else: <换行> <缩进体>`（`if`／`for`／`while` 共用）；`cursor` 指着 `else`。
+pub(crate) fn parse_else_block(
+    lexed: &Lexed,
+    cursor: usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<(Vec<Statement>, usize), CompileError> {
+    let tokens = &lexed.lexemes;
+    let mut cursor = cursor + 1;
+    if tokens.get(cursor) != Some(&Lexeme::Colon) {
+        return Err(CompileError::Syntax("`else` 后面要冒号".to_owned()));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Newline) {
+        return Err(CompileError::Syntax("`else` 的冒号后面要换行".to_owned()));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Indent) {
+        return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
+    }
+    cursor += 1;
+    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
+    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
+        return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
+    }
+    Ok((body, cursor + 1))
+}
+
+/// 一条语句之后必须**到此为止**（换行／EOF／退回缩进 ✓）。
+///
+/// **带位置** ✓（第 283 轮）：先前只报词元 ✗ ⇒ 对着 `Lib/` 里几千行的文件**无从下手** ✓ ——
+/// 上游那几个"语句结尾多出了 `Some(…)`"的模块（`asyncio`／`multiprocessing.context` 一族 ✓）
+/// 就是靠这行位置定到**具体哪一句**的 ✓。
+pub(crate) fn expect_statement_end(lexed: &Lexed, cursor: &mut usize) -> Result<(), CompileError> {
+    match lexed.lexemes.get(*cursor) {
+        // **`;` 也是语句结尾** ✓（简单语句分隔符；调用方的循环会把它吃掉 ✓）
+        Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | Some(Lexeme::Semicolon) => {
+            Ok(())
+        }
+        other => {
+            let span = lexed.spans[*cursor];
+            Err(CompileError::Syntax(format!(
+                "语句结尾多出了 {other:?}（第 {} 行，列 {}-{}）",
+                span.line_start, span.col_start, span.col_end
+            )))
+        }
+    }
+}
+
+/// `parse_statements` 的语句族：拆出的每个分支返回 [`StatementFlow`]（Continue ≈ 原 fallthrough）。
+enum StatementFlow {
+    Continue,
+    Break,
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Dedent)` 分支原样搬入。
+fn parse_statement_dedent(lexed: &Lexed, cursor: &mut usize, depth: usize) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Dedent) => {
+                if depth == 0 {
+                    return Err(CompileError::Syntax("多余的缩进收尾".to_owned()));
+                }
+                return Ok(StatementFlow::Break);
+        }
+        _ => unreachable!("parse_statement_dedent 只接收对应分支"),
+    }
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Class)` 分支原样搬入。
+fn parse_statement_class(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, decorators: Vec<Expression>, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Class) => {
                 let class_span = lexed.spans[*cursor];
                 let first_line = class_span.line_start;
                 *cursor += 1;
@@ -326,8 +638,17 @@ pub(crate) fn parse_statements(
                     body,
                     type_params,
                 });
-            }
-            Some(Lexeme::Def) => {
+        }
+        _ => unreachable!("parse_statement_class 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Def)` 分支原样搬入。
+fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorators: Vec<Expression>, decorators_first_line: Option<u32>, async_def: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Def) => {
                 // **函数里嵌套 `def` 已接线**（第 278 轮）：解析不再拦；闭包（引用外层局部）
                 // 由发射期如实报错。
                 let def_span = lexed.spans[*cursor];
@@ -527,8 +848,17 @@ pub(crate) fn parse_statements(
                     body,
                     type_params,
                 });
-            }
-            Some(Lexeme::For) => {
+        }
+        _ => unreachable!("parse_statement_def 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::For)` 分支原样搬入。
+fn parse_statement_for_loop(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, async_for: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::For) => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 // **第一项可以是名字，也可以是括号／方括号元组** ✓（第 289 轮：
@@ -662,8 +992,17 @@ pub(crate) fn parse_statements(
                     body,
                     else_body: for_else,
                 });
-            }
-            Some(Lexeme::While) => {
+        }
+        _ => unreachable!("parse_statement_for_loop 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::While)` 分支原样搬入。
+fn parse_statement_while_loop(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::While) => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 // 与 `if` 同一条口径：条件位置**允许裸海象** ✓（一处真相 ✓）
@@ -719,8 +1058,17 @@ pub(crate) fn parse_statements(
                     body,
                     else_body: while_else,
                 });
-            }
-            Some(Lexeme::Global) => {
+        }
+        _ => unreachable!("parse_statement_while_loop 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Global)` 分支原样搬入。
+fn parse_statement_global(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Global) => {
                 // `global a, b`（**不发任何指令** ✓；实测模块层与函数层都一样 ⇒ 效果落在
                 //   **存储形态**上：`global a` 后 `a = 1` 发 `STORE_GLOBAL` ✓）
                 let keyword_span = lexed.spans[*cursor];
@@ -747,8 +1095,17 @@ pub(crate) fn parse_statements(
                     .unwrap_or(keyword_span);
                 statements.push(Statement::Global(names, keyword_span.to(last_span)));
                 *cursor = at;
-            }
-            Some(Lexeme::Nonlocal) => {
+        }
+        _ => unreachable!("parse_statement_global 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Nonlocal)` 分支原样搬入。
+fn parse_statement_nonlocal(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Nonlocal) => {
                 // `nonlocal a, b`（**不发任何指令** ✓；声明的作用在分析层承担）
                 let keyword_span = lexed.spans[*cursor];
                 let mut names = Vec::new();
@@ -770,13 +1127,31 @@ pub(crate) fn parse_statements(
                 let last_span = lexed.spans.get(at.saturating_sub(1)).copied().unwrap_or(keyword_span);
                 statements.push(Statement::NonLocal(names, keyword_span.to(last_span)));
                 *cursor = at;
-            }
-            Some(Lexeme::If) => {
+        }
+        _ => unreachable!("parse_statement_nonlocal 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::If)` 分支原样搬入。
+fn parse_statement_if_stmt(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::If) => {
                 let (statement, next) = parse_if_chain(lexed, *cursor, depth, in_function)?;
                 *cursor = next;
                 statements.push(statement);
-            }
-            Some(Lexeme::Raise) => {
+        }
+        _ => unreachable!("parse_statement_if_stmt 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Raise)` 分支原样搬入。
+fn parse_statement_raise(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Raise) => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let bare = matches!(
@@ -805,8 +1180,17 @@ pub(crate) fn parse_statements(
                     .unwrap_or(keyword_span);
                 statements.push(Statement::Raise { value, cause, span: keyword_span.to(end) });
                 expect_statement_end(lexed, cursor)?;
-            }
-            Some(Lexeme::Yield) => {
+        }
+        _ => unreachable!("parse_statement_raise 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Yield)` 分支原样搬入。
+fn parse_statement_yield(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Yield) => {
                 // `yield` / `yield 表达式`（第 124 轮）：形态见发射臂 ✓
                 let statement_span = lexed.spans[*cursor];
                 *cursor += 1;
@@ -819,7 +1203,7 @@ pub(crate) fn parse_statements(
                     *cursor = next;
                     let end = delegated.span();
                     statements.push(Statement::YieldFrom(Box::new(delegated), statement_span.to(end)));
-                    continue;
+                    return Ok(StatementFlow::Continue);
                 }
                 let value = if matches!(
                     tokens.get(*cursor),
@@ -840,8 +1224,17 @@ pub(crate) fn parse_statements(
                 };
                 let end = value.as_ref().map(|item| item.span()).unwrap_or(statement_span);
                 statements.push(Statement::Yield(value, statement_span.to(end)));
-            }
-            Some(Lexeme::Return) => {
+        }
+        _ => unreachable!("parse_statement_yield 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Return)` 分支原样搬入。
+fn parse_statement_return(lexed: &Lexed, cursor: &mut usize, in_function: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Return) => {
                 if !in_function {
                     return Err(CompileError::Syntax(
                         "模块级的 `return`（参照实现也是 SyntaxError）".to_owned(),
@@ -867,23 +1260,47 @@ pub(crate) fn parse_statements(
                 let span = keyword_span.to(value.span());
                 statements.push(Statement::Return(value, span));
                 expect_statement_end(lexed, cursor)?;
-            }
-            // **`pass`**：实测**不产生任何指令**（连 `NOP` 都没有）⇒ 解析掉就行
-            Some(Lexeme::Name(name)) if name == "break" => {
+        }
+        _ => unreachable!("parse_statement_return 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "break"` 分支原样搬入。
+fn parse_statement_kw_break(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "break" => {
                 let position = lexed.spans[*cursor];
                 *cursor += 1;
                 statements.push(Statement::Break(position));
                 expect_statement_end(lexed, cursor)?;
-            }
-            Some(Lexeme::Name(name)) if name == "continue" => {
+        }
+        _ => unreachable!("parse_statement_kw_break 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "continue"` 分支原样搬入。
+fn parse_statement_kw_continue(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "continue" => {
                 let position = lexed.spans[*cursor];
                 *cursor += 1;
                 statements.push(Statement::Continue(position));
                 expect_statement_end(lexed, cursor)?;
-            }
-            // **`del <目标> (, <目标>)*`**：目标用表达式解析（`Name`／`Attribute`／`Subscript` ✓），
-            // 形状在**发射期**校验（别的形状如实报未接线 ✓）
-            Some(Lexeme::Name(name)) if name == "del" => {
+        }
+        _ => unreachable!("parse_statement_kw_continue 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "del"` 分支原样搬入。
+fn parse_statement_kw_del(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "del" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let mut targets = Vec::new();
@@ -906,9 +1323,17 @@ pub(crate) fn parse_statements(
                     span: keyword_span.to(end),
                 });
                 expect_statement_end(lexed, cursor)?;
-            }
-            // **`assert <测试> [, <消息>]`**：3.14 实测形态见发射臂
-            Some(Lexeme::Name(name)) if name == "assert" => {
+        }
+        _ => unreachable!("parse_statement_kw_del 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "assert"` 分支原样搬入。
+fn parse_statement_kw_assert(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "assert" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let (test, next) = parse_expression(lexed, *cursor)?;
@@ -930,15 +1355,32 @@ pub(crate) fn parse_statements(
                     span: keyword_span.to(end),
                 });
                 expect_statement_end(lexed, cursor)?;
-            }
-            Some(Lexeme::Name(name)) if name == "pass" => {
+        }
+        _ => unreachable!("parse_statement_kw_assert 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "pass"` 分支原样搬入。
+fn parse_statement_kw_pass(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "pass" => {
                 let position = lexed.spans[*cursor];
                 *cursor += 1;
                 statements.push(Statement::Pass(position));
                 expect_statement_end(lexed, cursor)?;
-            }
-            // **`import <模块> [as <名字>] (, …)*`**（3.14 实测形态见发射臂）
-            Some(Lexeme::Name(name)) if name == "import" => {
+        }
+        _ => unreachable!("parse_statement_kw_pass 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "import"` 分支原样搬入。
+fn parse_statement_kw_import(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "import" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let mut items: Vec<(String, Option<String>)> = Vec::new();
@@ -990,9 +1432,17 @@ pub(crate) fn parse_statements(
                     items,
                     span: keyword_span.to(end),
                 });
-            }
-            // **`from <点*><模块> import <名字表> | *`**
-            Some(Lexeme::Name(name)) if name == "from" => {
+        }
+        _ => unreachable!("parse_statement_kw_import 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "from"` 分支原样搬入。
+fn parse_statement_kw_from(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "from" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let mut level = 0u8;
@@ -1090,8 +1540,17 @@ pub(crate) fn parse_statements(
                     star,
                     span: keyword_span.to(end),
                 });
-            }
-            Some(Lexeme::Name(name)) if name == "with" => {
+        }
+        _ => unreachable!("parse_statement_kw_from 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "with"` 分支原样搬入。
+fn parse_statement_kw_with(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, async_with: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "with" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let mut items = Vec::new();
@@ -1150,8 +1609,17 @@ pub(crate) fn parse_statements(
                     body,
                     span: keyword_span.to(body_end),
                 });
-            }
-            Some(Lexeme::Name(name)) if name == "try" => {
+        }
+        _ => unreachable!("parse_statement_kw_with 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "try"` 分支原样搬入。
+fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(name)) if name == "try" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let (body, next) = parse_suite(lexed, *cursor, depth, in_function)?;
@@ -1260,8 +1728,17 @@ pub(crate) fn parse_statements(
                     finally_body,
                     span: keyword_span.to(body_end),
                 });
-            }
-            Some(Lexeme::Name(target)) => {
+        }
+        _ => unreachable!("parse_statement_kw_try 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Name(target))` 分支原样搬入。
+fn parse_statement_name_target(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Name(target)) => {
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
                 let statement_start = *cursor;
@@ -1273,7 +1750,7 @@ pub(crate) fn parse_statements(
                     {
                         statements.push(statement);
                         *cursor = next;
-                        continue;
+                        return Ok(StatementFlow::Continue);
                     }
                 }
                 // **调用开头的语句**（第 283 轮修 ✗）：`f()` 是表达式语句 ✓，但
@@ -1299,7 +1776,7 @@ pub(crate) fn parse_statements(
                         let span = expression.span();
                         statements.push(Statement::Expression(expression, span));
                         expect_statement_end(lexed, cursor)?;
-                        continue;
+                        return Ok(StatementFlow::Continue);
                     }
                     *cursor = next;
                     chain = expression;
@@ -1378,7 +1855,7 @@ pub(crate) fn parse_statements(
                         span,
                     });
                     expect_statement_end(lexed, cursor)?;
-                    continue;
+                    return Ok(StatementFlow::Continue);
                 }
                 // **元组解包赋值**（第 107 轮；实测形态见发射臂 ✓）：`a, b = x`／`a[0], b = x`／
                 // `a, *b, c = x`。目标用**表达式**解析（与 `del` 同一口径 ✓），`*` 单独记一位 ✓。
@@ -1420,7 +1897,7 @@ pub(crate) fn parse_statements(
                         chain,
                     });
                     expect_statement_end(lexed, cursor)?;
-                    continue;
+                    return Ok(StatementFlow::Continue);
                 }
                 // **带注解的赋值／裸注解**（第 340 轮）：`x: int = 1` ✓、`x: int` ✓、`x: "T" = v` ✓。
                 //
@@ -1514,7 +1991,7 @@ pub(crate) fn parse_statements(
                     }
                     // 裸注解（`x: int`）⇒ 本层当**空操作** ✓（参照会记进 `__annotations__` ✗，如实登记 ✓）
                     expect_statement_end(lexed, cursor)?;
-                    continue;
+                    return Ok(StatementFlow::Continue);
                 }
                 // **增强赋值**：三种目标各一套栈序（见 `Statement::AugAssign`）
                 if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
@@ -1553,7 +2030,7 @@ pub(crate) fn parse_statements(
                         span,
                     });
                     expect_statement_end(lexed, cursor)?;
-                    continue;
+                    return Ok(StatementFlow::Continue);
                 }
                 // 目标链之后接 `(` ⇒ **方法调用的表达式语句**（`obj.method(…)`，实测常见）
                 // ⇒ 整句按表达式重解析（此前只接线了 `名字(…)`，这种会误报"未接线"）。
@@ -1581,7 +2058,7 @@ pub(crate) fn parse_statements(
                         let span = expression.span();
                         statements.push(Statement::Expression(expression, span));
                         expect_statement_end(lexed, cursor)?;
-                        continue;
+                        return Ok(StatementFlow::Continue);
                     }
                 }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
@@ -1594,7 +2071,7 @@ pub(crate) fn parse_statements(
                             let span = expression.span();
                             statements.push(Statement::Expression(expression, span));
                             expect_statement_end(lexed, cursor)?;
-                            continue;
+                            return Ok(StatementFlow::Continue);
                         }
                     }
                     // **报错自带位置与 token**（第 104 轮：第 87／102 轮同一课的第三次 ✓）
@@ -1633,7 +2110,7 @@ pub(crate) fn parse_statements(
                         span,
                     });
                     expect_statement_end(lexed, cursor)?;
-                    continue;
+                    return Ok(StatementFlow::Continue);
                 }
                 let (value, next) = parse_expression_list(lexed, *cursor)?;
                 *cursor = next;
@@ -1672,17 +2149,17 @@ pub(crate) fn parse_statements(
                     }
                 }
                 expect_statement_end(lexed, cursor)?;
-            }
-            // 字符串字面量单独成句：**文档字符串**那一条（作用域首句才当文档串；
-            // 其余位置的常量表达式语句，参照实现也会**丢掉**——实测 `def f(): x = 1; "s"; return x`
-            // 的 `co_consts` 里没有那个 `"s"`）
-            // 字面量单独成句（`Str` 是文档串那条；`Int`／`Bytes` 是**裸表达式语句**，
-            // 实测参照对纯常量表达式语句**不产生指令**——`def f(): x = 1; "s"; return x` 的
-            // `co_consts` 里没有那个 `"s"`。第 281 轮把后两种也放进来（此前报"不认识的语句开头"）
-            // **`(` 起头的语句**（第 111 轮）：`(a, b) = x`（带括号的元组目标 ✓）或普通的
-            //   括号表达式语句 ✓。实测：`(a, b) = x` ⇒ `UNPACK_SEQUENCE 2`，**目标跨度含括号** ✓；
-            //   `(a) = x` ⇒ 退化成普通赋值 ✓；`(a, b) = 1, 2` ⇒ 等长窥孔 ✓。
-            Some(Lexeme::LeftParen) => {
+        }
+        _ => unreachable!("parse_statement_name_target 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::LeftParen)` 分支原样搬入。
+fn parse_statement_left_paren(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::LeftParen) => {
                 let start_span = lexed.spans[*cursor];
                 let (first, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
@@ -1751,13 +2228,17 @@ pub(crate) fn parse_statements(
                         expect_statement_end(lexed, cursor)?;
                     }
                 }
-            }
-            // **`[` 起头的语句**（第 722 轮）：`[a, b] = x`（**列表目标**解包 ✓）或列表显示的
-            //   表达式语句 ✓。实测 `[dd, mm, yy, tm, tz] = data` ⇒ `UNPACK_SEQUENCE 5`，
-            //   目标跨度＝**整个列表显示**（含方括号 ✓），与 `(a, b) = x` 那条同一口径 ✓。
-            //   动因：`Lib/email/_parseaddr.py:97` 正是它 ✗ —— 先前报"不认识的语句开头
-            //   Some(LeftBracket)"✗，把 email 那一族压在下面 ✓。
-            Some(Lexeme::LeftBracket) => {
+        }
+        _ => unreachable!("parse_statement_left_paren 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::LeftBracket)` 分支原样搬入。
+fn parse_statement_left_bracket(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::LeftBracket) => {
                 let start_span = lexed.spans[*cursor];
                 let (first, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
@@ -1789,12 +2270,17 @@ pub(crate) fn parse_statements(
                         expect_statement_end(lexed, cursor)?;
                     }
                 }
-            }
-            // **`*` 起头的语句**（第 722 轮）：`*a, b = x`（**首个目标带星**的解包 ✓）。
-            //   实测 `Lib/email/utils.py:319` 的 `*dtuple, tz = parsed_date_tz` 正是它 ✗ ——
-            //   先前报"不认识的语句开头 Some(Star)"✓。名字打头那支只覆盖 `a, *b, c = x`
-            //   （星号不在首位 ✗）⇒ 这里补首星那一路 ✓，其余交给同一个尾巴函数 ✓。
-            Some(Lexeme::Star) => {
+        }
+        _ => unreachable!("parse_statement_left_bracket 只接收对应分支"),
+    }
+    Ok(StatementFlow::Continue)
+}
+
+/// 从 `parse_statements` 的 `Some(Lexeme::Star)` 分支原样搬入。
+fn parse_statement_star(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
+    let tokens = &lexed.lexemes;
+    match tokens.get(*cursor) {
+        Some(Lexeme::Star) => {
                 let star_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let (first, next) = parse_expression(lexed, *cursor)?;
@@ -1822,197 +2308,9 @@ pub(crate) fn parse_statements(
                     chain: Vec::new(),
                 });
                 expect_statement_end(lexed, cursor)?;
-            }
-            // `Lexeme::Dot` 也收 ✓（第 177 轮）：`class C: ...` 这类**表达式语句** ✓（单个 `.` 会由
-            // 表达式解析器如实报错 ✓）。
-            Some(Lexeme::Str(_))
-            | Some(Lexeme::Int(_))
-            | Some(Lexeme::BigInt(_))
-            | Some(Lexeme::Bytes(_))
-            | Some(Lexeme::Dot) => {
-                let (expression, next) = parse_expression(lexed, *cursor)?;
-                *cursor = next;
-                let span = expression.span();
-                statements.push(Statement::Expression(expression, span));
-                expect_statement_end(lexed, cursor)?;
-            }
-            other => {
-                return Err({
-                    // **不许裸索引** ✗（同上真 bug）：`other` 可以是 EOF（`None` ✓）之外的任何词法
-                    // 单元 ✓；跨度取不到就给**空跨度** ✓（游标已在 `End` 之后时不再 panic ✓）。
-                    let span = lexed.spans.get(*cursor).copied();
-                    CompileError::Syntax(format!(
-                        "不认识的语句开头 {other:?}（第 {} 行，列 {}-{}）",
-                        span.map(|span| span.line_start).unwrap_or(0),
-                        span.map(|span| span.col_start).unwrap_or(0),
-                        span.map(|span| span.col_end).unwrap_or(0)
-                    ))
-                });
-            }
         }
+        _ => unreachable!("parse_statement_star 只接收对应分支"),
     }
-    Ok(statements)
-}
-
-/// 一段语句的最后一条的末尾跨度（`def` 的整段要用它收尾）。
-pub(crate) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
-    statements.last().map(|statement| match statement {
-        // **`match`**（第 290 轮）：跨度取**最后一条 `case` 的体**末尾 ✓（没有体就取整段 ✓）
-        Statement::Match { cases, span, .. } => cases
-            .iter()
-            .rev()
-            .find_map(|case| statements_last_end(&case.body))
-            .unwrap_or(*span),
-        Statement::Annotation { span, .. }
-        | Statement::TypeAlias { span, .. }
-        | Statement::Assign { span, .. }
-        | Statement::YieldFrom(_, span)
-        | Statement::Return(_, span)
-        | Statement::NonLocal(_, span)
-        | Statement::Global(_, span)
-        | Statement::Yield(_, span)
-        | Statement::Expression(_, span)
-        | Statement::Def { span, .. }
-        | Statement::Class { span, .. }
-        | Statement::Pass(span)
-        | Statement::Assert { span, .. }
-        | Statement::Delete { span, .. }
-        | Statement::AssignTuple { span, .. }
-        | Statement::AssignChained { span, .. }
-        | Statement::Import { span, .. }
-        | Statement::ImportFrom { span, .. }
-        | Statement::With { span, .. }
-        | Statement::Try { span, .. }
-        | Statement::Break(span)
-        | Statement::Continue(span)
-        | Statement::AugAssign { span, .. }
-        | Statement::AssignSubscript { span, .. }
-        | Statement::AssignAttr { span, .. }
-        | Statement::NullCoalesceAssign { span, .. }
-        | Statement::Raise { span, .. }
-        | Statement::If { span, .. }
-        | Statement::While { span, .. }
-        | Statement::For { span, .. } => *span,
-    })
-}
-
-/// 解析一个**缩进体**（`:` 换行 缩进 体 去缩进）；`cursor` 指着冒号。
-/// **冒号之后的"体"** ✓（第 188 轮）：既可能是**缩进块** ✓，也可能是**同一行的简单语句** ✓
-///（`if not m: return \'\'` ✓ —— `Lib/genericpath.py:107` 正是它 ✓；`def` 那边第 174 轮已接 ✓）。
-///
-/// 返回体，并把 `cursor` 停在**换行符之后** ✓。
-pub(crate) fn parse_body_after_colon(
-    lexed: &Lexed,
-    cursor: &mut usize,
-    depth: usize,
-    in_function: bool,
-) -> Result<Vec<Statement>, CompileError> {
-    let tokens = &lexed.lexemes;
-    if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-        // **行内体** ✓：简单语句，到行尾即止 ✓（`stop_at_newline` ✓）。
-        let body = parse_statements(lexed, cursor, depth + 1, in_function, true)?;
-        // **行内空体必须报错** ✓（`if True:` 冒号后直接 EOF ⇒ 参照 `IndentationError` ✓，
-        // 不能静默编成空体 ✗ —— 与 for／while／def／class 同一条口径 ✓）。
-        if body.is_empty() {
-            return Err(CompileError::Syntax("体要缩进".to_owned()));
-        }
-        if tokens.get(*cursor) == Some(&Lexeme::Newline) {
-            *cursor += 1;
-        }
-        return Ok(body);
-    }
-    *cursor += 1;
-    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-        return Err(CompileError::Syntax("体要缩进".to_owned()));
-    }
-    *cursor += 1;
-    let body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
-    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
-    }
-    *cursor += 1;
-    Ok(body)
-}
-
-pub(crate) fn parse_suite(
-    lexed: &Lexed,
-    cursor: usize,
-    depth: usize,
-    in_function: bool,
-) -> Result<(Vec<Statement>, usize), CompileError> {
-    let tokens = &lexed.lexemes;
-    let mut cursor = cursor;
-    if tokens.get(cursor) != Some(&Lexeme::Colon) {
-        return Err(CompileError::Syntax(format!(
-            "这里要冒号，实际 {:?}（第 {} 行，列 {}-{}）",
-            tokens.get(cursor),
-            lexed.spans[cursor].line_start,
-            lexed.spans[cursor].col_start,
-            lexed.spans[cursor].col_end
-        )));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Newline) {
-        return Err(CompileError::Syntax("冒号后面要换行".to_owned()));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Indent) {
-        return Err(CompileError::Syntax("体要缩进".to_owned()));
-    }
-    cursor += 1;
-    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
-    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
-        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
-    }
-    Ok((body, cursor + 1))
-}
-
-/// 解析 `else: <换行> <缩进体>`（`if`／`for`／`while` 共用）；`cursor` 指着 `else`。
-pub(crate) fn parse_else_block(
-    lexed: &Lexed,
-    cursor: usize,
-    depth: usize,
-    in_function: bool,
-) -> Result<(Vec<Statement>, usize), CompileError> {
-    let tokens = &lexed.lexemes;
-    let mut cursor = cursor + 1;
-    if tokens.get(cursor) != Some(&Lexeme::Colon) {
-        return Err(CompileError::Syntax("`else` 后面要冒号".to_owned()));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Newline) {
-        return Err(CompileError::Syntax("`else` 的冒号后面要换行".to_owned()));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Indent) {
-        return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
-    }
-    cursor += 1;
-    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
-    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
-        return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
-    }
-    Ok((body, cursor + 1))
-}
-
-/// 一条语句之后必须**到此为止**（换行／EOF／退回缩进 ✓）。
-///
-/// **带位置** ✓（第 283 轮）：先前只报词元 ✗ ⇒ 对着 `Lib/` 里几千行的文件**无从下手** ✓ ——
-/// 上游那几个"语句结尾多出了 `Some(…)`"的模块（`asyncio`／`multiprocessing.context` 一族 ✓）
-/// 就是靠这行位置定到**具体哪一句**的 ✓。
-pub(crate) fn expect_statement_end(lexed: &Lexed, cursor: &mut usize) -> Result<(), CompileError> {
-    match lexed.lexemes.get(*cursor) {
-        // **`;` 也是语句结尾** ✓（简单语句分隔符；调用方的循环会把它吃掉 ✓）
-        Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | Some(Lexeme::Semicolon) => {
-            Ok(())
-        }
-        other => {
-            let span = lexed.spans[*cursor];
-            Err(CompileError::Syntax(format!(
-                "语句结尾多出了 {other:?}（第 {} 行，列 {}-{}）",
-                span.line_start, span.col_start, span.col_end
-            )))
-        }
-    }
+    Ok(StatementFlow::Continue)
 }
 
