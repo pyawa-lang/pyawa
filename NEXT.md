@@ -3,23 +3,28 @@
 > 规则见 `agents-rules/round-rule.md`：**一轮一落地**（每轮以「提交」或「撤回＋一条改变计划的事实」结束 ✓）。
 > **本页是会话交接单页**（2026-10-18 ✓）：会话 07（Lead＋6 队员团队模式）已收 **round 10（M5 开局）／round 11／round 12（功能收口）／
 > round 13（M5 收口）**；逐轮复盘见 `docs/rounds/03-m3-progress-05.md` ✓（本笔追加「round 13」节）。
-> **会话 08**：**拆文件专项**（用户 2026-10-18 指示＝拆非生成的大文件；6 刀，见下）。
+> **会话 08**：**拆文件专项**（用户 2026-10-18 指示＝拆非生成的大文件；6 刀，全部落地 ✓）。
+> **会话 09（2026-10-23）**：**拆函数专项**（用户「把需要拆的函数拆一下」——先清纯移动低风险批，再处理两个顺序巨型函数）。
 
 ## 现在
 
-- **HEAD**：`a1c3657`（`dev`，本笔前）—— 本笔＝**拆文件专项 6/6**：`instance.rs`（2279 行）拆到既有子模块
-  （`bootstrap`／`alloc`／`refcount`／`gc`）＋ 新文件 `quarantine.rs`／`drop.rs`／`quote.rs`；父文件只剩
-  **222 行**（数据定义＋模块声明）。`bootstrap_builtin_types`（1060 行）**原样**留在 `bootstrap.rs`（未拆函数——
-  与 `parser/statements.rs` 的 `parse_statements` 一并如实登记为剩余项）。
+- **HEAD**：`c06828f`（`dev`，本笔前）—— 本笔＝**拆函数专项 1/9**：`emitter/stmt_compound.rs` 的
+  `emit_statement_compound`（1090 行）拆成 **分派 ＋ 6 个函数**（Match／With／Try／For／While／If；
+  最大 `emit_statement_try` 347 行）；`emitter/stmt_assign.rs` 的 `emit_statement_assign`（631 行）拆成
+  **分派 ＋ 8 个函数**（最大 `emit_statement_assign_chained` 150 行）。均为同文件纯移动（臂原样搬入）。
 - **工作区**：唯一未提交项 `tools/libtests_survey.py`（上轮 Lib/test 调查收尾：`PYTHONPATH`＋超时；
   **与本专项无关**，本笔不碰）；专项自身的改动都随本笔提交 ⇒ 其余干净。
 - **stash**：**空** ✓
 - **拆文件专项清单（6 刀，全部落地）**：① `format.rs` ✓ → ② `builtin_objects.rs` ✓ → ③ `emitter.rs` ✓ →
   ④ `parser.rs` ✓ → ⑤ `executor.rs` ✓ → ⑥ `instance.rs` ✓。每刀＝纯移动／分派等价，验收＝
   `tools/quickcheck.sh` ＋ 提交前 `tools/slowcheck.sh` 十项。
-- **剩余的两个巨型函数**（本轮**未**拆，如实登记）：`parser/statements.rs` 的 `parse_statements`（1766 行）、
-  `instance/bootstrap.rs` 的 `bootstrap_builtin_types`（1060 行）；两者所在**文件**已可读，但函数内部分派／
-  顺序注册尚未拆。
+- **拆函数专项清单（9 项，按先易后难）**：① `emitter` 两个语句分派 ✓ →
+  ② `executor/step_calls.rs`（720；含 `CALL_INTRINSIC_1` 245 行）→ ③ `step_exceptions.rs` 的 `RAISE_VARARGS`（189）＋
+  `expr_names.rs` 的 `Call`（218）→ ④ `parser/atoms.rs` 的 `parse_atom`（592）→ ⑤ `executor/attribute.rs` 的
+  `attribute_lookup`（552）→ ⑥ `executor/iter_advance.rs` 的 `advance_iterator`（1024）→
+  ⑦ `parser/statements.rs` 的 `parse_statements`（1767，需解析上下文，非纯移动）→
+  ⑧ `instance/bootstrap.rs` 的 `bootstrap_builtin_types`（1060，需按名查表，非纯移动）→ ⑨ 收口全量闸门。
+  暂不动：`lex`（772，内聚）与其余 300–500 行扁平分派族函数。
 - **M5 已成立 ✓（判据①②③ 全绿，2026-10-18 收口）**：
   - **判据①（`T-CP-*` 全绿）✓**：矩阵 **13 绿／0 红**。可执行证据：`crates/pyawa-abi/tests/capability_acceptance.rs`（11）／
     `crates/pyawa-runtime/tests/two_providers.rs`（7）／`t_cp10_cancel.rs`（4）／`select_dup2_shapes.rs`（1）／
