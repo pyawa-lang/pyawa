@@ -50,6 +50,82 @@ pub(crate) fn advance_iterator(
         };
     }
     if ty == builtin_type(instance, "list_reverseiterator") {
+        return advance_list_reverseiterator(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "reversed") {
+        return advance_reversed(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "count") {
+        return advance_count(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "repeat") {
+        return advance_repeat(instance, iterator, opcode);
+    }
+    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
+    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
+    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
+    if ty == builtin_type(instance, "islice")
+        || Some(ty) == instance.type_named("range_iterator")
+        || Some(ty) == instance.type_named("longrange_iterator") {
+        return advance_islice(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "product") {
+        return advance_product(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "permutations") {
+        return advance_permutations(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "compress") {
+        return advance_compress(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "combinations")
+        || ty == builtin_type(instance, "combinations_with_replacement") {
+        return advance_combinations(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "zip") {
+        return advance_zip(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "zip_longest") {
+        return advance_zip_longest(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "pairwise") {
+        return advance_pairwise(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "batched") {
+        return advance_batched(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "cycle") {
+        return advance_cycle(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "accumulate") {
+        return advance_accumulate(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "starmap") {
+        return advance_starmap(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "takewhile")
+        || ty == builtin_type(instance, "dropwhile")
+        || ty == builtin_type(instance, "filterfalse") {
+        return advance_takewhile(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "chain") {
+        return advance_chain(instance, iterator, opcode);
+    }
+    // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
+    let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+    let target = object.target();
+    let index = object.index();
+    let length = iterable_length(instance, target, opcode)?;
+    if index >= length {
+        return Ok(None);
+    }
+    let item = iterable_item(instance, target, index, opcode)?;
+    object.advance();
+    Ok(Some(item))
+}
+
+/// `list_reverseiterator` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_list_reverseiterator(instance: &Instance, iterator: NonNull<Header>, _opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // **反向遍历** ✓（第 227 轮）：`index` 存"**下一个要取的下标 ＋ 1**" ✓ ⇒ `0` ＝ 取完 ✓
         //（空表 ⇒ 初值 0 ⇒ 立刻耗尽 ✓，不必另设哨兵 ✓）。
         // SAFETY: 类型身份刚确认。
@@ -66,8 +142,10 @@ pub(crate) fn advance_iterator(
         // SAFETY: value 由列表持有，这里新增一份引用交给调用方。
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(Some(value));
-    }
-    if ty == builtin_type(instance, "reversed") {
+}
+
+/// `reversed` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_reversed(instance: &Instance, iterator: NonNull<Header>, _opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // **通用反向迭代** ✓（第 727 轮）：序列协议 `x[index]` ✓；`index` 是"下一个要取的下标 ＋ 1" ✓。
         // SAFETY: 类型身份刚确认。
         let state = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
@@ -82,8 +160,10 @@ pub(crate) fn advance_iterator(
         let result = crate::executor::subscript::subscript_read(instance, target, key);
         release(instance, key);
         return result.map(Some);
-    }
-    if ty == builtin_type(instance, "count") {
+}
+
+/// `count` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_count(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // `itertools.count`：先吐当前值，再按步长推进。**只含整数**（不持引用）。
         // 越过 `i64` ⇒ 如实报"未接线"（任意精度的口径还没裁，见契约 §5.2.6）——**不静默回绕**。
         // SAFETY: 类型身份刚确认。
@@ -96,8 +176,10 @@ pub(crate) fn advance_iterator(
             });
         }
         return Ok(Some(instance.new_int(value)));
-    }
-    if ty == builtin_type(instance, "repeat") {
+}
+
+/// `repeat` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_repeat(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -123,14 +205,10 @@ pub(crate) fn advance_iterator(
         // SAFETY: value 由本迭代器持有，存活。
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(Some(value));
-    }
-    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
-    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
-    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
-    if ty == builtin_type(instance, "islice")
-        || Some(ty) == instance.type_named("range_iterator")
-        || Some(ty) == instance.type_named("longrange_iterator")
-    {
+}
+
+/// `islice` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_islice(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -179,8 +257,10 @@ pub(crate) fn advance_iterator(
             // 跳过这一个（不在让出序列上）：归还引用后继续
             release(instance, item);
         }
-    }
-    if ty == builtin_type(instance, "product") {
+}
+
+/// `product` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_product(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -286,8 +366,10 @@ pub(crate) fn advance_iterator(
             items.push(value);
         }
         return Ok(Some(instance.new_tuple(items)));
-    }
-    if ty == builtin_type(instance, "permutations") {
+}
+
+/// `permutations` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_permutations(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -398,8 +480,10 @@ pub(crate) fn advance_iterator(
             items.push(value);
         }
         return Ok(Some(instance.new_tuple(items)));
-    }
-    if ty == builtin_type(instance, "compress") {
+}
+
+/// `compress` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_compress(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -436,10 +520,10 @@ pub(crate) fn advance_iterator(
             }
             release(instance, item);
         }
-    }
-    if ty == builtin_type(instance, "combinations")
-        || ty == builtin_type(instance, "combinations_with_replacement")
-    {
+}
+
+/// `combinations` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_combinations(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -556,8 +640,10 @@ pub(crate) fn advance_iterator(
             items.push(value);
         }
         return Ok(Some(instance.new_tuple(items)));
-    }
-    if ty == builtin_type(instance, "zip") {
+}
+
+/// `zip` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_zip(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // **`zip` 取最短** ✓（第 229 轮）：与 `zip_longest` 同一份载荷 ✓ ⇒ 区别只在"**缺项就收摊**" ✓。
         // SAFETY: 类型身份刚确认。
         let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
@@ -585,8 +671,10 @@ pub(crate) fn advance_iterator(
             }
         }
         return Ok(Some(instance.new_tuple(row)));
-    }
-    if ty == builtin_type(instance, "zip_longest") {
+}
+
+/// `zip_longest` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_zip_longest(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -641,8 +729,10 @@ pub(crate) fn advance_iterator(
             }
         }
         return Ok(Some(instance.new_tuple(row)));
-    }
-    if ty == builtin_type(instance, "pairwise") {
+}
+
+/// `pairwise` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_pairwise(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -689,8 +779,10 @@ pub(crate) fn advance_iterator(
                 }
             }
         }
-    }
-    if ty == builtin_type(instance, "batched") {
+}
+
+/// `batched` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_batched(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -726,8 +818,10 @@ pub(crate) fn advance_iterator(
         }
         // `new_tuple` **接手**这些引用（里面已经都是新引用）
         return Ok(Some(instance.new_tuple(batch)));
-    }
-    if ty == builtin_type(instance, "cycle") {
+}
+
+/// `cycle` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_cycle(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -787,8 +881,10 @@ pub(crate) fn advance_iterator(
             });
             return Ok(Some(item));
         }
-    }
-    if ty == builtin_type(instance, "accumulate") {
+}
+
+/// `accumulate` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_accumulate(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -840,8 +936,10 @@ pub(crate) fn advance_iterator(
             total: Some(next),
         });
         return Ok(Some(next));
-    }
-    if ty == builtin_type(instance, "starmap") {
+}
+
+/// `starmap` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_starmap(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -889,11 +987,10 @@ pub(crate) fn advance_iterator(
         };
         release(instance, item);
         return result.map(Some);
-    }
-    if ty == builtin_type(instance, "takewhile")
-        || ty == builtin_type(instance, "dropwhile")
-        || ty == builtin_type(instance, "filterfalse")
-    {
+}
+
+/// `takewhile` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_takewhile(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -979,8 +1076,10 @@ pub(crate) fn advance_iterator(
                 }
             }
         }
-    }
-    if ty == builtin_type(instance, "chain") {
+}
+
+/// `chain` 的推进分支（从 `advance_iterator` 原样搬来）。
+fn advance_chain(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1023,16 +1122,5 @@ pub(crate) fn advance_iterator(
                 current: Some(inner),
             });
         }
-    }
-    // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
-    let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
-    let target = object.target();
-    let index = object.index();
-    let length = iterable_length(instance, target, opcode)?;
-    if index >= length {
-        return Ok(None);
-    }
-    let item = iterable_item(instance, target, index, opcode)?;
-    object.advance();
-    Ok(Some(item))
 }
+
