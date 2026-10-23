@@ -136,7 +136,7 @@ pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         .get(cursor)
         .copied()
         .unwrap_or(Span::new(1, 1, 0, 0));
-    let (term, cursor) = 'atom: { match lexed.lexemes.get(cursor) {
+    let (term, cursor) = { match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
         // **大整数字面量**（第 285 轮）：常量池那条路 ✓（`Constant::BigInt` ✓）。
         Some(Lexeme::BigInt(text)) => (Expression::BigInt(text.clone(), span), cursor + 1),
@@ -146,507 +146,19 @@ pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         // 动因：`Lib/base64.py:437` 的
         // `_b85alphabet = (b"0123456789…" \n b"abcdef…")` 跨行相邻 ⇒ 先前**不并** ✗ ⇒ 括号那一组
         // 见到第二个 bytes 字面量 ⇒ 报"括号没有闭合，实际 Some(Bytes([…]))" ✗（那一族 **10** 个模块 ✓）。
-        Some(Lexeme::Bytes(bytes)) => {
-            let mut merged = bytes.clone();
-            let mut end_span = span;
-            let mut cursor = cursor + 1;
-            while let Some(Lexeme::Bytes(next)) = lexed.lexemes.get(cursor) {
-                merged.extend_from_slice(next);
-                if let Some(next_span) = lexed.spans.get(cursor) {
-                    end_span = *next_span;
-                }
-                cursor += 1;
-            }
-            let _ = end_span;
-            (Expression::Bytes(merged, span), cursor)
-        }
-        Some(Lexeme::Str(text)) => {
-            // **隐式字符串拼接**（第 283 轮）：相邻字符串字面量**合成一个常量**——
-            // 实测 `y = "a" "b" "c"` ⇒ `co_consts` 只有 `'abc'`（不产生任何拼接指令）。
-            // 跨度取**首尾**两段（位置要比的话按这个走）。与 f-string 混排是另一码事，未接线。
-            let mut merged = text.clone();
-            let mut end_span = span;
-            let mut cursor = cursor + 1;
-            while let Some(Lexeme::Str(next_text)) = lexed.lexemes.get(cursor) {
-                merged.push_str(next_text);
-                if let Some(next_span) = lexed.spans.get(cursor) {
-                    end_span = *next_span;
-                }
-                cursor += 1;
-            }
-            // **与前导 f-string 相邻**（`"a" f"b{c}"`）：参照把前导串并进 f-string 的**第一段**
-            // （实测 ⇒ `LOAD_CONST 'ab'; … FORMAT_SIMPLE; BUILD_STRING 2`）。纯字面量的 f-string
-            // 已被 `parse_fstring` 降级成普通串 ⇒ 走上面那条合并即可。
-            if let Some(Lexeme::FStr { .. }) = lexed.lexemes.get(cursor) {
-                let (fstring, after) = parse_fstring(lexed, cursor)?;
-                let fspan = fstring.span();
-                let mut parts = match fstring {
-                    Expression::FString { parts, .. } => parts,
-                    Expression::Str(text, mspan) => vec![FStringPart::Literal { text, span: mspan }],
-                    other => return Ok((other, after)),
-                };
-                // 首段**本来就是字面量** ⇒ 并进去（实测 `"a" "b" f"c{d}"` 的常量池只有
-                // `'abc'`，不是 `'ab'` ＋ `'c'` 两段 ✗）；否则插一段新的。
-                match parts.first_mut() {
-                    Some(FStringPart::Literal { text, span: head_span }) => {
-                        // 跨度取"**前导串起点 → 原段终点**"（实测 `"a" "b" f"c{d}"` 的
-                        // 合并段是 `(1,1,4,15)` ✗ 不是原段的 `(14,15)`）
-                        let merged_span = span.to(*head_span);
-                        let mut head = merged.clone();
-                        head.push_str(text);
-                        *text = head;
-                        *head_span = merged_span;
-                    }
-                    _ => parts.insert(
-                        0,
-                        FStringPart::Literal {
-                            text: merged.clone(),
-                            span: span.to(end_span),
-                        },
-                    ),
-                }
-                // **后面若还有相邻字面量（含**第二枚** f-string ✓）继续吃** ✓ ——
-                // task-19 第 3 轮真 bug：先前只吃一枚后随 f-string ✗ ⇒
-                // `('Field(' f'name={…!r},' f'type={…!r},' …)` 报「括号没有闭合」✗。
-                let (parts, after, tail_span) =
-                    consume_adjacent_string_parts(lexed, after, parts, fspan)?;
-                let parts = merge_adjacent_literal_parts(parts);
-                if parts
-                    .iter()
-                    .all(|part| matches!(part, FStringPart::Literal { .. }))
-                {
-                    let mut joined = String::new();
-                    for part in &parts {
-                        if let FStringPart::Literal { text, .. } = part {
-                            joined.push_str(text);
-                        }
-                    }
-                    return Ok((Expression::Str(joined, span.to(tail_span)), after));
-                }
-                return Ok((Expression::FString { parts, span: span.to(tail_span) }, after));
-            }
-            (Expression::Str(merged, span.to(end_span)), cursor)
-        }
+        Some(Lexeme::Bytes(_)) => parse_atom_bytes(lexed, cursor, span)?,
+        Some(Lexeme::Str(_)) => parse_atom_str(lexed, cursor, span)?,
         // **f-string**（第 238 轮）：切片成「字面段／插值段」，插值里的表达式按**相对列偏移**重新词法。
         // **相邻字面量拼接**（第 113 轮）：后随 **f-string**（`f"a{x}" f"b"` ✓）或**普通串**
         // （`f"a{x}" "b"` ✓）都要并进来 —— 实测上游 `_bootstrap.py:1426`／`site.py:210` 就卡在
         // 「相邻 **f-string ＋ f-string**」✗（此前后随 f-string 那条路只接在 `Str` 臂里 ✗）。
-        Some(Lexeme::FStr { .. }) => {
-            let (first, after) = parse_fstring(lexed, cursor)?;
-            let first_span = first.span();
-            let parts = match first {
-                Expression::FString { parts, .. } => parts,
-                // **无插值的 f-string 会被降级成 `Str`** ✓ ⇒ **照样要继续拼** ✓
-                //（第 222 轮真 bug 修复 ✗：先前这里直接 `return` ⇒ `f"a" f"b"` 只吃下第一个 ✗
-                // ⇒ 下一个 f-string 留在原地 ⇒ 报 "实参表里出现 Some(FStr …)" ✗，
-                // 上游 `Lib/_collections_abc.py:481` 正是这个形状 ✓）。
-                Expression::Str(text, span) => vec![FStringPart::Literal { text, span }],
-                other => return Ok((other, after)),
-            };
-            // **后续相邻字面量**（`FStr`／`Str` 都吃 ✓）走同一处 ✓
-            let (parts, after, tail_span) =
-                consume_adjacent_string_parts(lexed, after, parts, first_span)?;
-            // **边界处的相邻字面段要合并**（实测 `f"a{x} " f"b{x}"` ⇒ 段是 `'a'`／插值／
-            //   `' b'`／插值 ✓，不是 `' '` 与 `'b'` 两段 ✗）；合并段的跨度取**两段首尾** ✓
-            //   （与 `"a" "b" f"c{d}"` 那条口径一致 ✓）。
-            let merged_parts = merge_adjacent_literal_parts(parts);
-            (
-                Expression::FString {
-                    parts: merged_parts,
-                    span: first_span.to(tail_span),
-                },
-                after,
-            )
-        }
+        Some(Lexeme::FStr { .. }) => parse_atom_fstr(lexed, cursor)?,
         // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
         // `True`／`False` 要等 `Constant::Bool`（下一轮）
         // **推导式**：`[<元素> for <目标> in <可迭代> [if <条件>]*]`
-        Some(Lexeme::LeftBrace) => {
-            let start = lexed.spans[cursor];
-            let mut cursor = cursor + 1;
-            let mut pairs: Vec<MapItem> = Vec::new();
-            loop {
-                if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBrace) {
-                    cursor += 1;
-                    break;
-                }
-                // **`**映射`**（第 293 轮）：字典显示里的解包项 ✓ —— 照参照 `dis` 实测，
-                // 它发 `LOAD <映射>; DICT_UPDATE 1` ✓（`{**a, **b}`／`{1: 2, **a, 3: 4}` ✓）。
-                if lexed.lexemes.get(cursor) == Some(&Lexeme::DoubleStar) {
-                    let (value, next) = parse_expression(lexed, cursor + 1)?;
-                    cursor = next;
-                    pairs.push(MapItem::Unpack(value));
-                    match lexed.lexemes.get(cursor) {
-                        Some(Lexeme::Comma) => {
-                            cursor += 1;
-                            continue;
-                        }
-                        Some(Lexeme::RightBrace) => {
-                            cursor += 1;
-                            break;
-                        }
-                        other => {
-                            return Err(CompileError::Syntax(format!(
-                                "字典字面量里出现 {other:?}"
-                            )))
-                        }
-                    }
-                }
-                let (key, next) = parse_expression(lexed, cursor)?;
-                cursor = next;
-                // **集合推导式**：`{<元素> for <目标> in <可迭代> [if <条件>]*}`
-                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
-                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
-                    if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
-                        return Err(CompileError::Syntax(
-                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
-                        ));
-                    }
-                    let (iterable, mut cursor) = parse_or_test(lexed, after_target + 1)?;
-                    let mut conditions = Vec::new();
-                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
-                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
-                        cursor = next;
-                        conditions.push(condition);
-                    }
-                    // **多重 `for`**：继续收下后面的层
-                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
-                    cursor = after;
-                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBrace) {
-                        return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
-                    }
-                    let span = start.to(lexed.spans[cursor]);
-                    break 'atom (Expression::Comprehension {
-                            kind: ComprehensionKind::Set,
-                            element: Box::new(key),
-                            value: None,
-                            generators: {
-                                let mut list = vec![Generator {
-                                    target,
-                                    iterable,
-                                    conditions,
-                                }];
-                                list.extend(extra);
-                                list
-                            },
-                            span,
-                        },
-                        cursor + 1,);
-                }
-                // **集合字面量**（`{a, b}`／`{a}`）：既不是 `:`（字典）也不是 `for`（集合推导式）
-                if matches!(
-                    lexed.lexemes.get(cursor),
-                    Some(Lexeme::Comma) | Some(Lexeme::RightBrace)
-                ) {
-                    let mut items = vec![key];
-                    loop {
-                        match lexed.lexemes.get(cursor) {
-                            Some(Lexeme::Comma) => cursor += 1,
-                            Some(Lexeme::RightBrace) => {
-                                cursor += 1;
-                                break;
-                            }
-                            other => {
-                                return Err(CompileError::Syntax(format!(
-                                    "集合字面量里出现 {other:?}"
-                                )))
-                            }
-                        }
-                        if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBrace) {
-                            cursor += 1;
-                            break;
-                        }
-                        let (item, next) = parse_star_or_expression(lexed, cursor)?;
-                        cursor = next;
-                        items.push(item);
-                    }
-                    let span = start.to(lexed.spans[cursor - 1]);
-                    // **不能提前 `return Ok`** ✗（第 412 轮，task-24 ✓）：那会**绕过统一后缀链** ✓
-                    // ⇒ `{1, 2}.__contains__(1)` 报「实参表里出现 Some(Dot)」✗（`wsgiref/handlers.py:24`
-                    // 的 `_is_request = {…}.__contains__` 正是这形状 ⇒ `wsgiref.simple_server` 卡住 ✓）。
-                    // 与字典／列表字面量同口径：交回 `'atom` 让后缀链接着处理 ✓。
-                    break 'atom (Expression::SetLiteral(items, span), cursor);
-                }
-                if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
-                    return Err(CompileError::Syntax(format!(
-                        "字典字面量里键之后要 `:`，实际 {:?}",
-                        lexed.lexemes.get(cursor)
-                    )));
-                }
-                cursor += 1;
-                let (value, next) = parse_expression(lexed, cursor)?;
-                cursor = next;
-                // **字典推导式**：`{<键>: <值> for <目标> in <可迭代> [if <条件>]*}`
-                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
-                    let (target, mut cursor) = parse_comprehension_target(lexed, cursor + 1)?;
-                    if !matches!(lexed.lexemes.get(cursor), Some(Lexeme::In)) {
-                        return Err(CompileError::Syntax(
-                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
-                        ));
-                    }
-                    let (iterable, next) = parse_or_test(lexed, cursor + 1)?;
-                    cursor = next;
-                    let mut conditions = Vec::new();
-                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
-                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
-                        cursor = next;
-                        conditions.push(condition);
-                    }
-                    // **多重 `for`**：继续收下后面的层
-                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
-                    cursor = after;
-                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBrace) {
-                        return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
-                    }
-                    let span = start.to(lexed.spans[cursor]);
-                    break 'atom (Expression::Comprehension {
-                            kind: ComprehensionKind::Dict,
-                            element: Box::new(key),
-                            value: Some(Box::new(value)),
-                            generators: {
-                                let mut list = vec![Generator {
-                                    target,
-                                    iterable,
-                                    conditions,
-                                }];
-                                list.extend(extra);
-                                list
-                            },
-                            span,
-                        },
-                        cursor + 1,);
-                }
-                pairs.push(MapItem::Pair(key, value));
-                match lexed.lexemes.get(cursor) {
-                    Some(Lexeme::Comma) => cursor += 1,
-                    Some(Lexeme::RightBrace) => {
-                        cursor += 1;
-                        break;
-                    }
-                    other => {
-                        return Err(CompileError::Syntax(format!(
-                            "字典字面量里出现 {other:?}"
-                        )))
-                    }
-                }
-            }
-            let span = start.to(lexed.spans[cursor - 1]);
-            (Expression::Map(pairs, span), cursor)
-        }
-        Some(Lexeme::LeftParen) => {
-            // `(` 起头三种：`()` 空元组、`(a)` **分组**（参照不多发指令 ⇒ 不加节点）、
-            // `(a, b)`／`(a,)` 元组字面量（实测全常量折成常量，否则 `BUILD_TUPLE`）
-            let open = lexed.spans[cursor];
-            let mut cursor = cursor + 1;
-            if lexed.lexemes.get(cursor) == Some(&Lexeme::RightParen) {
-                return Ok((
-                    Expression::TupleLiteral(Vec::new(), open.to(lexed.spans[cursor])),
-                    cursor + 1,
-                ));
-            }
-            // **生成器表达式**（第 125 轮）：`(<元素> for <目标> in <可迭代> [if <条件>]*)` ✓
-            //   （先试解析一个表达式：紧接着 `for` 就是它 ✓，否则原样回退到元组／分组那条路 ✓）
-            {
-                let saved = cursor;
-                if let Ok((element, after_element)) = parse_expression(lexed, cursor) {
-                    if matches!(lexed.lexemes.get(after_element), Some(Lexeme::For)) {
-                        let (target, after_target) =
-                            parse_comprehension_target(lexed, after_element + 1)?;
-                        if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
-                            return Err(CompileError::Syntax(
-                                "生成器表达式的 `for <目标>` 后面要 `in`".to_owned(),
-                            ));
-                        }
-                        let (iterable, mut at) = parse_or_test(lexed, after_target + 1)?;
-                        let mut conditions = Vec::new();
-                        while matches!(lexed.lexemes.get(at), Some(Lexeme::If)) {
-                            let (condition, next) = parse_or_test(lexed, at + 1)?;
-                            at = next;
-                            conditions.push(condition);
-                        }
-                        let (extra, after) = parse_comprehension_generators(lexed, at)?;
-                        if lexed.lexemes.get(after) != Some(&Lexeme::RightParen) {
-                            return Err(CompileError::Syntax(
-                                "生成器表达式要以 `)` 收尾".to_owned(),
-                            ));
-                        }
-                        let span = open.to(lexed.spans[after]);
-                        let mut generators = vec![Generator {
-                            target,
-                            iterable,
-                            conditions,
-                        }];
-                        generators.extend(extra);
-                        break 'atom (Expression::Comprehension {
-                                kind: ComprehensionKind::Generator,
-                                element: Box::new(element),
-                                value: None,
-                                generators,
-                                span,
-                            },
-                            after + 1,);
-                    }
-                }
-                cursor = saved;
-            }
-            // **海象**（`(名字 := 表达式)`）：参照形态见发射臂 ✓
-            if let (Some(Lexeme::Name(name)), Some(Lexeme::Walrus)) =
-                (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
-            {
-                let target = name.clone();
-                let target_span = lexed.spans[cursor];
-                let (value, next) = parse_expression(lexed, cursor + 2)?;
-                if lexed.lexemes.get(next) != Some(&Lexeme::RightParen) {
-                    let span = lexed.spans.get(next).copied();
-                    return Err(CompileError::Syntax(format!(
-                        "海象表达式要有闭合的 `)`，实际 {:?}（第 {} 行）",
-                        lexed.lexemes.get(next),
-                        span.map(|span| span.line_start).unwrap_or(0)
-                    )));
-                }
-                // **跨度不含括号**（实测  的  位点是 ＝`y := 3`
-                // 那一段 ✓，不是含 `(` 的 ✗）
-                let _ = open;
-                let span = target_span.to(value.span());
-                // **不能在这里 `return`**（第 304 轮修）：`parse_atom` 的**统一后缀链**
-                // （`.`／`(`／`[`，在 `match` 之后）会被绕过 ⇒ `(ch := …).isspace()`
-                // 报「括号没有闭合，实际 `Some(Dot)`」（`Lib/traceback.py:923`，那一族 15 个模块）。
-                // 这一臂照常**返回元组**，后缀链就能接上。
-                (
-                    Expression::Walrus {
-                        target,
-                        target_span,
-                        value: Box::new(value),
-                        span,
-                    },
-                    next + 1,
-                )
-            } else {
-            let mut items = Vec::new();
-            let mut saw_comma = false;
-            loop {
-                let (item, next) = parse_star_or_expression(lexed, cursor)?;
-                items.push(item);
-                cursor = next;
-                if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
-                    break;
-                }
-                saw_comma = true;
-                cursor += 1;
-                if lexed.lexemes.get(cursor) == Some(&Lexeme::RightParen) {
-                    break;
-                }
-            }
-            if lexed.lexemes.get(cursor) != Some(&Lexeme::RightParen) {
-                let span = lexed.spans.get(cursor).copied();
-                return Err(CompileError::Syntax(format!(
-                    "括号没有闭合，实际 {:?}（第 {} 行，列 {}-{}）",
-                    lexed.lexemes.get(cursor),
-                    span.map(|span| span.line_start).unwrap_or(0),
-                    span.map(|span| span.col_start).unwrap_or(0),
-                    span.map(|span| span.col_end).unwrap_or(0),
-                )));
-            }
-            let close = lexed.spans[cursor];
-            let expression = if items.len() == 1 && !saw_comma {
-                items.pop().expect("刚判过长度")
-            } else {
-                Expression::TupleLiteral(items, open.to(close))
-            };
-            // **括号结果也要走后缀链**（第 127 轮）：`(expr).attr` / `(expr)(args)` ✓
-            //（此前这里提前 return ✗ ⇒ `(int(x) & 0xFFFFFFFF).to_bytes(...)` 报「语句结尾多出 .」✗）
-            (expression, cursor + 1)
-            }
-        }
-        Some(Lexeme::LeftBracket) => {
-            let start = lexed.spans[cursor];
-            // 这个位置的 `cursor` 是**不可变参数**（外层要到 match 之后才 `let (mut term, mut cursor)`）
-            // ⇒ 这里遮蔽一个本地可变的
-            let mut cursor = cursor + 1;
-            let mut items = Vec::new();
-            if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
-                // **首项也可能是星号** ✓（第 224 轮）：`[*a, b]` ✓ —— 先前这里用 `parse_expression` ✗
-                // ⇒ 星号当场报「表达式里出现 `Some(Star)`」✗（上游 `_collections_abc.py:479` 的
-                // `(*t_args, t_result)`／`[*…]` 一族正是这个形状 ✓）。星号项不会被当成推导式元素 ✓
-                //（后面跟的不是 `for` ✓）⇒ 照旧落到下面那条"逐项"的路上 ✓。
-                let (first, next) = parse_star_or_expression(lexed, cursor)?;
-                cursor = next;
-                // **清单推导式**（3.12+ 内联；实测骨架见发射臂）：`[<元素> for <目标> in <可迭代>
-                // [if <条件>]*]`。多重 `for` 的融合指令选择属优化器细节 ⇒ 暂如实报未接线
-                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
-                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
-                    // **看 `after_target`，不是 `cursor + 2`** ✗（第 281 轮真 bug 修 ✓）：
-                    // 先前这里写死"目标只有一个词元" ✗ ⇒ `[a for a, b in …]`（元组目标 ✓）
-                    // 与 `[a for (a, b) in …]`（带括号 ✓）**全部**误报"后面要 `in`" ✗ ——
-                    // 而集合／字典推导式那两条用的是 `after_target` ✓ ⇒ 同一形状在 `{…}` 里能跑、
-                    // 在 `[…]` 里不能跑 ✓（实测 ✓）。
-                    if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In))
-                    {
-                        return Err(CompileError::Syntax(
-                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
-                        ));
-                    }
-                    let (iterable, next) = parse_or_test(lexed, after_target + 1)?;
-                    cursor = next;
-                    let mut conditions = Vec::new();
-                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
-                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
-                        cursor = next;
-                        conditions.push(condition);
-                    }
-                    // **多重 `for`**：继续收下后面的层
-                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
-                    cursor = after;
-                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
-                        return Err(CompileError::Syntax("推导式要以 `]` 收尾".to_owned()));
-                    }
-                    let span = start.to(lexed.spans[cursor]);
-                    break 'atom (Expression::Comprehension {
-                            kind: ComprehensionKind::List,
-                            element: Box::new(first),
-                            value: None,
-                            generators: {
-                                let mut list = vec![Generator {
-                                    target,
-                                    iterable,
-                                    conditions,
-                                }];
-                                list.extend(extra);
-                                list
-                            },
-                            span,
-                        },
-                        cursor + 1,);
-                }
-                items.push(first);
-                loop {
-                    match lexed.lexemes.get(cursor) {
-                        Some(Lexeme::Comma) => cursor += 1,
-                        Some(Lexeme::RightBracket) => {
-                            cursor += 1;
-                            break;
-                        }
-                        other => {
-                            return Err(CompileError::Syntax(format!(
-                                "列表字面量里出现 {other:?}"
-                            )))
-                        }
-                    }
-                    if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBracket) {
-                        cursor += 1;
-                        break;
-                    }
-                    let (item, next) = parse_star_or_expression(lexed, cursor)?;
-                    cursor = next;
-                    items.push(item);
-                }
-            } else {
-                cursor += 1;
-            }
-            // 整段的跨度：实测 `BUILD_LIST` 那条取**整个列表**（`[` 到 `]`），不是只取 `[`
-            let span = start.to(lexed.spans[cursor - 1]);
-            (Expression::List(items, span), cursor)
-        }
+        Some(Lexeme::LeftBrace) => parse_atom_leftbrace(lexed, cursor)?,
+        Some(Lexeme::LeftParen) => parse_atom_leftparen(lexed, cursor)?,
+        Some(Lexeme::LeftBracket) => parse_atom_leftbracket(lexed, cursor)?,
         // **`lambda`**（3.14 实测）：`lambda 形参表: 表达式`；返回一个函数对象
         Some(Lexeme::Name(name)) if name == "lambda" => parse_lambda(lexed, cursor)?,
         Some(Lexeme::Name(name)) if name == "None" => {
@@ -1043,4 +555,558 @@ pub(crate) fn parse_subscript_suffix(
 
 
 // ---- 把编译产物装成真的 `CodeObject`（`P1-10` 与执行器／属性面的接缝） ----
+
+/// `parse_atom` 的 `Bytes` 分支（原样搬入，`break 'atom` 语义不变）。
+fn parse_atom_bytes(lexed: &Lexed, cursor: usize, span: Span) -> Result<(Expression, usize), CompileError> {
+    let (term, cursor) = {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::Bytes(bytes)) => {
+            let mut merged = bytes.clone();
+            let mut end_span = span;
+            let mut cursor = cursor + 1;
+            while let Some(Lexeme::Bytes(next)) = lexed.lexemes.get(cursor) {
+                merged.extend_from_slice(next);
+                if let Some(next_span) = lexed.spans.get(cursor) {
+                    end_span = *next_span;
+                }
+                cursor += 1;
+            }
+            let _ = end_span;
+            (Expression::Bytes(merged, span), cursor)
+            }
+            _ => unreachable!("parse_atom_bytes 只接收 Bytes"),
+        }
+    };
+    Ok((term, cursor))
+}
+
+/// `parse_atom` 的 `Str` 分支（原样搬入，`break 'atom` 语义不变）。
+fn parse_atom_str(lexed: &Lexed, cursor: usize, span: Span) -> Result<(Expression, usize), CompileError> {
+    let (term, cursor) = {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::Str(text)) => {
+            // **隐式字符串拼接**（第 283 轮）：相邻字符串字面量**合成一个常量**——
+            // 实测 `y = "a" "b" "c"` ⇒ `co_consts` 只有 `'abc'`（不产生任何拼接指令）。
+            // 跨度取**首尾**两段（位置要比的话按这个走）。与 f-string 混排是另一码事，未接线。
+            let mut merged = text.clone();
+            let mut end_span = span;
+            let mut cursor = cursor + 1;
+            while let Some(Lexeme::Str(next_text)) = lexed.lexemes.get(cursor) {
+                merged.push_str(next_text);
+                if let Some(next_span) = lexed.spans.get(cursor) {
+                    end_span = *next_span;
+                }
+                cursor += 1;
+            }
+            // **与前导 f-string 相邻**（`"a" f"b{c}"`）：参照把前导串并进 f-string 的**第一段**
+            // （实测 ⇒ `LOAD_CONST 'ab'; … FORMAT_SIMPLE; BUILD_STRING 2`）。纯字面量的 f-string
+            // 已被 `parse_fstring` 降级成普通串 ⇒ 走上面那条合并即可。
+            if let Some(Lexeme::FStr { .. }) = lexed.lexemes.get(cursor) {
+                let (fstring, after) = parse_fstring(lexed, cursor)?;
+                let fspan = fstring.span();
+                let mut parts = match fstring {
+                    Expression::FString { parts, .. } => parts,
+                    Expression::Str(text, mspan) => vec![FStringPart::Literal { text, span: mspan }],
+                    other => return Ok((other, after)),
+                };
+                // 首段**本来就是字面量** ⇒ 并进去（实测 `"a" "b" f"c{d}"` 的常量池只有
+                // `'abc'`，不是 `'ab'` ＋ `'c'` 两段 ✗）；否则插一段新的。
+                match parts.first_mut() {
+                    Some(FStringPart::Literal { text, span: head_span }) => {
+                        // 跨度取"**前导串起点 → 原段终点**"（实测 `"a" "b" f"c{d}"` 的
+                        // 合并段是 `(1,1,4,15)` ✗ 不是原段的 `(14,15)`）
+                        let merged_span = span.to(*head_span);
+                        let mut head = merged.clone();
+                        head.push_str(text);
+                        *text = head;
+                        *head_span = merged_span;
+                    }
+                    _ => parts.insert(
+                        0,
+                        FStringPart::Literal {
+                            text: merged.clone(),
+                            span: span.to(end_span),
+                        },
+                    ),
+                }
+                // **后面若还有相邻字面量（含**第二枚** f-string ✓）继续吃** ✓ ——
+                // task-19 第 3 轮真 bug：先前只吃一枚后随 f-string ✗ ⇒
+                // `('Field(' f'name={…!r},' f'type={…!r},' …)` 报「括号没有闭合」✗。
+                let (parts, after, tail_span) =
+                    consume_adjacent_string_parts(lexed, after, parts, fspan)?;
+                let parts = merge_adjacent_literal_parts(parts);
+                if parts
+                    .iter()
+                    .all(|part| matches!(part, FStringPart::Literal { .. }))
+                {
+                    let mut joined = String::new();
+                    for part in &parts {
+                        if let FStringPart::Literal { text, .. } = part {
+                            joined.push_str(text);
+                        }
+                    }
+                    return Ok((Expression::Str(joined, span.to(tail_span)), after));
+                }
+                return Ok((Expression::FString { parts, span: span.to(tail_span) }, after));
+            }
+            (Expression::Str(merged, span.to(end_span)), cursor)
+            }
+            _ => unreachable!("parse_atom_str 只接收 Str"),
+        }
+    };
+    Ok((term, cursor))
+}
+
+/// `parse_atom` 的 `FStr` 分支（原样搬入，`break 'atom` 语义不变）。
+fn parse_atom_fstr(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (term, cursor) = {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::FStr { .. }) => {
+            let (first, after) = parse_fstring(lexed, cursor)?;
+            let first_span = first.span();
+            let parts = match first {
+                Expression::FString { parts, .. } => parts,
+                // **无插值的 f-string 会被降级成 `Str`** ✓ ⇒ **照样要继续拼** ✓
+                //（第 222 轮真 bug 修复 ✗：先前这里直接 `return` ⇒ `f"a" f"b"` 只吃下第一个 ✗
+                // ⇒ 下一个 f-string 留在原地 ⇒ 报 "实参表里出现 Some(FStr …)" ✗，
+                // 上游 `Lib/_collections_abc.py:481` 正是这个形状 ✓）。
+                Expression::Str(text, span) => vec![FStringPart::Literal { text, span }],
+                other => return Ok((other, after)),
+            };
+            // **后续相邻字面量**（`FStr`／`Str` 都吃 ✓）走同一处 ✓
+            let (parts, after, tail_span) =
+                consume_adjacent_string_parts(lexed, after, parts, first_span)?;
+            // **边界处的相邻字面段要合并**（实测 `f"a{x} " f"b{x}"` ⇒ 段是 `'a'`／插值／
+            //   `' b'`／插值 ✓，不是 `' '` 与 `'b'` 两段 ✗）；合并段的跨度取**两段首尾** ✓
+            //   （与 `"a" "b" f"c{d}"` 那条口径一致 ✓）。
+            let merged_parts = merge_adjacent_literal_parts(parts);
+            (
+                Expression::FString {
+                    parts: merged_parts,
+                    span: first_span.to(tail_span),
+                },
+                after,
+            )
+            }
+            _ => unreachable!("parse_atom_fstr 只接收 FStr"),
+        }
+    };
+    Ok((term, cursor))
+}
+
+/// `parse_atom` 的 `LeftBrace` 分支（原样搬入，`break 'atom` 语义不变）。
+fn parse_atom_leftbrace(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (term, cursor) = 'atom: {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::LeftBrace) => {
+            let start = lexed.spans[cursor];
+            let mut cursor = cursor + 1;
+            let mut pairs: Vec<MapItem> = Vec::new();
+            loop {
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBrace) {
+                    cursor += 1;
+                    break;
+                }
+                // **`**映射`**（第 293 轮）：字典显示里的解包项 ✓ —— 照参照 `dis` 实测，
+                // 它发 `LOAD <映射>; DICT_UPDATE 1` ✓（`{**a, **b}`／`{1: 2, **a, 3: 4}` ✓）。
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::DoubleStar) {
+                    let (value, next) = parse_expression(lexed, cursor + 1)?;
+                    cursor = next;
+                    pairs.push(MapItem::Unpack(value));
+                    match lexed.lexemes.get(cursor) {
+                        Some(Lexeme::Comma) => {
+                            cursor += 1;
+                            continue;
+                        }
+                        Some(Lexeme::RightBrace) => {
+                            cursor += 1;
+                            break;
+                        }
+                        other => {
+                            return Err(CompileError::Syntax(format!(
+                                "字典字面量里出现 {other:?}"
+                            )))
+                        }
+                    }
+                }
+                let (key, next) = parse_expression(lexed, cursor)?;
+                cursor = next;
+                // **集合推导式**：`{<元素> for <目标> in <可迭代> [if <条件>]*}`
+                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
+                    if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
+                        return Err(CompileError::Syntax(
+                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
+                        ));
+                    }
+                    let (iterable, mut cursor) = parse_or_test(lexed, after_target + 1)?;
+                    let mut conditions = Vec::new();
+                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
+                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
+                        cursor = next;
+                        conditions.push(condition);
+                    }
+                    // **多重 `for`**：继续收下后面的层
+                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
+                    cursor = after;
+                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBrace) {
+                        return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
+                    }
+                    let span = start.to(lexed.spans[cursor]);
+                    break 'atom (Expression::Comprehension {
+                            kind: ComprehensionKind::Set,
+                            element: Box::new(key),
+                            value: None,
+                            generators: {
+                                let mut list = vec![Generator {
+                                    target,
+                                    iterable,
+                                    conditions,
+                                }];
+                                list.extend(extra);
+                                list
+                            },
+                            span,
+                        },
+                        cursor + 1,);
+                }
+                // **集合字面量**（`{a, b}`／`{a}`）：既不是 `:`（字典）也不是 `for`（集合推导式）
+                if matches!(
+                    lexed.lexemes.get(cursor),
+                    Some(Lexeme::Comma) | Some(Lexeme::RightBrace)
+                ) {
+                    let mut items = vec![key];
+                    loop {
+                        match lexed.lexemes.get(cursor) {
+                            Some(Lexeme::Comma) => cursor += 1,
+                            Some(Lexeme::RightBrace) => {
+                                cursor += 1;
+                                break;
+                            }
+                            other => {
+                                return Err(CompileError::Syntax(format!(
+                                    "集合字面量里出现 {other:?}"
+                                )))
+                            }
+                        }
+                        if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBrace) {
+                            cursor += 1;
+                            break;
+                        }
+                        let (item, next) = parse_star_or_expression(lexed, cursor)?;
+                        cursor = next;
+                        items.push(item);
+                    }
+                    let span = start.to(lexed.spans[cursor - 1]);
+                    // **不能提前 `return Ok`** ✗（第 412 轮，task-24 ✓）：那会**绕过统一后缀链** ✓
+                    // ⇒ `{1, 2}.__contains__(1)` 报「实参表里出现 Some(Dot)」✗（`wsgiref/handlers.py:24`
+                    // 的 `_is_request = {…}.__contains__` 正是这形状 ⇒ `wsgiref.simple_server` 卡住 ✓）。
+                    // 与字典／列表字面量同口径：交回 `'atom` 让后缀链接着处理 ✓。
+                    break 'atom (Expression::SetLiteral(items, span), cursor);
+                }
+                if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
+                    return Err(CompileError::Syntax(format!(
+                        "字典字面量里键之后要 `:`，实际 {:?}",
+                        lexed.lexemes.get(cursor)
+                    )));
+                }
+                cursor += 1;
+                let (value, next) = parse_expression(lexed, cursor)?;
+                cursor = next;
+                // **字典推导式**：`{<键>: <值> for <目标> in <可迭代> [if <条件>]*}`
+                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                    let (target, mut cursor) = parse_comprehension_target(lexed, cursor + 1)?;
+                    if !matches!(lexed.lexemes.get(cursor), Some(Lexeme::In)) {
+                        return Err(CompileError::Syntax(
+                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
+                        ));
+                    }
+                    let (iterable, next) = parse_or_test(lexed, cursor + 1)?;
+                    cursor = next;
+                    let mut conditions = Vec::new();
+                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
+                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
+                        cursor = next;
+                        conditions.push(condition);
+                    }
+                    // **多重 `for`**：继续收下后面的层
+                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
+                    cursor = after;
+                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBrace) {
+                        return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
+                    }
+                    let span = start.to(lexed.spans[cursor]);
+                    break 'atom (Expression::Comprehension {
+                            kind: ComprehensionKind::Dict,
+                            element: Box::new(key),
+                            value: Some(Box::new(value)),
+                            generators: {
+                                let mut list = vec![Generator {
+                                    target,
+                                    iterable,
+                                    conditions,
+                                }];
+                                list.extend(extra);
+                                list
+                            },
+                            span,
+                        },
+                        cursor + 1,);
+                }
+                pairs.push(MapItem::Pair(key, value));
+                match lexed.lexemes.get(cursor) {
+                    Some(Lexeme::Comma) => cursor += 1,
+                    Some(Lexeme::RightBrace) => {
+                        cursor += 1;
+                        break;
+                    }
+                    other => {
+                        return Err(CompileError::Syntax(format!(
+                            "字典字面量里出现 {other:?}"
+                        )))
+                    }
+                }
+            }
+            let span = start.to(lexed.spans[cursor - 1]);
+            (Expression::Map(pairs, span), cursor)
+            }
+            _ => unreachable!("parse_atom_leftbrace 只接收 LeftBrace"),
+        }
+    };
+    Ok((term, cursor))
+}
+
+/// `parse_atom` 的 `LeftParen` 分支（原样搬入，`break 'atom` 语义不变）。
+fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (term, cursor) = 'atom: {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::LeftParen) => {
+            // `(` 起头三种：`()` 空元组、`(a)` **分组**（参照不多发指令 ⇒ 不加节点）、
+            // `(a, b)`／`(a,)` 元组字面量（实测全常量折成常量，否则 `BUILD_TUPLE`）
+            let open = lexed.spans[cursor];
+            let mut cursor = cursor + 1;
+            if lexed.lexemes.get(cursor) == Some(&Lexeme::RightParen) {
+                return Ok((
+                    Expression::TupleLiteral(Vec::new(), open.to(lexed.spans[cursor])),
+                    cursor + 1,
+                ));
+            }
+            // **生成器表达式**（第 125 轮）：`(<元素> for <目标> in <可迭代> [if <条件>]*)` ✓
+            //   （先试解析一个表达式：紧接着 `for` 就是它 ✓，否则原样回退到元组／分组那条路 ✓）
+            {
+                let saved = cursor;
+                if let Ok((element, after_element)) = parse_expression(lexed, cursor) {
+                    if matches!(lexed.lexemes.get(after_element), Some(Lexeme::For)) {
+                        let (target, after_target) =
+                            parse_comprehension_target(lexed, after_element + 1)?;
+                        if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
+                            return Err(CompileError::Syntax(
+                                "生成器表达式的 `for <目标>` 后面要 `in`".to_owned(),
+                            ));
+                        }
+                        let (iterable, mut at) = parse_or_test(lexed, after_target + 1)?;
+                        let mut conditions = Vec::new();
+                        while matches!(lexed.lexemes.get(at), Some(Lexeme::If)) {
+                            let (condition, next) = parse_or_test(lexed, at + 1)?;
+                            at = next;
+                            conditions.push(condition);
+                        }
+                        let (extra, after) = parse_comprehension_generators(lexed, at)?;
+                        if lexed.lexemes.get(after) != Some(&Lexeme::RightParen) {
+                            return Err(CompileError::Syntax(
+                                "生成器表达式要以 `)` 收尾".to_owned(),
+                            ));
+                        }
+                        let span = open.to(lexed.spans[after]);
+                        let mut generators = vec![Generator {
+                            target,
+                            iterable,
+                            conditions,
+                        }];
+                        generators.extend(extra);
+                        break 'atom (Expression::Comprehension {
+                                kind: ComprehensionKind::Generator,
+                                element: Box::new(element),
+                                value: None,
+                                generators,
+                                span,
+                            },
+                            after + 1,);
+                    }
+                }
+                cursor = saved;
+            }
+            // **海象**（`(名字 := 表达式)`）：参照形态见发射臂 ✓
+            if let (Some(Lexeme::Name(name)), Some(Lexeme::Walrus)) =
+                (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
+            {
+                let target = name.clone();
+                let target_span = lexed.spans[cursor];
+                let (value, next) = parse_expression(lexed, cursor + 2)?;
+                if lexed.lexemes.get(next) != Some(&Lexeme::RightParen) {
+                    let span = lexed.spans.get(next).copied();
+                    return Err(CompileError::Syntax(format!(
+                        "海象表达式要有闭合的 `)`，实际 {:?}（第 {} 行）",
+                        lexed.lexemes.get(next),
+                        span.map(|span| span.line_start).unwrap_or(0)
+                    )));
+                }
+                // **跨度不含括号**（实测  的  位点是 ＝`y := 3`
+                // 那一段 ✓，不是含 `(` 的 ✗）
+                let _ = open;
+                let span = target_span.to(value.span());
+                // **不能在这里 `return`**（第 304 轮修）：`parse_atom` 的**统一后缀链**
+                // （`.`／`(`／`[`，在 `match` 之后）会被绕过 ⇒ `(ch := …).isspace()`
+                // 报「括号没有闭合，实际 `Some(Dot)`」（`Lib/traceback.py:923`，那一族 15 个模块）。
+                // 这一臂照常**返回元组**，后缀链就能接上。
+                (
+                    Expression::Walrus {
+                        target,
+                        target_span,
+                        value: Box::new(value),
+                        span,
+                    },
+                    next + 1,
+                )
+            } else {
+            let mut items = Vec::new();
+            let mut saw_comma = false;
+            loop {
+                let (item, next) = parse_star_or_expression(lexed, cursor)?;
+                items.push(item);
+                cursor = next;
+                if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+                    break;
+                }
+                saw_comma = true;
+                cursor += 1;
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::RightParen) {
+                    break;
+                }
+            }
+            if lexed.lexemes.get(cursor) != Some(&Lexeme::RightParen) {
+                let span = lexed.spans.get(cursor).copied();
+                return Err(CompileError::Syntax(format!(
+                    "括号没有闭合，实际 {:?}（第 {} 行，列 {}-{}）",
+                    lexed.lexemes.get(cursor),
+                    span.map(|span| span.line_start).unwrap_or(0),
+                    span.map(|span| span.col_start).unwrap_or(0),
+                    span.map(|span| span.col_end).unwrap_or(0),
+                )));
+            }
+            let close = lexed.spans[cursor];
+            let expression = if items.len() == 1 && !saw_comma {
+                items.pop().expect("刚判过长度")
+            } else {
+                Expression::TupleLiteral(items, open.to(close))
+            };
+            // **括号结果也要走后缀链**（第 127 轮）：`(expr).attr` / `(expr)(args)` ✓
+            //（此前这里提前 return ✗ ⇒ `(int(x) & 0xFFFFFFFF).to_bytes(...)` 报「语句结尾多出 .」✗）
+            (expression, cursor + 1)
+            }
+            }
+            _ => unreachable!("parse_atom_leftparen 只接收 LeftParen"),
+        }
+    };
+    Ok((term, cursor))
+}
+
+/// `parse_atom` 的 `LeftBracket` 分支（原样搬入，`break 'atom` 语义不变）。
+fn parse_atom_leftbracket(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (term, cursor) = 'atom: {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::LeftBracket) => {
+            let start = lexed.spans[cursor];
+            // 这个位置的 `cursor` 是**不可变参数**（外层要到 match 之后才 `let (mut term, mut cursor)`）
+            // ⇒ 这里遮蔽一个本地可变的
+            let mut cursor = cursor + 1;
+            let mut items = Vec::new();
+            if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
+                // **首项也可能是星号** ✓（第 224 轮）：`[*a, b]` ✓ —— 先前这里用 `parse_expression` ✗
+                // ⇒ 星号当场报「表达式里出现 `Some(Star)`」✗（上游 `_collections_abc.py:479` 的
+                // `(*t_args, t_result)`／`[*…]` 一族正是这个形状 ✓）。星号项不会被当成推导式元素 ✓
+                //（后面跟的不是 `for` ✓）⇒ 照旧落到下面那条"逐项"的路上 ✓。
+                let (first, next) = parse_star_or_expression(lexed, cursor)?;
+                cursor = next;
+                // **清单推导式**（3.12+ 内联；实测骨架见发射臂）：`[<元素> for <目标> in <可迭代>
+                // [if <条件>]*]`。多重 `for` 的融合指令选择属优化器细节 ⇒ 暂如实报未接线
+                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
+                    // **看 `after_target`，不是 `cursor + 2`** ✗（第 281 轮真 bug 修 ✓）：
+                    // 先前这里写死"目标只有一个词元" ✗ ⇒ `[a for a, b in …]`（元组目标 ✓）
+                    // 与 `[a for (a, b) in …]`（带括号 ✓）**全部**误报"后面要 `in`" ✗ ——
+                    // 而集合／字典推导式那两条用的是 `after_target` ✓ ⇒ 同一形状在 `{…}` 里能跑、
+                    // 在 `[…]` 里不能跑 ✓（实测 ✓）。
+                    if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In))
+                    {
+                        return Err(CompileError::Syntax(
+                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
+                        ));
+                    }
+                    let (iterable, next) = parse_or_test(lexed, after_target + 1)?;
+                    cursor = next;
+                    let mut conditions = Vec::new();
+                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
+                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
+                        cursor = next;
+                        conditions.push(condition);
+                    }
+                    // **多重 `for`**：继续收下后面的层
+                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
+                    cursor = after;
+                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
+                        return Err(CompileError::Syntax("推导式要以 `]` 收尾".to_owned()));
+                    }
+                    let span = start.to(lexed.spans[cursor]);
+                    break 'atom (Expression::Comprehension {
+                            kind: ComprehensionKind::List,
+                            element: Box::new(first),
+                            value: None,
+                            generators: {
+                                let mut list = vec![Generator {
+                                    target,
+                                    iterable,
+                                    conditions,
+                                }];
+                                list.extend(extra);
+                                list
+                            },
+                            span,
+                        },
+                        cursor + 1,);
+                }
+                items.push(first);
+                loop {
+                    match lexed.lexemes.get(cursor) {
+                        Some(Lexeme::Comma) => cursor += 1,
+                        Some(Lexeme::RightBracket) => {
+                            cursor += 1;
+                            break;
+                        }
+                        other => {
+                            return Err(CompileError::Syntax(format!(
+                                "列表字面量里出现 {other:?}"
+                            )))
+                        }
+                    }
+                    if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBracket) {
+                        cursor += 1;
+                        break;
+                    }
+                    let (item, next) = parse_star_or_expression(lexed, cursor)?;
+                    cursor = next;
+                    items.push(item);
+                }
+            } else {
+                cursor += 1;
+            }
+            // 整段的跨度：实测 `BUILD_LIST` 那条取**整个列表**（`[` 到 `]`），不是只取 `[`
+            let span = start.to(lexed.spans[cursor - 1]);
+            (Expression::List(items, span), cursor)
+            }
+            _ => unreachable!("parse_atom_leftbracket 只接收 LeftBracket"),
+        }
+    };
+    Ok((term, cursor))
+}
 
