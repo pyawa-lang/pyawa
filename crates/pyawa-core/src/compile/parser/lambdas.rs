@@ -25,6 +25,19 @@ pub(crate) fn parse_lambda(lexed: &Lexed, cursor: usize) -> Result<(Expression, 
                     cursor += 1;
                 }
             }
+            // **仅位置形参标记 `/`**（task-42 ✓）：`lambda a, /, b: a + b`
+            // （官方 `test_positional_only_arg.py:222` ✗ 先前报"lambda 的形参表里出现 Some(Slash)"）。
+            Some(Lexeme::Slash) => {
+                cursor += 1;
+                if after_star || parameters.iter().any(|item| item.posonly) {
+                    return Err(CompileError::Syntax(
+                        "`/` 只能出现在位置形参之后、且只能出现一次".to_owned(),
+                    ));
+                }
+                for parameter in parameters.iter_mut() {
+                    parameter.posonly = true;
+                }
+            }
             Some(Lexeme::DoubleStar) => {
                 cursor += 1;
                 match tokens.get(cursor) {

@@ -527,6 +527,28 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         }
                     }
                 }
+                // **前导点虚部**（task-42 ✓）：`.01j`（官方 `test_format.py:608` 的
+                // `f"{.01j:z.1f}"` ✗ —— 先前 `.01` 收成 Float、`j` 成名字 ⇒ f-string 解析失败）。
+                if matches!(characters.get(scan), Some('j' | 'J')) {
+                    let after = characters.get(scan + 1).copied();
+                    if after.is_some_and(|item| item.is_ascii_alphanumeric() || item == '_') {
+                        return Err(CompileError::Syntax(
+                            "invalid imaginary literal".to_owned(),
+                        ));
+                    }
+                    let digits: String = characters[index + 1..scan]
+                        .iter()
+                        .filter(|item| **item != '_')
+                        .collect();
+                    let text = format!("0.{digits}");
+                    let value: f64 = text.parse().map_err(|_| {
+                        CompileError::Unsupported(format!("虚部 {text} 解析不了"))
+                    })?;
+                    index = scan + 1;
+                    lexemes.push(Lexeme::Imaginary(value.to_bits()));
+                    spans.push(Span::new(line, line, start, column!(index)));
+                    continue;
+                }
                 let digits: String = characters[index + 1..scan]
                     .iter()
                     .filter(|item| **item != '_')

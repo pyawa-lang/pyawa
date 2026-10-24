@@ -97,7 +97,10 @@ pub(crate) fn parse_paren_target(
     );
     let next = lexed.lexemes.get(*cursor);
     if !is_group {
-        if next == Some(&Lexeme::Assign) {
+        // **`(目标) += 值`**（task-42 ✓）：括号只是分组 ⇒ 增强赋值同样走 `Single` 那条
+        // （官方 `test_compile.py:1273` 的跨行 `(o.\na) += (v)` ✗ 先前在这里被当
+        // "不是目标"⇒ 表达式语句 ⇒ 在 `+=` 上报"语句结尾多出了 Some(AugAssign)"）。
+        if matches!(next, Some(&Lexeme::Assign) | Some(&Lexeme::AugAssign(_))) {
             return Ok(ParenTarget::Single(first));
         }
         if next != Some(&Lexeme::Comma) {
@@ -147,7 +150,12 @@ pub(crate) fn parse_with_target_item(
                 Some(Lexeme::Dot) | Some(Lexeme::LeftBracket) | Some(Lexeme::LeftParen)
             ) =>
         {
-            let (expression, next) = parse_expression(lexed, cursor)?;
+            // **只解析"原子 ＋ 后缀链"**（task-42 ✓）：先前用 `parse_expression`，它会把
+            // `for a[i] in …` 里的 `in` 当**比较运算符**吃掉 ✗ ⇒ 得到 `Compare` 节点 ⇒
+            // "目标只接线了名字／属性／下标…" ✗（官方 `test_generators.py:1920` 的
+            // `for values[i] in gs[i]():` 正是它）。`parse_atom` 只收 `.`／`[`／`(` 后缀 ✓，
+            // 不碰顶层 `in` ✓；`(` 后缀会解析成调用、随后被 `for_target_from_expression` 如实拒 ✓。
+            let (expression, next) = parse_atom(lexed, cursor)?;
             Ok((for_target_from_expression(expression)?, next))
         }
         Some(Lexeme::Name(name)) => Ok((ForTarget::Name(name.clone(), lexed.spans[cursor]), cursor + 1)),
@@ -303,7 +311,12 @@ pub(crate) fn parse_for_target_item(
                 Some(Lexeme::Dot) | Some(Lexeme::LeftBracket) | Some(Lexeme::LeftParen)
             ) =>
         {
-            let (expression, next) = parse_expression(lexed, cursor)?;
+            // **只解析"原子 ＋ 后缀链"**（task-42 ✓）：先前用 `parse_expression`，它会把
+            // `for a[i] in …` 里的 `in` 当**比较运算符**吃掉 ✗ ⇒ 得到 `Compare` 节点 ⇒
+            // "目标只接线了名字／属性／下标…" ✗（官方 `test_generators.py:1920` 的
+            // `for values[i] in gs[i]():` 正是它）。`parse_atom` 只收 `.`／`[`／`(` 后缀 ✓，
+            // 不碰顶层 `in` ✓；`(` 后缀解析成调用后由 `for_target_from_expression` 如实拒 ✓。
+            let (expression, next) = parse_atom(lexed, cursor)?;
             Ok((for_target_from_expression(expression)?, next))
         }
         Some(Lexeme::Name(name)) => Ok((ForTarget::Name(name.clone(), lexed.spans[cursor]), cursor + 1)),

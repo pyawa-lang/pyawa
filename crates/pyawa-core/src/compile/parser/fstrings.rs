@@ -414,7 +414,9 @@ pub(crate) fn parse_fstring_expression(
             span.col_end + column,
         );
     }
-    let (expression, next) = parse_expression(&lexed, 0)?;
+    // **元组表达式**（task-42 ✓）：`f"{w1, w2, w3}"` 是合法的（官方 `test_minidom.py:208`）；
+    // 先前用 `parse_expression` ⇒ 在 `,` 上报"没能整段解析" ✗。
+    let (expression, next) = parse_expression_list(&lexed, 0)?;
     for lexeme in &lexed.lexemes[next..] {
         if !matches!(lexeme, Lexeme::Newline | Lexeme::Dedent | Lexeme::Indent | Lexeme::End) {
             return Err(CompileError::Syntax(format!(

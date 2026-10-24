@@ -256,11 +256,13 @@ impl Emitter {
                                     self.emit_expression(value)?;
                                     self.emit_named(*span, "SET_UPDATE", 1);
                                 }
-                                // **星号后面还有项** ✓（第 224 轮）：参照发 `LIST_APPEND 1` ✓
-                                //（`i` 是目标列表相对 TOS 的深度 ✓，这里恒为 1 ✓）。
+                                // **星号后面还有项** ✓（task-42 修 ✗）：**集合**里参照发的是
+                                // `SET_ADD 1` ✓（实测 `{0, *a, 3}` ⇒ `BUILD_SET 1; <a>;
+                                // SET_UPDATE 1; <3>; SET_ADD 1` ✓）—— 先前照 list 那套发
+                                // `LIST_APPEND` ✗ ⇒ 运行期"容器位置／类型不符" ✗。
                                 _ => {
                                     self.emit_expression(item)?;
-                                    self.emit_named(*span, "LIST_APPEND", 1);
+                                    self.emit_named(*span, "SET_ADD", 1);
                                 }
                             }
                         }

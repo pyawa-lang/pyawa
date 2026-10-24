@@ -68,6 +68,43 @@ pub(crate) fn parse_annotation_expression(
     Ok((expression, cursor))
 }
 
+/// **形参／返回注解**（task-42 ✓）：先试**类型标签**语法（既有字节形状一点不动 ✓），
+/// 判不出类型就**回退成任意表达式**（`.py` 的 3.14 语义：注解就是 `__annotate__` 里惰性求值的
+/// 表达式 ✓）。动因：官方 `test_annotationlib.py:540` 的 `def f(x: x | (1).__class__)` ——
+/// 先前只走 [`parse_type_at`] ⇒ 在 `(` 上报"注解里要一个类型名，实际 Some(LeftParen)" ✗。
+pub(crate) fn parse_parameter_annotation(
+    lexed: &Lexed,
+    cursor: usize,
+    // **`*args: *a`**（PEP 646，task-42 ✓）：星号只允许出现在 `*args` 的注解里；注解的值是
+    // 去掉星号那个表达式（参照实测：`def f(*args: *a)` 的注解字典给 `a` 的值本身 ✓，
+    // `def f(x: *a)` 是语法错 ✓）。
+    allow_star: bool,
+) -> Result<(AnnotationSource, usize), CompileError> {
+    if allow_star && lexed.lexemes.get(cursor) == Some(&Lexeme::Star) {
+        let (expression, after) = parse_expression(lexed, cursor + 1)?;
+        return Ok((AnnotationSource::Expression(expression), after));
+    }
+    if let Ok((label, after)) = parse_type_at(lexed, cursor) {
+        // 类型语法之后必须**紧跟**合法终止符（`=`／`,`／`)`／`:`／行尾；返回注解则是 `:`），
+        // 否则这一段类型只是更大表达式的前缀 ⇒ 回退表达式通道 ✓（与 `parse_annotation_source` 同口径）。
+        let terminated = matches!(
+            lexed.lexemes.get(after),
+            Some(Lexeme::Assign)
+                | Some(Lexeme::Comma)
+                | Some(Lexeme::RightParen)
+                | Some(Lexeme::Colon)
+                | Some(Lexeme::Newline)
+                | Some(Lexeme::Semicolon)
+                | Some(Lexeme::End)
+        );
+        if terminated && after > cursor {
+            return Ok((AnnotationSource::Type(label), after));
+        }
+    }
+    let (expression, after) = parse_expression(lexed, cursor)?;
+    Ok((AnnotationSource::Expression(expression), after))
+}
+
 /// 解析一个**注解类型**（`TS-31` 的边界标签；`BC-24` 的签名条目就是它）。
 ///
 /// - 名字 ⇒ 类型标签（`Constant::Type`）：`int`／`str`／`list` 一类

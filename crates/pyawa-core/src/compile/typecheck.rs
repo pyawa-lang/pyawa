@@ -414,9 +414,12 @@ impl Checker<'_> {
         for parameter in parameters.iter().chain(kwonly.iter()) {
             scope.assigned.insert(parameter.name.clone());
             if let Some(annotation) = &parameter.annotation {
-                scope
-                    .declared
-                    .insert(parameter.name.clone(), static_from_label(annotation));
+                // `TS-47` 只用**类型来源**的注解做静态声明（表达式来源没有编译期标签 ⇒ 不推断）。
+                if let AnnotationSource::Type(label) = annotation {
+                    scope
+                        .declared
+                        .insert(parameter.name.clone(), static_from_label(label));
+                }
             }
         }
         for name in [varargs, varkw].into_iter().flatten() {

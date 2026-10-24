@@ -679,7 +679,7 @@ fn compile_scope(
     qualname: &str,
     parameters: &[Parameter],
     kwonly: &[Parameter],
-    returns: Option<&Constant>,
+    returns: Option<&AnnotationSource>,
     varargs: Option<&str>,
     varkw: Option<&str>,
     mode: Mode,
@@ -882,13 +882,13 @@ fn compile_scope(
             || returns.is_some();
         if annotated {
             if !parameters.is_empty() {
+                // `TS-47` 的边界标签只认**类型来源**的注解（表达式来源的注解没有编译期标签 ⇒
+                // 按 `Any` 保守处理，与"未标注"同口径 ✓）。
                 let labels: Vec<Constant> = parameters
                     .iter()
-                    .map(|parameter| {
-                        parameter
-                            .annotation
-                            .clone()
-                            .unwrap_or_else(|| Constant::Str("Any".to_owned()))
+                    .map(|parameter| match parameter.annotation.as_ref() {
+                        Some(AnnotationSource::Type(label)) => label.clone(),
+                        _ => Constant::Str("Any".to_owned()),
                     })
                     .collect();
                 let index = emitter.intern_constant(Constant::Tuple(labels));
@@ -898,7 +898,7 @@ fn compile_scope(
                     index as u8,
                 );
             }
-            if let Some(label) = returns {
+            if let Some(AnnotationSource::Type(label)) = returns {
                 let index = emitter.intern_constant(Constant::Tuple(vec![label.clone()]));
                 emitter.boundary_out = Some(index);
             }
@@ -1554,8 +1554,11 @@ struct Parameter {
     name: String,
     /// `BC-*`：是不是**仅位置**形参（`/` 之前的那些）。
     posonly: bool,
-    /// 注解（标签常量；`None` ⇒ 没写注解）。
-    annotation: Option<Constant>,
+    /// 注解（**两种来源** `TS-47`／`TS-5`；`None` ⇒ 没写注解）：
+    /// - [`AnnotationSource::Type`]：扩展模式下的**编译期类型标签**（`BC-24` 的签名条目）；
+    /// - [`AnnotationSource::Expression`]：普通**表达式**（`.py` 的 3.14 语义 —— 注解是
+    ///   `__annotate__` 里惰性求值的表达式，可以是任意合法的注解表达式，如 `(1).__class__`）。
+    annotation: Option<AnnotationSource>,
     /// 注解在源码里的跨度（`__annotate__` 单元里 `LOAD_GLOBAL` 取它，实测）。
     annotation_span: Option<Span>,
     /// 默认值表达式（`None` ⇒ 没有默认值）。
@@ -2227,8 +2230,8 @@ enum Statement {
         varargs: Option<String>,
         /// `**kw` 的名字（`None` ⇒ 没有）。
         varkw: Option<String>,
-        /// 返回注解（标签常量）。
-        returns: Option<Constant>,
+        /// 返回注解（两种来源，同 [`Parameter::annotation`]）。
+        returns: Option<AnnotationSource>,
         /// 返回注解在源码里的跨度（`__annotate__` 单元的 `LOAD_GLOBAL` 取它，实测）。
         returns_span: Option<Span>,
         body: Vec<Statement>,

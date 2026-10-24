@@ -36,6 +36,17 @@ pub(crate) fn collect_constant_names(annotation: &Constant, out: &mut Vec<String
     }
 }
 
+/// 注解（**两种来源**）里引用了哪些名字（task-42）：类型标签走 `collect_constant_names`，
+/// 表达式走 `symbols::collect_names_in_expression` ✓。
+pub(crate) fn collect_annotation_names(annotation: &AnnotationSource, out: &mut Vec<String>) {
+    match annotation {
+        AnnotationSource::Expression(expression) => {
+            super::symbols::collect_names_in_expression(expression, out)
+        }
+        AnnotationSource::Type(label) => collect_constant_names(label, out),
+    }
+}
+
 /// 类体里的**注解声明**引用了哪些名字（递归进块体 ✓，**不进**嵌套 `class`／`def` ✓ ——
 /// 那两层各自有自己的注解单元 ✓）。
 pub(crate) fn collect_class_annotation_names(body: &[Statement], out: &mut Vec<String>) {
@@ -152,11 +163,11 @@ pub(crate) fn collect_class_body_def_param_refs(body: &[Statement], params: &[St
                 let mut names: Vec<String> = Vec::new();
                 for parameter in parameters.iter().chain(kwonly.iter()) {
                     if let Some(annotation) = parameter.annotation.as_ref() {
-                        collect_constant_names(annotation, &mut names);
+                        collect_annotation_names(annotation, &mut names);
                     }
                 }
                 if let Some(annotation) = returns.as_ref() {
-                    collect_constant_names(annotation, &mut names);
+                    collect_annotation_names(annotation, &mut names);
                 }
                 for name in &names {
                     push(name, out);
@@ -369,7 +380,7 @@ impl Emitter {
         nested: CompiledUnit,
         parameters: &[Parameter],
         kwonly: &[Parameter],
-        returns: Option<&Constant>,
+        returns: Option<&AnnotationSource>,
         returns_span: Option<Span>,
         // **`__annotate__` 单元的自由变量**（task-24 泛型函数外壳 ✓）：类型参数名 ✓（普通函数空表 ✓）。
         annotate_freevars: &[String],
@@ -463,7 +474,7 @@ impl Emitter {
                 // 模块／函数里照旧 ✓。
                 self.kind == ScopeKind::Class,
                 span,
-            );
+            )?;
             // **`CO_NESTED`（0x10）** ✓：注解单元定义在**嵌套作用域**里就要置 ✓
             //（参照实测 `def outer(): def g(x: int)` 的注解单元 flags ＝ 0x13 ✓；模块级仍是 0x3 ✓）。
             if annotate_qualname.contains(".<locals>.") {
@@ -672,7 +683,7 @@ impl Emitter {
         kwonly: &[Parameter],
         varargs: &Option<String>,
         varkw: &Option<String>,
-        returns: &Option<Constant>,
+        returns: &Option<AnnotationSource>,
         returns_span: &Option<Span>,
         body: &[Statement],
         type_params: &[TypeParam],
@@ -803,11 +814,11 @@ impl Emitter {
                     let mut annotation_names: Vec<String> = Vec::new();
                     for parameter in parameters.iter().chain(kwonly.iter()) {
                         if let Some(annotation) = parameter.annotation.as_ref() {
-                            collect_constant_names(annotation, &mut annotation_names);
+                            collect_annotation_names(annotation, &mut annotation_names);
                         }
                     }
                     if let Some(annotation) = returns.as_ref() {
-                        collect_constant_names(annotation, &mut annotation_names);
+                        collect_annotation_names(annotation, &mut annotation_names);
                     }
                     let referenced =
                         |name: &String| annotation_names.iter().any(|item| item == name);
@@ -1480,7 +1491,7 @@ impl Emitter {
         kwonly: &[Parameter],
         varargs: &Option<String>,
         varkw: &Option<String>,
-        returns: &Option<Constant>,
+        returns: &Option<AnnotationSource>,
         returns_span: &Option<Span>,
         body: &[Statement],
         type_params: &[TypeParam],
@@ -1515,11 +1526,11 @@ impl Emitter {
         let mut annotation_names: Vec<String> = Vec::new();
         for parameter in parameters.iter().chain(kwonly.iter()) {
             if let Some(annotation) = parameter.annotation.as_ref() {
-                collect_constant_names(annotation, &mut annotation_names);
+                collect_annotation_names(annotation, &mut annotation_names);
             }
         }
         if let Some(annotation) = returns.as_ref() {
-            collect_constant_names(annotation, &mut annotation_names);
+            collect_annotation_names(annotation, &mut annotation_names);
         }
         let annotate_freevars: Vec<String> = param_names
             .iter()
@@ -1662,7 +1673,7 @@ impl Emitter {
                 // 泛型函数的注解单元**没有**类字典（不在类体里 ✓）。
                 false,
                 *span,
-            );
+            )?;
             // 注解单元也在外壳函数里 ⇒ `CO_NESTED`（参照实测 flags ＝ 0x13 ✓）
             annotate.flags |= 0x10;
             let index = shell.intern_constant(Constant::Code(Box::new(annotate)));
@@ -1720,7 +1731,7 @@ impl Emitter {
         qualname: &str,
         parameters: &[Parameter],
         kwonly: &[Parameter],
-        returns: Option<&Constant>,
+        returns: Option<&AnnotationSource>,
         returns_span: Option<Span>,
         // **自由变量**（task-24 泛型函数 ✓）：注解里引用的类型参数名 ✓（声明序 ✓）。普通函数空表 ✓。
         freevars: &[String],
@@ -1729,7 +1740,7 @@ impl Emitter {
         // `class C[T]: def m(self) -> T` ⇒ `LOAD_DEREF <__classdict__>; LOAD_FROM_DICT_OR_DEREF <T>` ✓）。
         classdict: bool,
         span: Span,
-    ) -> CompiledUnit {
+    ) -> Result<CompiledUnit, CompileError> {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
@@ -1853,21 +1864,42 @@ impl Emitter {
             emitter.emit_indexed(span, "LOAD_CONST", key);
             // 注解表达式取**注解自身**的跨度（实测 `def f(a: int):` 的 `LOAD_GLOBAL` 是 `(1,1,9,12)`）
             let annotation_span = parameter.annotation_span.unwrap_or(span);
-            emitter.emit_annotation_expression(annotation, annotation_span, classdict_slot);
+            match annotation {
+                AnnotationSource::Expression(expression) => {
+                    emitter.emit_expression(expression)?
+                }
+                AnnotationSource::Type(label) => {
+                    emitter.emit_annotation_expression(label, annotation_span, classdict_slot)
+                }
+            }
             count += 1;
         }
         if let Some(annotation) = returns {
             let key = emitter.intern_constant(Constant::Str("return".to_owned()));
             emitter.emit_indexed(span, "LOAD_CONST", key);
             // 同上：返回注解取注解自身的跨度（实测 `def f() -> int:` 的 `LOAD_GLOBAL` 是 `(1,1,11,14)`）
-            emitter.emit_annotation_expression(annotation, returns_span.unwrap_or(span), classdict_slot);
+            match annotation {
+                AnnotationSource::Expression(expression) => {
+                    emitter.emit_expression(expression)?
+                }
+                AnnotationSource::Type(label) => emitter.emit_annotation_expression(
+                    label,
+                    returns_span.unwrap_or(span),
+                    classdict_slot,
+                ),
+            }
             count += 1;
         }
+        // 注解表达式里的**非小常量**（`-1`／浮点／字符串……）走 `emit_constant` 的**延迟入池** ⇒
+        // 这个单元先前没有收尾回填（`flush_pending` 只在作用域结尾调）✗ ⇒ `LOAD_CONST` 的实参
+        // 没被改写成真下标 ⇒ 读到别的常量（实测 `def f(x: -1)` 的 `__annotations__` 给 2 ✗）。
+        // task-42：在 `BUILD_MAP` 之前回填（下标回填与指令顺序无关 ⇒ 位置不影响逐字节）。
+        emitter.flush_pending();
         emitter.emit_indexed(span, "BUILD_MAP", count);
         emitter.emit_named(span, "RETURN_VALUE", 0);
         // __annotate__ 单元不会有待发的条件副本
         emitter.flush_jumps();
-        emitter.unit
+        Ok(emitter.unit)
     }
 
     /// **类体的 `__annotate__` 单元** ✓（task-21 ✓，PEP 649）：1 个 `format` 形参 ✓、**无闭包** ✓
@@ -1999,6 +2031,8 @@ impl Emitter {
             emitter.emit_indexed(*annotation_span, "LOAD_CONST", key);
             emitter.emit_named(*annotation_span, "STORE_SUBSCR", 0);
         }
+        // 同上：表达式来源的注解可能延迟入池 ⇒ 收尾回填 ✓
+        emitter.flush_pending();
         emitter.emit_named(span, "RETURN_VALUE", 0);
         emitter.flush_jumps();
         Ok(emitter.unit)

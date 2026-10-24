@@ -16,22 +16,42 @@ pub(crate) fn parse_subscript_key(
     lexed: &Lexed,
     cursor: usize,
 ) -> Result<(Expression, usize), CompileError> {
-    let (first, mut cursor) = parse_subscript_item(lexed, cursor)?;
+    // **星号下标项**（task-42 ✓，PEP 646）：`x[*a]`／`x[1, *a]`／`Union[*args, *(f())]`
+    // （官方 `test_annotationlib.py:186` ✗）。参照 `dis` 实测：与"元组显示里的星号"**同形**
+    // （`BUILD_LIST n; <项>; LIST_EXTEND 1; CALL_INTRINSIC_1 6`）⇒ 解析成
+    // `TupleLiteral([Starred…])` 交给既有发射路径 ✓（单个 `*a` 也要包一层元组 ✓）。
+    let subscript_item = |lexed: &Lexed, cursor: usize| {
+        if lexed.lexemes.get(cursor) == Some(&Lexeme::Star) {
+            parse_star_or_expression(lexed, cursor)
+        } else {
+            parse_subscript_item(lexed, cursor)
+        }
+    };
+    let (first, mut cursor) = subscript_item(lexed, cursor)?;
+    let has_star = matches!(first, Expression::Starred(..));
     if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+        // 单个星号项：参照也包成元组（`x[*a]` ⇒ `BUILD_LIST 0; …; LIST_TO_TUPLE` ✓）
+        if has_star {
+            let span = first.span();
+            return Ok((Expression::TupleLiteral(vec![first], span), cursor));
+        }
         return Ok((first, cursor));
     }
     let start = first.span();
     let mut items = vec![first];
+    let mut has_star = has_star;
     while lexed.lexemes.get(cursor) == Some(&Lexeme::Comma) {
         cursor += 1;
         // **尾随逗号**（`a[i,]` ⇒ 一项的元组 ✓）
         if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBracket) {
             break;
         }
-        let (item, next) = parse_subscript_item(lexed, cursor)?;
+        let (item, next) = subscript_item(lexed, cursor)?;
+        has_star |= matches!(item, Expression::Starred(..));
         items.push(item);
         cursor = next;
     }
+    let _ = has_star;
     let end = items
         .last()
         .map(|item| item.span())
@@ -51,7 +71,9 @@ pub(crate) fn parse_subscript_item(
     let mut cursor = cursor;
     let mut lower = None;
     if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
-        let (expression, next) = parse_expression(lexed, cursor)?;
+        // **下标里允许裸海象**（task-42 ✓）：`a[b := 0]` 合法（官方
+        // `test_named_expressions.py:483`）；`parse_condition` 认识裸海象 ✓。
+        let (expression, next) = parse_condition(lexed, cursor)?;
         lower = Some(Box::new(expression));
         cursor = next;
     }
@@ -64,9 +86,11 @@ pub(crate) fn parse_subscript_item(
     }
     cursor += 1;
     let mut upper = None;
+    // **`x[1:, …]` 的"空上界"**（task-42 ✓）：多切片元组里逗号也是合法终止符
+    // （`x[1:3:, ::-2]`／`x[:, ::-2]`）⇒ 不能在这里把 `,` 当表达式开头 ✗。
     if !matches!(
         lexed.lexemes.get(cursor),
-        Some(&Lexeme::Colon) | Some(&Lexeme::RightBracket)
+        Some(&Lexeme::Colon) | Some(&Lexeme::RightBracket) | Some(&Lexeme::Comma)
     ) {
         let (expression, next) = parse_expression(lexed, cursor)?;
         upper = Some(Box::new(expression));
@@ -75,7 +99,11 @@ pub(crate) fn parse_subscript_item(
     let mut step = None;
     if lexed.lexemes.get(cursor) == Some(&Lexeme::Colon) {
         cursor += 1;
-        if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
+        // **`x[1:3:, …]` 的"空步长"**（task-42 ✓）：逗号同样可以终止（`1:3:` 后面直接 `,`）
+        if !matches!(
+            lexed.lexemes.get(cursor),
+            Some(&Lexeme::RightBracket) | Some(&Lexeme::Comma)
+        ) {
             let (expression, next) = parse_expression(lexed, cursor)?;
             step = Some(Box::new(expression));
             cursor = next;
@@ -709,6 +737,31 @@ fn parse_atom_leftbrace(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                     cursor += 1;
                     break;
                 }
+                // **`{*a, …}` 的星号首项**（task-42 ✓）：`{*range(3)}` 的**第一项**是 `*` —
+                // 这里必须**先于**"先解析一个 key 再判字典/集合"那条路（那条会用
+                // `parse_expression`，见到 `*` 就报"表达式里出现 Some(Star)" ✗）。星号首项只可能
+                // 出现在**集合显示**里（字典没有 `*` 解包，只有 `**`）⇒ 直接按集合收 ✓。
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::Star) {
+                    let mut items: Vec<Expression> = Vec::new();
+                    loop {
+                        match lexed.lexemes.get(cursor) {
+                            Some(Lexeme::RightBrace) => {
+                                cursor += 1;
+                                break;
+                            }
+                            Some(Lexeme::Comma) => {
+                                cursor += 1;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        let (item, next) = parse_star_or_expression(lexed, cursor)?;
+                        items.push(item);
+                        cursor = next;
+                    }
+                    let span = start.to(lexed.spans[cursor - 1]);
+                    break 'atom (Expression::SetLiteral(items, span), cursor);
+                }
                 // **`**映射`**（第 293 轮）：字典显示里的解包项 ✓ —— 照参照 `dis` 实测，
                 // 它发 `LOAD <映射>; DICT_UPDATE 1` ✓（`{**a, **b}`／`{1: 2, **a, 3: 4}` ✓）。
                 if lexed.lexemes.get(cursor) == Some(&Lexeme::DoubleStar) {
@@ -945,6 +998,41 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                 let target = name.clone();
                 let target_span = lexed.spans[cursor];
                 let (value, next) = parse_expression(lexed, cursor + 2)?;
+                // **跨度不含括号**（实测  的  位点是 ＝`y := 3`
+                // 那一段 ✓，不是含 `(` 的 ✗）
+                let _ = open;
+                let span = target_span.to(value.span());
+                let walrus = Expression::Walrus {
+                    target,
+                    target_span,
+                    value: Box::new(value),
+                    span,
+                };
+                // **海象作为括号元组的一项**（task-42 ✓）：`(x := 1, 2)` 合法
+                // （官方 `test_named_expressions.py:402` ✗ 先前要求值后面紧跟 `)` ✗）。
+                if lexed.lexemes.get(next) == Some(&Lexeme::Comma) {
+                    let mut items = vec![walrus];
+                    let mut at = next;
+                    while lexed.lexemes.get(at) == Some(&Lexeme::Comma) {
+                        at += 1;
+                        if lexed.lexemes.get(at) == Some(&Lexeme::RightParen) {
+                            break;
+                        }
+                        let (item, after) = parse_star_or_expression(lexed, at)?;
+                        items.push(item);
+                        at = after;
+                    }
+                    if lexed.lexemes.get(at) != Some(&Lexeme::RightParen) {
+                        let site = lexed.spans.get(at).copied();
+                        return Err(CompileError::Syntax(format!(
+                            "括号没有闭合，实际 {:?}（第 {} 行）",
+                            lexed.lexemes.get(at),
+                            site.map(|span| span.line_start).unwrap_or(0)
+                        )));
+                    }
+                    let close = lexed.spans[at];
+                    break 'atom (Expression::TupleLiteral(items, open.to(close)), at + 1);
+                }
                 if lexed.lexemes.get(next) != Some(&Lexeme::RightParen) {
                     let span = lexed.spans.get(next).copied();
                     return Err(CompileError::Syntax(format!(
@@ -953,23 +1041,11 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                         span.map(|span| span.line_start).unwrap_or(0)
                     )));
                 }
-                // **跨度不含括号**（实测  的  位点是 ＝`y := 3`
-                // 那一段 ✓，不是含 `(` 的 ✗）
-                let _ = open;
-                let span = target_span.to(value.span());
                 // **不能在这里 `return`**（第 304 轮修）：`parse_atom` 的**统一后缀链**
                 // （`.`／`(`／`[`，在 `match` 之后）会被绕过 ⇒ `(ch := …).isspace()`
                 // 报「括号没有闭合，实际 `Some(Dot)`」（`Lib/traceback.py:923`，那一族 15 个模块）。
                 // 这一臂照常**返回元组**，后缀链就能接上。
-                (
-                    Expression::Walrus {
-                        target,
-                        target_span,
-                        value: Box::new(value),
-                        span,
-                    },
-                    next + 1,
-                )
+                (walrus, next + 1)
             } else {
             let mut items = Vec::new();
             let mut saw_comma = false;

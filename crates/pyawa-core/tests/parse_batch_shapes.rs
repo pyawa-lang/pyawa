@@ -663,3 +663,85 @@ fn task29_imaginary_constants_survive_the_pyac_round_trip() {
         );
     }
 }
+
+// --------------------------------------------------------------------------- #
+// task-42：批 B/C 语法缺口（`~T`／star 表达式／augassign 链／参数注解表达式）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn task42_syntax_gaps_compile() {
+    // 这些形状在官方套件里各代表一族（`test_enum`／`test_collections`／`test_compile`／
+    // `test_descr`／`test_generators`／`test_format`／`test_annotationlib`）—— 先前都是
+    // `状态 2` 语法错；这里钉住"能编过"（字节形状另由 `--test compile` 夹具守）。
+    let cases: &[&str] = &[
+        // `~` 起头的表达式语句（`test_enum.py:1067`）
+        "~1\n",
+        "-1\n",
+        "+1\n",
+        // f-string 起头的表达式语句（`test_format.py`）
+        "x = 1\nf'{x}'\n",
+        "x = 1\nf'{x}'.format()\n",
+        // 集合显示里的星号首项／混合项（`test_collections.py:1835`）
+        "s = {*range(3)}\n",
+        "a = [1, 2]\ns = {0, *a, 3}\n",
+        // 多切片的下标元组（`test_buffer.py:3651`）
+        "x = [0]\nv = x[1:3:, ::-2]\nv = x[:, ::-2]\nv = x[1:,]\n",
+        // 星号下标项（PEP 646；`test_annotationlib.py:186`）
+        "a = [1, 2]\nb = [3]\nx[*b]\nx[0, *b]\ny = x[*a, *b]\n",
+        // 括号目标的增强赋值／字面量起头的赋值目标（`test_compile.py:1273`／`test_descr.py:1089`）
+        "class O: pass\no = O()\no.a = 1\n(o.a) += 2\na = [1]\n(a[0]) += 1\nx = 1\n(x) += 1\n",
+        "class S(str): pass\n\"a\".__class__ = S\n",
+        // `for` 目标里的下标（`test_generators.py:1920`）
+        "a = [0]\nfor a[0] in [1]:\n    pass\n",
+        // 参数／返回注解里的任意表达式（`test_annotationlib.py:540`／官方一言蔽之：
+        // 3.14 的注解就是 `__annotate__` 里惰性求值的普通表达式）
+        "def f(x: (1).__class__): pass\n",
+        "def f(x: 1 + 2): pass\n",
+        "def f(x: ~int): pass\n",
+        "def f(x: -1): pass\n",
+        "def g() -> (1).__class__: pass\n",
+        // PEP 646 的 `*args: *T` 注解（`test_annotationlib.py:295`）
+        "def f(*args: *a): pass\n",
+        "def f(*args: *tuple[int, ...]): pass\n",
+        // 前导点虚部（`test_format.py:608` 的 `f\"{.01j:z.1f}\"`）
+        "z = .01j\nz = -.01j\nprint(f'{.01j}')\n",
+        // `await` 当语句（`test_coroutines.py`）
+        "async def g():\n    await []\n",
+        // lambda 的仅位置形参 `/`（`test_positional_only_arg.py:222`）
+        "a = lambda x, /, y: x + y\n",
+        // 装饰器是任意表达式（PEP 614；`test_grammar.py:647`）
+        "def null(v): return v\n@False or null\ndef f(): pass\n@d := null\ndef g(): pass\n",
+        // 元组表达式语句（`test_urllib2.py:916`）
+        "a, b == 1, \"OK\"\n",
+        // 括号元组里的海象（`test_named_expressions.py:402`）
+        "(x := 1, 2)\n",
+        // f-string 里的元组表达式（`test_minidom.py:208`）
+        "w1, w2, w3 = 1, 2, 3\nmsg = f\"work={w1,w2,w3}\"\n",
+    ];
+    for source in cases {
+        if let Err(error) = compile(source, "probe.py", Mode::PurePython, CheckTier::Shallow, 0) {
+            panic!("{source:?} 编不过：{error:?}");
+        }
+    }
+}
+
+#[test]
+fn task42_annotation_expressions_evaluate_like_references() {
+    // `.01j` 的常量形状（参照 `co_consts` = `(0.01j, None)`；`-.01j` 折叠成 `(-0-0.01j)`）
+    let unit = compile("z = .01j\n", "probe.py", Mode::PurePython, CheckTier::Shallow, 0).unwrap();
+    assert_eq!(
+        unit.constants,
+        vec![complex_constant(0.0, 0.01), Constant::None],
+        "`.01j` 的常量池形状（照 python3 3.14.4）"
+    );
+    let unit = compile("z = -.01j\n", "probe.py", Mode::PurePython, CheckTier::Shallow, 0).unwrap();
+    assert_eq!(
+        unit.constants,
+        vec![
+            complex_constant(0.0, 0.01),
+            Constant::None,
+            complex_constant(-0.0, -0.01),
+        ],
+        "`-.01j` 的折叠形状（照 python3 3.14.4，实部负零）"
+    );
+}
