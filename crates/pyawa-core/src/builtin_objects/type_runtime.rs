@@ -330,25 +330,40 @@ pub fn getframe_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if let Some(depth) = args.first() {
-        match instance.index_value(*depth)? {
-            Some(0) => {}
-            Some(_) => {
-                return Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "sys._getframe 目前只接 depth＝0（f_back 链随后补）",
-                })
-            }
+    // 参照 3.14.4 实测：负 depth ⇒ 当作 0（给当前帧 ✓）；非整数 ⇒
+    // `TypeError: '<类型>' object cannot be interpreted as an integer` ✓；
+    // 越过栈顶 ⇒ `ValueError: call stack is not deep enough` ✓。
+    let depth = match args.first() {
+        None => 0i64,
+        Some(value) => match instance.index_value(*value)? {
+            Some(depth) => depth,
             None => {
-                return Err(instance
-                    .raise_builtin_error("TypeError", "sys._getframe 的 depth 要整数"))
+                let type_name = instance.type_name(instance.type_of(*value));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{type_name}' object cannot be interpreted as an integer"),
+                ));
+            }
+        },
+    };
+    let depth = usize::try_from(depth.max(0)).unwrap_or(usize::MAX);
+    let Some(mut frame) = instance.current_frame() else {
+        return Err(instance.raise_builtin_error("ValueError", "sys._getframe: 没有当前帧"));
+    };
+    for _ in 0..depth {
+        // SAFETY: frame 是执行器守卫／f_back 链持有的帧，存活。
+        let frame_ref = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+        match frame_ref.f_back() {
+            Some(parent) => frame = parent,
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "call stack is not deep enough",
+                ))
             }
         }
     }
-    let Some(frame) = instance.current_frame() else {
-        return Err(instance.raise_builtin_error("ValueError", "sys._getframe: 没有当前帧"));
-    };
-    // SAFETY: 帧由执行器守卫持有，这里新增一份引用交给调用方 ✓。
+    // SAFETY: 帧由执行器守卫／f_back 链持有，这里新增一份引用交给调用方 ✓。
     unsafe { instance.incref_object(frame.as_ptr()) };
     Ok(frame)
 }

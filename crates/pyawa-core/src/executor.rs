@@ -1444,6 +1444,21 @@ impl<'a> CurrentFrameGuard<'a> {
     fn install(instance: &'a Instance, frame: Option<NonNull<Header>>) -> Self {
         // **调用栈**（第 617 轮 ✓）：`sys._getframemodulename(1)` 要回到调用者那一帧 ✓。
         if let Some(entered) = frame {
+            // **`f_back` 链**（task-43）：入帧时把**当前（调用者）帧**接上 ✓ ——
+            // `entered` 帧接手一份**新引用** ✓ ⇒ 调用者返回后捕获的帧仍能读 `f_back` ✓
+            //（参照同款；帧链无环 ⇒ 不会成环 ✓）。生成器恢复时按"本次恢复者"重接 ✓。
+            if let Some(caller) = instance.current_frame() {
+                if caller != entered {
+                    // SAFETY: caller 是当前执行的帧，存活；`entered` 是即将执行的帧，存活。
+                    let entered_ref = unsafe { &*entered.as_ptr().cast::<crate::frame::Frame>() };
+                    // SAFETY: 同上 —— 帧要自己那份引用。
+                    unsafe { instance.incref_object(caller.as_ptr()) };
+                    if let Some(previous) = entered_ref.set_f_back(Some(caller)) {
+                        // SAFETY: 被顶下来的那份由本帧交出。
+                        unsafe { instance.release_object(previous.as_ptr()) };
+                    }
+                }
+            }
             crate::builtin_objects::push_frame(entered);
         }
         let previous = instance.set_current_frame(frame);

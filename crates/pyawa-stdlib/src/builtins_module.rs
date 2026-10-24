@@ -68,6 +68,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("globals", globals_native as pyawa_core::NativeFn),
         ("eval", eval_native as pyawa_core::NativeFn),
         ("exec", exec_native as pyawa_core::NativeFn),
+        // **`compile()`**（task-43）：core 的实现（`pyawa_core::compile_native`）——这里只注册 ✓。
+        ("compile", pyawa_core::compile_native as pyawa_core::NativeFn),
         ("id", id_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         // **`reversed`** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
@@ -1437,24 +1439,40 @@ fn eval_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
-        return Err(instance.raise_builtin_error("TypeError", "eval: 第一个实参要是 str"));
+    let Some(first) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "eval() missing required argument 'source' (pos 1)",
+        ));
     };
-    let Some(namespace) = args.get(1).copied() else {
-        // **如实报未实现** ✓：`eval` 拿不到"调用者的帧" ✗（我们只接了 `sys._getframe(0)` ✓）⇒
-        // 只支持**带命名空间**的形态 ✓，其余不假装 ✓。
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "eval：只接了 `eval(源码, 命名空间)` 这一形态（拿不到调用者帧）",
-        });
+    let (globals, locals, locals_owned, globals_owned) = resolve_namespaces(
+        instance,
+        args.get(1).copied(),
+        args.get(2).copied(),
+        "eval",
+    )?;
+    let result = if pyawa_core::is_code_object(instance, first) {
+        // **code 对象分支**（task-43）：`eval(compile(src, f, "eval"), globals)` ✓。
+        pyawa_core::eval_code_public(instance, first, globals, locals)
+    } else if let Some(source) = instance.text_of(first) {
+        pyawa_core::eval_source_public(instance, source, globals, locals)
+    } else {
+        Err(instance.raise_builtin_error(
+            "TypeError",
+            "eval() arg 1 must be a string, bytes or code object",
+        ))
     };
-    instance.eval_source(source, namespace)
+    if locals_owned {
+        instance.release(locals);
+    }
+    if let (Some(globals), true) = (globals, globals_owned) {
+        instance.release(globals);
+    }
+    result
 }
 
-/// **`exec(源码, globals=None, locals=None)`** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py::_create_fn`
-/// 一族靠它把**生成的源码**跑起来 ✓（`exec(txt, globals, locals)` ＋ 再从 `locals` 取名 ✓）。
-/// **如实范围** ✗：只收 `str` 源码 ✓；`locals` 只收 `dict` ✓；没给命名空间时**新建一个**（参照用
-/// 调用者帧的 globals／locals ✗ —— 拿不到调用者帧 ✓，与 `eval` 同一如实口径 ✓）。
+/// **`exec(source, globals=None, locals=None)`** ✓（task-20 第 3 轮；task-43 补齐 code 对象与
+/// 隐式命名空间）：`Lib/dataclasses.py::_create_fn` 一族靠它把**生成的源码**跑起来 ✓。
 fn exec_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1462,27 +1480,78 @@ fn exec_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "exec", args, 1)?;
-    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
-        return Err(instance.raise_builtin_error("TypeError", "exec: 第一个实参要是 str"));
+    let Some(first) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "exec() missing required argument 'source' (pos 1)",
+        ));
     };
-    let globals = args.get(1).copied();
-    let locals = args.get(2).copied().or(globals);
-    let (namespace, owned) = match locals {
-        Some(value) if instance.dict_entries(value).is_some() => (value, false),
-        Some(_) => {
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                "exec: 目前只收 dict 当 locals",
-            ))
-        }
-        // 没有命名空间 ⇒ 新建一个（这一份由本函数持有，跑完归还 ✓）。
-        None => (instance.new_dict(), true),
+    let (globals, locals, locals_owned, globals_owned) = resolve_namespaces(
+        instance,
+        args.get(1).copied(),
+        args.get(2).copied(),
+        "exec",
+    )?;
+    let result = if pyawa_core::is_code_object(instance, first) {
+        // **code 对象分支**（task-43）：`exec(compile(src, f, "exec"), globals, locals)` ✓。
+        pyawa_core::exec_code_public(instance, first, globals, locals)
+    } else if let Some(source) = instance.text_of(first) {
+        instance.exec_source(source, globals, locals)
+    } else {
+        Err(instance.raise_builtin_error(
+            "TypeError",
+            "exec() arg 1 must be a string, bytes or code object",
+        ))
     };
-    let result = instance.exec_source(source, globals, namespace);
-    if owned {
-        instance.release(namespace);
+    if locals_owned {
+        instance.release(locals);
+    }
+    if let (Some(globals), true) = (globals, globals_owned) {
+        instance.release(globals);
     }
     result
+}
+
+/// **`eval`／`exec` 的 (globals, locals) 解析**（task-43）：`None` 单例与"没给"等价 ✓；
+/// 只给 `globals` ⇒ `locals` 就是它 ✓；都没给 ⇒ 用**调用者帧**的 globals／`f_locals` 快照 ✓
+/// （`f_back` 链接好后这条路才成立 ✓）。返回值里两个 bool 表示"这两份要不要本函数归还" ✓。
+fn resolve_namespaces(
+    instance: &Instance,
+    globals_arg: Option<NonNull<Header>>,
+    locals_arg: Option<NonNull<Header>>,
+    what: &str,
+) -> Result<(Option<NonNull<Header>>, NonNull<Header>, bool, bool), ExecError> {
+    let none = instance.singletons().none();
+    let explicit_globals = globals_arg.filter(|value| *value != none);
+    let explicit_locals = locals_arg.filter(|value| *value != none);
+    let check_dict = |value: NonNull<Header>| -> Result<(), ExecError> {
+        if instance.dict_entries(value).is_none() {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{what}: locals 目前只收 dict"),
+            ));
+        }
+        Ok(())
+    };
+    match (explicit_globals, explicit_locals) {
+        (Some(globals), Some(locals)) => {
+            check_dict(locals)?;
+            Ok((Some(globals), locals, false, false))
+        }
+        (Some(globals), None) => Ok((Some(globals), globals, false, false)),
+        (None, Some(locals)) => {
+            check_dict(locals)?;
+            let (implicit_globals, implicit_locals) = pyawa_core::implicit_namespaces(instance);
+            instance.release(implicit_locals);
+            let globals_owned = implicit_globals.is_some();
+            Ok((implicit_globals, locals, false, globals_owned))
+        }
+        (None, None) => {
+            let (globals, locals) = pyawa_core::implicit_namespaces(instance);
+            let globals_owned = globals.is_some();
+            Ok((globals, locals, true, globals_owned))
+        }
+    }
 }
 
 /// **`ascii(obj)`** ✓（task-19 第 3 轮 ✓）：参照口径 ＝ **`repr(obj)` 再把非 ASCII 转义** ✓
