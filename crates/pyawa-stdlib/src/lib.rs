@@ -140,6 +140,10 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (gc_module::NAME, gc_module::build),
         // **`unicodedata`**（round 19）：`_pyrepl` 一族（pdb/doctest）导入期要 `category`／`combining`／`east_asian_width`。
         (unicodedata_module::NAME, unicodedata_module::build),
+        // **`_hashlib`**（round 20）：md5／sha1／sha256 纯 Rust 实现 + HASH 对象面。
+        (_hashlib_module::NAME, _hashlib_module::build),
+        // **`_blake2`**（round 20）：上游 `hashlib.py` 对 blake2 只走 builtin 路径 ⇒ 名字占位、真调用如实未实现。
+        (_hashlib_module::BLAKE2_NAME, _hashlib_module::build_blake2),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
@@ -426,6 +430,8 @@ pub mod collections_module;
 /// **`_tokenize`** ✓（task-19 ✓）：`Lib/tokenize.py` 的词法底层 ✓。
 pub mod tokenize_module;
 pub mod unicode_tables;
+/// **`_hashlib`**（round 20）：纯 Rust md5／sha1／sha256 的最小诚实面（`Lib/hashlib.py` 的底座）。
+pub mod _hashlib_module;
 /// **`unicodedata`**（round 19）：最小诚实面；数据复用 `unicode_tables`（pdb/doctest 的闸）。
 pub mod unicodedata_module;
 
