@@ -10,6 +10,12 @@
     python3 tools/sync_lib.py --sync      # 按脚本里的 SLICE 从上游复制（**只增不改**）
 
 上游前缀默认取**本机 python3 的 stdlib 路径**（必须报 3.14.x；`CX-8` 只对 3.14.x 成立）。
+**第二来源根**：`target/upstream/extracted/usr/lib/python3.14`（`libpython3.14-testsuite` deb 的
+解包数据根，**不进仓库**）—— 本机 stdlib 里**没有**、只在 testsuite deb 里的文件从这里取 ✓
+（例：`test/multibytecodec_support.py` 就只在这里；但它因 **P3-35 surrogate** 暂不同步，
+见 `SLICE` 注释 ✓）。规则：**只对主来源缺失的文件使用**（主来源存在 ⇒ 仍以主来源为准 ✓；
+第二来源根不存在 ⇒ 退回单来源 ✓）；`--sync` 拷入后对每个文件做**逐字节校验**，`--check`
+对这类文件与第二来源比对 ✓（`CX-8` 口径不变：仍与上游 CPython 3.14.x 逐字节一致）。
 """
 
 from __future__ import annotations
@@ -23,6 +29,13 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LIB = ROOT / "Lib"
+
+#: **第二来源根**（task-38 ✓）：`libpython3.14-testsuite` deb 解到 `target/upstream/extracted/`
+#: 的数据根（**不进仓库** ✓）。只用于**主来源缺失**的文件 ✓（主来源存在时仍以主来源为准 ✗ ——
+#: `CX-8` 的上游口径是本机 stdlib 前缀 ✓）；目录不存在时自动退回单来源 ✓。
+#: **当前 `SLICE` 里暂无文件用到它** ✓（`test/multibytecodec_support.py` 因 **P3-35 surrogate**
+#: 暂不同步 —— 见 `SLICE` 注释；epic 落地后把该文件加回 `SLICE` 即可 ✓）——机制本身是通用能力 ✓。
+SECOND_SOURCE_ROOT = ROOT / "target/upstream/extracted/usr/lib/python3.14"
 
 #: 初始切片：`site.py` 直接导入的那些 ＋ 它们最短的依赖链（**只增不改** ✓）。名字带目录时按原样拷贝。
 SLICE = (
@@ -426,10 +439,18 @@ SLICE = (
     "test/support/channels.py",
     "test/typinganndata/ann_module.py",
     "test/typinganndata/ann_module2.py",
-    # **`P3-35` 剩余 3 个仍不同步** ✓：`test/libregrtest/utils.py`（surrogate `\uD800-\uDFFF`
+    # **`P3-35` 剩余 4 个仍不同步** ✓：`test/libregrtest/utils.py`（surrogate `\uD800-\uDFFF`
     # 字面量 ⇒ 要**string repr 级**改造，不是纯解析器格）、`test/support/os_helper.py`
     # （`\uDC80` 的运行时 surrogateescape 口径）、`test/typinganndata/ann_module695.py`
-    # （PEP 695 `*Ts` 未接线）⇒ 修完再收；按 `MS-19` 判据补充：**不登记 KNOWN**、不改编译器 ✗。
+    # （PEP 695 `*Ts` 未接线）、`test/multibytecodec_support.py`（第 24 行
+    # `unmappedunicode = '\udeee'` 是**合法孤立代理** ⇒ 同上，走 **P3-35 surrogate epic**；
+    # 它**只**在 `libpython3.14-testsuite` deb 的解包目录里 ✓、本机 stdlib 前缀里**没有** ⇒
+    # 修好后用**第二来源根**（`SECOND_SOURCE_ROOT`）同步 ✓，见 task-38）⇒ 修完再收；
+    # 按 `MS-19` 判据补充：**不登记 KNOWN**、不改编译器 ✗。
+    # **task-38 记**（2026-10-25 ✓）：8 个 `test_codecencodings_*`／`test_codecmaps_*` 的
+    # ×11 签名实测已从 `ImportError: cannot import name 'multibytecodec_support' from 'test'`
+    # 推进到**下一格** `SyntaxError: invalid unicode escape \U0000deee`（临时拷入验证后按裁决撤回，
+    # **当前不入库**）；等 surrogate epic 落地后回归（届时 `--sync` 用第二来源根即可 ✓）。
     # **`sysconfig` 的 `_sysconfigdata` 数据模块**（task-3 顺带 ✓）：`sysconfig.get_config_var()`
     # 走 `importlib.import_module(_get_sysconfigdata_name())` ✓，官方 `test.support` 导入期的
     # `check_sanitizer()` 就要 `CFLAGS` ⇒ 这两个名字按本机 `sys.platform`／multiarch 口径列出 ✓
@@ -471,12 +492,46 @@ def digest(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def secondary_prefix() -> pathlib.Path | None:
+    """第二来源根（testsuite deb 解包目录）。不存在 ⇒ `None`（退回单来源 ✓）。"""
+    if (SECOND_SOURCE_ROOT / "test").is_dir():
+        return SECOND_SOURCE_ROOT
+    return None
+
+
+def resolve_source(
+    prefix: pathlib.Path,
+    secondary: pathlib.Path | None,
+    relative: pathlib.PurePath,
+) -> tuple[pathlib.Path | None, bool]:
+    """**主来源优先**；主来源缺失才用第二来源 ✓（task-38）。返回 `(路径, 是否来自第二来源)`。"""
+    primary = prefix / relative
+    if primary.is_file():
+        return primary, False
+    if secondary is not None:
+        candidate = secondary / relative
+        if candidate.is_file():
+            return candidate, True
+    return None, False
+
+
+def copy_verified(source: pathlib.Path, target: pathlib.Path) -> None:
+    """拷入后**逐字节校验**（task-38 ✓）：拷入前记源摘要，拷入后比对目标摘要，不等即报错 ✗。"""
+    expected = digest(source)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    if digest(target) != expected:
+        raise SystemExit(f"  ✗ 拷入后与来源不一致：{target}（来源 {source}）")
+
+
 def check(prefix: pathlib.Path) -> int:
     """逐字节比对 `Lib/` 里的**每个**文件（例外清单必须为空 ⇒ 不设白名单 ✓）。"""
     if not LIB.exists():
         print("Lib/ 尚未引入（CX-8 无从谈起）")
         return 0
+    secondary = secondary_prefix()
     problems: list[str] = []
+    from_secondary: list[pathlib.PurePath] = []
     # **跳过字节码缓存** ✓（第 703 轮 ✗ 修）：`Lib/**/__pycache__/*.pyc` 是**本机跑出来的产物** ✗，
     # 与上游必然不同 ✓ ⇒ 先前它们把 `--check` 淹成一片红 ✗（实测报错**全是** `__pycache__` ✓，
     # 反而把"真正不一致的 `.py`"埋掉了 ✓）。`CX-8` 管的是**源文件** ✓。
@@ -487,13 +542,20 @@ def check(prefix: pathlib.Path) -> int:
     )
     for item in files:
         relative = item.relative_to(LIB)
-        upstream = prefix / relative
-        if not upstream.exists():
+        upstream, from_second = resolve_source(prefix, secondary, relative)
+        if upstream is None:
             problems.append(f"上游没有这个文件：{relative}")
             continue
+        if from_second:
+            from_secondary.append(relative)
         if digest(item) != digest(upstream):
             problems.append(f"与上游不一致：{relative}")
     print(f"CX-8：Lib/ 共 {len(files)} 个文件，与上游 {prefix} 比对完毕")
+    if from_secondary:
+        # **如实列出** ✓：这些文件主来源没有 ⇒ 按第二来源根（testsuite deb）比对 ✓。
+        print(f"  其中 {len(from_secondary)} 个只存在于第二来源根，按该根比对：{secondary}")
+        for relative in from_secondary:
+            print(f"    · {relative}")
     for problem in problems:
         print(f"  ✗ {problem}")
     if problems:
@@ -504,43 +566,56 @@ def check(prefix: pathlib.Path) -> int:
 
 def sync(prefix: pathlib.Path) -> int:
     LIB.mkdir(exist_ok=True)
+    secondary = secondary_prefix()
     copied = 0
+    from_secondary = 0
     skipped = 0
     for name in SLICE:
         # **支持 glob**（第 282 轮）：`encodings/*.py` 那一族 123 个文件按一条写 ✓
         #（一条一条列既啰嗦又容易漏 ✓）。一个都没匹配到 ⇒ **报错**（不是静默跳过 ✓）。
         if any(character in name for character in "*?["):
-            matches = sorted(prefix.glob(name))
-            if not matches:
-                print(f"  ✗ 上游没有匹配 {name} 的文件")
-                return 1
-            for source in matches:
-                if not source.is_file():
+            # 主来源优先；第二来源只**补主来源缺失**的相对路径 ✓（task-38，同一处真相：
+            # 谁优先只由 `resolve_source()` 判 ✓）。
+            relatives: set[pathlib.PurePath] = set()
+            for root in (prefix, secondary):
+                if root is None:
                     continue
-                relative = source.relative_to(prefix)
+                for source in root.glob(name):
+                    if source.is_file():
+                        relatives.add(source.relative_to(root))
+            if not relatives:
+                print(f"  ✗ 上游没有匹配 {name} 的文件（主来源／第二来源都没有）")
+                return 1
+            for relative in sorted(relatives):
                 # **显式排除**（task-3 ✓）：既有 glob 会重新匹配上 `36c450b` 按纪律剔除的
                 # 已知坏文件（`SYNC_EXCLUDE`，`P3-35` 语法缺口）⇒ 跳过 ✓（`--check` 不受影响 ✓）。
                 if relative.as_posix() in SYNC_EXCLUDE:
                     skipped += 1
                     continue
-                target = LIB / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, target)
+                source, used_secondary = resolve_source(prefix, secondary, relative)
+                if source is None:  # 理论不可达：relatives 就是两个来源的并集
+                    print(f"  ✗ 找不到来源 {relative}")
+                    return 1
+                copy_verified(source, LIB / relative)
                 copied += 1
+                if used_secondary:
+                    from_secondary += 1
             continue
         # 逐文件条目也过同一张排除表（**一处真相** ✓：排除只在 `SYNC_EXCLUDE` 判 ✓）。
         if name in SYNC_EXCLUDE:
             skipped += 1
             continue
-        source = prefix / name
-        if not source.exists():
-            print(f"  ✗ 上游没有 {name}")
+        source, used_secondary = resolve_source(prefix, secondary, pathlib.PurePath(name))
+        if source is None:
+            print(f"  ✗ 上游没有 {name}（主来源／第二来源都没有）")
             return 1
-        target = LIB / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+        copy_verified(source, LIB / name)
         copied += 1
+        if used_secondary:
+            from_secondary += 1
     print(f"已从 {prefix} 复制 {copied} 个文件到 Lib/")
+    if from_secondary:
+        print(f"  其中 {from_secondary} 个来自第二来源根：{secondary}")
     if skipped:
         print(
             f"  按 SYNC_EXCLUDE 跳过 {skipped} 个已知坏文件"
