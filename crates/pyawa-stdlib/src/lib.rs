@@ -138,6 +138,8 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // `test.support` 的 `gc_collect()`／`disable_gc()`／`gc_threshold()` 的底座 ✓。
         // **最小诚实面**：能真做的真做、做不了的如实 `NotImplementedError`（见 `gc_module` 头）。
         (gc_module::NAME, gc_module::build),
+        // **`unicodedata`**（round 19）：`_pyrepl` 一族（pdb/doctest）导入期要 `category`／`combining`／`east_asian_width`。
+        (unicodedata_module::NAME, unicodedata_module::build),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
@@ -424,6 +426,8 @@ pub mod collections_module;
 /// **`_tokenize`** ✓（task-19 ✓）：`Lib/tokenize.py` 的词法底层 ✓。
 pub mod tokenize_module;
 pub mod unicode_tables;
+/// **`unicodedata`**（round 19）：最小诚实面；数据复用 `unicode_tables`（pdb/doctest 的闸）。
+pub mod unicodedata_module;
 
 /// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。
 ///

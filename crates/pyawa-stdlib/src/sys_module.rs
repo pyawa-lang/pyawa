@@ -224,6 +224,61 @@ fn jit_is_active_native(
     jit_query(instance, args, kwargs, "sys._jit.is_active")
 }
 
+// ---- round 19：`sys.monitoring` 最小 import 面（`pdb`／`doctest` 的闸）----
+//
+// 参照 3.14.4 实测：`sys.monitoring` 是 **module 对象**（`<module 'sys.monitoring'>`），
+// `sys.monitoring.events` 是 `types.SimpleNamespace`；`bdb.py:20` 在**导入期**只做
+// `E = sys.monitoring.events` 并用 `E.PY_START | …` 填字典键 ⇒ 本层只需把常量做成**真 int** ✓。
+// pdb 默认 backend='settrace' ⇒ 工具 API（`use_tool_id`／`register_callback` 一族）运行期不调用；
+// 本层**如实**不实现它们（显式调用 ⇒ `NotImplementedError`，**不假返回值** ✓）。
+//
+// **如实偏差** ✗：① `events` 用"属性命名空间"对象（参照是 `types.SimpleNamespace` ⇒ `type` 名／
+// `repr` 不同，属性读法一致）；② 私有的 `_all_events` 未接（bdb 导入期不用）；③ 工具 API 全未接。
+
+/// `sys.monitoring.MISSING`／`DISABLE` 这类"独立哨兵"：参照各是**一个 `object()` 实例**
+/// （两者互不相同）。走真正的 `object()` 构造（`attribute_read` 那条 `call_value` 公开面 ✅）；
+/// `object` 类型在引导期已带 `new` 槽 ⇒ 不会抛。`build` 无返回值通道，构造失败说明引导期坏了 ⇒
+/// 与文件里 `expect("… 已登记")` 同一口径直接 panic（不拿别的对象冒充）。
+fn monitoring_sentinel(instance: &Instance) -> NonNull<Header> {
+    let object_type = instance
+        .type_named("object")
+        .expect("object 在引导期已登记（OM-13）");
+    pyawa_core::executor::call::call_value(instance, object_type.cast(), &[], &[])
+        .expect("`object()` 必须可构造（引导期核心不变量）")
+}
+
+/// 生成 `sys.monitoring` 的"未接线工具 API"原生：真调用一律如实 `NotImplementedError`。
+macro_rules! monitoring_unimplemented_native {
+    ($function:ident => $name:literal $(,)?) => {
+        fn $function(
+            instance: &Instance,
+            _bound: Option<NonNull<Header>>,
+            _args: &[NonNull<Header>],
+            _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+        ) -> Result<NonNull<Header>, ExecError> {
+            Err(instance.raise_builtin_error(
+                "NotImplementedError",
+                concat!(
+                    "`sys.monitoring.",
+                    $name,
+                    "`：round 19 只接 import 期常量（pdb 默认 backend='settrace' 不调用工具 API），真调用如实未实现（随后补）"
+                ),
+            ))
+        }
+    };
+}
+
+monitoring_unimplemented_native!(monitoring_use_tool_id_native => "use_tool_id");
+monitoring_unimplemented_native!(monitoring_free_tool_id_native => "free_tool_id");
+monitoring_unimplemented_native!(monitoring_get_tool_native => "get_tool");
+monitoring_unimplemented_native!(monitoring_set_events_native => "set_events");
+monitoring_unimplemented_native!(monitoring_get_events_native => "get_events");
+monitoring_unimplemented_native!(monitoring_set_local_events_native => "set_local_events");
+monitoring_unimplemented_native!(monitoring_get_local_events_native => "get_local_events");
+monitoring_unimplemented_native!(monitoring_register_callback_native => "register_callback");
+monitoring_unimplemented_native!(monitoring_restart_events_native => "restart_events");
+monitoring_unimplemented_native!(monitoring_clear_tool_id_native => "clear_tool_id");
+
 /// `sys.intern(str)`（第 335 轮）。
 ///
 /// **如实登记的偏差** ✗：本层**没有驻留池**（intern 表）——直接返回**同一个实参对象** ✓
@@ -872,6 +927,118 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         .into_raw()
         .cast::<Header>();
     instance.dict_set(namespace, "_jit", jit_module);
+
+    // **`sys.monitoring`**（round 19）：最小的 **import 期常量** 面（见 `monitoring_sentinel` 上方
+    // 的如实说明）。数值全部照本机 `python3` 3.14.4 逐条实测。
+    let monitoring_namespace = instance.new_dict();
+    // 工具 id 常量（`bdb.MonitoringBackend.__init__` 用 DEBUGGER_ID）。
+    let monitoring_ids: [(&str, i64); 4] = [
+        ("DEBUGGER_ID", 0),
+        ("COVERAGE_ID", 1),
+        ("PROFILER_ID", 2),
+        ("OPTIMIZER_ID", 5),
+    ];
+    for (name, value) in monitoring_ids {
+        let number = instance.new_int(value);
+        instance.dict_set(monitoring_namespace, name, number);
+    }
+    // 两个**互不相同**的 `object()` 哨兵（参照 `MISSING`／`DISABLE` 各是独立实例）。
+    for name in ["MISSING", "DISABLE"] {
+        let sentinel = monitoring_sentinel(instance);
+        instance.dict_set(monitoring_namespace, name, sentinel);
+    }
+    // `sys.monitoring.events`：20 个**整数位**（参照 `types.SimpleNamespace`；见文件头如实偏差）。
+    let events_type = instance.new_attribute_type("sys.monitoring.events");
+    let monitoring_events: [(&str, i64); 20] = [
+        ("NO_EVENTS", 0),
+        ("PY_START", 1),
+        ("PY_RESUME", 2),
+        ("PY_RETURN", 4),
+        ("PY_YIELD", 8),
+        ("CALL", 16),
+        ("LINE", 32),
+        ("INSTRUCTION", 64),
+        ("JUMP", 128),
+        ("BRANCH_LEFT", 256),
+        ("BRANCH_RIGHT", 512),
+        ("STOP_ITERATION", 1024),
+        ("RAISE", 2048),
+        ("EXCEPTION_HANDLED", 4096),
+        ("PY_UNWIND", 8192),
+        ("PY_THROW", 16384),
+        ("RERAISE", 32768),
+        ("C_RETURN", 65536),
+        ("C_RAISE", 131072),
+        ("BRANCH", 262144),
+    ];
+    for (field, value) in monitoring_events {
+        let number = instance.new_int(value);
+        instance.set_type_attribute(events_type, field, number);
+    }
+    let events = instance
+        .alloc(AttributeObject::new(
+            events_type,
+            core::cell::RefCell::new(None),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(monitoring_namespace, "events", events);
+    // 工具 API 的名字要在（运行期真调用 ⇒ 如实 NotImplementedError）。
+    for (name, handler) in [
+        (
+            "use_tool_id",
+            monitoring_use_tool_id_native as pyawa_core::NativeFn,
+        ),
+        (
+            "free_tool_id",
+            monitoring_free_tool_id_native as pyawa_core::NativeFn,
+        ),
+        ("get_tool", monitoring_get_tool_native as pyawa_core::NativeFn),
+        (
+            "set_events",
+            monitoring_set_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "get_events",
+            monitoring_get_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "set_local_events",
+            monitoring_set_local_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "get_local_events",
+            monitoring_get_local_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "register_callback",
+            monitoring_register_callback_native as pyawa_core::NativeFn,
+        ),
+        (
+            "restart_events",
+            monitoring_restart_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "clear_tool_id",
+            monitoring_clear_tool_id_native as pyawa_core::NativeFn,
+        ),
+    ] {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(monitoring_namespace, name, function);
+    }
+    let monitoring_name = instance.new_str("sys.monitoring");
+    instance.dict_set(monitoring_namespace, "__name__", monitoring_name);
+    let monitoring_module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let monitoring_module = instance
+        .alloc(AttributeObject::new(
+            monitoring_module_type,
+            core::cell::RefCell::new(Some(monitoring_namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(namespace, "monitoring", monitoring_module);
 
     // `float_info`／`int_info`（§5.2.3 的第 216 轮口径；载体与 `implementation` 同一种：
     // **属性命名空间**——点号可访问，structseq 的元组行为（下标／len／迭代／repr）未接线）。
