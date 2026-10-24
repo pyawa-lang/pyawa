@@ -457,6 +457,36 @@ SLICE = (
     #（后一个是前一个的符号链接，`shutil.copyfile` 落成逐字节相同的普通文件 ⇒ `CX-8` 仍成立 ✓）。
     "_sysconfigdata__linux_x86_64-linux-gnu.py",
     "_sysconfigdata__x86_64-linux-gnu.py",
+
+    # **task-41 收账（`doctest` 导入链，2026-10-25 ✓）**：官方套件里有 **20** 个测试文件在
+    # 自测/断言阶段 `import doctest`（survey 签名 `ModuleNotFoundError: No module named 'doctest'`
+    # ×20）✓ —— `doctest` 顶层 `import pdb` ⇒ `pdb` 顶层 `import bdb` ⇒ 三个模块一起补 ✓。
+    # `_pyrepl/` 是**包**（本仓已部分存在 ✓）：按上游同版本目录**逐文件对照补齐 11 个缺文件** ✓
+    #（`cmd.py`／`code.py` 等已在库；不重复、不覆盖 ✓）。
+    # 本批 14 个文件都过了 `lib_compile` 的编译期不变量 ✓（无 surrogate／无 `\N{…}`）；
+    # 逐个 import 探针：`doctest`／`from doctest import testmod`／`pdb`／`bdb`／`_pyrepl`／
+    # `_pyrepl.main`／`_pyrepl.utils` 通过 ✓；**如实记**：`_pyrepl.reader`／`readline`／
+    # `simple_interact` 运行期卡 `'function' object has no attribute '__builtins__'`（另一格，
+    # 已立据）、`_pyrepl.unix_console` 缺 C 模块 `termios`（另一格）——`lib_compile` 只看编译 ✓。
+    "bdb.py",
+    "doctest.py",
+    "pdb.py",
+    "_pyrepl/_module_completer.py",
+    "_pyrepl/completing_reader.py",
+    "_pyrepl/fancy_termios.py",
+    "_pyrepl/historical_reader.py",
+    "_pyrepl/reader.py",
+    "_pyrepl/readline.py",
+    "_pyrepl/simple_interact.py",
+    "_pyrepl/terminfo.py",
+    "_pyrepl/unix_console.py",
+    "_pyrepl/utils.py",
+    "_pyrepl/windows_console.py",
+
+    # **task-44 收账（sys-exit ✓，2026-10-25）**：`hashlib` 的**纯 Python 包装**（上游
+    # `/usr/lib/python3.14/hashlib.py` 逐字节）—— `import hashlib` 在**导入期**就要它 ✓，
+    # 由 task-44 落地（crates 侧 `_hashlib` 一族）；按**一处真相**由本 SLICE 管同步面 ✓。
+    "hashlib.py",
 )
 
 #: `--sync` 要**跳过**的已知坏文件（相对上游 stdlib 的路径 ⇒ 原由）。**只影响 `--sync`** ✓；
