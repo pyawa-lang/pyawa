@@ -39,6 +39,13 @@ pub(super) struct WithCleanupPlan {
     pub(super) exit_labels: Vec<usize>,
     /// 清理块出口要**重放**的余部（`emit_rest_and_tail`）。
     pub(super) rest: Vec<Statement>,
+    /// **余部里含 `with`／`try` 时的"余部副本起点"标签**（task-32 ✓）：连续 `with` 的清理块
+    /// 正常完成若照旧重放余部 ⇒ 每个 with 把后面所有 with 再复制一份 ⇒ **指数爆炸** ✗。
+    /// 有标签时清理块（最外层 `index == 0`）改用 `JUMP_BACKWARD_NO_INTERRUPT` 跳回它
+    /// （参照 `with a: … with b: …` 的 `POP_EXCEPT; JUMP_BACKWARD_NO_INTERRUPT` 同形 ✓）。
+    pub(super) continuation: Option<usize>,
+    /// 正常出口余部那份是否终止（跳回时沿用它，免得把"终止性"算错 ✓）。
+    pub(super) normal_terminated: bool,
     /// 整条 `with` 语句的跨度。
     pub(super) span: Span,
 }
@@ -242,7 +249,7 @@ impl Emitter {
 
     pub(super) fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
-            Expression::Float (..) | Expression::Map (..) | Expression::TupleLiteral (..) | Expression::SliceLiteral { .. } | Expression::List (..) | Expression::Constant (..) | Expression::SetLiteral (..) | Expression::BigInt (..) | Expression::Int (..) | Expression::Str (..) | Expression::Bytes (..) => self.emit_expression_literals(expression),
+            Expression::Float (..) | Expression::Imaginary (..) | Expression::Map (..) | Expression::TupleLiteral (..) | Expression::SliceLiteral { .. } | Expression::List (..) | Expression::Constant (..) | Expression::SetLiteral (..) | Expression::BigInt (..) | Expression::Int (..) | Expression::Str (..) | Expression::Bytes (..) => self.emit_expression_literals(expression),
             Expression::Subscript (..) | Expression::ChainSubject (..) | Expression::Lambda { .. } | Expression::Attribute (..) | Expression::Name (..) | Expression::Call { .. } | Expression::Starred (..) | Expression::Walrus { .. } => self.emit_expression_names(expression),
             Expression::Comprehension { .. } => self.emit_expression_comprehensions(expression),
             Expression::FString { .. } => self.emit_expression_fstrings(expression),

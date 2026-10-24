@@ -1639,3 +1639,74 @@ with_value = with_target(Cm(), Holder())
     let with_value = namespace_lookup(&vm, namespace, "with_value");
     assert_eq!(vm.instance.int_value(with_value), Some(7), "`with cm as holder.value` 的属性目标");
 }
+
+// --------------------------------------------------------------------------- #
+// task-32：**连续** `try`／`with` 块（≥16）⇒ 余部重放指数爆炸（StackUnderflow／挂死）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn consecutive_try_blocks_do_not_overflow_or_hang() {
+    // 修复前 N=16 ⇒ `帧操作失败：StackUnderflow`、N=17 ⇒ 挂死（每个 try 的处理块把"后面所有
+    // try"再复制一份 ⇒ 2^N 代码量）。修复后：处理块正常完成改为**跳回余部副本起点**（与参照
+    // `two_tries` 的 `POP_EXCEPT; JUMP_BACKWARD_NO_INTERRUPT` 同形）⇒ 代码量线性。
+    let mut source = String::from("v = 0\n");
+    for index in 0..64 {
+        source.push_str(&format!(
+            "try:\n    v = {index}\nexcept BaseException:\n    pass\n"
+        ));
+    }
+    source.push_str("module_result = v\n");
+    // 函数里同样来一遍（作用域收尾那条路也要走 ✓）
+    source.push_str("def f():\n    v = 0\n");
+    for index in 0..64 {
+        source.push_str(&format!(
+            "    try:\n        v = {index}\n    except BaseException:\n        pass\n"
+        ));
+    }
+    source.push_str("    return v\nfunction_result = f()\n");
+    let vm = Vm::new();
+    let namespace = run_source(&vm, &source);
+    let module_result = namespace_lookup(&vm, namespace, "module_result");
+    assert_eq!(
+        vm.instance.int_value(module_result),
+        Some(63),
+        "64 个连续 try/except：模块级"
+    );
+    let function_result = namespace_lookup(&vm, namespace, "function_result");
+    assert_eq!(
+        vm.instance.int_value(function_result),
+        Some(63),
+        "64 个连续 try/except：函数内"
+    );
+}
+
+#[test]
+fn consecutive_with_blocks_do_not_overflow_or_hang() {
+    // 同一机制也压 `with`：清理块（`index == 0`）先前照旧重放余部 ⇒ 连续 with 同样指数爆炸。
+    let mut source = String::from(
+        "class CM:\n    def __enter__(self):\n        return 1\n    def __exit__(self, *args):\n        return False\ncm = CM()\nv = 0\n",
+    );
+    for index in 0..64 {
+        source.push_str(&format!("with cm:\n    v = v + {index}\n"));
+    }
+    source.push_str("module_result = v\n");
+    source.push_str("def f():\n    v = 0\n");
+    for index in 0..64 {
+        source.push_str(&format!("    with cm:\n        v = v + {index}\n"));
+    }
+    source.push_str("    return v\nfunction_result = f()\n");
+    let vm = Vm::new();
+    let namespace = run_source(&vm, &source);
+    let module_result = namespace_lookup(&vm, namespace, "module_result");
+    assert_eq!(
+        vm.instance.int_value(module_result),
+        Some(2016),
+        "64 个连续 with：模块级（0+…+63 = 2016）"
+    );
+    let function_result = namespace_lookup(&vm, namespace, "function_result");
+    assert_eq!(
+        vm.instance.int_value(function_result),
+        Some(2016),
+        "64 个连续 with：函数内"
+    );
+}

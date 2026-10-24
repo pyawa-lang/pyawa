@@ -285,11 +285,18 @@ impl Emitter {
         //（`Lib/` 里实测有一条重算后正好 256 ✓）⇒ 加宽之后要看下一轮还需不需要插 ✓；
         // 每轮只增不减 ⇒ 必然收敛 ✓（上限 4 轮 ✓）。重复前缀**不会**发生 ✓：上一轮插的前缀是**独立的词** ✓
         // 会被重建原样拷贝 ✓，而本轮计划里没有它就自然不插 ✓。
-        for _ in 0..4 {
+        // 每轮只增不减 ⇒ 必然收敛 ✓；上限 64 只是防御（线性化之后的连续 `try`／`with` 也只在
+        // 几轮内收敛 ✓）。**不能**像先前那样只迭代 4 轮：加宽会级联（给 A 插前缀会把 B 顶过
+        // 1 字节 ⇒ 下一轮又给 B 插）——轮数不够时剩下的跳转实参被截断 ⇒ 跳到错误块 ⇒
+        // `StackUnderflow`／死循环（task-32 的 16 连续 `try` 正是这一格 ✓）。
+        for _ in 0..64 {
             self.widen_once();
             if self.wide_jumps.is_empty() {
                 break;
             }
+        }
+        if !self.wide_jumps.is_empty() && crate::diag::flag("PYAWA_JUMP_DEBUG") {
+            eprintln!("[jump] 加宽未收敛（64 轮）：{:?}", self.wide_jumps);
         }
     }
 
@@ -355,9 +362,7 @@ impl Emitter {
             }
         }
         self.widen_shift = shift.clone();
-        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
-            eprintln!("[jump] 加宽插入 {} 个词（码元总数 {word_count} ⇒ {}）", inserted, word_count + inserted);
-        }
+
         // **异常表偏移平移**（条目里存的是字节偏移 ⇒ 乘 2 换成码元再查插入数 ✓）
         for entry in &mut self.exception_entries {
             for field in [&mut entry.0, &mut entry.1, &mut entry.2] {

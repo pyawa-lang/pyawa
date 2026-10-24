@@ -69,6 +69,17 @@ impl Emitter {
                     plan.exit_labels[index - 1],
                     true,
                 );
+            } else if let Some(label) = plan.continuation {
+                // **清理块正常完成 ⇒ 跳回余部副本起点**（task-32 ✓）：连续 `with` 时余部只发
+                // 一份（正常出口那份）⇒ 不再指数复制 ✓；终止性沿用正常出口那份 ✓。
+                self.emit_directed_jump(
+                    context_span,
+                    opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                        .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                    label,
+                    true,
+                );
+                terminated &= plan.normal_terminated;
             } else {
                 terminated &= self.emit_rest_and_tail(&plan.rest, plan.span, None)?;
             }

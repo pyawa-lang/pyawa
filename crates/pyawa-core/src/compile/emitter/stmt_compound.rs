@@ -225,6 +225,15 @@ impl Emitter {
                 // **逆序**的退出调用（内层先退）；每条记一个标签，供清理块跳回
                 let mut exit_labels: Vec<usize> = vec![0; items.len()];
                 let mut terminated = true;
+                // **连续 `with` 的余部重放防爆** ✓（task-32 ✓）：余部里含 `with`／`try` 时，
+                // 在最外层清理块重放余部之前打一个标签；清理块正常完成改**跳回**这里（与参照
+                // `with a: … with b: …` 的 `JUMP_BACKWARD_NO_INTERRUPT` 同形 ✓）⇒ 代码量线性。
+                // 余部不含这两种语句时保持原样（`with … z = 1` 的尾部复制是参照行为 ✓，夹具守着）。
+                let needs_continuation = !dead_normal_exit
+                    && rest.iter().any(|statement| {
+                        matches!(statement, Statement::Try { .. } | Statement::With { .. })
+                    });
+                let mut continuation: Option<usize> = None;
                 if !dead_normal_exit {
                     for index in (0..items.len()).rev() {
                         let context_span = context_spans[index];
@@ -232,6 +241,11 @@ impl Emitter {
                         self.mark_label(label);
                         exit_labels[index] = label;
                         self.emit_with_exit_call(context_span, none_index);
+                    }
+                    if needs_continuation {
+                        let label = self.new_label();
+                        self.mark_label(label);
+                        continuation = Some(label);
                     }
                     terminated = self.emit_rest_and_tail(rest, *span, None)?;
                 }
@@ -245,6 +259,8 @@ impl Emitter {
                     exit_labels: exit_labels.clone(),
                     rest: rest.to_vec(),
                     span: *span,
+                    continuation,
+                    normal_terminated: terminated,
                 };
                 terminated &= self.emit_with_cleanups(&plan)?;
                 self.epilogue_span = context_spans[0];
@@ -321,6 +337,26 @@ impl Emitter {
                 let unreachable_rest = handlers.is_empty()
                     && block_returns_or_raises(body)
                     && !block_terminates(finally_body);
+                // **连续 `try` 的余部重放防爆** ✓（task-32 ✓）：处理块**正常完成**时若照旧
+                // `emit_rest_and_tail(rest)` 重放余部，而余部里又是 `try` ⇒ 每个 try 把"后面所有
+                // try"各复制一份（正常出口一份、每个处理块一份）⇒ **指数爆炸**（16 个连续
+                // try/except ⇒ 代码 ~2.2 MB ⇒ 跳转实参溢出 ⇒ StackUnderflow／死循环 ✓）。
+                // 参照在 `two_tries` 里给的是 `POP_EXCEPT; JUMP_BACKWARD_NO_INTERRUPT → 余部起点`
+                //（不复制余部 ✓）⇒ 这里同形：**余部里含 `try`／`with`（会再重放余部的语句）时**，
+                // 在正常出口余部前面打个标签，处理块正常完成**跳回去**而不是复制。
+                // 不含这两种语句时保持原样（逐字节夹具里 `try … except … z = 3` 的"尾部复制"
+                // 就是参照的行为 ⇒ 不能一律改跳 ✓）。
+                let needs_continuation = !has_finally
+                    && !unreachable_rest
+                    && rest.iter().any(|statement| {
+                        matches!(statement, Statement::Try { .. } | Statement::With { .. })
+                    });
+                let mut continuation_label: Option<usize> = None;
+                if needs_continuation {
+                    let label = self.new_label();
+                    self.mark_label(label);
+                    continuation_label = Some(label);
+                }
                 let mut all_terminate = if unreachable_rest {
                     true
                 } else if self.block_depth == 1 {
@@ -471,6 +507,18 @@ impl Emitter {
                             finally_label,
                             true,
                         );
+                    } else if let Some(label) = continuation_label {
+                        // **处理块正常完成 ⇒ 跳回余部副本起点**（task-32 ✓；与参照
+                        // `two_tries` 的 `POP_EXCEPT; JUMP_BACKWARD_NO_INTERRUPT` 同形 ✓）。
+                        // 余部只发一份（正常出口那份）⇒ 连续 try 的代码量线性 ✓。
+                        self.emit_directed_jump(
+                            self.last_span,
+                            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                                .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                            label,
+                            true,
+                        );
+                        all_terminate &= self.block_depth == 1;
                     } else if self.block_depth == 1 {
                         all_terminate &= self.emit_rest_and_tail(rest, *span, None)?;
                     } else {
