@@ -358,25 +358,104 @@ pub(crate) fn list_extend_native(
     }
     Ok(instance.retain(instance.singletons().none()))
 }
+/// **`list.pop([index])`**（task-33）：无参弹**末项** ✓；带下标按下标弹 ✓（负数从尾部数 ✓）。
+///
+/// 文案逐条照参照 3.14.4 实测：
+/// - 空表（两种形态）⇒ `IndexError: pop from empty list` ✓（`[].pop(0)` 也是这条 ✓）
+/// - 非空越界（含负下标越过头部）⇒ `IndexError: pop index out of range` ✓
+/// - 非整数（且无 `__index__`）⇒ `TypeError: '<类型>' object cannot be interpreted as an integer` ✓
+/// - 关键字实参 ⇒ `TypeError: list.pop() takes no keyword arguments` ✓
+/// - 位置实参多于 1 个 ⇒ `TypeError: pop expected at most 1 argument, got N` ✓
+///
+/// 下标的整数面走 `PyNumber_Index` 两步：`int` 快路径 ✓，其次 `__index__` 协议 ✓。
 pub(crate) fn list_pop_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let list = bound_list(instance, bound)?;
-    if !args.is_empty() {
+    if !kwargs.is_empty() {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "pop() 目前只接无参（带下标随后补）",
+            "list.pop() takes no keyword arguments",
+        ));
+    }
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("pop expected at most 1 argument, got {}", args.len()),
         ));
     }
     // SAFETY: 绑定的是本类型的存活对象。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    match object.pop_last() {
-        Some(item) => Ok(item),
-        None => Err(instance.raise_builtin_error("IndexError", "pop from empty list")),
+    let Some(index_arg) = args.first() else {
+        return match object.pop_last() {
+            Some(item) => Ok(item),
+            None => Err(instance.raise_builtin_error("IndexError", "pop from empty list")),
+        };
+    };
+    let length = object.len();
+    if length == 0 {
+        return Err(instance.raise_builtin_error("IndexError", "pop from empty list"));
     }
+    let index = match list_pop_index(instance, *index_arg)? {
+        Some(index) => index,
+        None => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!(
+                    "'{}' object cannot be interpreted as an integer",
+                    instance.type_name(instance.type_of(*index_arg))
+                ),
+            ))
+        }
+    };
+    let Some(index) = index else {
+        // 大整数下标：一定在表外（表长装得下 `usize` ⇒ 不可能有这么大的合法下标 ✓）
+        return Err(instance.raise_builtin_error("IndexError", "pop index out of range"));
+    };
+    let position = if index < 0 {
+        index + length as i64
+    } else {
+        index
+    };
+    if position < 0 || position as usize >= length {
+        return Err(instance.raise_builtin_error("IndexError", "pop index out of range"));
+    }
+    object
+        .remove_at(position as usize)
+        .ok_or_else(|| instance.raise_builtin_error("IndexError", "pop index out of range"))
+}
+
+/// `list.pop` 的下标转换（`PyNumber_Index` 的最小面 ✓）：
+/// - `int`（含 `bool`）⇒ 快路径 ✓；
+/// - 装不进 `i64` 的大整数 ⇒ `Some(None)`（调用方按"越界"报 ✓）；
+/// - 有 `__index__` ⇒ 调它、结果必须是 `int` ✓；
+/// - 其余 ⇒ `None`（调用方报 "cannot be interpreted as an integer" ✓）。
+fn list_pop_index(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Option<Option<i64>>, crate::ExecError> {
+    if let Some(integer) = instance.int_of(value) {
+        return Ok(Some(integer.to_i64().or(None)));
+    }
+    if let Some(method) = crate::executor::attribute_optional(instance, value, "__index__")? {
+        let outcome = crate::executor::call_value(instance, method, &[], &[]);
+        instance.release(method);
+        let result = outcome?;
+        let converted = instance.int_of(result);
+        let type_name = instance.type_name(instance.type_of(result));
+        instance.release(result);
+        let Some(integer) = converted else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("__index__ returned non-int (type {type_name})"),
+            ));
+        };
+        return Ok(Some(integer.to_i64().or(None)));
+    }
+    Ok(None)
 }
 /// 见 [`tuple_traverse`]。
 pub(crate) unsafe fn list_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {

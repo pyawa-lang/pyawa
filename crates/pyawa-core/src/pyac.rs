@@ -272,6 +272,15 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(12);
             out.extend_from_slice(&bits.to_le_bytes());
         }
+        // **复数常量**（task-29 ✓）：标签 19 ＝ 实部位模式 ＋ 虚部位模式（各 8 字节 LE）✓。
+        Constant::Complex {
+            real_bits,
+            imag_bits,
+        } => {
+            out.push(19);
+            out.extend_from_slice(&real_bits.to_le_bytes());
+            out.extend_from_slice(&imag_bits.to_le_bytes());
+        }
         Constant::Str(text) => {
             out.push(2);
             write_text(&mut out, text);
@@ -465,6 +474,11 @@ impl UnitReader<'_> {
             1 => Constant::Int(self.i64()?),
             // 位模式按  读回来再转（两种表示无损往返 ✓）
             12 => Constant::Float(self.i64()? as u64),
+            // **复数常量**（task-29 ✓）：实部／虚部两个位模式 ✓
+            19 => Constant::Complex {
+                real_bits: self.i64()? as u64,
+                imag_bits: self.i64()? as u64,
+            },
             // **任意精度整数字面量**（第 285 轮）
             13 => Constant::BigInt(self.text()?),
             // **注解表达式**（第 287 轮）

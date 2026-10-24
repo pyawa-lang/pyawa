@@ -84,6 +84,21 @@ fn render_constant(constant: &Constant) -> String {
                 format!("float:{value}")
             }
         }
+        // **复数常量**（task-29 ✓）：与浮点同一套数字渲染（实部:虚部；夹具里暂无该形状 ✓）
+        Constant::Complex {
+            real_bits,
+            imag_bits,
+        } => {
+            let show = |bits: u64| {
+                let value = f64::from_bits(bits);
+                if value.is_finite() && value == value.trunc() && value.abs() < 1e16 {
+                    format!("{value:.1}")
+                } else {
+                    format!("{value}")
+                }
+            };
+            format!("complex:{}:{}", show(*real_bits), show(*imag_bits))
+        }
         Constant::Str(text) => format!("str:{text}"),
         // `P1-12` 的 `bytes` 字面量：记成十六进制（与生成器同一口径）
         // 常量切片：记成 `slice(a, b, c)`（`None` 照写；与生成器同一口径）

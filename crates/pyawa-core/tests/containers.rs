@@ -11,7 +11,7 @@ use core::cell::RefCell;
 use core::ptr::NonNull;
 
 use pyawa_core::{
-    DictObject, Header, Instance, ListObject, SetObject, StrObject, TupleObject, Value,
+    DictObject, ExecError, Header, Instance, ListObject, SetObject, StrObject, TupleObject, Value,
 };
 
 use common::{emit, op, Vm};
@@ -559,4 +559,133 @@ fn contains_op_matches_the_reference() {
         message.as_deref(),
         Some("'in <string>' requires string as left operand, not int")
     );
+}
+
+/// **`deque` 的真值**（task-33 真 bug 修 ✗）：空 deque ⇒ 假、非空 ⇒ 真 ✓（与 `len` 同口径 ✓）。
+/// 先前真值分派里缺这一支 ⇒ 落到"`__bool__`／`__len__` 协议都没有 ⇒ 默认为真" ✗
+/// ⇒ `bool(deque())` 与参照相反 ⇒ `Lib/contextlib.py` 的 `ExitStack.__exit__` 死循环 ✓。
+#[test]
+fn deque_truthiness_matches_the_reference() {
+    let vm = Vm::new();
+    let deque_type = vm.instance.type_named("deque").expect("deque 已登记");
+    let constructor = vm.instance.type_value(deque_type);
+    let deque = pyawa_core::call_value(&vm.instance, constructor, &[], &[]).expect("deque()");
+    assert!(
+        !vm.instance.truthiness_of(deque).expect("真值判定"),
+        "bool(deque()) 应当是 False"
+    );
+    let append = pyawa_core::attribute_read(&vm.instance, deque, "append").expect("append 方法");
+    let one = vm.instance.new_int(1);
+    pyawa_core::call_value(&vm.instance, append, &[one], &[]).expect("append(1)");
+    assert!(
+        vm.instance.truthiness_of(deque).expect("真值判定"),
+        "bool(deque([1])) 应当是 True"
+    );
+    let clear = pyawa_core::attribute_read(&vm.instance, deque, "clear").expect("clear 方法");
+    pyawa_core::call_value(&vm.instance, clear, &[], &[]).expect("clear()");
+    assert!(
+        !vm.instance.truthiness_of(deque).expect("真值判定"),
+        "clear() 之后应当回到 False"
+    );
+}
+
+/// 一次调用应当抛出的（类型名, 消息）——收 `Result<NonNull<Header>, ExecError>`。
+fn raised(instance: &Instance, outcome: Result<NonNull<Header>, ExecError>) -> (String, String) {
+    match outcome {
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 由实例保活。
+            let ty = unsafe { exception.as_ref() }.ty();
+            // SAFETY: 同上。
+            let type_name = unsafe { ty.as_ref() }.name().to_owned();
+            // SAFETY: 同上。
+            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+                .message_with(instance)
+                .unwrap_or_default();
+            (type_name, message)
+        }
+        other => panic!("应当抛异常，实际 {other:?}"),
+    }
+}
+
+/// **`list.pop([index])`**（task-33 接线）：下标/负下标/越界/非整数/多实参/关键字的
+/// 结果与文案**逐条照参照 3.14.4**（对拍脚本 `target/recon/t33_probe.py`），并核对真变异
+///（长度与元素顺序都要对 ✓）。
+#[test]
+fn list_pop_accepts_an_index() {
+    let vm = Vm::new();
+    let make_list = |values: &[i64]| {
+        let items: Vec<NonNull<Header>> =
+            values.iter().map(|value| vm.instance.new_int(*value)).collect();
+        vm.instance.new_list(items)
+    };
+    let list = make_list(&[10, 20, 30, 40]);
+    let pop = pyawa_core::attribute_read(&vm.instance, list, "pop").expect("pop 方法");
+    let call = |list: NonNull<Header>, args: &[NonNull<Header>]| {
+        let method = pyawa_core::attribute_read(&vm.instance, list, "pop").expect("pop 方法");
+        pyawa_core::call_value(&vm.instance, method, args, &[])
+    };
+    // `pop(1)` ⇒ 20，余 `[10, 30, 40]`
+    let one = vm.instance.new_int(1);
+    let value = call(list, &[one]).expect("pop(1)");
+    assert_eq!(vm.instance.int_value(value), Some(20));
+    assert_eq!(
+        vm.instance.object_repr(list).expect("repr"),
+        "[10, 30, 40]"
+    );
+    // `pop(-2)` ⇒ 30，余 `[10, 40]`
+    let minus_two = vm.instance.new_int(-2);
+    let value = call(list, &[minus_two]).expect("pop(-2)");
+    assert_eq!(vm.instance.int_value(value), Some(30));
+    assert_eq!(vm.instance.object_repr(list).expect("repr"), "[10, 40]");
+    // `pop()` ⇒ 末项 40，余 `[10]`
+    let value = pyawa_core::call_value(&vm.instance, pop, &[], &[]).expect("pop()");
+    assert_eq!(vm.instance.int_value(value), Some(40));
+    assert_eq!(vm.instance.object_repr(list).expect("repr"), "[10]");
+    // 空表 ⇒ `pop from empty list`（`pop()` 与 `pop(0)` 同一条 ✓）
+    let empty = make_list(&[]);
+    let (type_name, message) = raised(&vm.instance, call(empty, &[]));
+    assert_eq!(type_name, "IndexError");
+    assert_eq!(message, "pop from empty list");
+    let zero = vm.instance.new_int(0);
+    let (type_name, message) = raised(&vm.instance, call(empty, &[zero]));
+    assert_eq!(type_name, "IndexError");
+    assert_eq!(message, "pop from empty list");
+    // 越界（正/负）⇒ `pop index out of range`
+    let full = make_list(&[1, 2, 3]);
+    for index in [99, -4] {
+        let argument = vm.instance.new_int(index);
+        let (type_name, message) = raised(&vm.instance, call(full, &[argument]));
+        assert_eq!(type_name, "IndexError", "pop({index})");
+        assert_eq!(message, "pop index out of range", "pop({index})");
+    }
+    // 非整数 ⇒ 参照文案（类型名照实）
+    for (value, expected) in [
+        (vm.instance.new_float(1.5), "'float' object cannot be interpreted as an integer"),
+        (vm.instance.new_str("x"), "'str' object cannot be interpreted as an integer"),
+        (
+            vm.instance.retain(vm.instance.singletons().none()),
+            "'NoneType' object cannot be interpreted as an integer",
+        ),
+    ] {
+        let (type_name, message) = raised(&vm.instance, call(full, &[value]));
+        assert_eq!(type_name, "TypeError");
+        assert_eq!(message, expected);
+    }
+    // `bool` 是 `int` 的真子类 ⇒ `pop(True)` 按下标 1 弹（参照一致 ✓）
+    let truth = vm.instance.retain(vm.instance.singletons().boolean(true));
+    let value = call(full, &[truth]).expect("pop(True)");
+    assert_eq!(vm.instance.int_value(value), Some(2));
+    // 多实参／关键字 ⇒ 参照文案
+    let one = vm.instance.new_int(1);
+    let (type_name, message) = raised(&vm.instance, call(full, &[one, one]));
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(message, "pop expected at most 1 argument, got 2");
+    let key = vm.instance.new_str("index");
+    let method = pyawa_core::attribute_read(&vm.instance, full, "pop").expect("pop 方法");
+    let (type_name, message) = raised(
+        &vm.instance,
+        pyawa_core::call_value(&vm.instance, method, &[], &[(key, one)]),
+    );
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(message, "list.pop() takes no keyword arguments");
 }

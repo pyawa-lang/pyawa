@@ -31,6 +31,24 @@ impl Instance {
             .cast::<Header>()
     }
 
+    /// **复数对象** ✓（task-30／P3-34）：`real` ＋ `imag`（**一份新引用** ✓）。
+    ///
+    /// 类型是登记表里那个**真正的 `complex`** ✓（`type(1j) is complex` 面成立 ✓），
+    /// 载荷为 [`crate::builtin_objects::ComplexObject`]。`task-29` 的 `LOAD_CONST` 实例化
+    /// （字面量／常量）与 `task-31` 的构造器都调这里 ✓。
+    pub fn new_complex(&self, real: f64, imag: f64) -> NonNull<Header> {
+        let complex_type = self
+            .type_named("complex")
+            .expect("complex 在引导期已登记（OM-13）");
+        self.alloc(crate::builtin_objects::ComplexObject::new(
+            complex_type,
+            real,
+            imag,
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
     /// 造一个 `list`（**接手**一批新引用，`CM-4` 的 stdlib 要用）。
     pub fn new_list(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
         let object = self.alloc(ListObject::new(

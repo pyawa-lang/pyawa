@@ -142,6 +142,8 @@ pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         Some(Lexeme::BigInt(text)) => (Expression::BigInt(text.clone(), span), cursor + 1),
         // **浮点字面量**（第 127 轮）：值与位点都来自词素 ✓
         Some(Lexeme::Float(bits)) => (Expression::Float(*bits, span), cursor + 1),
+        // **虚部字面量**（task-29 ✓）：`1j`／`1.5j`／`1e3j` —— 词素里是虚部位模式 ✓
+        Some(Lexeme::Imaginary(bits)) => (Expression::Imaginary(*bits, span), cursor + 1),
         // **bytes 的隐式拼接**（第 314 轮）：与字符串同一套口径 ✓ —— 相邻 `b"…"` **合成一个常量** ✓。
         // 动因：`Lib/base64.py:437` 的
         // `_b85alphabet = (b"0123456789…" \n b"abcdef…")` 跨行相邻 ⇒ 先前**不并** ✗ ⇒ 括号那一组

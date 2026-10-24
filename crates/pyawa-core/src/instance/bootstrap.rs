@@ -569,16 +569,23 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::range_getattr),
         );
 
-        // **`complex`** ✓（第 640 轮）：`Lib/copyreg.py` 模块级要用它 ✓。**如实说** ✗：本层还没有复数
-        // 语义 ✓ ⇒ 照 `memoryview` 那一款办：载荷借 `BytesObject` ✓、**不挂构造槽** ✗（造出真正的
-        // `complex` 随后补 ✓）—— 只满足"**名字必须是类型**"这一条 ✓。
-        let mut complex_slots = crate::builtin_objects::BytesObject::slots();
-        complex_slots.new = None;
-        // `alloc_type_raw` 自己按名字注册 ✓ ⇒ 绑定只作可读性 ✓（不用就加前缀，免得触警告 ✓）。
-        let _complex_type = self.alloc_type_raw(
+        // **`complex`** ✓（task-30／P3-34）：真正的复数载荷（`ComplexObject{real, imag}` ✓）＋
+        // 构造／表示／属性槽 ✓。第 640 轮的占位（借 `BytesObject`、无构造槽 ✗）已替换——
+        // `task-29` 的 `LOAD_CONST` 实例化与 `task-31` 的 stdlib 构造器都按真类型走 ✓。
+        let complex_type = self.alloc_type_raw(
             "complex",
-            core::mem::size_of::<crate::builtin_objects::BytesObject>(),
-            complex_slots,
+            core::mem::size_of::<crate::builtin_objects::ComplexObject>(),
+            crate::builtin_objects::ComplexObject::slots(),
+        );
+        // **层次要登记** ✓（`OM-13`／`TS-41`：MRO 由 C3 算，禁止手写 ✓）：先前占位类型漏了这一步 ✗
+        // ⇒ `complex.__mro__` 为空、`issubclass(complex, object)` 假、类型字典里的方法也查不到 ✗。
+        assert!(
+            self.register_bases(
+                complex_type,
+                vec![self.type_named("object").expect("object 已登记")],
+            )
+            .is_some(),
+            "OM-13：`complex` 的基类是 `object`"
         );
 
         // **`frozenset`** ✓（第 236 轮）：与 `set` **同载荷同槽** ✓（`set_new` 收 **class** ⇒ 直接复用 ✓），
@@ -1218,6 +1225,34 @@ impl Instance {
                 self.type_named("object").expect("object 已登记"),
                 "__init_subclass__",
                 crate::builtin::object::object_init_subclass_native as crate::NativeFn,
+            ),
+            // **`complex` 的类型级方法面**（task-30）：参照里 `complex.__complex__(z)`／
+            // `complex.conjugate(z)`／`complex.__hash__(z)`／`complex.__abs__(z)` 都可用 ✓
+            //（实例面是 `getattr` 槽 ✓，这里补类型级入口 ✓；未绑定时接收者＝第一个位置实参 ✓）。
+            (
+                self.type_named("complex").expect("complex 已登记"),
+                "__complex__",
+                crate::builtin_objects::complex_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("complex").expect("complex 已登记"),
+                "conjugate",
+                crate::builtin_objects::complex_conjugate_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("complex").expect("complex 已登记"),
+                "__hash__",
+                crate::builtin_objects::complex_hash_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("complex").expect("complex 已登记"),
+                "__abs__",
+                crate::builtin_objects::complex_abs_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("complex").expect("complex 已登记"),
+                "__bool__",
+                crate::builtin_objects::complex_bool_native as crate::NativeFn,
             ),
             // **`tuple.__new__`** ✓（第 728 轮）：属性通道可达 ✓（namedtuple／`CodecInfo`／`dis`／`enum` 的前置 ✓）。
             (

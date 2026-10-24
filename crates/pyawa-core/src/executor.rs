@@ -516,6 +516,19 @@ pub fn unary_public(
         };
         return Ok(instance.new_float(result));
     }
+    // **复数的一元面**（task-30）：`-z`／`+z` 给新复数 ✓；`abs(z)` ⇒ `hypot(real, imag)`
+    //（**float** ✓，实测 `abs(3+4j) == 5.0` ✓）。
+    if let Some((real, imag)) = instance.complex_value(operand) {
+        return match symbol {
+            "-" => Ok(instance.new_complex(-real, -imag)),
+            "+" => Ok(instance.new_complex(real, imag)),
+            "abs" => Ok(instance.new_float(real.hypot(imag))),
+            _ => Err(ExecError::Unsupported {
+                opcode,
+                what: "unary_public 收到了没见过的一元运算符（复数）",
+            }),
+        };
+    }
     // **实例的 dunder 面**（第 219 轮；`MS-19`：能力缺口必须修 ✓）：`-obj` ⇒ `__neg__` ✓、
     // `+obj` ⇒ `__pos__` ✓、`abs(obj)` ⇒ `__abs__` ✓、`~obj` ⇒ `__invert__` ✓。
     // 先前实例**一律**落到最后那句 `TypeError` ✗ —— 实测 `Lib/datetime` 族

@@ -6,6 +6,7 @@
 use crate::builtin_objects::BoolObject;
 use crate::builtin_objects::BytesObject;
 use core::cell::Cell;
+use crate::builtin_objects::DequeObject;
 use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
 use crate::builtin_objects::FloatObject;
@@ -203,6 +204,23 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) 
         //  在 IEEE 里为**假** ⇒ 与参照一致（ 为假 ✓）；
         //  为真 ⇒  为真 ✓（与参照一致）。
         return Ok(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value() != 0.0);
+    }
+    // **`complex` 的真值**（task-30）：`real != 0.0 || imag != 0.0` ✓（`nan` 为真 ✓，
+    // 参照实测 `bool(complex(0,0)) is False` ✓）。放在 `__bool__` 协议之前（内建规则优先 ✓）。
+    if let Some((real, imag)) = instance.complex_value(raw) {
+        return Ok(real != 0.0 || imag != 0.0);
+    }
+    // **`deque` 的真值**（真 bug 修 ✗；sys-exit 在 `unittest.mock.patch` 收尾处抓到）：非空为真 ✓
+    // —— 与 `len` 同一口径 ✓。先前缺这一条 ⇒ 落到下面的"`__bool__`／`__len__` 协议"都没有 ⇒
+    // **默认为真** ✗ ⇒ 空 deque 恒真 ✗ ⇒ `Lib/contextlib.py` 的 `ExitStack.__exit__`
+    //（`while self._exit_callbacks: …`）死循环 ✗ ⇒ `patch().stop()` 报
+    // `pop from an empty deque` ✓（实测复现：`bool(deque())` 与参照相反 ✓）。
+    if instance
+        .type_named("deque")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
+        // SAFETY: 类型身份已确认是 deque 族。
+        return Ok(unsafe { &*raw.as_ptr().cast::<DequeObject>() }.len() != 0);
     }
     // **`set` 一族**（第 103 轮）：非空为真 ✓（与 `len` 同一口径 ✓）—— 上限榜那一整族 **119** 个模块
     // 的第一句错就是 `if some_set:` ✓（`Lib/enum.py` 里满是这样用 ✓）。认**子类型** ✓。

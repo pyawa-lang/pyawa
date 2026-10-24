@@ -127,6 +127,10 @@ SLICE = (
     # `sys.version`，其文件早已在表里 ✓）。包用 `**/*.py`（同 `tomllib` 先例 ✓；只吃源文件 ✓）。
     "multiprocessing/**/*.py",
     "unittest/**/*.py",
+    # **task-31 收账**（P3-34 ✓）：`1j` 虚数字面量（task-29）＋ `complex()` 构造面（task-31）落地后，
+    # `unittest/mock.py` 过了 `lib_compile` 的编译期不变量、也能作为脚本跑通 ⇒ 从 `SYNC_EXCLUDE`
+    # 移回这里逐字节同步（此前因"虚数字面量 `1j`"被剔除 ✓）。
+    "unittest/mock.py",
     "wsgiref/handlers.py",
     "wsgiref/util.py",
     # **task-26 收账**（第 413 轮 ✓）：`tuple.index`（asyncio 链的最后一格）＋ `from M import *`
@@ -441,10 +445,11 @@ SLICE = (
 #: 先例：`36c450b` 把 `multiprocessing/heap.py`／`unittest/mock.py` 两处**按纪律剔除** ✓
 #: （链式赋值非名字目标／虚数字面量 `1j`）——但 `multiprocessing/**/*.py` 与 `unittest/**/*.py`
 #: 两条既有 glob 会把它们重新拉回来 ✗ ⇒ 这里显式排除 ✓（否则"跑一次 `--sync` 就红闸门" ✗）。
+#: **task-31 收账**（P3-34 ✓）：`unittest/mock.py` 已回 `SLICE`（`1j` 字面量与 `complex()` 构造面落地，
+#: 过 `lib_compile`）⇒ 只剩 `multiprocessing/heap.py` 一条（链式赋值的非名字目标，P3-35 一族）。
 SYNC_EXCLUDE = frozenset(
     {
         "multiprocessing/heap.py",
-        "unittest/mock.py",
     }
 )
 

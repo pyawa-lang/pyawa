@@ -143,6 +143,18 @@ impl Instance {
         None
     }
 
+    /// **复数载荷**（task-30）：`(real, imag)`；不是**恰好** `complex` 类型就 `None` ✓。
+    ///
+    /// 与 [`Self::float_value`]／[`Self::int_of`] 同一口径（恰类型；Python 子类的载荷面另说 ✓）。
+    pub fn complex_value(&self, object: NonNull<Header>) -> Option<(f64, f64)> {
+        if self.type_of(object) == self.type_named("complex").expect("complex 已登记") {
+            // SAFETY: 类型身份已确认 ⇒ 载荷是 `ComplexObject`（`TS-43` 布局自选 ✓）。
+            let value = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::ComplexObject>() };
+            return Some((value.real(), value.imag()));
+        }
+        None
+    }
+
     /// 两个值的**序**（`min`／`max`／`sorted` 要用）：数值塔按数比、两个 `str` 按字典序。
     ///
     /// 其余给 `None`——调用方据此报参照实现那条

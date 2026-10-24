@@ -19,6 +19,7 @@ mod constructors;
 mod representations;
 mod formatting;
 mod memoryview;
+mod complex;
 
 pub use self::scalars::*;
 pub use self::range_slice::*;
@@ -32,4 +33,5 @@ pub use self::type_runtime::*;
 pub use self::constructors::*;
 pub use self::representations::*;
 pub use self::formatting::*;
+pub use self::complex::*;
 pub use self::memoryview::*;

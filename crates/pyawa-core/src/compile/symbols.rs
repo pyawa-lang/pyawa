@@ -1699,6 +1699,7 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
         Expression::Int(_, _)
         | Expression::BigInt(_, _)
         | Expression::Float(_, _)
+        | Expression::Imaginary(_, _)
         | Expression::Str(_, _)
         | Expression::Bytes(_, _)
         | Expression::Constant(_, _) => {}

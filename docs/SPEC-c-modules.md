@@ -169,9 +169,9 @@
 
 - **能 import**：`builtins` 始终可 import（它是解释器自带的名字空间）
 - **已落地的函数**（本层只做**不需要能力域、也不需要输出通道**的）：
-  `abs`、`all`、`any`、`bin`、`callable`、`chr`、`hex`、`isinstance`、`issubclass`、`len`、
+  `abs`、`all`、`any`、`bin`、`callable`、`chr`、`hash`、`hex`、`isinstance`、`issubclass`、`len`、
   `max`、`min`、`oct`、`ord`、`repr`、`sorted`、`sum`
-  ＋ **`__build_class__`**（由核心在引导期建好，`OM-14`）
+  ＋ **`__build_class__`**（由核心在引导期建好，`OM-14`）＋ **`complex` 类型**（本轮真类型化，见下）
 - **语义口径**（期望值全部取自参照实现，见 `crates/pyawa-stdlib/tests/builtins.rs`）：
   - `abs(True)` ⇒ `1`，且结果是 **`int` 不是 `bool`**；`abs("x")` ⇒
     `bad operand type for abs(): 'str'`
@@ -206,18 +206,56 @@
   - `all`／`any`：空可迭代 ⇒ `True`／`False`；真值走核心那一处 `Instance::truth_of`
     （`None`／假／数值零／空串／空容器为假，其余为真）；`all()` ⇒
     `all() takes exactly one argument (0 given)`；`all(5)` ⇒ `'int' object is not iterable`
+  - **`hash()`（本轮新注册）**：已接 `int`／`float`／`bool`／`str`／`bytes`／`tuple`／`None`／
+    `complex`／用户类的 `__hash__`（身份哈希协议面）；`list`／`dict`／`set`／`bytearray` ⇒
+    `TypeError: unhashable type: '<类型>'`（参照同文案）；其余**可哈希但未接**的内建（如 `frozenset`）
+    ⇒ **如实 `NotImplementedError`**（不拿身份哈希冒充）
+    - 算法：`int` 走核心那一处（`sign × (|x| mod 2^61-1)`、`-1` ⇒ `-2`）；`float`／`complex` 走核心的
+      `hash_double_value`／`hash_complex_parts`；`str`／`bytes` 走 **siphash13（零密钥）**；
+      `tuple` 走 CPython 3.8+ 的 xxHash 组合；`None` ⇒ `0xFCA86420`
+    - **如实偏差**：① **无哈希随机化**——`str`／`bytes` 固定零密钥（等价 `PYTHONHASHSEED=0`；
+      参照默认每进程随机化 ⇒ 与默认 `python3` 不可比）；② **`nan` 的 hash** 本层给确定性 `0`
+      （参照按对象地址／进程内随机）
+  - **`abs()`／`int()`／`float()` 对 `complex`**：`abs(z)` ⇒ `hypot(real, imag)`（**float**）；
+    `int(z)` ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number,
+    not 'complex'`；`float(z)` ⇒ `TypeError: float() argument must be a string or a real number,
+    not 'complex'`（均照参照）
 - **未落地、且不是"忘了"**：
   - **`print` 与任何需要输出通道的内建**：九域里**没有"输出"域**，
     `DESIGN.md` §9 第 20 条的先例是"由 `pa_create`（`pyawa-abi`）创建实例时注入"。**口径未裁**（见下）
   - 需要能力域的（`open`、`input`、`exec`／`compile`…）：等 `P3-14`
-  - 需要**迭代器对象**（不是容器）／富比较／哈希协议的（`map`、`filter`、`zip`、`enumerate`、
-    `hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的 `richcompare`／`hash` 槽位接线
-    （`min`／`max`／`sorted`／`sum`／`all`／`any` 已按上一段的边界落地）
+  - 需要**迭代器对象**（不是容器）的（`map`、`filter`、`zip`、`enumerate`、`id`…）：等 `§10` 的
+    迭代器族与 `OM-11` 的其余槽位接线（`min`／`max`／`sorted`／`sum`／`all`／`any` 已按上一段的
+    边界落地；`hash` 本轮已落地，见上）
 - **待裁（不自行决定）**：`print` 的输出通道走哪儿——见 `README.md` 的"待裁"一节
 - 落地：`crates/pyawa-stdlib/src/builtins_module.rs`
 - **对拍夹具**：`tools/gen_builtins_fixture.py` ⇒ `crates/pyawa-stdlib/tests/fixtures/builtins.rs`
   （40 个用例；那份夹具是**生成的 Rust 源码**而不是 JSON——消费方 crate 里没有 JSON 解析器，
   生成源码省掉解析，也省掉一份重复的解析器）
+- **类型面（本轮已落地）：`complex`**
+  - **真类型**：载荷 `real`／`imag` 双 `f64`（`TS-43` 布局自选、不进 ABI）；MRO `complex → object`
+    （`OM-13`：C3 由核心算、**禁止**手写）；`isinstance`／`type`／`.real`／`.imag`（**float**）可用
+  - **构造器**（`complex.__new__`）：0 参 ⇒ `0j`；1 参数字（`int`／`float`／`bool`，无 `__complex__`
+    时退 `__float__`）；**单参恰 `complex` ⇒ `complex(z) is z`**；1 参 `str` ⇒ 解析（括号／空白／
+    指数／合法下划线／`inf`／`nan`；非法 ⇒ `ValueError: complex() arg is a malformed string`，
+    下划线位置非法 ⇒ `ValueError: could not convert string to complex: '<原串>'` 两套文案）；
+    `__complex__` 协议（返回非 `complex` ⇒ `__complex__ returned non-complex (type X)`）；两参形态
+    （含 `real=`／`imag=` 关键字）里**复数实参**照参照的历史口径按 `real + imag*1j` 收；
+    **`-0.0` 的符号位保留**；arity／未知关键字／同名重复的 TypeError 文案照参照
+  - **算术与比较**：`+`／`-`／`*`／`/`／`**`（与 `int`／`float`／`bool` 混合走数值塔）、
+    一元 `-`／`+`／`abs`、`==`／`!=`（与实数按 `real`／`imag` 比，`1+0j == 1` 真；与其余类型一律假）；
+    **排序**与 `//`／`%`／`divmod` 照参照报 `TypeError`
+    （`'<' not supported between instances of 'complex' and 'complex'`／
+    `unsupported operand type(s) for divmod(): 'complex' and 'int'`）；真值＝`real != 0 or imag != 0`
+    （`nan` 为真）；`conjugate()` 给新复数、`__complex__()` 返回**自身**；`hash(z)` 见上
+  - **如实偏差**：③ `class C(complex)` 的**子类构造**如实 `NotImplementedError`（core 只造基类
+    实例，**不**造错类型的实例）；④ **类型级**描述符 `complex.real`／`complex.__lt__`／
+    `complex.__add__` **未挂**（本层没有 getset 描述符面；**实例语义正确**）；⑤ 两参里给
+    `complex`／`__complex__` 的 `real` 时参照发 `DeprecationWarning`，本层**无警告通道**（值一致）；
+    ⑥ `setattr(z, "real", 5)` 的文案差异（本层按**无 `__dict__`** 口径报错，参照是
+    `AttributeError: readonly attribute`）
+  - **验收**：`crates/pyawa-core/tests/complex.rs`（表示／属性／算术／比较／真值／哈希算法／类型面；
+    期望值全部为参照 3.14.4 实测）
 - **类型面（本段未落地）：`bytes`**（`P1-12`；阶梯位置见 `TS-42`）
   - **存在性**：它是参照的核心内建类型，`TS-41` 要求集合与参照一致 ⇒ **必须有**。
     **基类是 `object`**、**不是** `str` 的子类（实测）

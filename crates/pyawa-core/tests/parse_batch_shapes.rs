@@ -573,3 +573,93 @@ fn task25_syntax_gaps_compile() {
             .unwrap_or_else(|error| panic!("{name} 编不过：{error:?}"));
     }
 }
+
+// --------------------------------------------------------------------------- #
+// task-29：复数虚部字面量（`1j` …）—— **常量池形状以 python3 3.14.4 的 `co_consts` 为准**
+// --------------------------------------------------------------------------- #
+
+fn complex_constant(real: f64, imag: f64) -> Constant {
+    Constant::Complex {
+        real_bits: real.to_bits(),
+        imag_bits: imag.to_bits(),
+    }
+}
+
+#[test]
+fn task29_imaginary_literals_produce_the_reference_constants() {
+    // 期望值来自 `python3 -c "compile(src, '<t>', 'exec').co_consts"`（3.14.4）逐条导出：
+    // 字面量 → 单个 complex 常量；`1 + 2j`／`-1j` 等按参照**折叠**成单个常量
+    //（`dis` 实测 `LOAD_CONST (1+2j)` ✓）。
+    let cases: &[(&str, &[Option<Constant>])] = &[
+        ("a = 1j\n", &[Some(complex_constant(0.0, 1.0)), Some(Constant::None)]),
+        ("a = 1.5j\n", &[Some(complex_constant(0.0, 1.5)), Some(Constant::None)]),
+        ("a = 1e3j\n", &[Some(complex_constant(0.0, 1000.0)), Some(Constant::None)]),
+        ("a = 0j\n", &[Some(complex_constant(0.0, 0.0)), Some(Constant::None)]),
+        ("a = 1_0j\n", &[Some(complex_constant(0.0, 10.0)), Some(Constant::None)]),
+        (
+            "a = 1 + 2j\n",
+            &[
+                Some(Constant::Int(1)),
+                Some(Constant::None),
+                Some(complex_constant(1.0, 2.0)),
+            ],
+        ),
+        // `-1j`：参照折成 `(-0-1j)`（实部是**负零** ✓）
+        (
+            "a = -1j\n",
+            &[
+                Some(complex_constant(0.0, 1.0)),
+                Some(Constant::None),
+                Some(complex_constant(-0.0, -1.0)),
+            ],
+        ),
+        (
+            "a = 1/2j\n",
+            &[
+                Some(Constant::Int(1)),
+                Some(Constant::None),
+                Some(complex_constant(0.0, -0.5)),
+            ],
+        ),
+        (
+            "p = 1j\nq = 1 + 2j\nr = -1j\n",
+            &[
+                Some(complex_constant(0.0, 1.0)),
+                Some(Constant::None),
+                Some(complex_constant(1.0, 2.0)),
+                Some(complex_constant(-0.0, -1.0)),
+            ],
+        ),
+    ];
+    for (source, expected) in cases {
+        let unit = compile(source, "probe.py", Mode::PurePython, CheckTier::Shallow, 0)
+            .unwrap_or_else(|error| panic!("{source:?} 编不过：{error:?}"));
+        let actual: Vec<Option<Constant>> = unit.constants.iter().map(|c| Some(c.clone())).collect();
+        assert_eq!(&actual, expected, "{source:?} 的常量池形状");
+    }
+}
+
+#[test]
+fn task29_imaginary_constants_survive_the_pyac_round_trip() {
+    // `Constant::Complex` 的 `.pyac` 序列化/反序列化（tag 19 = 实部/虚部位模式）✓
+    let unit = compile(
+        "a = 1j\nb = 1.5j\nc = 1 + 2j\nd = -1j\ne = 1/2j\n",
+        "probe.py",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect("编得过");
+    let bytes = pyawa_core::pyac::encode_unit(&unit);
+    let back = pyawa_core::pyac::decode_unit(&bytes).expect("解得开");
+    assert_eq!(back.constants, unit.constants, "常量池 round-trip");
+    assert_eq!(back.code, unit.code, "代码段 round-trip");
+    assert_eq!(back.positions, unit.positions, "位点 round-trip");
+    // **非法虚部**照参照报语法错（不是静默放过）
+    for source in ["a = 0x1j\n", "a = 1jj\n", "a = 1j2\n"] {
+        assert!(
+            compile(source, "probe.py", Mode::PurePython, CheckTier::Shallow, 0).is_err(),
+            "{source:?} 应当报语法错"
+        );
+    }
+}

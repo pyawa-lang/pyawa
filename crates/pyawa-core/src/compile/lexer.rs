@@ -32,6 +32,9 @@ pub(super) enum Lexeme {
     Colon,
     /// **浮点字面量**（第 127 轮）：值是 **IEEE-754 位模式** ✓
     Float(u64),
+    /// **虚部字面量**（task-29 ✓）：`1j`／`1.5j`／`1e3j` —— 值＝**虚部**的 IEEE-754 位模式
+    /// （实部恒为 `0.0`；`Constant::Complex` 在编译期补实部 ✓）。
+    Imaginary(u64),
     /// `:=`（**海象**／赋值表达式；与 `:` 分开 ✓）
     Walrus,
     LeftParen,
@@ -676,6 +679,28 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             }
                         }
                     }
+                    // **虚部字面量**（task-29 ✓）：十进制整数／浮点／指数形式后接 `j`／`J`
+                    // （`1j`／`1.5j`／`1e3j`／`0j`／`1_0j` ✓；`0x1j` 这类走下面 radix≠10 的报错 ✓）。
+                    // 值＝虚部（f64 位模式）；实部由编译期补 `0.0` ⇒ `Constant::Complex` ✓。
+                    if matches!(characters.get(scan), Some('j' | 'J')) {
+                        let after = characters.get(scan + 1).copied();
+                        if after.is_some_and(|item| item.is_ascii_alphanumeric() || item == '_') {
+                            return Err(CompileError::Syntax(
+                                "invalid imaginary literal".to_owned(),
+                            ));
+                        }
+                        let text: String = characters[digits_start..scan]
+                            .iter()
+                            .filter(|item| **item != '_')
+                            .collect();
+                        let value: f64 = text.parse().map_err(|_| {
+                            CompileError::Unsupported(format!("虚部 {text} 解析不了"))
+                        })?;
+                        index = scan + 1;
+                        lexemes.push(Lexeme::Imaginary(value.to_bits()));
+                        spans.push(Span::new(line, line, start, column!(index)));
+                        continue;
+                    }
                     if is_float {
                         let text: String = characters[digits_start..scan]
                             .iter()
@@ -708,9 +733,15 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         // 先前这里当场报"超出本层范围" ✗ —— `Lib/test/support` 一族 **26** 个模块压在它上面 ✓。
                         let magnitude = crate::bigint::BigInt::from_str_radix(&digits, radix)
                             .ok_or_else(|| {
-                                CompileError::Unsupported(format!(
-                                    "整数 {digits}（进制 {radix}）解析不了"
-                                ))
+                                // **非法进制字面量**（task-29 ✓）：`0x1j` 一类照参照报
+                                // `invalid hexadecimal literal` 的语义（本层给带原文的语法错 ✓）。
+                                let what = match radix {
+                                    16 => "invalid hexadecimal literal",
+                                    8 => "invalid octal literal",
+                                    2 => "invalid binary literal",
+                                    _ => "invalid decimal literal",
+                                };
+                                CompileError::Syntax(format!("{what}：{digits}"))
                             })?;
                         Lexeme::BigInt(magnitude.to_decimal())
                     }
@@ -1103,7 +1134,9 @@ pub struct PythonToken {
 fn public_kind(lexeme: &Lexeme) -> PythonTokenKind {
     match lexeme {
         Lexeme::Name(_) => PythonTokenKind::Name,
-        Lexeme::Int(_) | Lexeme::BigInt(_) | Lexeme::Float(_) => PythonTokenKind::Number,
+        Lexeme::Int(_) | Lexeme::BigInt(_) | Lexeme::Float(_) | Lexeme::Imaginary(_) => {
+            PythonTokenKind::Number
+        }
         Lexeme::Str(_) => PythonTokenKind::Str,
         Lexeme::Bytes(_) => PythonTokenKind::Bytes,
         Lexeme::FStr { .. } => PythonTokenKind::FString,

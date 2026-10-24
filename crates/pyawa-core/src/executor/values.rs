@@ -34,6 +34,30 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         // 走 `BigInt` 比：`IntValue` 的两种载荷（内联／大整数）数值相等就是相等
         return a.to_bigint() == b.to_bigint();
     }
+    // **复数相等**（task-30）：任一边是 `complex` ⇒ 两边升到复数塔比 ✓（实测
+    // `(1+0j) == 1`／`== 1.0`／`== True` 都真 ✓，`(1+2j) == 1` 假 ✓；与 `str` 等比较一律假 ✓）。
+    // 注意放在 `numeric_payload` 之前（它不认复数 ⇒ 否则会落到后面的"身份不等" ✗）。
+    let complex_side = |value: NonNull<Header>| instance.complex_value(value);
+    let left_complex = complex_side(left);
+    let right_complex = complex_side(right);
+    if left_complex.is_some() || right_complex.is_some() {
+        let convert = |parts: Option<(f64, f64)>, value: NonNull<Header>| match parts {
+            Some(parts) => Some(parts),
+            None => {
+                if let Some(number) = instance.float_value(value) {
+                    Some((number, 0.0))
+                } else {
+                    instance
+                        .int_of(value)
+                        .map(|integer| (integer.to_bigint().to_f64(), 0.0))
+                }
+            }
+        };
+        return match (convert(left_complex, left), convert(right_complex, right)) {
+            (Some(a), Some(b)) => a.0 == b.0 && a.1 == b.1,
+            _ => false,
+        };
+    }
     let (left_number, right_number) = (
         numeric_payload(instance, left),
         numeric_payload(instance, right),

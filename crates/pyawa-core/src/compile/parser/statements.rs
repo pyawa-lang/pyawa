@@ -333,6 +333,7 @@ pub(crate) fn parse_statements(
             | Some(Lexeme::Int(_))
             | Some(Lexeme::BigInt(_))
             | Some(Lexeme::Float(_))
+            | Some(Lexeme::Imaginary(_))
             | Some(Lexeme::Bytes(_))
             // **字面量表达式语句** ✓（task-25 ✓）：`{1: 2}`／`{1, 2}` 单独成句也合法
             // （官方 `test_dict.py`／`test_setcomps.py` 一族用它做"字面量表达式"用例 ✓）——

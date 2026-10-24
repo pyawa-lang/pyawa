@@ -10,6 +10,16 @@ impl Emitter {
                     self.emit_indexed(*span, "LOAD_CONST", index);
                     Ok(())
                 }
+                // **虚部字面量**（task-29 ✓）：`1j` ⇒ `LOAD_CONST 1j`（常量是 `complex(0,1)` ✓；
+                // 实部按参照补 `0.0` ✓）。
+                Expression::Imaginary(bits, span) => {
+                    let index = self.intern_constant(Constant::Complex {
+                        real_bits: 0f64.to_bits(),
+                        imag_bits: *bits,
+                    });
+                    self.emit_indexed(*span, "LOAD_CONST", index);
+                    Ok(())
+                }
                 Expression::Map(items, span) => {
                     // **纯键值对**（没有 `**`）：形状照第 282 轮**一字不动** ✓（夹具守着 ✓）——
                     // 15 对及以下一条 `BUILD_MAP n` ✓、16 对及以上走增量形态

@@ -160,6 +160,17 @@ pub(crate) fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pat
             Pattern::Literal(Constant::Float(*bits), span),
             cursor + 1,
         )),
+        // **虚部字面量**（task-29 ✓）：`case 1j:` 的常量模式（实部补 `0.0` ✓）
+        Some(Lexeme::Imaginary(bits)) => Ok((
+            Pattern::Literal(
+                Constant::Complex {
+                    real_bits: 0f64.to_bits(),
+                    imag_bits: *bits,
+                },
+                span,
+            ),
+            cursor + 1,
+        )),
         Some(Lexeme::LeftBracket) | Some(Lexeme::LeftBrace) | Some(Lexeme::LeftParen) => {
             Err(CompileError::Unsupported(
                 "`match` 的序列／映射模式尚未接线（`MATCH_SEQUENCE`／`MATCH_KEYS` 随后补）".to_owned(),
