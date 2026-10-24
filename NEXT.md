@@ -3,57 +3,58 @@
 > 规则见 `agents-rules/round-rule.md`：**一轮一落地**（每轮以「提交」或「撤回＋一条改变计划的事实」结束 ✓）。
 > **本页是会话交接单页**（2026-10-25 ✓）：会话 10＝**M6**（r14：`P3-32`/`P3-33`；r15：`else`＋`with` 编译器格＋两处崩溃；
 > r16：`time` 面 ⇒ `import test.support` 通过＋包装体面；r17：P3-35 语法批 A＋`sys.exc_info`＋`gc`＋4 骨架；
-> r18：**P3-34 complex 全链路**（1j／对象类型／构造器／`hash()`…）＋**`unittest/mock` 同步**＋**try/with 余部重放指数爆炸修**＋
-> deque/list.pop/getattr 补齐）。逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…18** 节 ✓（本笔追加 round 18）。
+> r18：**P3-34 complex 全链路**＋**`unittest/mock` 同步**＋**try/with 余部重放指数爆炸修**＋容器/getattr；
+> r19：**P3-36 `.pyac` 修**（Ellipsis 标签撞车）＋**match 全形模式**＋`sys.monitoring`＋**`unicodedata`** ⇒ **`import pdb`/`doctest` 打通**
+> ＋`sync_lib` 第二来源根）。逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…19** 节 ✓（本笔追加 round 19）。
 
 ## 现在
 
-- **HEAD**：`52058b4`（`dev`，本笔前）—— 本笔＝**round 18**：P3-34 complex 全链路（虚部字面量／真类型／`complex()` 构造器／`hash()`＋`abs/int/float/divmod` 面／规格）＋ `unittest/mock.py` 同步 ＋ **try/with「余部重放」指数爆炸修**（连续 ≥16 块 StackUnderflow／挂死）＋ `deque` 真值／`list.pop(index)`／`getattr(obj,name,default)` 修正；细节见台账 round 18。
-- **工作区**：本笔待提交 ＝ **36 项**（30 个修改文件：编译器/执行器/stdlib/测试/`tools/sync_lib.py`/`docs/SPEC-c-modules.md` ＋ `NEXT.md` ＋ 台账 round 18 ＋ `ROUNDS.md` 索引；＋ 6 个新增文件：`Lib/unittest/mock.py`、`crates/pyawa-core/src/builtin_objects/complex.rs`、`crates/pyawa-core/tests/complex.rs` 等；`git status --porcelain` 与之一致）。
+- **HEAD**：`e5f7326`（`dev`，本笔前）—— 本笔＝**round 19**：P3-36 `.pyac` `BadCodeSection`（Ellipsis pyac 标签与 Bool 撞车 ⇒ 独占标签 20；10→0）＋ **match 全形模式**（序列/映射/子模式或/`MATCH_CLASS` 位置形参）＋ `sys.monitoring` 最小面＋ **`unicodedata` 模块**（复用 unicode_tables）⇒ **`import bdb`/`pdb`/`doctest` 全通** ＋ `sync_lib` 第二来源根机制；细节见台账 round 19。
+- **工作区**：本笔待提交 ＝ **17 项**（13 个修改文件：`pyac.rs`/`patterns` 三件/`symbols.rs`/`step_match.rs`/`sys_module.rs`/`lib.rs`/`tests`/`tools/sync_lib.py`/`pyawa-runtime/tests/pyac.rs` ＋ `NEXT.md` ＋ 台账 round 19 ＋ `ROUNDS.md` 索引；＋ 4 个新增文件：`crates/pyawa-stdlib/src/unicodedata_module.rs`、`tests/unicodedata.rs`、`tests/sys_monitoring.rs`；`git status --porcelain` 与之一致）。
 - **stash**：**空** ✓
-- **round 18 新增验收（全 ✓）**：
-  1. **P3-34 complex 全链路**：`1j`／`1.5j`／`1e3j`／`0j`／`1_0j` 字面量与常量形状（含折叠）与参照 `co_consts` 一致；`.pyac` round-trip 全等；
-     complex 124+ 条语义探针（表示/属性/构造/字符串/关键字/-0.0/算术/比较/真值/类型面/hash/`__complex__`/identity/stdlib 面）与
-     python3 3.14.4 **diff 为空**；`complex(z) is z`、`complex(0.0,-0.0)`⇒`-0j`、`divmod` 文案均一致。
-  2. **`unittest/mock.py` 同步**：`Lib/unittest/mock.py` 与上游逐字节一致（`Lib/` **549**、`--check` **553 文件**）；`import unittest.mock` 可用、
-     `patch(...).start()/stop()`／`with patch`／`MagicMock`／`mock(1,2)+assert_called_with` 全通；`pyawa …/unittest/mock.py` **exit 0**。
-  3. **try/with 余部重放指数爆炸**（预存 bug：连续 `try` 块 ≥16 ⇒ StackUnderflow、≥17 ⇒ 挂死；连续 `with` 同款）：修后 N=13/16/17/30/64/200
-     全 exit 0（≤0.26s），模块级/函数级/长体/try-finally 链/真实异常路径/连续 with 均与参照一致；`widen_extended_args` 改为迭代到不动点。
-  4. **容器与 `getattr`**：`bool(deque())`⇒False（`ExitStack` 死循环根因）、`list.pop(index)` 全形态、`getattr(obj,name,default)` 吞
-     属性链 AttributeError 且非 AttributeError 上抛 —— 与参照逐行一致。
-  5. 既有验收仍全过：`import test.support` **ok**；`sys.exit(3)`⇒3；`unittest.main()`⇒0；`PYTHONPATH` 进 `sys.path`。
-- **数字**（round 18 终审实测）：判据① **469/628＝74.7%**（通过 452＋参照口径 17，**+1**：`unittest.mock` 可 import）；`Lib/` **549**、
-  进度指标 **453/549＝82.5%**；语料 407／在册差异 3 未变。`Lib/test` 体检：**可编译 338/397＝85.1%**、**跑通 7/397＝1.8%**（持平）、
-  语法错 59（**28 surrogate**＋具名转义 11＋批 B/C 若干）、未实现 39／运行期错 270／**超时 22**（中途一度 132，主因即余部重放 bug，已回落）。
-  **分类说明**：可编译 347→338 是 **`1j` 打通后文件解析得更远**撞上批 B/C 缺口（旧基线这些文件全卡在 `1j`），不是支持回退（已逐文件 tsv 比对）。
-- **官方套件缺口榜（下一轮取活）**：① `test.support.os_helper` ×72 等 surrogate 族（**P3-35 剩余，需 string repr 级改造 ⇒ 独立立项评估**，不以假数据绕过）；
-  ② `doctest` 18（导入 `pdb` ⇒ **match 序列/映射模式 opcode** 未接）；③ `.pyac BadCodeSection` 10（**P3-36**）；④ `unicodedata`/`hashlib`/
-  `multibytecodec_support`（P3-37 剩余，第二个来源根待拍板）；⑤ `\N{…}` 具名转义 11（Unicode 名字表数据面）；⑥ 超时 22（多为 socket/server/long 类，逐条甄别）。
-- **本轮修掉的格不再出现在缺口榜**：`1j`（P3-34）、`unittest.mock` 缺模块、连续 try/with 挂死、deque 真值、`list.pop(index)`、`getattr` 三参。
+- **round 19 新增验收（全 ✓）**：
+  1. **P3-36 `.pyac BadCodeSection`**：根因＝`Constant::Ellipsis` 的 pyac 标签 `0x07` 与 `Bool` 的 7 撞车（解码多读一字节 ⇒
+     其后常量池/代码段错位）；改独占标签 20、旧产物走既有「INVALID ⇒ 按陈旧重编重写」自愈；`test_dis`/`test_types` 连跑 2 次无报错、
+     第 3 次 mtime 不变（真命中缓存）；**survey `BadCodeSection` 10 → 0**。
+  2. **match 全形模式**：序列 `[a,b]`/`[a,*rest]`/`[*rest]`/`()`/组模式、映射 `{"k":v}`/`{}`/值模式键、**子模式或模式**、
+     `MATCH_CLASS` 位置形参（`__match_args__` 校验/错误文案、MATCH_SELF 单参回退）—— 36 档探针与 python3 **0 diff**、`--test patterns` 10 passed。
+  3. **`sys.monitoring` 最小面**（pdb 的闸）：工具 id/哨兵/20 个 events 位照参照，10 个工具 API 名字在位、真调用如实 NotImplementedError；`import bdb` ✓。
+  4. **`unicodedata` 模块**（`_pyrepl` 的闸，复用既有 `unicode_tables.rs`）：`unidata_version='16.0.0'`、`category`/`combining`/`east_asian_width`/
+     `bidirectional`/`decimal`/`digit`/`numeric`/`decomposition` 真实现，`name`/`lookup`/`normalize`/`mirrored` 如实 NotImplementedError；
+     值/文案探针 0 diff。⇒ **`import bdb`／`pdb`／`doctest` 全成功**。
+  5. **`sync_lib` 第二来源根机制**（testsuite deb 解包根；只对主来源缺失文件用；`--check` 回退比对）；`multibytecodec_support` 因
+     `'\udeee'` 合法孤立代理（surrogate epic）**按纪律不入库**，`--check` 553 文件全一致、`lib_compile` 绿。
+- **数字**（round 19 干净基线实测）：判据① **470/628＝74.8%**（通过 453＋参照口径 17，**+1**）；`Lib/` **549**、进度指标 **454/549＝82.7%**；
+  语料 407／在册差异 3 未变。`Lib/test` 体检：**可编译 337/397＝84.9%**、**跑通 7/397＝1.8%**、语法错 60、未实现 38、运行期错 260、
+  **超时 32**（并发编译期间的 40/166/210 是噪声；本基线为无并发作业时测得；`test_ssl`/`test_urllib2net` 等网络类待甄别）。
+- **缺口榜（下一轮取活）**：① `test.support.os_helper` **×93**（surrogate epic ⇒ 需字符串表示层 WTF-8 级改造，**独立立项**，不以假数据绕过）；
+  ② `doctest` ×20（`Lib/doctest.py` 未同步；已实测它可编译执行 ⇒ **下一轮同步链** `doctest.py`＋`pdb.py`＋`bdb.py`＋`_pyrepl/*` 等，由 lib-sync 做）；
+  ③ `hashlib` ×4（P3-37 剩余）；④ `\N{…}` 具名转义 11（Unicode 名字表数据面）；⑤ 批 B/C 语法缺口；⑥ 超时 32 甄别。
+- **本轮修掉的格不再出现在缺口榜**：`BadCodeSection` ×10、`import pdb`/`doctest` 的 match/monitoring/unicodedata 闸。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
 1. **M6 判据（`PLAN-milestones.md` §6）**：`MS-14` 的报告**可发布**，且"新差异"为零（对拍语料＋在册差异清单的复核；
    `MS-9` 归一规则、`MS-13` 语料下限按 `§13-10` 的剩余开放收口）。
-2. **取活顺序**：**`P3-36`（`.pyac BadCodeSection` 10）** → **doctest 的 match 模式 opcode（18）** → P3-37 剩余（`unicodedata`/`hashlib`；
-   `multibytecodec_support` 待拍板）→ `\N{…}` 名字表 → 批 B/C 语法缺口（`~T` 类型表达式／star 表达式／augassign 链／参数注解表达式等）
-   → 超时 22 甄别 → **surrogate 独立立项**（string repr 改造）评估 → 报用户批准 M6 收口（`--no-ff` ＋ tag `m6`）。
-3. **另立小格**：`builtins.compile` 缺失；嵌套类装饰器属性丢失；`test_memoize 3!=4`；`f_back` 链；`class C(complex)` 子类构造；
-   类型级描述符；哈希随机化；`list.__delitem__` 下标面。
+2. **取活顺序**：**doctest/pdb/bdb/_pyrepl 同步链**（doctest ×20）→ `sys._getframe` f_back（`test_unicodedata` 下一格）→
+   `hashlib`（×4）/`\N{…}` 名字表 → 批 B/C 语法缺口 → 超时 32 甄别 → **surrogate 独立立项**（string repr 改造；os_helper ×93 的头号解）→
+   报用户批准 M6 收口（`--no-ff` ＋ tag `m6`）。**注意**：surrogate epic 是 MS-19 判据补充下的硬前提，需你拍板是否本轮启动。
+3. **另立小格**：`sys._getframe` f_back；`builtins.compile`；嵌套类装饰器属性；`test_memoize 3!=4`；`class C(complex)` 子类构造；
+   类型级描述符；哈希随机化；`list.__delitem__` 下标面；`events` 命名空间 `types.SimpleNamespace` 形状偏差。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                      # 应干净（round 18 已提交）
-python3 tools/libtests_survey.py --jobs 8
-# 下一格：P3-36 —— 用 test_dis/test_types/test_typing 等 10 个 BadCodeSection 文件定位 .pyac 代码段读写 bug（IM-18…IM-21 容器契约）
+git status --short                      # 应干净（round 19 已提交）
+# 下一格：lib-sync 同步链 —— doctest.py / pdb.py / bdb.py / _pyrepl/*（先逐个 pyawa 编译验证再入 SLICE，CX-8 逐字节）
+python3 tools/sync_lib.py --check
 ```
 
 ## 本战役的关键口径（新会话必读）
 
 - **判据① 分子测量**：先 `tools/cargo.sh test -p pyawa-abi --test conformance --no-run`（重建）再 `rm -rf Lib/__pyawa__`，
   然后 `python3 tools/lib_import_ratio.py`；**禁止 `| tail`**（汇总在失败清单**之前**）；单次 ±1 ⇒ 报区间；并发测量无效。
-  **当前 469/628＝74.7%**（通过 452 ＋ 参照口径 17）。
+  **当前 470/628＝74.8%**（通过 453 ＋ 参照口径 17）。
 - **`Lib/test` 体检口径**：`tools/libtests_survey.py`（397 个顶层 `test_*.py`；默认目录＝
   `target/upstream/extracted/usr/lib/python3.14/test`）。两个比例是**报告级**、**不得当验收或完成度**（`CM-15`）。
   **改编译器之后必须清 `.pyac` 缓存**：`find target Lib -name __pyawa__ -type d -prune -exec rm -rf {} +`

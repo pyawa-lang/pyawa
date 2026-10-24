@@ -1650,3 +1650,52 @@
 - **缺口榜（下一轮取活）**：① `test.support.os_helper` ×72 等 surrogate 族（**P3-35 剩余，需 string repr 级改造 ⇒ 独立立项评估**，不以假数据绕过）；② `doctest` 18（导入 `pdb` ⇒ **match 序列/映射模式 opcode** 未接）；③ `.pyac BadCodeSection` 10（P3-36）；④ `unicodedata`/`hashlib`/`multibytecodec_support`（P3-37 剩余）；⑤ `\N{…}` 具名转义 11（Unicode 名字表数据面）；⑥ 超时 22（多为 socket/server/long 类，待逐条甄别）。
 - **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **4812s**）：① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（17s）；③ `cargo test --workspace` **全部测试绿**（510s；含 `complex` 7／`containers` 12／`classes` 29／`exceptions` 17／`parse_batch_shapes`／`lib_compile`）；④ `check.py` **14/14**（2s）；⑤ `stability.py` 计数一致（1526s）；⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2004s）；⑦ 夹具守卫（0s）；⑧ 语料下限 407/112（0s）；⑨ `conformance` **5 passed**（373s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（380s）。另：`-p pyawa-core` 69 个 test 目标全绿、`-p pyawa-runtime` 83 个全绿、`-p pyawa-stdlib`／`-p pyawa-abi` 全绿。
 - **下一轮**：**P3-36（`.pyac` BadCodeSection 10）** → **doctest 的 match 模式 opcode（18）** → P3-37 剩余（unicodedata/hashlib；`multibytecodec_support` 需第二来源根，待拍板）→ `\N{…}` 名字表 → 批 B/C 语法缺口；**surrogate 独立立项**（string repr 改造）评估后报用户。
+
+---
+
+## round 19（会话 10 · M6 续）落地 ✓ —— P3-36 `.pyac` 修 ＋ match 全形模式 ＋ `sys.monitoring`／`unicodedata`（`import pdb`/`doctest` 打通）
+
+- **口径**：`HEAD`（本笔前）＝`e5f7326`（`dev`，round 18）；工作区起始干净；`check.py` 14/14。
+- **落地（五块）**：
+  1. **P3-36 `.pyac BadCodeSection`（10 个官方测试）**：根因＝**`Constant::Ellipsis` 的 pyac 标签 `0x07` 与 `Bool` 的 7 撞车** ⇒
+     解码按 Bool 多读一字节 ⇒ 其后常量池/代码段整体错位（嵌套 code object 常量池含 `...` 即触发：`test_dis`/`test_types`/`test_typing` 一族）。
+     修法＝`...` 改用**独占标签 20**（7 只留 Bool）；旧产物含 `...` 本已损坏 ⇒ 走 CLI 既有「`PA_ERR_INVALID` ⇒ 按陈旧重编重写」**自愈**（不靠删缓存；
+     不含 `...` 的旧产物字节不变）。回归：`pyac` 测试补 `...`／`.../True/False`／默认值 `...`／全标签「厨房水槽」往返（12 passed）。
+     实测 `test_dis`／`test_types` 连跑 2 次不再报、第 3 次 mtime 不变（真命中缓存）；**survey `BadCodeSection` 10 → 0**。
+  2. **match 全形模式（doctest/pdb 的闸）**：parser＋emitter 补**序列模式**（`[a,b]`／`[a,*rest]`／`[*rest]`／`[]`／`()`／括号元组／组模式，
+     `MATCH_SEQUENCE/GET_LEN/COMPARE_OP 72|172/UNPACK_SEQUENCE|UNPACK_EX`）、**映射模式**（`{"k": v}`／`{}`／嵌套／值模式键，
+     `MATCH_MAPPING/GET_LEN/MATCH_KEYS/POP_JUMP_IF_NONE/UNPACK_SEQUENCE`）与**子模式或模式**（`_pyrepl/utils.py:242` 所需；
+     每个备选 `COPY 1` 复制值测、失败路消费干净）；executor 侧 `MATCH_CLASS` 补**位置形参**全语义（`__match_args__` 校验/错误文案、
+     属性缺失=不命中、方法绑定）＋`_Py_TPFLAGS_MATCH_SELF` 单参回退（10 类内建族实测锚定）＋`MATCH_SEQUENCE/MAPPING` 认子类型。
+     探针（序列 36 档＋错误文案＋子模式或）与 python3 3.14.4 **diff 为空**；`--test patterns` 10 passed。
+     **如实偏差**：映射 `**rest` 未接（诚实 Unsupported）；或模式"备选绑定名一致"的嵌套校验未做；`MATCH_MAPPING` 只认 dict 族；
+     发射形状多一条 `COPY 1`（语义等价，已注释登记）。
+  3. **`sys.monitoring` 最小 import 面**（`pdb` 的闸）：`bdb.py:20` 的 `E = sys.monitoring.events` ⇒ module 对象式命名空间
+     （工具 id `0/1/2/5`、`MISSING`/`DISABLE` 两个独立哨兵、`events` 子命名空间 20 个真整数位照参照全表），10 个工具 API 名字在位、
+     真调用**如实 `NotImplementedError`**；与参照 0 diff；`import bdb` ✓。
+  4. **`unicodedata` 模块最小面**（`_pyrepl` 的闸）：**复用既有 `unicode_tables.rs` 数据**（不加新表）⇒ `unidata_version='16.0.0'`、
+     `category`（含 `Cn`/`Cs`）、`combining`、`east_asian_width`、`bidirectional`、`decimal`/`digit`/`numeric`（恒 float）、`decomposition`
+     真实现；`name`/`lookup`/`normalize`/`is_normalized`/`mirrored` **如实 NotImplementedError**（无对应数据，不假数据）。值与错误文案探针 0 diff。
+     ⇒ **`import bdb`／`import pdb`／`import doctest` 全部成功**（round 19 的 pdb/doctest 闸全开）。
+  5. **`sync_lib` 第二来源根机制**（P3-37 前置）：`SECOND_SOURCE_ROOT`（testsuite deb 解包目录，**只对主来源缺失的文件使用**）＋
+     `resolve_source`／`copy_verified`（sha256 逐字节）／`sync` 两来源并集／`--check` 回退第二来源比对；机制实测可用
+     （临时状态 478 复制含 1 个第二来源、`--check` 554 全绿）。`test/multibytecodec_support.py` 因第 24 行 `'\udeee'`（合法孤立代理；属
+     `P3-35` 的 surrogate epic 面）**按裁决不入库**，`--check` 回到 **553 文件全一致**、`lib_compile` 绿；×11 签名如实记「待 surrogate epic 后回归」
+     （实测该文件唯一阻塞就是它，替换成 U+FFFD 后可直接跑）。
+- **验收（全 ✓）**：`import bdb`/`pdb`/`doctest` 全成功；`test_dis`/`test_types` 连跑 2 次无 BadCodeSection；match 36 档 0 diff；
+  `sys.monitoring`/`unicodedata` 值探针 0 diff；`pyac` 12 passed、`patterns` 10 passed、`unicodedata` 4 passed、`sys_monitoring` 2 passed；
+  **红线 `--test compile` 逐字节 4 passed**；`-p pyawa-core` 69 目标全绿；`check --workspace --all-targets` 0 warning；`check.py` 14/14。
+- **数字（终审实测，安静机器上的干净基线）**：`Lib/test` 体检 397：可编译 **337/397＝84.9%**；**跑通 7/397＝1.8%**；
+  语法错 60（surrogate 28＋`\N{…}` 11＋批 B/C）、未实现 38、运行期错 260、**超时 32**（round 18 的 22 与期间并发编译噪声的 40/166/210
+  均不可比；本基线为无并发作业时测得，仍有 `test_ssl`/`test_urllib2net`/`test_launcher` 等网络/外部类，逐条甄别留待下一轮）。
+  **缺口榜**：① `test.support.os_helper` **×93**（surrogate epic，最大单点）；② `doctest` ×20（`Lib/doctest.py` 未同步；已实测
+  `doctest.py` 在 pyawa 下可编译执行 ⇒ **下一轮同步链**：`doctest.py`＋`pdb.py`＋`bdb.py`＋`_pyrepl/*` 等）；③ `unicodedata` 已落地、
+  `hashlib` ×4 仍在；④ 语法批 B/C；⑤ 超时 32。判据① **470/628＝74.8%**（通过 453＋参照口径 17，**+1**）；进度指标 **454/549＝82.7%**；
+  语料 407／在册差异 3 未变；`PA_ABI_VERSION` 1.3。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **4638s**）：① check **0 警告**（1s）；② `--test compile` 逐字节 **4 passed**（17s）；
+  ③ `cargo test --workspace` **全部测试绿**（483s；含 `patterns` 10／`pyac` 12／`unicodedata` 4／`sys_monitoring` 2／`lib_compile`）；④ `check.py` **14/14**（3s）；
+  ⑤ `stability.py` 计数一致（1443s）；⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（1933s）；⑦ 夹具守卫（0s）；⑧ 语料下限 407/112（0s）；
+  ⑨ `conformance` **5 passed**（376s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（382s）。
+- **下一轮**：**同步 doctest/pdb/bdb/_pyrepl 链**（`doctest` ×20 的直接解）→ `sys._getframe` f_back（`test_unicodedata` 下一格）→
+  `hashlib`（×4）/`\N{…}` 名字表 → 批 B/C 语法缺口 → 超时 32 甄别 → **surrogate 独立立项**（string repr 改造；`os_helper` ×93 的头号解）→
+  报用户批准 M6 收口。
