@@ -1569,3 +1569,57 @@
   doctest／unittest.mock／gc／unicodedata／hashlib）；`P3-34`（complex）；`P3-36`（`BadCodeSection`）；
   小格队列：`builtins.compile` 缺失、`sys.exc_info()` 如实桩（会让 unittest runner 一遇错误就 abort）、
   嵌套类装饰器 `__dict__.update` 丢失、`test_memoize 3!=4`、`struct_time` 类型；最后报用户批准 M6 收口。
+
+---
+
+## round 17（会话 10 · M6 续）落地 ✓ —— P3-35 语法缺口批 A ＋ `sys.exc_info()` ＋ `gc` 模块 ＋ 4 个 `test` 骨架同步
+
+- **口径**：`HEAD`（本笔前）＝`009b3a0`（`dev`）；工作区起始干净；`check.py` 14/14。上一轮（round 16）后官方套件头号缺口是
+  `test.support.os_helper` ×83（P3-35 的语法缺口挡着骨架同步）与 `sys.exc_info()` 桩（×30），本轮把这两格连同 `gc` 缺模块一起落。
+- **落地（四块）**：
+  1. **P3-35 语法缺口批 A（`MS-19` 判据补充：合法 Python 必须收）**：① `try`／`except`／`try else`／`finally`／`with`
+     体与 `if/for/while` 的 `else:` 统一到**行内套件体**（`parse_body_after_colon`，`try: x = 1` 一族）；② `for` 目标支持
+     `*`（`for full_name, *_ in …` ⇒ `UNPACK_EX` 一层解包）＋属性／下标／call-chain 目标；③ **链式赋值目标可为元组**
+     （`chan = _, send = A(), B()`）；④ **带注解的非名字目标**（`(pars): bool = True`／`f().new_attr: object = …`／
+     `[list][0]: T`）；⑤ 三引号 bytes、表达式语句（元组显示／字面量／`Float`）、augassign 元组右值；`async` 推导式
+     改**如实 `Unsupported`**（接线要 AITER/ANEXT，另格）。新增 12 形状编译回归＋执行期语义回归。
+  2. **`sys.exc_info()`／`sys.exception()` 真实现（unittest 错误恢复）**：底座是既有 `BC-60 ②` 实例级异常状态；
+     顺手修 **`PUSH_EXC_INFO` 的"偷看再 push"重复**（嵌套 handler 后 `exc_info` 泄漏旧异常）；补帧属性
+     `f_code`／`f_globals`／`f_lineno`（traceback 格式化与 `_is_relevant_tb_level` 需要；`f_back` 链仍未接，如实）。
+     ⇒ 官方 `test_decorators` 的**故意失败用例**输出正常 `FAIL: … FAILED (failures=…)`，不再 `issubclass() arg 1 must be a class` abort。
+  3. **P3-37 第一片：`gc` 模块诚实面**：`collect`（真跑 core 标记-清除；单代、返回值＝本次释放不可达对象数，如实偏差）、
+     `isenabled`/`enable`/`disable`（映射 core 自动回收阈值，真开关）、`get_threshold`/`set_threshold`（含参照"第三参忽略"
+     怪口径）、`garbage`/`callbacks`/`get_freeze_count`/`DEBUG_*`；**11 个能力如实 `NotImplementedError`**（`get_objects`／
+     `get_referrers`／`get_referents`／`is_tracked`／`is_finalized`／`freeze`／`unfreeze`／`get_count`／`get_stats`／
+     `get_debug`／`set_debug`）⇒ `ModuleNotFoundError: gc` ×10 归零，`test.support.gc_collect()`/`disable_gc()` e2e 可用。
+  4. **Lib/test 骨架同步 4 个（批 A 解锁）**：`libregrtest/result.py`、`support/channels.py`、`typinganndata/ann_module.py`、
+     `ann_module2.py` ⇒ `Lib/` **548** 个 .py、`Lib/test` **65**、`sync_lib --check` **552 文件逐字节一致**（例外清单空）；
+     `lib_compile` 绿。仍不同步 3 个（如实）：`libregrtest/utils.py`（surrogate）／`support/os_helper.py`（surrogateescape）／
+     `ann_module695.py`（PEP 695 `*Ts`）。
+- **验收（全 ✓）**：
+  - 4 个目标上游文件：`ann_module`／`ann_module2` **exit 0**；`result.py`／`channels.py` 语法过（运行期分别卡 `.utils` 的
+    surrogate 与 `_interpchannels`，如实）。
+  - 官方套件「冒号后面要换行」签名 **0 次**（基线 8 个文件）；`test_dbm`／`test_exceptions`／`test_memoryview`／
+    `test_opcodes`／`test_sys_setprofile`／`test_with` 均能进编译/运行期。
+  - `sys.exc_info()` 探针与参照逐行一致（无异常 `(None,None,None)`／except 内 type/value／嵌套层／退出恢复／
+    `sys.exception()` 身份；`tb` 目前 `None`，如实偏差）；`test_decorators` 错误摘要正常（`Ran 16 tests`）。
+  - `import test.support` **仍 exit 0**；`import gc` 成功、`gc.isenabled()` True、`collect()` int、`get_threshold()` `(2000,10,0)`。
+  - **红线**：`--test compile` **4 passed（逐字节，无夹具改动）**；`lib_compile` 1 passed；`parse_batch_shapes` 2、`classes` 27、`exceptions` 17。
+- **数字（终审实测）**：`Lib/test` 体检 397：**可编译 347/397＝87.4%**（上轮 311；**MS-19 正向**）；**跑通 7/397＝1.8%**
+  （持平，因更多模块现在会走进运行期）；**语法错 86→50**（其中 **28 个是 surrogate 转义**、其余 22 个是批 B/C：PEP 646 `*Ts`
+  下标／复数 `0.0j`／参数注解里表达式／f-string 逗号／walrus-in-tuple／PEP 695 star 等）；未实现 72／运行期错 261／超时 7
+  （新增 `test_dictviews`／`test_exception_group`／`test_sort`／`test_weakset` —— 待查是否为性能/挂死）。判据① **468/628＝74.5%**
+  （通过 451＋参照口径 17，**+2**：`ann_module`／`ann_module2` 可 import）；进度指标 **452/548＝82.5%**；语料 407／在册差异 3 未变。
+- **缺口榜（下一轮取活）**：① `test.support.os_helper` ×72（＋`import_helper` 链）—— 卡在 **P3-35 的 surrogate 字面量/运行时
+  surrogateescape**（需字符串表示层 WTF-8 级改造，**独立立项评估**，不以假数据绕过）；② `doctest` 19（诊断：导入 `pdb` ⇒
+  **match 的序列/映射模式 opcode** 未接）；③ `unittest.mock` 13（诊断：`1j` 复数虚部字面量 ⇒ **P3-34**）；④ `unicodedata` 4／
+  `hashlib` 4（P3-37 其余）；⑤ `.pyac BadCodeSection` 8（P3-36，`test_dis`／`test_types` 已推进到它）；⑥ `multibytecodec_support` ×11
+  （文件只在 testsuite deb 解包目录、sync 来源没有 ⇒ 需**第二来源根**或一次性 CX-8 拷入，**待拍板**）；超时 7 待查。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **4905s**）：① check **0 警告**（0s）；② `--test compile`
+  逐字节 **4 passed**（30s）；③ `cargo test --workspace` **全部测试绿**（516s；含 `parse_batch_shapes` 2／`classes` 27／
+  `exceptions` 17／`lib_compile`／`gc` 4）；④ `check.py` **14/14**（3s）；⑤ `stability.py` 计数一致（1530s）；
+  ⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2027s）；⑦ 夹具守卫（1s）；⑧ 语料下限 407/112（0s）；
+  ⑨ `conformance` **5 passed**（396s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（402s）。
+- **下一轮**：**P3-34（complex `1j`）** —— 它同时是 `unittest.mock` 13 个测试的闸（计划里 52 个）；→ **P3-36（BadCodeSection 8）** →
+  **doctest/match 模式 opcode** → 其余 P3-37（unicodedata/hashlib/multibytecodec_support 拍板）→ 批 B/C 语法缺口；surrogate 作为
+  **独立立项**（string repr 改造）评估后报用户。

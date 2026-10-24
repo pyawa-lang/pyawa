@@ -57,6 +57,10 @@ pub mod select_module;
 pub mod array_module;
 pub mod io_module;
 pub mod warnings_module;
+/// **`gc`**（`P3-37` 第一片，task-27）：**最小诚实面**——`collect`／`enable`／`disable`／阈值
+/// 是真实现（阈值即 core 的自动回收开关），`get_objects`／`get_referrers` 等如实
+/// `NotImplementedError`（见模块头与挂账）。
+pub mod gc_module;
 
 /// **`sys.platform` 的值** ✓（第 194 轮）：本 crate 不碰平台（`CX-4` ✓）⇒ 先给常量 ✓，
 /// 真值应由平台集中点（`pyawa-runtime` ✓）注入 ✓ —— 已登记 ✓。
@@ -130,6 +134,10 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         ("_string", build_string_stub),
         (struct_module::NAME, struct_module::build),
         ("_opcode", build_opcode_module),
+        // **`gc`**（`P3-37` 第一片，task-27 ✓）：官方套件 `gc` ×10 的导入闸，也是
+        // `test.support` 的 `gc_collect()`／`disable_gc()`／`gc_threshold()` 的底座 ✓。
+        // **最小诚实面**：能真做的真做、做不了的如实 `NotImplementedError`（见 `gc_module` 头）。
+        (gc_module::NAME, gc_module::build),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
