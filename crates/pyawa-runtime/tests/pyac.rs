@@ -216,6 +216,17 @@ fn compiled_units_survive_the_code_section() {
         // **任意精度字面量**（第 285 轮）：新标签 13（十进制串）也要往返 ✓
         "x = 0xFFFFFFFFFFFFFFFF",
         "x = 10000000000000000000000",
+        // **`...` 与 `True`／`False` 的标签必须互不撞车**（task-36 ✓）：先前 `Ellipsis` 编码成
+        // `0x07`（与 `Bool` 同标签）⇒ 解码时按 `Bool` 多读一个载荷字节 ⇒ 整段错位 ⇒
+        // `BadCodeSection`（官方 `test_types.py` 一族 10 个文件就是嵌套单元里带了 `...` ✓）。
+        "x = ...",
+        "x = ...\ny = True\nz = False\n",
+        "def f(a=...):\n    return a is ...\n",
+        // **常量各标签的"厨房水槽"**（task-36 的容器一致性审视）：`None`／`Ellipsis`／`Bool`／
+        // `Int`／`BigInt`／`Float`／`Complex`／`Str`／`Bytes`／`Tuple`／`FrozenSet`／`Slice`／
+        // `Code`／`Names` 都进同一个常量池 ⇒ 任何一个标签错位都会在这里当场暴露 ✓。
+        "a = None\nb = ...\nc = True\nd = 1\ne = 1.5\nf = 1j\ng = 'x'\nh = b'y'\n\
+         i = 0xFFFFFFFFFFFFFFFF\nj = (1, 2)\nk = {1, 2, 3}\nl = f(a=1)\nm = q[1:2]\n",
     ];
     for source in sources {
         let unit = pyawa_core::compile::compile(

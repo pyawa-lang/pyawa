@@ -226,8 +226,11 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
     let mut out = Vec::new();
     match constant {
         Constant::None => out.push(0),
-        // **`...`**（第 177 轮）：`.pyac` 里记成标记 ✓。
-        Constant::Ellipsis => { out.push(0x07); }
+        // **`...`**（第 177 轮；task-36 修 ✗）：先前这里发 `0x07` —— **与 `Bool` 的标签 7 撞了** ✗
+        // ⇒ 解码侧按 `Bool` 读一个载荷字节（多读 1 字节）⇒ 其后整段错位 ⇒
+        // `BadCodeSection`（`test_types.py` 一族的 10 个官方文件正是卡在某个嵌套单元里的
+        // `...` 常量 ✓）。现在用**独占**标签 20（7 只留给 `Bool` ✓）。
+        Constant::Ellipsis => out.push(20),
         Constant::Int(value) => {
             out.push(1);
             out.extend_from_slice(&value.to_le_bytes());
@@ -471,6 +474,8 @@ impl UnitReader<'_> {
     fn constant(&mut self) -> Result<Constant, PyacError> {
         Ok(match self.u8()? {
             0 => Constant::None,
+            // **`...`**（task-36 修 ✓）：与 `Bool`（7）分开的独占标签 ✓
+            20 => Constant::Ellipsis,
             1 => Constant::Int(self.i64()?),
             // 位模式按  读回来再转（两种表示无损往返 ✓）
             12 => Constant::Float(self.i64()? as u64),
