@@ -167,6 +167,63 @@ fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -
     object.into_raw().cast::<Header>()
 }
 
+// ---- round 16：`sys._jit`（`Lib/test/support/__init__.py:2736` 的模块级查询口）----
+//
+// 参照 3.14.4 实测：`sys._jit` 是 **module 对象**（`<module 'sys._jit'>`），三个无参查询口
+// `is_available()`／`is_enabled()`／`is_active()`；本机参照是 JIT 构建 ⇒ `(True, False, False)`。
+// **如实登记偏差** ✗：本层**没有 JIT 后端** ⇒ 三个口一律 `False`（`is_available` 的 True 是
+// "构建期带 JIT"这一构建事实，编不出来，也不冒充）。`test.support` 只用它驱动
+// `requires_jit_*` 的 skip，False 的语义正确。
+
+/// `sys._jit` 的三个查询口的共用实现：**无参**，恒 `False`（本层没有 JIT 后端）。
+fn jit_query(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    name: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() takes no keyword arguments"),
+        ));
+    }
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    Ok(instance.new_bool(false))
+}
+
+fn jit_is_available_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    jit_query(instance, args, kwargs, "sys._jit.is_available")
+}
+
+fn jit_is_enabled_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    jit_query(instance, args, kwargs, "sys._jit.is_enabled")
+}
+
+fn jit_is_active_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    jit_query(instance, args, kwargs, "sys._jit.is_active")
+}
+
 /// `sys.intern(str)`（第 335 轮）。
 ///
 /// **如实登记的偏差** ✗：本层**没有驻留池**（intern 表）——直接返回**同一个实参对象** ✓
@@ -744,6 +801,32 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         "implementation",
         implementation.into_raw().cast::<Header>(),
     );
+
+    // **`sys._jit`**（round 16）：模块对象式的三个查询口（见 `jit_query` 的如实说明）。
+    // 建法与 `install` 里那些 Rust 侧模块同一手法：`module` 类型 ＋ 挂一个命名空间 dict。
+    let jit_namespace = instance.new_dict();
+    for (name, handler) in [
+        ("is_available", jit_is_available_native as pyawa_core::NativeFn),
+        ("is_enabled", jit_is_enabled_native as pyawa_core::NativeFn),
+        ("is_active", jit_is_active_native as pyawa_core::NativeFn),
+    ] {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(jit_namespace, name, function);
+    }
+    let jit_name = instance.new_str("sys._jit");
+    instance.dict_set(jit_namespace, "__name__", jit_name);
+    // `module` 在引导期不保证登记（与 `lib.rs::install` 的兜底同口径），缺就现建一个。
+    let module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let jit_module = instance
+        .alloc(AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(jit_namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(namespace, "_jit", jit_module);
 
     // `float_info`／`int_info`（§5.2.3 的第 216 轮口径；载体与 `implementation` 同一种：
     // **属性命名空间**——点号可访问，structseq 的元组行为（下标／len／迭代／repr）未接线）。

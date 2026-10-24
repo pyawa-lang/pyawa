@@ -671,13 +671,33 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 1. **本节自身的那次审计**（一个 12 行的脚本：对上面 28 个名字逐个 `hasattr` 探测 ✓）
    **没能跑完** ✗ —— 本层报 `指令 70 的这个形态尚未接线：FOR_ITER 的对象不是本层接线的迭代器` ✗
    （最小复现：`target/recon/time_audit.py` ✓，含"列表推导 ＋ `if` 条件"这一形态 ✓）。
-   ⇒ 这是**能力缺口**（`MS-19`：必须修，**不得**登记成差异 ✓），**记为本节的第一条待修** ✓。
+   ⇒ 这是**能力缺口**（`MS-19`：必须修，**不得**登记成差异 ✓），当时**记为本节的第一条待修** ✓
+   ——该 `FOR_ITER` 形态**其后已修**（审计脚本现在能跑完 ✓）。
 2. `errno` 那一路的同类审计**逐项一致** ✓（131 条 `errorcode`、`EPERM`／`ENOENT`／`EINVAL`、
    反向表 `errorcode[2] == "ENOENT"` ✓），作为"审计方法可行"的对照 ✓（§5.2.1 ✓）。
 
-**尚未逐条核对的面（不粉饰 ✓）**：`struct_time` 的字段与元组行为、`strftime`／`strptime` 的格式串面、
-`get_clock_info` 的返回对象、`tzname`／`daylight`／`altzone` 的取值来源（本层无 `TZ` 处理 ✓）
-—— 这些**要在 `FOR_ITER` 缺口修好、审计脚本能跑通之后**逐条补 ✓，不预写"已落地" ✓。
+**已落地面**（`clock` 域的**表尾三槽**，ABI 1.3）：
+- `strftime(format, t=None)`：`format` **必须** `str`；`t` 只接受 **9 元组**（参照对 `list`／`None`
+  报 `TypeError: Tuple or struct_time argument required`；缺省 ⇒ `localtime(now)`），输出经
+  **`clock.strftime`** 槽 —— **C locale**，glibc 扩展（如 `%4Y`）照参照；
+- `asctime(t=None)`／`ctime(secs=None)`：**纯 Rust** 格式化，C 口径 `%a %b %e %H:%M:%S %Y`
+  （`asctime()` 缺省取 now、`asctime(None)` 照参照报 `Tuple or struct_time argument required`；
+  `ctime(None)` ＝ now）；
+- `mktime(t)`：走 **`clock.mktime`** 槽，返回 **float**；
+- `localtime(secs=None)`：改走 **`clock.localtime`** 槽 ⇒ **真实本地时区**（`gmtime` 仍纯 UTC；
+  槽缺失＝旧宿主 ⇒ `localtime`／`asctime`／`ctime` 的缺省路径回退**纯 UTC**，`CP-3`）。
+
+**如实偏差（不粉饰 ✓）**：本层**还没有** `struct_time` 类型 ⇒ `localtime`／`gmtime` 仍返回 **9 元组**、
+`.tm_year` 等属性不可用；`tzname`／`timezone` 由 provider 的 `localtime(0)` 派生（**无 DST 的时区**
+与参照逐值一致），但 `daylight` 恒 **0**、`altzone` ＝ `timezone`（**没有夏令时第二偏移的通道**）
+⇒ 有 DST 的时区不保证；`%Z` 可用，其余 zone 语义未接。
+`strptime`／`tzset`／`process_time`／`process_time_ns`／`thread_time`／`thread_time_ns`／
+`clock_gettime`／`CLOCK_*`／`get_clock_info` **未做**。`strftime` 的格式串面只按实测覆盖
+（C locale／glibc 扩展），**不承诺**穷尽对拍。
+
+**验收**：`crates/pyawa-runtime/tests/time_shapes.rs`（`TZ=UTC` 端到端：`timezone` 一族、`localtime`／
+`gmtime` 的 9 元组、`strftime`（含 `%4Y`／空格式／`%a %b %e`）、`asctime`／`ctime`、`mktime` 的
+`float`、三类参数错误的类型与文案；期望值由本机 `python3` 3.14.4 跑同一探针实测）。
 
 #### 5.2.9 `_thread`（**VM 侧最小面** —— 第 280 轮；用户裁定 A）
 

@@ -1263,6 +1263,11 @@ fn cancellable_sleep_is_sliced_and_cancellable() {
         now_ns: None,
         monotonic_ns: None,
         sleep_ns: Some(sleep_slice),
+        // round 16（`AB-41` 表尾追加）：本测试只关心 `sleep_ns` 切片；日历／时区三槽如实留空
+        //（消费方按 `CP-3` 当"未实现"，与旧宿主行为一致）。
+        localtime: None,
+        strftime: None,
+        mktime: None,
     };
     let instance = pyawa_core::Instance::new();
     assert!(

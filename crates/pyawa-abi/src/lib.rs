@@ -84,7 +84,11 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **2**（round 15，2026-10-24）：`fs` 域 vtable **表尾追加** `stat_times` 槽（`CP-30`；读文件
 /// 时间戳，供 `os.stat_result` 的 `st_mtime` 一族）。属 `AB-41` 的"末尾追加"⇒ 旧宿主（1.1）的
 /// vtable 只是少了这一格，本运行时按 `CP-3` 把它当"该操作未实现"，不受影响。
-pub const PA_ABI_MINOR: u32 = 2;
+///
+/// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
+/// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
+/// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
+pub const PA_ABI_MINOR: u32 = 3;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
