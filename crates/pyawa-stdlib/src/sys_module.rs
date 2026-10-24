@@ -509,18 +509,54 @@ fn excepthook_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
-/// `sys.exc_info()` ✓（第 724 轮）：**如实口径** ✗ —— 本层不跟踪"当前异常" ⇒ 恒 `(None, None, None)` ✓。
+/// **`sys.exc_info()`**（task-26 真实现）：当前**处理中**的异常 ⇒ `(type, value, traceback)` ✓；
+/// 没有 ⇒ `(None, None, None)` ✓（参照 3.14.4 实测口径 ✓）。
+///
+/// 底座是 `BC-60` ② 的**实例级异常状态**（`PUSH_EXC_INFO` 压、`POP_EXCEPT` 弹 ✓，见
+/// `executor/step_exceptions.rs` ✓）—— 本层现在**真的**记"正在处理的异常" ✓。第 724 轮那个
+/// **如实桩**（恒 `(None, None, None)`）会让 `unittest` 的错误恢复在 `sys.exc_info()[0]` 上拿到
+/// `None` ✗ ⇒ `issubclass(None, failureException)` ⇒ 真实失败被掩盖、官方套件一遇失败就 abort ✗。
+///
+/// `traceback` 取异常实例的 `__traceback__`（`raise` 时挂上的**最小起步对象** ✓；
+/// 未抛过的异常给 `None` ✓）—— 与 `exception_getattr` 的 `"__traceback__"` 臂读**同一格** ✓。
 fn exc_info_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    // `new_tuple` **吃掉**每项引用 ⇒ 各 retain 一份 ✓。
-    let first = instance.retain(instance.singletons().none());
-    let second = instance.retain(instance.singletons().none());
-    let third = instance.retain(instance.singletons().none());
-    Ok(instance.new_tuple(vec![first, second, third]))
+    let none = instance.singletons().none();
+    // `new_tuple` **吃掉**每项引用 ⇒ 每项都自己 retain 一份 ✓。
+    let Some(exception) = instance.current_exception() else {
+        let first = instance.retain(none);
+        let second = instance.retain(none);
+        let third = instance.retain(none);
+        return Ok(instance.new_tuple(vec![first, second, third]));
+    };
+    // `type(value)` 是**类型对象**（参照给的也是类对象本身 ✓）；`retain` 那份给元组 ✓。
+    let exception_type = instance.type_of(exception).cast::<Header>();
+    instance.retain(exception_type);
+    instance.retain(exception);
+    // `__traceback__` 在异常实例的属性字典里（与 `exception_getattr` 同一条读取路径 ✓）。
+    let traceback = pyawa_core::mounted_instance_dict(instance, exception)
+        .and_then(|mapping| instance.dict_get(mapping, "__traceback__"))
+        .map(|value| instance.retain(value))
+        .unwrap_or_else(|| instance.retain(none));
+    Ok(instance.new_tuple(vec![exception_type, exception, traceback]))
+}
+
+/// **`sys.exception()`**（3.11+；task-26）：当前**处理中**的异常**值**；没有 ⇒ `None` ✓
+/// （参照实测：`except` 块里给那个异常实例 ✓、块外给 `None` ✓）。
+fn exception_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(match instance.current_exception() {
+        Some(value) => instance.retain(value),
+        None => instance.retain(instance.singletons().none()),
+    })
 }
 
 /// **`sys.exit([code])`** ✓（`P3-32`）：**实现＝抛 `SystemExit`** ✓（参照同义：`sys.exit` 本身
@@ -634,15 +670,24 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         excepthook_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "__excepthook__", excepthook_builtin);
-    // **`exc_info()`** ✓（第 724 轮）：`Lib/threading.py` 的 `_make_invoke_excepthook()` 在
-    // **模块级**就取 `sys_exc_info = _sys.exc_info` ✓ ⇒ 缺它同一处再报 AttributeError ✗（实测 ✓）。
-    // **如实口径** ✗：本层**不跟踪"当前异常"** ⇒ 恒返回 `(None, None, None)` ✓（`except` 块内也一样 ✓）。
+    // **`exc_info()`／`exception()`**（task-26 真实现）：`Lib/threading.py` 的
+    // `_make_invoke_excepthook()` 在**模块级**就取 `sys_exc_info = _sys.exc_info` ✓；
+    // `unittest` 的错误恢复靠 `sys.exc_info()` 拿真实异常 ✓（先前是如实桩 ⇒ 官方套件一遇
+    // 失败就 `issubclass() arg 1 must be a class` abort ✗）。两者都读 `BC-60` ② 的
+    // 实例级异常状态 ✓（`PUSH_EXC_INFO`／`POP_EXCEPT` 维护 ✓，见 `executor/step_exceptions.rs` ✓）。
     let exc_info = crate::builtins_module::make_native(
         instance,
         "exc_info",
         exc_info_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "exc_info", exc_info);
+    // `sys.exception()`（3.11+）：同一个状态的**值**那一项 ✓。
+    let exception = crate::builtins_module::make_native(
+        instance,
+        "exception",
+        exception_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "exception", exception);
 
     // **`sys.exit([code])`** ✓（`P3-32`）：`Lib/` 里遍地 `sys.exit(...)` ✓ —— 实现＝抛 `SystemExit`
     //（参照同义 ✓）；进程级退出码由组合根在**未捕获**时解释 ✓（`ExitDisposition` 一处真相 ✓）。

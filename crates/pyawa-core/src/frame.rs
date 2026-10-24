@@ -608,9 +608,36 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
     }
 }
 
-/// **帧的属性面** ✓（第 230 轮）：目前只接 `f_locals` ✓（快照 `dict` ✓）。
+/// **当前码元指针 → 所在指令的首选行号**（位置表首项 ✓）。
 ///
-/// **如实说** ✗：`f_back`／`f_lineno`／`f_code` 一族随后补 ✓。
+/// 码元指针的单位是**码元**（`BC-33`：每码元 2 字节），而位置表按**指令**一项 ⇒ 遍历时
+/// 要按**内联缓存**占的码元数跨过去（与 `flush_jumps` 的遍历同一口径 ✓）。
+pub fn line_at(code: &crate::CodeObject, instruction_pointer: usize) -> Option<u32> {
+    let raw = code.code();
+    let mut unit = 0usize;
+    let mut index = 0usize;
+    while index < code.positions().len() {
+        if unit == instruction_pointer {
+            return code.positions()[index].0;
+        }
+        if unit > instruction_pointer {
+            return None;
+        }
+        let op = u16::from(*raw.get(unit * 2)?);
+        unit += 1 + crate::opcode::inline_cache_entries(op) as usize;
+        index += 1;
+    }
+    None
+}
+
+/// **帧的属性面**（第 230 轮：`f_locals` ✓；task-26 补 `f_code`／`f_globals`／`f_lineno` ✓）。
+///
+/// 为什么要后三个：`traceback` 的失败格式化（`unittest` 的 FAIL／ERROR 输出）与
+/// `unittest.result._is_relevant_tb_level`（`'__unittest' in tb.tb_frame.f_globals`）都要它们 ✓
+/// —— `sys.exc_info()` 真实现之后（task-26），traceback 对象第一次真的进到 Python 侧 ✓
+/// ⇒ 缺这三个属性 ⇒ `unittest` 的失败报告仍会 `AttributeError` 中断 ✗。
+///
+/// **如实说** ✗：`f_back` 链仍未接 ✓（`traceback.walk_stack` 那条路暂时不可用 ✓）。
 pub unsafe fn frame_getattr(
     ptr: *mut Header,
     name: &str,
@@ -620,6 +647,27 @@ pub unsafe fn frame_getattr(
     let frame = unsafe { &*ptr.cast::<Frame>() };
     match name {
         "f_locals" => Some(frame.locals_snapshot(instance)),
+        // **`f_code`**：traceback 用它取 `co_filename`／`co_name`／`co_positions` 一族 ✓。
+        "f_code" => frame.code().map(|code| {
+            // SAFETY: code 由帧持有，存活；调用方要自己那份。
+            unsafe { instance.incref_object(code.as_ptr()) };
+            code
+        }),
+        // **`f_globals`**：`linecache.lazycache` 与 `unittest` 的 `_is_relevant_tb_level` 要它 ✓。
+        "f_globals" => frame.effective_globals().map(|mapping| {
+            // SAFETY: 映射由帧（或命名空间）持有，存活；调用方要自己那份。
+            unsafe { instance.incref_object(mapping.as_ptr()) };
+            mapping
+        }),
+        // **`f_lineno`**：按当前指令的位置表给（取不到给 `0` ✓ —— 本层位置表是可选面 ✓）。
+        "f_lineno" => {
+            let line = frame.code().and_then(|code_header| {
+                // SAFETY: code 由帧持有，存活。
+                let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+                line_at(code, frame.instruction_pointer())
+            });
+            Some(instance.new_int(i64::from(line.unwrap_or(0))))
+        }
         _ => None,
     }
 }

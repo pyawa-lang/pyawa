@@ -22,13 +22,15 @@ fn step_exceptions_push_exc_info<'a>(instance: &'a Instance, frame: &Owned<'a, F
             "PUSH_EXC_INFO" => {
                 // 实测骨架：处理块入口第一条就是它；栈效果 `(new_exc -- prev_exc, new_exc)`
                 let exception = frame.get().pop()?;
-                let previous = instance.current_exception();
+                // **上一次的"当前异常"要**取走**（不是偷看）** ✗（task-26 真 bug 修 ✗）：
+                // `exception_state` 是**栈**（`current_exception()` ＝ 栈顶 ✓）⇒ 进入处理块＝
+                // 「弹掉外层、压入本层」✓、退出＝「弹掉本层、把外层压回」✓（见 `POP_EXCEPT` 臂）。
+                // 先前用 `current_exception()` **偷看**再 push ✗ ⇒ 外层那项留在栈里 ＋ 退出时又压回
+                // 一次 ⇒ **每经一层嵌套 handler 就多一层重复** ✗ ⇒ `sys.exc_info()`（task-26 真实现）
+                // 在"handler 里再套 try/except"之后仍报旧的异常 ✓（实测 `ValueError` 泄漏 ✓）。
+                let previous = instance.pop_exception();
                 let previous_owned = match previous {
-                    Some(value) => {
-                        // SAFETY: value 由实例的异常状态持有，存活。
-                        unsafe { instance.incref_object(value.as_ptr()) };
-                        value
-                    }
+                    Some(value) => value, // `pop_exception` 交出的就是**新引用** ✓
                     None => {
                         let none = instance.singletons().none();
                         // SAFETY: 单例由实例持有。
@@ -36,7 +38,7 @@ fn step_exceptions_push_exc_info<'a>(instance: &'a Instance, frame: &Owned<'a, F
                         none
                     }
                 };
-                // 状态接管这份引用（当前的"正在处理的异常"）
+                // 状态接手本层异常（"正在处理的异常"＝新压入的这层 ✓）
                 instance.push_exception(exception);
                 frame.get().push(previous_owned)?;
                 push(instance, frame.get(), exception)?;
