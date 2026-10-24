@@ -14,8 +14,10 @@ impl Instance {
         self.is_subtype(self.type_of(object), self.metatype())
     }
 
-    /// **可调用判定**（`OM-11`）——**一处口径**：类型的 `call` 槽存在，**或**它是内建可调用
-    /// 类型（`function`／`builtin_function_or_method`／`method`／元类型，这几个的调用语义写
+    /// **可调用判定**（`OM-11`）——**一处口径**：类型的 `call` 槽存在（含 task-7：**沿 MRO
+    /// 继承来**的槽，查询与 `call_callable` 共用
+    /// [`inherited_call_slot`](crate::executor::call::inherited_call_slot) ✓），**或**它是内建
+    /// 可调用类型（`function`／`builtin_function_or_method`／`method`／元类型，这几个的调用语义写
     /// 在 `call_callable` 里）。
     ///
     /// 给 `callable()`、`pa_isfunction` 一类共用；两边各写一份就会漂。
@@ -23,6 +25,11 @@ impl Instance {
         let ty = self.type_of(object);
         // SAFETY: 类型对象由注册表持有。
         if unsafe { ty.as_ref() }.has_call_slot() {
+            return true;
+        }
+        // **`tp_call` 沿 MRO 继承**（task-7 ✓）：`class KeyedRef(weakref.ref)` 的实例可调用 ✓ ——
+        // 这里必须与 `call_callable` 的判定**同源**（同一个助手 ＋ 同一条载荷同构守卫 ✓）。
+        if crate::executor::call::inherited_call_slot(ty).is_some() {
             return true;
         }
         ty == self.metatype()

@@ -1365,3 +1365,83 @@
 
 
 
+
+---
+
+## round 14（会话 09 · M6 开局）落地 ✓ —— P3-32／P3-33：解锁官方 `Lib/test` 框架（官方套件首次跑通 5/397）
+
+- **口径**：`HEAD`（本笔前）＝`d6be4ea`（`dev`）；工作区起始干净；`stash` 空；`check.py` 14/14。
+- **用户指示（2026-10-24）**：本轮**唯一目标**＝`P3-32` ＋ `P3-33`；验收五条见下；**不动** `P3-34/35/36/37`、
+  不碰重构债、不合并 `main`；**不把"框架跑不起来"登记成"已知差异"**（`MS-19` 判据补充：合法 `.py` 被拒＝新差异、必须修）。
+- **验收（逐条实测 ✓）**：
+  1. `pyawa /tmp/x.py`（`import sys; sys.exit(3)`）⇒ **退出码 3** ✓（此前 `AttributeError: 'module' object has no attribute 'exit'`）。
+  2. 最小 `unittest.TestCase` ＋ `unittest.main()` ⇒ **退出码 0** ✓（**1 个与 2 个测试方法两档都过**；此前 `KeyError: 'dest'`）。
+  3. `PYTHONPATH=/tmp/pp` ⇒ `sys.path` **含 `/tmp/pp`** 且 `import ppmod` 成功 ✓。
+  4. `tools/libtests_survey.py`（397 个 `test_*.py`，清 `__pyawa__` 缓存后）⇒ **跑通 5/397＝1.3%**（上轮 0 ⇒ 首次非零 ✓）；
+     可编译 **311/397＝78.3%**（与上轮持平）；语法错 86／未实现 54／运行期错 250／超时 2。
+     跑通名单：`test_colorsys`／`test_errno`／`test_html`／`test_int_literal`／`test_typechecks`。
+  5. `check.py` 14/14 ✓；`slowcheck` 十项全绿 ✓；`.py` 产物逐字节不变（`cargo test -p pyawa-core --test compile`）✓。
+- **本轮实际落地（含为避免"把合法 Python 当差异"而必须一并修的前置；全部逐条对拍 python3 3.14.4）**：
+  1. **`sys.exit`**（`sys_module.rs`）：抛 `SystemExit`；参数校验/文案逐字；**未捕获 `SystemExit` 的进程级处置**
+     （`executor/runtime.rs` 的 `ExitDisposition`／`uncaught_system_exit`；`bin/pyawa.rs` 解释成退出码／`stderr` 文本；
+     0 参／None⇒0、int（含 bool）⇒该值（8 位截断、超 i64⇒255）、非 int⇒`str`+1、多参⇒`str(元组)`+1）。
+  2. **`PYTHONPATH` 进 `sys.path`**（`stdlib/lib.rs` 的组合根过渡半；顺序 `[脚本目录, PYTHONPATH…, Lib]`、
+     整体空串不加项、空组件⇒cwd 绝对路径）——最终形态仍归 `IM-24`（`site.py`）。
+  3. **`dict` 三格**（`builtin/dict.rs`）：`__init__` 接关键字实参（`dict(mapping, **kw)`／至少 1 个位置实参的上限文案）、
+     `dict_lookup` 支持任意键（`None`／tuple…，与 `dict_position` 同口径）、PEP 584 的 **`dict | dict`**（`arithmetic.rs` 分派）。
+  4. **用户类富比较协议**（`executor/protocol.rs` 的 `rich_compare`；`instance/convert.rs` 的 `order_of` 委托同一入口）：
+     `<`／`<=`／`>`／`>=` 正向→`NotImplemented` 反向→原 `TypeError`；`unittest` 用 `functools.cmp_to_key` 排测试方法名的硬前置。
+  5. **类内方法闭包穿类体捕获外层局部**（`compile/emitter/defs.rs` ＋ `compile/symbols.rs` 的候选集扩
+     `nested_unit_names`；模块作用域边界已收）：方法体里引用外层函数局部（`cmp_to_key.<locals>.K.__lt__` 的 `mycmp`）不再 `NameError`。
+  6. **零参 `super()` 支持函数内定义的类**（`builtin_objects/type_runtime.rs` 的慢路：按当前帧 code 在 MRO 反查定义类；
+     快路不变）＋ **`super().__new__(cls)` 的类对象 `__self__` 用该类自己的 MRO**（`executor.rs` 的 `super_lookup`；
+     如实收窄：只对 `__new__` 放开，其余等 `generic_init_subclass_native` 对齐后再说）。
+  7. **weakref 的 Python 子类可调用**（`executor/call.rs` 的 `tp_call` 沿 MRO 继承＋载荷同构守卫；
+     `classes.rs` 把 `weakref` 纳入内建布局族；`weakref_new` 用请求的子类 ＋ `weakref.__new__` 接线；
+     `query.rs` 的 `is_callable` 同源）：`_bootstrap._WeakValueDictionary` 的嵌套 `KeyedRef` 通了。
+  8. **`sys.stdout`／`sys.stderr` 的 `write`／`writeln`／`flush`**（`_io_module.rs`；逐对象绑定、句柄不存对象里）——
+     `unittest` 的 TextTestRunner 报告通道。
+  9. **`os.terminal_size`／`os.get_terminal_size`**（`posix_module.rs`；`sequence=`／`dict=` 关键字与参照文案；
+     `get_terminal_size` 无 ioctl 如实 `ENOTTY`；如实偏差：非真 structseq）。
+  10. **`sys.implementation._multiarch`**（`sys_module.rs`；构建目标三元组，本机 `x86_64-linux-gnu`）——
+      `sysconfig._get_sysconfigdata_name()` 依赖它。
+  11. **meta_path 过渡 finder 的 spec 形状**（`stdlib/lib.rs`）：`submodule_search_locations`／`parent`／
+      `_uninitialized_submodules`（`importlib._bootstrap._init_module_attrs` 无条件读）。
+  12. **`Lib/test` 包骨架补同步**（`tools/sync_lib.py`＋`Lib/`）：21 个上游文件（`test/support/__init__.py` 等 19 个骨架
+      ＋ `_sysconfigdata*` 2 个数据模块）⇒ `Lib/test` 的 `.py` **42→61**、`Lib/` 同步 **544/628**、
+      `sync_lib.py --check` **548** 个文件逐字节一致（例外清单空）。**7 个骨架暂不同步**（P3-35 合法 Python 被拒：
+      `libregrtest/result.py`（for-star）、`libregrtest/utils.py`＋`support/os_helper.py`（surrogate escape）、
+      `support/channels.py`（链式赋值非名字目标）、`typinganndata/{ann_module,ann_module2}.py`（注解赋值非名字目标）、
+      `typinganndata/ann_module695.py`（PEP 695 `*Ts`））——**不登记 `KNOWN`**；`SYNC_EXCLUDE` 另排除
+      `multiprocessing/heap.py`／`unittest/mock.py`（36c450b 按纪律剔除、同因）。`Lib/test` 体检默认目录已指向
+      `target/upstream/extracted/...`（`tools/libtests_survey.py`）。
+  13. **规格同步**：`SPEC-c-modules.md` §5.2.3（`exit` 契约／`implementation._multiarch`／`path` 的过渡半）、
+      §5.2.15（终端尺寸）、§5.2.16（`_io` 流方法）；`SPEC-imports-and-modes.md` §2（spec 形状硬契约）与 §8
+      （`IM-24` C 层过渡半指针）。`PLAN-milestones.md` §9.2 的 `P3-32`／`P3-33` 标完成、§6 兼容边界声明刷新。
+- **数字（终审实测）**：判据① **通过 449 ＋ 参照口径 17 ＝ 466 ÷ 628 ⇒ 74.2%**（**未变**；阈值 67% ✓）；
+  进度指标（不作判据）：`Lib/` 已同步子集 **544** 个文件 ⇒ 能 import **450** 个 ⇒ **82.7%**（M5 时 450/523＝86.0%；
+  +21 个同步文件多数还 import 不了 ⇒ 指标降是如实的）；`Lib/test` 体检见上；语料 **407** 条、在册差异 **3** 条未变。
+- **本轮暴露的新缺口（如实，进队列；不是"已知差异"）**：
+  1. **函数体 `if/else` 的 `else` 分支含 `with`** ⇒ 其后（甚至之前）对模块全局的读变成 `None`
+     （最小复现 `target/recon/helper_else_with.py`；命中 `Lib/sysconfig/__init__.py` 的 `get_config_vars()`
+     ⇒ `test.support` 导入链仍卡 `AttributeError: 'NoneType' object has no attribute 'get'` ×**135** 个官方测试签名）。
+     编译器/作用域 bug，单独一轮修（`P3-32` 的"框架"面之外）。
+  2. **官方 `test_decorators` 触发内存损坏**（`misaligned pointer dereference`／段错误；最小复现：
+     `setattr(f, 'dbval', (args, kwds))` 后读回 `f.dbval`；函数属性存"含 dict 的 tuple"）。
+     疑与既有函数属性引用账／`P3-18`／`P3-19` 同族，单独立项。
+  3. `SystemExit` 的 **Python 级子类**（`class E(SystemExit)`）载荷不是 `ExceptionObject` ⇒ 按形状核口径退化为通用诊断
+     （如实；与 `JSONDecodeError` 同类限制）。
+  4. `_functools` 模块未落地（`cmp_to_key` 走 Python 回退 ⇒ 键类名 `cmp_to_key.<locals>.K` vs 参照 C 版 `KeyWrapper`，
+     行为一致、`type().__name__` 不同＝实现观测面）。
+  5. `super_lookup` 的类对象 `__self__` 只对 `__new__` 放开（`generic_init_subclass_native` 与参照口径未对齐，见 6）。
+  6. `os.terminal_size` 返回对象不是真 structseq（无 `len()`／下标／元组相等；`get_terminal_size` 恒 `ENOTTY`）。
+- **闸门**（逐项实测，全部绿）：① `cargo check --workspace --all-targets` **0 警告**；② `--test compile` 逐字节 **4 passed**；
+  ③ `cargo test --workspace` **169 个二进制全 ok／0 FAILED**（524s）；④ `check.py` **14/14**；⑤ `stability.py`
+  （**168 个二进制 × 851 项 × 3 次计数完全一致**，1563s）；⑥ `heap_and_concurrency.py` **4 路并发 4/4 全绿（407 条语料）
+  ＋堆扰动 3/3 全绿**；⑦ 夹具守卫 **499** 条；⑧ 语料下限 **407/112** 全项达标；⑨ `conformance` **5 passed**（484s）；
+  ⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（483s）。如实记：第一次连续跑 `slowcheck.sh` 时，step 6 因**同时另起了一份
+  `heap_and_concurrency.py`**（8 路并发）被环境资源挤红；停掉干扰后 step 6 单独复跑 **绿**（①②③④⑤⑦⑧ 为同一次连续跑的
+  记录，⑥⑨⑩ 为随后单独复跑），十项各自的最终状态都是绿。
+- **未做（下一轮按序）**：`P3-34`（complex，52 个测试阻塞）→ `P3-35`（合法 Python 被拒：surrogate 20／同行 `try:`·`for:` 8）
+  → `P3-36`（`.pyac` `BadCodeSection`）→ `P3-37`（缺模块：doctest 15／`unittest.mock` 12／gc 10／unicodedata 4／hashlib 4）
+  → **M6 收口**（报用户批准后 `--no-ff` ＋ tag `m6`）。

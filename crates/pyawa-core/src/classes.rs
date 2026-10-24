@@ -699,6 +699,12 @@ pub fn build_class_from_parts_with_keywords(
             // 被包的函数／fget ✗ ⇒ 描述符 `__get__`／`__set__` 读不到东西（实测：强转读到 NULL ⇒ abort ✗）。
             // 与上面容器／数值族同一判据（基类自带 `new` 槽 ✓）；行为同 `class D(dict)` ✓。
             "classmethod", "staticmethod", "property",
+            // **`weakref`**（task-7）：`class KeyedRef(weakref.ref)` 必须**沿用 `WeakRefObject`
+            // 载荷** ✓ —— 否则目标根本没处存（`ref.__new__(type, ob, cb)` 当时落到
+            // `object.__new__` ⇒ 通用 `AttributeObject` ✗），而 `weakref_call` 按基类载荷读目标 ✓
+            // ⇒ 强调会读到别人的字段（实测 `null pointer dereference` abort ✗）。
+            // 动因：`Lib/importlib/_bootstrap.py` 的 `_WeakValueDictionary` 嵌套 `KeyedRef` ✓。
+            "weakref",
         ]
             .iter()
             .find_map(|name| {

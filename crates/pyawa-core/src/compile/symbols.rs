@@ -436,7 +436,19 @@ pub(super) fn analyze_cells(
                         demanded.push(wanted.clone());
                     }
                 }
-                for referenced in &probe.names {
+                // **类体里 `def` 单元引用的名字**也算（task-12 ✓）：类作用域不是函数闭包边界 ⇒
+                // 方法体里引用的外层局部要**穿过类体**索取（`def make(): base = 10; class K:
+                // def plain(self): return base`）。先前只遍历 `probe.names`（类体**自己**的
+                // `co_names`）✗ ⇒ `base` 不进取舍 ⇒ 外层函数不把它变 cell ⇒ 类体重编时
+                // `deref_slot` 找不到 ✗（运行期 `NameError: base`）。方法单元的名字在**嵌套 code
+                // 常量**里 ⇒ 用 `nested_unit_names` 递归收 ✓。
+                let mut class_names = probe.names.clone();
+                for name in nested_unit_names(&probe) {
+                    if !class_names.iter().any(|item| item == &name) {
+                        class_names.push(name);
+                    }
+                }
+                for referenced in &class_names {
                     if emitter.unit.varnames.iter().any(|local| local == referenced) {
                         if !cells.iter().any(|cell| cell == referenced) {
                             cells.push(referenced.clone());

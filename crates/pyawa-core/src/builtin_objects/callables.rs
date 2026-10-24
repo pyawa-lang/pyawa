@@ -590,8 +590,14 @@ pub unsafe fn type_call(
     }
 }
 
+/// 造一个 `ref`（`_weakref` 模组的 `ref` ✓）：接 1 或 2 个实参 ✓（回调**忽略** ✗，已登记 ✓）。
+///
+/// **`class` 用调用方请求的类** ✓（task-7）：`class KeyedRef(weakref.ref)` 的 `__new__` 要造出
+/// **子类**实例 ✓（载荷是同一个 `WeakRefObject` ✓ —— `classes.rs` 的"内建布局族"把 `weakref`
+/// 纳入了 ⇒ 子类沿用同一布局 ✓）；先前**硬编码**成 `weakref` 类型 ✗ ⇒ 子类实例的 `type()`
+/// 与 `isinstance()` 都会错 ✗。
 pub unsafe fn weakref_new(
-    _class: NonNull<crate::TypeObject>,
+    class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
@@ -602,12 +608,50 @@ pub unsafe fn weakref_new(
         ));
     };
     instance.retain(*target);
-    let ty = instance
-        .type_named("weakref")
-        .expect("引导期已登记 weakref 类型");
+    // SAFETY: `class` 由注册表持有；`target` 的那份引用由新对象接手（上面刚 retain ✓）。
     Ok(instance
-        .alloc_payload(WeakRefObject::new(ty, *target))
+        .alloc_payload(WeakRefObject::new(class, *target))
         .cast::<Header>())
+}
+
+/// **`weakref.__new__(cls, ob, callback=None)`**（task-7）：`ref.__new__` 在参照里是 weakref 类型
+/// **自己的** `tp_new` ✓ —— Python 子类（`class KeyedRef(weakref.ref)`）靠它拿到**请求的子类**
+/// 与目标（`weakref.ref.__new__(type, ob, callback)` ✓）。
+///
+/// 派发形态与 [`data_new_native`](crate::builtin_objects::constructors::data_new_native) 一致 ✓：
+/// 属性通道可能把**拥有者类型**放进 `bound` ✓，构造分派的 `__new__` 覆写支则把 `cls` 放进
+/// `args[0]` ✓ —— 两种都要认 ✓（纯 `weakref` 自己的实例化还会走 `new` 槽 ✓，本函数只负责
+/// "在类型对象上取到 `__new__` 再调用"这条 ✓）。
+pub unsafe fn weakref_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (class_header, rest) = match (bound, args.split_first()) {
+        (Some(this), Some((first, _remaining)))
+            if instance.is_type_object(this) && !instance.is_type_object(*first) =>
+        {
+            (this, args)
+        }
+        (Some(this), None) if instance.is_type_object(this) => (this, &[][..]),
+        (_, Some((first, remaining))) => (*first, remaining),
+        (Some(this), None) => (this, &[][..]),
+        (None, None) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "ref.__new__(): not enough arguments",
+            ))
+        }
+    };
+    let Some(class) = instance.as_type(class_header) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "ref.__new__(X): X is not a type object",
+        ));
+    };
+    // SAFETY: 槽位/实参都是借用视图，契约同 [`weakref_new`]。
+    unsafe { weakref_new(class, rest, instance) }
 }
 
 py_object! {

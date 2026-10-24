@@ -232,6 +232,28 @@ pub(crate) fn call_callable(
             }
             return call_callable(instance, function, Some(this), call_args, kwargs, opcode);
         }
+        // **`tp_call` 沿 MRO 继承** ✓（task-7）：上面只查了**精确类型**的 `call` 槽 ✗ ——
+        // 参照的 `tp_call` 在**建子类时从基类继承** ✓（`class KeyedRef(weakref.ref)` 的实例照旧
+        // 可调用 ✓）。动因：`Lib/importlib/_bootstrap.py` 的 `_WeakValueDictionary` 把嵌套
+        // `KeyedRef` 放进 `data` 并在 `data[key]()` 里调用 ✓ —— 先前报
+        // `TypeError: 'KeyedRef' object is not callable` ✗ ⇒ `importlib.import_module` 进
+        // `_ModuleLock`（第二跳）就崩 ✗。
+        // **只在"实例调用"这条路上找** ✓：类对象（含元类实例）走下面的实例化分派 ✓，
+        // 且它们已在上面 `callable_type_ok` 判为 true ⇒ 到不了这里 ✓。
+        // **`__call__` 优先** ✓：上面那条属性通道已先试过（`__call__` 在参照里就是"在更近的类上
+        // 定义 tp_call 槽"的同义物 ✓），到这里说明整条 MRO 都没有 `__call__` ✓ ⇒ 才退到原生槽 ✓。
+        if let Some(slot) = inherited_call_slot(ty) {
+            // SAFETY: 槽位契约见 `CallFn`（借用视图 ＋ 新引用返回值）；`callable` 仍是原对象 ✓。
+            let result = unsafe { slot(callable.as_ptr(), bound_self, &args, &kwargs, instance) };
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return result;
+        }
     }
     if !callable_type_ok {
         for value in args {
@@ -651,4 +673,35 @@ pub(crate) fn call_callable(
             what: "非生成器函数不该让出（码元被改坏了？）",
         }),
     }
+}
+
+/// **沿 MRO 继承来的 `call` 槽**（task-7）——**一处口径**：`call_callable` 的实例调用回退与
+/// [`Instance::is_callable`] 共用本函数 ⇒ "调用"与"`callable()`"不漂 ✓。
+///
+/// 语义：参照的 `tp_call` 在**建子类时从基类继承** ✓ ⇒ 实例的**精确类型**没有 `call` 槽时，
+/// 沿 `mro()`（`mro[0]` 是自己，已由调用方查过 ✓）找**第一个带 `call` 槽的基类** ✓。
+///
+/// **载荷必须同构**（`instance_size` 相同）才会返回槽 ✓：`CallFn` 按**基类的载荷**强转实例
+/// （`weakref_call` 读 `WeakRefObject.target` ✓）⇒ 布局不同的子类若走上基类槽，读到的是别人的
+/// 字段（实测：`class KeyedRef(weakref.ref)` 未继承载荷时强调 ⇒ `null pointer dereference` abort ✗）。
+/// 所以这把"谁能继承谁的槽"与 `classes.rs` 的"内建布局族"口径绑在一起 ✓ —— 布局没继承 ⇒
+/// 明确回 `None`、照旧报"不可调用" ✓，绝不冒险强转 ✓。
+pub(crate) fn inherited_call_slot(
+    ty: NonNull<TypeObject>,
+) -> Option<crate::type_object::CallFn> {
+    // SAFETY: 调用方保证 `ty` 是存活对象的类型（注册表持有 ✓）。
+    let info = unsafe { ty.as_ref() };
+    let instance_size = info.instance_size();
+    for base in info.mro().into_iter().skip(1) {
+        // SAFETY: base 由注册表持有。
+        let base_info = unsafe { base.as_ref() };
+        let Some(slot) = base_info.slots().call else {
+            continue;
+        };
+        if base_info.instance_size() != instance_size {
+            continue;
+        }
+        return Some(slot);
+    }
+    None
 }

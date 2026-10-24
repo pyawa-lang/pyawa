@@ -697,6 +697,11 @@ pub fn compare_public(
         _ => None,
     };
     let Some(ordering) = ordering else {
+        // **富比较协议**（task-12 ✓）：内建快速路径判不出可比性之后才走这里 ✓
+        // （`int`／`str`／`bytes`／`tuple`／`set` 的热路径在上面已经返回 ⇒ 这一步不加重它们的开销 ✓）。
+        if let Some(verdict) = rich_compare(instance, left, right, symbol, opcode)? {
+            return Ok(verdict);
+        }
         let left_name = instance.type_name(instance.type_of(left));
         let right_name = instance.type_name(instance.type_of(right));
         return Err(instance.raise_builtin_error(
@@ -717,6 +722,46 @@ pub fn compare_public(
             })
         }
     })
+}
+
+/// **用户类的富比较协议**（task-12 ✓）：`<`／`<=`／`>`／`>=` 的**正向 ＋ 反向**派发。
+///
+/// 参照口径（CPython `do_richcompare`）：
+/// - `a < b` ⇒ 先 `type(a).__lt__(a, b)` ✓；返回 `NotImplemented` ⇒ 再 `type(b).__gt__(b, a)` ✓；
+/// - 两边都 `NotImplemented`（或**都没有**这个方法）⇒ `None` ⇒ 调用方照原样报 `TypeError` ✓。
+///
+/// **只在内建快速路径判不出之后调** ✓（`int`／`str`／`bytes`／`tuple`／`set` 那一族在上面就返回了
+/// ⇒ 热路径不多走一步 ✓）。方法本身经属性通道取（`call_special_method`；找不到给 `Ok(None)` ✓）。
+fn rich_compare(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<Option<bool>, ExecError> {
+    // 符号 ⇒（正向方法，反向方法）。反向方法挂在**右操作数**上 ✓。
+    let (forward, reflected) = match symbol {
+        "<" => ("__lt__", "__gt__"),
+        "<=" => ("__le__", "__ge__"),
+        ">" => ("__gt__", "__lt__"),
+        ">=" => ("__ge__", "__le__"),
+        _ => return Ok(None),
+    };
+    let not_implemented = instance.not_implemented();
+    for (name, object, other) in [(forward, left, right), (reflected, right, left)] {
+        let Some(result) = call_special_method(instance, object, name, &[other])? else {
+            continue;
+        };
+        // **结果新引用** ⇒ 两条出口都要 release ✓。
+        if result == not_implemented {
+            release(instance, result);
+            continue;
+        }
+        let verdict = crate::executor::truthiness_public(instance, result, opcode)?;
+        release(instance, result);
+        return Ok(Some(verdict));
+    }
+    Ok(None)
 }
 
 /// **`TS-44`**：类型字典里若定义了某个 dunder（`__repr__`／`__str__`），就调用它并取文本。

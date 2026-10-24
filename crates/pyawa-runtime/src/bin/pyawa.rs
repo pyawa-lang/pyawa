@@ -303,15 +303,32 @@ fn main() {
     let exit = if executed == status::PA_OK {
         0
     } else {
-        // 宿主侧诊断（**不是** `sys.stderr`；`print`／`sys` 落地后替换为合规通道）
-        let pointer = unsafe { pa_errmsg(state) };
-        let message = if pointer.is_null() {
-            String::new()
-        } else {
-            unsafe { core::ffi::CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
-        };
-        eprintln!("pyawa: 未捕获（状态 {executed}）：{message}");
-        EXIT_SCRIPT
+        // **未捕获的 `SystemExit` 决定进程退出码**（`P3-32`，参照 3.14.4 实测口径）：
+        // `sys.exit(n)`／`raise SystemExit(n)` ⇒ 退出码 n；无实参／`None` ⇒ 0；
+        // 非 `int` 载荷 ⇒ `str(载荷)` 打到 stderr、码 1。**它不是错误** ⇒ 不打"未捕获"诊断。
+        // **先读异常再 `pa_destroy`**：`pending_exception` 是实例状态，销毁后不可再用。
+        let pending = state_ref.instance().pending_exception();
+        match pending.and_then(|exception| {
+            pyawa_core::executor::uncaught_system_exit(state_ref.instance(), exception)
+        }) {
+            Some(pyawa_core::executor::ExitDisposition::Code(code)) => code as i32,
+            Some(pyawa_core::executor::ExitDisposition::Message(message)) => {
+                eprintln!("{message}");
+                EXIT_SCRIPT
+            }
+            // 不是 `SystemExit` ⇒ 维持原有的宿主侧诊断
+            None => {
+                // 宿主侧诊断（**不是** `sys.stderr`；`print`／`sys` 落地后替换为合规通道）
+                let pointer = unsafe { pa_errmsg(state) };
+                let message = if pointer.is_null() {
+                    String::new()
+                } else {
+                    unsafe { core::ffi::CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
+                };
+                eprintln!("pyawa: 未捕获（状态 {executed}）：{message}");
+                EXIT_SCRIPT
+            }
+        }
     };
     // 实参已经装进 `sys.argv` ✓（第 97 轮起不再是「收了没用」✓；`argv[0]` 是脚本路径 ✓）
     unsafe { pa_destroy(state) };

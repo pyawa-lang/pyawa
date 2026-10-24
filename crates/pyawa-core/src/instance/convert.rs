@@ -216,6 +216,18 @@ impl Instance {
             let right_text = unsafe { &*right.as_ptr().cast::<StrObject>() }.value().to_owned();
             return Some(left_text.cmp(&right_text));
         }
+        // **富比较协议**（task-12 ✓）：内建快速路径都判不出时，照 `COMPARE_OP` 的**同一处真相**
+        // （`executor::compare_public`：正向方法 → `NotImplemented` 走反向 → 再判不出报 `TypeError`）
+        // 判 `<`／`>` —— `sorted`／`list.sort`／`heapq` 排**用户对象**要靠它 ✓（真 `unittest` 的
+        // `functools.cmp_to_key` 把方法名包成 `KeyWrapper` 再 `sorted`，先前就撞在这条上 ✗）。
+        // `compare_public` 报错（两边都没有可比方法）⇒ 仍回 `None`：调用方照旧报
+        // `'<' not supported between instances of …` ✓（文案不变）。
+        if crate::executor::compare_public(self, left, right, "<", 0).unwrap_or(false) {
+            return Some(core::cmp::Ordering::Less);
+        }
+        if crate::executor::compare_public(self, left, right, ">", 0).unwrap_or(false) {
+            return Some(core::cmp::Ordering::Greater);
+        }
         None
     }
 

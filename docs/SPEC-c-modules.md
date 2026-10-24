@@ -266,8 +266,14 @@
   - `hexversion` 是 `version_info` 的整数编码（与参照同式：主 `<<24`｜次 `<<16`｜微 `<<8`｜
     发布级 `<<4`｜序号）
   - `version` 是**构建串**，**必须**含 `pyawa`（**禁止**伪装成 CPython 的构建串）
+- **`implementation._multiarch`**（`P3-32`）：**构建目标事实**——Debian/Ubuntu multiarch 三元组
+  （本机 `x86_64-linux-gnu`；未知目标给**空串**、不冒充）；`sysconfig._get_sysconfigdata_name()`
+  用它拼 sysconfigdata 模块名。**不是**语言版本、也**不是**本实现的版本号
 - **`argv`**：启动参数列表。REPL／嵌入式默认 `[""]`；`-c` 入口给 `["-c"]`（照参照的可见形态）
-- **`path`**：**由 `site.py` 构建**（`IM-24`）——本层只暴露这个列表，**禁止**另立路径逻辑
+- **`path`**：**由 `site.py` 构建**（`IM-24`）——本层只暴露这个列表，**禁止**另立路径逻辑。
+  `site.py` 接上之前的**过渡半**（`P3-33`）：组合根按参照口径装成
+  **[脚本目录] ＋ `PYTHONPATH` 各项 ＋ [`Lib/`]**（`PYTHONPATH` 整体为空 ⇒ 不加项；空组件展开为
+  cwd 的绝对路径），最终形态仍归 `IM-24`
 - **`modules`**：import 系统的模块表（`IM-6` 一族的落点）；import 未接之前只保证这个键存在
 - **与实现无关的常量**（值由探测参照导出、逐项对拍，见 `crates/pyawa-stdlib/tests/sys.rs`）：
   - `maxunicode` ＝ `0x10FFFF`
@@ -280,9 +286,16 @@
   **不是**"审计已实现"（有 hook 可注册时参照会回调 hook——本层没有那条路径）。参数校验照参照 3.14.4
   **实测**（关键字**先判**／0 个位置实参／非 `str` 的 `event` ⇒ `TypeError`，文案逐字；`str` 子类
   事件名接受）；其余位置实参任意、一律忽略。`Lib/http/client.py:1031` 在建连前调它（`P3-29` 硬前置）
+- **`exit([arg])`**（`P3-32`）：**抛 `SystemExit`**——`sys.exit` 自身**不**直接退出进程，因此可被
+  `except SystemExit` 接住；**未捕获**的 `SystemExit` 由 CLI／宿主解释成**进程退出码**，**不是**错误诊断。
+  退出码口径（`raise SystemExit(...)` 直构同源）：`None`／无载荷 ⇒ **0**；`int`（含 `bool`）⇒ 该值
+  （进程按 8 位截断；超出 `i64` 可表示范围 ⇒ **255**）；其余载荷 ⇒ **未接住时**把 `str(载荷)` 打到
+  stderr ＋ **1**（多元素载荷即元组的 `str`）。参数校验照参照 3.14.4 **实测**：位置实参 ≥2 ⇒
+  `TypeError: exit expected at most 1 argument, got N`；带关键字 ⇒
+  `TypeError: sys.exit() takes no keyword arguments`
 - **已落地**（`crates/pyawa-stdlib/src/sys_module.rs`）：`argv`／`path`／`modules`／`version`／
   `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`／
-  **`float_info`／`int_info`（第 216 轮）**
+  **`float_info`／`int_info`（第 216 轮）**／**`exit`（`P3-32`）**／**`implementation._multiarch`（`P3-32`）**
 - **载体的实现观测面**：`implementation`／`float_info`／`int_info` 都是核心的**属性命名空间**
   （`new_attribute_type` ＋ `set_type_attribute`），点号可访问；**structseq 的元组行为**
   （下标／`len`／迭代／`repr`，以及 `count`／`index` 两个方法）**未接线**——那属于"元组子类"那一面
@@ -292,7 +305,9 @@
 - **验收**：`crates/pyawa-stdlib/tests/sys.rs`——身份三条（`name`／`cache_tag`／`version`）、
   语言版本两条（`version_info`／`hexversion` 与参照一致）、常量三条对拍、`argv`／`path`／
   `modules` 的形态；期望值由 `tools/gen_sys_fixture.py` **探测参照实现**导出
-  （`crates/pyawa-stdlib/tests/fixtures/sys.rs`，生成物、禁止手改）
+  （`crates/pyawa-stdlib/tests/fixtures/sys.rs`，生成物、禁止手改）。`exit` 的**进程级**口径由
+  `crates/pyawa-runtime/tests/cli.rs` 端到端对拍（退出码、`stderr` 文本、可被 `except SystemExit`
+  接住、参数错误文案；`PYTHONPATH` 同处有一条导入用例）
 
 #### 5.2.4 `_imp`
 
@@ -836,7 +851,7 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
   `cpu_count`／`getcwd`／`getcwdb`／`urandom`）走组合根提供的最小路径（`DESIGN.md` §9 第 20 条同一先例，
   **不新增能力域**）。
 - **能 import**：内建模块；`import posix` 恒成功（`Lib/os.py:55` 的 `from posix import *` 读 `__all__`）。
-- **已落地面**（`__all__` 当前 **39** 名；逐条照本机参照实测）：
+- **已落地面**（`__all__` 当前 **43** 名；逐条照本机参照实测）：
   - **文件系统**：`stat`／`lstat`／`stat_result`（`st_*` 字段）、`open`／`close`／`read`／`write`、
     `unlink`（`remove` 是它的别名）、`rmdir`、`readlink`；报错按 errno 折成 §5.1 的 `OSError` 子类；
   - **进程／环境**：`getpid`、`environ`（本进程环境，`_create_environ` 同源）、`cpu_count`、`_exit`；
@@ -847,13 +862,27 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
     **纯逻辑真实现**（退出码／负信号／`ValueError: process stopped by delivery of signal N`／
     `invalid wait status: N` 全部照参照实测）、`waitpid`（见下）；
   - **常量**：`F_OK`／`X_OK`／`W_OK`／`R_OK`、Linux 的 `O_*` 12 个真实取值（供 `Lib/tempfile.py` 等
-    导入期拼标志用）；`_have_functions` **空表**（如实：本层一个可选能力都不声明）。
+    导入期拼标志用）；`_have_functions` **空表**（如实：本层一个可选能力都不声明）；
+  - **终端尺寸**（`P3-32` 框架链）：`terminal_size`（**原生可调用**：收一个 2 元 tuple／list ⇒
+    返回带 `columns`／`lines` 点号属性的对象）与 `get_terminal_size(fd=1)`。**如实偏差**：
+    ① `terminal_size` **不是真 structseq** ⇒ 无 `len()`／下标／元组相等（与 `os.stat_result` 的既有
+    口径一致）；构造只接 tuple／list（参照接任意序列）、**不收关键字**（参照接受 `sequence=`）、
+    第二位置实参的 dict 语义未接线 ⇒ 这些情形本层报 `TypeError`（带关键字那条的措辞
+    `structseq() takes no keyword arguments` 是**本层措辞**，参照无此串）；② 本层没有 `ioctl` ⇒
+    `get_terminal_size` **恒抛** `OSError`（照"不是终端"那档 `[Errno 25] Inappropriate ioctl for
+    device`，**不区分** EBADF）——`shutil` 捕获后回退，链不受阻。参数错误文案照参照实测：
+    `structseq() missing required argument 'sequence' (pos 1)`／`constructor requires a sequence`／
+    `os.terminal_size() takes a 2-sequence (N-sequence given)`／
+    `posix.get_terminal_size() takes no keyword arguments`／
+    `get_terminal_size expected at most 1 argument, got N`。
 - **如实未接线面（`CM-6`；禁止假数据）**：`waitpid` 调用即 `NotImplementedError`（真 `waitpid(2)` 属
   能力域；**不返回假 pid／假 status**）；`readlink` 的 `dir_fd≠None` 未接线（如实报未接线）；`fs` 槽
   未注册／未实现时按 `CM-6` 报 `NotImplementedError`（不静默）。**范围如实**：参照 `posix` 的公开面
-  是 **346** 个非下划线名，本层 `__all__` 39 ⇒ `fork`／`execve`／`chdir`／`listdir`／`scandir`／`dup`／
+  是 **346** 个非下划线名，本层 `__all__` 43 ⇒ `fork`／`execve`／`chdir`／`listdir`／`scandir`／`dup`／
   `pipe`／`kill`／`wait4` 等远未落地（缺名＝少接线，逐批补）。
 - **验收**：`crates/pyawa-runtime/tests/posix_fs_shapes.rs`（`getcwd`／`getcwdb`／`readlink` 两侧逐行）；
+  `terminal_size`／`get_terminal_size` **无专用抽例**（如实记——形态与错误文案在
+  `crates/pyawa-stdlib/src/posix_module.rs` 里逐条对参照实测）；
   对拍语料 `posix_function_surface.py`／`posix_cwd_readlink.py`／`posix_path_helpers.py`／
   `import_os_surface.py`／`import_posixpath_surface.py`。
 
@@ -868,9 +897,17 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
   - 常量 `DEFAULT_BUFFER_SIZE`＝**8192**；异常 `BlockingIOError`（内建）与 `UnsupportedOperation`
     （**如实说**：参照是 `OSError`＋`ValueError` 子类，本层**别名到 `OSError`** —— 比缺名强、比造类型省，
     随后补真类型）；
-  - **真实现**：`TextIOWrapper`（`sys.stdout`／`sys.stderr` 的最小文本流，`write`／`flush` 经 `fs`）、
-    `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）、`FileIO`（经 `fs` 域：
-    `open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现）；
+  - **真实现**：
+    - `TextIOWrapper`（`sys.stdout`／`sys.stderr` 的最小文本流）：**每个流对象**有
+      `write`／`writeln`／`flush`（**逐对象绑定** —— 句柄烤进原生函数，**不**存进对象或共享类型字典）；
+      `write(str)` **只收 `str`**（UTF-8 编码后经 `fs` 域写，返回**字符数**；非 `str` ⇒ 参照口径
+      `TypeError: write() argument must be str, not <类型>`）；`writeln(str="")` 是**本层便利方法**
+      （参照的文本流没有这个名字；`unittest` 的 `_WritelnDecorator` 在 Python 层）——文本 ＋ 换行
+      **一次**写出、返回 `None`；`flush()` 在本层**无缓冲**下是**真 no-op**（`write` 已落 `fs`，
+      无事可刷；返回 `None`）。用途（`P3-32`）：官方 `unittest` 的 `TextTestRunner`／`TextTestResult`
+      **直接写这两个流**（报告通道）
+    - `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）
+    - `FileIO`（经 `fs` 域）：`open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现
   - **占位类型**（可当基类、可 `isinstance`；**实例化按 CM-6 报错**）：`_IOBase`／`_RawIOBase`／
     `_BufferedIOBase`／`_TextIOBase` 与 `BufferedReader`／`BufferedWriter`／`BufferedRWPair`／
     `BufferedRandom`／`StringIO`／`IncrementalNewlineDecoder`；

@@ -404,6 +404,92 @@ pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> E
     raise(instance, exception)
 }
 
+/// 抛一个内建异常，`args` 用给定的那批**新引用**（本函数接手；异常对象持有它们）。
+///
+/// 给 `pyawa-stdlib` 用（`CX-22`：stdlib 侧不能碰异常载荷布局）——`sys.exit` 要造
+/// `SystemExit(载荷)`，而载荷的**读取**在 [`uncaught_system_exit`] 里（同一处真相）。
+pub fn raise_builtin_with_args_public(
+    instance: &Instance,
+    name: &str,
+    args: Vec<NonNull<Header>>,
+) -> ExecError {
+    let exception =
+        crate::executor::new_exception_with_args(instance, exception_type(instance, name), args);
+    raise(instance, exception)
+}
+
+/// **未捕获 `SystemExit` 的进程级处置**（`P3-32`）：要么是退出码，要么是要打到 `stderr` 的文本。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExitDisposition {
+    /// 进程退出码（宿主按 `std::process::exit(code as i32)` 落；OS 自然按 8 位截断）。
+    Code(i64),
+    /// 把文本打到 `stderr` 后以 `1` 退出（非 `int` 的载荷：`str(载荷)`）。
+    Message(String),
+}
+
+/// **未捕获的 `SystemExit`**（`P3-32`）：给宿主一个"退出码／`stderr` 文本"的处置。
+///
+/// 返回 `None` ⇒ **不是**可读的 `SystemExit`（或载荷形状对不上）⇒ 宿主维持原有的未捕获诊断。
+/// 口径照参照 3.14.4 **实测**：
+/// - 无实参／`SystemExit(None)` ⇒ 退出码 `0`；
+/// - 单实参是 `int`（含 `bool` 与 `int` 子类）⇒ 它的值；超出 `i64` ⇒ `Code(-1)`（进程层截成 `255`）；
+/// - 其余（单实参非 `int`／多实参）⇒ `str(载荷)` 打到 `stderr`、退出码 `1`
+///   （多实参的载荷是 `args` 元组，`str((3, 4))` ⇒ `(3, 4)`）。
+///
+/// 形状核与 [`crate::executor::exception_uncaught_text`]／`Instance::exception_message_of`
+/// **同一套**：先核「类型是 `SystemExit` 的子类型」＋「载荷大小 == `ExceptionObject`」，再读载荷
+/// （**绝不硬读**）。
+pub fn uncaught_system_exit(
+    instance: &Instance,
+    exception: NonNull<Header>,
+) -> Option<ExitDisposition> {
+    // SAFETY: exception 由调用方保证存活。
+    let ty = unsafe { exception.as_ref() }.ty();
+    let is_system_exit = instance
+        .type_named("SystemExit")
+        .is_some_and(|base| instance.is_subtype(ty, base));
+    // SAFETY: ty 由注册表持有。
+    if !is_system_exit
+        || unsafe { ty.as_ref() }.instance_size()
+            != core::mem::size_of::<crate::builtin_objects::ExceptionObject>()
+    {
+        return None;
+    }
+    // SAFETY: 形状刚核过（与 `Instance::exception_message_of` 同一套检查）。
+    let payload = unsafe { &*exception.as_ptr().cast::<crate::builtin_objects::ExceptionObject>() };
+    let arguments = payload.args();
+    match arguments.as_slice() {
+        // `raise SystemExit`／`SystemExit()`／`sys.exit()` ⇒ 0
+        [] => Some(ExitDisposition::Code(0)),
+        [only] => {
+            // `SystemExit(None)`／`sys.exit(None)` ⇒ 0
+            if *only == instance.singletons().none() {
+                return Some(ExitDisposition::Code(0));
+            }
+            // `int`（含 `bool` 与 `int` 子类）⇒ 该整数；超出 `i64` ⇒ `-1`（进程层截成 255）。
+            if let Some(number) = instance.int_of(*only) {
+                return Some(ExitDisposition::Code(number.to_i64().unwrap_or(-1)));
+            }
+            // 非 `int` ⇒ `str(载荷)` 到 `stderr`、码 1。
+            Some(ExitDisposition::Message(
+                instance.object_str(*only).unwrap_or_default(),
+            ))
+        }
+        _ => {
+            // 多实参 ⇒ `str(args)`（例：`(3, 4)`）。
+            // `new_tuple` **吃掉**每项的新引用 ⇒ 先为每个实参 `retain` 一份；渲染完再释放元组。
+            let items = arguments
+                .iter()
+                .map(|argument| instance.retain(*argument))
+                .collect();
+            let tuple = instance.new_tuple(items);
+            let message = instance.object_str(tuple).unwrap_or_default();
+            release(instance, tuple);
+            Some(ExitDisposition::Message(message))
+        }
+    }
+}
+
 /// **未绑定局部槽** ✓（第 277 轮诊断升级）：参照在同样情形给
 /// `UnboundLocalError: cannot access local variable '<名>' where it is not associated with a value` ✓
 /// ⇒ 照它报，并带上**变量名**（先前只报"槽 N 未绑定（未接线）" ✗ ⇒ 无从下手 ✓）。

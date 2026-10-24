@@ -559,15 +559,29 @@ impl Emitter {
                 // **本层的自由变量** ✓ ⇒ 带 `freevars` **重编一次** ✓（`COPY_FREE_VARS`／`LOAD_DEREF`
                 // 才发得出 ✓），并在 `LOAD_CONST <code>` 之前压**闭包元组** ✓。
                 let mut closure_freevars: Vec<String> = Vec::new();
-                for referenced in global_load_names(&nested)
-                    .into_iter()
-                    .chain(nested.demanded.clone())
-                {
-                    let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
-                        || self.unit.cellvars.iter().any(|cell| cell == &referenced)
-                        || self.unit.freevars.iter().any(|free| free == &referenced);
-                    if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
-                        closure_freevars.push(referenced);
+                // **模块作用域没有闭包来源** ✓：模块的 `varnames` 只是**内联推导式目标**（3.12+），
+                // 类体／方法看不到它们（参照里这类名字在类体里是全局读，不是自由变量）⇒ 不收
+                // （收了也发不出 `LOAD_FAST_BORROW`：模块没有 cell／free 槽。`Lib/` 全量编译实测到
+                // `varnames=["name"]` 的 panic ✓）。
+                if self.kind != ScopeKind::Module {
+                    for referenced in global_load_names(&nested)
+                        .into_iter()
+                        .chain(nested.demanded.clone())
+                        // **方法单元**里的名字也要算候选 ✓（task-12 ✓）：类体**自己**不读、但方法体里
+                        // 引用外层局部时（`def make(): base = 10; class K: def plain(self): return base`），
+                        // 那句 `LOAD_GLOBAL base` 落在**方法的 code 常量**里 ✗ —— 只看类体的 `co_names`
+                        // （`global_load_names`）看不到 ✗ ⇒ 类体不会被当闭包体重编 ⇒ 方法退化成全局读
+                        // （运行期 `NameError`）。`nested_unit_names` 递归收嵌套 code 单元的 `co_names` ✓
+                        // （真 `functools.cmp_to_key` 的 `K.__lt__` 引用闭包 `mycmp` 正是这一格 ✓）。
+                        .chain(nested_unit_names(&nested))
+                    {
+                        // **只认本层真能 `LOAD_FAST_BORROW` 的槽**（cell／free）✓：类体自己的
+                        // `varnames`（内联推导式目标）不是闭包来源（类作用域不是闭包边界）✗。
+                        let from_here = self.unit.cellvars.iter().any(|cell| cell == &referenced)
+                            || self.unit.freevars.iter().any(|free| free == &referenced);
+                        if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
+                            closure_freevars.push(referenced);
+                        }
                     }
                 }
                 if !closure_freevars.is_empty() {

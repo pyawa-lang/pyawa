@@ -8,6 +8,10 @@ use super::*;
 mod primitives;
 mod jumps;
 mod defs;
+// **`nested_unit_names` 再导出**（task-12 ✓）：`compile::symbols` 的 `analyze_cells` 也要用
+// （类体里**方法单元**引用的外层局部 ⇒ 外层函数得把它变 cell ✓）；`defs` 是私有子模块，
+// 跨兄弟模块直接取不到 ⇒ 从 `emitter` 这一层 `pub(crate) use` 一次 ✓。
+pub(crate) use self::defs::nested_unit_names;
 mod patterns;
 mod control;
 mod compare;

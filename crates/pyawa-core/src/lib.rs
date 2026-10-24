@@ -26,6 +26,7 @@ pub use builtin_objects::{
     str_dunder_new, tuple_new_native,
 };
 pub use builtin::function::function_descriptor_get;
+pub use builtin_objects::weakref_dunder_new;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::dir_new;

@@ -330,6 +330,27 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
+    // **`weakref.__new__` 进 `weakref` 的类型字典** ✓（task-7）：`ref.__new__` 在参照里是
+    // weakref 类型**自己的** `tp_new` ✓ ⇒ Python 子类（`class KeyedRef(weakref.ref)` 的
+    // `weakref.ref.__new__(type, ob, callback)` ✓，`Lib/importlib/_bootstrap.py` 的嵌套
+    // `KeyedRef` ＋ `Lib/weakref.py` 的模块级 `KeyedRef` ✓）必须取到它 ✓；缺了它属性通道会
+    // 翻到 `object.__new__` ✗ ⇒ 通用 `AttributeObject` 载荷，**目标根本没处存** ✗。
+    if let Some(weakref_type) = instance.type_named("weakref") {
+        if let Some(namespace) = instance.type_namespace(weakref_type.cast()) {
+            let has_own = instance
+                .type_lookup_owner(weakref_type, "__new__")
+                .is_some_and(|(owner, _)| owner == weakref_type);
+            if !has_own {
+                let own = make_native(
+                    instance,
+                    "__new__",
+                    pyawa_core::weakref_dunder_new as pyawa_core::NativeFn,
+                );
+                instance.dict_set(namespace, "__new__", own);
+            }
+        }
+    }
+
     // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {

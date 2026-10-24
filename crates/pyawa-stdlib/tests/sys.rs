@@ -133,6 +133,24 @@ fn implementation_free_constants_match_the_reference() {
 }
 
 #[test]
+fn the_multiarch_reports_the_build_target_fact() {
+    // task-9：`sys.implementation._multiarch` 是**构建目标（宿主平台）的 Debian/Ubuntu
+    // multiarch 三元组**。`Lib/sysconfig/__init__.py:394-399` 用它拼 sysconfigdata 的名字
+    // `_sysconfigdata_{abiflags}_{platform}_{multiarch}` ⇒ 它必须与同步进 `Lib/` 的那份
+    // 上游 sysconfigdata **同目标**（`_sysconfigdata__linux_x86_64-linux-gnu.py`）。
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let implementation = attribute(&instance, namespace, "implementation");
+    let multiarch = implementation_field(&instance, implementation, "_multiarch");
+    let text = text_of(multiarch);
+    assert_eq!(text, sys_module::multiarch(), "`_multiarch` 与 `multiarch()` 一处真相");
+    // 本机参照 3.14.4 实测（`python3 -c "import sys; print(sys.implementation._multiarch)"`）
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        assert_eq!(text, "x86_64-linux-gnu");
+    }
+}
+
+#[test]
 fn the_capability_free_containers_have_the_documented_shape() {
     // `argv` 默认 `[""]`；`path` 由 `site.py` 建（本层先给空表）；`modules` 是空表
     let instance = Instance::new();

@@ -450,6 +450,186 @@ fn stat_native(
     Ok(result.into_raw().cast::<Header>())
 }
 
+/// **`os.terminal_size` 的每实例唯一类型对象**（task-8）：与 [`stat_result_type`] 同一口径
+/// （查本实例注册表 ⇒ 同实例内身份稳定、跨实例不串 ✓）。
+fn terminal_size_type(instance: &Instance) -> NonNull<pyawa_core::TypeObject> {
+    if let Some(existing) = instance.type_named("os.terminal_size") {
+        return existing;
+    }
+    instance.new_attribute_type("os.terminal_size")
+}
+
+/// 取一个**序列**的元素（tuple 族／list 族；借用视图）。`terminal_size` 的实参用。
+fn sequence_items(instance: &Instance, value: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+    instance
+        .tuple_items(value)
+        .or_else(|| instance.list_items(value))
+}
+
+/// **`os.terminal_size(sequence, /, **kwargs)`**（task-8；task-16 补 `sequence=` 关键字）：
+/// `os.terminal_size` 的最小可用形态。
+///
+/// 动因 ✓：`Lib/shutil.py:1548`／`1554` 的 `get_terminal_size()` 在**没有终端**时用
+/// `os.terminal_size(fallback)` 包回退值；`Lib/argparse.py:190` 读它的 `.columns` 定帮助宽度
+/// ⇒ 缺这个类型，官方 `unittest.main()` 走 argparse 时就
+/// `AttributeError: 'module' object has no attribute 'terminal_size'` ✗（P3-32 验收②的最后一格 ✓）。
+///
+/// **关键字口径** ✓（task-16，参照 3.14.4 实测；`MS-19`：合法 Python 不得被拒）：参照的
+/// `structseq_new` 接受 `sequence=`（以及 `dict=` 这个名字）关键字 ⇒ 本层照做，不再"一律拒关键字"。
+/// 位置与同名关键字同给、未知关键字、个数上限、缺参的**文案与优先级**都照实测（见函数内注释）。
+///
+/// **如实登记的偏差** ✗：参照里它是 **structseq**（`tuple` 子类，`len()`／下标／`== (80,24)`
+/// 都成立）；本层用**属性命名空间**（`new_attribute_type` ＋ `AttributeObject`）⇒ 只有
+/// `.columns`／`.lines` 两个点号属性，元组行为**未接线**（不阻塞 argparse／shutil 这条链 ✓；
+/// 与 `os.stat_result` 的既有口径一致 ✓）。构造的序列只接 tuple 族／list 族（参照接任意序列，
+/// 如 `'ab'` 按下标取字符——本条已登记，不在 task-16 的范围 ✓）。
+fn terminal_size_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    // **参数解析照参照 3.14.4 逐条实测**（task-16；优先级就是下面的次序）：
+    // ① 个数上限：有位置实参 ⇒ 按「位置＋关键字」总数报 `takes at most 2 arguments (N given)`；
+    //    纯关键字 ⇒ 按关键字个数报 `takes at most 2 keyword arguments (N given)`；
+    // ② 位置 `sequence` 与关键字 `sequence=` 同给 ⇒
+    //    `argument for structseq() given by name ('sequence') and position (1)`；
+    //    （`dict` 同名冲突**不可达**：位置 ≥ 2 再加关键字总数已 > 2 ⇒ ① 先报。）
+    // ③ 两个来源都没有 ⇒ `structseq() missing required argument 'sequence' (pos 1)`
+    //    ——**先于**未知关键字判定（实测 `foo=1` ⇒ missing，不是 unexpected）；
+    // ④ 未知关键字 ⇒ `structseq() got an unexpected keyword argument '<名>'`
+    //    ——**先于**序列形状校验（实测 `(1,), foo=1` ⇒ unexpected，不是长度错）；
+    // ⑤ 校验次序：序列类型 → 第二实参必须是 dict → dict 字段（terminal_size 没有未命名字段
+    //    ⇒ **非空** dict 一律 `got duplicate or unexpected field name(s)`）→ 序列长度。
+    let positional_sequence = args.first().copied();
+    let positional_dict = args.get(1).copied();
+    let keyword_of = |name: &str| {
+        kwargs
+            .iter()
+            .find(|(key, _)| instance.text_of(*key) == Some(name))
+            .map(|(_, value)| *value)
+    };
+    let keyword_sequence = keyword_of("sequence");
+    let keyword_dict = keyword_of("dict");
+    let total = args.len() + kwargs.len();
+    if !args.is_empty() && total > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("structseq() takes at most 2 arguments ({total} given)"),
+        ));
+    }
+    if args.is_empty() && kwargs.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "structseq() takes at most 2 keyword arguments ({} given)",
+                kwargs.len()
+            ),
+        ));
+    }
+    if positional_sequence.is_some() && keyword_sequence.is_some() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "argument for structseq() given by name ('sequence') and position (1)",
+        ));
+    }
+    let Some(sequence) = positional_sequence.or(keyword_sequence) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "structseq() missing required argument 'sequence' (pos 1)",
+        ));
+    };
+    for (key, _) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        if name != "sequence" && name != "dict" {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("structseq() got an unexpected keyword argument '{name}'"),
+            ));
+        }
+    }
+    let Some(items) = sequence_items(instance, sequence) else {
+        return Err(instance.raise_builtin_error("TypeError", "constructor requires a sequence"));
+    };
+    if let Some(dictionary) = positional_dict.or(keyword_dict) {
+        let Some(entries) = instance.dict_entries(dictionary) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "os.terminal_size() takes a dict as second arg, if any",
+            ));
+        };
+        // `terminal_size` 的两个字段都由序列填满、且没有未命名字段 ⇒ 任何条目都是多余/重复
+        // （照参照实测：`{'columns': 1}`／`{1: 2}` 都是同一条文案）。
+        if !entries.is_empty() {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "os.terminal_size() got duplicate or unexpected field name(s)",
+            ));
+        }
+    }
+    if items.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "os.terminal_size() takes a 2-sequence ({}-sequence given)",
+                items.len()
+            ),
+        ));
+    }
+    let result_type = terminal_size_type(instance);
+    let result = instance
+        .alloc(AttributeObject::new(result_type, core::cell::RefCell::new(None)))
+        .into_raw()
+        .cast::<Header>();
+    // 属性挂在**实例**上（类型只有一个、值逐次不同）；`set_attribute_value` 自己 `retain` ✓
+    for (field, item) in [("columns", items[0]), ("lines", items[1])] {
+        instance.set_attribute_value(result, field, item)?;
+    }
+    Ok(result)
+}
+
+/// **`posix.get_terminal_size(fd=1)`**（task-8）：终端宽度探测的**查询口**。
+///
+/// **如实登记的偏差** ✗：本层没有 `ioctl`（`CX-4`：stdlib 不碰平台接口）⇒ **恒抛 `OSError`**，
+/// 口径照参照"目标不是终端"那一档（`[Errno 25] Inappropriate ioctl for device`）——
+/// `Lib/shutil.py:1544-1548` 正是**捕获 `OSError` 后回退**到 `fallback` ✓ ⇒ 这条链照常成立 ✓。
+/// 参数校验照参照 3.14.4 实测：关键字 ⇒ `posix.get_terminal_size() takes no keyword arguments`
+/// （参照的 `fd` 是**位置参数** ✓）；多于 1 个位置实参 ⇒ `get_terminal_size expected at most 1
+/// argument, got N`；非整数 ⇒ `'<类型>' object cannot be interpreted as an integer`。
+fn get_terminal_size_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.get_terminal_size() takes no keyword arguments",
+        ));
+    }
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("get_terminal_size expected at most 1 argument, got {}", args.len()),
+        ));
+    }
+    if let Some(fd) = args.first() {
+        if instance.int_value(*fd).is_none() {
+            let name = instance.type_name(instance.type_of(*fd));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("'{name}' object cannot be interpreted as an integer"),
+            ));
+        }
+    }
+    // 没有 ioctl：如实报"不是终端"（`shutil` 捕获 `OSError` 后回退 ✓）
+    Err(instance.raise_builtin_error(
+        "OSError",
+        "[Errno 25] Inappropriate ioctl for device",
+    ))
+}
+
 /// **`posix.getcwd()`** ✓（task-10）：`sysconfig` 一族的**第一道 import 闸** ✓ —— 它不是直接调
 /// `os.getcwd()`，而是 `Lib/posixpath.py` 的 `realpath` 对**绝对路径**也会调 `os.getcwd()`
 /// （`posixpath.py:381`／`426`；`sysconfig/__init__.py:219` 的 `_safe_realpath(sys.executable)` 经它 ✓）。
@@ -936,6 +1116,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     //（`os.py:55` 的 `from posix import *` 靠 `__all__` 带过去 ✓）。
     let stat_result = stat_result_type(instance);
     instance.dict_set(namespace, "stat_result", stat_result.cast::<Header>());
+    // **`terminal_size`／`get_terminal_size`** ✓（task-8）：`Lib/shutil.py:1548` 与
+    // `Lib/argparse.py:190` 的终端宽度探测（`os.py:55` 的 `from posix import *` 靠 `__all__` 带过去 ✓）。
+    let terminal_size = crate::builtins_module::make_native(
+        instance,
+        "terminal_size",
+        terminal_size_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "terminal_size", terminal_size);
+    let get_terminal_size = crate::builtins_module::make_native(
+        instance,
+        "get_terminal_size",
+        get_terminal_size_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "get_terminal_size", get_terminal_size);
     for (name, handler) in [
         ("open", open_native as pyawa_core::NativeFn),
         ("close", close_native as pyawa_core::NativeFn),
@@ -1003,6 +1197,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("stat"),
         instance.new_str("lstat"),
         instance.new_str("stat_result"),
+        // **task-8**：`shutil.get_terminal_size()` 的底座（`os.py:55` 的 `from posix import *`）✓
+        instance.new_str("terminal_size"),
+        instance.new_str("get_terminal_size"),
         instance.new_str("open"),
         instance.new_str("close"),
         instance.new_str("dup"),

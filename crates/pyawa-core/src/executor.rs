@@ -200,7 +200,12 @@ pub(crate) enum Attribute {
     },
 }
 
-/// **`super` 的属性查找** ✓（第 233 轮）：在 `type(__self__)` 的 MRO 上、**定义类之后**找 ✓。
+/// **`super` 的属性查找** ✓（第 233 轮）：在 `__self__` 的 MRO 上、**定义类之后**找 ✓。
+///
+/// **`__new__` 的 `__self__` 是类对象**（task-6 ✓）：参照的 `super.__getattribute__` 用**该类自己的
+/// `tp_mro`**（`PyType_Check(obj) ⇒ ((PyTypeObject *)obj)->tp_mro`），**不是**元类的 MRO ✗ ——
+/// 先前一律 `type_of(__self__)` ⇒ `__new__` 里的零参 `super().__new__(cls)` 会去 `[type, object]` 上找
+/// （拿到 `type.__new__` 后按类当命名空间调 ⇒ 报"至少要 3 个实参"✗，模块级类也一样）。
 ///
 /// 函数 ⇒ 绑到 `__self__`（与实例方法同款 ✓）；其余 ⇒ 原样给（**如实说** ✗：描述符的 `__get__` 随后补 ✓）。
 pub(crate) fn super_lookup(
@@ -219,7 +224,18 @@ pub(crate) fn super_lookup(
     let Some(this) = instance.dict_get(dict, "__self__") else {
         return Ok(None);
     };
-    let this_type = instance.type_of(this);
+    // **`__new__` 的 `__self__` 是类对象**（类体里的 `__new__` 被包成 staticmethod ⇒ 第一个实参是类）：
+    // 参照的 `super.__getattribute__` 对类对象用它的**自己的 `tp_mro`** ✓
+    //（`PyType_Check(obj) ⇒ ((PyTypeObject *)obj)->tp_mro`），否则用 `type(__self__)` 的 MRO ——
+    // 本层先只对 `__new__` 放开 ✗：`__init_subclass__` 这类**隐式 classmethod** 的类对象 `super()`
+    // 若也改走自己的 MRO，会命中 `generic_init_subclass_native` 的简化条件（`params.is_empty()` 一律报
+    // `Cannot inherit from plain Generic`）⇒ `import typing` 当场红 ✗ —— 那一格（`builtin/typing.rs`）
+    // 不在本任务写域，待它按参照的 `Generic in cls.__bases__`／`__orig_bases__` 口径对齐后再放开。
+    let this_type = if name == "__new__" && instance.is_type_object(this) {
+        this.cast::<TypeObject>()
+    } else {
+        instance.type_of(this)
+    };
     let stop = thisclass.cast::<TypeObject>();
     // SAFETY: this_type 由注册表持有。
     let mro = unsafe { this_type.as_ref() }.mro();
@@ -302,6 +318,37 @@ pub(crate) fn super_lookup(
                             }));
                         }
                     }
+                }
+                // **`staticmethod`／`classmethod` 是描述符** ✓（task-6 连带修 ✗）：`__self__` 是类对象时，
+                // 上面按"该类自己的 MRO"查（task-6）会走到**父类 Python 定义**的 `__new__`／classmethod
+                // ⇒ 类字典里存的是**包装对象** ✓，参照的 `super().__getattribute__` 走 `__get__` 解包 ✓
+                //（先前一律按元类 MRO 查、走不到这一格 ⇒ 漏着没暴露；真 `_collections_abc` 的
+                // `_DeprecateByteStringMeta.__new__` 当场报 `'staticmethod' object is not callable` ✗）。
+                if Some(found_type) == instance.type_named("staticmethod") {
+                    // SAFETY: 类型身份刚确认 ⇒ 载荷是 `StaticMethodObject`。
+                    let inner = unsafe {
+                        &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>()
+                    }
+                    .function();
+                    // `staticmethod.__get__` 不绑 `self` ⇒ 交**裸函数**（`LOAD_ATTR` 的方法位会补 NULL 槽）。
+                    return Ok(Some(Attribute::Value(inner)));
+                }
+                if Some(found_type) == instance.type_named("classmethod") {
+                    // SAFETY: 类型身份刚确认 ⇒ 载荷是 `ClassMethodObject`。
+                    let inner = unsafe {
+                        &*found.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>()
+                    }
+                    .function();
+                    // 参照口径：`classmethod.__get__` 绑**类**（实例语境绑 `type(self)`）。
+                    let bound = if instance.is_type_object(this) {
+                        this
+                    } else {
+                        instance.type_of(this).cast::<Header>()
+                    };
+                    return Ok(Some(Attribute::Method {
+                        function: inner,
+                        this: bound,
+                    }));
                 }
                 if found_type == builtin_type(instance, "function")
                     || found_type == builtin_type(instance, "builtin_function_or_method")

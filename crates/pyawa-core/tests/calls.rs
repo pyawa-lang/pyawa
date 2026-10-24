@@ -23,6 +23,7 @@
 mod common;
 
 use core::cell::RefCell;
+use core::ptr::NonNull;
 
 use pyawa_core::opcode::get_nb_ops;
 use pyawa_core::{ExecError, FunctionObject, Header, Instance, StrObject, TupleObject, Value};
@@ -528,4 +529,60 @@ core::cell::RefCell::new(Vec::new()),
     assert_eq!(function.get().code(), code_header);
     assert!(function.get().defaults().is_empty());
     assert!(function.get().kwdefaults().is_none());
+}
+
+// ---- `tp_call` 沿 MRO 继承（task-7）----
+
+/// 精确实例类型没有 `call` 槽时，参照的 `tp_call` 会**从基类继承**（`class KeyedRef(weakref.ref)`
+/// 的实例照旧可调用）。这里手工搭一对**载荷同构**（都用 `AttributeObject`）的类型来钉住该语义。
+///
+/// 真端到端那格（`weakref` 的 Python 子类）还要"布局继承"——见 task-7 报告：本层
+/// `class KeyedRef(weakref.ref)` 现在落通用 `AttributeObject` 载荷，强调基类的
+/// `weakref_call` 会读到别的字段 ⇒ 代码里加了**同构守卫**，不会冒险调。
+#[test]
+fn an_instance_inherits_the_call_slot_of_its_base() {
+    unsafe fn inherited_call(
+        _ptr: *mut Header,
+        _bound: Option<NonNull<Header>>,
+        _args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+        instance: &Instance,
+    ) -> Result<NonNull<Header>, ExecError> {
+        Ok(instance.new_int(42))
+    }
+
+    let vm = Vm::new();
+    let size = core::mem::size_of::<pyawa_core::AttributeObject>();
+    let base = vm.instance.new_type(
+        "CallableBase",
+        size,
+        pyawa_core::AttributeObject::slots().with_call(inherited_call),
+    );
+    let sub = vm.instance.new_type("CallableSub", size, pyawa_core::AttributeObject::slots());
+    assert!(
+        vm.instance.register_bases(sub, vec![base]).is_some(),
+        "MRO 应当算得出来"
+    );
+    let object = vm
+        .instance
+        .alloc(pyawa_core::AttributeObject::new(sub, RefCell::new(None)))
+        .into_raw()
+        .cast::<Header>();
+    // **调用与 `callable()` 口径同源**（task-7）：`is_callable` 也认 MRO 继承来的 call 槽 ✓。
+    assert!(
+        vm.instance.is_callable(object),
+        "callable() 应当与调用口径一致（都是 MRO 继承来的槽）"
+    );
+    let result =
+        pyawa_core::call_value(&vm.instance, object, &[], &[]).expect("子类实例应当可调用");
+    assert_eq!(
+        vm.instance.int_value(result),
+        Some(42),
+        "调用的是基类的 call 槽"
+    );
+    // SAFETY: result 与 object 都由本测试持有。
+    unsafe {
+        vm.instance.release_object(result.as_ptr());
+        vm.instance.release_object(object.as_ptr());
+    }
 }

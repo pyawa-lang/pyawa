@@ -380,6 +380,57 @@ SLICE = (
     # `from . import a` 的循环形状 ✓）。
     "socketserver.py",
     "test/typinganndata/partialexecution/a.py",
+
+    # **task-3 收账（官方测试套件包骨架，2026-10-24 ✓）**：`Lib/test` 此前只有 42 个 `.py` ✓，
+    # 而上游 `test` **包骨架**（`support/__init__.py`／`libregrtest` 的 runner 一族／
+    # `typinganndata` 的注解夹具）**不在** deb 数据包里 ✓、只在本机 stdlib（`upstream_prefix()`，
+    # 即 `CX-8` 的上游口径）里 ✓ ⇒ `import test.support` 直接 `No module named 'test.support'` ✗。
+    # 这里**逐文件列 19 个**（不用目录 glob ✗）：其余 7 个（`libregrtest/result.py`／
+    # `libregrtest/utils.py`／`support/channels.py`／`support/os_helper.py`／
+    # `typinganndata/ann_module.py`／`ann_module2.py`／`ann_module695.py`）当前过不了
+    # `tools/cargo.sh test -p pyawa-core --test lib_compile` 的编译期不变量 ✗（`P3-35` 的
+    # **合法 Python 被拒**语法缺口：`for *x` 目标／surrogate escape `\uD800`／链式赋值非名字目标／
+    # 注解赋值的括号名字与属性目标／PEP 695 `*Ts`）⇒ **暂不同步** ✓（`P3-35` 修完再收）；
+    # 按 `MS-19` 判据补充：**不登记 KNOWN**、也不改编译器凑绿 ✗。
+    "test/libregrtest/cmdline.py",
+    "test/libregrtest/findtests.py",
+    "test/libregrtest/logger.py",
+    "test/libregrtest/main.py",
+    "test/libregrtest/refleak.py",
+    "test/libregrtest/results.py",
+    "test/libregrtest/run_workers.py",
+    "test/libregrtest/runtests.py",
+    "test/libregrtest/save_env.py",
+    "test/libregrtest/setup.py",
+    "test/libregrtest/single.py",
+    "test/libregrtest/testresult.py",
+    "test/libregrtest/worker.py",
+    "test/support/__init__.py",
+    "test/support/pty_helper.py",
+    "test/support/socket_helper.py",
+    "test/support/strace_helper.py",
+    "test/typinganndata/_typed_dict_helper.py",
+    "test/typinganndata/mod_generics_cache.py",
+    # **`sysconfig` 的 `_sysconfigdata` 数据模块**（task-3 顺带 ✓）：`sysconfig.get_config_var()`
+    # 走 `importlib.import_module(_get_sysconfigdata_name())` ✓，官方 `test.support` 导入期的
+    # `check_sanitizer()` 就要 `CFLAGS` ⇒ 这两个名字按本机 `sys.platform`／multiarch 口径列出 ✓
+    #（后一个是前一个的符号链接，`shutil.copyfile` 落成逐字节相同的普通文件 ⇒ `CX-8` 仍成立 ✓）。
+    "_sysconfigdata__linux_x86_64-linux-gnu.py",
+    "_sysconfigdata__x86_64-linux-gnu.py",
+)
+
+#: `--sync` 要**跳过**的已知坏文件（相对上游 stdlib 的路径 ⇒ 原由）。**只影响 `--sync`** ✓；
+#: `--check` 的语义不变 ✓（它只校验 `Lib/` 里**已有**的文件 ⇒ 不引白名单、例外清单仍为空 ✓）。
+#: 这些都是**合法 Python 却被 pyawa 的编译期不变量拒**的（`P3-35` 一族）⇒ 按 `MS-19` 判据补充
+#: **不登记 KNOWN**、也不改编译器凑绿；暂不同步 ✓。
+#: 先例：`36c450b` 把 `multiprocessing/heap.py`／`unittest/mock.py` 两处**按纪律剔除** ✓
+#: （链式赋值非名字目标／虚数字面量 `1j`）——但 `multiprocessing/**/*.py` 与 `unittest/**/*.py`
+#: 两条既有 glob 会把它们重新拉回来 ✗ ⇒ 这里显式排除 ✓（否则"跑一次 `--sync` 就红闸门" ✗）。
+SYNC_EXCLUDE = frozenset(
+    {
+        "multiprocessing/heap.py",
+        "unittest/mock.py",
+    }
 )
 
 
@@ -434,6 +485,7 @@ def check(prefix: pathlib.Path) -> int:
 def sync(prefix: pathlib.Path) -> int:
     LIB.mkdir(exist_ok=True)
     copied = 0
+    skipped = 0
     for name in SLICE:
         # **支持 glob**（第 282 轮）：`encodings/*.py` 那一族 123 个文件按一条写 ✓
         #（一条一条列既啰嗦又容易漏 ✓）。一个都没匹配到 ⇒ **报错**（不是静默跳过 ✓）。
@@ -446,10 +498,19 @@ def sync(prefix: pathlib.Path) -> int:
                 if not source.is_file():
                     continue
                 relative = source.relative_to(prefix)
+                # **显式排除**（task-3 ✓）：既有 glob 会重新匹配上 `36c450b` 按纪律剔除的
+                # 已知坏文件（`SYNC_EXCLUDE`，`P3-35` 语法缺口）⇒ 跳过 ✓（`--check` 不受影响 ✓）。
+                if relative.as_posix() in SYNC_EXCLUDE:
+                    skipped += 1
+                    continue
                 target = LIB / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
                 copied += 1
+            continue
+        # 逐文件条目也过同一张排除表（**一处真相** ✓：排除只在 `SYNC_EXCLUDE` 判 ✓）。
+        if name in SYNC_EXCLUDE:
+            skipped += 1
             continue
         source = prefix / name
         if not source.exists():
@@ -460,6 +521,11 @@ def sync(prefix: pathlib.Path) -> int:
         shutil.copyfile(source, target)
         copied += 1
     print(f"已从 {prefix} 复制 {copied} 个文件到 Lib/")
+    if skipped:
+        print(
+            f"  按 SYNC_EXCLUDE 跳过 {skipped} 个已知坏文件"
+            "（`P3-35` 语法缺口，暂不同步；不登记 KNOWN）"
+        )
     return 0
 
 

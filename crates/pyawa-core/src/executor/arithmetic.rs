@@ -59,6 +59,20 @@ pub fn arithmetic_public(
             return Ok(set_operation(instance, left, right, symbol));
         }
     }
+    // **`dict | dict`**（`PEP 584` ✓，task-13）：两边都是 **dict 族**（子类也算 ✓）⇒ **新建** dict，
+    // 先左后右、右侧**覆盖**同名键 ✓（参照 3.14.4 实测；语义见
+    // [`crate::builtin::dict::dict_merge`] ✓）。动因：`Lib/sysconfig/__init__.py:427` 的
+    // `_get_sysconfigdata() | vars` ✓ ⇒ `sysconfig.get_config_var()` 崩 ⇒ 官方 `test.support`
+    // 导入链（`P3-32` 框架门槛）的最后一格之一 ✓。
+    // 非 dict 的对侧**不在这里接** ✓（照旧落到文件末尾"一处真相"的 `unsupported_operand` ✓）；
+    // `dict |= dict` 走 `protocol::inplace_dict_merge` ✓（那条行为不动 ✓）。
+    let dict_type = instance.type_named("dict");
+    let is_dict = |value: NonNull<Header>| {
+        dict_type.is_some_and(|base| instance.is_subtype(instance.type_of(value), base))
+    };
+    if symbol == "|" && is_dict(left) && is_dict(right) {
+        return Ok(crate::builtin::dict::dict_merge(instance, left, right));
+    }
     // **序列重复 `*`**（第 305 轮）：`"-" * 40`、`[0] * 3`、`b"ab" * 2` —— `Lib/` 里遍地都是。
     // 实测第一处撞上的是 `Lib/traceback.py` 的 `f"{'a' * 3}"`：先前直接落到整数那条路 ⇒
     // `TypeError: unsupported operand type(s) for *: 'str' and 'int'`。

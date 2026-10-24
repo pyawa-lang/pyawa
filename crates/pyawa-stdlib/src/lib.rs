@@ -510,6 +510,18 @@ fn finder_find_spec(
     set_field(instance, spec, "name", instance.new_str(&name));
     set_field(instance, spec, "origin", instance.new_str(&name));
     set_field(instance, spec, "has_location", instance.retain(instance.singletons().boolean(false)));
+    // **Python 层 `importlib._bootstrap` 要的 spec 形状** ✓（task-11）：`_init_module_attrs`
+    // **无条件读** `spec.submodule_search_locations`（`Lib/importlib/_bootstrap.py:750`／`786`）
+    // 与 `spec.parent`（`:776`）⇒ 缺一个就是 `AttributeError: 'module' object has no attribute …`
+    // ✗ ⇒ 经 `importlib.import_module` 的**任何**导入都崩 ✗（纯 `import` 语句走核心 Rust 路径、
+    // 不读这个 spec ⇒ 先前没露 ✓，但 `sysconfig`／`test.support` 走 Python 层 importlib ✓）。
+    // 本桥**只定位顶层文件模块**（不是包）⇒ `submodule_search_locations` 如实给 `None`；
+    // 顶层名字没有点分 ⇒ `parent` 是空串。`_uninitialized_submodules` 是
+    // `_find_and_load_unlocked` 给**父包**做的循环导入簿记（`:_bootstrap.py:1340`）——顶层用不到，
+    // 但补空表更稳 ✓（`_load_unlocked` 会往 spec 上写 `_initializing`，属性可写 ✓）。
+    set_field(instance, spec, "submodule_search_locations", instance.retain(instance.singletons().none()));
+    set_field(instance, spec, "parent", instance.new_str(""));
+    set_field(instance, spec, "_uninitialized_submodules", instance.new_list(Vec::new()));
     if let Some(loader) = module_like(instance, "loader") {
         set_field(instance, loader, "create_module", native_fn(instance, "create_module", loader_create));
         set_field(instance, loader, "exec_module", native_fn(instance, "exec_module", loader_exec));
@@ -564,6 +576,23 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         let text = directory.to_string_lossy().into_owned();
         if !text.is_empty() {
             path_entries.push(text);
+        }
+    }
+    // **`PYTHONPATH`**（`P3-33`）：参照的 `sys.path` 次序是 `[脚本所在目录, PYTHONPATH 各项, Lib]`
+    // ——这里插在**脚本目录之后、`Lib/` 之前** ✓。用 `std::env::split_paths` 按平台分隔符拆 ✓；
+    // **整体空串 ⇒ 不加项** ✓；**空组件** ⇒ 参照取 **cwd 的绝对路径** ✓（实测：`PYTHONPATH=:x`
+    // ⇒ `sys.path[1]` 是 cwd）。`std::env` 不违反 `CX-4`（`posix_module` 有先例 ✓）。
+    if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
+        if !pythonpath.is_empty() {
+            for component in std::env::split_paths(&pythonpath) {
+                if component.as_os_str().is_empty() {
+                    if let Ok(cwd) = std::env::current_dir() {
+                        path_entries.push(cwd.to_string_lossy().into_owned());
+                    }
+                } else {
+                    path_entries.push(component.to_string_lossy().into_owned());
+                }
+            }
         }
     }
     // **暂由组合根把 `Lib/` 放进 `sys.path`**（第 138 轮）——按 `IM-24`／`IM-26`（**A2**）这活

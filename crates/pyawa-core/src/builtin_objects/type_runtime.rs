@@ -86,10 +86,118 @@ pub fn type_new_native(
     )
 }
 
-/// **`super()`**（**零参**）✓（第 233 轮）：从**当前帧**取 `self` ✓，从 `co_qualname` 取**定义该方法的类** ✓
+/// **零参 `super()` 慢路的"定义类"反查**（task-6 ✓）：在 `this` 的 MRO 上找**类字典持有当前 `code`** 的那个类。
+///
+/// 参照语义：定义类 ＝ **方法所在的那个类对象**（CPython 编译期把 `__class__` cell 塞进方法的闭包）。
+/// 本层**不改编译器字节码**（`compile` 的逐字节对拍不能动 ✓）⇒ 运行期反查：
+/// 方法的 code object 就在类字典的那个函数里 ⇒ 沿 MRO **由近到远**找第一个"类字典里有一项是同一 code 的函数"。
+///
+/// - `this` 是**类对象**（`__new__`／`__init_subclass__` 这种 staticmethod／classmethod 形态 ⇒ 第一个实参是类）
+///   ⇒ 先查**这个类自己**的 MRO ✓（`__new__` 就是这条）；再兜底查它的**元类** MRO ✓（元类里定义的 `__new__`）。
+/// - `this` 是实例 ⇒ 查 `type(this)` 的 MRO ✓（`type(this)` 必是定义类的子类 ✓）。
+/// - 找不到 ⇒ `None`（调用方保留原报错 ✓）。
+fn find_defining_class(
+    instance: &Instance,
+    code: NonNull<Header>,
+    this: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    if instance.is_type_object(this) {
+        // SAFETY: `is_type_object` 刚确认 ⇒ 载荷是 `TypeObject`，由注册表持有。
+        let self_type = this.cast::<crate::TypeObject>();
+        if let Some(found) = scan_mro_for_code(instance, code, self_type) {
+            return Some(found);
+        }
+        // 元类里定义的 `__new__`／classmethod：定义类是 `type(this)` 的 MRO 上的那个类。
+        return scan_mro_for_code(instance, code, instance.type_of(this));
+    }
+    scan_mro_for_code(instance, code, instance.type_of(this))
+}
+
+/// 沿 `root` 的 MRO **由近到远**找"类字典里持有 `code` 那个函数"的类。
+fn scan_mro_for_code(
+    instance: &Instance,
+    code: NonNull<Header>,
+    root: NonNull<crate::TypeObject>,
+) -> Option<NonNull<Header>> {
+    // SAFETY: root 由注册表持有；MRO 里的类型同样存活。
+    for entry in unsafe { root.as_ref() }.mro() {
+        // SAFETY: 同上。
+        let Some(mapping) = (unsafe { entry.as_ref() }).dict() else {
+            continue;
+        };
+        let Some(entries) = instance.dict_entries(mapping) else {
+            continue;
+        };
+        if entries
+            .into_iter()
+            .any(|(_key, value)| class_dict_value_has_code(instance, value, code))
+        {
+            return Some(entry.cast::<Header>());
+        }
+    }
+    None
+}
+
+/// 类字典里的这一项是不是"定义在 `code` 上的函数"。
+///
+/// 除了裸 `function`，还要剥开类体里会自动出现的包装：`__new__` 被 `type.__new__` 包成
+/// **`staticmethod`** ✓、`@classmethod`／`@staticmethod`／`@property` 装饰的也是包装对象 ✓。
+/// **只认精确的内建包装类型** ✗（Python 子类实例走通用 `AttributeObject` 布局、载荷里没有被包的对象
+/// ⇒ 强转会读到垃圾／NULL；判据同 `builtin_wrapper_layout_ok` 的注释 ✓）。
+fn class_dict_value_has_code(
+    instance: &Instance,
+    value: NonNull<Header>,
+    code: NonNull<Header>,
+) -> bool {
+    let Some(function_type) = instance.type_named("function") else {
+        return false;
+    };
+    let value_type = instance.type_of(value);
+    if value_type == function_type {
+        return function_has_code(instance, value, function_type, code);
+    }
+    if Some(value_type) == instance.type_named("staticmethod") {
+        // SAFETY: 类型身份刚确认 ⇒ 载荷是 `StaticMethodObject`。
+        let inner = unsafe { &*value.as_ptr().cast::<StaticMethodObject>() }.function();
+        return function_has_code(instance, inner, function_type, code);
+    }
+    if Some(value_type) == instance.type_named("classmethod") {
+        // SAFETY: 类型身份刚确认 ⇒ 载荷是 `ClassMethodObject`。
+        let inner = unsafe { &*value.as_ptr().cast::<ClassMethodObject>() }.function();
+        return function_has_code(instance, inner, function_type, code);
+    }
+    if Some(value_type) == instance.type_named("property") {
+        // SAFETY: 类型身份刚确认 ⇒ 载荷是 `PropertyObject`（`fset`／`fdel` 可能是 `None` 单例，下面按类型滤）。
+        let property = unsafe { &*value.as_ptr().cast::<PropertyObject>() };
+        return [property.fget(), property.fset(), property.fdel()]
+            .into_iter()
+            .any(|inner| function_has_code(instance, inner, function_type, code));
+    }
+    false
+}
+
+/// `candidate` 是函数对象且它的 code 就是 `code`。
+fn function_has_code(
+    instance: &Instance,
+    candidate: NonNull<Header>,
+    function_type: NonNull<crate::TypeObject>,
+    code: NonNull<Header>,
+) -> bool {
+    instance.type_of(candidate) == function_type
+        // SAFETY: 类型身份刚确认 ⇒ 载荷是 `FunctionObject`。
+        && unsafe { &*candidate.as_ptr().cast::<FunctionObject>() }.code() == code
+}
+
+/// **`super()`**（**零参**）✓（第 233 轮）：从**当前帧**取 `self` ✓，从 `co_qualname` 取**定义该方法的类名** ✓
 ///（`A.hi` ⇒ `A` ✓，在**当前全局**里查 ✓）。
 ///
-/// **如实说** ✗：只接**零参**形式 ✓、且定义类必须是**全局可查到的名字** ✓（嵌套类／显式两参形式随后补 ✓）。
+/// **快路 ⇒ 慢路**（task-6 ✓）：模块级类走的仍是"全局按名字查"的**快路** ✓（`super()` 很热 ⇒ 不能给快路加扫描）；
+/// 查不到时走**慢路**：用**当前帧的 code** 在 `type(self)` 的 MRO 里反查"类字典持有这个函数"的那个类
+/// （＝参照里 `__class__` cell 给出的**定义类** ✓）—— 函数里／嵌套定义的类不在全局里，只能这样定位 ✓。
+/// 慢路也查不到 ⇒ **保留原来的报错** ✓（不吞错 ✓）。
+///
+/// **如实说** ✗：只接**零参**形式 ✓；慢路按"函数 code 相同"认定义类 ⇒ 把同一个函数**别名**给另一个类
+/// （`B.f = A.f`）时认不出编译期那个 `__class__` cell（取 MRO 上**最近**的匹配 ✓，如实差异）。
 pub fn super_new(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -114,17 +222,27 @@ pub fn super_new(
     let globals = instance
         .current_globals()
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "super(): 没有当前全局"))?;
-    let Some(class_value) = instance.dict_get(globals, &class_name) else {
-        return Err(instance.raise_builtin_error(
-            "RuntimeError",
-            &format!("super(): 全局里找不到定义类 {class_name}"),
-        ));
+    // **快路**：全局里按名字查（模块级类的老路径 ✓，`super()` 很热 ⇒ 这一支的顺序与开销保持原样：
+    // 先查全局、再取第一个实参；慢路的 MRO 扫描与 `frame.local(0)` 都不进快路）。
+    let class_value = if let Some(found) = instance.dict_get(globals, &class_name) {
+        found
+    } else {
+        // **慢路**：函数里／嵌套定义的类不在全局里 ⇒ 按"类字典持有当前 code"反查定义类。
+        let this = frame.local(0).ok().flatten();
+        match this.and_then(|value| find_defining_class(instance, code_header, value)) {
+            Some(found) => found,
+            // 慢路也找不到 ⇒ **保留原来的报错**（不吞错 ✓）。
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "RuntimeError",
+                    &format!("super(): 全局里找不到定义类 {class_name}"),
+                ));
+            }
+        }
     };
-    let this = frame
-        .local(0)
-        .ok()
-        .flatten()
-        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "super(): 当前帧没有第一个实参"))?;
+    let this = frame.local(0).ok().flatten().ok_or_else(|| {
+        instance.raise_builtin_error("RuntimeError", "super(): 当前帧没有第一个实参")
+    })?;
     let super_type = instance.type_named("super").ok_or(crate::ExecError::Unsupported {
         opcode: 0,
         what: "super 类型未登记",

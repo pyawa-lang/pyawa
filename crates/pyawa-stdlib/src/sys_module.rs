@@ -128,6 +128,31 @@ pub const fn byteorder() -> &'static str {
     }
 }
 
+/// **`sys.implementation._multiarch`** ✓（task-9）：**构建目标（宿主平台）的 Debian/Ubuntu
+/// multiarch 三元组** —— 不是语言版本、也不是本实现自报的版本号。
+///
+/// 为什么需要它 ✓：`Lib/sysconfig/__init__.py:394-399` 用它拼 sysconfigdata 的名字
+/// `_sysconfigdata_{abiflags}_{platform}_{multiarch}`；空值会拼出 `_sysconfigdata__linux_`
+/// ⇒ `ModuleNotFoundError` ⇒ `test.support` 的 sysconfig 链断 ✗（本仓 `Lib/` 里同步了
+/// `_sysconfigdata__linux_x86_64-linux-gnu.py` 与 `_sysconfigdata__x86_64-linux-gnu.py` ✓）。
+///
+/// 取值口径 ✓：CPython 在 **configure 期**把 `MULTIARCH`（`dpkg-architecture
+/// -qDEB_HOST_MULTIARCH` 的同源值）编进解释器 ⇒ 这是**构建目标事实**。本机参照 3.14.4
+/// 实测 `'x86_64-linux-gnu'` ✓；本层对拍／同步的 `Lib/` 来自**同一目标**的上游 deb ⇒ 值必须
+/// 一致。判据用 `cfg!`（**不是**平台接口，`CX-4` ✓；同 [`byteorder`] 的既有手法 ✓）——
+/// **未知目标如实给空串**（不冒充某个三元组 ⇒ sysconfig 会拼出不存在的名字，由它自己报错 ✓）。
+pub fn multiarch() -> &'static str {
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86")) {
+        "i386-linux-gnu"
+    } else {
+        ""
+    }
+}
+
 /// 造一个原生可调用对象（**新引用**；与 `builtins_module` 同一做法）。
 fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -> NonNull<Header> {
     let ty = instance
@@ -441,6 +466,42 @@ fn exc_info_native(
     Ok(instance.new_tuple(vec![first, second, third]))
 }
 
+/// **`sys.exit([code])`** ✓（`P3-32`）：**实现＝抛 `SystemExit`** ✓（参照同义：`sys.exit` 本身
+/// 不直接退出进程，`except SystemExit` 必须能接住）——进程级退出码由组合根在**未捕获**时解释
+/// （`pyawa_core::executor::ExitDisposition`）。
+///
+/// 参数校验照参照 3.14.4 **实测**（关键字**先判**）：
+/// - 带关键字 ⇒ `sys.exit() takes no keyword arguments`；
+/// - 位置实参 ≥2 ⇒ `exit expected at most 1 argument, got N`（N 是实际个数）；
+/// - 0 参 ⇒ `SystemExit()`；1 参 ⇒ `SystemExit(该参)`（`int`／`None`／别的都原样交给异常载荷，
+///   退出码／`stderr` 文本的解释在组合根那一处，**不在**这里）。
+///
+/// `CX-22`：载荷布局只有核心能碰 ⇒ 造异常走 `raise_builtin_with_args_public`。
+fn exit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sys.exit() takes no keyword arguments",
+        ));
+    }
+    if args.len() >= 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("exit expected at most 1 argument, got {}", args.len()),
+        ));
+    }
+    // 实参进异常对象 ⇒ 每项交一份**新引用**（`new_exception_with_args` 接手）。
+    let payload: Vec<NonNull<Header>> = args.iter().map(|argument| instance.retain(*argument)).collect();
+    Err(pyawa_core::executor::raise_builtin_with_args_public(
+        instance, "SystemExit", payload,
+    ))
+}
+
 /// 建 `sys` 模块的命名空间（**新引用** 的 `dict`）。
 /// **编码名**（第 265 轮）：`sys.getfilesystemencoding()`／`sys.getdefaultencoding()` ✓。
 fn encoding_native(
@@ -525,6 +586,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         exc_info_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "exc_info", exc_info);
+
+    // **`sys.exit([code])`** ✓（`P3-32`）：`Lib/` 里遍地 `sys.exit(...)` ✓ —— 实现＝抛 `SystemExit`
+    //（参照同义 ✓）；进程级退出码由组合根在**未捕获**时解释 ✓（`ExitDisposition` 一处真相 ✓）。
+    let exit = make_native(instance, "exit", exit_native);
+    instance.dict_set(namespace, "exit", exit);
 
     // **`_getframe`** ✓（第 230 轮）：`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓。
     let getframe = crate::builtins_module::make_native(
@@ -667,6 +733,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_int(i64::from(impl_serial)),
     ]);
     instance.set_type_attribute(namespace_type, "version", impl_version);
+    // **`_multiarch`** ✓（task-9）：`sysconfig._get_sysconfigdata_name()` 拼 sysconfigdata 名字要用它
+    //（`Lib/sysconfig/__init__.py:394-399`）；值是**构建目标事实**，见 [`multiarch`]。
+    let multiarch = instance.new_str(multiarch());
+    instance.set_type_attribute(namespace_type, "_multiarch", multiarch);
     let implementation =
         instance.alloc(AttributeObject::new(namespace_type, core::cell::RefCell::new(None)));
     instance.dict_set(

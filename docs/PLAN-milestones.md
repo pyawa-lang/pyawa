@@ -205,13 +205,13 @@
 >   **阶段边界时把这两个数记入本块** ✓（否则"兼容性验收"名不副实 ✗）。
 > - **保证层（语义零差异）**：**单线程** ＋ 纯 Python 源 ＋ 只用**已声明的 C 模块面** ⇒ 以 `MS-13` 的语料为准
 >   （现 **407** 例，含 `Lib/` 165＋`Lib/test/` 50；来源列格式 A 见 `tests/conformance/corpus/manifest.tsv`）＋ `MS-19` 的在册差异（现 **3** 条：`DIV-1`／`DIV-2`／`DIV-8`）。
-> - **已兼容面（当前实况）**：`Lib/` 已同步 **523/628**；可 import 比例 **466/628（74.2%）** ⇒ **判据① 已达标** ✓（阈值 421／67%；复核用
+> - **已兼容面（当前实况）**：`Lib/` 已同步 **544/628**；可 import 比例 **466/628（74.2%）** ⇒ **判据① 已达标** ✓（阈值 421／67%；复核用
 >   `tools/lib_import_ratio.py`——该仪器**单次读数有 ±1 噪声**，判涨跌要多跑取众数 ✓）；C ABI `AB-1`…`AB-64` 可用；C 模块面按 `CM-14` 的 fan-in 增长，
 >   未提供的走 `CM-6`（`ImportError`，如实）。**能力层**已正式化（M5）：`T-CP-*` 13/13、两 provider 写法不变、体量阻塞阈值已拍板
 >   （`DESIGN.md` §9 的 M5 小节）。
 > - **未兼容面（明确不承诺）**：**多线程程序的语义**（含 GIL 原子性／线程调度；`threading` **允许跑**）·
 >   **C 扩展加载** · free-threading · `.pyc`／`.pyac` 跨实现（自有格式）· `_interpreters` ·
->   `Lib/` 未同步的 **105** 个文件 · **扩展模式**（`.pyawa` 无参照 ⇒ 只按各特性条款自对照）·
+>   `Lib/` 未同步的 **84** 个文件 · **扩展模式**（`.pyawa` 无参照 ⇒ 只按各特性条款自对照）·
 >   **未被语料覆盖、也未列入 `MS-19` 的边角语义**（一律**无保证**）。
 > - **修订规则**：**阶段边界**（`--no-ff` 收录进 `main`）**必须**更新本块；**判据① 或语料数变动时也应刷新** ✓；
 >   每次修订**追加一行**（保留历史）。
@@ -229,6 +229,7 @@
 >   两 provider **写法不变**（`crates/pyawa-runtime/tests/two_providers.rs`）、判据③ 的**阻塞阈值经用户拍板**
 >   （三档实测数字与阈值的唯一出处＝`DESIGN.md` §9 的「Pyawa（M5 实测基线）」末节）；可 import 比例刷新为
 >   **466/628（74.2%）**；`Lib/` 同步 523/628；语料 **407** 条与在册差异 **3** 条未变；如实缺口见 §6 的「M5 的要求」。
+> - **修订**：`dev` @ `d6be4ea`（2026-10-24）—— **M6 开局（round 14）**：`P3-32`／`P3-33` 落地；`Lib/test` 体检**首次非零**（可编译 311/397＝78.3%、**跑通 5/397＝1.3%**）；判据① **466/628（74.2%）未变**；`Lib/` 同步 **544/628**（同步子集 450/544＝82.7%）；语料 **407** 条与在册差异 **3** 条未变。
 
 ---
 
@@ -345,8 +346,8 @@
 | ~~**P3-29**~~ **首片已落地（round 10：`socketpair` 真 I/O；其余如实未接线）** | **`socket` 支**（**用户已拍板立项**，会话 05，排在 typing 收口之后）：`_socket`/`socket` 的最小面——`http.client`／`urllib.request`／`socketserver`／`asyncio` 的共同前置（上限诊断 overlay 口径 **41 个模块**压在这上面）；先 POSIX 域的无连接面（`socketpair`/`create_connection` 一族随后），逐条对参照 | `CM-14`、`DESIGN.md` §9 | 无（工作量大，单独立项 ✓） |
 | **P3-30** | **`random.Random(<seed>)` 的序列与参照不一致**（会话 05 语料侦察实测：`Random(42).random()` ⇒ 0.0838… vs 参照 0.6394…，参照文档保证同种子同序列 ⇒ **真差异**）：生成算法/种子混合口径要对齐 CPython 的 MT19937 init_by_array | `MS-19`、`MS-10` | 无 |
 | ~~**P3-31**~~ **已解除（round 3）** | **解析器缺口批**：**10 格全落**（嵌套元组目标／`.05` 前导点浮点／行内 if 分号表＋次行 else／`*` 后置关键字实参／`with … as (a,b)`／推导式模式目标／元组里的 `*`／带注解赋值非名字目标／制表符缩进／调用基底下标赋值）⇒ `difflib`／`gettext`／`xml.etree.ElementTree`／`tomllib`／`argparse` 等 11 个模块同步 ⇒ 判据① 341→358 ✓。剩余同族缺口（PEP 604 union 注解 dataclass 字段的 `__builtins__` 面）挂账后续。清单全文＝台账卷 `03-m3-progress-05.md` 的 task-7 表 ✓（一处真相，不重述） | `BC-14`、`CM-14` | 无 |
-| **P3-32** | **官方 `Lib/test` 的框架门槛**（`tools/libtests_survey.py` 实测 397 模块 **0 通过** ✗）：根因＝**`sys.exit` 缺失**（`unittest.main()` 结尾必用）＋ **`unittest.main()` 直接崩 `KeyError: 'dest'`**（选项解析路）⇒ 修好这两处，官方套件才**开始**跑 | `REQUIREMENTS` 的兼容承诺（保证层）＋ `MS-19` 判据补充 | 无 |
-| **P3-33** | **`sys.path` 不认 `PYTHONPATH`**（参照认 ✓、本层只有"脚本目录 ＋ `Lib`" ✗）⇒ `import test.support` 一类外部路径全灭；与 `IM-24`（`sys.path` 由 `site.py` 构造）的 C 层那半需补齐 | `IM-24`／`IM-26`、`MS-19` 判据补充 | 无 |
+| ~~**P3-32**~~ **已完成（round 14）** | **官方 `Lib/test` 的框架门槛**（`tools/libtests_survey.py` 实测 397 模块 **0 通过** ✗）：根因＝**`sys.exit` 缺失**（`unittest.main()` 结尾必用）＋ **`unittest.main()` 直接崩 `KeyError: 'dest'`**（选项解析路）⇒ 修好这两处，官方套件才**开始**跑。**落地**：`sys.exit`（抛 `SystemExit`；退出码口径见 `SPEC-c-modules.md` §5.2.3）＋ CLI 把未捕获 `SystemExit` 解释成进程退出码；`unittest.main()` 全路打通（`dict` kwargs／`None` 键、argparse 的 `os.terminal_size`、`sys` 流 `write`、富比较协议、类内方法闭包转发等前置一并落地）⇒ **官方套件首次跑通**（≥1 个模块；全量调查与台账见 `NEXT.md` 与 `docs/rounds/`） | `REQUIREMENTS` 的兼容承诺（保证层）＋ `MS-19` 判据补充 | 无 |
+| ~~**P3-33**~~ **已完成（round 14）** | **`sys.path` 不认 `PYTHONPATH`**（参照认 ✓、本层只有"脚本目录 ＋ `Lib`" ✗）⇒ `import test.support` 一类外部路径全灭；与 `IM-24`（`sys.path` 由 `site.py` 构造）的 C 层那半需补齐。**落地**：`PYTHONPATH` 进 `sys.path`（组合根过渡半，口径见 `SPEC-c-modules.md` §5.2.3 的 `path` 条目）＋ `test/support` 包骨架补同步 **21** 个上游文件（19 个骨架 ＋ `_sysconfigdata*` 2 个数据模块）⇒ `Lib/test` 的 .py **42→61**、`Lib/` 同步 **544/628**、`sync_lib.py --check` **548** 个文件逐字节一致（例外清单空）。**缺口如实记**：另有 **7** 个 `Lib/test/*` 骨架因 `P3-35` 的合法 Python 被拒（surrogate escape／链式赋值非名字目标／for-star／PEP 695 等）**暂不同步**（不登记 `KNOWN`，列进 `P3-35` 队列）；`SYNC_EXCLUDE` 另排除 `multiprocessing/heap.py`／`unittest/mock.py`（同因）。细节见 `NEXT.md` 与 `docs/rounds/` | `IM-24`／`IM-26`、`MS-19` 判据补充 | 无 |
 | **P3-34** | **`complex` 类型面**：`1j` 字面量解析不了（状态 5）⇒ **52 个官方测试直接阻塞**（调查实测） | `TS-42`、`CM-27` | 无 |
 | **P3-35** | **合法 Python 被拒的语法缺口**（`MS-19` 判据补充：**必须修、不得登记为差异** ✗）：surrogate escape `\ud800` 类 **20 个**／同行 `try:`·`for:` **8 个**／解析器瑕疵（`语句结尾多出了 Some(Str(…))` 5、`async` 在列表里 1、`要冒号却得 Some(Dot)` 1） | `MS-19` 判据补充、`BC-15` | 无 |
 | **P3-36** | **`.pyac` `BadCodeSection`**（6 个官方测试触发 ✗）：代码段读不出来 ⇒ 缓存/序列化真 bug，按 `IM-18`…`IM-21` 的容器契约查 | `IM-18`…`IM-21` | 无 |

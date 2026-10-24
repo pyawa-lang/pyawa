@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """`Lib/test` 可编译／可运行面调查（对上游 CPython 3.14.4 的测试套件）。
 
-输入：一份与参照**同版本**的 `Lib/test` 目录（默认 `target/upstream/Python-3.14.4/Lib/test`，
-      由 CPython 3.14.4 源码 tarball 解出；**不进仓库** ✓ —— 它是"测试输入"，不是交付物）。
+输入：一份与参照**同版本**的 `Lib/test` 目录（默认
+      `target/upstream/extracted/usr/lib/python3.14/test`，由 `libpython3.14-testsuite`
+      deb 包解出 —— `target/upstream/extracted/` 就是 deb 的数据根；**不进仓库** ✓
+      —— 它是"测试输入"，不是交付物）。
 做法：逐个顶层 `test_*.py` 用 CLI 跑一遍（短超时、独立临时 cwd），按退出码分类：
       0        = 跑通 ✓
       2        = 编译／词法错 ✗（状态 2 是 `PA_ERR_SYNTAX`）
@@ -12,6 +14,8 @@
 输出：`target/libtests_survey.tsv`（逐文件）＋ 终端汇总（**可编译率** / **跑通率** / 头号缺口）。
 口径：**可编译率** ＝ 非语法错占比；**跑通率** ＝ 退出 0 占比。
       两个数都**不得**当"完成度"或"验收"（`CM-15` 同理：比例只排顺序，不衡量语义）。
+      实测基线的**数字**不写死在这里（会漂 ✗）—— 以 `NEXT.md`「现在」段与随代码提交的
+      台账为准（**一处真相**：本文件只定义口径与做法）。
 
 用法::
 
@@ -29,7 +33,9 @@ import sys
 import tempfile
 
 WORKSPACE = pathlib.Path(__file__).resolve().parent.parent
-DEFAULT_DIR = WORKSPACE / "target/upstream/Python-3.14.4/Lib/test"
+# 官方套件数据＝`libpython3.14-testsuite` deb 解到 `target/upstream/extracted/` 的 usr 数据根
+# （**不进仓库** ✓）。文件名口径：deb 数据根 ＋ `/usr/lib/python3.14/test`。
+DEFAULT_DIR = WORKSPACE / "target/upstream/extracted/usr/lib/python3.14/test"
 DEFAULT_BIN = WORKSPACE / "target/debug/pyawa"
 OUT = WORKSPACE / "target/libtests_survey.tsv"
 
@@ -82,7 +88,7 @@ def main() -> None:
     if not root.is_dir():
         sys.exit(
             f"找不到 Lib/test 目录：{root}\n"
-            "（先解出 CPython 3.14.4 源码里的 Lib/test 到 target/upstream/）"
+            "（先解开 `libpython3.14-testsuite` deb 到 `target/upstream/extracted/`）"
         )
     if not binary.is_file():
         sys.exit(f"找不到 CLI：{binary}（先 cargo build --bin pyawa）")
