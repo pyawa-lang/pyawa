@@ -2097,6 +2097,19 @@ fn pre_intern_pattern(emitter: &mut Emitter, pattern: &Pattern) {
                 pre_intern_pattern(emitter, sub);
             }
         }
+        // **序列／映射模式**（task-37）：子模式里的捕获名／值表达式都要预登记 ✓。
+        Pattern::Sequence { items, .. } => {
+            for item in items {
+                pre_intern_pattern(emitter, item);
+            }
+        }
+        Pattern::Mapping { items, .. } => {
+            for (key, value) in items {
+                pre_intern_pattern(emitter, key);
+                pre_intern_pattern(emitter, value);
+            }
+        }
+        Pattern::Star(inner, _) => pre_intern_pattern(emitter, inner),
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }
@@ -2124,6 +2137,17 @@ fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
                 collect_pattern_locals(emitter, sub);
             }
         }
+        Pattern::Sequence { items, .. } => {
+            for item in items {
+                collect_pattern_locals(emitter, item);
+            }
+        }
+        Pattern::Mapping { items, .. } => {
+            for (_, value) in items {
+                collect_pattern_locals(emitter, value);
+            }
+        }
+        Pattern::Star(inner, _) => collect_pattern_locals(emitter, inner),
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }

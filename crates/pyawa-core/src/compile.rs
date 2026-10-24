@@ -1933,6 +1933,31 @@ enum Pattern {
     Wildcard(Span),
     /// 或模式（`case "a" | "b":`）—— **备选里不许有捕获**（参照也是语法错）。
     Or(Vec<Pattern>, Span),
+    /// **序列模式**（task-37）：`case [a, b, *rest]:`／`case (a, b):`（括号元组同形）。
+    ///
+    /// `items` 按**书写顺序**；星号项是 [`Pattern::Star`] 包着的捕获／通配 ✓。
+    /// 字节码形状照参照 3.14.4 实测：`MATCH_SEQUENCE; POP_JUMP_IF_FALSE; NOT_TAKEN; GET_LEN;
+    /// LOAD_SMALL_INT n; COMPARE_OP 72(==)［有 star 时 172(>=)］; POP_JUMP_IF_FALSE; NOT_TAKEN;
+    /// UNPACK_SEQUENCE n`／`UNPACK_EX (前 | 后<<8)`／（空序列）`POP_TOP` ✓。
+    Sequence {
+        items: Vec<Pattern>,
+        span: Span,
+    },
+    /// **映射模式**（task-37）：`case {"k": v, ...}:`／`case {}:`
+    ///
+    /// 字节码形状：`MATCH_MAPPING; ...; GET_LEN; LOAD_SMALL_INT n; COMPARE_OP 172(>=);
+    /// LOAD_CONST <键元组>; MATCH_KEYS; COPY 1; POP_JUMP_IF_NONE; NOT_TAKEN;
+    /// UNPACK_SEQUENCE n` ✓。
+    ///
+    /// **未接线**（如实报）：`**rest` 剩余项捕获。
+    Mapping {
+        /// `(键模式, 值模式)`：键只能是字面量或值模式（参照同规 ✓）。
+        items: Vec<(Pattern, Pattern)>,
+        span: Span,
+    },
+    /// **序列模式里的星号项**：`case [a, *rest]` ⇒ `UNPACK_EX` 星号那一格 ✓。
+    /// 只允许出现在 [`Pattern::Sequence::items`] 里（解析器保证 ✓）。
+    Star(Box<Pattern>, Span),
 }
 
 /// **PEP 695 的类型参数**（task-24 收口 ① ✓）：名字 ＋ 可选 `bound`（`[T: int]`）／

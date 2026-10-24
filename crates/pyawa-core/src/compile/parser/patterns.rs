@@ -171,16 +171,172 @@ pub(crate) fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pat
             ),
             cursor + 1,
         )),
-        Some(Lexeme::LeftBracket) | Some(Lexeme::LeftBrace) | Some(Lexeme::LeftParen) => {
-            Err(CompileError::Unsupported(
-                "`match` 的序列／映射模式尚未接线（`MATCH_SEQUENCE`／`MATCH_KEYS` 随后补）".to_owned(),
-            ))
-        }
+        // **序列模式**（task-37）：`[a, b, *rest]` ✓
+        Some(Lexeme::LeftBracket) => parse_sequence_pattern(lexed, cursor, Lexeme::RightBracket, span),
+        // **映射模式**（task-37）：`{"k": v}`／`{}` ✓
+        Some(Lexeme::LeftBrace) => parse_mapping_pattern(lexed, cursor, span),
+        // **括号**：组模式 `(p)` 或括号元组模式 `(a, b)`／`()` ✓
+        Some(Lexeme::LeftParen) => parse_paren_pattern(lexed, cursor, span),
         other => Err(CompileError::Syntax(format!(
             "`match` 的模式里遇到 {other:?}（第 {} 行）",
             span.line_start
         ))),
     }
+}
+
+/// **序列模式**（task-37）：`[` 之后、`]`／`)` 之前的项表（调用方给开括号位点 ✓）。
+///
+/// 项＝子模式或星号项 `*名字`／`*_`（参照：星号只收捕获／通配 ✓）。
+fn parse_sequence_items(
+    lexed: &Lexed,
+    mut at: usize,
+    close: &Lexeme,
+    open_span: Span,
+    mut items: Vec<Pattern>,
+) -> Result<(Vec<Pattern>, usize, Span), CompileError> {
+    let close_span: Span;
+    loop {
+        if lexed.lexemes.get(at) == Some(close) {
+            close_span = lexed.spans[at];
+            at += 1;
+            break;
+        }
+        if lexed.lexemes.get(at) == Some(&Lexeme::Star) {
+            let star_span = lexed.spans[at];
+            let (inner, next) = parse_pattern(lexed, at + 1)?;
+            if !matches!(inner, Pattern::Capture(_, _) | Pattern::Wildcard(_)) {
+                return Err(CompileError::Syntax(
+                    "序列模式的 `*` 后面只能是名字或 `_`".to_owned(),
+                ));
+            }
+            items.push(Pattern::Star(Box::new(inner), star_span));
+            at = next;
+        } else {
+            let (item, next) = parse_pattern(lexed, at)?;
+            items.push(item);
+            at = next;
+        }
+        match lexed.lexemes.get(at) {
+            Some(Lexeme::Comma) => at += 1,
+            Some(token) if token == close => {
+                close_span = lexed.spans[at];
+                at += 1;
+                break;
+            }
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "序列模式里期望 `,` 或收尾括号，遇到 {other:?}（第 {} 行）",
+                    lexed.spans.get(at).map(|span| span.line_start).unwrap_or(0)
+                )))
+            }
+        }
+    }
+    Ok((items, at, open_span.to(close_span)))
+}
+
+/// `[a, b, *rest]` 的整条模式 ✓。
+fn parse_sequence_pattern(
+    lexed: &Lexed,
+    cursor: usize,
+    close: Lexeme,
+    open_span: Span,
+) -> Result<(Pattern, usize), CompileError> {
+    let (items, at, span) = parse_sequence_items(lexed, cursor + 1, &close, open_span, Vec::new())?;
+    Ok((Pattern::Sequence { items, span }, at))
+}
+
+/// 括号形态（task-37）：`()` 空序列／`(a, b)` 括号元组序列／`(p)` 组模式（直接交出子模式）✓。
+fn parse_paren_pattern(
+    lexed: &Lexed,
+    cursor: usize,
+    open_span: Span,
+) -> Result<(Pattern, usize), CompileError> {
+    if lexed.lexemes.get(cursor + 1) == Some(&Lexeme::RightParen) {
+        return Ok((
+            Pattern::Sequence {
+                items: Vec::new(),
+                span: open_span.to(lexed.spans[cursor + 1]),
+            },
+            cursor + 2,
+        ));
+    }
+    let (first, at) = parse_pattern(lexed, cursor + 1)?;
+    match lexed.lexemes.get(at) {
+        // 组模式：`(p)` ⇒ 语义上就是 `p` 本身 ✓（捕获／通配照旧触发"不可达"那条规则 ✓）。
+        Some(Lexeme::RightParen) => Ok((first, at + 1)),
+        Some(Lexeme::Comma) => {
+            let (items, at, span) = parse_sequence_items(
+                lexed,
+                at + 1,
+                &Lexeme::RightParen,
+                open_span,
+                vec![first],
+            )?;
+            Ok((Pattern::Sequence { items, span }, at))
+        }
+        other => Err(CompileError::Syntax(format!(
+            "括号模式里期望 `,` 或 `)`，遇到 {other:?}"
+        ))),
+    }
+}
+
+/// **映射模式**（task-37）：`{}`／`{"k": v, ...}` ✓。
+///
+/// 键只收**字面量／值模式**（参照同规 ✓）；`**rest` 如实报**未接线**（本轮不做 ✓）。
+fn parse_mapping_pattern(
+    lexed: &Lexed,
+    cursor: usize,
+    open_span: Span,
+) -> Result<(Pattern, usize), CompileError> {
+    let mut at = cursor + 1;
+    let mut items: Vec<(Pattern, Pattern)> = Vec::new();
+    let close_span: Span;
+    loop {
+        if lexed.lexemes.get(at) == Some(&Lexeme::RightBrace) {
+            close_span = lexed.spans[at];
+            at += 1;
+            break;
+        }
+        if lexed.lexemes.get(at) == Some(&Lexeme::DoubleStar) {
+            return Err(CompileError::Unsupported(
+                "映射模式的 `**rest` 剩余项捕获尚未接线".to_owned(),
+            ));
+        }
+        let (key, next) = parse_pattern_primary(lexed, at)?;
+        if !matches!(key, Pattern::Literal(_, _) | Pattern::Value(_, _)) {
+            return Err(CompileError::Syntax(
+                "映射模式的键只能是字面量或值模式（参照同规）".to_owned(),
+            ));
+        }
+        if lexed.lexemes.get(next) != Some(&Lexeme::Colon) {
+            return Err(CompileError::Syntax(
+                "映射模式的键后面要 `:`".to_owned(),
+            ));
+        }
+        let (value, next) = parse_pattern(lexed, next + 1)?;
+        items.push((key, value));
+        at = next;
+        match lexed.lexemes.get(at) {
+            Some(Lexeme::Comma) => at += 1,
+            Some(Lexeme::RightBrace) => {
+                close_span = lexed.spans[at];
+                at += 1;
+                break;
+            }
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "映射模式里期望 `,` 或 `}}`，遇到 {other:?}"
+                )))
+            }
+        }
+    }
+    Ok((
+        Pattern::Mapping {
+            items,
+            span: open_span.to(close_span),
+        },
+        at,
+    ))
 }
 
 /// **类模式的实参表**（第 300 轮）：`[名字 = 子模式 | 子模式] ("," …)* ")"` ✓。
@@ -243,6 +399,9 @@ pub(crate) fn pattern_span(pattern: &Pattern) -> Span {
         | Pattern::Wildcard(span)
         | Pattern::Value(_, span)
         | Pattern::Or(_, span) => *span,
-        Pattern::Class { span, .. } => *span,
+        Pattern::Class { span, .. }
+        | Pattern::Sequence { span, .. }
+        | Pattern::Mapping { span, .. }
+        | Pattern::Star(_, span) => *span,
     }
 }

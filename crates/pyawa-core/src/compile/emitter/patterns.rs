@@ -135,6 +135,15 @@ impl Emitter {
                 self.emit_class_pattern(pattern, next_case, matched, false)?;
                 Ok(())
             }
+            // **序列模式／映射模式**（task-37）：主语留在栈上（helper 自己 `COPY 1` 一份来测 ✓；
+            // 失败路也把那份复制收干净 ⇒ 下一条 `case` 照常看到主语 ✓）。
+            Pattern::Sequence { .. } => self.emit_sequence_pattern(pattern, next_case, matched, false),
+            Pattern::Mapping { .. } => self.emit_mapping_pattern(pattern, next_case, matched, false),
+            // 星号项只该在序列模式的 items 里（解析器保证 ⇒ 到这儿是内部错误）。
+            Pattern::Star(_, span) => Err(CompileError::Unsupported(format!(
+                "`*` 项只能出现在序列模式里（第 {} 行）",
+                span.line_start
+            ))),
             // 捕获与通配**一定命中** ✓（没有判定指令 ✓）
             Pattern::Capture(_, _) | Pattern::Wildcard(_) => Ok(()),
             Pattern::Or(alternatives, span) => {
@@ -299,11 +308,341 @@ impl Emitter {
             }
             // 嵌套类模式 ✓（`case ast.Return(value=ast.Name())` 就是它）
             Pattern::Class { .. } => self.emit_class_pattern(pattern, failure, on_match, true),
-            Pattern::Or(_, span) => Err(CompileError::Unsupported(format!(
-                "`match` 子模式里的或模式尚未接线（第 {} 行）",
+            // **嵌套序列／映射**（task-37）：进入时栈顶是它的值；测完把它消费掉 ✓
+            Pattern::Sequence { .. } => self.emit_sequence_pattern(pattern, failure, on_match, true),
+            Pattern::Mapping { .. } => self.emit_mapping_pattern(pattern, failure, on_match, true),
+            Pattern::Star(_, span) => Err(CompileError::Unsupported(format!(
+                "`*` 项只能出现在序列模式里（第 {} 行）",
                 span.line_start
             ))),
+            // **子模式里的或模式**（task-37 补 ✓；参照实测形状 `_pyrepl/utils.py:242`）：
+            // 每个备选先 `COPY 1` 复制一份值来测（测完那份被消费 ✓，原值留给下一个备选 ✓）；
+            // 任一备选命中 ⇒ 丢掉原值、跳 `on_match` ✓；全不中 ⇒ 跳 `failure` ✓。
+            Pattern::Or(alternatives, span) => {
+                let success = self.new_label();
+                for alternative in alternatives {
+                    self.emit_named(*span, "COPY", 1);
+                    let failed = self.new_label();
+                    self.emit_subpattern_test(alternative, failed, success)?;
+                    self.emit_jump(
+                        *span,
+                        opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                        success,
+                    );
+                    self.mark_label(failed);
+                }
+                // 全不中：**子模式的契约是"把值消费掉"** ✓ ⇒ 原值那份也弹掉再走失败 ✓
+                //（否则失败路会把它留给下一条 case 的栈 ⇒ 污染 ✓）。
+                self.emit_named(*span, "POP_TOP", 0);
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                    failure,
+                );
+                self.mark_label(success);
+                // 命中：原值那份也消费掉（子模式的契约 ✓）
+                self.emit_named(*span, "POP_TOP", 0);
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                    on_match,
+                );
+                Ok(())
+            }
         }
+    }
+
+    /// 发**小整数常量**（`GET_LEN` 的比较用）：≤255 走 `LOAD_SMALL_INT` ✓，更大走 `LOAD_CONST`。
+    fn emit_small_length(&mut self, span: Span, value: usize) {
+        if value <= 255 {
+            self.emit_named(span, "LOAD_SMALL_INT", value as u8);
+        } else {
+            let index = self.intern_constant(Constant::Int(value as i64));
+            self.emit_indexed(span, "LOAD_CONST", index);
+        }
+    }
+
+    /// 失败清理：先弹掉**还没测的项**，再按需弹掉保留的原值（嵌套时 ✓；顶层是主语、要留给下一条 `case` ✓）。
+    fn emit_pattern_failure_cleanup(&mut self, span: Span, remaining: usize, consume_value: bool) {
+        for _ in 0..remaining {
+            self.emit_named(span, "POP_TOP", 0);
+        }
+        if consume_value {
+            self.emit_named(span, "POP_TOP", 0);
+        }
+    }
+
+    /// 映射模式的**键元组**：全字面量 ⇒ `LOAD_CONST (键…)`（参照同形 ✓）；含值模式 ⇒ 逐个求值再
+    /// `BUILD_TUPLE` ✓。
+    fn emit_mapping_keys(
+        &mut self,
+        span: Span,
+        items: &[(Pattern, Pattern)],
+    ) -> Result<(), CompileError> {
+        let all_literals = items
+            .iter()
+            .all(|(key, _)| matches!(key, Pattern::Literal(_, _)));
+        if all_literals {
+            let mut constants: Vec<Constant> = Vec::with_capacity(items.len());
+            for (key, _) in items {
+                match key {
+                    Pattern::Literal(constant, _) => constants.push(constant.clone()),
+                    _ => unreachable!("上面刚判过全是字面量"),
+                }
+            }
+            let index = self.intern_constant(Constant::Tuple(constants));
+            self.emit_indexed(span, "LOAD_CONST", index);
+            return Ok(());
+        }
+        for (key, _) in items {
+            match key {
+                Pattern::Literal(constant, key_span) => {
+                    let index = self.intern_constant(constant.clone());
+                    self.emit_indexed(*key_span, "LOAD_CONST", index);
+                }
+                Pattern::Value(expression, _) => self.emit_expression(expression)?,
+                _ => unreachable!("解析器保证映射键只有字面量／值模式"),
+            }
+        }
+        self.emit_indexed(span, "BUILD_TUPLE", items.len());
+        Ok(())
+    }
+
+    /// **序列模式的判定**（task-37）。进入时栈顶是待测值；`consume_value` 为真时（嵌套）
+    /// **连它一起消费**，为假时（顶层）**留着**（那是主语 ⇒ 下一条 `case` 也要用 ✓）。
+    ///
+    /// 形状照参照 3.14.4 实测：`MATCH_SEQUENCE; POP_JUMP_IF_FALSE; NOT_TAKEN; GET_LEN;
+    /// LOAD_SMALL_INT n; COMPARE_OP 72(==)［有 star ⇒ 172(>=)］; POP_JUMP_IF_FALSE; NOT_TAKEN;
+    /// UNPACK_SEQUENCE n`／`UNPACK_EX`／空序列 `POP_TOP`。**与参照的差别**（如实登记）：
+    /// 参照把主语自己交给解包（成功路主语消失），这里 `COPY 1` 保留主语 ⇒ 与既有 `case` 骨架
+    /// 的"主语一直留在栈上"约定一致 ✓（指令序列多一条 `COPY 1`）。
+    pub(crate) fn emit_sequence_pattern(
+        &mut self,
+        pattern: &Pattern,
+        failure: usize,
+        on_match: usize,
+        consume_value: bool,
+    ) -> Result<(), CompileError> {
+        let Pattern::Sequence { items, span } = pattern else {
+            unreachable!("只给序列模式调")
+        };
+        let span = *span;
+        let total_slots = items.len();
+        let star_index = items
+            .iter()
+            .position(|item| matches!(item, Pattern::Star(_, _)));
+        // [原值] ⇒ [原值, 副本]（副本交给判定／解包 ✓）
+        self.emit_named(span, "COPY", 1);
+        self.emit_named(span, "MATCH_SEQUENCE", 0);
+        let head_failure = self.new_label();
+        self.emit_jump(
+            span,
+            opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+            head_failure,
+        );
+        self.emit_named(span, "NOT_TAKEN", 0);
+        if let Some(index) = star_index {
+            let minimum = total_slots - 1;
+            if minimum > 0 {
+                self.emit_named(span, "GET_LEN", 0);
+                self.emit_small_length(span, minimum);
+                // `>=`（参照实测 `COMPARE_OP 172` ✓）
+                self.emit_named(span, "COMPARE_OP", 172);
+                self.emit_jump(
+                    span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+                    head_failure,
+                );
+                self.emit_named(span, "NOT_TAKEN", 0);
+            }
+            let before = index;
+            let after = total_slots - index - 1;
+            self.emit_indexed(span, "UNPACK_EX", before | (after << 8));
+        } else {
+            self.emit_named(span, "GET_LEN", 0);
+            self.emit_small_length(span, total_slots);
+            // `==`（参照实测 `COMPARE_OP 72` ✓）
+            self.emit_named(span, "COMPARE_OP", 72);
+            self.emit_jump(
+                span,
+                opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+                head_failure,
+            );
+            self.emit_named(span, "NOT_TAKEN", 0);
+            if total_slots == 0 {
+                self.emit_named(span, "POP_TOP", 0);
+            } else {
+                self.emit_indexed(span, "UNPACK_SEQUENCE", total_slots);
+            }
+        }
+        // 逐项判定（书写顺序 ⇒ 栈顶就是 items[0] ✓）
+        for (index, item) in items.iter().enumerate() {
+            let remaining = total_slots - index - 1;
+            let failed = self.new_label();
+            let next = self.new_label();
+            if let Pattern::Star(inner, _) = item {
+                // 星号那一格：按捕获／通配消费栈顶 ✓（`*名字` ⇒ STORE；`*_` ⇒ POP_TOP）
+                self.emit_subpattern_test(inner, failed, next)?;
+            } else {
+                self.emit_subpattern_test(item, failed, next)?;
+            }
+            self.emit_jump(
+                span,
+                opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                next,
+            );
+            self.mark_label(failed);
+            self.emit_pattern_failure_cleanup(span, remaining, consume_value);
+            self.emit_jump(
+                span,
+                opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                failure,
+            );
+            self.mark_label(next);
+        }
+        // 全部命中：栈上是原值（嵌套时消费掉它 ✓）
+        if consume_value {
+            self.emit_named(span, "POP_TOP", 0);
+        }
+        self.emit_jump(
+            span,
+            opcode::opcode("JUMP_FORWARD").expect("表里有"),
+            on_match,
+        );
+        // 序列判定／长度判定失败：栈是 [原值, 副本] ⇒ 收掉副本（＋按需收原值）
+        self.mark_label(head_failure);
+        self.emit_named(span, "POP_TOP", 0);
+        if consume_value {
+            self.emit_named(span, "POP_TOP", 0);
+        }
+        self.emit_jump(
+            span,
+            opcode::opcode("JUMP_FORWARD").expect("表里有"),
+            failure,
+        );
+        Ok(())
+    }
+
+    /// **映射模式的判定**（task-37）。进入时栈顶是待测值；消费语义同序列模式 ✓。
+    ///
+    /// 形状照参照 3.14.4 实测：`MATCH_MAPPING; POP_JUMP_IF_FALSE; NOT_TAKEN; GET_LEN;
+    /// LOAD_SMALL_INT n; COMPARE_OP 172(>=); POP_JUMP_IF_FALSE; NOT_TAKEN; LOAD_CONST <键元组>;
+    /// MATCH_KEYS; COPY 1; POP_JUMP_IF_NONE; NOT_TAKEN; UNPACK_SEQUENCE n` ✓；`case {}` 只有
+    /// `MATCH_MAPPING` ＋ 收尾 ✓。**与参照的差别**（如实登记）：同序列模式，`COPY 1` 保留主语 ✓。
+    pub(crate) fn emit_mapping_pattern(
+        &mut self,
+        pattern: &Pattern,
+        failure: usize,
+        on_match: usize,
+        consume_value: bool,
+    ) -> Result<(), CompileError> {
+        let Pattern::Mapping { items, span } = pattern else {
+            unreachable!("只给映射模式调")
+        };
+        let span = *span;
+        self.emit_named(span, "COPY", 1);
+        self.emit_named(span, "MATCH_MAPPING", 0);
+        let head_failure = self.new_label();
+        self.emit_jump(
+            span,
+            opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+            head_failure,
+        );
+        self.emit_named(span, "NOT_TAKEN", 0);
+        if !items.is_empty() {
+            self.emit_named(span, "GET_LEN", 0);
+            self.emit_small_length(span, items.len());
+            self.emit_named(span, "COMPARE_OP", 172);
+            self.emit_jump(
+                span,
+                opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+                head_failure,
+            );
+            self.emit_named(span, "NOT_TAKEN", 0);
+            self.emit_mapping_keys(span, items)?;
+            self.emit_named(span, "MATCH_KEYS", 0);
+            self.emit_named(span, "COPY", 1);
+            let keys_missing = self.new_label();
+            self.emit_jump(
+                span,
+                opcode::opcode("POP_JUMP_IF_NONE").expect("表里有"),
+                keys_missing,
+            );
+            self.emit_named(span, "NOT_TAKEN", 0);
+            self.emit_indexed(span, "UNPACK_SEQUENCE", items.len());
+            // 逐项判定值模式（栈：原值、副本、键元组、值… ✓）
+            for (index, (_, value)) in items.iter().enumerate() {
+                let remaining = items.len() - index - 1;
+                let failed = self.new_label();
+                let next = self.new_label();
+                self.emit_subpattern_test(value, failed, next)?;
+                self.emit_jump(
+                    span,
+                    opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                    next,
+                );
+                self.mark_label(failed);
+                self.emit_pattern_failure_cleanup(span, remaining, false);
+                self.emit_named(span, "POP_TOP", 0); // 键元组
+                self.emit_named(span, "POP_TOP", 0); // 副本
+                if consume_value {
+                    self.emit_named(span, "POP_TOP", 0);
+                }
+                self.emit_jump(
+                    span,
+                    opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                    failure,
+                );
+                self.mark_label(next);
+            }
+            // 全部命中：收掉键元组与副本，然后直接去 `on_match`（**不能落进下面的清理块** ✗）
+            self.emit_named(span, "POP_TOP", 0);
+            self.emit_named(span, "POP_TOP", 0);
+            if consume_value {
+                self.emit_named(span, "POP_TOP", 0);
+            }
+            self.emit_jump(
+                span,
+                opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                on_match,
+            );
+            // `MATCH_KEYS` 缺键：栈 [原值, 副本, 键元组, None]
+            self.mark_label(keys_missing);
+            self.emit_named(span, "POP_TOP", 0);
+            self.emit_named(span, "POP_TOP", 0);
+            self.emit_named(span, "POP_TOP", 0);
+            if consume_value {
+                self.emit_named(span, "POP_TOP", 0);
+            }
+            self.emit_jump(
+                span,
+                opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                failure,
+            );
+        } else {
+            // `case {}`：只剩副本
+            self.emit_named(span, "POP_TOP", 0);
+            if consume_value {
+                self.emit_named(span, "POP_TOP", 0);
+            }
+            self.emit_jump(
+                span,
+                opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                on_match,
+            );
+        }
+        // `MATCH_MAPPING`／长度失败：栈 [原值, 副本]
+        self.mark_label(head_failure);
+        self.emit_named(span, "POP_TOP", 0);
+        if consume_value {
+            self.emit_named(span, "POP_TOP", 0);
+        }
+        self.emit_jump(
+            span,
+            opcode::opcode("JUMP_FORWARD").expect("表里有"),
+            failure,
+        );
+        Ok(())
     }
 
     /// **`for` 目标的一项**（第 289 轮）：名字 ⇒ 按作用域存 ✓；括号元组 ⇒ 先 `UNPACK_SEQUENCE 个数`
