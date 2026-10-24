@@ -1623,3 +1623,30 @@
 - **下一轮**：**P3-34（complex `1j`）** —— 它同时是 `unittest.mock` 13 个测试的闸（计划里 52 个）；→ **P3-36（BadCodeSection 8）** →
   **doctest/match 模式 opcode** → 其余 P3-37（unicodedata/hashlib/multibytecodec_support 拍板）→ 批 B/C 语法缺口；surrogate 作为
   **独立立项**（string repr 改造）评估后报用户。
+
+---
+
+## round 18（会话 10 · M6 续）落地 ✓ —— P3-34 complex 全链路 ＋ `unittest/mock` 同步 ＋ 余部重放指数爆炸修 ＋ 容器/`getattr` 补齐
+
+- **口径**：`HEAD`（本笔前）＝`52058b4`（`dev`，round 17）；工作区起始干净；`check.py` 14/14。
+- **落地（五块）**：
+  1. **P3-34 `complex` 全链路（字面量／对象类型／构造器／数值面）**：
+     - **字面量**：`lexer` 接受十进制整数/浮点/指数后接 `j`/`J`（`1j`／`1.5j`／`1e3j`／`0j`／`1_0j`；非法 `0x1j` 等照参照报错）⇒ `Constant::Complex{real_bits,imag_bits}`、
+       `.pyac` 常量段 tag 19 round-trip、emitter `LOAD_CONST` 调 `Instance::new_complex`；**常量折叠照参照**（`1+2j`⇒单常量 `(1+2j)`、`-1j`⇒`(-0-1j)`、`1/2j`⇒`-0.5j`；`**` 参照折/本层留运行期但语义一致，如实登记）。
+     - **对象类型**：`ComplexObject`（real/imag 双 f64）＋真 `complex` 类型（MRO／`new` 槽非 None）；`repr`/`str`（含 `-0` 符号位／inf/nan／指数）、`.real`/`.imag`、`conjugate()`、`__complex__`、`__abs__`/`__bool__`/`__neg__`/`__pos__`/`__hash__`；算术塔 `+ - * / **`（Smith 除法、`_Py_c_pow` 重复平方＋极坐标、0j 特殊口径）、`//`/`%`/`divmod` 的 unsupported 文案；`==`/`!=`、排序 TypeError 文案；**CPython 数值哈希算法**（`_Py_HashDouble`／int／bigint／complex 组合）公开给 stdlib。
+     - **stdlib 面**：`complex()` 构造器（0/1/2 参、`complex("1+2j")` 字符串解析含括号/空白/指数/下划线/`inf`/`nan` 与两套 ValueError 文案、`__complex__`/`__float__` 协议、关键字/arity/未知关键字文案、**`-0.0` 符号位**、单参恰 complex ⇒ `complex(z) is z`）；新注册 **`hash()` 内置**（int/float/bool/str/bytes/tuple/None/complex/用户类 `__hash__`；不可哈希内建同参照文案；其余如实 `NotImplementedError`）；`abs(complex)`（hypot）、`int/float(complex)` 的 TypeError 文案、`divmod(complex,…)` 文案。
+     - 规格：`SPEC-c-modules.md` §5.2.2 补 `complex` 类型面/构造器/`hash()`＋**如实偏差 6 条**（无哈希随机化＝零密钥 siphash13 等价 `PYTHONHASHSEED=0`；nan 的 hash 确定性 0；`class C(complex)` 子类构造未接；类型级 `complex.real`/`__lt__`/`__add__` 未挂；无 DeprecationWarning 通道；`setattr(z,"real")` 文案差异）。
+  2. **`unittest/mock` 同步**（P3-34 解锁）：`Lib/unittest/mock.py`（3204 行）从 `SYNC_EXCLUDE` 移回 SLICE，与上游逐字节一致 ⇒ `Lib/` **549** 个 .py、`sync_lib --check` **553 文件**全一致；`import unittest.mock` 可用。
+  3. **编译器真 bug：`try`/`with` 余部重放**指数爆炸**（预存）**：每个 `try` 处理块正常出口复制其后全部语句、余部又是 `try` ⇒ 2^N 代码量（N=16 达 1.1M 词/2.2MB）⇒ 跳转实参截断 ⇒ `StackUnderflow`（N≥16）/死循环（N≥17）；连续 `with` 同款。修法：余部含 `try`/`with` 时正常出口打 `continuation` 标签、处理块正常完成改 `POP_EXCEPT; JUMP_BACKWARD_NO_INTERRUPT`（与参照 `two_tries`/`with a: … with b: …` 同形）；`widen_extended_args` 从"最多 4 轮"改为**迭代到不动点**（防御 64 轮＋未收敛诊断）。⇒ N=16/17/30/64/200 全 ≤0.26s、与参照一致；连续 `with` 同。
+  4. **`deque` 真值 bug**：真值分派漏 deque（落"默认真"）⇒ `bool(deque())` 恒 True ⇒ `contextlib.ExitStack.__exit__` 死循环/`pop from an empty deque`（`unittest.mock.patch().stop()` 崩的根因）；补真值分派（`len()!=0`）。**`list.pop([index])`** 真接线（`remove_at` 真摘+移位；空表/越界/非整数/arity/关键字文案照参照，支持 `__index__`）。
+  5. **`getattr`/`hasattr` 三参口径**（`Unittest.mock` 的 `MagicMixin` 需要）：`getattr(obj,name,default)` 吞属性链上的 `AttributeError`（含 `__getattr__` 抛的）、非 AttributeError 上抛；`hasattr` 同口径；arity/关键字/属性缺失消息补接收者类型名；修 `attribute_optional_of` 新引用泄漏。
+- **验收（全 ✓，均与 python3 3.14.4 逐行对拍）**：
+  - complex：124+ 条表达式（表示/属性/构造/字符串/关键字/-0.0/算术/比较/真值/类型面/hash/`__complex__`/identity/stdlib 面）**diff 为空**；`1j`/`-1j`/`1.5j`/`1e3j`/`0j`/`1+2j` 常量形状与参照 `co_consts` 一致；`.pyac` round-trip 全等。
+  - mock：`patch(...).start()/stop()`、`with patch`、`patch.object`、`MagicMock()`／`NonCallableMock()`、`mock(1,2)+assert_called_with` 全通；`pyawa …/unittest/mock.py` **exit 0**（与 python3 同）。
+  - 编译器：N=13/16/17/30/64/200 连续 try（模块级＋函数级、体内含 if/for、try/finally 链、真实异常路径 raise/except）与连续 with 全 exit 0 且输出与参照一致；**红线 `--test compile` 逐字节 4 passed**。
+  - 容器/getattr：deque 真值、list.pop 全形态、getattr/hasattr 三参与文案逐行一致；`--test containers` 12 passed。
+- **数字（终审实测）**：`Lib/test` 体检 397：可编译 **338/397＝85.1%**（语法错 59：**28 个 surrogate 转义**＋11 个 `\N{…}` 具名转义/其余批 B/C 缺口；与 round 17 的 347/50 相比有 → 见「说明」）、**跑通 7/397＝1.8%**（持平）、未实现 39／运行期错 270／**超时 22**（round 18 中途一度 132 —— 主因即余部重放指数爆炸，修后回落）。判据① **469/628＝74.7%**（通过 452＋参照口径 17，**+1**：`unittest.mock` 可 import）；进度指标 **453/549＝82.5%**；语料 407／在册差异 3 未变。
+- **如实说明（可编译 347→338，非支持回退）**：用 round-17 二进制与新二进制对同一批 397 文件逐条比对 tsv 得：**9 个文件 `unimplemented → syntax`**（`test_annotationlib`/`test_buffer`/`test_collections`/`test_compile`/`test_descr`/`test_enum`/`test_format`/`test_generators`/`test_socket`/`test_struct`，其中旧基线全卡在 `1j`）；实测例子：`test_collections` 旧=`整数 1j（进制 10）解析不了`、新=`表达式里出现 Some(Star)`（批 B/C 的 `*` 表达式）；`test_enum` 旧=`1j`、新=`不认识的语句开头 Some(Tilde)`（`~T` 类型表达式）；`test_compile` 旧=`777j`、新=`语句结尾多出了 Some(AugAssign(Add))`。⇒ 是 **`1j` 打通后文件解析得更远**撞上批 B/C 缺口，不是我们支持的形态回退；下一轮批 B/C 收口一并归零。超时 22 中多数是 `test_httpservers`/`test_ssl`/`test_socket`/`test_long` 一类"跑得久/等网络"（旧基线里它们多数还没编译到那一步），逐条甄别留待下一轮。
+- **缺口榜（下一轮取活）**：① `test.support.os_helper` ×72 等 surrogate 族（**P3-35 剩余，需 string repr 级改造 ⇒ 独立立项评估**，不以假数据绕过）；② `doctest` 18（导入 `pdb` ⇒ **match 序列/映射模式 opcode** 未接）；③ `.pyac BadCodeSection` 10（P3-36）；④ `unicodedata`/`hashlib`/`multibytecodec_support`（P3-37 剩余）；⑤ `\N{…}` 具名转义 11（Unicode 名字表数据面）；⑥ 超时 22（多为 socket/server/long 类，待逐条甄别）。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **4812s**）：① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（17s）；③ `cargo test --workspace` **全部测试绿**（510s；含 `complex` 7／`containers` 12／`classes` 29／`exceptions` 17／`parse_batch_shapes`／`lib_compile`）；④ `check.py` **14/14**（2s）；⑤ `stability.py` 计数一致（1526s）；⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2004s）；⑦ 夹具守卫（0s）；⑧ 语料下限 407/112（0s）；⑨ `conformance` **5 passed**（373s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（380s）。另：`-p pyawa-core` 69 个 test 目标全绿、`-p pyawa-runtime` 83 个全绿、`-p pyawa-stdlib`／`-p pyawa-abi` 全绿。
+- **下一轮**：**P3-36（`.pyac` BadCodeSection 10）** → **doctest 的 match 模式 opcode（18）** → P3-37 剩余（unicodedata/hashlib；`multibytecodec_support` 需第二来源根，待拍板）→ `\N{…}` 名字表 → 批 B/C 语法缺口；**surrogate 独立立项**（string repr 改造）评估后报用户。
