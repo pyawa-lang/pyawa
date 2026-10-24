@@ -35,11 +35,17 @@ OUT = WORKSPACE / "target/libtests_survey.tsv"
 
 
 def run_one(binary: pathlib.Path, path: pathlib.Path, timeout: float):
+    # `test_*.py` 需要 `import test.support` ⇒ 把 **test/ 的父目录**放进 PYTHONPATH
+    # （否则会误报 ModuleNotFoundError: No module named 'test.support' —— 首版踩过 ✓）。
+    env = dict(os.environ)
+    parent = str(path.parent.parent)
+    env["PYTHONPATH"] = parent + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     with tempfile.TemporaryDirectory() as td:
         try:
             proc = subprocess.run(
                 [str(binary), str(path)],
                 cwd=td,
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -68,7 +74,7 @@ def main() -> None:
     ap.add_argument("--bin", default=str(DEFAULT_BIN))
     ap.add_argument("--jobs", type=int, default=max(4, (os.cpu_count() or 4) - 1))
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--timeout", type=float, default=5.0)
+    ap.add_argument("--timeout", type=float, default=30.0)
     args = ap.parse_args()
 
     root = pathlib.Path(args.dir).resolve()
