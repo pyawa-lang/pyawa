@@ -716,12 +716,31 @@ impl Emitter {
                 // **元组目标**（第 118 轮）：先 `UNPACK_SEQUENCE <个数>`（位点＝**整段目标** ✓，
                 //   实测 `n, line` ⇒ `(2,2,4,11)` ✓），再**按目标序**逐个存 ✓（走统一入口 ✓）。
                 if !tuple_targets.is_empty() {
-                    self.emit_indexed(*target_span, "UNPACK_SEQUENCE", tuple_targets.len());
+                    // **单个属性／下标目标** ✓（task-25 ✓）：`for d[k] in …`（参照只有"值 ← 一次
+                    // `STORE_SUBSCR`" ✓，**不发** `UNPACK_SEQUENCE` ✓）⇒ 直接按目标存 ✓。
+                    if tuple_targets.len() == 1
+                        && matches!(
+                            tuple_targets[0],
+                            ForTarget::Attribute(..) | ForTarget::Subscript(..)
+                        )
+                    {
+                        self.emit_for_target(&tuple_targets[0])?;
+                    } else {
                     // **两个局部目标的超指令融合**（实测 `for a, b in xs` ⇒ `STORE_FAST_STORE_FAST`
                     //   ✓，与元组解包／推导式**同一编码口径** ✓，arg ＝ `(slot0 << 4) | slot1` ✓）
                     // **超指令融合只认"两项都是名字"** ✓（第 289 轮：目标现在可嵌套 ✗ ⇒
-                    // 括号那一层要走递归 UNPACK ✓，不能融成一条 STORE_FAST_STORE_FAST ✗）。
-                    let fused = if let [ForTarget::Name(first, _), ForTarget::Name(second, _)] =
+                    // 括号那一层要走递归 UNPACK ✓，不能融成一条 STORE_FAST_STORE_FAST ✗）；
+                    // **带星 / 属性 / 下标目标也不融合** ✓（task-25 ✓）。
+                    let fused = if tuple_targets.iter().any(|item| {
+                        matches!(
+                            item,
+                            ForTarget::Starred(..)
+                                | ForTarget::Attribute(..)
+                                | ForTarget::Subscript(..)
+                        )
+                    }) {
+                        None
+                    } else if let [ForTarget::Name(first, _), ForTarget::Name(second, _)] =
                         tuple_targets.as_slice()
                     {
                         if self.kind == ScopeKind::Function
@@ -747,8 +766,12 @@ impl Emitter {
                     let first_span = match &tuple_targets[0] {
                         ForTarget::Name(_, span) => *span,
                         ForTarget::Group(_, span) => *span,
+                        ForTarget::Starred(_, span) => *span,
+                        ForTarget::Attribute(_, _, span) => *span,
+                        ForTarget::Subscript(_, _, span) => *span,
                     };
                     if let Some((slot0, slot1)) = fused {
+                        self.emit_indexed(*target_span, "UNPACK_SEQUENCE", tuple_targets.len());
                         self.emit_at(
                             first_span,
                             opcode::opcode("STORE_FAST_STORE_FAST")
@@ -756,9 +779,9 @@ impl Emitter {
                             ((slot0 << 4) | slot1) as u8,
                         );
                     } else {
-                        for item in tuple_targets {
-                            self.emit_for_target(item)?;
-                        }
+                        // **无星 ⇒ `UNPACK_SEQUENCE`；有星 ⇒ `UNPACK_EX`** ✓（task-25 ✓，同一入口）
+                        self.emit_unpack_for_targets(tuple_targets, *target_span)?;
+                    }
                     }
                 } else {
                     match self.kind {

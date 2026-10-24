@@ -506,3 +506,70 @@ fn parser_batch_shapes_match_the_reference_instruction_by_instruction() {
         assert_eq!(actual, norm(case.expected), "{} 的指令流", case.name);
     }
 }
+
+/// **task-25：P3-35 语法缺口批 A** 的"能编过"回归（不逐条对拍指令流——这些形状是本批
+/// 新接的，参照对拍随后补；先钉住"合法 Python 不得被拒"这一条）：
+///
+/// ① 行内套件体（`try:`／`except:`／`else:`／`finally:`／`with:`，含 `for/while` 的 `else:`）；
+/// ② `for` 目标里的 `*`；③ 链式赋值的**元组目标**；④ 带注解的**非名字目标**；
+/// ⑤ `with … as` 的**属性／下标目标**（含调用链）。
+#[test]
+fn task25_syntax_gaps_compile() {
+    let sources: &[(&str, &str)] = &[
+        (
+            "inline_suites",
+            "def f(x):\n    try: x = 1\n    except ValueError: pass\n    else: x = 2\n    finally: x = 3\n    return x\n",
+        ),
+        (
+            "inline_with_for_else",
+            "def f(xs):\n    for a in xs: pass\n    else: pass\n    return 1\n",
+        ),
+        (
+            "inline_while_else",
+            "def f(x):\n    while x: x = x - 1\n    else: x = 2\n    return x\n",
+        ),
+        (
+            "for_star_target",
+            "def f(items):\n    for full_name, *_ in items:\n        return full_name\n",
+        ),
+        (
+            "chained_tuple_target",
+            "def f(a, b):\n    chan = _, send = a, b\n    return chan, send\n",
+        ),
+        (
+            "annotated_paren_name",
+            "(pars): bool = True\n",
+        ),
+        (
+            "annotated_attr_via_call",
+            "def f(new):\n    new().attr: object = 1\n",
+        ),
+        (
+            "with_attr_target",
+            "def f(cm, holder):\n    with cm as holder.value:\n        pass\n",
+        ),
+        (
+            "with_subscript_call_target",
+            "def f(cm, values):\n    with cm as list(values)[0]:\n        pass\n",
+        ),
+        // **表达式语句的元组显示** ✓（尾逗号；官方 `test_clinic`／`test_cprofile` 一族）
+        (
+            "tuple_display_statement",
+            "def f(g):\n    g(a=0),\n    g(1), g(2),\n",
+        ),
+        // **字面量表达式语句** ✓（`{1: 2}`／`{1, 2}` 成句；官方 `test_dict`／`test_setcomps`）
+        (
+            "dict_set_literal_statement",
+            "{1: 2}\n{1, 2}\n[1][0]\n",
+        ),
+        // 增强赋值的右值可以是元组显示
+        (
+            "augassign_tuple_rhs",
+            "def f(x, y):\n    x += y,\n",
+        ),
+    ];
+    for (name, source) in sources {
+        compile(source, "probe.py", Mode::PurePython, CheckTier::Shallow, 0)
+            .unwrap_or_else(|error| panic!("{name} 编不过：{error:?}"));
+    }
+}

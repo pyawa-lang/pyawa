@@ -136,12 +136,26 @@ pub(crate) fn parse_with_target_item(
     cursor: usize,
 ) -> Result<(ForTarget, usize), CompileError> {
     match lexed.lexemes.get(cursor) {
+        // **属性／下标目标** ✓（task-25 ✓）：参照的 `as` 后面是任意 `star_target`
+        // ⇒ `with ct as self.foo:`（官方 `test_with.py:231`）／`with a as b[0]:` 都合法 ✓。
+        // **属性／下标目标（可含调用）** ✓（task-25 ✓）：参照的 `as` 后面是任意 `star_target`
+        // ⇒ `with … as list(targets.values())[0][1]:`（官方 `test_with.py:672`）／`self.foo`／
+        // `targets[1][0]` 都合法 ✓ —— 先前只认名字／括号组 ⇒ 在 `(` 上报"这里要冒号" ✗。
+        Some(Lexeme::Name(_))
+            if matches!(
+                lexed.lexemes.get(cursor + 1),
+                Some(Lexeme::Dot) | Some(Lexeme::LeftBracket) | Some(Lexeme::LeftParen)
+            ) =>
+        {
+            let (expression, next) = parse_expression(lexed, cursor)?;
+            Ok((for_target_from_expression(expression)?, next))
+        }
         Some(Lexeme::Name(name)) => Ok((ForTarget::Name(name.clone(), lexed.spans[cursor]), cursor + 1)),
         Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket) => parse_for_target_group(lexed, cursor),
         other => {
             let span = lexed.spans.get(cursor).copied();
             Err(CompileError::Unsupported(format!(
-                "`with … as` 只接线了名字与括号元组目标，实际 {other:?}（第 {} 行）",
+                "`with … as` 只接线了名字／属性／下标与括号元组目标，实际 {other:?}（第 {} 行）",
                 span.map(|span| span.line_start).unwrap_or(0)
             )))
         }
@@ -254,14 +268,54 @@ pub(crate) fn comprehension_target_span(target: &ComprehensionTarget) -> Span {
     }
 }
 
-/// **`for` 目标的一项**（第 289 轮）：名字，或**括号／方括号元组**（可再嵌 ✓）。
+/// 把"属性／下标"表达式转成 `ForTarget`（`for`／`with … as` 的目标那一族 ✓，task-25 ✓）。
+fn for_target_from_expression(expression: Expression) -> Result<ForTarget, CompileError> {
+    match expression {
+        Expression::Attribute(object, name, span) => {
+            Ok(ForTarget::Attribute(object, name, span))
+        }
+        Expression::Subscript(object, key, span) => {
+            Ok(ForTarget::Subscript(object, key, span))
+        }
+        other => {
+            let span = other.span();
+            Err(CompileError::Syntax(format!(
+                "`for`／`with … as` 的目标只接线了名字／属性／下标／括号组（第 {} 行）",
+                span.line_start
+            )))
+        }
+    }
+}
+
+/// **`for` 目标的一项**（第 289 轮）：名字、属性／下标，或**括号／方括号元组**（可再嵌 ✓）；
+/// `*` 项包成 `Starred` ✓（task-25 ✓）。
 pub(crate) fn parse_for_target_item(
     lexed: &Lexed,
     cursor: usize,
 ) -> Result<(ForTarget, usize), CompileError> {
     match lexed.lexemes.get(cursor) {
+        // **属性／下标目标** ✓（task-25 ✓）：参照语法里 `for`／`with … as` 的目标是任意
+        // `star_target` ⇒ `for d[k] in …`／`with C() as (targets[1][0], x)`（官方
+        // `test_with.py:689` 一族）都合法 ✓ —— 先前只认名字 ⇒ 括号目标里报"没有收尾" ✗。
+        Some(Lexeme::Name(_))
+            if matches!(
+                lexed.lexemes.get(cursor + 1),
+                Some(Lexeme::Dot) | Some(Lexeme::LeftBracket) | Some(Lexeme::LeftParen)
+            ) =>
+        {
+            let (expression, next) = parse_expression(lexed, cursor)?;
+            Ok((for_target_from_expression(expression)?, next))
+        }
         Some(Lexeme::Name(name)) => Ok((ForTarget::Name(name.clone(), lexed.spans[cursor]), cursor + 1)),
         Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket) => parse_for_target_group(lexed, cursor),
+        // **星号项** ✓（task-25 ✓）：`for full_name, *_ in error_list:`（官方 `libregrtest/result.py:198`）
+        // —— 先前这里报"`for` 的目标要名字或括号元组，实际 Some(Star)" ✗。
+        Some(Lexeme::Star) => {
+            let star_span = lexed.spans[cursor];
+            let (inner, next) = parse_for_target_item(lexed, cursor + 1)?;
+            let span = star_span.to(item_span(&inner));
+            Ok((ForTarget::Starred(Box::new(inner), span), next))
+        }
         other => Err(CompileError::Syntax(format!(
             "`for` 的目标要名字或括号元组，实际 {other:?}（第 {} 行）",
             lexed.spans.get(cursor).map(|span| span.line_start).unwrap_or(0)
@@ -306,7 +360,11 @@ pub(crate) fn parse_for_target_group(
 /// 一项目标的位点（`ForTarget` 两种形态各取自己的 ✓）。
 pub(crate) fn item_span(target: &ForTarget) -> Span {
     match target {
-        ForTarget::Name(_, span) | ForTarget::Group(_, span) => *span,
+        ForTarget::Name(_, span)
+        | ForTarget::Group(_, span)
+        | ForTarget::Starred(_, span)
+        | ForTarget::Attribute(_, _, span)
+        | ForTarget::Subscript(_, _, span) => *span,
     }
 }
 

@@ -387,11 +387,12 @@ SLICE = (
     # 即 `CX-8` 的上游口径）里 ✓ ⇒ `import test.support` 直接 `No module named 'test.support'` ✗。
     # 这里**逐文件列 19 个**（不用目录 glob ✗）：其余 7 个（`libregrtest/result.py`／
     # `libregrtest/utils.py`／`support/channels.py`／`support/os_helper.py`／
-    # `typinganndata/ann_module.py`／`ann_module2.py`／`ann_module695.py`）当前过不了
+    # `typinganndata/ann_module.py`／`ann_module2.py`／`ann_module695.py`）当时过不了
     # `tools/cargo.sh test -p pyawa-core --test lib_compile` 的编译期不变量 ✗（`P3-35` 的
     # **合法 Python 被拒**语法缺口：`for *x` 目标／surrogate escape `\uD800`／链式赋值非名字目标／
     # 注解赋值的括号名字与属性目标／PEP 695 `*Ts`）⇒ **暂不同步** ✓（`P3-35` 修完再收）；
-    # 按 `MS-19` 判据补充：**不登记 KNOWN**、也不改编译器凑绿 ✗。
+    # 按 `MS-19` 判据补充：**不登记 KNOWN**、也不改编译器凑绿 ✗。**后续**：其中 4 个已由
+    # **task-28 批 A** 解锁收进 ✓（见下）；剩 3 个仍不同步 ✓。
     "test/libregrtest/cmdline.py",
     "test/libregrtest/findtests.py",
     "test/libregrtest/logger.py",
@@ -411,6 +412,20 @@ SLICE = (
     "test/support/strace_helper.py",
     "test/typinganndata/_typed_dict_helper.py",
     "test/typinganndata/mod_generics_cache.py",
+    # **task-28 批 A 收账（`P3-35` 批 A 解锁，2026-10-24 ✓）**：parser 批（for-star 目标／链式元组
+    # 目标／注解赋值的括号名字与属性目标）落地后，这 4 个现在过得了 `lib_compile` 的编译期不变量 ✓
+    #（Lead 实测：`ann_module`／`ann_module2` 跑完无错；`channels.py` 编译过、运行期还缺
+    # `_interpchannels`（另一格）；`result.py` 编译过、运行期 `from .utils import …` 还卡在
+    # `utils.py` 的 surrogate escape（另一格）——`lib_compile` **只看编译** ✓ ⇒ 都可同步 ✓）。
+    # 三个目录的 `__init__.py` 早已在表里／已同步 ✓ ⇒ 本批只补这 4 个文件（不重复、不覆盖 ✓）。
+    "test/libregrtest/result.py",
+    "test/support/channels.py",
+    "test/typinganndata/ann_module.py",
+    "test/typinganndata/ann_module2.py",
+    # **`P3-35` 剩余 3 个仍不同步** ✓：`test/libregrtest/utils.py`（surrogate `\uD800-\uDFFF`
+    # 字面量 ⇒ 要**string repr 级**改造，不是纯解析器格）、`test/support/os_helper.py`
+    # （`\uDC80` 的运行时 surrogateescape 口径）、`test/typinganndata/ann_module695.py`
+    # （PEP 695 `*Ts` 未接线）⇒ 修完再收；按 `MS-19` 判据补充：**不登记 KNOWN**、不改编译器 ✗。
     # **`sysconfig` 的 `_sysconfigdata` 数据模块**（task-3 顺带 ✓）：`sysconfig.get_config_var()`
     # 走 `importlib.import_module(_get_sysconfigdata_name())` ✓，官方 `test.support` 导入期的
     # `check_sanitizer()` 就要 `CFLAGS` ⇒ 这两个名字按本机 `sys.platform`／multiarch 口径列出 ✓

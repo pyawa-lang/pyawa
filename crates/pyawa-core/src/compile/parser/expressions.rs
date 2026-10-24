@@ -22,50 +22,6 @@ pub(crate) fn parse_star_or_expression(lexed: &Lexed, cursor: usize) -> Result<(
     parse_condition(lexed, cursor)
 }
 
-/// 游标处是不是「目标链 ＋ `=`」（**链式赋值**的判断；**不跨行** ✓）。
-///
-/// 目标链的形态与 `del`／元组目标同一口径：`名字` ＋ 任意串 `[键]`／`.名字` ✓。
-pub(crate) fn looks_like_target_then_assign(lexed: &Lexed, cursor: usize) -> bool {
-    let tokens = &lexed.lexemes;
-    let mut index = cursor;
-    if !matches!(tokens.get(index), Some(Lexeme::Name(_))) {
-        return false;
-    }
-    index += 1;
-    loop {
-        match tokens.get(index) {
-            Some(Lexeme::Dot) => {
-                if !matches!(tokens.get(index + 1), Some(Lexeme::Name(_))) {
-                    return false;
-                }
-                index += 2;
-            }
-            Some(Lexeme::LeftBracket) => {
-                let mut depth = 0usize;
-                loop {
-                    match tokens.get(index) {
-                        Some(Lexeme::LeftBracket) => {
-                            depth += 1;
-                            index += 1;
-                        }
-                        Some(Lexeme::RightBracket) => {
-                            depth -= 1;
-                            index += 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        Some(_) => index += 1,
-                        None => return false,
-                    }
-                }
-            }
-            Some(Lexeme::Assign) => return true,
-            _ => return false,
-        }
-    }
-}
-
 /// **条件位置的表达式**：允许**不带括号的海象**（实测参照允许 `if x := f():` ✓）。
 ///
 /// `_bootstrap.py:547` 就是这种形态 ✗（我们此前只接了括号形式的 `(x := …)` ✓）。
@@ -476,7 +432,19 @@ pub(crate) fn parse_comprehension_generators(
 ) -> Result<(Vec<Generator>, usize), CompileError> {
     let mut generators = Vec::new();
     let mut cursor = cursor;
-    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+    while {
+        // `async for` 在后续生成器里也合法（`[i for i in a async for j in b]`）⇒ 同一口径报未接线 ✓
+        if matches!(
+            lexed.lexemes.get(cursor),
+            Some(Lexeme::Name(name)) if name == "async"
+        ) && matches!(lexed.lexemes.get(cursor + 1), Some(Lexeme::For))
+        {
+            return Err(CompileError::Unsupported(
+                "`async` 推导式尚未接线（GET_AITER／GET_ANEXT 那一套）".to_owned(),
+            ));
+        }
+        matches!(lexed.lexemes.get(cursor), Some(Lexeme::For))
+    } {
         let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
         if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
             return Err(CompileError::Syntax(

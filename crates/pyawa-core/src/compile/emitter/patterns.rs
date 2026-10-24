@@ -35,6 +35,8 @@ pub(crate) fn first_for_target_name(items: &[ForTarget]) -> Option<(String, Span
     items.iter().find_map(|item| match item {
         ForTarget::Name(name, span) => Some((name.clone(), *span)),
         ForTarget::Group(items, _) => first_for_target_name(items),
+        ForTarget::Starred(inner, _) => first_for_target_name(core::slice::from_ref(inner)),
+        ForTarget::Attribute(..) | ForTarget::Subscript(..) => None,
     })
 }
 
@@ -312,11 +314,58 @@ impl Emitter {
                 self.emit_store_name(*span, name);
             }
             ForTarget::Group(items, span) => {
-                self.emit_indexed(*span, "UNPACK_SEQUENCE", items.len());
-                for item in items {
-                    self.emit_for_target(item)?;
-                }
+                self.emit_unpack_for_targets(items, *span)?;
             }
+            // 星号项本身只是"那一层解包时占一格"的标记 ✓ —— 真正存的是它包着的目标 ✓。
+            ForTarget::Starred(inner, _) => self.emit_for_target(inner)?,
+            // **属性目标** ✓（task-25 ✓）：`with cm as self.foo:` ⇒ 先求值对象、再 `STORE_ATTR`
+            ForTarget::Attribute(object, name, span) => {
+                self.emit_expression(object)?;
+                let index = self.intern_name(name);
+                self.emit_indexed(*span, "STORE_ATTR", index);
+            }
+            // **下标目标** ✓（task-25 ✓）：`with cm as a[0]:` ⇒ 对象、键、`STORE_SUBSCR`
+            ForTarget::Subscript(object, key, span) => {
+                self.emit_expression(object)?;
+                self.emit_expression(key)?;
+                self.emit_named(*span, "STORE_SUBSCR", 0);
+            }
+        }
+        Ok(())
+    }
+
+    /// **一层 `for`／`with` 目标的解包＋逐项存**（task-25 ✓）：无星 ⇒ `UNPACK_SEQUENCE`；
+    /// 有星 ⇒ `UNPACK_EX`（`before | after << 8`，只允许一个 `*` ✓，与元组赋值同一条编码口径 ✓）。
+    /// 位点取**那一层目标**（整段）——与 `UNPACK_SEQUENCE` 既有口径一致 ✓。
+    pub(crate) fn emit_unpack_for_targets(
+        &mut self,
+        targets: &[ForTarget],
+        span: Span,
+    ) -> Result<(), CompileError> {
+        let starred: Vec<usize> = targets
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, ForTarget::Starred(..)))
+            .map(|(index, _)| index)
+            .collect();
+        if starred.is_empty() {
+            self.emit_indexed(span, "UNPACK_SEQUENCE", targets.len());
+        } else {
+            if starred.len() != 1 {
+                return Err(CompileError::Unsupported(
+                    "`for`／`with` 目标里只允许一个 `*`（如实报未接线 ✓）".to_owned(),
+                ));
+            }
+            let before = starred[0];
+            let after = targets.len() - before - 1;
+            let argument = (before | (after << 8)) as u16;
+            if argument > 255 {
+                self.emit_named(span, "EXTENDED_ARG", (argument >> 8) as u8);
+            }
+            self.emit_named(span, "UNPACK_EX", (argument & 0xFF) as u8);
+        }
+        for item in targets {
+            self.emit_for_target(item)?;
         }
         Ok(())
     }

@@ -1560,3 +1560,82 @@ mid_a, mid_b = mid_function(False)
     assert_eq!(vm.instance.int_value(mid_a), Some(2), "else 分支的执行结果");
     assert_eq!(vm.instance.int_value(mid_b), Some(3), "if/else 之后的语句要照常执行");
 }
+
+// --------------------------------------------------------------------------- #
+// task-25：P3-35 语法缺口批 A —— **执行期**回归（行内套件／for-star／链式元组目标／
+// with 属性目标）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn task25_syntax_gaps_execute_with_reference_semantics() {
+    let vm = Vm::new();
+    let namespace = run_source(
+        &vm,
+        r#"
+class Cm:
+    def __enter__(self):
+        return 7
+    def __exit__(self, *args):
+        return False
+
+class Holder:
+    pass
+
+def inline(flag):
+    try: a = 1
+    except ValueError: a = 2
+    else: a = 3
+    finally: a = 4
+    if flag: b = 10
+    else: b = 20
+    for i in [1]:
+        pass
+    else: b = b + 1
+    return (a, b)
+
+def star(items):
+    first, *rest = items
+    total = 0
+    for name, *args in items:
+        count = 0
+        for extra in args:
+            count = count + 1
+        total = total + count
+    return (first, rest, total)
+
+def chained(a, b):
+    x = _, y = a, b
+    return (x, y)
+
+def with_target(cm, holder):
+    with cm as holder.value:
+        pass
+    return holder.value
+
+inline_a, inline_b = inline(False)
+star_first, star_rest, star_total = star([(1, 2, 3), (4, 5)])
+chain_x, chain_y = chained(8, 9)
+with_value = with_target(Cm(), Holder())
+"#,
+    );
+    let inline_a = namespace_lookup(&vm, namespace, "inline_a");
+    let inline_b = namespace_lookup(&vm, namespace, "inline_b");
+    assert_eq!(vm.instance.int_value(inline_a), Some(4), "try/except/else/finally 行内体次序");
+    assert_eq!(vm.instance.int_value(inline_b), Some(21), "if/else 行内体 + for 的 else 行内体");
+    let star_total = namespace_lookup(&vm, namespace, "star_total");
+    assert_eq!(vm.instance.int_value(star_total), Some(3), "`for name, *args in …` 的星号收余项");
+    let star_rest_name = namespace_lookup(&vm, namespace, "star_rest");
+    assert!(
+        vm.instance.list_items(star_rest_name).is_some_and(|items| items.len() == 1),
+        "`first, *rest = items` 的 rest 应当收到 1 项"
+    );
+    let chain_x = namespace_lookup(&vm, namespace, "chain_x");
+    assert!(
+        vm.instance.tuple_items(chain_x).is_some_and(|items| items.len() == 2),
+        "链式赋值的目标可以是元组（`x = _, y = a, b` ⇒ x 收整个元组）"
+    );
+    let chain_y = namespace_lookup(&vm, namespace, "chain_y");
+    assert_eq!(vm.instance.int_value(chain_y), Some(9), "链式元组目标里 y 的绑定");
+    let with_value = namespace_lookup(&vm, namespace, "with_value");
+    assert_eq!(vm.instance.int_value(with_value), Some(7), "`with cm as holder.value` 的属性目标");
+}

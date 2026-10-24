@@ -1817,6 +1817,12 @@ enum ForTarget {
     Name(String, Span),
     /// 一层括号／方括号元组（位点取**括号那一段** ✓，可再嵌 ✓）。
     Group(Vec<ForTarget>, Span),
+    /// **星号项**（task-25 ✓）：`for a, *b in …`／`with … as (a, *b)` —— 那一层要发 `UNPACK_EX` ✓。
+    Starred(Box<ForTarget>, Span),
+    /// **属性目标**（task-25 ✓）：`with cm as self.foo:`（参照语法里 `as` 后面是任意 `star_target` ✓）。
+    Attribute(Box<Expression>, String, Span),
+    /// **下标目标**（task-25 ✓）：`with cm as a[0]:`。
+    Subscript(Box<Expression>, Box<Expression>, Span),
 }
 
 /// **`match` 的一条 `case`**（第 290 轮）。

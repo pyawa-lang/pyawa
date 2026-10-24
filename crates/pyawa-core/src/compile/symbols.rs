@@ -2063,6 +2063,10 @@ fn collect_for_target(emitter: &mut Emitter, target: &ForTarget, pre_intern: boo
                 collect_for_target(emitter, item, pre_intern);
             }
         }
+        // 星号项只是标记 ⇒ 递归收它包着的目标 ✓（`for a, *b in …` 的 `b` 也是本作用域局部 ✓）。
+        ForTarget::Starred(inner, _) => collect_for_target(emitter, inner, pre_intern),
+        // 属性／下标目标**不声明**局部（`with … as self.foo` ✓）。
+        ForTarget::Attribute(..) | ForTarget::Subscript(..) => {}
     }
 }
 

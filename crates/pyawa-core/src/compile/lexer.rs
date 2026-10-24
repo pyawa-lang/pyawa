@@ -911,6 +911,11 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             // **原始** ⇒ 反斜杠原样是两个字节 ✓（不解码 ✓）
                             Some(current) if current.is_ascii() => {
                                 value.push(*current as u8);
+                                // 三引号跨行：行号与行首索引都要跟上（否则后续词元位点整体漂移 ✗）
+                                if triple && *current == '\n' {
+                                    line += 1;
+                                    line_start_index = index + 1;
+                                }
                                 index += 1;
                             }
                             Some(_) => {
@@ -935,17 +940,27 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                     && matches!(characters.get(index + 1), Some('\'') | Some('"'))
                 {
                     let start = column!(index);
+                    let start_line = line;
                     let quote = characters[index + 1];
-                    index += 2;
+                    // **三引号 bytes** ✓（task-25 ✓）：`b"""…"""`（可跨行）—— 先前只认单引号 ✗
+                    // ⇒ `b"""…"""` 被拆成 `Bytes(空)` ＋ 一堆词元 ⇒ 实参表报"实参表里出现 …" ✗
+                    //（官方 `test_exceptions` 的 tokenizer 用例正是它 ✓）。
+                    let triple = characters.get(index + 2) == Some(&quote)
+                        && characters.get(index + 3) == Some(&quote);
+                    index += if triple { 4 } else { 2 };
                     // 转义报错里的 `position` 是**相对字面量内容**的下标（实测口径）
                     let content_start = index;
                     let mut value: Vec<u8> = Vec::new();
                     loop {
+                        let at_quote = characters.get(index) == Some(&quote)
+                            && (!triple
+                                || (characters.get(index + 1) == Some(&quote)
+                                    && characters.get(index + 2) == Some(&quote)));
+                        if at_quote {
+                            index += if triple { 3 } else { 1 };
+                            break;
+                        }
                         match characters.get(index) {
-                            Some(current) if *current == quote => {
-                                index += 1;
-                                break;
-                            }
                             Some('\\') => {
                                 let (byte, width) =
                                     lex_bytes_escape(&characters[index..], index - content_start)?;
@@ -954,6 +969,11 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             }
                             Some(current) if current.is_ascii() => {
                                 value.push(*current as u8);
+                                // 三引号跨行：行号与行首索引都要跟上（后续词元位点不漂移 ✓）
+                                if triple && *current == '\n' {
+                                    line += 1;
+                                    line_start_index = index + 1;
+                                }
                                 index += 1;
                             }
                             Some(_) => {
@@ -969,7 +989,7 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         }
                     }
                     lexemes.push(Lexeme::Bytes(value));
-                    spans.push(Span::new(line, line, start, column!(index)));
+                    spans.push(Span::new(start_line, line, start, column!(index)));
                     continue;
                 }
                 let start = column!(index);

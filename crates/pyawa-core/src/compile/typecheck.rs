@@ -1062,6 +1062,8 @@ fn collect_for_target_names(target: &ForTarget, out: &mut HashSet<String>) {
                 collect_for_target_names(item, out);
             }
         }
+        ForTarget::Starred(inner, _) => collect_for_target_names(inner, out),
+        ForTarget::Attribute(..) | ForTarget::Subscript(..) => {}
     }
 }
 
@@ -1141,6 +1143,8 @@ fn clear_for_target(target: &ForTarget, narrow: &mut HashMap<String, StaticType>
                 clear_for_target(item, narrow);
             }
         }
+        ForTarget::Starred(inner, _) => clear_for_target(inner, narrow),
+        ForTarget::Attribute(..) | ForTarget::Subscript(..) => {}
     }
 }
 

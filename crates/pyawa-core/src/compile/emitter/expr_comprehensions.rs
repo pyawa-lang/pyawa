@@ -37,6 +37,15 @@ impl Emitter {
                             // `target` 字段**不参与发射**（见 `Statement::For` 的发射臂 ✓），但它是
                             // **本层局部**、要参与 `varnames` 登记 ⇒ 取组里**第一个叶子名字** ✓
                             //（写空串会把空的 varname 塞进去 ✗ ⇒ 槽号整体错位 ✓）。
+                            // 星号／属性／下标目标不会出现在推导式里（`ComprehensionTarget` 只有
+                            // 名字与组 ✓）⇒ 如实报未接线，别静默走错栈序 ✓。
+                            ForTarget::Starred(..)
+                            | ForTarget::Attribute(..)
+                            | ForTarget::Subscript(..) => {
+                                return Err(CompileError::Unsupported(
+                                    "推导式目标里出现星号／属性／下标（如实报未接线 ✓）".to_owned(),
+                                ));
+                            }
                             ForTarget::Group(items, group_span) => {
                                 let Some((name, _)) = first_for_target_name(&items) else {
                                     return Err(CompileError::Unsupported(
