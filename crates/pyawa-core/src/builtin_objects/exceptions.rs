@@ -275,6 +275,30 @@ pub unsafe fn exception_getattr(
             None => instance.new_none(),
         }),
         "__suppress_context__" => Some(instance.new_bool(object.suppress_context())),
+        // **`with_traceback(tb, /)`**（task-24 扩）：参照里它是 `BaseException` 的方法 ✓
+        //（`Lib/unittest/case.py:279` 的 `exc_value.with_traceback(None)` 正靠它 ✓）。
+        // 与 `dict_getattr` 同一做法：把原生函数**绑到本实例**上交出去 ✓（调用时 `bound` 就是 self ✓）。
+        "with_traceback" => {
+            // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+            let owner = unsafe { NonNull::new_unchecked(ptr) };
+            let method_type = instance
+                .type_named("builtin_function_or_method")
+                .expect("引导期已登记");
+            let native = instance.alloc(BuiltinFunctionObject::new(
+                method_type,
+                "with_traceback",
+                Cell::new(with_traceback_native),
+            ));
+            let native_raw = native.into_raw().cast::<Header>();
+            // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+            unsafe { instance.incref_object(ptr) };
+            let bound = instance.alloc(MethodObject::new(
+                instance.type_named("method").expect("method 已登记"),
+                native_raw,
+                owner,
+            ));
+            Some(bound.into_raw().cast::<Header>())
+        }
         // **有就给、没有给 `None`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `raise` 时挂上去 ✓
         //（`Instance::new_traceback` ✓）；未抛过 ⇒ `None` ✓。
         "__traceback__" => {
@@ -288,6 +312,68 @@ pub unsafe fn exception_getattr(
             })
         }
         _ => None,
+    }
+}
+
+/// **`BaseException.with_traceback(tb, /)`**（task-24 扩）：把 `__traceback__` 设成 `tb` 并返回 `self` ✓。
+///
+/// 语义照参照 3.14.4 实测：
+/// - `e.with_traceback(None) is e` ✓（同时 `e.__traceback__ == None` ✓）；
+/// - 0 参／2 参 ⇒ `TypeError: BaseException.with_traceback() takes exactly one argument (N given)` ✓；
+/// - 关键字实参 ⇒ `TypeError: BaseException.with_traceback() takes no keyword arguments` ✓；
+/// - 非 traceback／None ⇒ `TypeError: __traceback__ must be a traceback or None` ✓。
+///
+/// **如实偏差** ✗：本层的 traceback 对象是 `BC-60` 的"最小起步"（`tb_frame` ＋ 占位的
+/// `tb_next`／`tb_lineno`／`tb_lasti` ✓）⇒ 这里只做**类型校验 ＋ 挂载**，不重建链 ✓
+/// （与 `DIV-6` 的既有口径一致 ✓；测试里只靠"设／读回"这一档 ✓）。
+unsafe fn with_traceback_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'with_traceback' needs an argument",
+        ));
+    };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "BaseException.with_traceback() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "BaseException.with_traceback() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let traceback = args[0];
+    if traceback != instance.singletons().none() && !is_traceback_object(instance, traceback) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__traceback__ must be a traceback or None",
+        ));
+    }
+    // **借用**：`set_attribute_value` 自己 retain ✓。挂到异常的实例字典 —— `__traceback__` 的
+    // 读取面（本文件 `exception_getattr` 的 `"__traceback__"` 臂）读的就是这一格 ✓。
+    instance.set_attribute_value(this, "__traceback__", traceback)?;
+    Ok(instance.retain(this))
+}
+
+/// `object` 是不是本层的 **traceback 对象**（类型名 `traceback`；该类型由
+/// [`Instance::new_traceback`] 按需惰性建 ✓）。
+fn is_traceback_object(instance: &Instance, object: NonNull<Header>) -> bool {
+    let ty = instance.type_of(object);
+    match instance.type_named("traceback") {
+        Some(traceback_type) => instance.is_subtype(ty, traceback_type),
+        // 还没建过这个类型 ⇒ 按名字兜底（`new_traceback` 用的就是同名类型 ✓）。
+        None => instance.type_name(ty) == "traceback",
     }
 }
 

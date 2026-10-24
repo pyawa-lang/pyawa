@@ -1504,3 +1504,68 @@
   `P3-34`（complex）→ `P3-35`（合法 Python 被拒）→ `P3-36`（`.pyac BadCodeSection`）→ `P3-37`（缺模块）→
   **M6 收口**（报用户批准后 `--no-ff` ＋ tag `m6`）。另列小格：`classmethod`／`staticmethod` 包装体属性委派＋`repr`；
   `issubclass() arg 1 must be a class`（`test_decorators` 的次级症状，疑 `classmethod` 包装体面同源）。
+
+---
+
+## round 16（会话 10 · M6 续）落地 ✓ —— `time` 面解锁（`import test.support` 通过）＋ 包装体面 ＋ 编译器待修格
+
+- **口径**：`HEAD`（本笔前）＝`a094974`（`dev`）；工作区起始干净；`check.py` 14/14。上一轮（round 15）把
+  "`time` 面（`strftime` 族，135 个签名）"列为下一轮第一格；本轮把三件事一起落了。
+- **落地（三条线）**：
+  1. **`time` 面 ＋ `sys._jit`（`clock` 域表尾三槽，`ABI 1.2→1.3`）**：`clock` vtable 表尾追加
+     `localtime(secs)`／`strftime(fmt, tm)`／`mktime(tm)` 三槽（新 `CpTm` 为 C 布局 `struct tm` ＋ gmtoff/zone）；
+     `PA_ABI_MINOR` 2→3（Rust 常量＋`include/pa.h`）；runtime（平台集中点）用 `unsafe extern "C"` 直连
+     `localtime_r`／`strftime`／`mktime`（**不调 `setlocale`** ⇒ C locale，与参照 `LC_TIME=C` 一致）；
+     core 三态映射＋`strftime` 缓冲两段式重试；stdlib `time` 补 `strftime`／`asctime`／`ctime`／`mktime`
+     （进 `__all__`），`localtime` 改走 provider（槽缺失退回纯 UTC ⇒ 旧宿主/语料 harness 不回归），
+     `gmtime` 保持纯 UTC，`timezone`／`altzone`／`daylight`／`tzname` 能问到 provider 时据实
+     （本机 `-28800`／`('CST','CST')`，与 `python3` 同值）；`sys._jit` 给模块对象式三查询口
+     （**如实**全 `False`；参照 `is_available()=True` 是构建期事实，登记偏差不冒充）。
+     ⇒ **`import test.support` 通过**（`test.support ok`；`has_strftime_extensions=True`／`_JIT_ENABLED=False`）。
+  2. **`classmethod`／`staticmethod` 包装体面**：`__module__`／`__qualname__`／`__name__`／`__doc__`／
+     `__annotations__` 委派到被包对象、`repr` 为 `<classmethod(<function …>)>`／`<staticmethod(…)>`、
+     `staticmethod` 实例可调用（3.10+ 语义；`classmethod` 仍不可调用）；顺带把函数 `__name__`／`__qualname__`／
+     `__module__` 做**首次取值后缓存同一对象**（`test_classmethod` 的 `assertIs` 依赖）。
+  3. **编译器两格（`try: return <表达式>` ＋ `finally`）**：`return <表达式>` 现按参照顺序发射
+     （先求值压栈 → `with` 退出 → 逐层 `finally` 逆序 → `RETURN_VALUE`；字面量常量保留参照特例）；
+     **`return` 写在 `finally` 体里**导致的发射器无限重放／Rust 栈溢出 abort 一并修（重放层先把自己
+     从待重放栈摘掉）；补 **`BaseException.with_traceback(tb, /)`**（`unittest.assertRaises` 需要）。
+     ⇒ `unittest.assertRaises` 端到端与参照逐行一致（捕获／`ValueError not raised`／异类外泄），
+     `subTest` 类错误路径恢复不再被 `NoneType.handle` 掩盖。
+- **验收（全 ✓，逐条对拍 `python3` 3.14.4）**：
+  - `time`：`%4Y`='2026'、`localtime(0)`=`(1970,1,1,8,0,0,3,1,0)`、`strftime("%Y-%m-%d %H:%M:%S")`=
+    `'1970-01-01 08:00:00'`、`asctime`=`'Thu Jan  2 03:04:05 2020'`、`ctime(0)`=`'Thu Jan  1 08:00:00 1970'`、
+    `mktime(localtime(0))`=`0.0`（float）、`timezone/altzone/daylight/tzname` 同值；`TZ=UTC` 全表 IDENTICAL；
+    `strftime` 的非法实参文案按参照逐条对齐（`Tuple or struct_time argument required` 等）。
+  - 编译器：`task22_try_finally.py` ⇒ `result => 1` / `g result => 2`（修前 `AttributeError`）；
+    `dis` 顺序 3 形态与参照同序；`return`-in-finally 最小/嵌套复现与参照一致且**不再崩**；
+    `with_traceback` 探针与参照逐行一致。
+  - 官方：`test_decorators` **不崩**、`test_classmethod` 转 **PASS**（逐测试探针 11 passed／5 failed；
+    其余 5 条均为独立格：缺 `builtins.compile`×3、嵌套类装饰器 `__dict__.update` 丢失、`test_memoize 3!=4`）。
+  - **红线**：`cargo test -p pyawa-core --test compile` **4 passed（逐字节）**，无夹具被改/重生成。
+  - ABI：C 头实编 `PA_ABI_VERSION` ⇒ `1 3 65539`；`capability_acceptance` 的 `CpClockVtable` 字面量同步。
+- **数字（终审实测）**：`Lib/test` 体检 397：可编译 **311/397＝78.3%**（持平）；**跑通 7/397＝1.8%**
+  （上轮 5；新跑通 `test_bigaddrspace`／`test_threadedtempfile`）；语法错 86／未实现 55／运行期错 247／超时 2。
+  **失败签名大幅换位**（`test.support` 导入通过后）：头号 `ModuleNotFoundError: test.support.os_helper` ×**59**
+  （该文件是本轮之前因 P3-35 的 **surrogate escape**（`\uDC80`）暂不同步的 7 个之一 ⇒ 下一格指向 **P3-35**）、
+  `doctest` 17／`unittest.mock` 14／`gc` 10／`unicodedata` 4／`hashlib` 4（→ `P3-37`）；运行期 `TypeError` ×25、
+  `BadCodeSection` ×6（`P3-36`）、`NotImplementedError` ×4；语法错头部仍是 `\ud800` 族 ×12＋同行 `try:`·`for:` ×8（`P3-35`）。
+  判据① **466/628＝74.2%**（未变；进度指标 450/544＝82.7%）；语料 407／在册差异 3 未变；**`PA_ABI_VERSION` 1.2→1.3**。
+- **如实偏差/遗留（本轮登记）**：① **没有 `struct_time` 类型**（`localtime`/`gmtime` 仍返回 9 元组 ⇒ `.tm_year`
+  等属性不可用；`strftime(fmt, localtime(0))` 的 `%z` 给 `+0000` 而参照给 `+0800`，因为参照的 struct_time 携带 zone）；
+  ② `daylight` 恒 0、`altzone==timezone`（无 DST 第二偏移通道）；③ `strptime`／`tzset`／`process_time*`／
+  `thread_time*`／`clock_gettime` 未做；④ `sys._jit.is_available()` 如实 False（参照 True）；⑤ `gmtime` 极值不报
+  `OSError`（纯 UTC 现值）；⑥ `strftime` 输出 >1 MiB 与空结果在 glibc 下不可区分 ⇒ 按空串（注释如实）；
+  ⑦ 旧宿主（1.2 vtable 无三槽）⇒ `localtime` 退回纯 UTC、`strftime`/`mktime` 报未实现（`CP-3`）。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **4814s**）：① check **0 警告**（0s）；
+  ② `--test compile` 逐字节 **4 passed**（18s）；③ `cargo test --workspace` **全部测试绿**（499s；含 cli 17／
+  `time_shapes` 2／`warnings_catch` 3／`exceptions` 16）；④ `check.py` **14/14**（2s）；⑤ `stability.py`
+  计数一致（1488s）；⑥ `heap_and_concurrency.py` **4 路并发 4/4 ＋ 堆扰动 3/3**（2014s）；⑦ 夹具守卫（0s）；
+  ⑧ 语料下限 407/112（0s）；⑨ `conformance` **5 passed**（393s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（400s）。
+  另：`-p pyawa-core` 68 个 test 目标全绿；`-p pyawa-runtime` 83 个 test 目标全绿；`-p pyawa-capabilities`／
+  `-p pyawa-abi`／`-p pyawa-stdlib` 全绿。
+- **下一轮取活（据本轮实测调整）**：**`P3-35` 的 surrogate escape**（`\ud800`/`\uDC80`）优先 —— 它同时挡着
+  **59** 个官方测试（`test.support.os_helper`）与 7 个暂不同步的 `Lib/test` 骨架；然后 `P3-37`（缺模块：
+  doctest／unittest.mock／gc／unicodedata／hashlib）；`P3-34`（complex）；`P3-36`（`BadCodeSection`）；
+  小格队列：`builtins.compile` 缺失、`sys.exc_info()` 如实桩（会让 unittest runner 一遇错误就 abort）、
+  嵌套类装饰器 `__dict__.update` 丢失、`test_memoize 3!=4`、`struct_time` 类型；最后报用户批准 M6 收口。

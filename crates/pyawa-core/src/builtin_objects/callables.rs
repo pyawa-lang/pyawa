@@ -102,6 +102,19 @@ py_object! {
             doc_override: RefCell<Option<NonNull<Header>>>,
             /// `__module__` 的覆盖值（`del` 之后是 `Some(None 单例)` ✓）。
             module_override: RefCell<Option<NonNull<Header>>>,
+            // **默认值缓存**（task-22）：参照实测 —— `f.__name__`／`f.__qualname__`／`f.__module__`
+            // 每次给的是**同一个对象** ✓（官方 `test_decorators` 里
+            // `assertIs(getattr(wrapper, attr), getattr(func, attr))` 就靠这个身份成立 ✓）。
+            // 本层这些默认值来自 code object 的 Rust 字符串／`__globals__` 的文本 ⇒ 先前每次都
+            // `new_str` ✗ ⇒ 每次都是新对象 ✗ ⇒ `assertIs` 必红 ✗。这里首次取值时生成并各持一份，
+            // 之后给同一个对象 ✓（`__name__`／`__qualname__` 不可删 ✓；`__module__` 的 `del`
+            // 走覆盖字段 `Some(None)` ✓，缓存被覆盖值遮住 ✓）。
+            /// `__name__` 默认值的缓存（`None` ＝ 还没生成过）。
+            name_cache: RefCell<Option<NonNull<Header>>>,
+            /// `__qualname__` 默认值的缓存。
+            qualname_cache: RefCell<Option<NonNull<Header>>>,
+            /// `__module__` 默认值的缓存。
+            module_cache: RefCell<Option<NonNull<Header>>>,
         }
     }
 }
@@ -390,7 +403,33 @@ py_object! {
     }
 }
 
-/// **`classmethod`／`staticmethod` 的属性面**（第 346 轮）：`__func__` 与 `__wrapped__` ✓。
+/// **`classmethod`／`staticmethod` 的"委派属性"名单**（task-22）。
+///
+/// 参照 3.14.4 实测：这两个包装体**不自己实现**这五项 ⇒ 直接从被包对象上取 ✓
+/// （与 `functools.WRAPPER_ASSIGNMENTS` 同一族 ✓）。动因：官方 `test_decorators` 的
+/// `check_wrapper_attrs` 逐项 `assertIs(getattr(wrapper, attr), getattr(func, attr))` ✓ ——
+/// 先前一律 `AttributeError: 'classmethod' object has no attribute '__module__'` ✗
+///（`TestDecorators.test_classmethod` 的首 fail ✓）。
+const WRAPPER_DELEGATED_ATTRIBUTES: [&str; 5] =
+    ["__module__", "__qualname__", "__name__", "__doc__", "__annotations__"];
+
+/// 把 `name` 委派给**被包对象**：命名单里的项 ⇒ `inner` 上取（**新引用** ✓）；否则 `None` ✓。
+fn wrapper_delegate(
+    instance: &Instance,
+    inner: NonNull<Header>,
+    name: &str,
+) -> Option<NonNull<Header>> {
+    if !WRAPPER_DELEGATED_ATTRIBUTES.iter().any(|candidate| *candidate == name) {
+        return None;
+    }
+    // `attribute_optional_of` 交的是**新引用**（与 `Attribute::Owned` 同款 ✓）；
+    // 取不到（被包对象没有这个名字）⇒ `None` ⇒ 外层照旧报 `AttributeError` ✓
+    //（参照此时报的是**被包对象**那句 `'int' object has no attribute …` —— 如实记偏差 ✓）。
+    instance.attribute_optional_of(inner, name).ok().flatten()
+}
+
+/// **`classmethod`／`staticmethod` 的属性面**（第 346 轮：`__func__` 与 `__wrapped__` ✓；
+/// task-22：加五项**委派属性** ✓，见 [`WRAPPER_DELEGATED_ATTRIBUTES`]）。
 ///
 /// 实测原形 ✓：上限榜上 `AttributeError: 'classmethod' object has no attribute '__func__'` × **39** 个模块
 /// （`Lib/` 里到处是 `cls.__func__`／`f.__func__` 的用法 ✓ —— 例如 `abc.py`／`functools.py` 一带 ✓）。
@@ -403,10 +442,54 @@ pub unsafe fn classmethod_getattr(
     let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
     match name {
         "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
-        _ => None,
+        _ => wrapper_delegate(instance, object.function(), name),
     }
 }
 
+
+/// **`classmethod` 的 `repr`**（task-22）：参照 `<classmethod(<function func at 0x…>)>` ✓
+/// —— 内层用 [`Instance::object_repr`]（**同一处 repr 口径** ✓，不另写一套 ✓）。
+///
+/// 动因：官方 `test_decorators.check_wrapper_attrs` 用 `repr` 的**精确形状**做断言 ✓
+///（`'<classmethod({!r})>'` ✓）；先前落到默认 `<classmethod object at 0x…>` ✗。
+pub(crate) unsafe fn classmethod_repr(
+    ptr: *mut Header,
+    instance: &Instance,
+) -> Result<String, crate::ExecError> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    let inner = instance.object_repr(object.function())?;
+    Ok(format!("<classmethod({inner})>"))
+}
+
+/// **`staticmethod` 的 `repr`**（task-22）：参照 `<staticmethod(<function func at 0x…>)>` ✓。
+pub(crate) unsafe fn staticmethod_repr(
+    ptr: *mut Header,
+    instance: &Instance,
+) -> Result<String, crate::ExecError> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象（与 `classmethod` 同载荷 ✓）。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    let inner = instance.object_repr(object.function())?;
+    Ok(format!("<staticmethod({inner})>"))
+}
+
+/// **`staticmethod` 实例**直接可调用**（task-22 附带；参照 3.10+ 的语义：`staticmethod(f)(*a) == f(*a)` ✓）。
+///
+/// 动因：官方 `test_decorators.TestDecorators.test_staticmethod` 就 `wrapper(1)` ✓；
+/// 先前报 `'staticmethod' object is not callable` ✗。**`classmethod` 仍然不可调用** ✓
+///（参照同 ✓ —— 那条别动 ✓）。
+unsafe fn staticmethod_call(
+    ptr: *mut Header,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<StaticMethodObject>() };
+    // `call_value` 吃**借用视图**、给**新引用** ✓（与本槽的契约同款 ✓）⇒ 直接转交 ✓。
+    crate::executor::call::call_value(instance, object.function(), args, kwargs)
+}
 
 /// **绑定 `method` 的属性面**（第 259 轮 ✓）：`__self__` ⇒ 绑定的实例 ✓、
 /// `__func__`／`__wrapped__` ⇒ 函数 ✓ —— 模板是第 346 轮给 `classmethod`／`staticmethod` 补的那一对 ✓
@@ -474,7 +557,7 @@ pub unsafe fn staticmethod_getattr(
     let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
     match name {
         "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
-        _ => None,
+        _ => wrapper_delegate(instance, object.function(), name),
     }
 }
 
@@ -484,6 +567,8 @@ impl ClassMethodObject {
         Slots::new(Self::dealloc)
             .with_traverse(classmethod_traverse)
             .with_clear(classmethod_clear)
+            // **`repr` 形照参照** ✓（task-22：`<classmethod(<function …>)>` ✓）。
+            .with_repr(classmethod_repr)
     }
 
     /// 被包起来的对象（**借用**）。
@@ -728,6 +813,10 @@ impl StaticMethodObject {
         Slots::new(Self::dealloc)
             .with_traverse(staticmethod_traverse)
             .with_clear(staticmethod_clear)
+            // **`repr` 形照参照** ✓（task-22：`<staticmethod(<function …>)>` ✓）。
+            .with_repr(staticmethod_repr)
+            // **实例可直接调用** ✓（task-22 附带；参照 3.10+ ✓：`staticmethod(f)(*a) == f(*a)` ✓）。
+            .with_call(staticmethod_call)
     }
 
     /// 被包起来的对象（**借用**）。
@@ -1055,6 +1144,21 @@ impl FunctionObject {
     /// 换 `__module__` 覆盖值，返回旧值（**调用方负责归还**）。
     pub fn set_module_override(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
         self.module_override.replace(value)
+    }
+
+    /// **`__name__` 默认值缓存**（**借用**；`None` ⇒ 还没生成过 ✓）。
+    pub fn name_cache(&self) -> Option<NonNull<Header>> {
+        *self.name_cache.borrow()
+    }
+
+    /// **`__qualname__` 默认值缓存**（同上）。
+    pub fn qualname_cache(&self) -> Option<NonNull<Header>> {
+        *self.qualname_cache.borrow()
+    }
+
+    /// **`__module__` 默认值缓存**（同上）。
+    pub fn module_cache(&self) -> Option<NonNull<Header>> {
+        *self.module_cache.borrow()
     }
 }
 

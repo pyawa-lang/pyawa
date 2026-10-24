@@ -734,3 +734,71 @@ fn compiled_try_except_catches_by_type() {
     )
     .expect("没异常时处理块不应当执行");
 }
+
+/// 把一次调用的结果读成异常消息（不是 `Raised` 就 panic）。
+fn raised_message(instance: &Instance, outcome: Result<NonNull<Header>, ExecError>) -> String {
+    match outcome {
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 由异常机制持有，存活。
+            unsafe { &*exception.as_ptr().cast::<ExceptionObject>() }
+                .message_with(instance)
+                .unwrap_or_default()
+        }
+        other => panic!("应当抛异常，实际 {other:?}"),
+    }
+}
+
+/// **`BaseException.with_traceback(tb, /)`**（task-24 扩；参照 3.14.4 实测）：
+/// `e.with_traceback(None) is e` ✓、`e.__traceback__` 变 `None` ✓；0／2 参、关键字、
+/// 非 traceback 的 `TypeError` 文案逐条照参照 ✓（本层 traceback 对象只做最小档 ✓）。
+#[test]
+fn exceptions_expose_with_traceback_like_the_reference() {
+    let instance = Instance::new();
+    let value_error = instance.type_value(instance.type_named("ValueError").expect("已注册"));
+    let boom = instance.new_str("boom");
+    let error = pyawa_core::call_value(&instance, value_error, &[boom], &[])
+        .expect("ValueError('boom') 应当成功");
+    let method = pyawa_core::attribute_read(&instance, error, "with_traceback")
+        .expect("异常实例应当有 with_traceback");
+    let none = instance.singletons().none();
+    // 成功档：返回 self，且 `__traceback__` 置成 None。
+    let result = pyawa_core::call_value(&instance, method, &[none], &[])
+        .expect("with_traceback(None) 应当成功");
+    assert_eq!(result, error, "with_traceback 应当返回 self");
+    let traceback = pyawa_core::attribute_read(&instance, error, "__traceback__")
+        .expect("异常实例应当有 __traceback__");
+    assert_eq!(traceback, none, "__traceback__ 应当被设成 None");
+    // 0 参／2 参的文案（参照逐字）。
+    assert_eq!(
+        raised_message(&instance, pyawa_core::call_value(&instance, method, &[], &[])),
+        "BaseException.with_traceback() takes exactly one argument (0 given)"
+    );
+    assert_eq!(
+        raised_message(
+            &instance,
+            pyawa_core::call_value(&instance, method, &[none, none], &[])
+        ),
+        "BaseException.with_traceback() takes exactly one argument (2 given)"
+    );
+    // 关键字实参。
+    let key = instance.new_str("tb");
+    assert_eq!(
+        raised_message(
+            &instance,
+            pyawa_core::call_value(&instance, method, &[], &[(key, none)])
+        ),
+        "BaseException.with_traceback() takes no keyword arguments"
+    );
+    // 非 traceback／None。
+    let one = instance.new_int(1);
+    assert_eq!(
+        raised_message(&instance, pyawa_core::call_value(&instance, method, &[one], &[])),
+        "__traceback__ must be a traceback or None"
+    );
+    // SAFETY: 这些引用都由本测试持有。
+    unsafe {
+        for value in [result, traceback, method, error, boom, value_error, key, one] {
+            instance.release_object(value.as_ptr());
+        }
+    }
+}

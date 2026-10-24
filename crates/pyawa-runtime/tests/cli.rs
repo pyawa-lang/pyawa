@@ -288,3 +288,62 @@ print(B.bar())
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+/// **task-22**：`classmethod`／`staticmethod` 包装体的**属性委派 ＋ repr ＋ staticmethod 可调用**。
+///
+/// 参照 3.14.4 语义：
+/// - `__module__`／`__qualname__`／`__name__`／`__doc__`／`__annotations__` 从被包函数**委派** ✓
+///   （且与 `func` 上取到的是**同一对象** —— 官方 `test_decorators` 用 `assertIs` ✓）；
+/// - `repr` ＝ `<classmethod(<function func at 0x…>)>`／`<staticmethod(…)>` ✓；
+/// - `staticmethod(f)(*a) == f(*a)` ✓（3.10+ 可调用）；`classmethod` **仍然不可调用** ✓。
+#[test]
+fn classmethod_and_staticmethod_expose_the_wrapped_function() {
+    let dir = scratch("wrapper-face");
+    let path = dir.join("wrapper_face.py");
+    let source = r#"
+def func(x):
+    """文档串。"""
+    return x
+
+
+cm = classmethod(func)
+sm = staticmethod(func)
+print(cm.__module__, cm.__qualname__, cm.__name__, cm.__doc__)
+print(cm.__annotations__, sm.__annotations__)
+print(cm.__func__ is func, cm.__wrapped__ is func)
+print(sm.__func__ is func, sm.__wrapped__ is func)
+print(sm.__name__, sm.__qualname__, sm.__module__, sm.__doc__)
+print(getattr(cm, "__name__") is getattr(func, "__name__"))
+print(repr(cm).startswith("<classmethod(<function func at 0x"))
+print(repr(sm).startswith("<staticmethod(<function func at 0x"))
+print(sm(7))
+try:
+    cm(7)
+except TypeError as error:
+    print(type(error).__name__, str(error))
+"#;
+    std::fs::write(&path, source).expect("写脚本");
+    let output = Command::new(binary()).arg(&path).output().expect("跑 CLI");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected = "__main__ func func 文档串。\n\
+                    {} {}\n\
+                    True True\n\
+                    True True\n\
+                    func func __main__ 文档串。\n\
+                    True\n\
+                    True\n\
+                    True\n\
+                    7\n\
+                    TypeError 'classmethod' object is not callable\n";
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}

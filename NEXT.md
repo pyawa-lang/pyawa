@@ -1,59 +1,64 @@
 # NEXT.md —— 续做状态（单页；长复盘进台账 `docs/rounds/`）
 
 > 规则见 `agents-rules/round-rule.md`：**一轮一落地**（每轮以「提交」或「撤回＋一条改变计划的事实」结束 ✓）。
-> **本页是会话交接单页**（2026-10-24 ✓）：会话 10＝**M6**（round 14 开局：`P3-32`＋`P3-33`；round 15：修 135 个官方测试阻塞的
-> `else`＋`with` 编译器格 ＋ `test_decorators` 两个崩溃点）。逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的
-> **round 14／round 15** 节 ✓（本笔追加 round 15）。
+> **本页是会话交接单页**（2026-10-24 ✓）：会话 10＝**M6**（round 14 开局：`P3-32`＋`P3-33`；round 15：`else`＋`with` 编译器格
+> ＋两处崩溃；round 16：**`time` 面解锁 ⇒ `import test.support` 通过** ＋ `classmethod`/`staticmethod` 包装体面 ＋
+> `try: return <表达式>`/`finally` 顺序与 `return`-in-finally 崩溃）。逐轮复盘见
+> `docs/rounds/03-m3-progress-05.md` 的 **round 14／15／16** 节 ✓（本笔追加 round 16）。
 
 ## 现在
 
-- **HEAD**：`3b52bbb`（`dev`，本笔前）—— 本笔＝**round 15**：`else` 尾位 `with` 误发作用域收尾（编译器格）＋
-  `setattr` 少 incref（崩溃）＋ `classmethod(A().foo)` 多层方法剥离（崩溃）＋ `fs.stat_times`（`st_mtime` 族，**ABI 1.1→1.2**）；细节见台账 round 15。
-- **工作区**：本笔待提交 ＝ **19 项**（18 个修改文件：源码/测试/三份 `SPEC` ＋ `NEXT.md` ＋ 台账 round 15 ＋ `ROUNDS.md` 索引；＋ 1 个新增测试 `crates/pyawa-runtime/tests/stat_result.rs`；`git status --porcelain` 与之一致；无其他未跟踪项）。
+- **HEAD**：`a094974`（`dev`，本笔前）—— 本笔＝**round 16**：`time` 面（`strftime`/`localtime`/`gmtime`/`mktime` 族，`clock` 表尾三槽，**ABI 1.2→1.3**）＋ `sys._jit` ＋ `classmethod`/`staticmethod` 包装体面 ＋ `try: return <表达式>`/`finally` 顺序与 `return`-in-finally 崩溃（编译器）；细节见台账 round 16。
+- **工作区**：本笔待提交 ＝ **21 项**（20 个修改文件：源码/测试/三份 `SPEC` ＋ `NEXT.md` ＋ 台账 round 16 ＋ `ROUNDS.md` 索引；＋ 1 个新增测试 `crates/pyawa-runtime/tests/time_shapes.rs`；`git status --porcelain` 与之一致；无其他未跟踪项）。
 - **stash**：**空** ✓
-- **round 14（M6 开局）五条验收仍成立**：`sys.exit(3)`⇒3；最小 `unittest.main()`（1／2 测试方法）⇒0；
-  `PYTHONPATH` 进 `sys.path`；官方套件跑通非零；`check.py`／slowcheck 绿、`.py` 逐字节不变。
-- **round 15 新增验收（全 ✓）**：
-  1. `if/else` 的 `else` 尾位 `with`（函数中段，`with` 后面还有语句）⇒ 返回值与 `python3` 一致（修前 `None`）：
-     `target/recon/task17_else_with.py` 六形态逐行一致；`sysconfig.get_config_var('CFLAGS'/'CC')` 与参照**逐字一致**。
-  2. `setattr(f, 'dbval', (args, kwds))` 后读回 ⇒ `(('a','b'), {'one':1})`；plain／`PYAWA_DANGLING=1`／
-     `PYAWA_QUARANTINE=1` ×3 全 exit 0 且输出一致（修前 SIGSEGV／misaligned pointer）。
-  3. 官方 `test_decorators` **不再崩溃**（`test_argforms`／`test_bound_function_inside_classmethod` 过；
-     首个 fail 换成 `test_classmethod` 的独立行为缺口：`classmethod`／`staticmethod` 包装体的
-     `__module__`／`__qualname__`／`__name__`／`__annotations__` 委派与 `repr` 未接 —— 新列小格）。
-  4. `fs.stat_times`（ABI 1.2）：`os.stat('.')` 的 `st_size/st_mode/st_mtime/st_mtime_ns` 与 `python3` 逐行相同
-     （`st_mtime == st_mtime_ns/1e9`、两次文件 `st_size` 不串）；`warnings_catch` **3 passed**、`linecache` 一致。
-- **数字**（round 15 终审实测）：判据① **466/628＝74.2%**（通过 449 ＋参照口径 17；**未变**）；`PA_ABI_VERSION` **1.2**；
+- **round 16 新增验收（全 ✓）**：
+  1. **`import test.support` 通过**（`test.support ok`；`has_strftime_extensions=True`、`_JIT_ENABLED=False`）——
+     这是 round 14–15 一直压着的"官方套件框架门槛"在**模块导入层**的最后一段。
+  2. `time` 面与 `python3` 3.14.4 逐条一致：`%4Y`='2026'、`localtime(0)`=`(1970,1,1,8,0,0,3,1,0)`、
+     `strftime("%Y-%m-%d %H:%M:%S")`=`'1970-01-01 08:00:00'`、`asctime`/`ctime`/`mktime`（float）、
+     `timezone=-28800`/`tzname=('CST','CST')`/`daylight=0`；`TZ=UTC` 全表 IDENTICAL。
+  3. `try: return <表达式>` ＋ `finally` ⇒ 与参照同序（`target/recon/task22_try_finally.py`：`result => 1`）；
+     `return` 写在 `finally` 体内**不再栈溢出 abort**；`BaseException.with_traceback(tb, /)` 与参照逐行一致；
+     `unittest.assertRaises` 端到端一致（捕获／`ValueError not raised`／异类外泄）。
+  4. `classmethod`/`staticmethod` 包装体：5 属性委派、`repr` `<classmethod(<function …>)>`、`staticmethod` 可调用
+     与参照逐行一致；官方 `test_decorators` 不崩、**`test_classmethod` 转 PASS**（逐测试 11 passed／5 failed）。
+  5. 既有验收仍全过：`sys.exit(3)`⇒3；最小 `unittest.main()`⇒0；`PYTHONPATH` 进 `sys.path`。
+- **数字**（round 16 终审实测）：判据① **466/628＝74.2%**（通过 449 ＋参照口径 17；**未变**）；`PA_ABI_VERSION` **1.3**；
   `Lib/` 同步 **544/628**（进度指标 450/544＝82.7%，不作判据）；语料 **407**、在册差异 **3** 未变。
-  `Lib/test` 体检：可编译 **311/397＝78.3%**、**跑通 5/397＝1.3%**（名单 `test_colorsys`／`test_errno`／`test_html`／
-  `test_int_literal`／`test_typechecks` 未变）；运行期错 250／超时 2（`test_configparser`／`test_zstd`）。
+  `Lib/test` 体检：可编译 **311/397＝78.3%**（持平）、**跑通 7/397＝1.8%**（上轮 5；新跑通
+  `test_bigaddrspace`／`test_threadedtempfile`）；语法错 86／未实现 55／运行期错 247／超时 2
+  （`test_configparser`／`test_zstd`）。
 - **官方套件缺口榜（下一轮取活顺序的实测依据，`target/libtests_survey.tsv`）**：
-  ① 运行期 `AttributeError: 'module' object has no attribute 'strftime'` ×**135** —— 即 round 14 的 135 个
-  `'NoneType'…get'` 被**整体推进了一步**（`sysconfig` 已通，现在卡在 **`time` 面**：`time.strftime` 及
-  `localtime`／`struct_time` 一族缺）。**下一轮第一格：`time` 面**（一次压 135 个，比 P3-34 的 52 更多）。
-  ② `ModuleNotFoundError` ×64（`doctest` 15／`unittest.mock` 12／`gc` 10／`unicodedata` 4／`hashlib` 4 → **`P3-37`**）
-  ③ 语法错：`invalid unicode escape \ud800` 族 ×12 ＋ 同行 `try:`·`for:` ×8（→ **`P3-35`**）
-  ④ 未实现：`complex` 的 `1j` 一族（→ **`P3-34`**）
-  ⑤ `BadCodeSection` ×6（→ **`P3-36`**）；超时 3（`test_configparser`／`test_ssl`／`test_zstd`）
-- **本轮修掉的两格不再出现在缺口榜**：`else`＋`with` 全局读 `None`（编译器/作用域）、`test_decorators` 内存损坏。
+  ① **`test.support.os_helper` 缺失：`ModuleNotFoundError` ×59 ＋ `ImportError: cannot import name 'os_helper'` ×24
+  ＝ **83 个** —— 该文件是本轮之前因 **P3-35 的 surrogate escape（`\uDC80`）** 暂不同步的 7 个之一
+  ⇒ **下一轮第一格 = `P3-35` 的 surrogate escape**（修词法期转义 → 同步 os_helper 等 7 个骨架，一次解锁 83+）。
+  ② `ModuleNotFoundError` 其余：`doctest` 17／`unittest.mock` 14／`gc` 10／`unicodedata` 4／`hashlib` 4（→ **`P3-37`**）；
+  `ImportError: cannot import name 'multibytecodec_support' from 'test'` ×11（同类半同步）。
+  ③ 运行期 `TypeError: issubclass() arg 1 must be a class` ×**30** —— `sys.exc_info()` 的如实桩让 unittest runner
+  一遇错误就 abort（**错误恢复**格；不改跑通数但会掩盖真实断言，单列小格，优先级高）。
+  ④ 语法错：`invalid unicode escape \ud800` 族 ×12＋同行 `try:`·`for:` ×8（→ **`P3-35`**，与 ① 同源）。
+  ⑤ `BadCodeSection` ×6（→ **`P3-36`**）；`NotImplementedError` ×4（`_socket` I/O 方法未接线）。
+- **本轮修掉的格不再出现在缺口榜**：`time.strftime` ×135、`else`＋`with` ×135、`test_decorators` 内存损坏、
+  `try/return-finally`、`classmethod` 包装体面。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
 1. **M6 判据（`PLAN-milestones.md` §6）**：`MS-14` 的报告**可发布**，且"新差异"为零（对拍语料＋在册差异清单的复核；
    `MS-9` 归一规则、`MS-13` 语料下限按 `§13-10` 的剩余开放收口）。
-2. **取活顺序**：**`time` 面**（`strftime`／`localtime`／`struct_time` 族，一次解锁 **135** 个官方测试签名；
-   需要先定"时区/格式化走哪条路"：能力域加槽 or 运行时平台层，按 `CP-`／`AB-` 的规则来）→ **`P3-34`**（complex，52 个）
-   → **`P3-35`**（合法 Python 被拒：surrogate 20／同行 `try:`·`for:` 8；含 7 个暂不同步的 `Lib/test` 骨架同族缺口）
-   → **`P3-36`**（`.pyac` `BadCodeSection`）→ **`P3-37`**（缺模块）→ **报用户批准后 M6 收口**（`--no-ff` ＋ tag `m6`）。
-3. **另立小格（按需插队）**：`classmethod`／`staticmethod` 包装体属性委派＋`repr`；`issubclass() arg 1 must be a class`
-   （`test_decorators` 次级症状，疑同源）；`_functools` 模块（现为 Python 回退，行为一致、键类名差异＝实现观测面）。
+2. **取活顺序（据本轮实测调整）**：**`P3-35` 的 surrogate escape**（`\ud800`/`\uDC80`，一次解锁 83+ 个官方测试
+   ＋ 7 个暂不同步的 `Lib/test` 骨架；与语法错 ④ 同源）→ **`P3-37`**（缺模块：doctest／unittest.mock／gc／
+   unicodedata／hashlib）→ **`P3-34`**（complex，52 个）→ **`P3-36`**（`.pyac BadCodeSection`）→
+   **报用户批准后 M6 收口**（`--no-ff` ＋ tag `m6`）。
+3. **另立小格（按需插队，优先级从上到下）**：`sys.exc_info()` 真实现（unittest 错误恢复）；`builtins.compile` 缺失；
+   嵌套类装饰器 `func.__dict__.update` 丢失；`test_memoize 3!=4`；`_functools` 模块；`struct_time` 类型（`time` 面收口）。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                              # 应干净（round 15 已提交）
-import time / dir(time)                         # 量 time 面缺什么：time.strftime / localtime / gmtime / strftime 族
-python3 tools/libtests_survey.py --jobs 8       # 重跑基线（默认目录已指向 target/upstream/extracted/...）
+git status --short                                      # 应干净（round 16 已提交）
+python3 tools/libtests_survey.py --jobs 8               # 重跑基线
+python3 -c "import test.support"                        # 应已 ok（round 16 解锁）；再量 os_helper 缺口
+# 下一格：P3-35 的 surrogate escape —— 词法期接受 \ud800/\uDC80，然后 sync_lib 补 test/support/os_helper.py 等 7 个
 ```
 
 ## 本战役的关键口径（新会话必读）

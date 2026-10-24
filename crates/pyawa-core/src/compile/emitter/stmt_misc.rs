@@ -85,8 +85,15 @@ impl Emitter {
                         // `try: continue finally: y = 1` 的参照是 `NOP`(位点＝`continue`) ＋ finally ＋ 回跳）
                         self.emit_at(*position, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                         let pending: Vec<Vec<Statement>> = self.finally_stack.clone();
-                        for finally_body in pending.iter().rev() {
-                            self.emit_block(finally_body, false)?;
+                        // 重放某一层时把它**自己**从"待重放栈"里摘掉（同 `return` 臂的修法 ✓）：
+                        // 避免 finally 体内的 `return` 无限重放同一层 ⇒ 发射器栈溢出 abort ✗。
+                        for (level, finally_body) in pending.iter().enumerate().rev() {
+                            let outer: Vec<Vec<Statement>> = pending[..level].to_vec();
+                            let saved_stack =
+                                core::mem::replace(&mut self.finally_stack, outer);
+                            let outcome = self.emit_block(finally_body, false);
+                            self.finally_stack = saved_stack;
+                            outcome?;
                         }
                     }
                     // **跳出 `except` 处理块 ⇒ 逐层 `POP_EXCEPT`** ✓（task-22 真 bug 修 ✗）：参照在
@@ -306,11 +313,17 @@ impl Emitter {
                     if !with_levels.is_empty() && constant_value && self.with_body_end.is_none() {
                         self.with_body_end = Some(self.unit.code.len());
                     }
-                    if with_levels.is_empty() || constant_value {
-                        // 没有 `with`：照旧；有 `with` 且值是常量：值放到退出调用**之后**
-                    } else {
+                    // **参照顺序**（task-24）：`return <表达式>` ⇒ **先求值**（压栈）→ `with` 退出调用
+                    // （内层先、每层 item 逆序）→ 逐层 `finally` → `RETURN_VALUE` ✓。
+                    // **只有字面量常量**是例外 ✓：参照把常量推迟到收尾之后再取（`with cm: return 1`
+                    // ⇒ 退出调用全发完才 `LOAD_SMALL_INT 1` ✓）。
+                    // 先前这里对"**没有 `with`** 的表达式 return"也把求值推迟到 finally 之后 ✗ ⇒
+                    // `try: return x.get("k") finally: x = None` 里 `x` 已被 finally 改掉 ✗
+                    //（`unittest.assertRaises` 的 `try: return context.handle(...) finally: context = None`
+                    // 同型 ⇒ 真实异常被掩盖 ✓）。
+                    if !constant_value {
                         self.emit_expression(value)?;
-                        if self.with_body_end.is_none() {
+                        if !with_levels.is_empty() && self.with_body_end.is_none() {
                             self.with_body_end = Some(self.unit.code.len());
                         }
                     }
@@ -343,11 +356,33 @@ impl Emitter {
                             self.emit_at(value_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                         }
                         let pending: Vec<Vec<Statement>> = self.finally_stack.clone();
-                        for finally_body in pending.iter().rev() {
-                            self.emit_block(finally_body, false)?;
+                        // **逐层重放**（内层先 ✓，执行顺序照参照 ✓）。重放某一层时把它**自己**
+                        // 从"待重放栈"里摘掉（task-24 真 bug ✗）：该层体里若有 `return`，按参照
+                        // 它只该把**外层** finally 再跑一遍 ✓；先前 `finally_stack` 原样留着 ✗ ⇒
+                        // 体内 `return` 又重放同一层 ⇒ **发射器无限递归** ⇒ Rust 栈溢出 abort ✗
+                        // （最小复现：`try: return "try" finally: return "finally"` ✓）。
+                        let mut terminated = false;
+                        for (level, finally_body) in pending.iter().enumerate().rev() {
+                            let outer: Vec<Vec<Statement>> = pending[..level].to_vec();
+                            let saved_stack =
+                                core::mem::replace(&mut self.finally_stack, outer);
+                            let outcome = self.emit_block(finally_body, false);
+                            self.finally_stack = saved_stack;
+                            outcome?;
+                            // 这层 finally 在**正常路径**上必然以 `return`／`raise` 结束 ⇒ 外层那条
+                            // `return` 的取值与 `RETURN_VALUE` 都是**死代码** ✓（参照也不发 ✓）。
+                            terminated = block_terminates(finally_body);
+                            if terminated {
+                                break;
+                            }
+                        }
+                        if terminated {
+                            self.defer_return_literal = saved_defer;
+                            return Ok(());
                         }
                     }
-                    if with_levels.is_empty() || constant_value {
+                    // **字面量常量**的取值放在所有收尾之后 ✓（表达式那支已在上面先求值 ✓）。
+                    if constant_value {
                         self.emit_expression(value)?;
                     }
                     self.defer_return_literal = saved_defer;
@@ -396,5 +431,23 @@ impl Emitter {
                 }
             _ => unreachable!("emit_statement_misc 只接收 stmt_misc 族的 Statement"),
         }
+    }
+}
+
+/// 语句表在**正常路径**上是否必然终止（`return`／`raise` 结尾；`if/else` 两支都终止也算）✓。
+///
+/// 用途：`try: return … finally: <必然 return 的 finally>` 里，外层那条 `return` 的取值与
+/// `RETURN_VALUE` 是**死代码** ✓（参照也不发 ✓；task-24）。
+fn block_terminates(statements: &[Statement]) -> bool {
+    match statements.last() {
+        Some(Statement::Return(..)) | Some(Statement::Raise { .. }) => true,
+        Some(Statement::If {
+            then_body,
+            else_body,
+            ..
+        }) if !else_body.is_empty() => {
+            block_terminates(then_body) && block_terminates(else_body)
+        }
+        _ => false,
     }
 }
