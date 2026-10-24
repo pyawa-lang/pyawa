@@ -212,3 +212,79 @@ fn unittest_main_smoke_exits_zero() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// **task-18 真 bug 回归**：`setattr(func, "dbval", (args, kwds))` 之后再**读回**该函数属性。
+///
+/// 先前 stdlib 的 `setattr` 把**借用视图**的实参直接交给"接手新引用"的属性协议入口 ✗ ⇒
+/// 运行时新建的 dict 没有别处持有 ⇒ 当场释放 ⇒ `f1.dbval` 读出时 SIGSEGV（官方
+/// `test_decorators.test_argforms` 的 `noteargs` 装饰器同型 ✓）。普通 tuple 常被 code
+/// object 的常量表另持一份 ⇒ 症状被遮住，只有"含运行时 dict"的载荷才炸 ✓。
+#[test]
+fn setattr_keeps_a_runtime_dict_alive_in_function_attributes() {
+    let dir = scratch("setattr-ownership");
+    let path = dir.join("setattr.py");
+    let source = r#"
+def noteargs(*args, **kwds):
+    def decorate(func):
+        setattr(func, "dbval", (args, kwds))
+        return func
+    return decorate
+
+
+@noteargs("a", "b", one=1)
+def f1():
+    return 42
+
+
+print(f1())
+print(f1.dbval)
+"#;
+    std::fs::write(&path, source).expect("写脚本");
+    let output = Command::new(binary()).arg(&path).output().expect("跑 CLI");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "setattr 之后再读回函数属性不应当崩：stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "42\n(('a', 'b'), {'one': 1})\n", "stdout={stdout}");
+}
+
+/// **task-18 附带真 bug 回归**：`classmethod(绑定方法)` 的调用（`MethodObject` **套** `MethodObject`）。
+///
+/// 参照语义：`classmethod(A().foo)` 的 `B.bar()` 等价 `A().foo(B)` ✓。先前 `call_callable` 只剥
+/// **一层**绑定方法 ✗ ⇒ 剩下的方法对象被按 `FunctionObject` 读载荷 ✗ ⇒ `function_defaults`
+/// 读到垃圾长度（`capacity overflow`／misaligned panic ✗；官方
+/// `test_decorators.TestDecorators.test_bound_function_inside_classmethod` 直接崩 ✓）。
+#[test]
+fn classmethod_wrapping_a_bound_method_calls_through_the_chain() {
+    let dir = scratch("nested-method");
+    let path = dir.join("nested_method.py");
+    let source = r#"
+class A:
+    def foo(self, cls):
+        return "spam"
+
+
+class B:
+    bar = classmethod(A().foo)
+
+
+print(B.bar())
+"#;
+    std::fs::write(&path, source).expect("写脚本");
+    let output = Command::new(binary()).arg(&path).output().expect("跑 CLI");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "嵌套绑定方法调用不应当崩：stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "spam\n",
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}

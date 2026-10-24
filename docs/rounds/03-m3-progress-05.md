@@ -1445,3 +1445,62 @@
 - **未做（下一轮按序）**：`P3-34`（complex，52 个测试阻塞）→ `P3-35`（合法 Python 被拒：surrogate 20／同行 `try:`·`for:` 8）
   → `P3-36`（`.pyac` `BadCodeSection`）→ `P3-37`（缺模块：doctest 15／`unittest.mock` 12／gc 10／unicodedata 4／hashlib 4）
   → **M6 收口**（报用户批准后 `--no-ff` ＋ tag `m6`）。
+
+---
+
+## round 15（会话 10 · M6 续）落地 ✓ —— 修 `else` 尾位 `with` 误发作用域收尾 ＋ `test_decorators` 两个崩溃点 ＋ `fs.stat_times`（`st_mtime` 族，ABI 1.2）
+
+- **口径**：`HEAD`（本笔前）＝`3b52bbb`（`dev`）；工作区起始干净；`check.py` 14/14。上一轮（round 14）把这两格列为"下一轮优先"。
+- **落地（3 个 bug，全部最小复现＋对拍 python3 3.14.4）**：
+  1. **`if/else` 的 `else` 分支最后一条是 `with` ⇒ 提前 `return None`**（编译器／块尾）：
+     `emit_rest_and_tail` 发作用域收尾前**没看本块是否尾块**（`self.block_tail`）⇒ 非尾分支体里的 `with`
+     正常出口发 `LOAD_CONST None; RETURN_VALUE`，后面的语句变死代码。修法＝`(self.block_tail || containing_depth.is_some())
+     && emit_scope_tail(...)`（`break` 退出路径保留收尾）——`compile/emitter/control.rs`。命中 `Lib/sysconfig`
+     `get_config_vars()` 的 `else: with _CONFIG_VARS_LOCK:` ⇒ `sysconfig.get_config_var()` 现与参照**逐字一致**。
+  2. **`setattr` 存"含 dict 的 tuple"后读回即 SIGSEGV**（引用账）:stdlib `setattr` 把 `call_callable` 的**借用实参**
+     直接交给"接手新引用"的 `set_attribute_with_protocol` ⇒ 少一份 incref ⇒ 属性字典持有已释放对象。
+     修法＝`setattr_native` 交出前 `retain`；`instance/state.rs` 补引用契约文档。官方 `test_decorators`
+     的 `test_argforms` 不再崩。
+  3. **`classmethod(A().foo)` 多层方法对象被按 `FunctionObject` 读载荷**（崩溃②，验证 ② 时暴露）：
+     `call_callable` 只剥一层 `method` ⇒ `capacity overflow`／misaligned panic。修法＝**逐层剥**
+     （`MethodType(f, x)(*a) == f(x, *a)`）。官方 `test_decorators` 整文件**不再崩溃**。
+  4. **`fs` 能力域表尾追加 `stat_times` 槽 ⇒ `os.stat_result` 的 `st_mtime` 族**（`ABI 1.1→1.2`）：
+     编译器修复（第 1 项）让 `warnings.warn` 的格式化真正走到 `linecache` ⇒ `os.stat(f).st_mtime`，
+     而本层 `stat_result` 没有时间戳、`FileInfo` 也没有（`utime` 只能写）⇒ `warnings_catch` 红。
+     按 `AB-41`「表尾追加 ⇒ 次版本 +1」补：`FileTimes{atime_ns,mtime_ns,ctime_ns}` ＋
+     `CpFsVtable::stat_times`；`PA_ABI_MINOR` 1→2（Rust 常量＋`include/pa.h`）；`Instance::fs_stat_times`；
+     `PosixFs` 用 `metadata.accessed/modified/created` 填 ns；`posix.stat_native` 逐**结果对象**写
+     `st_atime/st_mtime/st_ctime`（float 秒）＋`*_ns`（int），并**修掉"字段写共享类型、多次 stat 互相覆盖"**
+     的既有 bug、`st_mode` 从恒 0 改为宿主原值。如实偏差：`st_ctime` 取 birth time（无 `statx`）、
+     `st_dev/st_ino` 仍 0（`CP-23` 面）、provider 无该槽时如实缺名（conformance harness 即如此）；
+     `AB-43` 的 `min(宿主 size, 自身 size)` 界读仍未在 `fs_vtable()` 体现（既有口径，接旧宿主前须补）。
+- **验收（全 ✓）**：
+  - 复现探针与 `python3` 逐行一致：`if_else_with` ⇒ `{'z': 9}`（修前 `None`）、`else_with_then_stmt`、
+    函数中段 `if/else` 等 6 形态；`setattr` 含 dict tuple 读回 `(('a','b'), {'one':1})`（plain／
+    `PYAWA_DANGLING=1`／`PYAWA_QUARANTINE=1` ×3 全 exit 0 且输出一致）。
+  - 官方文件：`test_decorators` **未捕获崩溃消失**（`test_double`／`test_order`／`test_simple`／
+    `test_argforms`／`test_bound_function_inside_classmethod` 过；首个 fail 换成 `test_classmethod` 的
+    **独立行为缺口**：`classmethod`／`staticmethod` 包装体的 `__module__`／`__qualname__`／`__name__`／
+    `__annotations__` 委派与 `repr` 未接 —— 新列一格）。
+  - `sysconfig.get_config_var('CFLAGS'/'CC')` 与参照**完全一致**；`import test.support` 的卡点从
+    `'NoneType' object has no attribute 'get'`（×135）推进到 **`'module' object has no attribute 'strftime'`**（×135）。
+  - `st_mtime` 族：`os.stat('.')` 的 `st_size/st_mode/st_mtime/st_mtime_ns` 与 `python3` **逐行相同**
+    （`st_mtime == st_mtime_ns/1e9`；两次不同文件的 `st_size` 不串）；`warnings_catch` **3 passed**；
+    `linecache.checkcache()+getline` 与参照一致。
+- **数字（终审实测）**：`Lib/test` 体检 397 个：可编译 **311/397＝78.3%**（持平）、**跑通 5/397＝1.3%**（持平；
+  名单同 round 14）；**头号失败签名换位**：`AttributeError: 'module' object has no attribute 'strftime'` ×**135**
+  （＝把 round 14 的 135 个 `'NoneType'…get'` 整体推进了一步；`stat_times` 修完后仍是它 ⇒ 下一格明确是 `time` 面）；
+  `ModuleNotFoundError` ×65（P3-37）、`ImportError` ×22、`TypeError` ×12、`BadCodeSection` ×6（P3-36）；
+  超时 2（`test_configparser`／`test_zstd`）。判据① **466/628＝74.2%**（未变；进度指标 450/544＝82.7%）；
+  语料 407／在册差异 3 未变；**`PA_ABI_VERSION` 1.1 → 1.2**（`fs.stat_times` 表尾追加）。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **5040s**）：① `cargo check --workspace --all-targets`
+  **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（32s）；③ `cargo test --workspace` **全部测试绿**（534s，
+  含 `warnings_catch` 3 passed／新增 `stat_result`）；④ `check.py` **14/14**（3s）；⑤ `stability.py` 计数一致（1572s）；
+  ⑥ `heap_and_concurrency.py` **4 路并发 4/4 全绿 ＋ 堆扰动 3/3**（2079s）；⑦ 夹具守卫（0s）；⑧ 语料下限 407/112（0s）；
+  ⑨ `conformance` **5 passed**（408s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（412s）。
+  另：cli **16 passed**、`stat_result`（新增 runtime 测试）绿、`quickcheck` OK。
+- **下一轮优先（据本轮实测调整）**：**`time` 面（`strftime`／`localtime`／`struct_time` 族）** —— 它一次压着
+  **135** 个官方测试签名（比 P3-34 的 52 更多），且是 `test.support` 导入链的下一格；随后按
+  `P3-34`（complex）→ `P3-35`（合法 Python 被拒）→ `P3-36`（`.pyac BadCodeSection`）→ `P3-37`（缺模块）→
+  **M6 收口**（报用户批准后 `--no-ff` ＋ tag `m6`）。另列小格：`classmethod`／`staticmethod` 包装体属性委派＋`repr`；
+  `issubclass() arg 1 must be a class`（`test_decorators` 的次级症状，疑 `classmethod` 包装体面同源）。

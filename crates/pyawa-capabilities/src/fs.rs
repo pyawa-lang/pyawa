@@ -51,6 +51,21 @@ pub struct FileInfo {
     pub ino: u64,
 }
 
+/// 文件**时间戳**子集（`CP-30` 的**追加槽位**：`AB-41` 允许"表尾追加 ⇒ 次版本 +1、旧宿主仍可用"）。
+///
+/// 单位：**Unix epoch 起的纳秒**（与 `st_mtime_ns` 同源）；provider 取不到的字段如实给 `0`
+/// （`CP-5`：不编造机器值）。字段顺序即线格式顺序（`repr(C)`）。
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileTimes {
+    /// 访问时间（`st_atime_ns` 的源）。
+    pub atime_ns: i64,
+    /// 修改时间（`st_mtime_ns` 的源；`linecache` 一族靠它判缓存新鲜度）。
+    pub mtime_ns: i64,
+    /// 状态变更时间（`st_ctime_ns` 的源；本层取 `created()`，取不到就 `0`）。
+    pub ctime_ns: i64,
+}
+
 /// `open(name, flags, mode)`：`O_*` 标志位（`SPEC-capabilities.md` §9.1）。
 ///
 /// 数值**未**在本文件钉死（那是 `posix` 的映射面）；先给名字，避免"发明数字"。
@@ -145,6 +160,14 @@ pub struct CpFsVtable {
     pub fsync: Option<extern "C" fn(*mut c_void, Handle, *mut i32) -> CapStatus>,
     /// `close(handle)`（`CP-17`：释放）。
     pub close: Option<extern "C" fn(*mut c_void, Handle, *mut i32) -> CapStatus>,
+    /// **`CP-30` 的追加槽**（`AB-41`：**只能从表尾追加** ⇒ `PA_ABI_MINOR` 1→2，旧宿主仍可用）：
+    /// `stat_times(name)` ⇒ 路径的[`FileTimes`]（纳秒）。
+    ///
+    /// 消费方（`pyawa-core` 的 `fs_stat_times`）按 `CP-3` 处理：宿主 vtable 没有这一格
+    /// （1.1 的旧宿主）或给 `None` ⇒ 只有这个操作"未实现"，同域其余槽位不受影响。
+    pub stat_times: Option<
+        extern "C" fn(*mut c_void, *const u8, usize, *mut FileTimes, *mut i32) -> CapStatus,
+    >,
 }
 
 impl CpFsVtable {
@@ -172,6 +195,7 @@ impl CpFsVtable {
         truncate: None,
         fsync: None,
         close: None,
+        stat_times: None,
     };
 }
 

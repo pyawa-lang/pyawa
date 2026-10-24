@@ -533,15 +533,45 @@ pub(crate) fn call_callable(
     // （走原生分支、self 当 `bound` 递进去）。顺序很要紧——原生的
     // `BuiltinFunctionObject` 与 `FunctionObject` 布局不同，先当函数读会读到错位的内存
     // （症状是"misaligned pointer dereference"）。
+    //
+    // **可以嵌套多层**（task-18 实测 ✗）：`classmethod(A().foo)` 的 `__func__` 本身就是一个
+    // **绑定方法**（`MethodObject` 里再套 `MethodObject`）；`B.bar()` 在参照里等价
+    // `A().foo(B)` ✓。先前只剥**一层** ✗ ⇒ 剩下的仍是 `method` 对象却按 `FunctionObject`
+    // 读载荷 ✗ ⇒ `function_defaults` 的 `to_vec` 读到垃圾长度 ⇒ `capacity overflow`／
+    // misaligned panic（官方 `test_decorators` 的 `test_bound_function_inside_classmethod` ✓）。
+    //
+    // 剥法照参照的 `MethodType(f, x)(*a) == f(x, *a)` ✓：**每层方法对象的 `this`** 都是
+    // "下一层的第一个位置实参"，**最内层**的 `this` 才是真正的绑定 self ✓。
+    // **调用方交来的 `bound_self` 在 callable 是方法对象时按旧口径丢弃** ✓ —— 那是内部调用点
+    // （`iter_value` 的 `__iter__`、`call_dunder_method` 一族）给"**未绑定**函数"准备的 self；
+    // 方法对象自带 `this` ✓，再塞一份会把 receiver 重复传进去 ✗（实测 `range` 迭代当场
+    // `TypeError: range indices must be integers or slices, not range` ✗）。
     // SAFETY: callable 是存活对象。
-    let callable_type = unsafe { callable.as_ref() }.ty();
-    let (callable, bound_self) = if callable_type == builtin_type(instance, "method") {
-        // SAFETY: 类型身份已确认。
+    let method_type = builtin_type(instance, "method");
+    let caller_bound_self = bound_self;
+    let mut callable = callable;
+    let mut args = args;
+    let mut layer_self: Option<NonNull<Header>> = None;
+    while unsafe { callable.as_ref() }.ty() == method_type {
+        // SAFETY: 类型身份刚确认 ⇒ 载荷是 `MethodObject`；函数与实例都由它持有、存活
+        //（方法对象各持一份引用 ⇒ 整条链在调用期间都活着 ✓）。
         let method = unsafe { &*callable.as_ptr().cast::<MethodObject>() };
-        // 函数与实例都由该方法对象持有、存活；`bound_self` 是**借用**（见本函数开头的契约）
-        (method.function(), Some(method.this()))
-    } else {
-        (callable, bound_self)
+        let inner = method.function();
+        let this = method.this();
+        if let Some(previous_layer) = layer_self {
+            // 上一层方法对象的 `this` ⇒ 本层调用的**第一个位置实参** ✓（上面那条 `MethodType` 等式）。
+            // 实参表按"转移语义"被下面的调用路径消费 ⇒ 这里先新增一份 ✓。
+            // SAFETY: previous_layer 由上一层方法对象持有、存活。
+            unsafe { instance.incref_object(previous_layer.as_ptr()) };
+            args.insert(0, previous_layer);
+        }
+        layer_self = Some(this);
+        callable = inner;
+    }
+    // 单层方法 ⇒ 最内层 `this` 就是它自己的绑定 self（与旧口径一致 ✓）；没有方法层 ⇒ 用调用方的。
+    let bound_self = match layer_self {
+        Some(innermost) => Some(innermost),
+        None => caller_bound_self,
     };
 
     // **原生可调用对象**（`AB-24`：宿主函数与内建函数的落点）：实参以**借用视图**递进去，
@@ -584,7 +614,6 @@ pub(crate) fn call_callable(
     // SAFETY: 函数持有一份对 code object 的引用，故它在函数存活期间有效。
     let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
 
-    let mut args = args;
     if let Some(self_object) = bound_self {
         // 契约：`bound_self` 是**借用**（调用方持有那份引用）；实参表由 `bind_arguments` 接手，
         // 故这里先为它新增一份。

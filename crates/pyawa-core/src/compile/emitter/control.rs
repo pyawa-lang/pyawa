@@ -142,7 +142,18 @@ impl Emitter {
                 );
             return Ok(false);
         }
-        if self.emit_scope_tail(self.last_span) {
+        // **作用域收尾只对"尾块"发** ✓（task-17 ✓）：`if/else` 的**非尾**分支体里最后一条是
+        // `with` 时（`emit_block(else_body, branch_tail=false)` ⇒ 这里的 `block_tail` 是假 ✗），
+        // 先前不看它 ⇒ 分支里的 `with` 正常出口发出 `LOAD_CONST None; RETURN_VALUE` ⇒
+        // **提前 return None** ✗，后面真正的 `return` 成了死代码 ✗（官方套件 135 个测试签名
+        // ＋ `test.support` 导入链卡在这一格 ✓）。非尾块改走下面的兜底：跳 `block_end_labels.last()`。
+        //
+        // **`break` 的退出路径例外** ✓：它重放的 `rest` 在语义上接回**作用域层**继续走
+        // （`containing_depth = Some(1)`；嵌套的 depth > 1 已在上面提前返回）⇒ 收尾照发 ✓
+        // —— 否则 `for …: break` 这类会退化成"跳块尾"，栈契约与参照都不对 ✗。
+        if (self.block_tail || containing_depth.is_some())
+            && self.emit_scope_tail(self.last_span)
+        {
             return Ok(true);
         }
         if let Some(end) = self.block_end_labels.last().copied() {

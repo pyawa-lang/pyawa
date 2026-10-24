@@ -153,6 +153,11 @@ impl Instance {
         Ok(None)
     }
 
+    /// **引用契约**：`value` 是**新引用**（`OM-16`），由属性字典／`__setattr__` 协议**接手** ✓
+    /// —— 与 `STORE_ATTR` 从值栈弹出的那一份同契约 ✓。手上有**借用视图**的调用方
+    /// （如 stdlib 的 `setattr` 原生函数：实参是 `call_callable` 的借用 ✓）**必须自己先
+    /// `retain` 一份**再交进来 ✗ 否则属性字典会持有一份不存在的引用 ✓
+    /// （task-18 实测：`setattr(f, "d", {"one": 1})` 之后 dict 被提前释放 ⇒ 读回时 SIGSEGV ✓）。
     pub fn set_attribute_with_protocol(
         &self,
         object: NonNull<Header>,

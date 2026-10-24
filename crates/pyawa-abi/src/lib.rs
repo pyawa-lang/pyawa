@@ -80,7 +80,11 @@ pub const PA_ABI_MAJOR: u32 = 1;
 ///
 /// **1**（`P3-29`，2026-10-18）：`net` 域 vtable 加 `socketpair` 槽（`CP-38`）——那是对**能力接口**
 /// 的追加式改动，按 `AB-39` 三份契约共用一个版本号 ⇒ 本号随 `CP-30` 升次版本。
-pub const PA_ABI_MINOR: u32 = 1;
+///
+/// **2**（round 15，2026-10-24）：`fs` 域 vtable **表尾追加** `stat_times` 槽（`CP-30`；读文件
+/// 时间戳，供 `os.stat_result` 的 `st_mtime` 一族）。属 `AB-41` 的"末尾追加"⇒ 旧宿主（1.1）的
+/// vtable 只是少了这一格，本运行时按 `CP-3` 把它当"该操作未实现"，不受影响。
+pub const PA_ABI_MINOR: u32 = 2;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 

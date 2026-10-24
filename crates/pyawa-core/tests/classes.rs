@@ -1476,3 +1476,87 @@ lt_value = 1 if k.__lt__(5) else 0
         "`__lt__` 里也要能读到闭包变量（10 < 5 ⇒ False）"
     );
 }
+
+// --------------------------------------------------------------------------- #
+// task-17：`if/else` 非尾分支里最后一条是 `with` ⇒ 不能发作用域收尾（提前 return None）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn a_tail_with_inside_an_if_else_branch_does_not_return_early() {
+    // 分支体**不是尾块**时（`if` 后面还有 `return`），尾位 `with` 的正常出口只能跳到块尾，
+    // 不能发 `LOAD_CONST None; RETURN_VALUE`（先前会把外层真正的 return 变成死代码）。
+    let vm = Vm::new();
+    let namespace = run_source(
+        &vm,
+        r#"
+class Lock:
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
+
+LOCK = Lock()
+
+def else_branch():
+    if False:
+        pass
+    else:
+        with LOCK:
+            pass
+    return 7
+
+def then_branch():
+    if True:
+        with LOCK:
+            pass
+    else:
+        pass
+    return 11
+
+def else_with_then_stmt():
+    if False:
+        pass
+    else:
+        with LOCK:
+            pass
+        z = 5
+    return z
+
+def mid_function(flag):
+    if flag:
+        a = 1
+    else:
+        with LOCK:
+            a = 2
+    b = 3
+    return (a, b)
+
+else_value = else_branch()
+then_value = then_branch()
+stmt_value = else_with_then_stmt()
+mid_a, mid_b = mid_function(False)
+"#,
+    );
+    let else_value = namespace_lookup(&vm, namespace, "else_value");
+    assert_eq!(
+        vm.instance.int_value(else_value),
+        Some(7),
+        "else 分支里的尾位 with 之后必须还能继续执行外层的 return"
+    );
+    let then_value = namespace_lookup(&vm, namespace, "then_value");
+    assert_eq!(
+        vm.instance.int_value(then_value),
+        Some(11),
+        "then 分支里的尾位 with 也不能提前 return"
+    );
+    let stmt_value = namespace_lookup(&vm, namespace, "stmt_value");
+    assert_eq!(
+        vm.instance.int_value(stmt_value),
+        Some(5),
+        "else 分支里 with 之后的语句要照常执行"
+    );
+    let mid_a = namespace_lookup(&vm, namespace, "mid_a");
+    let mid_b = namespace_lookup(&vm, namespace, "mid_b");
+    assert_eq!(vm.instance.int_value(mid_a), Some(2), "else 分支的执行结果");
+    assert_eq!(vm.instance.int_value(mid_b), Some(3), "if/else 之后的语句要照常执行");
+}

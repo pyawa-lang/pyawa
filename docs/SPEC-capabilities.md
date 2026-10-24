@@ -160,6 +160,11 @@
 | `seek(file, offset, whence)` / `tell(file)` | 位置 |
 | `truncate(file, size)` / `fsync(file)` | 截断／落盘 |
 | `close(handle)` | 释放（CP-17） |
+| `stat_times(name)` | **时间戳**（`FileTimes { atime_ns, mtime_ns, ctime_ns }`，三个 **i64 纳秒**字段；取不到的字段为 `0`、provider **不编造**）——`stat_result` 的 `st_*time*` 字段来源；槽为 null ⇒ 该操作未实现（`CP-3`） |
+
+**追加式改动**：`stat_times` 是 `CpFsVtable` **表尾追加**的槽（`AB-44`）⇒ 按 `AB-41` **次版本 +1**、
+旧宿主**仍可用**（`AB-43` 以 `min(宿主 size, 自身 size)` 为界读；新槽读不到 ⇒ 未实现，`CP-3`）。
+版本号是**共用版本号**（`CP-30`／`AB-39`），当前值见 `SPEC-c-abi.md` §12。
 
 **建议**：`dup`／`fdopen` 一类由实例能力表复制槽位实现（CP-14／CP-31），**不需要** provider 提供。
 可异步化：上表全部。

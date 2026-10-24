@@ -13,9 +13,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* AB-45：版本宏。编码：主版本在高 16 位（见 crates/pyawa-abi/src/lib.rs）。 */
+/* AB-45：版本宏。编码：主版本在高 16 位（见 crates/pyawa-abi/src/lib.rs）。
+ * 次版本 2：fs 域 vtable 表尾追加 stat_times 槽（AB-41：旧宿主仍可用）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 1u
+#define PA_ABI_MINOR 2u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */

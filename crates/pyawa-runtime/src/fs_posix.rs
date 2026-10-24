@@ -9,7 +9,7 @@
 
 use core::ffi::c_void;
 use pyawa_capabilities::fs::{
-    open_flag, whence, CapStatus, CpFsVtable, FileInfo, Handle,
+    open_flag, whence, CapStatus, CpFsVtable, FileInfo, FileTimes, Handle,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -71,6 +71,9 @@ impl PosixFs {
             truncate: Some(fs_truncate),
             fsync: Some(fs_fsync),
             close: Some(fs_close),
+            // **`CP-30` 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 1→2）：读文件时间戳，
+            // 供 `os.stat_result` 的 `st_mtime` 一族（`linecache` 靠它判缓存新鲜度）。
+            stat_times: Some(fs_stat_times),
         }
     }
 }
@@ -185,6 +188,59 @@ extern "C" fn fs_stat(
     }
 }
 
+/// `stat_times(name)`（`CP-30` 的**追加槽**，`AB-41` 次版本 2）：路径 ⇒ 时间戳纳秒。
+///
+/// 三个时间**全部取自 `std::fs::metadata`**（平台集中点在这里，`DESIGN.md` §7）：
+/// `accessed()`／`modified()`／`created()`。取不到（平台不支持、或时间早于 `UNIX_EPOCH`）
+/// ⇒ 该字段如实给 `0`（不编造）。**注意** `created()` 在 Linux 上是 **birth time**（若文件系统
+/// 支持；否则 `Err` ⇒ `0`），与参照 `st_ctime`（inode 变更时间）语义**不同**——本层没有
+/// `statx` 封装前如实近似，只影响 `st_ctime`，不影响 `linecache` 用的 `st_mtime`。
+#[allow(unsafe_code)]
+extern "C" fn fs_stat_times(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    out: *mut FileTimes,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    match std::fs::metadata(&path) {
+        Ok(meta) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out = times_of(&meta) };
+            CapStatus::Ok
+        }
+        Err(error) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno_of(&error) };
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `SystemTime` ⇒ Unix epoch 起的纳秒（取不到 ⇒ `0`，见 [`fs_stat_times`] 的注释）。
+fn unix_ns(time: std::io::Result<std::time::SystemTime>) -> i64 {
+    time.ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_nanos()).ok())
+        .unwrap_or(0)
+}
+
+fn times_of(meta: &std::fs::Metadata) -> FileTimes {
+    FileTimes {
+        atime_ns: unix_ns(meta.accessed()),
+        mtime_ns: unix_ns(meta.modified()),
+        ctime_ns: unix_ns(meta.created()),
+    }
+}
+
 /// `fstat(file)`。
 #[allow(unsafe_code)]
 extern "C" fn fs_fstat(
@@ -216,9 +272,14 @@ extern "C" fn fs_fstat(
 }
 
 fn info_of(meta: &std::fs::Metadata) -> FileInfo {
+    // **`st_mode`**：宿主的**原始 `st_mode`**（含文件类型位；`MetadataExt::mode()` 就是
+    // `stat(2)` 的同一个字段）——stdlib 侧 `os.stat_result.st_mode` 直接照它报。task-19 的
+    // 探针要求 `st_mode` 与参照同口径；先前这里恒填 `0` ✗ ⇒ `stat.S_ISDIR`／`os.path.isdir`
+    // 一类全为假 ✗（`dev`／`ino` 仍是 `CP-23` 的保留面，本格不动）。
+    use std::os::unix::fs::MetadataExt;
     FileInfo {
         size: meta.len(),
-        mode: 0,
+        mode: meta.mode(),
         is_dir: meta.is_dir(),
         dev: 0,
         ino: 0,

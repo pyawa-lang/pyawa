@@ -1490,6 +1490,13 @@ fn setattr_native(
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
     // **协议口径** ✓（第 706 轮）：core 里那个公开入口负责 `__setattr__` ✓（见它的注释 ✓）。
+    // **引用纪律**（task-18 真 bug ✗）：原生函数的实参是 `call_callable` 的**借用视图** ✗
+    // —— 而该入口要的是**新引用**（与 `STORE_ATTR` 从值栈弹出的那一份同契约 ✓）⇒ 先自己
+    // `retain` 一份再交出 ✓。先前漏了这一份 ✗ ⇒ 属性字典持有一份不存在的引用 ✓；实参是
+    // **运行时新建的 dict**（无别处持有 ✓）时当场被释放 ✓ ⇒ 读回该属性 SIGSEGV／
+    // misaligned pointer（官方 `test_decorators` 的 `noteargs` 装饰器把 `(*args, **kwds)`
+    // 存进函数属性时正撞它 ✓）。普通 tuple 常被 code object 的常量表另持一份 ⇒ 症状被遮住 ✓。
+    instance.retain(args[2]);
     instance.set_attribute_with_protocol(args[0], name, args[2])?;
     Ok(instance.retain(instance.singletons().none()))
 }

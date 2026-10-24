@@ -854,6 +854,11 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 - **已落地面**（`__all__` 当前 **43** 名；逐条照本机参照实测）：
   - **文件系统**：`stat`／`lstat`／`stat_result`（`st_*` 字段）、`open`／`close`／`read`／`write`、
     `unlink`（`remove` 是它的别名）、`rmdir`、`readlink`；报错按 errno 折成 §5.1 的 `OSError` 子类；
+  - **`stat_result` 的时间字段**（`warnings` 的格式化走到 `linecache` 后 `os.stat` 需要 `st_mtime`）：
+    `st_atime`／`st_mtime`／`st_ctime` 是**浮点秒**、`st_atime_ns`／`st_mtime_ns`／`st_ctime_ns` 是
+    **int 纳秒**（均照参照）；时间戳取自 `fs` 域的 **`stat_times`** 槽（`SPEC-capabilities.md` §9.1）。
+    **如实偏差**：provider 不支持该槽时**如实缺名**（如 conformance harness 未提供 ⇒ 这六个字段
+    不存在，**不编时间**）；`st_*` 字段**逐结果对象写**（每次 `stat` 一个新对象，**不是**共享类型上的字段）；
   - **进程／环境**：`getpid`、`environ`（本进程环境，`_create_environ` 同源）、`cpu_count`、`_exit`；
   - **路径**：`getcwd`（`str`）／`getcwdb`（`bytes`）；
   - **随机**：`urandom`——先经 `fs` 域读 `/dev/urandom`（**能读满才算成功**）；读不满时退回进程内
@@ -883,6 +888,8 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 - **验收**：`crates/pyawa-runtime/tests/posix_fs_shapes.rs`（`getcwd`／`getcwdb`／`readlink` 两侧逐行）；
   `terminal_size`／`get_terminal_size` **无专用抽例**（如实记——形态与错误文案在
   `crates/pyawa-stdlib/src/posix_module.rs` 里逐条对参照实测）；
+  `stat_result` 的时间戳族与**逐结果独立**由 `crates/pyawa-runtime/tests/stat_result.rs` 端到端对拍
+  （`st_mtime == st_mtime_ns / 1e9`、类型分别是 `float`／`int`、两次 `stat` 的 `st_size` 不串）；
   对拍语料 `posix_function_surface.py`／`posix_cwd_readlink.py`／`posix_path_helpers.py`／
   `import_os_surface.py`／`import_posixpath_surface.py`。
 

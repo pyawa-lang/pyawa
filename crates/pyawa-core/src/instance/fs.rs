@@ -118,6 +118,36 @@ impl Instance {
         }
     }
 
+    /// **经 `fs` 域取文件时间戳**（`stat_times(name)`；`CP-30` 的**追加槽**，`AB-41` 次版本 2）。
+    ///
+    /// 名字先经 VM 解析器（与 [`Instance::fs_stat`] 同一条口径）；槽缺失（1.1 的旧宿主）或
+    /// provider 给 `None` ⇒ `NotImplemented`（`CP-3`：只有这个操作未实现，调用方据此"如实缺名"）。
+    pub fn fs_stat_times(
+        &self,
+        path: &[u8],
+    ) -> Result<pyawa_capabilities::fs::FileTimes, CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        self.fs_stat_times_raw(&resolved)
+    }
+
+    /// `fs_stat_times` 的 provider 直达面（**名字已解析**）。
+    fn fs_stat_times_raw(
+        &self,
+        path: &[u8],
+    ) -> Result<pyawa_capabilities::fs::FileTimes, CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let stat_times = table.stat_times.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut times = pyawa_capabilities::fs::FileTimes::default();
+        let mut errno = 0i32;
+        match stat_times(table.state, path.as_ptr(), path.len(), &mut times, &mut errno) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(times),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     /// **经 `fs` 域读符号链接目标**（`readlink`；按名字，不经过能力表）。
     ///
     /// 名字先经 VM 解析器（**不跟随最后一段** —— `readlink` 要的就是链接本身）。

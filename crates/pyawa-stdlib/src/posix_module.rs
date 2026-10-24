@@ -410,11 +410,20 @@ fn stat_result_type(instance: &Instance) -> NonNull<pyawa_core::TypeObject> {
     instance.new_attribute_type("os.stat_result")
 }
 
-/// **`posix.stat(path)`** ✓（第 204 轮）：`Lib/os.py:148` 的 `_set.add(stat)` 要这个名字 ✓
-///（它来自 `from posix import *` ✓）。**一处真相** ✓：值来自 `fs` 域的 `stat` 槽 ✓（provider 早已实现 ✓）。
+/// **`posix.stat(path)`** ✓（第 204 轮；task-19 补时间戳族）：`Lib/os.py:148` 的 `_set.add(stat)`
+/// 要这个名字 ✓（它来自 `from posix import *` ✓）。**一处真相** ✓：值来自 `fs` 域的
+/// `stat` 槽 ＋ **追加的** `stat_times` 槽 ✓。
 ///
-/// **如实说** ✗：只给 `FileInfo` **真的有**的字段 ✓（`st_mode`／`st_size`／`st_dev`／`st_ino` ✓）；
-/// `st_uid`／时间戳一族随后随 `CP-` 补 ✓。
+/// **结果对象逐次独立** ✓（task-19 修既有 bug ✗）：先前把字段写到**共享类型**上（`set_type_attribute`）
+/// ⇒ 第二次 `os.stat` 会覆盖第一次的 `st_size` 等 ✗（参照里每个结果各自独立 ✓）；现在写到**逐结果
+/// 对象**的实例属性上，类型仍是同一个 `os.stat_result` ✓。
+///
+/// 时间戳（`st_atime`／`st_mtime`／`st_ctime` 是**浮点秒**、`*_ns` 是**整数纳秒**，与参照同口径）：
+/// `stat_times` 槽**成功才补**；槽缺失／`NotImplemented`（如旧宿主、conformance harness 没提供该槽）
+/// ⇒ **不补**，保持"如实缺名"（`CP-3`／`CP-5`）。
+///
+/// **如实说** ✗：`st_uid` 一族仍未接；`st_dev`／`st_ino` 仍来自 `FileInfo` 的既有值（provider 目前给
+/// 0，属 `CP-23` 的保留面，不在本格）。
 fn stat_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -436,18 +445,52 @@ fn stat_native(
             ));
         }
     };
+    // **时间戳是追加槽**：取不到（旧宿主／槽未实现）就不补名 —— 不能把"读不到"编成 0 ✗。
+    let times = instance.fs_stat_times(path.as_bytes()).ok();
+    // **先分配结果对象，再往它自己的实例属性上写**（task-19 的共享类型 bug 修 ✗）。
     let result_type = stat_result_type(instance);
+    let result = instance
+        .alloc(AttributeObject::new(result_type, core::cell::RefCell::new(None)))
+        .into_raw()
+        .cast::<Header>();
+    // `set_attribute_value` 是**借用语义**（它自己给属性表 `retain` 一份）⇒ 本函数那份要归还 ✓
+    // （与 `_socket_module` 的 `set_socket_int` 同一手法 ✓）。
     for (field, number) in [
         ("st_mode", info.mode as i64),
         ("st_size", info.size as i64),
         ("st_dev", info.dev as i64),
         ("st_ino", info.ino as i64),
     ] {
-        let value = instance.new_int(number);
-        instance.set_type_attribute(result_type, field, value);
+        let object = instance.new_int(number);
+        let outcome = instance.set_attribute_value(result, field, object);
+        instance.release(object);
+        let _ = outcome;
     }
-    let result = instance.alloc(AttributeObject::new(result_type, core::cell::RefCell::new(None)));
-    Ok(result.into_raw().cast::<Header>())
+    if let Some(times) = times {
+        // `st_*time`：**浮点秒**（参照实测就是 `ns / 1e9` 同一个浮点值）。
+        for (field, nanoseconds) in [
+            ("st_atime", times.atime_ns),
+            ("st_mtime", times.mtime_ns),
+            ("st_ctime", times.ctime_ns),
+        ] {
+            let object = instance.new_float(nanoseconds as f64 / 1e9);
+            let outcome = instance.set_attribute_value(result, field, object);
+            instance.release(object);
+            let _ = outcome;
+        }
+        // `st_*time_ns`：**整数纳秒**（`linecache` 一族按它与缓存比对）。
+        for (field, nanoseconds) in [
+            ("st_atime_ns", times.atime_ns),
+            ("st_mtime_ns", times.mtime_ns),
+            ("st_ctime_ns", times.ctime_ns),
+        ] {
+            let object = instance.new_int(nanoseconds);
+            let outcome = instance.set_attribute_value(result, field, object);
+            instance.release(object);
+            let _ = outcome;
+        }
+    }
+    Ok(result)
 }
 
 /// **`os.terminal_size` 的每实例唯一类型对象**（task-8）：与 [`stat_result_type`] 同一口径
