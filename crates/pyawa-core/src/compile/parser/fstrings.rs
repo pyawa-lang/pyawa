@@ -239,6 +239,48 @@ pub(crate) fn parse_fstring_parts(
                             }
                         }
                         '!' | ':' if depth == 1 && separator.is_none() => separator = Some(scan),
+                        // **插值里的嵌套字符串要整段跳过**（task-45 ✓）：官方
+                        // `test_xml_etree.py:4661` 的 `f"{… ','.join(c.tag.split('}')[-1] …)}"`
+                        // —— 先前把字符串里的 `}` 当**插值收尾** ✗ ⇒ 表达式被截断 ⇒
+                        // "实参表里出现 Some(End)" ✗。按引号跳过（含三引号、反斜杠转义）。
+                        '\'' | '"' => {
+                            let quote = characters[scan];
+                            let triple = characters.get(scan + 1) == Some(&quote)
+                                && characters.get(scan + 2) == Some(&quote);
+                            scan += if triple { 3 } else { 1 };
+                            while scan < characters.len() {
+                                if characters[scan] == '\\' {
+                                    scan += 2;
+                                    continue;
+                                }
+                                if characters[scan] == quote {
+                                    if triple {
+                                        if characters.get(scan + 1) == Some(&quote)
+                                            && characters.get(scan + 2) == Some(&quote)
+                                        {
+                                            scan += 3;
+                                            break;
+                                        }
+                                        scan += 1;
+                                    } else {
+                                        scan += 1;
+                                        break;
+                                    }
+                                } else {
+                                    scan += 1;
+                                }
+                            }
+                            continue;
+                        }
+                        // **插值里的注释**（PEP 701）：跳过到行尾（不算括号/分隔符）。
+                        // **只在表达式部分**（分隔符 `:` 之前）——格式说明里的 `#` 是**格式标志**
+                        // （`f'{id(self):#x}'`），不是注释（task-45 ✓）。
+                        '#' if separator.is_none() => {
+                            while scan < characters.len() && characters[scan] != '\n' {
+                                scan += 1;
+                            }
+                            continue;
+                        }
                         _ => {}
                     }
                     scan += 1;

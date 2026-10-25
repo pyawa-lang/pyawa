@@ -84,21 +84,66 @@ pub(crate) fn parse_pattern(lexed: &Lexed, cursor: usize) -> Result<(Pattern, us
         alternatives.push(next_pattern);
         at = next;
     }
-    if alternatives.len() == 1 {
-        return Ok((alternatives.remove(0), at));
+    let pattern = if alternatives.len() == 1 {
+        alternatives.remove(0)
+    } else {
+        // 参照：`case a | b:` 里**不许有捕获**（`SyntaxError: name capture … makes remaining patterns unreachable` ✓）
+        if alternatives
+            .iter()
+            .any(|item| matches!(item, Pattern::Capture(_, _)))
+        {
+            return Err(CompileError::Syntax(
+                "`match` 的或模式里不许有捕获（参照同样是语法错）".to_owned(),
+            ));
+        }
+        let start = pattern_span(&alternatives[0]);
+        let end = pattern_span(alternatives.last().expect("刚判过非空"));
+        Pattern::Or(alternatives, start.to(end))
+    };
+    // **`as` 模式**（task-45 ✓）：`case A.y as z:`／`case [1] as z:`／`case (0 | 1) as z:`
+    // —— 官方 `test_patma.py` 一族；先前在 `as` 上报"这里要冒号" ✗。`as` 只吃一个名字 ✓。
+    if let Some(Lexeme::Name(word)) = lexed.lexemes.get(at) {
+        if word == "as" {
+            let Some(Lexeme::Name(binding)) = lexed.lexemes.get(at + 1) else {
+                return Err(CompileError::Syntax("`as` 后面要一个名字".to_owned()));
+            };
+            let binding_span = lexed.spans[at + 1];
+            let span = pattern_span(&pattern).to(binding_span);
+            return Ok((Pattern::As(Box::new(pattern), binding.clone(), span), at + 2));
+        }
     }
-    // 参照：`case a | b:` 里**不许有捕获**（`SyntaxError: name capture … makes remaining patterns unreachable` ✓）
-    if alternatives
-        .iter()
-        .any(|item| matches!(item, Pattern::Capture(_, _)))
-    {
-        return Err(CompileError::Syntax(
-            "`match` 的或模式里不许有捕获（参照同样是语法错）".to_owned(),
-        ));
+    Ok((pattern, at))
+}
+
+/// **模式里的数字字面量链**（task-45 ✓）：`case 0 + 0j:`／`case -1 - 2j:` —— 参照把这些
+/// **常量折叠**成一个复数常量（`dis` 里就是一条 `LOAD_CONST`）。只收"实部 ± 虚部"这一形态
+/// （与表达式那边的 `fold_complex_binary` 同口径；更复杂的表达式模式参照本来也不允许）。
+fn pattern_number_tail(lexed: &Lexed, mut value: Constant, mut at: usize) -> (Constant, usize) {
+    loop {
+        let negative = match lexed.lexemes.get(at) {
+            Some(Lexeme::Plus) => false,
+            Some(Lexeme::Minus) => true,
+            _ => return (value, at),
+        };
+        let Some(Lexeme::Imaginary(bits)) = lexed.lexemes.get(at + 1) else {
+            return (value, at);
+        };
+        let imag = f64::from_bits(*bits);
+        let real = match value {
+            Constant::Int(integer) => integer as f64,
+            Constant::Float(bits) => f64::from_bits(bits),
+            Constant::BigInt(ref text) => match text.parse::<f64>() {
+                Ok(number) => number,
+                Err(_) => return (value, at),
+            },
+            _ => return (value, at),
+        };
+        value = Constant::Complex {
+            real_bits: real.to_bits(),
+            imag_bits: (if negative { -imag } else { imag }).to_bits(),
+        };
+        at += 2;
     }
-    let start = pattern_span(&alternatives[0]);
-    let end = pattern_span(alternatives.last().expect("刚判过非空"));
-    Ok((Pattern::Or(alternatives, start.to(end)), at))
 }
 
 /// **模式的基本项**：字面量／捕获／通配 ✓；其余如实报**未接线** ✓（`CM-6`）。
@@ -143,11 +188,54 @@ pub(crate) fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pat
             }
             Ok((Pattern::Capture(name.clone(), span), cursor + 1))
         }
-        Some(Lexeme::Int(value)) => Ok((Pattern::Literal(Constant::Int(*value), span), cursor + 1)),
-        Some(Lexeme::BigInt(text)) => Ok((
-            Pattern::Literal(Constant::BigInt(text.clone()), span),
-            cursor + 1,
-        )),
+        // **带符号的数字字面量模式**（task-45 ✓）：`case -0:`／`case -1.5:`／`case -1j:`
+        // （官方 `test_patma.py:1013`）—— 参照 `dis` 里直接是 `LOAD_CONST -1` 那种常量 ✓。
+        Some(Lexeme::Minus) | Some(Lexeme::Plus) => {
+            let negative = lexed.lexemes.get(cursor) == Some(&Lexeme::Minus);
+            let literal_span = span.to(lexed.spans.get(cursor + 1).copied().unwrap_or(span));
+            let constant = match lexed.lexemes.get(cursor + 1) {
+                Some(Lexeme::Int(value)) => Constant::Int(if negative {
+                    value.checked_neg().ok_or_else(|| {
+                        CompileError::Unsupported("模式里的整数取负溢出".to_owned())
+                    })?
+                } else {
+                    *value
+                }),
+                Some(Lexeme::BigInt(text)) => Constant::BigInt(if negative {
+                    format!("-{text}")
+                } else {
+                    text.clone()
+                }),
+                Some(Lexeme::Float(bits)) => Constant::Float(if negative {
+                    (-f64::from_bits(*bits)).to_bits()
+                } else {
+                    *bits
+                }),
+                Some(Lexeme::Imaginary(bits)) => {
+                    let value = f64::from_bits(*bits);
+                    Constant::Complex {
+                        real_bits: if negative { (-0.0f64).to_bits() } else { 0f64.to_bits() },
+                        imag_bits: if negative { (-value).to_bits() } else { *bits },
+                    }
+                }
+                other => {
+                    return Err(CompileError::Syntax(format!(
+                        "模式里的 `+`／`-` 后面要数字字面量，实际 {other:?}"
+                    )))
+                }
+            };
+            let (constant, at) = pattern_number_tail(lexed, constant, cursor + 2);
+            Ok((Pattern::Literal(constant, literal_span), at))
+        }
+        Some(Lexeme::Int(value)) => {
+            let (constant, at) = pattern_number_tail(lexed, Constant::Int(*value), cursor + 1);
+            Ok((Pattern::Literal(constant, span), at))
+        }
+        Some(Lexeme::BigInt(text)) => {
+            let (constant, at) =
+                pattern_number_tail(lexed, Constant::BigInt(text.clone()), cursor + 1);
+            Ok((Pattern::Literal(constant, span), at))
+        }
         Some(Lexeme::Str(text)) => Ok((
             Pattern::Literal(Constant::Str(text.clone()), span),
             cursor + 1,
@@ -156,21 +244,22 @@ pub(crate) fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pat
             Pattern::Literal(Constant::Bytes(value.clone()), span),
             cursor + 1,
         )),
-        Some(Lexeme::Float(bits)) => Ok((
-            Pattern::Literal(Constant::Float(*bits), span),
-            cursor + 1,
-        )),
+        Some(Lexeme::Float(bits)) => {
+            let (constant, at) = pattern_number_tail(lexed, Constant::Float(*bits), cursor + 1);
+            Ok((Pattern::Literal(constant, span), at))
+        }
         // **虚部字面量**（task-29 ✓）：`case 1j:` 的常量模式（实部补 `0.0` ✓）
-        Some(Lexeme::Imaginary(bits)) => Ok((
-            Pattern::Literal(
+        Some(Lexeme::Imaginary(bits)) => {
+            let (constant, at) = pattern_number_tail(
+                lexed,
                 Constant::Complex {
                     real_bits: 0f64.to_bits(),
                     imag_bits: *bits,
                 },
-                span,
-            ),
-            cursor + 1,
-        )),
+                cursor + 1,
+            );
+            Ok((Pattern::Literal(constant, span), at))
+        }
         // **序列模式**（task-37）：`[a, b, *rest]` ✓
         Some(Lexeme::LeftBracket) => parse_sequence_pattern(lexed, cursor, Lexeme::RightBracket, span),
         // **映射模式**（task-37）：`{"k": v}`／`{}` ✓
@@ -398,7 +487,8 @@ pub(crate) fn pattern_span(pattern: &Pattern) -> Span {
         | Pattern::Capture(_, span)
         | Pattern::Wildcard(span)
         | Pattern::Value(_, span)
-        | Pattern::Or(_, span) => *span,
+        | Pattern::Or(_, span)
+        | Pattern::As(_, _, span) => *span,
         Pattern::Class { span, .. }
         | Pattern::Sequence { span, .. }
         | Pattern::Mapping { span, .. }

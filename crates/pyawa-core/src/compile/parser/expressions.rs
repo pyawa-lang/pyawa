@@ -27,8 +27,16 @@ pub(crate) fn parse_star_or_expression(lexed: &Lexed, cursor: usize) -> Result<(
 /// `_bootstrap.py:547` 就是这种形态 ✗（我们此前只接了括号形式的 `(x := …)` ✓）。
 /// **值位置的表达式**：允许**元组显示**（`a, b = 1, 2` ✓ —— 没有括号的逗号列表 ✓）。
 pub(crate) fn parse_value_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
-    let (first, mut next) = parse_expression(lexed, cursor)?;
+    // **首项可以是 `*表达式`**（task-45 ✓）：`for x in *a, *b, *c:` 是合法元组显示
+    // （官方 `test_grammar.py:1390`）—— 先前首项走 `parse_expression` ⇒ 在 `*` 上报
+    // "表达式里出现 Some(Star)" ✗。
+    let (first, mut next) = parse_star_or_expression(lexed, cursor)?;
     if lexed.lexemes.get(next) != Some(&Lexeme::Comma) {
+        if matches!(first, Expression::Starred(..)) {
+            return Err(CompileError::Syntax(
+                "starred expression must be in a list, tuple or set".to_owned(),
+            ));
+        }
         return Ok((first, next));
     }
     let mut items = vec![first];
@@ -280,6 +288,11 @@ pub(crate) fn parse_expression_list(
                 | Some(Lexeme::RightParen)
                 | Some(Lexeme::RightBracket)
                 | Some(Lexeme::RightBrace)
+                // **文件末尾没有换行**（task-47 ✓）：`compile("x,", "test", "exec")` 也要
+                // 收成单元素元组（官方 test_decorators.test_errors 的 sanity check）。
+                | Some(Lexeme::End)
+                | Some(Lexeme::Dedent)
+                | Some(Lexeme::Semicolon)
         ) {
             end = comma_span;
             break;

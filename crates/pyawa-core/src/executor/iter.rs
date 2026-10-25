@@ -533,6 +533,9 @@ pub(crate) fn contains(
         return Ok(false);
     }
     if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
+        // 不可哈希的项 ⇒ 参照的 TypeError ✓（task-46；`[1] in d` ⇒
+        // `cannot use 'list' as a dict key (unhashable type: 'list')` ✓）。
+        crate::builtin::dict::reject_unhashable_key(instance, item)?;
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         for (key, _) in object.entries() {

@@ -13,7 +13,10 @@
 //! - **方法注解引用类型参数**（task-24 收口 ②，两层闭包 ✓）：类体捕获 `T`、方法注解单元再从
 //!   类体捕获（`T` ＋ `__classdict__` ✓），注解表达式按**类字典优先**求值 ✓；方法体引用 `T` 也通 ✓；
 //! - **泛型别名 `type Y[T] = …`**（task-24 收口 ② ✓）：壳 ＋ thunk 闭包（`LOAD_DEREF T` ✓）；
-//! - **如实范围** ✗：`*Ts`／`**P`／泛型函数的默认值参数／泛型类的类关键字／外壳引用外层局部
+//! - **泛型类的类关键字／`**` 解包**（round 21／task-45 ✓）：`class C[T](metaclass=M)` 等
+//!   按参照 `CALL_KW` 形状发射并落地运行期语义（`type(C) is M`／`__bases__`／`__parameters__`／
+//!   `__orig_bases__`／`C[int]` 全部对拍 ✓，见 `generic_class_with_metaclass_agrees_with_the_reference`）；
+//! - **如实范围** ✗：`*Ts`／`**P`／泛型函数的默认值参数／外壳引用外层局部
 //!   **一律当场报未接线** ✓（不静默丢语义 ✓，见末尾用例 ✓）。
 
 use pyawa_core::compile::{compile, CheckTier, CompileError, Mode};
@@ -127,14 +130,52 @@ fn generic_type_params_in_body_and_class_annotations_agree_with_the_reference() 
 }
 
 /// **未接线的形态必须当场报错** ✗（`BC-59` 的口径：不许静默丢 `[T]` 的语义 ✓）。
+/// **泛型类 ＋ 类关键字**（round 21／task-45 ✓）：`class C[T](metaclass=M)` 按参照落地
+/// （`CALL_KW` 形状；本轮之前这一档是"当场报未接线"，现在是真能力 ✓）。参照 `python3` 3.14.4
+/// 跑同一段脚本逐行取得（`type(C) is M`／基类／类型参数／`__parameters__`／`__orig_bases__`／
+/// `C[int]` 的 origin／实例化）。
+const GENERIC_CLASS_METACLASS_SCRIPT: &str = r#"import _typing
+
+class M(type):
+    pass
+
+
+class C[T](metaclass=M):
+    pass
+
+
+print("class_is_M", type(C) is M)
+print("bases", [b.__name__ for b in C.__bases__])
+print("type_params", [p.__name__ for p in C.__type_params__])
+print("parameters", [p.__name__ for p in C.__parameters__])
+print("orig_bases", [b.__name__ for b in C.__orig_bases__])
+print("subscript_origin", C[int].__origin__ is C)
+print("instance_is_C", isinstance(C(), C))
+"#;
+
+/// 参照（`python3` 3.14.4 实测 ✓，逐行）。
+const GENERIC_CLASS_METACLASS_EXPECTED: &str = "class_is_M True\n\
+bases ['Generic']\n\
+type_params ['T']\n\
+parameters ['T']\n\
+orig_bases ['Generic']\n\
+subscript_origin True\n\
+instance_is_C True\n";
+
+#[test]
+fn generic_class_with_metaclass_agrees_with_the_reference() {
+    let stdout = run("generic-metaclass", GENERIC_CLASS_METACLASS_SCRIPT);
+    assert_eq!(stdout, GENERIC_CLASS_METACLASS_EXPECTED, "{stdout}");
+}
+
 #[test]
 fn unsupported_pep695_shapes_are_reported_not_guessed() {
-    // `[T: bound]`／`[T = default]` 已在收口 ① 落地 ✓（不再是未接线形态 ✓）；这里剩下的仍是
-    // 当场报错的那几档 ✓。
-    let cases: [(&str, &str); 4] = [
+    // `[T: bound]`／`[T = default]` 已在收口 ① 落地 ✓；泛型类的**类关键字**（`metaclass=`）
+    // 在 round 21（task-45）落地 ✓（语义见 `generic_class_with_metaclass_agrees_with_the_reference`）
+    // ⇒ 这里剩下的仍是当场报错的那几档 ✓。
+    let cases: [(&str, &str); 3] = [
         ("class C[*Ts]:\n    pass\n", "*Ts"),
         ("class C[**P]:\n    pass\n", "**P"),
-        ("class C[T](metaclass=M):\n    pass\n", "类关键字"),
         ("def f[T](x: T = 1):\n    return x\n", "默认值"),
     ];
     for (source, label) in cases {

@@ -26,6 +26,13 @@ pub(crate) fn comprehension_target_as_for_target(target: &ComprehensionTarget) -
                 .collect(),
             *span,
         ),
+        // **属性／下标目标**（task-45 ✓）：直接映射到 `ForTarget` 的同名形态（发射同口径 ✓）。
+        ComprehensionTarget::Attribute(object, name, span) => {
+            ForTarget::Attribute(Box::new(object.clone()), name.clone(), *span)
+        }
+        ComprehensionTarget::Subscript(object, key, span) => {
+            ForTarget::Subscript(Box::new(object.clone()), Box::new(key.clone()), *span)
+        }
     }
 }
 
@@ -52,13 +59,18 @@ pub(crate) fn collect_comprehension_target_names<'a>(
                 collect_comprehension_target_names(item, out);
             }
         }
+        // 属性／下标目标**不占名字槽**（不绑定局部 ✓）
+        ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => {}
     }
 }
 
 /// 一项推导式目标的跨度（`UNPACK_SEQUENCE` 的位点用 ✓）。
 pub(crate) fn comprehension_target_span_of(target: &ComprehensionTarget) -> Span {
     match target {
-        ComprehensionTarget::Name(_, span) | ComprehensionTarget::Group(_, span) => *span,
+        ComprehensionTarget::Name(_, span)
+        | ComprehensionTarget::Group(_, span)
+        | ComprehensionTarget::Attribute(_, _, span)
+        | ComprehensionTarget::Subscript(_, _, span) => *span,
     }
 }
 
@@ -144,6 +156,14 @@ impl Emitter {
                 "`*` 项只能出现在序列模式里（第 {} 行）",
                 span.line_start
             ))),
+            // **`as` 模式**（task-45 ✓）：照参照实测形状 —— 先 `COPY 1` 一份给子模式测，
+            // 子模式命中后再把**主语**绑到名字（`STORE` 弹掉那份 copy ✓）。
+            Pattern::As(inner, name, span) => {
+                self.emit_named(*span, "COPY", 1);
+                self.emit_pattern_test(inner, next_case, matched)?;
+                self.store_target(*span, name);
+                Ok(())
+            }
             // 捕获与通配**一定命中** ✓（没有判定指令 ✓）
             Pattern::Capture(_, _) | Pattern::Wildcard(_) => Ok(()),
             Pattern::Or(alternatives, span) => {
@@ -295,6 +315,14 @@ impl Emitter {
                     failure,
                 );
                 self.emit_named(*span, "NOT_TAKEN", 0);
+                Ok(())
+            }
+            // **`as` 模式**（task-45 ✓）：栈顶是待测值 ⇒ 先 `COPY 1` 给子模式，命中后
+            // 把原值 `STORE` 绑定 ✓。
+            Pattern::As(inner, name, span) => {
+                self.emit_named(*span, "COPY", 1);
+                self.emit_subpattern_test(inner, failure, on_match)?;
+                self.store_target(*span, name);
                 Ok(())
             }
             // 捕获：`STORE` 直接吃掉它 ✓（一定命中）；通配：`POP_TOP` ✓
@@ -994,6 +1022,17 @@ impl Emitter {
                         slot_index,
                         scaffold,
                     )?;
+                }
+                // **属性／下标目标**（task-45 ✓）：栈顶是这一格的值 ⇒ 对象（＋键）求值后存 ✓。
+                ComprehensionTarget::Attribute(object, name, span) => {
+                    self.emit_expression(object)?;
+                    let name_index = self.intern_name(name);
+                    self.emit_indexed(*span, "STORE_ATTR", name_index);
+                }
+                ComprehensionTarget::Subscript(object, key, span) => {
+                    self.emit_expression(object)?;
+                    self.emit_expression(key)?;
+                    self.emit_named(*span, "STORE_SUBSCR", 0);
                 }
             }
         }

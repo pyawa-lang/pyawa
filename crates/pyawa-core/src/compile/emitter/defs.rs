@@ -637,10 +637,63 @@ impl Emitter {
                 // 找不到定义类 ⇒ `import typing` 卡死 ✓）。
                 let name_const = self.intern_constant(Constant::Str(name.clone()));
                 self.emit_indexed(*span, "LOAD_CONST", name_const);
+                // **基类里有 `*解包`**（task-45 ✓）：`LOAD_CONST <名字>` 之后先把"名字"与
+                // 前导非星号基类收进列表，星号项 `LIST_EXTEND 1`、其后普通基类 `LIST_APPEND 1`，
+                // 最后 `CALL_INTRINSIC_1 6`（LIST_TO_TUPLE）—— 照参照 dis 逐条对拍 ✓。
+                let starred_bases = bases
+                    .iter()
+                    .any(|base| matches!(base, Expression::Starred(_, _)));
+                if starred_bases {
+                    let leading = bases
+                        .iter()
+                        .take_while(|base| !matches!(base, Expression::Starred(_, _)))
+                        .count();
+                    for base in &bases[..leading] {
+                        self.emit_expression(base)?;
+                    }
+                    self.emit_indexed(*span, "BUILD_LIST", 2 + leading);
+                    for base in &bases[leading..] {
+                        match base {
+                            Expression::Starred(value, _) => {
+                                self.emit_expression(value)?;
+                                self.emit_named(*span, "LIST_EXTEND", 1);
+                            }
+                            _ => {
+                                self.emit_expression(base)?;
+                                self.emit_named(*span, "LIST_APPEND", 1);
+                            }
+                        }
+                    }
+                    self.emit_named(*span, "CALL_INTRINSIC_1", 6);
+                    self.emit_class_keywords_ex(*span, keywords)?;
+                    self.emit_named(*span, "CALL_FUNCTION_EX", 0);
+                } else {
                 for base in bases {
                     self.emit_expression(base)?;
                 }
-                if keywords.is_empty() {
+                // **`**映射` 解包**（task-45 ✓）：照参照 dis 形状走 `CALL_FUNCTION_EX` ——
+                //   `LOAD_CONST <名字>; <基类…>; BUILD_TUPLE (2+bases); <关键字对…>;
+                //    BUILD_MAP n; 每个 **: <表达式>; DICT_MERGE 1; CALL_FUNCTION_EX`
+                //（普通路径的 `CALL`／`CALL_KW` 一个字节都不动 ✓）。
+                if keywords.iter().any(|(key, _)| key.is_empty()) {
+                    self.emit_indexed(*span, "BUILD_TUPLE", 2 + bases.len());
+                    let plain: Vec<&(String, Expression)> =
+                        keywords.iter().filter(|(key, _)| !key.is_empty()).collect();
+                    for (key, value) in &plain {
+                        let index = self.intern_constant(Constant::Str((*key).clone()));
+                        self.emit_indexed(*span, "LOAD_CONST", index);
+                        self.emit_expression(value)?;
+                    }
+                    self.emit_indexed(*span, "BUILD_MAP", plain.len());
+                    for (key, value) in keywords {
+                        if !key.is_empty() {
+                            continue;
+                        }
+                        self.emit_expression(value)?;
+                        self.emit_named(*span, "DICT_MERGE", 1);
+                    }
+                    self.emit_named(*span, "CALL_FUNCTION_EX", 0);
+                } else if keywords.is_empty() {
                     self.emit_indexed(*span, "CALL", 2 + bases.len());
                 // **套上装饰器**（逆序 ✓，与 `Def` 同口径 ✓）：此时类对象在 TOS ✓。
                 // **纠错** ✓（第 193 轮）：我一度把它改成 `CALL 1` ✗ —— 参照实测（`dis` ✓）就是
@@ -664,12 +717,43 @@ impl Emitter {
                     self.emit_indexed(*span, "LOAD_CONST", names_index);
                     self.emit_indexed(*span, "CALL_KW", 2 + bases.len() + keywords.len());
                 }
+                }
                 // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒
                 // "函数里定义类"当场撞"需要命名空间帧" ✓ —— 与处理器那两处同族 ✓）。
                 self.emit_store_name(*span, name);
                 // 收尾两条跟整段（与 `def` 同规则，实测）
                 self.epilogue_span = *span;
                 Ok(())
+    }
+
+    /// **类关键字＋`**` 解包的公共尾巴**（task-45 ✓）：栈上已有 `(callable, NULL, 参数元组)`；
+    /// 有 `**` 或关键字就 `BUILD_MAP`＋`DICT_MERGE`，一个关键字都没有就 `PUSH_NULL`
+    ///（"没有关键字"那一格；参照 `dis` 实测 ✓）。
+    fn emit_class_keywords_ex(
+        &mut self,
+        span: Span,
+        keywords: &[(String, Expression)],
+    ) -> Result<(), CompileError> {
+        if keywords.is_empty() {
+            self.emit_named(span, "PUSH_NULL", 0);
+            return Ok(());
+        }
+        let plain: Vec<&(String, Expression)> =
+            keywords.iter().filter(|(key, _)| !key.is_empty()).collect();
+        for (key, value) in &plain {
+            let index = self.intern_constant(Constant::Str((*key).clone()));
+            self.emit_indexed(span, "LOAD_CONST", index);
+            self.emit_expression(value)?;
+        }
+        self.emit_indexed(span, "BUILD_MAP", plain.len());
+        for (key, value) in keywords {
+            if !key.is_empty() {
+                continue;
+            }
+            self.emit_expression(value)?;
+            self.emit_named(span, "DICT_MERGE", 1);
+        }
+        Ok(())
     }
 
     /// **`def` 语句的发射** ✓（task-24 轮 2 的**纯搬运** ✗→✓，同上）。
@@ -1270,11 +1354,9 @@ impl Emitter {
         body: &[Statement],
         type_params: &[TypeParam],
     ) -> Result<(), CompileError> {
-        if !keywords.is_empty() {
-            return Err(CompileError::Unsupported(
-                "PEP 695 泛型类的类关键字（`metaclass=` 一族）尚未接线".to_owned(),
-            ));
-        }
+        // **类关键字／`**` 解包**（task-45 ✓）：照参照 dis 的两种形状
+        //（纯关键字 ⇒ `CALL_KW`；含 `**` ⇒ `BUILD_TUPLE` ＋ `BUILD_MAP`／`DICT_MERGE` ＋
+        // `CALL_FUNCTION_EX`，与普通类同口径）。
         // 装饰器先按**源码序**求值（与普通类同口径 ✓）
         let decorator_spans: Vec<Span> =
             decorators.iter().map(|decorator| decorator.span()).collect();
@@ -1442,6 +1524,41 @@ impl Emitter {
         shell.emit_indexed(*span, "LOAD_DEREF", shell.unit.nlocals);
         shell.emit_named(*span, "CALL_INTRINSIC_1", 10);
         let generic_base = shell.unit.varnames.len() - 1;
+        // **基类里有 `*解包`**（task-45 ✓）：照参照 dis —— `BUILD_LIST (2+前导基类)`；
+        // 星号项 `LIST_EXTEND 1`、其后普通基类 `LIST_APPEND 1`；末尾把**泛型基** `LIST_APPEND`；
+        // `CALL_INTRINSIC_1 6` 转元组 ⇒ 再走关键字／`**` 尾巴 ＋ `CALL_FUNCTION_EX`。
+        let starred_bases = bases
+            .iter()
+            .any(|base| matches!(base, Expression::Starred(_, _)));
+        if starred_bases {
+            shell.emit_indexed(*span, "STORE_FAST", generic_base);
+            let leading = bases
+                .iter()
+                .take_while(|base| !matches!(base, Expression::Starred(_, _)))
+                .count();
+            for base in &bases[..leading] {
+                shell.emit_expression(base)?;
+            }
+            shell.emit_indexed(*span, "BUILD_LIST", 2 + leading);
+            for base in &bases[leading..] {
+                match base {
+                    Expression::Starred(value, _) => {
+                        shell.emit_expression(value)?;
+                        shell.emit_named(*span, "LIST_EXTEND", 1);
+                    }
+                    _ => {
+                        shell.emit_expression(base)?;
+                        shell.emit_named(*span, "LIST_APPEND", 1);
+                    }
+                }
+            }
+            shell.emit_indexed(*span, "LOAD_FAST_BORROW", generic_base);
+            shell.emit_named(*span, "LIST_APPEND", 1);
+            shell.emit_named(*span, "CALL_INTRINSIC_1", 6);
+            shell.emit_class_keywords_ex(*span, keywords)?;
+            shell.emit_named(*span, "CALL_FUNCTION_EX", 0);
+            shell.emit_named(*span, "RETURN_VALUE", 0);
+        } else {
         if bases.is_empty() {
             // 参照的窥孔：无显式基类时打成 `STORE_FAST_LOAD_FAST(.generic_base,.generic_base)` ✓
             if generic_base < 16 {
@@ -1461,8 +1578,42 @@ impl Emitter {
             }
             shell.emit_indexed(*span, "LOAD_FAST_BORROW", generic_base);
         }
-        shell.emit_indexed(*span, "CALL", 2 + bases.len() + 1);
+        if keywords.iter().any(|(key, _)| key.is_empty()) {
+            // `**` 解包路径：`BUILD_TUPLE (2 + bases + 1)`（func／名字／基类…／泛型基）
+            shell.emit_indexed(*span, "BUILD_TUPLE", 2 + bases.len() + 1);
+            let plain: Vec<&(String, Expression)> =
+                keywords.iter().filter(|(key, _)| !key.is_empty()).collect();
+            for (key, value) in &plain {
+                let index = shell.intern_constant(Constant::Str((*key).clone()));
+                shell.emit_indexed(*span, "LOAD_CONST", index);
+                shell.emit_expression(value)?;
+            }
+            shell.emit_indexed(*span, "BUILD_MAP", plain.len());
+            for (key, value) in keywords {
+                if !key.is_empty() {
+                    continue;
+                }
+                shell.emit_expression(value)?;
+                shell.emit_named(*span, "DICT_MERGE", 1);
+            }
+            shell.emit_named(*span, "CALL_FUNCTION_EX", 0);
+        } else if keywords.is_empty() {
+            shell.emit_indexed(*span, "CALL", 2 + bases.len() + 1);
+        } else {
+            // 纯关键字：`…; <关键字值…>; LOAD_CONST <名字元组>; CALL_KW (2 + bases + 1 + kw)`
+            for (_, value) in keywords {
+                shell.emit_expression(value)?;
+            }
+            let names: Vec<Constant> = keywords
+                .iter()
+                .map(|(key, _)| Constant::Str(key.clone()))
+                .collect();
+            let names_index = shell.intern_constant(Constant::Tuple(names));
+            shell.emit_indexed(*span, "LOAD_CONST", names_index);
+            shell.emit_indexed(*span, "CALL_KW", 2 + bases.len() + 1 + keywords.len());
+        }
         shell.emit_named(*span, "RETURN_VALUE", 0);
+        }
         let wrapper = shell.finish_shell()?;
         let wrapper_index = self.intern_constant(Constant::Code(Box::new(wrapper)));
         self.emit_indexed(*span, "LOAD_CONST", wrapper_index);

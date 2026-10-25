@@ -28,6 +28,16 @@ pub(crate) fn parse_tuple_target_tail(
             *last_span = lexed.spans[*cursor - 1];
             break;
         }
+        // **裸元组表达式语句**（task-47 ✓）：`x,`／`*a,` 后面**没有** `=` ⇒ 这是表达式
+        // 语句（参照合法）⇒ 就此收尾 ✓（调用方会退回表达式通道；先前在这里解析下一个元素
+        // ⇒ 在行尾报"表达式里出现 Some(Newline)" ✗，官方 test_decorators.test_errors 卡它）。
+        if matches!(
+            tokens.get(*cursor),
+            None | Some(Lexeme::Newline) | Some(Lexeme::Semicolon) | Some(Lexeme::End)
+        ) {
+            *last_span = lexed.spans[*cursor - 1];
+            break;
+        }
         // `*目标`（星号只允许一个 ✓，在发射期核）
         let starred = tokens.get(*cursor) == Some(&Lexeme::Star);
         if starred {
@@ -206,6 +216,29 @@ pub(crate) fn parse_comprehension_target_item(
     cursor: usize,
 ) -> Result<(ComprehensionTarget, usize), CompileError> {
     match lexed.lexemes.get(cursor) {
+        // **属性／下标目标**（task-45 ✓）：`for (l[0], l) in …`（官方 test_listcomps:433）。
+        // 只取"原子＋后缀链"（`parse_atom` 不碰顶层 `in` ✓），再按形状转目标 ✓。
+        Some(Lexeme::Name(_))
+            if matches!(
+                lexed.lexemes.get(cursor + 1),
+                Some(Lexeme::Dot) | Some(Lexeme::LeftBracket)
+            ) =>
+        {
+            let (expression, next) = parse_atom(lexed, cursor)?;
+            match expression {
+                Expression::Attribute(object, name, span) => Ok((
+                    ComprehensionTarget::Attribute(*object, name, span),
+                    next,
+                )),
+                Expression::Subscript(object, key, span) => Ok((
+                    ComprehensionTarget::Subscript(*object, *key, span),
+                    next,
+                )),
+                other => Err(CompileError::Syntax(format!(
+                    "推导式目标只接名字／属性／下标／括号组，实际 {other:?}"
+                ))),
+            }
+        }
         Some(Lexeme::Name(name)) => Ok((
             ComprehensionTarget::Name(name.clone(), lexed.spans[cursor]),
             cursor + 1,
@@ -272,7 +305,10 @@ pub(crate) fn parse_comprehension_target_group(
 /// 一项推导式目标的跨度（`UNPACK_SEQUENCE` 那些位点用）。
 pub(crate) fn comprehension_target_span(target: &ComprehensionTarget) -> Span {
     match target {
-        ComprehensionTarget::Name(_, span) | ComprehensionTarget::Group(_, span) => *span,
+        ComprehensionTarget::Name(_, span)
+        | ComprehensionTarget::Group(_, span)
+        | ComprehensionTarget::Attribute(_, _, span)
+        | ComprehensionTarget::Subscript(_, _, span) => *span,
     }
 }
 

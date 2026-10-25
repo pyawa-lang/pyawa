@@ -950,7 +950,9 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
             //   （先试解析一个表达式：紧接着 `for` 就是它 ✓，否则原样回退到元组／分组那条路 ✓）
             {
                 let saved = cursor;
-                if let Ok((element, after_element)) = parse_expression(lexed, cursor) {
+                // **生成器表达式的元素允许裸海象**（task-45 ✓）：`(c := i + a for i in b)`
+                // 合法（官方 `test_named_expressions.py:747`）；`parse_condition` 认识裸海象 ✓。
+                if let Ok((element, after_element)) = parse_condition(lexed, cursor) {
                     if { reject_async_comprehension(lexed, after_element)?; matches!(lexed.lexemes.get(after_element), Some(Lexeme::For)) } {
                         let (target, after_target) =
                             parse_comprehension_target(lexed, after_element + 1)?;

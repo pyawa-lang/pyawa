@@ -1525,6 +1525,12 @@ enum ComprehensionTarget {
     /// 一层组：`(a, b)`／`[off]`／裸的 `a, b` —— 位点取**那一层**的跨度 ✓
     /// （带括号的取括号段含括号 ✓，裸的取首项起点到末项终点 ✓；`UNPACK_SEQUENCE` 用 ✓）。
     Group(Vec<ComprehensionTarget>, Span),
+    /// **属性目标**（task-45 ✓）：`for (obj.attr, x) in …` —— 参照 `dis` 给
+    /// `LOAD obj; STORE_ATTR`（值先由 `UNPACK_SEQUENCE` 压好 ✓）。
+    Attribute(Expression, String, Span),
+    /// **下标目标**（task-45 ✓）：`for (l[0], l) in [[1, 2]]`（官方 test_listcomps:433）——
+    /// 参照 `dis`：`LOAD l; LOAD_SMALL_INT 0; STORE_SUBSCR` ✓。
+    Subscript(Expression, Expression, Span),
 }
 
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
@@ -1543,6 +1549,8 @@ impl ComprehensionTarget {
             ComprehensionTarget::Group(items, _) => {
                 items.iter().flat_map(|item| item.names()).collect()
             }
+            // 属性／下标目标**不声明局部**（它们不绑定名字；容器／键是读取 ✓）
+            ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => Vec::new(),
         }
     }
 }
@@ -1770,6 +1778,7 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
                         ComprehensionTarget::Group(..) => {
                             targets.extend(generator.target.names().into_iter().map(str::to_owned));
                         }
+                        ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => {}
                     }
                 }
                 let mut inner = Vec::new();
@@ -1936,6 +1945,9 @@ enum Pattern {
     Wildcard(Span),
     /// 或模式（`case "a" | "b":`）—— **备选里不许有捕获**（参照也是语法错）。
     Or(Vec<Pattern>, Span),
+    /// **`as` 模式**（task-45 ✓）：`case A.y as z:`／`case [1] as z:` —— 子模式测完后再把
+    /// 主语绑到名字 ✓（参照 `dis`：`COPY 1` ＋ 子模式 ＋ `STORE` ✓）。
+    As(Box<Pattern>, String, Span),
     /// **序列模式**（task-37）：`case [a, b, *rest]:`／`case (a, b):`（括号元组同形）。
     ///
     /// `items` 按**书写顺序**；星号项是 [`Pattern::Star`] 包着的捕获／通配 ✓。

@@ -165,6 +165,8 @@ pub(crate) fn subscript_get(
         return Ok(value);
     }
     if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
+        // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46；本层 dict 不哈希 ⇒ 必须显式拦 ✗）。
+        crate::builtin::dict::reject_unhashable_key(instance, key)?;
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息
@@ -370,6 +372,11 @@ pub(crate) fn subscript_set(
         && instance.type_lookup(container_type, "__setitem__")
             == instance.type_lookup(builtin_type(instance, "dict"), "__setitem__")
     {
+        // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46）；`value` 的接管契约在错误路上要还掉 ✓。
+        if let Err(error) = crate::builtin::dict::reject_unhashable_key(instance, key) {
+            release(instance, value);
+            return Err(error);
+        }
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         let position = object

@@ -1046,6 +1046,14 @@ fn declare_comprehension_target(emitter: &mut Emitter, target: &ComprehensionTar
                 declare_comprehension_target(emitter, item);
             }
         }
+        // **属性／下标目标**（task-45 ✓）：不声明局部；容器／键是**读** ⇒ 预登记名字 ✓。
+        ComprehensionTarget::Attribute(object, _, _) => {
+            pre_intern_expression(emitter, object);
+        }
+        ComprehensionTarget::Subscript(object, key, _) => {
+            pre_intern_expression(emitter, object);
+            pre_intern_expression(emitter, key);
+        }
     }
 }
 
@@ -2110,6 +2118,11 @@ fn pre_intern_pattern(emitter: &mut Emitter, pattern: &Pattern) {
             }
         }
         Pattern::Star(inner, _) => pre_intern_pattern(emitter, inner),
+        // **`as` 模式**（task-45 ✓）：子模式照做，绑定名要登记成局部 ✓。
+        Pattern::As(inner, name, _) => {
+            pre_intern_pattern(emitter, inner);
+            pre_intern_target(emitter, name);
+        }
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }
@@ -2127,6 +2140,10 @@ fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
             }
         }
         Pattern::Value(_, _) => {}
+        Pattern::As(inner, name, _) => {
+            collect_pattern_locals(emitter, inner);
+            declare_local(emitter, name);
+        }
         Pattern::Class {
             positional, keywords, ..
         } => {

@@ -134,6 +134,25 @@ pub(crate) fn parse_statements(
                 decorators_first_line = Some(lexed.spans[*cursor].line_start);
             }
             *cursor += 1;
+            // **语句关键字不能当装饰器表达式起头**（task-47 ✓）：`@pass`／`@import sys`／
+            // `@return` 参照都是 SyntaxError（官方 `test_decorators.test_errors` 的 sanity 组）。
+            // 本层关键字不少仍是 `Name` 词素 ⇒ 这里显式挡掉；表达式关键字（`lambda`／`not`／
+            // `await`／`None/True/False`）不在此列 ✓。
+            if let Some(Lexeme::Name(word)) = tokens.get(*cursor) {
+                if matches!(
+                    word.as_str(),
+                    "pass" | "import" | "from" | "def" | "class" | "return" | "raise"
+                        | "yield" | "if" | "elif" | "else" | "while" | "for" | "in" | "try"
+                        | "except" | "finally" | "with" | "as" | "assert" | "del" | "global"
+                        | "nonlocal" | "break" | "continue"
+                ) {
+                    let span = lexed.spans[*cursor];
+                    return Err(CompileError::Syntax(format!(
+                        "装饰器后面要一个表达式，实际关键字 {word:?}（第 {} 行）",
+                        span.line_start
+                    )));
+                }
+            }
             // **装饰器是任意表达式**（PEP 614）：`@False or null`／`@d := null`／`@lambda f: …`／
             // `@[…] [1]` 都合法（官方 `test_grammar.py:647-655`）⇒ 走 `parse_condition`
             // （它认识裸海象 ✓；`parse_expression` 不吃裸海象 ✗ —— 先前在 `@d := null` 上报
@@ -671,6 +690,28 @@ fn parse_statement_class(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fun
                             }
                             Some(Lexeme::Comma) => {
                                 *cursor += 1;
+                            }
+                            // **`*基类` 解包**（task-45 ✓）：`class A(0, *range(1, 8), **d)`／
+                            // `class C2[T](*bases, **kwargs)`（官方 test_class/test_type_params）。
+                            // 基类表里存成 `Starred` 项 ⇒ 发射器走 `BUILD_LIST`／`LIST_EXTEND`
+                            // ＋ `CALL_INTRINSIC_1 6`（照参照 dis ✓）。
+                            Some(Lexeme::Star) => {
+                                let star_span = lexed.spans[*cursor];
+                                let (value, after) = parse_expression(lexed, *cursor + 1)?;
+                                let span = star_span.to(value.span());
+                                bases.push(Expression::Starred(Box::new(value), span));
+                                *cursor = after;
+                                continue;
+                            }
+                            // **`**映射` 解包**（task-45 ✓）：`class A(**d):`／
+                            // `class C[T](Base, **kwargs):`（官方 test_class/test_type_params）。
+                            // 发射走 `CALL_FUNCTION_EX` ＋ `BUILD_MAP`／`DICT_MERGE`（照参照 dis ✓）；
+                            // 这里用**空 key** 当"解包项"的哨兵（发射器按它分流）。
+                            Some(Lexeme::DoubleStar) => {
+                                let (value, after) = parse_expression(lexed, *cursor + 1)?;
+                                *cursor = after;
+                                class_keywords.push((String::new(), value));
+                                continue;
                             }
                             _ => {
                                 // **类关键字**（第 157 轮）：`class C(B, metaclass=M):` ✓
@@ -2613,6 +2654,7 @@ fn parse_statement_star(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<
     let tokens = &lexed.lexemes;
     match tokens.get(*cursor) {
         Some(Lexeme::Star) => {
+                let statement_start = *cursor;
                 let star_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let (first, next) = parse_expression(lexed, *cursor)?;
@@ -2622,12 +2664,14 @@ fn parse_statement_star(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<
                 let mut last_span = first_span;
                 parse_tuple_target_tail(lexed, cursor, &mut targets, &mut last_span)?;
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
-                    let span = lexed.spans.get(*cursor).copied();
-                    return Err(CompileError::Syntax(format!(
-                        "元组目标之后要 `=`，实际 {:?}（第 {} 行）",
-                        tokens.get(*cursor),
-                        span.map(|span| span.line_start).unwrap_or(0)
-                    )));
+                    // **`*a,`／`*a, b` 是合法的元组表达式语句**（task-47 ✓；参照
+                    // `python3 -c "*a,"` 合法）⇒ 退回表达式通道按元组显示收 ✓。
+                    let (expression, next) = parse_expression_list(lexed, statement_start)?;
+                    *cursor = next;
+                    let span = expression.span();
+                    statements.push(Statement::Expression(expression, span));
+                    expect_statement_end(lexed, cursor)?;
+                    return Ok(StatementFlow::Continue);
                 }
                 *cursor += 1;
                 let (value, next) = parse_value_expression(lexed, *cursor)?;

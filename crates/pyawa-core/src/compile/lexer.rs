@@ -269,6 +269,35 @@ pub(super) fn lex_bytes_escape(characters: &[char], position: usize) -> Result<(
     }
 }
 
+/// **标识符继续字符**（PEP 3131 的 XID_Continue 近似，task-45 ✓）：字母数字／下划线之外，
+/// 还包括**组合记号**与**变体选择符**那批（官方 `test_unicode_identifiers.py:10` 的
+/// `x` 后跟 U+E0100 正是变体选择符 —— Rust 的 `char::is_alphanumeric` 不含它 ✗ ⇒ 先前
+/// 在词法期报"不认识的字符" ✓）。这里按**常用区间**收：覆盖组合用记号（Mn/Mc/Me 的主要块）
+/// 与变体选择符；XID_Start 仍用 `is_alphabetic`（字母面足够）。
+fn is_identifier_continue(character: char) -> bool {
+    if character == '_' || character.is_alphanumeric() {
+        return true;
+    }
+    matches!(
+        character as u32,
+        0x0300..=0x036F      // Combining Diacritical Marks
+            | 0x0483..=0x0489 // Cyrillic combining
+            | 0x0591..=0x05BD | 0x05BF | 0x05C1..=0x05C2 | 0x05C4..=0x05C5 | 0x05C7
+            | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670
+            | 0x06D6..=0x06DC | 0x06DF..=0x06E4 | 0x06E7..=0x06E8 | 0x06EA..=0x06ED
+            | 0x0900..=0x0903 | 0x093A..=0x093C | 0x093E..=0x094F | 0x0951..=0x0957
+            | 0x0962..=0x0963 | 0x0981..=0x0983 | 0x09BC | 0x09BE..=0x09CD
+            | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
+            | 0x1AB0..=0x1AFF // Combining Diacritical Marks Extended
+            | 0x1DC0..=0x1DFF // Combining Diacritical Marks Supplement
+            | 0x20D0..=0x20F0 // Combining Diacritical Marks for Symbols
+            | 0x302A..=0x302F | 0x3099..=0x309A
+            | 0xFE00..=0xFE0F // Variation Selectors
+            | 0xFE20..=0xFE2F // Combining Half Marks
+            | 0xE0100..=0xE01EF // Variation Selectors Supplement
+    )
+}
+
 pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
     let characters: Vec<char> = source.chars().collect();
     let mut index = 0usize;
@@ -650,7 +679,7 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             index += 1;
                         }
                         None => {
-                            return Err(CompileError::Syntax("字符串没有收尾引号".to_owned()))
+                            return Err(CompileError::Syntax(format!("字符串没有收尾引号（第 {line} 行，列 {}）", column!(index))))
                         }
                     }
                 }
@@ -833,29 +862,60 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                                     break;
                                 }
                                 // **转义花括号**：在插值**之外**成对出现时是字面量 ✓（不改变深度 ✓）
-                                Some('{') if brace_depth == 0 && characters.get(index + 1) == Some(&'{') => {
+                                Some('{') if prefix_has_f && brace_depth == 0 && characters.get(index + 1) == Some(&'{') => {
                                     contents.push('{');
                                     contents.push('{');
                                     index += 2;
                                 }
-                                Some('}') if brace_depth == 0 && characters.get(index + 1) == Some(&'}') => {
+                                Some('}') if prefix_has_f && brace_depth == 0 && characters.get(index + 1) == Some(&'}') => {
                                     contents.push('}');
                                     contents.push('}');
                                     index += 2;
                                 }
                                 Some('{') => {
-                                    brace_depth += 1;
+                                    // **普通字符串里的 `{`／`}` 是字面量**（task-45 ✓）：
+                                    // 花括号/引号嵌套那套只对 **f-string** 成立；先前不分前缀 ⇒
+                                    // 普通串里的 `{` 把深度顶成 1 ⇒ 收尾引号认不出 ⇒
+                                    // "字符串没有收尾引号"（官方 test_fstring.py 的测试数据串 ✗）。
+                                    if prefix_has_f {
+                                        brace_depth += 1;
+                                    }
                                     contents.push('{');
                                     index += 1;
                                 }
                                 Some('}') => {
-                                    brace_depth = brace_depth.saturating_sub(1);
+                                    if prefix_has_f {
+                                        brace_depth = brace_depth.saturating_sub(1);
+                                    }
                                     contents.push('}');
                                     index += 1;
                                 }
+                                // **插值表达式里的注释**（task-45 ✓，PEP 701）：`# 到行尾`，
+                                // 注释里的引号**不是**字符串起始 ✓。动因：官方 test_fstring.py:770
+                                // 的三引号 f-string 里 `{ # the following operation it's \n3 * 2}`
+                                // —— 先前把注释里的 `'` 当内层字符串开头 ⇒ 一路吞到 109 行之后的
+                                // 反斜杠 ⇒ 报"不认识的字符" ✗。
+                                // **启发式**：`#` 后紧跟空白/换行才算注释（格式说明里的 `#` 是**格式
+                                // 标志**：`f'{x:#x}'`／`f'{10:#{1}0x}'` ⇒ `#` 后不是空白 ⇒ 不当注释 ✓）。
+                                Some('#')
+                                    if prefix_has_f && brace_depth > 0
+                                        && characters
+                                            .get(index + 1)
+                                            .is_some_and(|next| next.is_whitespace()) =>
+                                {
+                                    while let Some(current) = characters.get(index) {
+                                        contents.push(*current);
+                                        index += 1;
+                                        if *current == '\n' {
+                                            line += 1;
+                                            line_start_index = index;
+                                            break;
+                                        }
+                                    }
+                                }
                                 // **插值里的嵌套字符串**：原样吞到它的收尾引号 ✓
                                 Some(current)
-                                    if brace_depth > 0 && (*current == '\'' || *current == '"') =>
+                                    if prefix_has_f && brace_depth > 0 && (*current == '\'' || *current == '"') =>
                                 {
                                     let inner_quote = *current;
                                     contents.push(*current);
@@ -911,9 +971,10 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                                     index += 1;
                                 }
                                 None => {
-                                    return Err(CompileError::Syntax(
-                                        "字符串没有收尾引号".to_owned(),
-                                    ))
+                                    return Err(CompileError::Syntax(format!(
+                                        "字符串没有收尾引号（第 {line} 行，列 {}）",
+                                        column!(index)
+                                    )))
                                 }
                             }
                         }
@@ -1048,7 +1109,7 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                 let start = column!(index);
                 let start_index = index;
                 while index < characters.len()
-                    && (characters[index].is_alphanumeric() || characters[index] == '_')
+                    && is_identifier_continue(characters[index])
                 {
                     index += 1;
                 }

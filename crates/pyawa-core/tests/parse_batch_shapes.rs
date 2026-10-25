@@ -745,3 +745,44 @@ fn task42_annotation_expressions_evaluate_like_references() {
         "`-.01j` 的折叠形状（照 python3 3.14.4，实部负零）"
     );
 }
+
+// --------------------------------------------------------------------------- #
+// task-45：剩余 10 条非 surrogate 语法缺口
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn task45_syntax_gaps_compile() {
+    let cases: &[&str] = &[
+        // `class A(**d)`／`*基类`／泛型类 `**kwargs`（test_class／test_type_params）
+        "d = {}\nclass A(**d):\n    pass\n",
+        "class A(0, *range(1, 8), **{}):\n    pass\n",
+        "bases = (object,)\nclass C[T](*bases, **{}):\n    pass\n",
+        // f-string：注释（PEP 701）、嵌套引号、格式说明里的 `#`（test_fstring／test_xml_etree）
+        "x = 1\nf'''\n# 注释\n{x}'''\n",
+        "x = 1\nf'{x:#x}'\n",
+        "name = 'a'\nvalue = 1\nchildren = []\nf\"{name}={value or ','.join(c.tag.split('}')[-1] for c in children)}\"\n",
+        // 推导式目标含下标（test_listcomps）
+        "def f():\n    l = [None]\n    return [1 for (l[0], l) in [[1, 2]]]\n",
+        // 值模式 `case A.y as z`、带符号／复数常量模式（test_patma）
+        "class A:\n    y = 1\nmatch 1:\n    case A.y as z:\n        pass\n    case (0 as w) | (1 as w) if w:\n        pass\n    case -1:\n        pass\n    case 0 + 0j:\n        pass\n",
+        // `for x in *a, *b, *c:`（test_grammar:1390）
+        "a = [1]\nb = [2]\nc = [3]\nfor x in *a, *b, *c:\n    pass\n",
+        // 生成器表达式的元素是裸海象（test_named_expressions:747）
+        "a = 1\nb = [1, 2]\ng = (c := i + a for i in b)\n",
+        // 非 BMP／组合类标识符（test_unicode_identifiers:10）
+        "x\u{e0100} = 4\n",
+        // **裸元组表达式语句**（task-47 ✓）：`x,`／`x, y`／`*a,`（参照都合法；与
+        // `r.code, r.msg == 200, "OK"` 同一条表达式语句路径 ✓）
+        "x = 1\nx,\n",
+        "x = 1\ny = 2\nx, y\n",
+        "a = [1, 2]\n*a,\n",
+        "a = [1, 2]\nb = [3]\n*a, b\n",
+        // 与"单元素元组**目标**"区分：`x, = (1,)` 仍是赋值（不是表达式语句）
+        "x, = (1,)\nassert x == 1\n",
+    ];
+    for source in cases {
+        if let Err(error) = compile(source, "probe.py", Mode::PurePython, CheckTier::Shallow, 0) {
+            panic!("{source:?} 编不过：{error:?}");
+        }
+    }
+}

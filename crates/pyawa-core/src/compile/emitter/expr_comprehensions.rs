@@ -276,6 +276,18 @@ impl Emitter {
                                     scaffold,
                                 )?;
                             }
+                            // **属性／下标目标**（task-45 ✓，内联路径）：栈顶是本次迭代的值 ⇒
+                            // 对象（＋键）求值后 `STORE_ATTR`／`STORE_SUBSCR` ✓（不占名字槽 ✓）。
+                            ComprehensionTarget::Attribute(object, name, target_span) => {
+                                self.emit_expression(object)?;
+                                let name_index = self.intern_name(name);
+                                self.emit_indexed(*target_span, "STORE_ATTR", name_index);
+                            }
+                            ComprehensionTarget::Subscript(object, key, target_span) => {
+                                self.emit_expression(object)?;
+                                self.emit_expression(key)?;
+                                self.emit_named(*target_span, "STORE_SUBSCR", 0);
+                            }
                         }
                     }
                     // 最内层：条件 → 元素
