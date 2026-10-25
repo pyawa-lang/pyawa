@@ -1850,3 +1850,32 @@
 - **下一轮（S2a 起）**：按审计顺序 S2a（`scalars.rs`/`alloc.rs`/`accessors.rs`/`bootstrap.rs`/`state.rs`/`quote.rs`/`representations.rs`/
   `constructors.rs`：`new_wtf8`/`wtf8_of`，`text_of` 保留合法视图）→ S2b（lexer/AST/Constant/emitter/pyac）→ S2c → S3a → S3b → S3e；
   §7 六问需用户拍板后再动 S2a 代码（本笔只落 S1 与计划）。
+
+---
+
+## round 23（会话 10 · M6 续）落地 ✓ —— P3-38 S2a-1：`StrObject` 存储升 WTF-8 表示（零行为改动）
+
+- **口径**：`HEAD`（本笔前）＝`b9061db`（`dev`，round 22）；工作区起始干净；`check.py` 14/14。按 round 22 台账 §7 裁定执行。
+- **落地（S2a 第一片，写域严格限定）**：
+  1. `builtin_objects/scalars.rs`：新增 `pub enum StrRepr { Utf8(String), Wtf8(Vec<u8>) }`；`StrObject` 载荷改 `repr: StrRepr`
+     （**手写**而非 `py_object!`：既有 8 处 `StrObject::new(ty, String)` 签名保持不变；结构体仍 `#[repr(C)]`＋`header` 首字段＋同形 dealloc）。
+     `new(ty, String)` ⇒ `Utf8`；`new_wtf8(ty, bytes) -> Option<Self>`（`wtf8::validate` 失败 ⇒ None；**合法 UTF-8 字节仍存 `Utf8`** ⇒ 零行为改动）；
+     `value() -> &str` 保留（`Wtf8` 分支 panic 守卫，注明 S2a 生产路径不构造）；新增 `wtf8_bytes() -> &[u8]`（两分支总可用）、
+     `as_utf8() -> Option<&str>`（Wtf8⇒None）、`repr()` 诊断、`is_empty()` 覆盖两分支。
+  2. `instance/alloc.rs`：`Instance::new_str_wtf8(&self, bytes) -> Option<NonNull<Header>>`（非法 WTF-8 ⇒ None、空串走空串单例）。
+  3. `instance/accessors.rs`：`Instance::wtf8_of(&self, object) -> Option<&[u8]>`（仅 `str`；两种表示都给字节）。
+  4. **唯一允许的行为改动点（点名）**：`Instance::text_of` 从 `value()` 改 `as_utf8()` ⇒ **WTF-8 表示给 None**（先前会 panic）；
+     合法 UTF-8 路径结果逐字节不变；S2a 生产路径不构造 WTF-8 表示 ⇒ 实际无可观测变化。
+- **验收（全 ✓）**：新 `crates/pyawa-core/tests/str_wtf8.rs` **8 passed**（旧面不变／空串单例同指针／合法 UTF-8 留在 Utf8／
+  孤立代理 `b"a\xED\xA0\x80b"` ⇒ `wtf8_of` 原字节＋`text_of`=None／`#[should_panic]` 证明 `value()` 守卫／多种 WTF-8 形状字节往返／
+  非法 WTF-8 六类逐条 None／非 str ⇒ 两个访问器 None）；`--test wtf8` 13 passed；**红线 `--test compile` 逐字节 4 passed**；
+  `-p pyawa-core` 全量 0 failed；`check --workspace --all-targets` 0 warning；`check.py` 14/14。
+- **数字**：本轮零行为改动（新表示分支尚未被生产路径构造），survey 沿用 round 21/22 基线：可编译 **367/397＝92.4%**、跑通 9/397、
+  语法错 30（全 surrogate）、判据① **477/628＝76.0%**、语料 407／新差异 0（MS-14 407/407）。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **5044s**）：① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（31s）；
+  ③ `cargo test --workspace` **全部测试绿**（533s；含 `str_wtf8` 8／`wtf8` 13）；④ `check.py` **14/14**（3s）；⑤ `stability.py`（1586s）；
+  ⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2077s）；⑦ 夹具（0s）；⑧ 语料下限 407/112；⑨ `conformance` **5 passed**（404s）；
+  ⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（410s）。
+- **下一轮（S2a-2/S2b）**：S2a-2＝按审计 §2.3 把 **必须 surrogate-aware** 的调用点分批迁到 `wtf8_bytes()`/`as_utf8()`（不改语义，
+  逐批提交）；S2b＝lexer 转义/AST/Constant/emitter/pyac 走 WTF-8（须过 compile 逐字节＋`lib_compile`＝epic 编译闸）；
+  之后 S2c→S3a（codecs，解锁 os_helper）→S3b（fs/io/argv/ABI）→S3e（同步回归）→ 才能报 M6 收口。

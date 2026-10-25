@@ -42,11 +42,36 @@ py_object! {
     }
 }
 
-py_object! {
-    /// `str` 的实例。*临时*：载荷是 Rust 字符串；字符层面的一致性随 `CM-13` 的 Unicode 数据补。
-    pub struct StrObject {
-        /// 内容（UTF-8）。
-        value: String,
+/// **`str` 的存储表示**（P3-38 S2a）：UTF-8 里加一层"已校验的 WTF-8 字节"分支。
+///
+/// S2a 只是**把存储升上来**（零行为改动）：现有生产路径仍只构造 [`StrRepr::Utf8`] ✓；
+/// [`StrRepr::Wtf8`] 只在显式调用 `Instance::new_str_wtf8` 时出现（测试／S2b 起才大面积用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StrRepr {
+    /// **合法 UTF-8**（现有形态；`&str` 视图可直接给 ✓）。
+    Utf8(String),
+    /// **已校验的 WTF-8 字节**（可含孤立代理；**没有** `&str` 视图 ✓）。
+    Wtf8(Vec<u8>),
+}
+
+/// `str` 的实例（P3-38 S2a：载荷升成能装 WTF-8 的表示）。
+///
+/// 手写而不用 `py_object!` 的原因：`py_object!` 生成的 `new(ty, String)` 是**既有 8 处调用点**
+/// 依赖的签名（`executor/*`、`bootstrap` 等），而本轮**不改那些调用点** ⇒ 这里手写 `new` 保持
+/// **同签名**（`String` → [`StrRepr::Utf8`]），另给 [`StrObject::new_wtf8`] 走新分支 ✓。
+/// 结构体形状仍守 `OM-5`：`#[repr(C)]`、`header` 是第一字段 ✓。
+#[repr(C)]
+pub struct StrObject {
+    /// **OM-5**：头部必须是第一个字段。
+    pub header: crate::Header,
+    /// 内容表示（UTF-8 或 WTF-8）。
+    repr: StrRepr,
+}
+
+// SAFETY: 上面的结构体是 `#[repr(C)]`，且 `header` 是第一个字段（OM-5）。
+unsafe impl crate::PyObject for StrObject {
+    fn header(&self) -> &crate::Header {
+        &self.header
     }
 }
 
@@ -821,13 +846,84 @@ impl FloatObject {
 }
 
 impl StrObject {
-    /// 内容。
+    /// 构造一个 **UTF-8** 形态的 `str`（与 `py_object!` 生成的 `new` **同签名** ✓）。
+    pub fn new(ty: NonNull<crate::TypeObject>, value: String) -> Self {
+        Self {
+            header: crate::Header::new(ty),
+            repr: StrRepr::Utf8(value),
+        }
+    }
+
+    /// 构造一个 **WTF-8** 形态的 `str`：`bytes` 必须是合法 WTF-8（用 S1 的
+    /// [`crate::wtf8::validate`] 校验）；非法返回 `None`（**不**静默按有损转换收下 ✓）。
+    ///
+    /// **合法 UTF-8 的字节照旧存 [`StrRepr::Utf8`]**（零行为改动：`value()` 视图仍可用 ✓）；
+    /// 只有**含孤立代理**这类"WTF-8 合法、UTF-8 非法"的字节才进 [`StrRepr::Wtf8`] ✓。
+    pub fn new_wtf8(ty: NonNull<crate::TypeObject>, bytes: Vec<u8>) -> Option<Self> {
+        crate::wtf8::validate(&bytes).ok()?;
+        let repr = match String::from_utf8(bytes) {
+            Ok(text) => StrRepr::Utf8(text),
+            Err(error) => StrRepr::Wtf8(error.into_bytes()),
+        };
+        Some(Self {
+            header: crate::Header::new(ty),
+            repr,
+        })
+    }
+
+    /// 内容（**`&str` 兼容视图**）。
+    ///
+    /// # Panics
+    ///
+    /// [`StrRepr::Wtf8`] 分支**没有** `&str` 视图（孤立代理装不进 Rust `str`）⇒ 会 panic。
+    /// **S2a 的生产路径不会构造该分支** ✓；代码里要用"可能是 WTF-8"的对象时走
+    /// [`StrObject::as_utf8`]（`Option`）或 [`StrObject::wtf8_bytes`]（总是可用）✓。
     pub fn value(&self) -> &str {
-        &self.value
+        match &self.repr {
+            StrRepr::Utf8(text) => text,
+            StrRepr::Wtf8(_) => panic!(
+                "StrObject::value() 不适用于 WTF-8 表示（含孤立代理；S2a 生产路径不构造该分支；\
+                 请改用 as_utf8()/wtf8_bytes()）"
+            ),
+        }
+    }
+
+    /// **WTF-8 字节**（总是可用：UTF-8 就是合法 WTF-8 ✓；WTF-8 分支给原始字节 ✓）。
+    pub fn wtf8_bytes(&self) -> &[u8] {
+        match &self.repr {
+            StrRepr::Utf8(text) => text.as_bytes(),
+            StrRepr::Wtf8(bytes) => bytes,
+        }
+    }
+
+    /// **合法 UTF-8 视图**：UTF-8 分支给 `Some(&str)`；WTF-8 分支给 `None` ✓。
+    pub fn as_utf8(&self) -> Option<&str> {
+        match &self.repr {
+            StrRepr::Utf8(text) => Some(text),
+            StrRepr::Wtf8(_) => None,
+        }
+    }
+
+    /// 内部表示（诊断／测试用；**不**是稳定 API 面 ✓）。
+    pub fn repr(&self) -> &StrRepr {
+        &self.repr
     }
 
     /// 是否为空串（`OM-23` 的空串单例就是它）。
     pub fn is_empty(&self) -> bool {
-        self.value.is_empty()
+        match &self.repr {
+            StrRepr::Utf8(text) => text.is_empty(),
+            StrRepr::Wtf8(bytes) => bytes.is_empty(),
+        }
+    }
+
+    /// **OM-11** 的 `dealloc` 槽位（与 `py_object!` 生成物同形 ✓）。
+    ///
+    /// # Safety
+    ///
+    /// `ptr` 必须来自本类型的一次 `Instance::alloc`；引用计数已归零。
+    pub unsafe fn dealloc(ptr: *mut crate::Header) {
+        // SAFETY: 由调用方保证（OM-5 保证头部就在对象地址上）。
+        unsafe { core::mem::drop(Box::from_raw(ptr.cast::<StrObject>())) }
     }
 }

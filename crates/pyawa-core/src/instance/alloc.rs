@@ -217,6 +217,24 @@ impl Instance {
         .cast::<Header>()
     }
 
+    /// 造一个 **WTF-8** 形态的 `str`（P3-38 S2a；`None` ＝ 非法 WTF-8）——**新引用**。
+    ///
+    /// - `bytes` 必须是合法 WTF-8（[`crate::wtf8::validate`] ✓）；非法 ⇒ `None`
+    ///   （**不**按有损转换静默收下 ✓）。
+    /// - **合法 UTF-8** 的字节走 UTF-8 表示（零行为改动：`value()` 视图仍可用 ✓）；
+    ///   只有含孤立代理这类才进 WTF-8 表示 ✓（`StrObject::new_wtf8` 里分派）。
+    /// - 空串照 `new_str` 走 **`OM-23` 单例** ✓。
+    pub fn new_str_wtf8(&self, bytes: &[u8]) -> Option<NonNull<Header>> {
+        if bytes.is_empty() {
+            let empty = self.singletons().empty_str();
+            // SAFETY: 单例由实例持有，存活。
+            unsafe { self.incref_object(empty.as_ptr()) };
+            return Some(empty);
+        }
+        let object = StrObject::new_wtf8(self.singletons().str_type(), bytes.to_vec())?;
+        Some(self.alloc(object).into_raw().cast::<Header>())
+    }
+
     pub fn new_tuple(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
         if items.is_empty() {
             // **OM-23**：空元组是**单例**（`() is ()` 为真）——调用方按"新引用"接收，

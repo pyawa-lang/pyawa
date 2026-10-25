@@ -207,7 +207,23 @@ impl Instance {
             return None;
         }
         // SAFETY: 类型身份刚确认是 `str` ✓。
-        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.value())
+        //
+        // **P3-38 S2a 唯一允许的行为改动点**：先前直接 `value()`（对 WTF-8 表示会 panic）⇒
+        // 现在走 `as_utf8()`：WTF-8 表示（含孤立代理）**如实给 `None`** ✓。合法 UTF-8 路径的
+        // 结果**一个字节都不变** ✓（S2a 的生产路径也不会构造 WTF-8 表示 ⇒ 实际无可观测变化）。
+        unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.as_utf8()
+    }
+
+    /// **`str` 对象的 WTF-8 字节**（P3-38 S2a；不是 `str` ⇒ `None`）。
+    ///
+    /// 与 [`Instance::text_of`] 的分工：`text_of` 是"合法 UTF-8 视图"（WTF-8 ⇒ `None`），
+    /// 本函数**总是**给字节（UTF-8 表示的字节就是合法 WTF-8 ✓）——S2b 起语义层用它 ✓。
+    pub fn wtf8_of(&self, object: NonNull<Header>) -> Option<&[u8]> {
+        if self.type_of(object) != self.singletons().str_type() {
+            return None;
+        }
+        // SAFETY: 类型身份刚确认是 `str` ✓。
+        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes())
     }
 
     /// **`OM-11` 的 `str` 槽**：`str(对象)`。
