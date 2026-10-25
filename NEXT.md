@@ -8,6 +8,8 @@
 > r21：**非 surrogate 语法归零**（可编译 92.4%）＋core 小格批 ⇒ **`test_decorators` 16/16 OK**；
 > r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）；
 > r23：**S2a-1** `StrObject` 存储升 WTF-8 表示（`StrRepr` 双分支、`new_str_wtf8`/`wtf8_of`/`as_utf8`，**零行为改动**＋8 测试）。
+> **M6 收口结论（2026-10-25）**：`MS-14` ✓（407/407、新差异 0）；但 `MS-19` 补充下 **surrogate 未解 ⇒ M6 不标记完成**；
+> 用户已拍板 P3-38 epic，进度 **S1 ✓ → S2a-1 ✓ → S2a-2 起继续**；**未合并 main、未 tag m6**。
 > 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
@@ -41,6 +43,7 @@
 git status --short                      # 应干净（round 23 已提交）
 # 下一步：S2a-2 —— 按 target/recon/t48_str_audit.md §2.3 的"必须 surrogate-aware"清单，分批迁调用点（先 repr/print/编码面，再名字面）
 cargo test -p pyawa-core --test str_wtf8
+# M6 收口（仅当 P3-38 完成并复核 MS-14/新差异后）：报用户批准 → git checkout main && git merge --no-ff dev && git tag m6 && git push --tags
 ```
 
 ## 本战役的关键口径（新会话必读）

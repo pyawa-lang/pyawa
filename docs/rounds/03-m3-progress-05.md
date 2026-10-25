@@ -1879,3 +1879,29 @@
 - **下一轮（S2a-2/S2b）**：S2a-2＝按审计 §2.3 把 **必须 surrogate-aware** 的调用点分批迁到 `wtf8_bytes()`/`as_utf8()`（不改语义，
   逐批提交）；S2b＝lexer 转义/AST/Constant/emitter/pyac 走 WTF-8（须过 compile 逐字节＋`lib_compile`＝epic 编译闸）；
   之后 S2c→S3a（codecs，解锁 os_helper）→S3b（fs/io/argv/ABI）→S3e（同步回归）→ 才能报 M6 收口。
+
+---
+
+## M6 收口结论（会话 10 · goal 收口，2026-10-25）—— 目标范围内全部落地；M6 仍 gated 在 P3-38（用户已拍板立项，进度 S2a-1）
+
+- **HEAD**：`dce790c`（`dev`，已推 `origin/dev`）；工作区干净；`check.py` 14/14；最近一次 `slowcheck` 十项全绿（round 23，5044s）。
+- **目标范围内逐条状态（全 ✓）**：
+  - 非 surrogate 语法缺口（`P3-35` 的剩余面）：同行 `try:/for:` 体／解析器瑕疵／批 A/B/C 全部落地 ⇒ **survey 语法错 40→30，剩余 30 条全部是
+    surrogate 转义**（`MS-19` 补充下不得登记为差异，按 gated 项处理）；重试同步骨架：本轮已同步 14 个 `Lib/test` 文件
+    （doctest/pdb/bdb/_pyrepl 链）＋4 个（result/channels/ann_module/ann_module2）＋mock/hashlib，`Lib/` 564、`--check` 568 逐字节一致。
+  - 缺模块面（`P3-37`）：doctest（×20→0）／unittest.mock（×13→0）／gc（×10→0）／unicodedata（×4→0）／hashlib（×4→0）全部落地；
+    **multibytecodec_support（×11）** 唯一阻塞＝surrogate（`'\udeee'`），已按 `MS-19` 纪律不入库，P3-38 后直接可同步。
+  - **P3-34**（complex `1j`）✓ 全链路；**P3-36**（`.pyac BadCodeSection`，10→0）✓。
+  - **小格**：`sys.exc_info()`/`sys.exception()` ✓、`builtins.compile()` ✓、嵌套类装饰器属性（函数 `__dict__`）✓、`test_memoize` ✓；
+    另落地 `bytes.justify`、`set.union` 迁 core、异常子类 MRO、`sys._getframe` f_back、`sys.monitoring`、`sys._jit`、`time` 面、`fs.stat_times`、
+    `hash()`、deque 真值、`list.pop(index)`、`getattr` 三参、try/with 余部指数爆炸修（连续 ≥16 块挂死）、EXTENDED_ARG 加宽不动点等。
+  - **每轮 survey 记录**：round 14→23 逐轮记入台账；最终干净基线：**可编译 367/397＝92.4%**、跑通 9/397、语法错 30（全 surrogate）、
+    未实现 48、运行期错 271、超时 39；**判据① 477/628＝76.0%**；语料 407／在册差异 3。
+  - **MS-14 复核**：`target/conformance/report.md`（Python 3.14.4、407 案例）⇒ **通过 407 · 已知差异 0 · 新差异 0**，
+    四要素齐、可发布；`check.py` 的 `M3-COVERAGE` 硬门同步绿。
+- **M6 收口结论（如实）**：按 `PLAN-milestones.md` §6，「`MS-14` 报告可发布 ＋ 新差异为零」**已满足**；但按 `MS-19` 判据补充
+  「合法 Python 被拒必须修、不得登记差异」——**30 个 `test_*.py` 的 surrogate 转义被拒＋`os_helper` ×106 仍未解** ⇒ **M6 不可标记完成**；
+  用户 2026-10-25 已拍板**启动 P3-38 surrogate epic**（跨轮大改），当前进度 **S1 ✓／S2a-1 ✓／S2a-2·S2b·S2c·S3a/S3b/S3e 待做**。
+  **因此未合并 `main`、未打 `m6` tag**；收口动作（`--no-ff` 收 `main` ＋ tag `m6`）留待 P3-38 完成并复核后再报用户批准。
+- **续做入口**：`NEXT.md`（下一条命令＝S2a-2：按 `target/recon/t48_str_audit.md` §2.3 分批迁 surrogate-aware 调用点）＋
+  `docs/PLAN-milestones.md` §9.2 `P3-38`（S1…S5 与逐阶段验收）。
