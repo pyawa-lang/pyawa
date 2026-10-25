@@ -5,33 +5,49 @@
 > `import test.support` 通过；r17：P3-35 批 A＋`sys.exc_info`＋`gc`＋4 骨架；r18：**P3-34 complex**＋mock 同步＋**try/with 余部重放修**；
 > r19：**P3-36 `.pyac` 修**＋**match 全形**＋`sys.monitoring`＋**`unicodedata`** ⇒ `import pdb`/`doctest`；
 > r20：**doctest 链同步（×20→0）**＋批 B/C 语法＋**`compile()`/`f_back`**＋**`hashlib`（×4→0）**；
-> r21：**非 surrogate 语法归零**（可编译 92.4%）＋core 小格批（异常子类 MRO/bytes.justify/set.union/`__dict__`/memoize）⇒ **`test_decorators` 16/16 OK**）。
-> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…21** 节 ✓（本笔追加 round 21）。
+> r21：**非 surrogate 语法归零**（可编译 92.4%）＋core 小格批 ⇒ **`test_decorators` 16/16 OK**；
+> r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）。
+> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
 
-- **HEAD**：`45a1141`（`dev`，本笔前）—— 本笔＝**round 21**：**非 surrogate 语法缺口 10→0**（class `**`/星基类、f-string PEP 701、推导式下标目标、值模式 as、非 BMP 标识符、星迭代元组、genexp 海象；语法错总数 40→30＝全 surrogate）＋ **core 小格批**（异常子类 MRO、`bytes.ljust/rjust/center`、`set.union` 迁 core、函数 `__dict__`、dict 不可哈希键）＋ **裸元组语句 `x,`** ⇒ **`test_decorators` 16/16 OK**、可编译 92.4%；细节见台账 round 21。
-- **工作区**：本笔待提交 ＝ **26 项**（`git status --porcelain` 实测：compile/parser 若干、`classes.rs`、`builtin/{bytes,dict,set}.rs`、`builtin_objects/scalars.rs`、`executor/{iter,subscript}.rs`、stdlib `_hashlib_module.rs`（删临时补丁）、`tests/task46_small_cells.rs` 新增、`NEXT.md`＋台账 round 21＋`ROUNDS.md` 等；与实测一致）。
+- **HEAD**：`926c2bb`（`dev`，本笔前）—— 本笔＝**round 22**：用户拍板**启动 surrogate epic** ⇒ **`P3-38` 立项**（PLAN §9.2 S1…S5＋§9.4 开工指示）＋ **S1 WTF-8 编解码基础模块**（新 `wtf8.rs`，23 测试全绿，零风险）＋ **S2/S3 落地审计**（`target/recon/t48_str_audit.md`：存储/构造点计数、S2a…S3e 切片与风险、§7 六问）；细节见台账 round 22。
+- **工作区**：本笔待提交 ＝ **7 项**（`git status --porcelain` 实测：`crates/pyawa-core/src/wtf8.rs`、`crates/pyawa-core/tests/wtf8.rs`（新增）、`crates/pyawa-core/src/lib.rs`（`pub mod wtf8;` 一行）、`docs/PLAN-milestones.md`（P3-38 行＋开工指示）、`NEXT.md`、台账 round 22、`ROUNDS.md`）。
 - **stash**：**空** ✓
-- **round 21 新增验收（全 ✓）**：
-  1. **官方 `test_decorators` 16/16 OK**（`Ran 16 tests`；`PYTHONPATH=/usr/lib/python3.14` 直跑）。
-  2. **非 surrogate 语法错 0**：语法错总数 40→**30（全部 surrogate）**、**可编译 337/397…→367/397＝92.4%**；10 个代表文件语法全过
-     （class `**d`/`*基类`/泛型、f-string PEP 701、推导式下标目标、`case A.y as z`、非 BMP 标识符、`for x in *a,*b`、genexp 海象、test_re 引号）。
-  3. **core 小格批**：异常子类 MRO（`test_dbcheck` 过）、`bytes.ljust/rjust/center`（hmac 回退实测）、`set.union` 迁 core（stdlib 临时补丁删除）、
-     函数 `__dict__`（`test_double` 过）、dict 不可哈希键（`test_memoize` 过）—— 各格与 python3 对拍一致。
-  4. **裸元组语句 `x,`** 修复（`compile("x,","test","exec")` 也过）；`@pass` 等如实 SyntaxError。
-  5. 既有验收仍全过：`import test.support` ok；`sys.exit(3)`⇒3；`unittest.main()`⇒0；`PYTHONPATH` 进 `sys.path`。
-- **数字**（round 21 干净基线）：判据① **477/628＝76.0%**（未变）；`Lib/` **564**（`--check` 568）、进度指标 **461/564＝81.7%**；
-  语料 407／在册差异 3 未变。`Lib/test` 体检：**可编译 367/397＝92.4%**、**跑通 9/397＝2.3%**（`test_decorators` 新入；
-  `test_bigaddrspace` 因冷编译 15.7s 超 30s 上限转 timeout，非语义回归）、**语法错 30（全部 surrogate）**、未实现 48、运行期错 271、**超时 39**
-  （含 doctest 链 ≈15s 冷编译成本）。
-- **MS-14 报告**（`target/conformance/report.md`，round 21 实测）：参照 Python 3.14.4、407 案例**全通过**、已知差异 **0**、**新差异 0**
-  ⇒ **四要素齐、可发布**（`M3-COVERAGE` 硬门在 check.py 里同步绿）。
-- **缺口榜（M6 收口前）**：① **surrogate epic**（`os_helper` ×106＋`multibytecodec_support` 唯一阻塞＝字符串表示层支持合法孤立代理，
-  需 WTF-8 级 repr 改造，**必须用户拍板**）；② `\N{…}` 名字表 11；③ `except*` 6／`async` 推导式 4／PEP 695（`*Ts`/`**P`）／映射 `**rest`；
-  ④ `list.__delitem__` 下标面、`bytearray.ljust` 旧口径、dict 真哈希表（自定义 `__hash__`）；⑤ 超时 39 甄别（冷编译成本/网络类）。
-- **本战役 M6 结论（待用户拍板）**：MS-14 ✓／新差异 0 ✓；但**surrogate 未修前不满足** `MS-19` 判据补充"合法 Python 被拒必须修"
-  ⇒ 已按要求如实报告并请示是否启动 surrogate epic（跨轮大改）。
+- **round 22 新增验收（全 ✓）**：
+  1. **P3-38 立项**：`PLAN-milestones.md` §9.2 `P3-38`（surrogate epic，S1…S5 每阶段独立提交＋逐阶段验收）＋ §9.4 开工指示；
+     `check_p3_numbers.py` 24 编号 0 重复、`P3-38` 定义一次。
+  2. **S1 WTF-8 基础模块**：`encode_code_point`（1/2/3/4 字节，**允许孤立代理**）／`decode`（严格、保留代理）／`validate`／
+     `is_valid_wtf8`／`code_points`／`to_string_lossy`／`Wtf8Error{offset,kind}`（6 kind）；**23 测试全绿**
+     （集成 13＋模块内 10：全部边界码点与孤立代理往返、编码→解码→再编码逐字节相同、截断/过长/非法首字节/坏续字节/超界逐条 Err）。
+  3. **S2/S3 审计**：`target/recon/t48_str_audit.md`（28KB）—— 存储定义 1／`new_str` **387**／`text_of` **170**／名字面 **682**／
+     编译期字面量点 76／上游含代理 59 文件（30 即当前语法错）；切片 S2a→S2b→S2c→S3a→S3b→S3d→S3e 与逐片文件清单/风险/回归面；
+     最大风险 3 条（`text_of`/`&str` 边界、repr/print 输出约定、codecs/fs 四套实现）；§7 六问待拍板。
+  4. 既有验收仍全过：`test_decorators` 16/16；`import test.support` ok；`--test compile` 逐字节 4 passed；check.py 14/14。
+- **数字**：本轮**零运行期行为改动**（新模块＋文档），沿用 round 21 干净基线：**可编译 367/397＝92.4%**、跑通 9/397、
+  语法错 30（全部 surrogate）、未实现 48、运行期错 271、超时 39；判据① **477/628＝76.0%**；语料 407／新差异 0（MS-14 407/407）；
+  `Lib/` 564（`--check` 568）。P3-38 完成后预期：30 语法错→0、`os_helper` ×106→0、`multibytecodec_support` ×11 可同步。
+- **M6 收口结论**：MS-14 ✓／新差异 0 ✓；**但 P3-38 未完成 ⇒ 按 `MS-19` 判据补充不满足"M6 收口"**（合法 Python 被拒必须修）。
+  用户已拍板启动 epic；当前进度 **S1 完成、S2/S3 审计完成、S2a 待开工**。
+- **下一轮（S2a 起）**：先等 §7 六问拍板（`text_of` 策略／输出边界／正则策略／pyac 版本／S3d 是否本期／epic 验收口径）→
+  **S2a**（`scalars.rs`/`alloc.rs`/`accessors.rs`/`bootstrap.rs`/`state.rs`/`quote.rs`/`representations.rs`/`constructors.rs`：
+  `new_wtf8`/`wtf8_of`，`text_of` 保留合法视图）→ S2b（lexer/AST/Constant/emitter/pyac，须过 compile 逐字节＋lib_compile）→
+  S2c → S3a（codecs，解锁 os_helper）→ S3b（fs/io/argv/ABI）→ S3e（Lib 同步回归）；之后才能报 M6 收口。
+
+## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
+
+1. **M6 判据**：`MS-14` 报告可发布 ✓（407/407、新差异 0）但 **`P3-38` 必须完成**（`MS-19` 补充）才能收口。
+2. **P3-38 阶段**：S1 ✓ → S2a → S2b → S2c → S3a → S3b → S3e；每阶段独立提交＋十项闸门＋survey 对应格归零。
+3. **收口动作**（epic 完成后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
+
+## 下一条命令（下一轮开工）
+
+```text
+git status --short                      # 应干净（round 22 已提交）
+# 下一步：按 t48_str_audit.md §5 开 S2a；先读 §7 六问并等用户拍板（S2a 动存储层前必须定 text_of 策略）
+python3 tools/sync_lib.py --check
+```
+
 ## 本战役的关键口径（新会话必读）
 
 - **判据① 分子测量**：先 `tools/cargo.sh test -p pyawa-abi --test conformance --no-run`（重建）再 `rm -rf Lib/__pyawa__`，

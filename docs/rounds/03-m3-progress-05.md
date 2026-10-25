@@ -1800,3 +1800,53 @@
   `async` 推导式 4、PEP 695（`*Ts`/`**P`）、映射 `**rest`、`list.__delitem__` 下标面、超时 39 甄别（冷编译成本/网络类）、
   `bytearray.ljust` 旧口径、`dict` 真哈希表（自定义 `__hash__`）。**M6 收口结论**：MS-14 ✓／新差异 0 ✓，但若坚持以 `MS-19` 判据补充
   "合法 Python 被拒必须修"为 gate，则 surrogate 未修前**不满足收口**；已按目标要求向用户请示。
+
+---
+
+## round 22（会话 10 · M6 续）落地 ✓ —— P3-38 surrogate epic 立项 ＋ S1（WTF-8 基础）＋ S2/S3 落地审计
+
+- **口径**：`HEAD`（本笔前）＝`926c2bb`（`dev`，round 21）；工作区起始干净；`check.py` 14/14。用户 2026-10-25 拍板**启动 surrogate epic**。
+- **落地（三块）**：
+  1. **P3-38 立项**（`PLAN-milestones.md` §9.2 一行＋§9.4 开工指示）：`str` 表示层支持合法孤立代理（WTF-8 级改造）；
+     动机＝`MS-19` 判据补充（合法 Python 被拒必须修、不得登记差异）——`test/support/os_helper.py` 与 `test/multibytecodec_support.py`
+     是**唯一阻塞**（survey 30 个 `test_*.py` 语法错全为 surrogate、`os_helper` 缺模块 ×106）；
+     **S1…S5** 分阶段（S1 WTF-8 基础 → S2 `StrObject` 存储＋编译期字面量管线 → S3 API 面分片 → S4 lexer 转义＋
+     `surrogateescape`/`surrogatepass` → S5 Lib 同步回归）；**M6 收口 gate 含 P3-38 完成**。
+  2. **S1：WTF-8 编解码基础模块**（新 `crates/pyawa-core/src/wtf8.rs` ＋ `tests/wtf8.rs`；`lib.rs` 仅加 `pub mod wtf8;`）：
+     - API：`MAX_CODE_POINT`／`is_surrogate`／`is_scalar_value`；`encode_code_point`（1/2/3/4 字节、**允许孤立代理**、超界 Err 且不写一半）；
+       `next_code_point`／`decode`（严格、**保留代理码点**）／`validate`／`is_valid_wtf8`／`code_points` 迭代器；`to_string_lossy`
+       （代理/非法 ⇒ U+FFFD，如实注明仅诊断显示不可逆）；`Wtf8Error{offset, kind}`＋6 种 kind（结构性错误取序列起始、续字节错误取坏字节）。
+     - **零风险**：未动任何既有 `StrObject` 存储/调用点（git status 只 3 处：新模块＋新测试＋lib.rs 一行）。
+     - 测试 **23 条全绿**（集成 13：全部边界码点 0x7F/0x80/0x7FF/0x800/0xFFFF/0x10000/0x10FFFF、孤立代理 D800/DBFF/DC00/DFFF、
+       混合串 `a\u{D800}b`、编码→解码→再编码逐字节相同、"合法 UTF-8 必是合法 WTF-8"、截断 `ED A0`、`C0 80` 过长、3/4 字节真过长、
+       5 字节 `F8`、非法首字节、坏续字节、超界 `F4 90 80 80`；模块内单测 10）。
+  3. **S2/S3 落地审计**（`target/recon/t48_str_audit.md`，28KB）：机械统计 **存储定义 1**（`StrObject.value: String`）／
+     `cast::<StrObject>` **46**／`StrObject::new` **12**／`new_str` **387**（core 110＋stdlib 269＋abi 8）／`text_of` **170**／
+     `text_value` **46**／`object_str` **16**／`object_repr` **30**／名字面（`dict_get` 115＋`dict_set` 443＋`attribute_lookup` 29＋
+     `type_lookup` 59＋`set_attribute_value` 36＝**682**）／编译期字面量点 **76**／`from_utf8` 30／lossy 10／`.chars()` 137／
+     上游 `test/` 含代理 **59 文件**（30 即当前语法错）。**切片建议**：S2a 存储层（高）→ S2b 编译期字面量管线（高，须与 S2a 紧邻，
+     过 `--test compile` 4 逐字节＋`lib_compile`＝epic 编译闸）→ S2c 基础运行期 API（中）→ S3a codecs（高，解锁 os_helper 关键）→
+     S3b fs/io/argv/ABI（高；含 `sys.getfilesystemencodeerrors` 现为真 bug 返回 'utf-8'、`readlink` lossy、`stdout.encoding/errors` 缺失）→
+     S3c regex/unicodedata/marshal（策略需拍板）→ S3d 动态名字面（可后置）→ S3e Lib 同步/官方测试推进（低风险、收益最大）。
+     **最大风险 3 条**：① `text_of`/`&str` 边界全局波及（170 点混"内部名/用户文本"，含代理静默 `None` 会成难查回归）；② `object_str`/repr/print
+     输出约定（repr 可保持 ASCII 转义，str/print 必须定 WTF-8 输出边界）；③ codecs/fs 四套实现与 ABI 边界（漏一处即语义分叉，fs 错误放大面最危险）。
+     §7 另列 6 个开工前需拍板问题（`text_of` 策略、输出边界、正则策略、pyac 版本、S3d 是否本期、epic 验收口径）——**待用户确认后进 S2a**。
+- **验收（全 ✓）**：`cargo test -p pyawa-core --test wtf8` **13 passed**（＋模块内 10）；`--test compile` 逐字节 **4 passed**；
+  `-p pyawa-core` 全量 0 failed；`check --workspace --all-targets` **0 warning**；`check.py` **14/14**；`check_p3_numbers.py` 24 编号 0 重复、`P3-38` 定义一次。
+- **数字**：本轮**零运行期行为改动**（仅新模块＋文档），survey 沿用 round 21 干净基线：可编译 **367/397＝92.4%**、跑通 9/397、
+  语法错 30（全 surrogate）、判据① **477/628＝76.0%**、语料 407／新差异 0（MS-14 407/407）。P3-38 完成后预期：30 语法错→0、
+  `os_helper` ×106→0、`multibytecodec_support` ×11 可同步。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **4940s**）：① check **0 警告**（1s）；② `--test compile` 逐字节 **4 passed**（18s）；
+  ③ `cargo test --workspace` **全部测试绿**（523s；含 `wtf8` 13）；④ `check.py` **14/14**（2s）；⑤ `stability.py`（1544s）；
+  ⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2035s）；⑦ 夹具（0s）；⑧ 语料下限 407/112（1s）；
+  ⑨ `conformance` **5 passed**（404s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（412s）。
+- **§7 六问的 Lead 裁定（技术决定，记于此供 S2a 开工；可随实现修正）**：① `text_of` 策略＝**保留 `Option<&str>`（仅合法 UTF-8）＋新增
+  `wtf8_of()/wtf8_bytes()` 逃生口**；含代理的**内部名字面**（属性名/字典键/导入路径/type 名）S2 阶段先按"合法 UTF-8 假设"维持，
+  由 S3d 再扩（如 `getattr(obj,'\ud800')`）；② 输出边界＝**`repr` 保持 ASCII 转义（合法 UTF-8）**；`str()`/`print`/stderr/异常消息
+  走 WTF-8 输出边界（fs 写入按 UTF-8 字节直写，不做 lossy）；③ 正则策略＝S3c 前保持"代理不进入 `_sre`"（遇代理如实 NotImplementedError），
+  引擎换 WTF-8 另立项评估；④ `pyac` 版本＝S2b 时 bump 缓存版本并按"陈旧重编"自愈；⑤ S3d（动态名字面）**不并入本期 S2/S3**，后置；
+  ⑥ epic 验收口径＝按 PLAN `P3-38` 行逐阶段验收，最终以 survey 30 语法错→0、`os_helper` ×106→0、`multibytecodec_support` ×11 可同步
+  且 `MS-14` 无新差异为准。
+- **下一轮（S2a 起）**：按审计顺序 S2a（`scalars.rs`/`alloc.rs`/`accessors.rs`/`bootstrap.rs`/`state.rs`/`quote.rs`/`representations.rs`/
+  `constructors.rs`：`new_wtf8`/`wtf8_of`，`text_of` 保留合法视图）→ S2b（lexer/AST/Constant/emitter/pyac）→ S2c → S3a → S3b → S3e；
+  §7 六问需用户拍板后再动 S2a 代码（本笔只落 S1 与计划）。
