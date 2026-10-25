@@ -641,6 +641,10 @@ pub fn str_method_native(name: &str) -> Option<NativeFn> {
         "lstrip" => bytes_lstrip_native,
         "rstrip" => bytes_rstrip_native,
         "zfill" => bytes_zfill_native,
+        // **`ljust`／`rjust`／`center`**（task-46；`Lib/hmac.py:136` 要 `bytes.ljust` ✓）。
+        "ljust" => crate::builtin::bytes::bytes_ljust_native,
+        "rjust" => crate::builtin::bytes::bytes_rjust_native,
+        "center" => crate::builtin::bytes::bytes_center_native,
         "splitlines" => bytes_splitlines_native,
         "isdigit" => bytes_isdigit_native,
         "isspace" => bytes_isspace_native,

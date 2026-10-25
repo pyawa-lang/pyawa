@@ -10,6 +10,67 @@ use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::{bound_dict, container_receiver};
 
+/// **键可哈希性**（task-46）：参照的 `dict` 用哈希表 ⇒ **不可哈希的键必须报 `TypeError`** ✓；
+/// 本层 `dict` 是"值相等线性表"（不哈希）⇒ 不查就会**静默接受** ✗ ——
+/// `test_decorators.test_memoize` 的 3≠4 正是这条：`saved[args]` 里 `args = ([10],)` 本该抛
+/// `TypeError` 走 `except TypeError` 分支（计数 +1），却"命中缓存"⇒ 少算一次 ✗。
+///
+/// 返回 `(键的类型名, 真正不可哈希的那个类型名)` —— 文案照参照实测：
+/// `cannot use 'tuple' as a dict key (unhashable type: 'list')` ✓（嵌套 tuple 报**最内层** ✗ 的那个）。
+pub(crate) fn unhashable_key_type(
+    instance: &Instance,
+    key: NonNull<Header>,
+) -> Option<(String, String)> {
+    let key_type = instance.type_of(key);
+    let key_name = instance.type_name(key_type);
+    for name in ["list", "dict", "set", "bytearray"] {
+        if instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(key_type, base))
+        {
+            return Some((key_name.clone(), key_name));
+        }
+    }
+    // tuple 的哈希是递归的 ⇒ 元素不可哈希时整键也不可哈希 ✓（`([1],)` ⇒ 'list' ✗）。
+    if instance
+        .type_named("tuple")
+        .is_some_and(|base| instance.is_subtype(key_type, base))
+    {
+        // SAFETY: tuple 子类沿用 tuple 布局（`AB-58` 族）。
+        let items = unsafe { &*key.as_ptr().cast::<TupleObject>() };
+        for index in 0..items.len() {
+            if let Some(item) = items.item(index) {
+                if let Some((_, bad)) = unhashable_key_type(instance, item) {
+                    return Some((key_name, bad));
+                }
+            }
+        }
+        return None;
+    }
+    // 用户类 `__hash__ = None` ⇒ 不可哈希 ✓（参照实测：`cannot use 'A' as a dict key (unhashable type: 'A')`）。
+    if instance
+        .type_lookup(key_type, "__hash__")
+        .is_some_and(|hash| hash == instance.singletons().none())
+    {
+        return Some((key_name.clone(), key_name));
+    }
+    None
+}
+
+/// 不可哈希就报参照文案的 `TypeError`（`dict` 的读／写／`get`／`setdefault`／`in` 共用 ✓）。
+pub(crate) fn reject_unhashable_key(
+    instance: &Instance,
+    key: NonNull<Header>,
+) -> Result<(), crate::ExecError> {
+    if let Some((key_name, bad)) = unhashable_key_type(instance, key) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cannot use '{key_name}' as a dict key (unhashable type: '{bad}')"),
+        ));
+    }
+    Ok(())
+}
+
 /// **按值找键的下标** ✓（引擎统一比较口径 ✓）。
 pub(crate) fn dict_position(
     instance: &Instance,
@@ -197,6 +258,7 @@ pub(crate) fn dict_setdefault_native(
             "setdefault expected at least 1 argument, got 0",
         ));
     };
+    reject_unhashable_key(instance, *key)?;
     if let Some(index) = dict_position(instance, mapping, *key) {
         let entries = instance.dict_entries(mapping).unwrap_or_default();
         return Ok(instance.retain(entries[index].1));
@@ -331,6 +393,7 @@ pub(crate) fn dict_get_native(
             "get expected at least 1 argument, got 0",
         ));
     };
+    reject_unhashable_key(instance, *key)?;
     if let Some(found) = dict_lookup(instance, mapping, *key) {
         // **借来的引用要还一份**（第 145 轮：`dict_get`／`dict_entries` 都是**借用** ✓；
         //   不 retain ⇒ 调用方释放后 double free ✗ —— 这一族在第 131 轮的 `type()` 上已经栽过 ✓）。
@@ -442,6 +505,7 @@ pub fn dict_setitem_native(
     let (Some(container), Some(key), Some(value)) = (receiver, rest.first(), rest.get(1)) else {
         return Err(instance.raise_builtin_error("TypeError", "__setitem__ expected 3 arguments"));
     };
+    reject_unhashable_key(instance, *key)?;
     // **内建实现直奔"原始写"** ✓（第 702 轮 ✗ 修）：`dict.__setitem__` 是**内建实现** ✓ ——
     // 覆盖版 `__setitem__` 结尾常写 `dict.__setitem__(self, k, v)` ✓（上游 `enum._EnumDict` 就是 ✓）
     // ⇒ 这里若再走协议 ✗（`subscript_write` 就是"incref ＋ 转协议"✗）⇒ **自递归** ✓（实测

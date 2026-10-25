@@ -434,21 +434,71 @@ fn requalified_method(
         unsafe { instance.incref_object(cell.as_ptr()) };
         cells.push(cell);
     }
-    // 返回值**带着一份引用**（调用方在 `Some` 分支里**不再** incref，字典 `insert_raw` 接手这份）
-    Some(
-        instance
-            .alloc(crate::FunctionObject::new(
-                function_type,
-                new_code,
-                defaults,
-                kwdefaults,
-                core::cell::RefCell::new(globals),
-                core::cell::RefCell::new(cells),
-                core::cell::RefCell::new(annotate),
-            core::cell::RefCell::new(None)))
-            .into_raw()
-            .cast::<Header>(),
-    )
+    let replacement = instance
+        .alloc(crate::FunctionObject::new(
+            function_type,
+            new_code,
+            defaults,
+            kwdefaults,
+            core::cell::RefCell::new(globals),
+            core::cell::RefCell::new(cells),
+            core::cell::RefCell::new(annotate),
+            core::cell::RefCell::new(None),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // **函数实例字典要跟着搬**（task-46，`test_decorators.test_double` 的根因 ✓）：
+    // 换 `co_qualname` 会再造一个函数对象 ✗ —— 先前新函数**不带**旧函数的 `__dict__` ✗
+    // ⇒ 类体里 `@funcattrs(abc=1)` 写进旧函数 `__dict__` 的属性，换名后**整个丢掉** ✗
+    //（实测：模块级类不换名（`co_qualname` 已对）⇒ 不丢 ✓；函数内定义的类要换名 ⇒ 丢 ✓）。
+    // 四个**可写属性覆盖值**（`__name__`／`__qualname__`／`__doc__`／`__module__`）同理要搬 ✓
+    // （`functools.wraps` 改的就是它们 ✓）。
+    // SAFETY: value 是旧的函数对象（上面已核类型），replacement 是刚造的新函数，都存活。
+    let old_function = unsafe { &*value.as_ptr().cast::<crate::FunctionObject>() };
+    // SAFETY: 同上。
+    let new_function = unsafe { &*replacement.as_ptr().cast::<crate::FunctionObject>() };
+    if let Some(old_dict) = crate::executor::protocol::mounted_instance_dict(instance, value) {
+        if let Some(entries) = instance.dict_entries(old_dict) {
+            if !entries.is_empty() {
+                if let Some(new_dict) =
+                    crate::executor::protocol::mounted_instance_dict(instance, replacement)
+                {
+                    for (key, item) in entries {
+                        // SAFETY: 旧字典持有它们；新字典要自己那份。
+                        unsafe {
+                            instance.incref_object(key.as_ptr());
+                            instance.incref_object(item.as_ptr());
+                        }
+                        instance.dict_insert_raw(new_dict, key, item);
+                    }
+                }
+            }
+        }
+    }
+    let copy_override = |source: Option<NonNull<Header>>,
+                         set: &dyn Fn(Option<NonNull<Header>>) -> Option<NonNull<Header>>| {
+        if let Some(source) = source {
+            // SAFETY: 旧函数持有它；新函数要自己那份。
+            unsafe { instance.incref_object(source.as_ptr()) };
+            if let Some(previous) = set(Some(source)) {
+                // SAFETY: 新函数原本没有覆盖值；真顶下来的释放掉。
+                unsafe { instance.release_object(previous.as_ptr()) };
+            }
+        }
+    };
+    copy_override(old_function.name_override(), &|value| {
+        new_function.set_name_override(value)
+    });
+    copy_override(old_function.qualname_override(), &|value| {
+        new_function.set_qualname_override(value)
+    });
+    copy_override(old_function.doc_override(), &|value| {
+        new_function.set_doc_override(value)
+    });
+    copy_override(old_function.module_override(), &|value| {
+        new_function.set_module_override(value)
+    });
+    Some(replacement)
 }
 
 /// 帧**自己持有一份**命名空间引用（`Frame::for_code_with_namespace` 接手的是新引用），
@@ -699,6 +749,12 @@ pub fn build_class_from_parts_with_keywords(
             // 被包的函数／fget ✗ ⇒ 描述符 `__get__`／`__set__` 读不到东西（实测：强转读到 NULL ⇒ abort ✗）。
             // 与上面容器／数值族同一判据（基类自带 `new` 槽 ✓）；行为同 `class D(dict)` ✓。
             "classmethod", "staticmethod", "property",
+            // **异常族**（task-46）：`class E(ValueError)` 必须沿用 `ExceptionObject` 布局 ✓
+            // —— 否则落到通用 `AttributeObject` 布局 ✗ ⇒ 载荷里没有 `args`／`__cause__`／
+            // `__traceback__`，`with_traceback`／`str(e)` 全断 ✗（实测 `E("x")` ⇒
+            // `<__main__.E object at 0x…>`／`AttributeError: 'E' object has no attribute 'args'` ✗）。
+            // 判据同容器族：基类自带 `new` 槽（`exception_new` ✓）且是 `BaseException` 的子类 ✓。
+            "BaseException",
             // **`weakref`**（task-7）：`class KeyedRef(weakref.ref)` 必须**沿用 `WeakRefObject`
             // 载荷** ✓ —— 否则目标根本没处存（`ref.__new__(type, ob, cb)` 当时落到
             // `object.__new__` ⇒ 通用 `AttributeObject` ✗），而 `weakref_call` 按基类载荷读目标 ✓

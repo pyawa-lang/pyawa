@@ -1358,6 +1358,35 @@ impl Instance {
                 "__getformat__",
                 misc::float_getformat_native as crate::NativeFn,
             ),
+            // **`bytes.ljust`／`rjust`／`center`**（task-46）：类型级入口（`bytes.ljust(b"a", 3, b"x")` ✓）；
+            // 实例面由 `bytes_getattr` 走同一批函数 ✓。
+            (
+                self.type_named("bytes").expect("bytes 已登记"),
+                "ljust",
+                crate::builtin::bytes::bytes_ljust_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("bytes").expect("bytes 已登记"),
+                "rjust",
+                crate::builtin::bytes::bytes_rjust_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("bytes").expect("bytes 已登记"),
+                "center",
+                crate::builtin::bytes::bytes_center_native as crate::NativeFn,
+            ),
+            // **`set.union`**（task-46）：实例面走 `set_getattr`；类型级入口（`set.union({1}, {2})` ✓）
+            // 从这里装 —— stdlib `_hashlib_module` 的临时补丁同步移除（一处真相 ✓）。
+            (
+                self.type_named("set").expect("set 已登记"),
+                "union",
+                crate::builtin::set::set_union_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("frozenset").expect("frozenset 已登记"),
+                "union",
+                crate::builtin::set::set_union_native as crate::NativeFn,
+            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,

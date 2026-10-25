@@ -9,7 +9,7 @@
 //! - `_hashlib.new(name, data=b'', **kwargs)`：名字不区分大小写；不认识的算法报
 //!   `ValueError: unsupported hash type <名>`（`hashlib.new` 据此回退并给出同一文案）；
 //! - `openssl_md_meth_names`：只列**真有的**三种（参照是 frozenset 且含 OpenSSL 全部算法，
-//!   **如实偏差**；本层用 set 以配合 `hashlib.py` 的 `algorithms_available.union(...)`）；
+//!   **如实偏差**；本层用 set 以配合 `hashlib.py` 的 `algorithms_available.union(...)`；`set.union` 已收进 core ✓）；
 //! - `pbkdf2_hmac`／`scrypt`：名字在、真调用 ⇒ `NotImplementedError`（KDF 未接，不假数据）。
 //!
 //! ## 哈希对象（`HASH` 类型，三种算法共用——照参照 `type(_hashlib.openssl_md5())` 同型）
@@ -1006,69 +1006,6 @@ fn blake2s_native(
 }
 
 // --------------------------------------------------------------------------- //
-// `Lib/hashlib.py` 的导入口：`set.union`
-// --------------------------------------------------------------------------- //
-//
-// 上游 `hashlib.py` 在**导入期**做 `algorithms_available.union(_hashlib.openssl_md_meth_names)`，
-// 而本层 `set` 的方法面目前只有 `add`／`discard`／`pop`／`update`／`copy`／`issuperset`（没有
-// `union`）⇒ 直接 `AttributeError: 'set' object has no attribute 'union'` ⇒ `import hashlib` 失败。
-// 这里给 `set` 类型**补一个诚实的 `union`**（真取并集、真去重；不是假接口）——写域在 stdlib，
-// 不动 core；语义照参照（返回新 set，可接多个可迭代实参）。
-// **如实范围** ✗：实参只收 list／tuple／set／frozenset（走 core 的 `collect_iterable`），其余可迭代
-// 对象（生成器／range 等）如实 `TypeError: '<类型>' object is not iterable`（迭代协议面随后补）。
-
-fn set_union_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, ExecError> {
-    let (this, rest) = method_self(bound, args);
-    let Some(this) = this else {
-        return Err(instance.raise_builtin_error("TypeError", "union() 缺少 self 实参"));
-    };
-    // 去重口径＝引擎统一的"值相等"（与 `set.add` 同一处真相）。
-    let mut accumulated: Vec<NonNull<Header>> = Vec::new();
-    let mut push_unique = |item: NonNull<Header>| -> bool {
-        if accumulated
-            .iter()
-            .any(|existing| pyawa_core::executor::values_equal_public(instance, *existing, item))
-        {
-            return false;
-        }
-        accumulated.push(item);
-        true
-    };
-    for item in instance.set_items(this).unwrap_or_default() {
-        if push_unique(item) {
-            // `new_set` 接管**新引用**；`set_items` 给的是借用 ⇒ 自己留一份。
-            instance.retain(item);
-        }
-    }
-    for argument in rest {
-        let items = match instance.collect_iterable(*argument) {
-            Ok(items) => items,
-            Err(ExecError::Unsupported { .. }) => {
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    &format!(
-                        "'{}' object is not iterable",
-                        instance.type_name(instance.type_of(*argument))
-                    ),
-                ))
-            }
-            Err(error) => return Err(error),
-        };
-        for item in items {
-            if push_unique(item) {
-                instance.retain(item);
-            }
-        }
-    }
-    Ok(instance.new_set(accumulated))
-}
-
-// --------------------------------------------------------------------------- //
 // 模块构建
 // --------------------------------------------------------------------------- //
 
@@ -1134,11 +1071,6 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         .collect();
     let names = instance.new_set(names);
     instance.dict_set(namespace, "openssl_md_meth_names", names);
-    // **`set.union`**：见上方「导入口」的说明（`Lib/hashlib.py` 导入期就要它）。
-    if let Some(set_type) = instance.type_named("set") {
-        let union = make_native(instance, "union", set_union_native as NativeFn);
-        instance.set_type_attribute(set_type, "union", union);
-    }
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     let doc = instance.new_str(DOC);
