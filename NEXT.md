@@ -4,55 +4,34 @@
 > **本页是会话交接单页**（2026-10-25 ✓）：会话 10＝**M6**（r14：`P3-32`/`P3-33`；r15：`else`＋`with` 编译器格；r16：`time` 面 ⇒
 > `import test.support` 通过；r17：P3-35 批 A＋`sys.exc_info`＋`gc`＋4 骨架；r18：**P3-34 complex**＋mock 同步＋**try/with 余部重放修**；
 > r19：**P3-36 `.pyac` 修**＋**match 全形**＋`sys.monitoring`＋**`unicodedata`** ⇒ `import pdb`/`doctest`；
-> r20：**doctest 链同步（×20→0）**＋**批 B/C 语法（60→40，非 surrogate 仅剩 10）**＋**`compile()`/`f_back`**（⇒ 跑通 9）＋**`hashlib`（×4→0）**）。
-> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…20** 节 ✓（本笔追加 round 20）。
+> r20：**doctest 链同步（×20→0）**＋批 B/C 语法＋**`compile()`/`f_back`**＋**`hashlib`（×4→0）**；
+> r21：**非 surrogate 语法归零**（可编译 92.4%）＋core 小格批（异常子类 MRO/bytes.justify/set.union/`__dict__`/memoize）⇒ **`test_decorators` 16/16 OK**）。
+> 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…21** 节 ✓（本笔追加 round 21）。
 
 ## 现在
 
-- **HEAD**：`2e4ac19`（`dev`，本笔前）—— 本笔＝**round 20**：**doctest/pdb/bdb/_pyrepl 同步链**（14 文件，`doctest` ×20→0）＋ **批 B/C 语法缺口**（60→40；`~x`/star 表达式/PEP 646 星号下标/多切片/目标链/注解表达式重构/装饰器表达式/walrus 等；`except*` 改诚实 Unsupported）＋ **`builtins.compile()`**（exec/eval 可用）＋ **`sys._getframe` f_back 链**（跑通 7→9）＋ **`hashlib` 最小面**（Rust md5/sha1/sha256，×4→0）；细节见台账 round 20。
-- **工作区**：本笔待提交 ＝ **42 项**（23 个修改文件：compile/parser＋emitter 10 件/`builtin.rs`/`compile.rs`（core 内置）/`frame.rs`/`executor.rs`/`typecheck.rs`/`lib.rs`/`builtins_module.rs`/stdlib `lib.rs`/`tools/sync_lib.py`/`tests` ＋ `NEXT.md` ＋ 台账 round 20 ＋ `ROUNDS.md`；＋ 19 个新增文件：`Lib/{bdb,doctest,pdb,hashlib}.py`＋`Lib/_pyrepl/` 11 个、`crates/pyawa-core/src/builtin/compile.rs`、`tests/builtin_compile.rs`、`crates/pyawa-stdlib/src/_hashlib_module.rs`、`tests/hashlib.rs`；`git status --porcelain` 与之一致）。
+- **HEAD**：`45a1141`（`dev`，本笔前）—— 本笔＝**round 21**：**非 surrogate 语法缺口 10→0**（class `**`/星基类、f-string PEP 701、推导式下标目标、值模式 as、非 BMP 标识符、星迭代元组、genexp 海象；语法错总数 40→30＝全 surrogate）＋ **core 小格批**（异常子类 MRO、`bytes.ljust/rjust/center`、`set.union` 迁 core、函数 `__dict__`、dict 不可哈希键）＋ **裸元组语句 `x,`** ⇒ **`test_decorators` 16/16 OK**、可编译 92.4%；细节见台账 round 21。
+- **工作区**：本笔待提交 ＝ **26 项**（`git status --porcelain` 实测：compile/parser 若干、`classes.rs`、`builtin/{bytes,dict,set}.rs`、`builtin_objects/scalars.rs`、`executor/{iter,subscript}.rs`、stdlib `_hashlib_module.rs`（删临时补丁）、`tests/task46_small_cells.rs` 新增、`NEXT.md`＋台账 round 21＋`ROUNDS.md` 等；与实测一致）。
 - **stash**：**空** ✓
-- **round 20 新增验收（全 ✓）**：
-  1. **doctest 链**：仓库 Lib 下 `import doctest`／`pdb`／`bdb`／`_pyrepl` 全通（14 文件同步、`--check` 568 文件逐字节一致）；
-     survey `No module named 'doctest'` **×20 → 0**。
-  2. **批 B/C 语法**：**语法错 60→40**（30 条 surrogate 之外只剩 **10 条**）、**可编译 337→357**；`~x`/star 表达式/集合星号/
-     PEP 646 星号下标/多切片/`for a[i]`/`(o.a) +=`/装饰器任意表达式/walrus/元组表达式语句/`.01j`/注解表达式重构（含
-     `def f(x: -1)` 注解值真 bug）与 python3 对拍；`except*` 归诚实未实现。
-  3. **`builtins.compile()`**：exec/eval 可直接用 code 对象、SyntaxError 属性齐全、filename 正确 ⇒ 官方 `test_compiler_assemble`／
-     `test_compiler_codegen` 转 PASS（跑通 7→**9**）。
-  4. **`sys._getframe` f_back 链**：`_getframe(1).f_code.co_name`、f_back 链/越界/类型文案照参照；`test_unicodedata`/`test_doctest`
-     的该格已过（卡 `test.support.os_helper`＝surrogate epic）。
-  5. **`hashlib`**：Rust md5/sha1/sha256 向量与参照一致、`_hashlib` 面/`compare_digest` 可用、`Lib/hashlib.py` 同步 ⇒
-     `No module named 'hashlib'` **×4 → 0**；`hmac.compare_digest` 回归转绿。
-- **数字**（round 20 干净基线）：判据① **477/628＝76.0%**（通过 460＋参照口径 17，**+7**）；`Lib/` **564**（`--check` 568）、
-  进度指标 **461/564＝81.7%**；语料 407／在册差异 3 未变。`Lib/test` 体检：**可编译 357/397＝89.9%**、**跑通 9/397＝2.3%**、
-  语法错 40（30 surrogate＋10 非 surrogate）、未实现 43、运行期错 260、**超时 45**（`import doctest` ≈15s CPU + 重套件；与 round 19 的
-  32 不可直比）。**BadCodeSection／doctest／hashlib 三个签名均为 0**。
-- **缺口榜（下一轮）**：① `test.support.os_helper` **×101**（**surrogate epic：字符串表示层支持合法孤立代理** —— 最大单点，
-  **需用户拍板是否启动**；不启动则 M6「新差异为零」被它卡住）；② `\N{…}` 具名转义 11；③ 非 surrogate 语法错 10（`class A(**d)`／
-  泛型类 `**kwargs`、f-string 反斜杠/嵌套引号、推导式目标含下标、值模式 `case A.y as z`、非 BMP 标识符、test_re 引号、
-  test_grammar/test_named_expressions 残留）；④ `except*` 6／`async` 推导式 4／PEP 695 `**P` 2；⑤ 超时 45；
-  ⑥ 小格：`hmac.new` 卡 `bytes.ljust`、`sys.exc_info` 异常子类 MRO（`with_traceback`/`__cause__` 只在精确类型）、
-  `set.union` 挂 stdlib 类型字典（将来与 core 遮蔽）、`test_decorators` 余 4。
-- **本轮修掉的格不再出现在缺口榜**：doctest ×20、hashlib ×4、BadCodeSection（r19）、`compile` NameError、`f_back`。
-
-## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
-
-1. **M6 判据（`PLAN-milestones.md` §6）**：`MS-14` 的报告**可发布**，且"新差异"为零（对拍语料＋在册差异清单的复核；
-   `MS-9` 归一规则、`MS-13` 语料下限按 `§13-10` 的剩余开放收口）。
-2. **取活顺序**：**surrogate epic 立项评估（需用户拍板）** → 非 surrogate 语法错 10 → `\N{…}` 名字表 → `except*`/async 推导式/
-   PEP 695 → 超时 45 甄别 → 小格（`bytes.ljust`／异常子类 MRO／`set.union` 迁移）→ 报用户批准 M6 收口（`--no-ff` ＋ tag `m6`）。
-3. **如实**：M6 收口目前**被 surrogate epic 硬 gate**（`os_helper` ×101＋`multibytecodec_support` 唯一阻塞都是它；`MS-19` 判据补充
-   要求"合法 Python 被拒必须修、不得登记差异"），启动前需用户明确；不启动则只能给出"带已知 gate 的收口结论"。
-
-## 下一条命令（下一轮开工）
-
-```text
-git status --short                      # 应干净（round 20 已提交）
-# 下一格：非 surrogate 语法错 10（test_class/test_type_params 的 class A(**d)、test_fstring、test_listcomps、test_patma 等）
-python3 tools/libtests_survey.py --jobs 8
-```
-
+- **round 21 新增验收（全 ✓）**：
+  1. **官方 `test_decorators` 16/16 OK**（`Ran 16 tests`；`PYTHONPATH=/usr/lib/python3.14` 直跑）。
+  2. **非 surrogate 语法错 0**：语法错总数 40→**30（全部 surrogate）**、**可编译 337/397…→367/397＝92.4%**；10 个代表文件语法全过
+     （class `**d`/`*基类`/泛型、f-string PEP 701、推导式下标目标、`case A.y as z`、非 BMP 标识符、`for x in *a,*b`、genexp 海象、test_re 引号）。
+  3. **core 小格批**：异常子类 MRO（`test_dbcheck` 过）、`bytes.ljust/rjust/center`（hmac 回退实测）、`set.union` 迁 core（stdlib 临时补丁删除）、
+     函数 `__dict__`（`test_double` 过）、dict 不可哈希键（`test_memoize` 过）—— 各格与 python3 对拍一致。
+  4. **裸元组语句 `x,`** 修复（`compile("x,","test","exec")` 也过）；`@pass` 等如实 SyntaxError。
+  5. 既有验收仍全过：`import test.support` ok；`sys.exit(3)`⇒3；`unittest.main()`⇒0；`PYTHONPATH` 进 `sys.path`。
+- **数字**（round 21 干净基线）：判据① **477/628＝76.0%**（未变）；`Lib/` **564**（`--check` 568）、进度指标 **461/564＝81.7%**；
+  语料 407／在册差异 3 未变。`Lib/test` 体检：**可编译 367/397＝92.4%**、**跑通 9/397＝2.3%**（`test_decorators` 新入；
+  `test_bigaddrspace` 因冷编译 15.7s 超 30s 上限转 timeout，非语义回归）、**语法错 30（全部 surrogate）**、未实现 48、运行期错 271、**超时 39**
+  （含 doctest 链 ≈15s 冷编译成本）。
+- **MS-14 报告**（`target/conformance/report.md`，round 21 实测）：参照 Python 3.14.4、407 案例**全通过**、已知差异 **0**、**新差异 0**
+  ⇒ **四要素齐、可发布**（`M3-COVERAGE` 硬门在 check.py 里同步绿）。
+- **缺口榜（M6 收口前）**：① **surrogate epic**（`os_helper` ×106＋`multibytecodec_support` 唯一阻塞＝字符串表示层支持合法孤立代理，
+  需 WTF-8 级 repr 改造，**必须用户拍板**）；② `\N{…}` 名字表 11；③ `except*` 6／`async` 推导式 4／PEP 695（`*Ts`/`**P`）／映射 `**rest`；
+  ④ `list.__delitem__` 下标面、`bytearray.ljust` 旧口径、dict 真哈希表（自定义 `__hash__`）；⑤ 超时 39 甄别（冷编译成本/网络类）。
+- **本战役 M6 结论（待用户拍板）**：MS-14 ✓／新差异 0 ✓；但**surrogate 未修前不满足** `MS-19` 判据补充"合法 Python 被拒必须修"
+  ⇒ 已按要求如实报告并请示是否启动 surrogate epic（跨轮大改）。
 ## 本战役的关键口径（新会话必读）
 
 - **判据① 分子测量**：先 `tools/cargo.sh test -p pyawa-abi --test conformance --no-run`（重建）再 `rm -rf Lib/__pyawa__`，

@@ -1752,3 +1752,51 @@
 - **下一轮**：**surrogate epic 立项评估**（`os_helper` ×101＋`multibytecodec_support` 的唯一阻塞＝字符串表示层支持合法孤立代理；
   这是跨轮大改，**需用户拍板**）→ 非 surrogate 语法 10 → `\N{…}` 名字表 → `except*`/async 推导式/PEP 695 → 超时 45 甄别 →
   小格（`bytes.ljust`/异常子类 MRO/`set.union` 迁移）→ 报用户批准 M6 收口。
+
+---
+
+## round 21（会话 10 · M6 续）落地 ✓ —— 非 surrogate 语法归零（可编译 92.4%）＋ core 小格批（`test_decorators` 全绿）
+
+- **口径**：`HEAD`（本笔前）＝`45a1141`（`dev`，round 20）；工作区起始干净；`check.py` 14/14。
+- **落地（两块）**：
+  1. **剩余 10 条非 surrogate 语法缺口 → 0**（语法错总数 **40 → 30，全部是 surrogate 转义**；可编译 **357 → 367/397＝92.4%**）：
+     - **class 定义**：`class A(**d)`／`*基类`／泛型类 `**kwargs` ⇒ 按参照 `dis` 补 `BUILD_LIST`/`LIST_EXTEND`/`LIST_APPEND`/
+       `CALL_INTRINSIC_1 6` 与 `BUILD_MAP`/`DICT_MERGE`/`CALL_FUNCTION_EX`（普通类路径一字节未动）；`__init_subclass__` kwargs 对拍一致。
+     - **f-string（PEP 701）**：插值内注释、花括号/引号嵌套逻辑**只对 f-string 生效**（修普通串误报"没有收尾引号"）；分段器跳过插值内嵌套字符串、
+       `#` 只在格式分隔符前算注释。
+     - **推导式目标含下标** `for (l[0], l) in`（`ComprehensionTarget` 增 Attribute/Subscript，`STORE_ATTR`/`STORE_SUBSCR`，`UnboundLocalError` 同参照）。
+     - **值模式**：`case A.y as z`／`(0 as w) | (1 as w)`（`Pattern::As`）＋带符号/复数常量模式（`-0`/`-1.5`/`-1j`/`0+0j` 折叠）。
+     - **非 BMP 标识符**（标识符继续字符 XID_Continue 近似，组合记号/变体选择符）；`for x in *a, *b, *c:` 首项星号；
+       生成器表达式元素裸海象；`test_re` 引号误报已清。
+  2. **core 小格批**（5 格，每格与 python3 3.14.4 对拍）：
+     - **异常子类 MRO**：布局判定表纳 `"BaseException"` 族 ⇒ `class E(ValueError)` 子类沿用 `ExceptionObject` 布局并继承
+       getattr/str/repr/new 槽 ⇒ `str/args/with_traceback/__cause__/__context__/__traceback__` 与参照一致（`test_dbcheck` 过）。
+     - **`bytes.ljust`/`rjust`/`center`**（hmac 回退路径需要）：`__index__` width、默认 `b' '`、center 多出 1 个补右、填充字符 TypeError 文案逐字对齐。
+     - **`set.union` 迁 core**：真实现（多实参、通用迭代、不可哈希元素/关键字文案、frozenset 结果保持），**stdlib 临时补丁整段删除**；顺修 `frozenset.__repr__`。
+     - **函数 `__dict__`**：`requalified_method` 换 `co_qualname` 再造函数时漏搬 `__dict__`/四个可写覆盖值 ⇒ 嵌套类装饰器属性丢失（`test_double` 过）。
+     - **`test_memoize` 3≠4**：dict 从不拒绝不可哈希键 ⇒ 补 `reject_unhashable_key`（list/dict/set/bytearray、tuple 递归、`__hash__=None`，文案照实测）
+       在各下标/get/setdefault/in 路径拦截（`test_memoize` 过）。
+     - 新增 `tests/task46_small_cells.rs`（5 项 e2e）。**如实偏差**：`bytearray.ljust` 返回 `bytes`（旧口径）；dict 仅按类型判可哈希
+       （本层无哈希表，不真调自定义 `__hash__`）；异常子类 `E.__init__` repr 形/函数 repr 缺 qualname（旧）。
+  3. **裸元组表达式语句 `x,`**（`test_errors` 最后红条）：`parse_tuple_target_tail` 逗号后紧跟语句结尾 ⇒ 元组表达式语句收尾；
+     尾随逗号终止集合补 `End`/`Dedent`/`Semicolon`（`compile("x,","test","exec")` 也过）；`*a,`/`*a, b` 无 `=` 退回表达式通道；
+     `@pass`/`@import sys` 如实 SyntaxError（原误编过）。**⇒ 官方 `test_decorators` 16/16 OK**。
+- **验收（全 ✓）**：`test_decorators` **16/16 OK**（`Ran 16 tests`）；8 组代表文件（test_class/test_type_params/test_listcomps/test_patma/
+  test_unicode_identifiers/test_fstring/test_xml_etree/test_re/test_grammar/test_named_expressions）**语法全过**（新卡点均运行期/未实现，已逐条列）；
+  小格探针与参照一致；**红线 `--test compile` 逐字节 4 passed**；`parse_batch_shapes` 7、`classes` 29、`task46` 5、`-p pyawa-core` **71 目标全绿**；
+  0 warning；`check.py` 14/14。
+- **数字（干净基线）**：`Lib/test` 体检 397：**可编译 367/397＝92.4%**、**跑通 9/397＝2.3%**（`test_decorators` 新入；`test_bigaddrspace` 本轮
+  因冷编译 15.7s 超 30s 上限转为 timeout —— 非语义回归，已核实直接跑 `OK (skipped=6)`）、**语法错 30（全部 surrogate）**、
+  未实现 48（清语法后暴露的下一格：`\N{…}` 11／`except*` 6／`async` 推导式 4／PEP 695 若干／`**rest` 映射等）、
+  运行期错 271、**超时 39**（含 doctest 链 ≈15s 冷编译成本）。判据① **477/628＝76.0%**（未变）；`Lib/` 564（`--check` 568）、
+  进度指标 461/564＝81.7%；语料 407／在册差异 3 未变。**MS-14 报告**（`target/conformance/report.md`，round 21 实测）：
+  参照 Python 3.14.4／407 案例**全通过**／已知差异 0／**新差异 0** ⇒ **报告四要素齐、可发布**。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **4974s**）：① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（18s）；
+  ③ `cargo test --workspace` **全部测试绿**（515s；含 `pep695_shell_shapes` 9／`task46_small_cells` 5／`parse_batch_shapes` 7）；④ `check.py` **14/14**（3s）；
+  ⑤ `stability.py` 计数一致（1544s）；⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2073s）；⑦ 夹具守卫（0s）；⑧ 语料下限 407/112（0s）；
+  ⑨ `conformance` **5 passed**（407s）；⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（414s）。
+- **剩余/下一轮（M6 收口前的硬 gate）**：**surrogate epic**（字符串表示层支持合法孤立代理：`os_helper` ×106 与
+  `multibytecodec_support` 的唯一阻塞；需字符串 repr WTF-8 级改造，**必须用户拍板**）；其余可继续：`\N{…}` 名字表 11、`except*` 6、
+  `async` 推导式 4、PEP 695（`*Ts`/`**P`）、映射 `**rest`、`list.__delitem__` 下标面、超时 39 甄别（冷编译成本/网络类）、
+  `bytearray.ljust` 旧口径、`dict` 真哈希表（自定义 `__hash__`）。**M6 收口结论**：MS-14 ✓／新差异 0 ✓，但若坚持以 `MS-19` 判据补充
+  "合法 Python 被拒必须修"为 gate，则 surrogate 未修前**不满足收口**；已按目标要求向用户请示。
