@@ -214,7 +214,9 @@ pub unsafe fn bytes_new(
             Ok(build(out))
         }
         [only, encoding] => {
-            let Some(text) = instance.text_value(*only) else {
+            // **P3-38 S3a**：输入是 WTF-8（可能含孤立代理）⇒ 走核心编码器；两参形态是
+            // **strict**（`bytes('\udcff', 'utf-8')` ⇒ `UnicodeEncodeError: surrogates not allowed` ✓）。
+            let Some(text) = instance.wtf8_of(*only).map(<[u8]>::to_vec) else {
                 let name = instance.type_name(instance.type_of(*only));
                 return Err(instance.raise_builtin_error(
                     "TypeError",
@@ -225,8 +227,10 @@ pub unsafe fn bytes_new(
                 return Err(instance.raise_builtin_error("TypeError", "encoding must be a string"));
             };
             match name.to_ascii_lowercase().replace('_', "-").as_str() {
-                // 第一刀只接 UTF-8：Rust 字符串就是 UTF-8，`.into_bytes()` 即编码结果
-                "utf-8" | "utf8" | "u8" => Ok(build(text.into_bytes())),
+                // 第一刀只接 UTF-8（其余编码如实 LookupError ✓）。
+                "utf-8" | "utf8" | "u8" => {
+                    Ok(build(instance.encode_with_builtin_codec(&text, "utf-8", "strict")?))
+                }
                 other => Err(instance.raise_builtin_error(
                     "LookupError",
                     &format!("unknown encoding: {other}"),

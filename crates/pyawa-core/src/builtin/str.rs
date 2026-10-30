@@ -1094,13 +1094,25 @@ pub(crate) fn str_replace_native(
 /// 内置 `utf-8`／`ascii`／`latin-1`／`cp437` 走快路径，**其余委派 `_codecs.lookup` 注册表**
 /// （⇒ `'あ'.encode('cp932')` 与 `Lib/encodings/*` 全族可用 ✓）。先前这里另有一份 4 编码白名单 ✗
 /// （与 `bytes.decode` 那份重复 ⇒ 两处都得改才通）。
+/// 取绑定 `str` 的 **WTF-8 字节**（P3-38 S3a）：`str.encode` 的输入可含孤立代理 ⇒
+/// `bound_text`（`.value()`）对 WTF-8 表示会 panic ✗，这里走字节视图 ✓。
+fn bound_wtf8(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<Vec<u8>, crate::ExecError> {
+    let Some(bound) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
+    };
+    // SAFETY: 绑定的是 `str`（或子类，布局沿用 str ✓）。
+    Ok(unsafe { &*bound.as_ptr().cast::<crate::StrObject>() }
+        .wtf8_bytes()
+        .to_vec())
+}
+
 pub(crate) fn str_encode_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+    let text = bound_wtf8(instance, bound)?;
     let mut encoding = args.first().and_then(|value| instance.text_of(*value));
     let mut errors = args.get(1).and_then(|value| instance.text_of(*value));
     for (key, value) in kwargs {
@@ -1115,7 +1127,7 @@ pub(crate) fn str_encode_native(
     }
     let encoding = encoding.unwrap_or("utf-8");
     let errors = errors.unwrap_or("strict");
-    instance.encode_with_encoding_and_errors(&text, encoding, errors)
+    instance.encode_wtf8_with_encoding_and_errors(&text, encoding, errors)
 }
 
 /// `str.format(*args, **kwargs)` ✓（第 722 轮 ✓）：`Lib/base64.py:246` 的

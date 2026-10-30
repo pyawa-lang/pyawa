@@ -310,91 +310,207 @@ fn character_literal(codepoint: u32) -> String {
     }
 }
 
-/// **内置四档的编码快路径**（不碰注册表；语义与旧 `str_encode_native` 逐条一致 ✓）。
+/// **WTF-8 文本的码点表**（`str` 的载荷由 S2 校验过 ⇒ 这里必成功）。
+fn code_points_of(text: &[u8]) -> Vec<u32> {
+    crate::wtf8::code_points(text)
+        .map(|point| point.expect("str 载荷必须是合法 WTF-8"))
+        .collect()
+}
+
+/// 一串**连续代理**的 `UnicodeEncodeError`（UTF-8 编码器口径，实测 3.14.4）：
+/// - 单个 ⇒ `can't encode character '\ud800' in position N: surrogates not allowed`；
+/// - 连续多个 ⇒ `can't encode characters in position N-M: surrogates not allowed` ✓。
+fn surrogate_encode_error(
+    instance: &Instance,
+    points: &[u32],
+    start: usize,
+    escapable: Option<(u32, u32)>,
+) -> ExecError {
+    let mut end = start + 1;
+    while end < points.len() && crate::wtf8::is_surrogate(points[end]) {
+        if let Some((low, high)) = escapable {
+            if (low..=high).contains(&points[end]) {
+                break;
+            }
+        }
+        end += 1;
+    }
+    let last = end - 1;
+    let message = if last == start {
+        format!(
+            "'utf-8' codec can't encode character '{}' in position {start}: surrogates not allowed",
+            character_literal(points[start])
+        )
+    } else {
+        format!(
+            "'utf-8' codec can't encode characters in position {start}-{last}: surrogates not allowed"
+        )
+    };
+    instance.raise_builtin_error("UnicodeEncodeError", &message)
+}
+
+/// **UTF-8 编码器**（P3-38 S3a）：`surrogateescape` 只把 `U+DC80..=U+DCFF` 还原成单字节；
+/// `surrogatepass` 把代理按 3 字节 UTF-8 写；其余处理器按参照的 `surrogates not allowed`／
+/// `ignore`（跳过）／`replace`（`?`）走 ✓。
+fn encode_utf8_builtin(
+    instance: &Instance,
+    text: &[u8],
+    errors: &str,
+) -> Result<Vec<u8>, ExecError> {
+    let points = code_points_of(text);
+    let mut out: Vec<u8> = Vec::with_capacity(text.len());
+    let mut position = 0usize;
+    while position < points.len() {
+        let code = points[position];
+        if crate::wtf8::is_surrogate(code) {
+            match errors {
+                "surrogatepass" => {
+                    crate::wtf8::encode_code_point(code, &mut out)
+                        .expect("代理 U+D800..U+DFFF 在 WTF-8 范围内");
+                }
+                "surrogateescape" if (0xDC80..=0xDCFF).contains(&code) => {
+                    out.push((code - 0xDC00) as u8);
+                }
+                "ignore" => {}
+                "replace" => out.push(b'?'),
+                "strict" => return Err(surrogate_encode_error(instance, &points, position, None)),
+                "surrogateescape" => {
+                    return Err(surrogate_encode_error(
+                        instance,
+                        &points,
+                        position,
+                        Some((0xDC80, 0xDCFF)),
+                    ))
+                }
+                other => return Err(builtin_error_handler_failure(instance, "utf-8", other)),
+            }
+        } else {
+            crate::wtf8::encode_code_point(code, &mut out)
+                .expect("合法码点必可编码");
+        }
+        position += 1;
+    }
+    Ok(out)
+}
+
+/// **`ascii` 编码**：`surrogateescape` 只救 `U+DC80..=U+DCFF`；其余不可编码字符按
+/// `ordinal not in range(128)`（`surrogatepass` 对非 UTF-8 编解码器等同 strict ✓）。
+fn encode_ascii_builtin(
+    instance: &Instance,
+    text: &[u8],
+    errors: &str,
+) -> Result<Vec<u8>, ExecError> {
+    let mut out: Vec<u8> = Vec::with_capacity(text.len());
+    for (position, code) in code_points_of(text).into_iter().enumerate() {
+        if code < 0x80 {
+            out.push(code as u8);
+            continue;
+        }
+        if errors == "surrogateescape" && (0xDC80..=0xDCFF).contains(&code) {
+            out.push((code - 0xDC00) as u8);
+            continue;
+        }
+        match errors {
+            "ignore" => {}
+            "replace" => out.push(b'?'),
+            // `surrogateescape` 对**不可逃逸**的字符（含 U+D800..DC7F／DD00..DFFF 与普通
+            // 不可编码字符）照参照回本编解码器的 strict 文案 ✓（只有 UTF-8 才说 surrogates not allowed）。
+            "strict" | "surrogatepass" | "surrogateescape" => {
+                return Err(instance.raise_builtin_error(
+                    "UnicodeEncodeError",
+                    &format!(
+                        "'ascii' codec can't encode character '{}' in position {position}: ordinal not in range(128)",
+                        character_literal(code)
+                    ),
+                ))
+            }
+            other => return Err(builtin_error_handler_failure(instance, "ascii", other)),
+        }
+    }
+    Ok(out)
+}
+
+/// **`latin-1` 编码**：`surrogateescape` 同上（只救 `U+DC80..=U+DCFF`）。
+fn encode_latin1_builtin(
+    instance: &Instance,
+    text: &[u8],
+    errors: &str,
+) -> Result<Vec<u8>, ExecError> {
+    let mut out: Vec<u8> = Vec::with_capacity(text.len());
+    for (position, code) in code_points_of(text).into_iter().enumerate() {
+        if code <= 0xFF {
+            out.push(code as u8);
+            continue;
+        }
+        if errors == "surrogateescape" && (0xDC80..=0xDCFF).contains(&code) {
+            out.push((code - 0xDC00) as u8);
+            continue;
+        }
+        match errors {
+            "ignore" => {}
+            "replace" => out.push(b'?'),
+            "strict" | "surrogatepass" | "surrogateescape" => {
+                return Err(instance.raise_builtin_error(
+                    "UnicodeEncodeError",
+                    &format!(
+                        "'latin-1' codec can't encode character '{}' in position {position}: ordinal not in range(256)",
+                        character_literal(code)
+                    ),
+                ))
+            }
+            other => return Err(builtin_error_handler_failure(instance, "latin-1", other)),
+        }
+    }
+    Ok(out)
+}
+
+/// **`cp437` 编码**（`charmap` 口径：文案用 `'charmap' codec … character maps to <undefined>`）。
+fn encode_cp437_builtin(
+    instance: &Instance,
+    text: &[u8],
+    errors: &str,
+) -> Result<Vec<u8>, ExecError> {
+    let table = crate::instance::CP437;
+    let mut out: Vec<u8> = Vec::with_capacity(text.len());
+    for (position, code) in code_points_of(text).into_iter().enumerate() {
+        if let Some(byte) = table.iter().position(|candidate| *candidate as u32 == code) {
+            out.push(byte as u8);
+            continue;
+        }
+        if errors == "surrogateescape" && (0xDC80..=0xDCFF).contains(&code) {
+            out.push((code - 0xDC00) as u8);
+            continue;
+        }
+        match errors {
+            "ignore" => {}
+            "replace" => out.push(b'?'),
+            "strict" | "surrogatepass" | "surrogateescape" => {
+                return Err(instance.raise_builtin_error(
+                    "UnicodeEncodeError",
+                    &format!(
+                        "'charmap' codec can't encode character '\\u{:04x}' in position {position}: character maps to <undefined>",
+                        code
+                    ),
+                ))
+            }
+            other => return Err(builtin_error_handler_failure(instance, "cp437", other)),
+        }
+    }
+    Ok(out)
+}
+
+/// **内置四档的编码快路径**（P3-38 S3a：输入是 **WTF-8 字节**，返回编码字节）。
 fn encode_builtin(
     instance: &Instance,
-    text: &str,
+    text: &[u8],
     codec: &'static str,
     errors: &str,
 ) -> Result<Vec<u8>, ExecError> {
     match codec {
-        "utf-8" => Ok(text.as_bytes().to_vec()),
-        "latin-1" => {
-            let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
-            for (position, character) in text.chars().enumerate() {
-                let code = character as u32;
-                if code <= 0xFF {
-                    bytes.push(code as u8);
-                    continue;
-                }
-                match errors {
-                    "ignore" => {}
-                    "replace" => bytes.push(b'?'),
-                    "strict" => {
-                        return Err(instance.raise_builtin_error(
-                            "UnicodeEncodeError",
-                            &format!(
-                                "'latin-1' codec can't encode character '{}' in position {position}: ordinal not in range(256)",
-                                character_literal(code)
-                            ),
-                        ))
-                    }
-                    other => return Err(builtin_error_handler_failure(instance, codec, other)),
-                }
-            }
-            Ok(bytes)
-        }
-        "ascii" => {
-            let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
-            for (position, character) in text.chars().enumerate() {
-                let code = character as u32;
-                if code < 0x80 {
-                    bytes.push(code as u8);
-                    continue;
-                }
-                match errors {
-                    "ignore" => {}
-                    "replace" => bytes.push(b'?'),
-                    "strict" => {
-                        return Err(instance.raise_builtin_error(
-                            "UnicodeEncodeError",
-                            &format!(
-                                "'ascii' codec can't encode character '{}' in position {position}: ordinal not in range(128)",
-                                character_literal(code)
-                            ),
-                        ))
-                    }
-                    other => return Err(builtin_error_handler_failure(instance, codec, other)),
-                }
-            }
-            Ok(bytes)
-        }
-        "cp437" => {
-            let table = crate::instance::CP437;
-            let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
-            for (position, character) in text.chars().enumerate() {
-                match table.iter().position(|candidate| *candidate == character) {
-                    Some(byte) => bytes.push(byte as u8),
-                    None => match errors {
-                        "ignore" => {}
-                        "replace" => bytes.push(b'?'),
-                        "strict" => {
-                            return Err(instance.raise_builtin_error(
-                                "UnicodeEncodeError",
-                                &format!(
-                                    // 参照的 cp437 走 **charmap** 编解码器 ⇒ 文案是 `'charmap' codec` ＋
-                                    // `character maps to <undefined>`（实测 ✓），不是 `'cp437' … no mapping`。
-                                    "'charmap' codec can't encode character '\\u{:04x}' in position {position}: character maps to <undefined>",
-                                    character as u32
-                                ),
-                            ))
-                        }
-                        other => return Err(builtin_error_handler_failure(instance, codec, other)),
-                    },
-                }
-            }
-            Ok(bytes)
-        }
+        "utf-8" => encode_utf8_builtin(instance, text, errors),
+        "latin-1" => encode_latin1_builtin(instance, text, errors),
+        "ascii" => encode_ascii_builtin(instance, text, errors),
+        "cp437" => encode_cp437_builtin(instance, text, errors),
         _ => unreachable!("builtin_encoding 只回四档"),
     }
 }
@@ -426,76 +542,162 @@ fn utf8_decode_error(instance: &Instance, value: &[u8], start: usize, error_len:
     instance.raise_builtin_error("UnicodeDecodeError", &message)
 }
 
-/// **UTF-8 解码**（`errors` 三条：非法序列按**一个错误单元**跳过／替换成 `\uFFFD`；末尾截断序列
-/// 整段算一个单元 —— 与参照的 `replace` 口径一致 ✓）。
-fn decode_utf8_builtin(instance: &Instance, value: &[u8], errors: &str) -> Result<String, ExecError> {
-    let mut out = String::with_capacity(value.len());
-    let mut consumed = 0usize;
-    while consumed < value.len() {
-        match core::str::from_utf8(&value[consumed..]) {
+/// **WTF-8 字节 ⇒ str 载荷**（解码结果交给 `new_str_wtf8`；结果必是合法 WTF-8 ✓）。
+fn bytes_as_str(instance: &Instance, bytes: &[u8]) -> NonNull<Header> {
+    instance
+        .new_str_wtf8(bytes)
+        .expect("解码产物必须是合法 WTF-8")
+}
+
+/// **UTF-8 解码**（P3-38 S3a）：返回 **WTF-8 字节**与**消耗的字节数**。
+///
+/// 处理器口径（照参照 3.14.4 实测）：
+/// - `surrogateescape`：**逐字节**把不可解码字节映射成 `U+DC00+byte`（`ED A0 80` ⇒
+///   `\udced\udca0\udc80`，`C3` 截断 ⇒ `\udcc3`）✓；
+/// - `surrogatepass`：只接**合法的 3 字节代理序列**（`ED A0..BF 80..BF`）；其余非法照 strict 报 ✓；
+/// - `ignore`／`replace`：**逐字节**跳过／替换（`ED A0 80` ⇒ 3 个 `U+FFFD` ✓）；
+/// - `final=false` 时**末尾截断**序列**留着**（返回已解部分与消耗数；`_codecs.utf_8_decode` 用）✓。
+fn decode_utf8_builtin(
+    instance: &Instance,
+    value: &[u8],
+    errors: &str,
+    final_round: bool,
+) -> Result<(Vec<u8>, usize), ExecError> {
+    let mut out: Vec<u8> = Vec::with_capacity(value.len());
+    let mut position = 0usize;
+    while position < value.len() {
+        match core::str::from_utf8(&value[position..]) {
             Ok(rest) => {
-                out.push_str(rest);
-                consumed = value.len();
+                out.extend_from_slice(rest.as_bytes());
+                return Ok((out, value.len()));
             }
             Err(error) => {
                 let valid = error.valid_up_to();
                 if valid > 0 {
-                    out.push_str(core::str::from_utf8(&value[consumed..consumed + valid]).unwrap_or(""));
-                    consumed += valid;
+                    out.extend_from_slice(&value[position..position + valid]);
+                    position += valid;
+                    continue;
                 }
-                let span = error.error_len().unwrap_or(value.len() - consumed);
+                // `surrogatepass`：3 字节代理序列（WTF-8 的 ED A0..BF 80..BF）解成代理码点 ✓。
+                if errors == "surrogatepass"
+                    && value[position] == 0xED
+                    && position + 2 < value.len()
+                    && (0xA0..=0xBF).contains(&value[position + 1])
+                    && (0x80..=0xBF).contains(&value[position + 2])
+                {
+                    let code = 0xD800
+                        | (((u32::from(value[position + 1]) & 0x3F) << 6)
+                            | (u32::from(value[position + 2]) & 0x3F));
+                    crate::wtf8::encode_code_point(code, &mut out)
+                        .expect("代理码点在 WTF-8 范围内");
+                    position += 3;
+                    continue;
+                }
+                let error_len = error.error_len();
+                if error_len.is_none() && !final_round {
+                    // 末尾截断：留给下一段（与 strict 无关 —— 参照的增量口径 ✓）。
+                    return Ok((out, position));
+                }
+                // **错误单元的字节跨度**（照参照 3.14.4 实测）：
+                // - 结构错（`Some(n)`）⇒ 一次跨 `n` 字节（`replace` 只吐**一个** U+FFFD、
+                //   `ignore` 一次跳过这 n 字节 —— `b'\xe2\x82('` 的 replace ⇒ `'�('` ✓）；
+                // - 末尾截断（`None`）⇒ 整段剩余前缀算**一个**错误单元（`b'ab\xe3\x81'` ⇒ `'ab�'` ✓，
+                //   不是逐字节吐两个 ✗）。
+                // `surrogateescape` 例外：**跨度内逐字节**映射 U+DC00+byte ✓
+                //（`b'\xe2\x82('` ⇒ `'\udce2\udc82('` ✓）。
+                let span = error_len.unwrap_or(value.len() - position);
                 match errors {
-                    "strict" => return Err(utf8_decode_error(instance, value, consumed, error.error_len())),
-                    "ignore" => consumed += span,
+                    "strict" | "surrogatepass" => {
+                        return Err(utf8_decode_error(instance, value, position, error_len))
+                    }
+                    "ignore" => position += span,
                     "replace" => {
-                        out.push('\u{fffd}');
-                        consumed += span;
+                        crate::wtf8::encode_code_point(0xFFFD, &mut out)
+                            .expect("U+FFFD 可编码");
+                        position += span;
+                    }
+                    "surrogateescape" => {
+                        for byte in &value[position..position + span] {
+                            crate::wtf8::encode_code_point(0xDC00 + u32::from(*byte), &mut out)
+                                .expect("U+DC80..U+DCFF 在 WTF-8 范围内");
+                        }
+                        position += span;
                     }
                     other => return Err(builtin_error_handler_failure(instance, "utf-8", other)),
                 }
             }
         }
     }
+    Ok((out, value.len()))
+}
+
+/// **`ascii` 解码**（`surrogateescape`：非法单字节 ⇒ `U+DC00+byte`；`surrogatepass` 等同 strict ✓）。
+fn decode_ascii_builtin(
+    instance: &Instance,
+    value: &[u8],
+    errors: &str,
+) -> Result<Vec<u8>, ExecError> {
+    let mut out: Vec<u8> = Vec::with_capacity(value.len());
+    for (position, byte) in value.iter().enumerate() {
+        if *byte < 0x80 {
+            out.push(*byte);
+            continue;
+        }
+        match errors {
+            "ignore" => {}
+            "replace" => {
+                crate::wtf8::encode_code_point(0xFFFD, &mut out).expect("U+FFFD 可编码");
+            }
+            "surrogateescape" => {
+                crate::wtf8::encode_code_point(0xDC00 + u32::from(*byte), &mut out)
+                    .expect("U+DC80..U+DCFF 在 WTF-8 范围内");
+            }
+            "strict" | "surrogatepass" => {
+                return Err(instance.raise_builtin_error(
+                    "UnicodeDecodeError",
+                    &format!(
+                        "'ascii' codec can't decode byte 0x{byte:02x} in position {position}: ordinal not in range(128)"
+                    ),
+                ))
+            }
+            other => return Err(builtin_error_handler_failure(instance, "ascii", other)),
+        }
+    }
     Ok(out)
 }
 
-/// **内置四档的解码快路径**（不碰注册表；语义与旧实现逐条一致 ＋ 补上 `errors` 三态 ✓）。
+/// **`latin-1` 解码**（不可能失败）。
+fn decode_latin1_builtin(value: &[u8]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(value.len());
+    for byte in value {
+        crate::wtf8::encode_code_point(u32::from(*byte), &mut out).expect("latin-1 码点可编码");
+    }
+    out
+}
+
+/// **`cp437` 解码**（不可能失败）。
+fn decode_cp437_builtin(value: &[u8]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(value.len());
+    for byte in value {
+        let character = crate::instance::CP437[*byte as usize];
+        crate::wtf8::encode_code_point(character as u32, &mut out)
+            .expect("cp437 码点可编码");
+    }
+    out
+}
+
+/// **内置四档的解码快路径**（P3-38 S3a：返回 **WTF-8 字节**）。
 fn decode_builtin(
     instance: &Instance,
     value: &[u8],
     codec: &'static str,
     errors: &str,
-) -> Result<String, ExecError> {
+) -> Result<Vec<u8>, ExecError> {
     match codec {
-        "utf-8" => decode_utf8_builtin(instance, value, errors),
-        "ascii" => {
-            let mut out = String::with_capacity(value.len());
-            for (index, byte) in value.iter().enumerate() {
-                if *byte < 0x80 {
-                    out.push(*byte as char);
-                    continue;
-                }
-                match errors {
-                    "ignore" => {}
-                    "replace" => out.push('\u{fffd}'),
-                    "strict" => {
-                        return Err(instance.raise_builtin_error(
-                            "UnicodeDecodeError",
-                            &format!(
-                                "'ascii' codec can't decode byte 0x{byte:02x} in position {index}: ordinal not in range(128)"
-                            ),
-                        ))
-                    }
-                    other => return Err(builtin_error_handler_failure(instance, codec, other)),
-                }
-            }
-            Ok(out)
-        }
-        "latin-1" => Ok(value.iter().map(|byte| *byte as char).collect()),
-        "cp437" => Ok(value
-            .iter()
-            .map(|byte| crate::instance::CP437[*byte as usize])
-            .collect()),
+        "utf-8" => decode_utf8_builtin(instance, value, errors, true).map(|(bytes, _)| bytes),
+        "ascii" => decode_ascii_builtin(instance, value, errors),
+        "latin-1" => Ok(decode_latin1_builtin(value)),
+        "cp437" => Ok(decode_cp437_builtin(value)),
         _ => unreachable!("builtin_encoding 只回四档"),
     }
 }
@@ -558,7 +760,7 @@ impl Instance {
     /// **委派编码**：`_codecs.lookup(encoding).encode(text, errors)`（返回 bytes）。
     fn delegate_encode(
         &self,
-        text: &str,
+        text: &[u8],
         encoding: &str,
         errors: &str,
     ) -> Result<NonNull<Header>, ExecError> {
@@ -577,7 +779,9 @@ impl Instance {
                 &format!("unknown encoding: {encoding}"),
             ));
         };
-        let text_value = self.new_str(text);
+        let text_value = self
+            .new_str_wtf8(text)
+            .expect("`str.encode` 的载荷必须是合法 WTF-8");
         let errors_value = self.new_str(errors);
         let result = crate::executor::call::call_value(self, method, &[text_value, errors_value], &[]);
         // SAFETY: 两个实参是本函数的**新引用**（`call_value` 自己也 retain 过一份）⇒ 用完归还 ✓。
@@ -631,7 +835,7 @@ impl Instance {
         self.decode_with_encoding_and_errors(value, encoding, "strict")
     }
 
-    /// [`Self::decode_with_encoding`] ＋ `errors`（照参照的 strict／ignore／replace ✓）。
+    /// [`Self::decode_with_encoding`] ＋ `errors`（P3-38 S3a：返回 **WTF-8 表示**的 `str` ✓）。
     pub fn decode_with_encoding_and_errors(
         &self,
         value: &[u8],
@@ -639,26 +843,39 @@ impl Instance {
         errors: &str,
     ) -> Result<NonNull<Header>, ExecError> {
         if let Some(codec) = builtin_encoding(encoding) {
-            let text = decode_builtin(self, value, codec, errors)?;
-            return Ok(self.new_str(&text));
+            let bytes = decode_builtin(self, value, codec, errors)?;
+            return Ok(bytes_as_str(self, &bytes));
         }
         self.delegate_decode(value, encoding, errors)
     }
 
     /// **按名字编文本** ✓（`str.encode`／`_io` 的**一处真相** ✓）：内置四档走快路径，
     /// 其余委派 `_codecs.lookup` 注册表（返回 **bytes** ✓）。
+    ///
+    /// **P3-38 S3a**：这是**合法 UTF-8 输入**的便利入口（`_io` 用）；含代理的输入走
+    /// [`Self::encode_wtf8_with_encoding_and_errors`] ✓。
     pub fn encode_with_encoding(
         &self,
         text: &str,
         encoding: &str,
     ) -> Result<NonNull<Header>, ExecError> {
-        self.encode_with_encoding_and_errors(text, encoding, "strict")
+        self.encode_wtf8_with_encoding_and_errors(text.as_bytes(), encoding, "strict")
     }
 
-    /// [`Self::encode_with_encoding`] ＋ `errors`（照参照的 strict／ignore／replace ✓）。
+    /// [`Self::encode_with_encoding`] ＋ `errors`（合法 UTF-8 输入便利入口）。
     pub fn encode_with_encoding_and_errors(
         &self,
         text: &str,
+        encoding: &str,
+        errors: &str,
+    ) -> Result<NonNull<Header>, ExecError> {
+        self.encode_wtf8_with_encoding_and_errors(text.as_bytes(), encoding, errors)
+    }
+
+    /// **按名字编码 WTF-8 字节**（P3-38 S3a；`str.encode` 走这条 ⇒ 输入可含孤立代理 ✓）。
+    pub fn encode_wtf8_with_encoding_and_errors(
+        &self,
+        text: &[u8],
         encoding: &str,
         errors: &str,
     ) -> Result<NonNull<Header>, ExecError> {
@@ -667,5 +884,48 @@ impl Instance {
             return Ok(self.new_bytes(&bytes));
         }
         self.delegate_encode(text, encoding, errors)
+    }
+
+    /// **内置四档的字节级解码**（P3-38 S3a；给 `_codecs` 模块用）：返回 **WTF-8 字节** ✓。
+    pub fn decode_with_builtin_codec(
+        &self,
+        value: &[u8],
+        codec: &str,
+        errors: &str,
+    ) -> Result<Vec<u8>, ExecError> {
+        let Some(codec) = builtin_encoding(codec) else {
+            return Err(self.raise_builtin_error(
+                "LookupError",
+                &format!("unknown encoding: {codec}"),
+            ));
+        };
+        decode_builtin(self, value, codec, errors)
+    }
+
+    /// **内置四档的字节级编码**（P3-38 S3a；给 `_codecs` 模块用；输入是 **WTF-8 字节**）✓。
+    pub fn encode_with_builtin_codec(
+        &self,
+        text: &[u8],
+        codec: &str,
+        errors: &str,
+    ) -> Result<Vec<u8>, ExecError> {
+        let Some(codec) = builtin_encoding(codec) else {
+            return Err(self.raise_builtin_error(
+                "LookupError",
+                &format!("unknown encoding: {codec}"),
+            ));
+        };
+        encode_builtin(self, text, codec, errors)
+    }
+
+    /// **UTF-8 单档增量解码**（P3-38 S3a；`_codecs.utf_8_decode` 用）：
+    /// 返回 `(WTF-8 字节, 消耗字节数)` ✓；`final_round=false` 时末尾截断序列**留着** ✓。
+    pub fn decode_utf8_with_errors(
+        &self,
+        value: &[u8],
+        errors: &str,
+        final_round: bool,
+    ) -> Result<(Vec<u8>, usize), ExecError> {
+        decode_utf8_builtin(self, value, errors, final_round)
     }
 }

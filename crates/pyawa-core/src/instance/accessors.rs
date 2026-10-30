@@ -219,10 +219,12 @@ impl Instance {
     /// 与 [`Instance::text_of`] 的分工：`text_of` 是"合法 UTF-8 视图"（WTF-8 ⇒ `None`），
     /// 本函数**总是**给字节（UTF-8 表示的字节就是合法 WTF-8 ✓）——S2b 起语义层用它 ✓。
     pub fn wtf8_of(&self, object: NonNull<Header>) -> Option<&[u8]> {
-        if self.type_of(object) != self.singletons().str_type() {
+        // **`str` 的子类沿用 str 布局**（`AB-58` 族）⇒ 子类实例也给字节 ✓（S3a：`str.encode`
+        // 对 `class S(str)` 同样成立；先前只认精确 `str` ✗）。
+        if !self.is_str_object(object) {
             return None;
         }
-        // SAFETY: 类型身份刚确认是 `str` ✓。
+        // SAFETY: 类型身份刚确认是 `str`（或其子类，布局同 str）✓。
         Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes())
     }
 

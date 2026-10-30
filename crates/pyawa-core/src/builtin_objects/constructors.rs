@@ -472,6 +472,23 @@ pub(crate) fn make_str(class: NonNull<crate::TypeObject>, instance: &Instance, t
     object.into_raw().cast::<Header>()
 }
 
+/// 造一个 **WTF-8** 字符串实例（P3-38 S3a：`str(bytes, encoding, errors)` 的解码结果可能含
+/// 孤立代理 ⇒ 不能走 `make_str(&str)` ✓）；类型仍用调用方给的类 ✓。
+pub(crate) fn make_str_wtf8(
+    class: NonNull<crate::TypeObject>,
+    instance: &Instance,
+    bytes: &[u8],
+) -> NonNull<Header> {
+    if class == instance.singletons().str_type() {
+        return instance
+            .new_str_wtf8(bytes)
+            .expect("解码产物必须是合法 WTF-8");
+    }
+    let object = StrObject::new_wtf8(class, bytes.to_vec())
+        .expect("解码产物必须是合法 WTF-8");
+    instance.alloc(object).into_raw().cast::<Header>()
+}
+
 pub unsafe fn str_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
@@ -524,10 +541,12 @@ pub unsafe fn str_new(
             return Err(instance.raise_builtin_error("TypeError", &message));
         };
         let decoded = instance.decode_with_encoding_and_errors(bytes, &encoding, &errors)?;
-        let text = instance.text_value(decoded).unwrap_or_default();
-        // SAFETY: `decode_with_encoding_and_errors` 交回的是**新引用** ✓ ⇒ 取完文本把这**一份**还掉 ✓。
+        // **P3-38 S3a**：解码结果可能是 WTF-8（`surrogateescape`）⇒ 走 `wtf8_of`（先前
+        // `text_value` 对 WTF-8 表示会取不到／panic ✗）。
+        let raw = instance.wtf8_of(decoded).map(<[u8]>::to_vec).unwrap_or_default();
+        // SAFETY: `decode_with_encoding_and_errors` 交回的是**新引用** ✓ ⇒ 取完字节把这**一份**还掉 ✓。
         unsafe { instance.release_object(decoded.as_ptr()) };
-        return Ok(make_str(_class, instance, &text));
+        return Ok(make_str_wtf8(_class, instance, &raw));
     }
     // **"本来就是 `str` ⇒ 原样给回"只对 `str` 本身成立** ✓（第 612 轮修 ✗）：`class S(str)` 的 `S("ab")`
     // 必须造出 **`S` 的实例** ✓ —— 先前这条对子类也生效 ✗ ⇒ 返回的是普通 `str` ✗（`type(s) is S` 为假 ✓）。
@@ -535,6 +554,12 @@ pub unsafe fn str_new(
         && _class == instance.singletons().str_type()
     {
         return Ok(instance.retain(*value));
+    }
+    // **`class S(str)` 的 `S(<str>)`**（P3-38 S3a）：值本来就是 str（可能含孤立代理）⇒ 内容原样、
+    // 只换类 ✓（否则落到 `object_str` 的 `.value()` ⇒ 对 WTF-8 表示会 panic ✗）。
+    if instance.is_str_object(*value) {
+        let bytes = instance.wtf8_of(*value).map(<[u8]>::to_vec).unwrap_or_default();
+        return Ok(make_str_wtf8(_class, instance, &bytes));
     }
     // **走 `str()` 那一套** ✓（第 211 轮真 bug 修复 ✗：先前用的是 `object_repr` ✗ ⇒
     // 等于把 `str(x)` 实现成 `repr(x)` ✓ ⇒ 用户自定义的 `__str__` 被**整个忽略** ✗、
