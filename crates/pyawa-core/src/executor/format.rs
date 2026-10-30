@@ -25,6 +25,57 @@ pub(crate) fn release(instance: &Instance, raw: NonNull<Header>) {
     unsafe { instance.release_object(raw.as_ptr()) };
 }
 
+/// **恰 `str` 的 WTF-8 表示的最小格式化**（P3-38 S2c）：宽度／填充／对齐／精度按**码点**
+/// 在 WTF-8 字节层做 ⇒ 代理原样保留、结果仍是 WTF-8 串 ✓（`format(chr(0xD800), '>5')` 与参照逐字符一致 ✓）。
+///
+/// 只接 `str` 合法的**简单**规格：`ty` 空或 `'s'`、无 `sign`／`#`／分组／`=` 对齐；
+/// 其余返回 `None` ⇒ 调用方走既有（有损）路径 —— **不 panic** 是硬要求 ✓。
+pub(crate) fn format_wtf8_str(
+    instance: &Instance,
+    value: NonNull<Header>,
+    spec: &crate::format::Spec,
+) -> Option<NonNull<Header>> {
+    if spec.sign.is_some()
+        || spec.alternate
+        || spec.grouping.is_some()
+        || matches!(spec.align, Some('='))
+        || !matches!(spec.ty, None | Some('s'))
+    {
+        return None;
+    }
+    let mut points = instance.str_code_point_vec(value)?;
+    if let Some(precision) = spec.precision {
+        points.truncate(precision);
+    }
+    let width = spec.width.unwrap_or(0);
+    // 参照实测：`str` 的 `0` 填充仍是**左对齐**（`format('ab', '05') == 'ab000'` ✓）
+    let fill = if spec.zero { '0' } else { spec.fill };
+    let align = spec.align.unwrap_or('<');
+    let missing = width.saturating_sub(points.len());
+    let fill_points: Vec<u32> = core::iter::repeat_n(u32::from(fill), missing).collect();
+    let output = match align {
+        '>' => {
+            let mut out = fill_points;
+            out.extend(points);
+            out
+        }
+        '^' => {
+            let left = missing / 2;
+            let right = missing - left;
+            let mut out: Vec<u32> = fill_points[..left].to_vec();
+            out.extend(points);
+            out.extend_from_slice(&fill_points[left..left + right]);
+            out
+        }
+        _ => {
+            let mut out = points;
+            out.extend(fill_points);
+            out
+        }
+    };
+    Some(instance.new_str_code_points(&output))
+}
+
 /// 把一个值按**格式规格**文本渲染 ✓（`FORMAT_WITH_SPEC` 与 `str.format` 的**同一处** ✓）。
 ///
 /// ① 属性通道里的 `__format__`（Python 级覆写优先 ✓，`TS-44` ✓）；② 原生 `format` 槽 ✓；
@@ -37,17 +88,40 @@ pub(crate) fn format_value_with_spec(
     spec_text: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
-    // P3-38 S2a-2 批 2 最小直通：**恰 str 的 WTF-8 表示**（含孤立代理）——
-    // 空规格 ⇒ 身份返回（参照 `format(s) is s` ✓；`String` 装不下代理，不能再走 `object_str`）；
-    // 非空规格 ⇒ 本批只保证**不 panic**：用有损文本（U+FFFD）渲染，**如实登记为偏差**（完整规格语义留下批）。
-    if instance.is_str_object(value) && instance.text_of(value).is_none() {
+    // P3-38 S2c：**恰 str 的 WTF-8 表示**（含孤立代理）走**码点层**格式化：
+    // 空规格 ⇒ 身份返回（参照 `format(s) is s` ✓）；宽度/填充/对齐/精度在 WTF-8 字节层做 ⇒
+    // `f"{s:>5}"` 与参照逐字符一致 ✓（不再是 U+FFFD）。不支持的规格类别 ⇒ 有损兜底（不 panic ✓）。
+    if instance.type_of(value) == instance.singletons().str_type()
+        && instance.text_of(value).is_none()
+    {
         if spec_text.is_empty() {
             return Ok(instance.retain(value));
         }
-        let lossy = crate::wtf8::to_string_lossy(
-            instance.str_wtf8_bytes(value).expect("刚判过是 str"),
-        );
-        return Ok(instance.new_str(&lossy));
+        match crate::format::parse(spec_text) {
+            Ok(spec) => {
+                if let Some(formatted) = format_wtf8_str(instance, value, &spec) {
+                    return Ok(formatted);
+                }
+                // 不支持的类别（sign／`#`／分组／`=`）⇒ 走既有有损路径（保持与合法 str 同口径）
+                let lossy = crate::wtf8::to_string_lossy(
+                    instance.str_wtf8_bytes(value).expect("刚判过是 str"),
+                );
+                return crate::builtin_objects::formatting::format_outcome(
+                    instance,
+                    crate::format::format_str(&lossy, &spec),
+                    "str",
+                    instance.int_max_str_digits(),
+                );
+            }
+            Err(error) => {
+                return crate::builtin_objects::formatting::format_outcome(
+                    instance,
+                    Err(error),
+                    "str",
+                    instance.int_max_str_digits(),
+                );
+            }
+        }
     }
     // SAFETY: value 由调用方保证存活。
     let value_type = unsafe { value.as_ref() }.ty();

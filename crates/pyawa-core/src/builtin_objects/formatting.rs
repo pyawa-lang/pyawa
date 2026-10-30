@@ -22,8 +22,8 @@ pub(crate) fn spec_argument(instance: &Instance, args: &[NonNull<Header>]) -> St
     if unsafe { first.as_ref() }.ty() != instance.singletons().str_type() {
         return String::new();
     }
-    // SAFETY: 类型身份已确认。
-    unsafe { &*first.as_ptr().cast::<StrObject>() }.value().to_owned()
+    // SAFETY: 类型身份已确认。P3-38 S2c：走安全口径 `text_value`（WTF-8 ⇒ 有损文本，不 panic ✓）
+    instance.text_value(first).unwrap_or_default()
 }
 
 /// 把 `format.rs` 的结果折成"原生返回值或实测消息的异常"。
@@ -182,8 +182,6 @@ pub unsafe fn native_format_str(
         });
     };
     let spec_text = spec_argument(instance, args);
-    // SAFETY: 契约上 this 是 str 实例。
-    let text = unsafe { &*this.as_ptr().cast::<StrObject>() }.value().to_owned();
     let spec = match format::parse(&spec_text) {
         Ok(spec) => spec,
         Err(error) => return format_outcome(instance, Err(error), "str", instance.int_max_str_digits()),
@@ -193,6 +191,27 @@ pub unsafe fn native_format_str(
             return format_outcome(instance, Err(SpecError::UnknownCode(code)), "str", instance.int_max_str_digits());
         }
     }
+    // P3-38 S2c：`str.__format__` 直接调用（不经 FORMAT_WITH_SPEC）时，WTF-8 含代理的 self 也走
+    // **码点层**格式化（`format(s, '>5')` 与参照逐字符一致 ✓；不再有损 ✓）；不支持的类别 ⇒ 有损兜底。
+    if instance.text_of(this).is_none() {
+        if spec_text.is_empty() {
+            return Ok(instance.retain(this));
+        }
+        if let Some(formatted) =
+            crate::executor::format::format_wtf8_str(instance, this, &spec)
+        {
+            return Ok(formatted);
+        }
+        let text = instance.text_value(this).unwrap_or_default();
+        return format_outcome(
+            instance,
+            format::format_str(&text, &spec),
+            "str",
+            instance.int_max_str_digits(),
+        );
+    }
+    // 合法 UTF-8：内容原样（旧行为不变 ✓）
+    let text = instance.text_value(this).unwrap_or_default();
     format_outcome(
         instance,
         format::format_str(&text, &spec),

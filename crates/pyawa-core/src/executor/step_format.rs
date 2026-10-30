@@ -73,9 +73,9 @@ pub(super) fn step_format<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                             "format spec must be a str",
                         ));
                     }
-                    // SAFETY: 类型身份已确认。
-                    let spec_text =
-                        unsafe { &*spec_object.as_ptr().cast::<StrObject>() }.value().to_owned();
+                    // P3-38 S2c：规格文本走安全口径（合法 UTF-8 原样；代理 ⇒ 有损后按规格解析，
+                    // 解析错就报 ValueError —— 总之**不 panic** ✓）
+                    let spec_text = instance.text_value(spec_object).unwrap_or_default();
                     release(instance, spec_object);
 
                     let value = frame.get().pop()?;

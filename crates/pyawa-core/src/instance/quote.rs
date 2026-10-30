@@ -110,11 +110,6 @@ pub(crate) fn quote_wtf8(bytes: &[u8], ascii: bool) -> String {
     text
 }
 
-pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
-    // 合法 UTF-8 ⇒ 就是合法 WTF-8（S2a-2：旧函数转调新实现，字节输出不变 ✓）。
-    quote_wtf8(text.as_bytes(), ascii)
-}
-
 
 /// **`bytes` 的 `repr` 引号与转义**（`P1-12`；规则与 `str` 同源但按**字节**判断，照参照实测）：
 /// 能用单引号就用单引号（内容有 `'` 而无 `"` 时改用双引号）；`\t`／`\n`／`\r`／`\\` 用转义；

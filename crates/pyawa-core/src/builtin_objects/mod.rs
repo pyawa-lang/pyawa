@@ -17,7 +17,7 @@ mod exceptions;
 mod type_runtime;
 mod constructors;
 mod representations;
-mod formatting;
+pub(crate) mod formatting;
 mod memoryview;
 mod complex;
 

@@ -684,8 +684,8 @@ pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> Strin
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
     if label_type == builtin_type(instance, "str") {
-        // SAFETY: 类型身份刚确认。
-        return unsafe { &*label.as_ptr().cast::<StrObject>() }.value().to_owned();
+        // P3-38 S2c：标签文本走安全口径（内部标签是合法 ASCII ⇒ 旧输出不变；代理 ⇒ 有损，不 panic ✓）
+        return instance.text_value(label).unwrap_or_default();
     }
     if is_type_object(instance, label_type) {
         return type_name_of(instance, label.cast::<TypeObject>());
@@ -697,8 +697,8 @@ pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> Strin
         if let Some(head) = parts.item(0) {
             // SAFETY: 元组元素存活。
             let head_is_union_marker = unsafe { head.as_ref() }.ty() == builtin_type(instance, "str")
-                // SAFETY: 类型身份刚确认。
-                && unsafe { &*head.as_ptr().cast::<StrObject>() }.value() == "Union";
+                // P3-38 S2c：合法视图比较（WTF-8 不等于内部 ASCII 标签 ✓，不 panic ✓）
+                && instance.text_of(head) == Some("Union");
             if head_is_union_marker {
                 let members = (1..parts.len())
                     .filter_map(|index| parts.item(index))
@@ -923,8 +923,8 @@ fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<Str
             what: "关键字实参的名字必须是 str",
         });
     }
-    // SAFETY: 类型身份已确认。
-    Ok(unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned())
+    // SAFETY: 类型身份已确认。P3-38 S2c：安全口径（WTF-8 ⇒ 有损文本，不 panic ✓）
+    Ok(instance.text_value(raw).unwrap_or_default())
 }
 
 /// 取函数对象的位置默认值（**借用**，需要时自行 incref）。

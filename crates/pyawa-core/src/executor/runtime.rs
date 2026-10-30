@@ -10,7 +10,6 @@ use crate::frame::Frame;
 use crate::header::Header;
 use crate::instance::Instance;
 use core::ptr::NonNull;
-use crate::builtin_objects::StrObject;
 use crate::type_object::TypeObject;
 use crate::value::Value;
 use crate::executor::ctrls::exception_type;
@@ -53,8 +52,8 @@ pub(crate) fn str_matches_public(instance: &Instance, raw: NonNull<Header>, expe
     if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
         return false;
     }
-    // SAFETY: 类型身份已确认。
-    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
+    // P3-38 S2c：内部**合法 ASCII** 名字比较走合法视图（WTF-8 ⇒ false，不 panic ✓）
+    instance.text_of(raw) == Some(expected)
 }
 
 /// **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测先撞上的是

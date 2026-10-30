@@ -30,10 +30,14 @@ pub unsafe fn str_repr(ptr: *mut Header, _instance: &Instance) -> Result<String,
 }
 
 /// `str` 的 `str`：内容本身。
+///
+/// P3-38 S2c：按 **WTF-8 字节**取内容；合法 UTF-8 原样（旧行为不变 ✓）；含孤立代理 ⇒
+/// 有损文本（U+FFFD，`String` 装不下代理）。**注**：`str(s)` 对恰 `str` 在 `str.__new__`
+/// 里就是**身份返回**（`str(s) is s` ✓），本槽只在子类／直接调槽时用 ⇒ 不 panic 是硬要求 ✓。
 pub unsafe fn str_str(ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<StrObject>() };
-    Ok(object.value().to_owned())
+    Ok(crate::wtf8::to_string_lossy(object.wtf8_bytes()))
 }
 
 

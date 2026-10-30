@@ -29,13 +29,12 @@ impl Instance {
             return Some(tuple.items().iter().copied().map(owned).collect());
         }
         if ty == self.singletons().str_type() {
-            // SAFETY: 同上。
-            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }
-                .value()
-                .to_owned();
+            // P3-38 S2c：按**码点**取元素（含孤立代理也各给一个单字符对象 ✓；不再经 `value()` ⇒ 不 panic ✓）
+            let points = self.str_code_point_vec(object)?;
             return Some(
-                text.chars()
-                    .map(|character| self.new_str(&character.to_string()))
+                points
+                    .into_iter()
+                    .map(|point| self.new_str_code_point(point))
                     .collect(),
             );
         }

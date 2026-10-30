@@ -14,6 +14,6 @@ pub(super) fn str_matches(instance: &Instance, raw: NonNull<Header>, expected: &
     if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
         return false;
     }
-    // SAFETY: 类型身份已确认。
-    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
+    // P3-38 S2c：内部**合法 ASCII** 名字比较走合法视图（WTF-8 ⇒ false，不 panic ✓）
+    instance.text_of(raw) == Some(expected)
 }

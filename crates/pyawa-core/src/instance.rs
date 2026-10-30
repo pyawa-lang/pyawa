@@ -219,4 +219,4 @@ mod quarantine;
 mod drop;
 mod quote;
 
-pub(crate) use quote::{quote_bytes, quote_str, quote_wtf8};
+pub(crate) use quote::{quote_bytes, quote_wtf8};

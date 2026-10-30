@@ -774,8 +774,8 @@ pub(crate) fn bound_text(instance: &Instance, bound: Option<NonNull<Header>>) ->
     let Some(bound) = bound else {
         return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
     };
-    // SAFETY: 绑定的是本类型的存活对象。
-    Ok(unsafe { &*bound.as_ptr().cast::<StrObject>() }.value().to_owned())
+    // SAFETY: 绑定的是本类型的存活对象。P3-38 S2c：安全口径（WTF-8 ⇒ 有损文本，不 panic ✓）
+    Ok(instance.text_value(bound).unwrap_or_default())
 }
 
 /// 取一个**字符串实参**（不是 str ⇒ 与参照同形的 `TypeError` ✓）。

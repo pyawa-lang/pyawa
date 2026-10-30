@@ -878,13 +878,8 @@ pub(crate) fn element_repr(
     match call_special_method(instance, object, "__repr__", &[])? {
         Some(result) => {
             // SAFETY: result 是新引用，存活。
-            let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
-            let text = if is_str {
-                // SAFETY: 类型身份已确认。
-                Some(unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned())
-            } else {
-                None
-            };
+            // P3-38 S2c：`__repr__` 返回的 str 走**安全口径**（WTF-8 ⇒ 有损文本，不 panic ✓）
+            let text = instance.text_value(result);
             release(instance, result);
             match text {
                 Some(text) => Ok(text),
@@ -904,13 +899,8 @@ pub(crate) fn element_str(
     match call_special_method(instance, object, "__str__", &[])? {
         Some(result) => {
             // SAFETY: result 是新引用，存活。
-            let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
-            let text = if is_str {
-                // SAFETY: 类型身份已确认。
-                Some(unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned())
-            } else {
-                None
-            };
+            // P3-38 S2c：`__str__` 返回的 str 同样走安全口径 ✓
+            let text = instance.text_value(result);
             release(instance, result);
             match text {
                 Some(text) => Ok(text),
@@ -948,8 +938,8 @@ pub(crate) fn dunder_text(
         let message = format!("{name} returned non-string (type {type_name})");
         return Err(raise_builtin(instance, "TypeError", &message));
     }
-    // SAFETY: 类型身份已确认。
-    let text = unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned();
+    // P3-38 S2c：dunder 返回的 str 走安全口径（WTF-8 ⇒ 有损文本，不 panic ✓）
+    let text = instance.text_value(result).unwrap_or_default();
     release(instance, result);
     Ok(Some(text))
 }
@@ -1139,8 +1129,9 @@ fn union_members<'a>(instance: &Instance, label: NonNull<Header>) -> Option<&'a 
     if unsafe { head.as_ref() }.ty() != builtin_type(instance, "str") {
         return None;
     }
+    // P3-38 S2c：内部标签名比较走**合法视图**（WTF-8 ⇒ `None` ⇒ 不等于 ASCII 常量 ⇒ 安全返回 ✓）
     // SAFETY: 类型身份刚确认。
-    if unsafe { &*head.as_ptr().cast::<StrObject>() }.value() != "Union" {
+    if instance.text_of(head) != Some("Union") {
         return None;
     }
     Some(parts)
@@ -1153,8 +1144,8 @@ pub(crate) fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, lab
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
     if label_type == builtin_type(instance, "str") {
-        // SAFETY: 类型身份刚确认。
-        return unsafe { &*label.as_ptr().cast::<StrObject>() }.value() == "Any";
+        // P3-38 S2c：WTF-8 标签不可能是内部 ASCII 标签 ⇒ 合法视图比较即安全 ✓
+        return instance.text_of(label) == Some("Any");
     }
     // **`TS-46`**：union 标签（`T?` ＝ `T | None` 的运行期形态）——**任一成员**接受即接受。
     // 成员可递归：类型对象／`"Any"`／嵌套 union／既有 `(外, 内)` 复合标签（成员级语义照旧）。

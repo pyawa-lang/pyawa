@@ -184,12 +184,20 @@ impl Instance {
     }
 
     /// 读字符串内容（**复制**；不是 `str` 给 `None`）。
+    ///
+    /// **P3-38 S2c**：改成**安全口径** —— 合法 UTF-8 原样返回（旧行为逐字节不变 ✓）；
+    /// WTF-8 表示（含孤立代理）⇒ [`crate::wtf8::to_string_lossy`]（代理位置成 U+FFFD）。
+    /// 这是"必须交出 `String` 的用户可见输出面"的**如实偏差**（完整代理输出面属 S3b ✓），
+    /// 关键是**不再 panic** ✓。需要精确内容的地方走 [`Self::str_wtf8_bytes`]／`text_of`（合法视图）。
     pub fn text_value(&self, object: NonNull<Header>) -> Option<String> {
         if self.type_of(object) != self.singletons().str_type() {
             return None;
         }
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned())
+        let bytes = self.str_wtf8_bytes(object)?;
+        Some(match core::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => crate::wtf8::to_string_lossy(bytes),
+        })
     }
 
     /// **`TS-45` ①**：当前 `int`↔`str` 的位数上限（`0` ＝ 不限）。
@@ -485,9 +493,11 @@ impl Instance {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         if ty == self.singletons().str_type() {
+            // P3-38 S2c：按 **WTF-8 字节**转义（合法 UTF-8 输出与旧 `quote_str` 逐字节相同 ✓，
+            // 孤立代理 ⇒ `\udXXX` 转义 ✓；不再经 `value()` ⇒ 不 panic ✓）。
             // SAFETY: 类型身份已确认。
-            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return Ok(quote_str(&text, true));
+            let bytes = unsafe { &*object.as_ptr().cast::<StrObject>() }.wtf8_bytes();
+            return Ok(super::quote_wtf8(bytes, true));
         }
         self.object_repr(object)
     }

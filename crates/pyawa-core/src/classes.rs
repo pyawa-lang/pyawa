@@ -16,7 +16,7 @@
 use core::cell::Cell;
 use core::ptr::NonNull;
 
-use crate::builtin_objects::{BuiltinFunctionObject, DictObject, StrObject};
+use crate::builtin_objects::{BuiltinFunctionObject, DictObject};
 use crate::executor::{raise_builtin, ExecError};
 use crate::instance::Instance;
 use crate::type_object::TypeObject;
@@ -53,8 +53,8 @@ pub unsafe fn build_class_native(
             "__build_class__: name is not a string",
         ));
     }
-    // SAFETY: 类型身份已确认。
-    let name = unsafe { &*name_object.as_ptr().cast::<StrObject>() }.value().to_owned();
+    // P3-38 S2c：类名走安全口径（合法 UTF-8 原样；代理 ⇒ 有损，属如实偏差 ✓）
+    let name = instance.text_value(name_object).unwrap_or_default();
 
     // **要接的自定义元类** ✓（第 218 轮）：`class X(metaclass=M)` ✓。
     let mut requested_metaclass: Option<NonNull<TypeObject>> = None;
@@ -66,8 +66,8 @@ pub unsafe fn build_class_native(
         // SAFETY: 键由调用方保证存活。
         let key_type = unsafe { key.as_ref() }.ty();
         if key_type == instance.singletons().str_type() {
-            // SAFETY: 同上。
-            let text = unsafe { &*key.as_ptr().cast::<StrObject>() }.value();
+            // P3-38 S2c：内部关键字比较走合法视图（WTF-8 不等于 `metaclass` ⇒ 安全 ✓）
+            let text = instance.text_of(*key).unwrap_or_default();
             if text == "metaclass" {
                 // **等于默认元类时直接放行** ✓（第 159 轮）：参照 `class C(metaclass=type)` 与不写**完全等价** ✓。
                 //   认两种写法 ✓（`type` 的类型对象 ✓／内建里那个 `type` 名 ✓ —— 本层 `type()` 是 native ✓）；
@@ -385,10 +385,9 @@ fn requalified_method(
     if unsafe { value.as_ref() }.ty() != function_type {
         return None;
     }
+    // P3-38 S2c：方法名走安全口径（合法 UTF-8 原样；代理 ⇒ 有损，仅用于 qualname 合成，不 panic ✓）
     // SAFETY: 键是 str（类命名空间的键）。
-    let method_name = unsafe { &*key.as_ptr().cast::<crate::StrObject>() }
-        .value()
-        .to_owned();
+    let method_name = instance.text_value(key).unwrap_or_default();
     // SAFETY: 上面刚确认是函数对象。
     let function = unsafe { &*value.as_ptr().cast::<crate::FunctionObject>() };
     let code_header = function.code();
@@ -957,8 +956,9 @@ pub fn build_class_from_parts_with_keywords(
     let mut subclass_keywords: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
     for (key, value) in class_keywords {
         // SAFETY: 键由调用方保证存活。
+        // P3-38 S2c：内部关键字名比较走合法视图（WTF-8 ⇒ false，不 panic ✓）
         let is_metaclass = unsafe { key.as_ref() }.ty() == instance.singletons().str_type()
-            && unsafe { &*key.as_ptr().cast::<StrObject>() }.value() == "metaclass";
+            && instance.text_of(*key) == Some("metaclass");
         if !is_metaclass {
             subclass_keywords.push((*key, *value));
         }

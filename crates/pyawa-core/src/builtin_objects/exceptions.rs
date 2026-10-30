@@ -207,8 +207,8 @@ impl ExceptionObject {
         if ty != instance.singletons().str_type() {
             return None;
         }
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*first.as_ptr().cast::<StrObject>() }.value().to_owned())
+        // P3-38 S2c：异常消息走安全口径（合法 UTF-8 原样；含代理 ⇒ 有损文本，不 panic ✓）
+        Some(instance.text_value(first).unwrap_or_default())
     }
 }
 

@@ -140,12 +140,8 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                                 what: "MATCH_CLASS 的关键字名必须是 str",
                             });
                         }
-                        // SAFETY: 类型身份已确认。
-                        keywords.push(
-                            unsafe { &*name.as_ptr().cast::<StrObject>() }
-                                .value()
-                                .to_owned(),
-                        );
+                        // P3-38 S2c：关键字名走安全口径（名字含代理 ⇒ 有损；查找失败的报错路径不 panic ✓）
+                        keywords.push(instance.text_value(name).unwrap_or_default());
                     }
                     // 位置子模式的名字（`__match_args__` 面）。
                     let mut positional_names: Vec<String> = Vec::with_capacity(oparg);
@@ -200,12 +196,8 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                                             ),
                                         ));
                                     }
-                                    // SAFETY: 类型身份已确认。
-                                    positional_names.push(
-                                        unsafe { &*name.as_ptr().cast::<StrObject>() }
-                                            .value()
-                                            .to_owned(),
-                                    );
+                                    // P3-38 S2c：同上（安全口径 ✓）
+                                    positional_names.push(instance.text_value(name).unwrap_or_default());
                                 }
                             }
                             None => {

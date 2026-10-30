@@ -38,8 +38,8 @@ impl Instance {
             return self.float_value(object).unwrap_or(0.0) != 0.0;
         }
         if ty == self.singletons().str_type() {
-            // SAFETY: 类型身份已确认。
-            return !unsafe { &*object.as_ptr().cast::<StrObject>() }.value().is_empty();
+            // P3-38 S2c：真值走安全口径（两表示都认；WTF-8 不再 panic ✓）
+            return !self.str_is_empty(object).unwrap_or(false);
         }
         if let Some(length) = self.length_of(object) {
             return length != 0;
