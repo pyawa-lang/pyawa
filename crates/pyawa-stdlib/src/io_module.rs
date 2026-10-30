@@ -864,16 +864,9 @@ pub fn open_native(
             "open() missing required argument 'file' (pos 1)",
         ));
     };
-    let (path, display) = if let Some(text) = instance.text_of(file_value) {
-        (text.as_bytes().to_vec(), text.to_owned())
-    } else if let Some(raw) = instance.bytes_value(file_value) {
-        (raw.to_vec(), format!("b'{}'", String::from_utf8_lossy(raw)))
-    } else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "open() 只收 str／bytes 路径（int 文件描述符随后补 ✗）",
-        ));
-    };
+    // **P3-38 S3b-2**：路径按 PEP 383 的 `surrogateescape` 编成 fs 原始字节（与 `posix` 面同一
+    // 一处真相）⇒ 含孤立代理的文件名可真实打开；合法 UTF-8 字节零变化 ✓。
+    let path = crate::posix_module::path_argument(instance, file_value, "open")?;
     let mode = args
         .get(1)
         .copied()
@@ -909,18 +902,18 @@ pub fn open_native(
         // **`x`**：能力域**没有** `EXCL` 槽 ✗ ⇒ 先 `stat` 探存在（`FileExistsError` ✓），再以
         // `CREAT|TRUNC` 开 ✓ —— **如实** ✗：这中间有 TOCTOU 窗口（单进程自用无碍 ✓）。
         ModeKind::Create => {
-            if instance.fs_stat(&path).is_ok() {
+            if instance.fs_stat(&path.bytes).is_ok() {
                 return Err(instance.raise_builtin_error(
                     "FileExistsError",
-                    &format!("[Errno 17] File exists: '{display}'"),
+                    &format!("[Errno 17] File exists: {}", path.display),
                 ));
             }
             flags |= open_flag::CREAT | open_flag::TRUNC;
         }
     }
-    let handle = match instance.fs_open(&path, flags, 0o666) {
+    let handle = match instance.fs_open(&path.bytes, flags, 0o666) {
         Ok(handle) => handle,
-        Err(error) => return Err(fs_error(instance, error, &display)),
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
     };
     let mut raw: Vec<u8> = Vec::new();
     if spec.readable {
@@ -928,7 +921,7 @@ pub fn open_native(
             Ok(bytes) => raw = bytes,
             Err(error) => {
                 let _ = instance.fs_close(handle);
-                return Err(fs_error(instance, error, &display));
+                return Err(fs_error_with_display(instance, error, &path.display));
             }
         }
     }
@@ -975,7 +968,12 @@ pub fn open_native(
         let flag = instance.new_bool(value);
         instance.dict_set(attributes, name, flag);
     }
-    let name_value = instance.new_str(&display);
+    // **`f.name`**：路径形状跟实参走（str ⇒ str、bytes ⇒ bytes）；不拿 repr 显示形冒充。
+    let name_value = if path.want_bytes {
+        instance.new_bytes(&path.bytes)
+    } else {
+        crate::posix_module::decode_path_text(instance, &path.bytes)?
+    };
     instance.dict_set(attributes, "_name", name_value);
     let mode_value = instance.new_str(&mode);
     instance.dict_set(attributes, "mode", mode_value);

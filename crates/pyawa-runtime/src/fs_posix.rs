@@ -54,14 +54,14 @@ impl PosixFs {
             open: Some(fs_open),
             stat: Some(fs_stat),
             fstat: Some(fs_fstat),
-            // 目录句柄与元信息修改面要等 `posix`／`_io` 落地（`CP-21` 的名字解析也在那时钉死）
-            listdir: None,
+            // P3-38 S3b-2：目录句柄列表（`/proc/self/fd` 变体）与符号链接创建接上。
+            listdir: Some(fs_listdir),
             mkdir: Some(fs_mkdir),
             rmdir: Some(fs_rmdir),
             unlink: Some(fs_unlink),
             rename: Some(fs_rename),
             readlink: Some(fs_readlink),
-            symlink: None,
+            symlink: Some(fs_symlink),
             chmod: None,
             utime: None,
             read: Some(fs_read),
@@ -96,14 +96,112 @@ fn fallback_errno(name: &str) -> i32 {
         .unwrap_or(0)
 }
 
-/// `name`／`len` 变成路径（UTF-8；非 UTF-8 借 `EINVAL`）。
+/// `name`／`len` 变成路径（**原始字节**：P3-38 S3b-2 起按 PEP 383 的宿主口径收非 UTF-8 字节）。
+///
+/// 宿主路径本来就是字节串；`std::os::unix::ffi::OsStrExt` 原样搬运 ⇒ 含 `0xff` 一类字节的
+/// 文件名可真实工作。合法 UTF-8 路径的字节不变（零行为改动）。
 #[allow(unsafe_code)]
 fn path_of(name: *const u8, len: usize) -> Result<std::path::PathBuf, i32> {
+    use std::os::unix::ffi::OsStrExt;
     // SAFETY: 调用方按 vtable 契约给出 `name`／`len`（`SPEC-c-abi.md` §7 的出参约定）。
     let bytes = unsafe { core::slice::from_raw_parts(name, len) };
-    match core::str::from_utf8(bytes) {
-        Ok(text) => Ok(std::path::PathBuf::from(text)),
-        Err(_) => Err(fallback_errno("EINVAL")),
+    Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+/// **目录名列表**（`listdir` 槽的共用实现）：`NUL` 分隔的两段式出参（`out_len` 回**总字节数**）。
+///
+/// `listdir` 的 ABI 收**句柄**（`open` 过的目录）⇒ 用 `/proc/self/fd/<fd>` 把句柄重新变成
+/// 可读目录（Linux 平台集中点；`std` 的 `read_dir` 给 `OsStr` ⇒ 名字字节原样 ✓）。
+#[allow(unsafe_code)]
+fn listdir_names(state: *mut c_void, handle: Handle) -> Result<Vec<Vec<u8>>, i32> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: provider 由注册方保证活到 vtable 使用期（契约同 `PosixFs::vtable`）。
+    let provider = unsafe { &*(state as *const PosixFs) };
+    let fd = {
+        let files = provider.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match files.get(&handle.0) {
+            Some(file) => file.as_raw_fd(),
+            None => return Err(fallback_errno("EBADF")),
+        }
+    };
+    let directory = format!("/proc/self/fd/{fd}");
+    let entries = std::fs::read_dir(&directory).map_err(|error| errno_of(&error))?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| errno_of(&error))?;
+        // 只要文件名那一段（`read_dir` 的 `file_name()` 是 `OsStr`，字节原样 ✓）。
+        names.push(entry.file_name().as_bytes().to_vec());
+    }
+    Ok(names)
+}
+
+/// `listdir(dir)`：**两段式出参**（`NUL` 分隔、`out_len` 回总字节数；带 pid 不冲突 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_listdir(
+    state: *mut c_void,
+    handle: Handle,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let names = match listdir_names(state, handle) {
+        Ok(names) => names,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    let mut blob = Vec::new();
+    for name in &names {
+        blob.extend_from_slice(name);
+        blob.push(0);
+    }
+    let written = blob.len().min(capacity);
+    if !out.is_null() && written > 0 {
+        // SAFETY: `out` 由调用方按 `capacity` 给出；源与目标不重叠。
+        unsafe { core::ptr::copy_nonoverlapping(blob.as_ptr(), out, written) };
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe { *out_len = blob.len() };
+    CapStatus::Ok
+}
+
+/// `symlink(target, name)`（真实符号链接；两边都按原始字节收 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_symlink(
+    _state: *mut c_void,
+    target: *const u8,
+    target_len: usize,
+    name: *const u8,
+    name_len: usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let target_path = match path_of(target, target_len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    let name_path = match path_of(name, name_len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    match std::os::unix::fs::symlink(&target_path, &name_path) {
+        Ok(()) => CapStatus::Ok,
+        Err(error) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno_of(&error) };
+            CapStatus::Machine
+        }
     }
 }
 
@@ -749,8 +847,9 @@ impl RestrictedFs {
     /// - 命中某个允许根的**宿主绝对路径**（如 `<root>/a`、`<Lib>/os.py`）⇒ 用那个根；
     /// - 其它绝对路径 ⇒ chroot 语义：按"主根下的同名路径"解析（`/proc` ⇒ `<root>/proc`）；
     /// - 相对路径 ⇒ 相对主根。
-    fn base_of(&self, name: &str) -> (PathBuf, PathBuf) {
-        let raw = Path::new(name);
+    fn base_of(&self, name: &[u8]) -> (PathBuf, PathBuf) {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = Path::new(std::ffi::OsStr::from_bytes(name));
         if raw.is_absolute() {
             for root in std::iter::once(&self.root).chain(self.read_only_roots.iter()) {
                 if let Ok(rest) = raw.strip_prefix(root) {
@@ -773,7 +872,7 @@ impl RestrictedFs {
     ///
     /// `leaf` 参数保留只为对齐 vtable 的叶子语义（VM 已在解析器里处理"跟不跟随最后一段"）；
     /// 映射规则见类型文档。**只读根上的写**返回真实机器错误 `EACCES`（根权限策略）。
-    fn resolve(&self, name: &str, _leaf: bool, for_write: bool) -> Result<PathBuf, i32> {
+    fn resolve(&self, name: &[u8], _leaf: bool, for_write: bool) -> Result<PathBuf, i32> {
         let (base, rest) = self.base_of(name);
         let mapped = base.join(rest);
         if for_write && !mapped.starts_with(&self.root) {
@@ -794,6 +893,11 @@ impl RestrictedFs {
         table.unlink = Some(restricted_unlink);
         table.rename = Some(restricted_rename);
         table.readlink = Some(restricted_readlink);
+        // **句柄类**：`listdir` 的 ABI 收句柄（不是名字）⇒ 直接交内层 state ✓。
+        table.listdir = Some(restricted_listdir);
+        // **如实** ✗：受限根下创建符号链接（目标路径的 chroot 映射语义未钉）暂不接 ⇒
+        // `CP-3`：只有该操作未实现，同域其余槽位不受影响。
+        table.symlink = None;
         // 句柄类槽位：不解析名字，直接把内层 `state` 交过去（`CP-31` 的 `fd` 仍是表下标）。
         table.fstat = Some(restricted_fstat);
         table.read = Some(restricted_read);
@@ -807,12 +911,12 @@ impl RestrictedFs {
     }
 }
 
-/// `name`／`len` → 文本（UTF-8；非 UTF-8 借 `EINVAL`；与 [`path_of`] 同一条口径）。
+/// `name`／`len` → **原始字节**（P3-38 S3b-2：受限 provider 也按字节路径映射；合法 UTF-8 零变化）。
 #[allow(unsafe_code)]
-fn text_of(name: *const u8, len: usize) -> Result<String, i32> {
+fn bytes_of(name: *const u8, len: usize) -> Result<Vec<u8>, i32> {
     // SAFETY: 调用方按 vtable 契约给出 `name`／`len`（`SPEC-c-abi.md` §7 的出参约定）。
     let bytes = unsafe { core::slice::from_raw_parts(name, len) };
-    core::str::from_utf8(bytes).map(|text| text.to_owned()).map_err(|_| fallback_errno("EINVAL"))
+    Ok(bytes.to_vec())
 }
 
 /// 宿主路径 → 交给内层真实现的字节串（`std::os::unix` 的 `OsStrExt` ⇒ 非 UTF-8 也不丢）。
@@ -835,15 +939,15 @@ macro_rules! resolve_name {
     ($state:expr, $name:expr, $len:expr, $leaf:expr, $for_write:expr, $errno_out:expr) => {{
         // SAFETY: provider 由注册方保证活到 vtable 使用期（契约同 `PosixFs::vtable`）。
         let provider = unsafe { &*($state as *const RestrictedFs) };
-        let text = match text_of($name, $len) {
-            Ok(text) => text,
+        let bytes = match bytes_of($name, $len) {
+            Ok(bytes) => bytes,
             Err(errno) => {
                 // SAFETY: 出参由调用方提供。
                 unsafe { *$errno_out = errno };
                 return CapStatus::Machine;
             }
         };
-        match provider.resolve(&text, $leaf, $for_write) {
+        match provider.resolve(&bytes, $leaf, $for_write) {
             Ok(path) => (provider, path),
             Err(errno) => {
                 // SAFETY: 出参由调用方提供。
@@ -941,6 +1045,21 @@ extern "C" fn restricted_rename(
         target.len(),
         errno_out,
     )
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_listdir(
+    state: *mut c_void,
+    handle: Handle,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: provider 由注册方保证活到 vtable 使用期（契约同 `PosixFs::vtable`）。
+    let provider = unsafe { &*(state as *const RestrictedFs) };
+    // 句柄是**内层** provider 分配的（`restricted_open` 直接透传）⇒ 用内层 state 列表 ✓。
+    fs_listdir(provider.inner_state(), handle, out, capacity, out_len, errno_out)
 }
 
 #[allow(unsafe_code)]
