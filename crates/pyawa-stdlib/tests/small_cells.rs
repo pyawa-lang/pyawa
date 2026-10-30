@@ -264,3 +264,49 @@ fn faulthandler_surface_and_real_state() {
         other => panic!("应当抛 ValueError，实际 {other:?}"),
     }
 }
+
+#[test]
+fn sys_getsizeof_and_thread_info_minimal_face() {
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    // `sys.getsizeof(obj)`：本实现真实占用口径 ⇒ 返回 int > 0；参数契约照参照 ✓。
+    let text = instance.new_str("abc");
+    let size = call(&instance, namespace, "getsizeof", &[text]).expect("getsizeof");
+    let size = instance.int_of(size).and_then(|value| value.to_i64()).expect("int");
+    assert!(size > 0, "本实现的对象占用必须为正：{size}");
+    match call(&instance, namespace, "getsizeof", &[]) {
+        Err(ExecError::Raised { .. }) => {
+            let (kind, message) = pending_exception(&instance);
+            assert_eq!(kind, "TypeError");
+            assert_eq!(
+                message.unwrap_or_default(),
+                "getsizeof() missing required argument 'object' (pos 1)"
+            );
+        }
+        other => panic!("应当抛 TypeError，实际 {other:?}"),
+    }
+    // `sys.thread_info`：本 VM 没有线程实现 ⇒ name="none"、lock/version=None（如实边界）✓。
+    let thread_info = instance
+        .dict_get(namespace, "thread_info")
+        .expect("sys.thread_info 必须存在");
+    assert_eq!(
+        instance.type_name(instance.type_of(thread_info)),
+        "thread_info",
+        "类型名照参照"
+    );
+    let name = instance
+        .attribute_optional_of(thread_info, "name")
+        .unwrap_or(None)
+        .and_then(|value| instance.text_of(value).map(str::to_owned))
+        .expect("thread_info.name 是 str");
+    assert_eq!(name, "none", "没有线程实现 ⇒ 如实报 none（不冒充 pthread）");
+    for field in ["lock", "version"] {
+        let value = instance
+            .attribute_optional_of(thread_info, field)
+            .unwrap_or(None);
+        assert!(
+            value.is_some_and(|value| value == instance.singletons().none()),
+            "thread_info.{field} 如实为 None"
+        );
+    }
+}

@@ -191,11 +191,38 @@ impl Instance {
         // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
         let _ = self.set_attribute_value(object, "tb_next", none);
         unsafe { self.release_object(none.as_ptr()) };
-        let lineno = self.new_int(0);
+        // **P3-38 S3e-3**：`tb_lineno`／`tb_lasti` 从**抛出处的帧**算真值（先前恒 0 ✗ ——
+        // `traceback` 格式化与官方 `test_raise`／`test_dis` 都读它们）。`tb_lasti` 是
+        // **字节偏移**（码元 × 2，参照实测 `tb_lasti == 14` 对 7 码元 ✓）。
+        let (lineno_value, lasti_value) = {
+            // SAFETY: `new_traceback` 的契约是 frame 为存活帧对象。
+            let frame_ref = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+            let instruction_pointer = frame_ref.instruction_pointer();
+            // SAFETY: code 由帧持有，存活。
+            let code_ref = frame_ref
+                .code()
+                .map(|code| unsafe { &*code.as_ptr().cast::<crate::CodeObject>() });
+            let lineno = code_ref
+                .and_then(|code| crate::frame::line_at(code, instruction_pointer))
+                .unwrap_or(0) as i64;
+            // **口径说明（P3-38 S3e-3）**：本层位置表按**每条指令**一条（`BC-18` 夹具），
+            // 参照 `co_positions()` 按**每码元**一条（含 `CACHE`）。`traceback` 用
+            // `tb_lasti // 2` 当下标 ⇒ 落在 `CACHE` 槽时本层表里没有对应项；此时给 **0**
+            // （**如实**表示"位置表口径没有这一槽"，不伪造位置），保证格式化不越界。
+            // 编译器口径统一后这里自然恢复真偏移 ✓。
+            let lasti = match code_ref {
+                Some(code) if instruction_pointer < code.positions().len() => {
+                    (instruction_pointer * 2) as i64
+                }
+                _ => 0,
+            };
+            (lineno, lasti)
+        };
+        let lineno = self.new_int(lineno_value);
         // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
         let _ = self.set_attribute_value(object, "tb_lineno", lineno);
         unsafe { self.release_object(lineno.as_ptr()) };
-        let lasti = self.new_int(0);
+        let lasti = self.new_int(lasti_value);
         // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
         let _ = self.set_attribute_value(object, "tb_lasti", lasti);
         unsafe { self.release_object(lasti.as_ptr()) };

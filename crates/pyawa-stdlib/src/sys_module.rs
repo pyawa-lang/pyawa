@@ -17,6 +17,7 @@
 //! 本模块**不碰**平台（`CX-4`：stdlib 在静态扫描范围内 ⇒ `#![forbid(unsafe_code)]`）：
 //! 字节序用 `cfg!(target_endian)`，不调任何平台接口。
 
+use core::cell::RefCell;
 use core::ptr::NonNull;
 
 use pyawa_core::{AttributeObject, ExecError, Header, Instance};
@@ -614,6 +615,74 @@ fn exception_native(
     })
 }
 
+/// **`sys.getsizeof(object[, default])`**（P3-38 S3e-3，task-67）：
+/// 先走用户类的 `__sizeof__` 协议（参照同一协议）；没有就走**本实现**的真实占用口径
+/// （[`Instance::object_sizeof`] —— 对象头＋载荷＋容器指针数组；**不冒充** CPython 的具体数字）。
+/// `default` 只在 `__sizeof__` 抛 `TypeError` 时兜底（照参照 ✓）。
+fn getsizeof_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("getsizeof() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    let mut object: Option<NonNull<Header>> = args.first().copied();
+    let mut default: Option<NonNull<Header>> = args.get(1).copied();
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        match name {
+            "object" => object = Some(*value),
+            "default" => default = Some(*value),
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("getsizeof() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
+    }
+    let Some(object) = object else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "getsizeof() missing required argument 'object' (pos 1)",
+        ));
+    };
+    // **`__sizeof__` 协议**：用户类定义了就用它（返回 int）；`TypeError` 且有 default ⇒ default。
+    if let Some(method) = instance.type_lookup(instance.type_of(object), "__sizeof__") {
+        match pyawa_core::executor::call::call_value(instance, method, &[object], &[]) {
+            Ok(result) => {
+                if let Some(size) = instance.int_of(result).and_then(|int| int.to_i64()) {
+                    instance.release(result);
+                    return Ok(instance.new_int(size));
+                }
+                instance.release(result);
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "__sizeof__() should return an int",
+                ));
+            }
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                // stdlib `forbid(unsafe_code)` ⇒ 只走安全访问器（`type_of`／`type_name`）✓。
+                let exception_name = instance.type_name(instance.type_of(exception));
+                if exception_name == "TypeError" {
+                    if let Some(default) = default {
+                        instance.release(exception);
+                        return Ok(instance.retain(default));
+                    }
+                }
+                return Err(pyawa_core::ExecError::Raised { exception });
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(instance.new_int(instance.object_sizeof(object) as i64))
+}
+
 /// **`sys.exit([code])`** ✓（`P3-32`）：**实现＝抛 `SystemExit`** ✓（参照同义：`sys.exit` 本身
 /// 不直接退出进程，`except SystemExit` 必须能接住）——进程级退出码由组合根在**未捕获**时解释
 /// （`pyawa_core::executor::ExitDisposition`）。
@@ -767,6 +836,29 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     //（参照同义 ✓）；进程级退出码由组合根在**未捕获**时解释 ✓（`ExitDisposition` 一处真相 ✓）。
     let exit = make_native(instance, "exit", exit_native);
     instance.dict_set(namespace, "exit", exit);
+    // **`sys.getsizeof`**（P3-38 S3e-3，task-67）：`test_marshal` 等导入期/用例会读它 ✓。
+    let getsizeof = make_native(instance, "getsizeof", getsizeof_native);
+    instance.dict_set(namespace, "getsizeof", getsizeof);
+    // **`sys.thread_info`**（P3-38 S3e-3，task-67，最小诚实面）：本 VM **没有线程实现**
+    // （单线程解释器；`threading` 只是纯 Python 最小面）⇒ 如实给 `name="none"`、
+    // `lock=None`、`version=None`（参照在有 pthread 的构建里给 `pthread`／`semaphore`／`NPTL…`；
+    // 这是**平台/实现差异**，不冒充）。官方 `test_threadsignals` 读 `.name`／`.lock`／`.version`
+    // 做能力判断（不是 pthread ⇒ 相关用例跳过 ✓）。
+    let thread_info_type = instance.new_attribute_type("thread_info");
+    let thread_info_attributes = instance.new_dict();
+    let thread_info_name = instance.new_str("none");
+    instance.dict_set(thread_info_attributes, "name", thread_info_name);
+    let none = instance.singletons().none();
+    instance.dict_set(thread_info_attributes, "lock", none);
+    instance.dict_set(thread_info_attributes, "version", none);
+    let thread_info = instance
+        .alloc(AttributeObject::new(
+            thread_info_type,
+            RefCell::new(Some(thread_info_attributes)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(namespace, "thread_info", thread_info);
 
     // **`_getframe`** ✓（第 230 轮）：`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓。
     let getframe = crate::builtins_module::make_native(

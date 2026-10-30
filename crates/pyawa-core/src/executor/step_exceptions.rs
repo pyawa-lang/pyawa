@@ -165,10 +165,16 @@ fn step_exceptions_reraise<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                 //   `未捕获（状态 1）：int` ✓（参照报 `ZeroDivisionError: division by zero` ✓）。
                 //   实测栈（顶在前）：`[ZeroDivisionError, NoneType, int, CM, function]` ✓ ——
                 //   TOS 是异常 ✓、下面那两格是 `prev`／`lasti` ✓，与 `WITH_EXCEPT_START` 的注释一致 ✓。
+                // **P3-38 S3e-3 真 bug 修**：`RERAISE` 的栈效应是 **−1**（只弹异常本身；
+                // 参照 `dis.stack_effect(RERAISE, 0/1/2) == -1` ✓）——`oparg` 那几格**不在这里弹**：
+                // 抛出去之后由**异常表解栈**按 `depth` 截平（`unwind_to_handler`）。先前在这里
+                // 多弹了 `oparg` 格 ✗ ⇒ 轮到清理块 `COPY 3; POP_EXCEPT; RERAISE 1` 时栈比表里的
+                // `depth` 浅，`COPY 3` 抄到的是**上下文管理器**（`self`）而不是"上一个异常" ⇒
+                // `POP_EXCEPT` 把管理器当成异常压进异常状态 ⇒ 后续 `raise` 的 `__context__`
+                // 变成 `<CM object>`（`_AssertRaisesContext`／`_GeneratorContextManager`／`FileIO`
+                // 那 11 个官方测试的 `AttributeError: … no attribute '__traceback__'` 根因 ✓）。
+                let _ = oparg;
                 let exception = frame.get().pop()?;
-                for _ in 0..oparg {
-                    release(instance, frame.get().pop()?);
-                }
                 return Err(raise(instance, exception));
             }
         _ => unreachable!("step_exceptions_reraise 只接收 RERAISE"),

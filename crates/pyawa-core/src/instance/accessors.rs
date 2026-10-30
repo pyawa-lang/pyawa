@@ -233,6 +233,30 @@ impl Instance {
         self.is_str_like(object)
     }
 
+    /// **`sys.getsizeof` 的底层口径**（P3-38 S3e-3，task-67）：**本实现**的对象占用字节数
+    /// ＝ 类型载荷尺寸 ＋ 容器的指针数组／字符串字节（**不含**元素对象自身；与 CPython 的
+    /// 具体数字不同，这是实现自定量，不冒充 CPython 数值 ✓）。
+    ///
+    /// `dict` 的估算含每项 16 字节（键值指针）＋ 32 字节表头；`str` 含结尾 NUL 一字节。
+    pub fn object_sizeof(&self, object: NonNull<Header>) -> usize {
+        let ty = self.type_of(object);
+        // SAFETY: 类型身份由 `type_of` 给出，注册表持有。
+        let base = unsafe { ty.as_ref() }.instance_size();
+        let extra = match self.type_name(ty).as_str() {
+            "str" => self.wtf8_of(object).map(|bytes| bytes.len() + 1).unwrap_or(0),
+            "bytes" => self.bytes_value(object).map(<[u8]>::len).unwrap_or(0),
+            "list" => 8 * self.list_items(object).map(|items| items.len()).unwrap_or(0),
+            "tuple" => 8 * self.tuple_items(object).map(|items| items.len()).unwrap_or(0),
+            "dict" => self
+                .dict_entries(object)
+                .map(|entries| 32 + 16 * entries.len())
+                .unwrap_or(0),
+            "set" | "frozenset" => 8 * self.set_items(object).map(|items| items.len()).unwrap_or(0),
+            _ => 0,
+        };
+        base + extra
+    }
+
     /// **`str` 的码点表**（P3-38 S2a-2 批 2）：UTF-8 ⇒ `chars()`；WTF-8 ⇒ 逐码点解码
     /// （孤立代理各算一个码点 ✓）；不是 `str` ⇒ `None`。
     pub fn str_code_point_vec(&self, object: NonNull<Header>) -> Option<Vec<u32>> {
