@@ -165,6 +165,86 @@ fn release_lock_native(
     lock_action_native(instance, None, args, kwargs, "release_lock")
 }
 
+/// **`_imp._override_frozen_modules_for_tests(override, /)`**（P3-38 S3e-2，照参照 3.14.4 实测）：
+///
+/// - 位置实参**恰好一个**（`__index__` 口径的整数；非整数 ⇒
+///   `TypeError: '<类型>' object cannot be interpreted as an integer`）；关键字一律拒
+///   （`_imp._override_frozen_modules_for_tests() takes no keyword arguments`）；
+/// - 返回 `None`；参照里它改的是 `PyConfig.use_frozen_modules`（`-1` 关／`1` 开／`0` 不覆盖）。
+///
+/// **本 VM 的诚实面** ✗：本层**没有冻结模块**（`is_frozen()` 恒 0，见上）⇒ "开/关冻结模块"对
+/// 本层导入**没有任何可观测效果**；这里只做**参数契约**（类型/个数/关键字）并返回 `None` ✓ ——
+/// 不伪造"已改配置"的状态（没有查询入口，也不会影响任何东西）。`test.support.import_helper.
+/// frozen_modules()` 的上下文管理器正是唯一调用者 ✓（9 个官方测试靠它解锁）。
+fn override_frozen_modules_for_tests_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_imp._override_frozen_modules_for_tests() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "_imp._override_frozen_modules_for_tests() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    if instance.index_value(args[0])?.is_none() {
+        let name = instance.type_name(instance.type_of(args[0]));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object cannot be interpreted as an integer"),
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`_imp._override_multi_interp_extensions_check(override, /)`**（P3-38 S3e-2，照参照实测）：
+/// 类型/个数/关键字契约同上一格；**本 VM 只有主解释器** ⇒ 参照在主解释器里调用它报
+/// `RuntimeError: _imp._override_multi_interp_extensions_check() cannot be used in the main
+/// interpreter` ✓ —— 这里照抄那一条（先做类型检查，再报运行时错误 ✓，实测次序如此）。
+fn override_multi_interp_extensions_check_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_imp._override_multi_interp_extensions_check() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "_imp._override_multi_interp_extensions_check() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    if instance.index_value(args[0])?.is_none() {
+        let name = instance.type_name(instance.type_of(args[0]));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object cannot be interpreted as an integer"),
+        ));
+    }
+    Err(instance.raise_builtin_error(
+        "RuntimeError",
+        "_imp._override_multi_interp_extensions_check() cannot be used in the main interpreter",
+    ))
+}
+
 /// 造一个原生可调用对象（**新引用**；与 `builtins_module`／`sys_module` 同一做法）。
 fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -> NonNull<Header> {
     let ty = instance
@@ -220,6 +300,25 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         extension_suffixes_native,
     );
     instance.dict_set(namespace, "extension_suffixes", extension_suffixes);
+    // **`_override_frozen_modules_for_tests`／`_override_multi_interp_extensions_check`**
+    // （P3-38 S3e-2）：`Lib/test/support/import_helper.py` 的 `frozen_modules()` 上下文管理器
+    // 在**测试导入期**就取前者 ✓（实测 9 个官方测试的 `AttributeError` 就是它）✓。
+    let override_frozen = make_native(
+        instance,
+        "_override_frozen_modules_for_tests",
+        override_frozen_modules_for_tests_native,
+    );
+    instance.dict_set(namespace, "_override_frozen_modules_for_tests", override_frozen);
+    let override_multi_interp = make_native(
+        instance,
+        "_override_multi_interp_extensions_check",
+        override_multi_interp_extensions_check_native,
+    );
+    instance.dict_set(
+        namespace,
+        "_override_multi_interp_extensions_check",
+        override_multi_interp,
+    );
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     let doc = instance.new_str(DOC);

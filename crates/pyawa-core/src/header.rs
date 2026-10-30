@@ -226,7 +226,11 @@ mod tests {
         assert!(header.instance_dict().is_none(), "OM-14：一开始没有另行挂载的字典");
     }
 
+    /// **OM-7 的预留位契约是 `debug` 档的检查**：`set_flag` 用的是 `debug_assert_eq!`，
+    /// **release 档不启用**（产品语义如此 ✓，不为测试把它改成 release 也 panic）。
+    /// 所以本用例只在 `debug_assertions` 打开的构建里跑；release 档下它自然被编译掉 ✓。
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "禁止占用")]
     fn reserved_flag_bits_are_rejected() {
         let instance = Instance::new();

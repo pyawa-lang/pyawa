@@ -685,18 +685,35 @@ pub fn compare_public(
     }
     let left_int = instance.int_of(left);
     let right_int = instance.int_of(right);
-    let left_text = instance.text_value(left);
-    let right_text = instance.text_value(right);
+    // **`str` 的码点序**（Task-66 ✓）：两个恰 `str` 就走这里（含孤立代理也按码点比 ✓，
+    // 不再经 `value()` ⇒ 不 panic）；合法 UTF-8 路径与旧的 `String::cmp` 结果逐例相同 ✓。
+    if let Some(ordering) = instance.str_order_cmp(left, right) {
+        return Ok(match symbol {
+            "<" => ordering.is_lt(),
+            "<=" => ordering.is_le(),
+            ">" => ordering.is_gt(),
+            ">=" => ordering.is_ge(),
+            _ => false,
+        });
+    }
+    // `text_of` 是**安全**视图（WTF-8 表示 ⇒ `None`；上面已处理两个恰 str 的情形 ✓）
+    let left_text = instance.text_of(left);
+    let right_text = instance.text_of(right);
     let left_bytes = instance.bytes_value(left);
     let right_bytes = instance.bytes_value(right);
     let ordering = match (left_int, right_int, left_text, right_text, left_bytes, right_bytes) {
         (Some(a), Some(b), _, _, _, _) => Some(a.cmp(&b)),
-        (_, _, Some(a), Some(b), _, _) => a.partial_cmp(&b),
+        (_, _, Some(a), Some(b), _, _) => Some(a.cmp(b)),
         // `bytes` 按**字节**字典序（`P1-12`；实测 `b'ab' < b'b'` 为真）
         (_, _, _, _, Some(a), Some(b)) => Some(a.cmp(b)),
         _ => None,
     };
     let Some(ordering) = ordering else {
+        // **富比较协议**（task-12 ✓）：内建快速路径判不出可比性之后才走这里 ✓
+        // （`int`／`str`／`bytes`／`tuple`／`set` 的热路径在上面已经返回 ⇒ 这一步不加重它们的开销 ✓）。
+        if let Some(verdict) = rich_compare(instance, left, right, symbol, opcode)? {
+            return Ok(verdict);
+        }
         let left_name = instance.type_name(instance.type_of(left));
         let right_name = instance.type_name(instance.type_of(right));
         return Err(instance.raise_builtin_error(
@@ -717,6 +734,46 @@ pub fn compare_public(
             })
         }
     })
+}
+
+/// **用户类的富比较协议**（task-12 ✓）：`<`／`<=`／`>`／`>=` 的**正向 ＋ 反向**派发。
+///
+/// 参照口径（CPython `do_richcompare`）：
+/// - `a < b` ⇒ 先 `type(a).__lt__(a, b)` ✓；返回 `NotImplemented` ⇒ 再 `type(b).__gt__(b, a)` ✓；
+/// - 两边都 `NotImplemented`（或**都没有**这个方法）⇒ `None` ⇒ 调用方照原样报 `TypeError` ✓。
+///
+/// **只在内建快速路径判不出之后调** ✓（`int`／`str`／`bytes`／`tuple`／`set` 那一族在上面就返回了
+/// ⇒ 热路径不多走一步 ✓）。方法本身经属性通道取（`call_special_method`；找不到给 `Ok(None)` ✓）。
+fn rich_compare(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<Option<bool>, ExecError> {
+    // 符号 ⇒（正向方法，反向方法）。反向方法挂在**右操作数**上 ✓。
+    let (forward, reflected) = match symbol {
+        "<" => ("__lt__", "__gt__"),
+        "<=" => ("__le__", "__ge__"),
+        ">" => ("__gt__", "__lt__"),
+        ">=" => ("__ge__", "__le__"),
+        _ => return Ok(None),
+    };
+    let not_implemented = instance.not_implemented();
+    for (name, object, other) in [(forward, left, right), (reflected, right, left)] {
+        let Some(result) = call_special_method(instance, object, name, &[other])? else {
+            continue;
+        };
+        // **结果新引用** ⇒ 两条出口都要 release ✓。
+        if result == not_implemented {
+            release(instance, result);
+            continue;
+        }
+        let verdict = crate::executor::truthiness_public(instance, result, opcode)?;
+        release(instance, result);
+        return Ok(Some(verdict));
+    }
+    Ok(None)
 }
 
 /// **`TS-44`**：类型字典里若定义了某个 dunder（`__repr__`／`__str__`），就调用它并取文本。
@@ -821,13 +878,8 @@ pub(crate) fn element_repr(
     match call_special_method(instance, object, "__repr__", &[])? {
         Some(result) => {
             // SAFETY: result 是新引用，存活。
-            let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
-            let text = if is_str {
-                // SAFETY: 类型身份已确认。
-                Some(unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned())
-            } else {
-                None
-            };
+            // P3-38 S2c：`__repr__` 返回的 str 走**安全口径**（WTF-8 ⇒ 有损文本，不 panic ✓）
+            let text = instance.text_value(result);
             release(instance, result);
             match text {
                 Some(text) => Ok(text),
@@ -847,13 +899,8 @@ pub(crate) fn element_str(
     match call_special_method(instance, object, "__str__", &[])? {
         Some(result) => {
             // SAFETY: result 是新引用，存活。
-            let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
-            let text = if is_str {
-                // SAFETY: 类型身份已确认。
-                Some(unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned())
-            } else {
-                None
-            };
+            // P3-38 S2c：`__str__` 返回的 str 同样走安全口径 ✓
+            let text = instance.text_value(result);
             release(instance, result);
             match text {
                 Some(text) => Ok(text),
@@ -891,8 +938,8 @@ pub(crate) fn dunder_text(
         let message = format!("{name} returned non-string (type {type_name})");
         return Err(raise_builtin(instance, "TypeError", &message));
     }
-    // SAFETY: 类型身份已确认。
-    let text = unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned();
+    // P3-38 S2c：dunder 返回的 str 走安全口径（WTF-8 ⇒ 有损文本，不 panic ✓）
+    let text = instance.text_value(result).unwrap_or_default();
     release(instance, result);
     Ok(Some(text))
 }
@@ -1082,8 +1129,9 @@ fn union_members<'a>(instance: &Instance, label: NonNull<Header>) -> Option<&'a 
     if unsafe { head.as_ref() }.ty() != builtin_type(instance, "str") {
         return None;
     }
+    // P3-38 S2c：内部标签名比较走**合法视图**（WTF-8 ⇒ `None` ⇒ 不等于 ASCII 常量 ⇒ 安全返回 ✓）
     // SAFETY: 类型身份刚确认。
-    if unsafe { &*head.as_ptr().cast::<StrObject>() }.value() != "Union" {
+    if instance.text_of(head) != Some("Union") {
         return None;
     }
     Some(parts)
@@ -1096,8 +1144,8 @@ pub(crate) fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, lab
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
     if label_type == builtin_type(instance, "str") {
-        // SAFETY: 类型身份刚确认。
-        return unsafe { &*label.as_ptr().cast::<StrObject>() }.value() == "Any";
+        // P3-38 S2c：WTF-8 标签不可能是内部 ASCII 标签 ⇒ 合法视图比较即安全 ✓
+        return instance.text_of(label) == Some("Any");
     }
     // **`TS-46`**：union 标签（`T?` ＝ `T | None` 的运行期形态）——**任一成员**接受即接受。
     // 成员可递归：类型对象／`"Any"`／嵌套 union／既有 `(外, 内)` 复合标签（成员级语义照旧）。

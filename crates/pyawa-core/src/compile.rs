@@ -162,8 +162,17 @@ pub enum Constant {
     BigInt(String),
     /// **浮点**（第 127 轮）：存 **IEEE-754 位模式**（`f64` 没有 `Eq`，本枚举派生 `Eq` ✓）。
     Float(u64),
-    /// 字符串。
+    /// **复数常量**（task-29 ✓）：实部／虚部各存 **IEEE-754 位模式**（`f64` 没有 `Eq`，
+    /// 本枚举派生 `Eq` ✓；`1j` 是 `real_bits = 0.0`、`imag_bits = 1.0` 的位模式 ✓）。
+    Complex {
+        real_bits: u64,
+        imag_bits: u64,
+    },
+    /// 字符串（**合法 UTF-8**；字面量/common case 都是它 ✓）。
     Str(String),
+    /// **含孤立代理的字符串常量**（P3-38 S2b ✓）：**已校验的 WTF-8 字节**。
+    /// 合法 UTF-8 的字面量仍走 [`Constant::Str`]（常量池形状/夹具零变化 ✓）。
+    StrWtf8(Vec<u8>),
     /// **`bytes` 字面量**（`P1-12`；不进 `co_consts` 的文本形态，实例化时建 `BytesObject`）。
     Bytes(Vec<u8>),
     /// **常量切片**（实测：界全是常量时参照把 `slice(...)` 放进常量池 ⇒ `LOAD_CONST slice(1, 2, None)`）。
@@ -673,7 +682,7 @@ fn compile_scope(
     qualname: &str,
     parameters: &[Parameter],
     kwonly: &[Parameter],
-    returns: Option<&Constant>,
+    returns: Option<&AnnotationSource>,
     varargs: Option<&str>,
     varkw: Option<&str>,
     mode: Mode,
@@ -876,13 +885,13 @@ fn compile_scope(
             || returns.is_some();
         if annotated {
             if !parameters.is_empty() {
+                // `TS-47` 的边界标签只认**类型来源**的注解（表达式来源的注解没有编译期标签 ⇒
+                // 按 `Any` 保守处理，与"未标注"同口径 ✓）。
                 let labels: Vec<Constant> = parameters
                     .iter()
-                    .map(|parameter| {
-                        parameter
-                            .annotation
-                            .clone()
-                            .unwrap_or_else(|| Constant::Str("Any".to_owned()))
+                    .map(|parameter| match parameter.annotation.as_ref() {
+                        Some(AnnotationSource::Type(label)) => label.clone(),
+                        _ => Constant::Str("Any".to_owned()),
                     })
                     .collect();
                 let index = emitter.intern_constant(Constant::Tuple(labels));
@@ -892,7 +901,7 @@ fn compile_scope(
                     index as u8,
                 );
             }
-            if let Some(label) = returns {
+            if let Some(AnnotationSource::Type(label)) = returns {
                 let index = emitter.intern_constant(Constant::Tuple(vec![label.clone()]));
                 emitter.boundary_out = Some(index);
             }
@@ -1059,7 +1068,14 @@ fn truthiness(constant: &Constant) -> Option<bool> {
         | Constant::AnnAttribute { .. }
         | Constant::AnnString(_) => true,
         Constant::Str(text) => !text.is_empty(),
+        // 含孤立代理的串：WTF-8 字节非空即真（空字节串不会以该形态出现 ✓）
+        Constant::StrWtf8(bytes) => !bytes.is_empty(),
         Constant::Bytes(bytes) => !bytes.is_empty(),
+        // **复数真值**：任一分量非零即真（`0j` 假 ✓；`nan` 分量按非零算 ✓，与参照一致）
+        Constant::Complex {
+            real_bits,
+            imag_bits,
+        } => f64::from_bits(*real_bits) != 0.0 || f64::from_bits(*imag_bits) != 0.0,
         _ => return None,
     })
 }
@@ -1068,6 +1084,56 @@ fn truthiness(constant: &Constant) -> Option<bool> {
 fn fold_int_unary_negative(value: i64) -> Result<Option<Constant>, CompileError> {
     let negated = crate::bigint::BigInt::from_i64(value).neg();
     Ok(negated.to_i64().map(Constant::Int))
+}
+
+/// **带复数的常量二元折叠**（task-29 ✓）：参照把 `1+2j`／`2j+1`／`1j*2`／`1/2j` 折成**一个**
+/// `complex` 常量（`dis` 实测 ✓）。只有一侧是复数才调用（`float` 不折的既有口径不动 ✓）。
+///
+/// 口径照 CPython 的复数运算（实部／虚部都是 `f64`）：
+/// `+`／`-` 分量算；`*`／`/` 用复数公式（`/` 先算分母模方）。**除数为 0 不折**（交运行期报
+/// `ZeroDivisionError` ✓）；`**`／`//`／`%`／`@` **不折**（参照对后三者也不折 ✓；`**` 的复数幂
+/// 本批不做，如实留运行期 ✓）。
+fn fold_complex_binary(
+    operator: BinaryOperator,
+    left: &Constant,
+    right: &Constant,
+) -> Result<Option<Constant>, CompileError> {
+    let to_parts = |constant: &Constant| -> Option<(f64, f64)> {
+        match constant {
+            Constant::Int(value) => Some((*value as f64, 0.0)),
+            Constant::Float(bits) => Some((f64::from_bits(*bits), 0.0)),
+            Constant::Complex {
+                real_bits,
+                imag_bits,
+            } => Some((f64::from_bits(*real_bits), f64::from_bits(*imag_bits))),
+            _ => None,
+        }
+    };
+    let (Some((lr, li)), Some((rr, ri))) = (to_parts(left), to_parts(right)) else {
+        return Ok(None);
+    };
+    let folded = match operator {
+        BinaryOperator::Add => (lr + rr, li + ri),
+        BinaryOperator::Subtract => (lr - rr, li - ri),
+        BinaryOperator::Multiply => (lr * rr - li * ri, lr * ri + li * rr),
+        BinaryOperator::TrueDivide => {
+            let denominator = rr * rr + ri * ri;
+            if denominator == 0.0 {
+                // 除数为 0：不折（交给运行期报 ZeroDivisionError ✓）
+                return Ok(None);
+            }
+            (
+                (lr * rr + li * ri) / denominator,
+                (li * rr - lr * ri) / denominator,
+            )
+        }
+        // `**`／`//`／`%`／`@`：本批不折（参照对 `//`／`%`／`@` 也不折；`**` 的复数幂留运行期 ✓）
+        _ => return Ok(None),
+    };
+    Ok(Some(Constant::Complex {
+        real_bits: folded.0.to_bits(),
+        imag_bits: folded.1.to_bits(),
+    }))
 }
 
 /// 常量折叠：整数二元运算。**装不进 `i64` 就不折**（常量池的整数只有 `Constant::Int(i64)`），
@@ -1150,7 +1216,13 @@ enum Expression {
     BigInt(String, Span),
     /// **浮点字面量**（第 127 轮）：值＝IEEE-754 位模式 ✓（`LOAD_CONST` 走常量池 ✓）。
     Float(u64, Span),
+    /// **虚部字面量**（task-29 ✓）：`1j`／`1.5j`／`1e3j` —— 存虚部的 IEEE-754 位模式 ✓
+    /// （实部恒 `0.0` ⇒ 常量池里是 `Constant::Complex` ✓）。
+    Imaginary(u64, Span),
     Str(String, Span),
+    /// **含孤立代理的字符串字面量**（P3-38 S2b ✓）：**已校验的 WTF-8 字节**；
+    /// 合法 UTF-8 字面量仍走 [`Expression::Str`]（旧路径/夹具零变化 ✓）。
+    StrWtf8(Vec<u8>, Span),
     /// **`bytes` 字面量**（`P1-12`）。
     Bytes(Vec<u8>, Span),
     Name(String, Span),
@@ -1376,7 +1448,9 @@ impl Expression {
             Expression::Int(_, span)
             | Expression::BigInt(_, span)
             | Expression::Float(_, span)
+            | Expression::Imaginary(_, span)
             | Expression::Str(_, span)
+            | Expression::StrWtf8(_, span)
             | Expression::Bytes(_, span)
             | Expression::Yield(_, span)
             | Expression::YieldFrom(_, span)
@@ -1438,6 +1512,8 @@ enum ComprehensionKind {
 enum FStringPart {
     /// 字面段（跨度取**字面文字本身**，实测 `f"a{x}b"` 里 `'a'` 是 `(1,1,6,7)`）。
     Literal { text: String, span: Span },
+    /// **含孤立代理的字面段**（P3-38 S2b ✓）：已校验的 WTF-8 字节（合法 UTF-8 段仍走上一条 ✓）。
+    LiteralWtf8 { bytes: Vec<u8>, span: Span },
     Formatted {
         expression: Expression,
         /// `!s` ＝ 1、`!r` ＝ 2、`!a` ＝ 3（实测 `!r` ⇒ `CONVERT_VALUE 2`）。
@@ -1460,6 +1536,15 @@ enum ComprehensionTarget {
     /// 一层组：`(a, b)`／`[off]`／裸的 `a, b` —— 位点取**那一层**的跨度 ✓
     /// （带括号的取括号段含括号 ✓，裸的取首项起点到末项终点 ✓；`UNPACK_SEQUENCE` 用 ✓）。
     Group(Vec<ComprehensionTarget>, Span),
+    /// **属性目标**（task-45 ✓）：`for (obj.attr, x) in …` —— 参照 `dis` 给
+    /// `LOAD obj; STORE_ATTR`（值先由 `UNPACK_SEQUENCE` 压好 ✓）。
+    Attribute(Expression, String, Span),
+    /// **下标目标**（task-45 ✓）：`for (l[0], l) in [[1, 2]]`（官方 test_listcomps:433）——
+    /// 参照 `dis`：`LOAD l; LOAD_SMALL_INT 0; STORE_SUBSCR` ✓。
+    Subscript(Expression, Expression, Span),
+    /// **星号项**（task-59 ✓）：`for id, *_ in …` —— 这一层要发 `UNPACK_EX`（低字节＝星号前个数、
+    /// 高字节＝星号后个数 ✓）；星号本身绑定 `inner`（通常是名字，拿 list）。
+    Starred(Box<ComprehensionTarget>, Span),
 }
 
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
@@ -1478,6 +1563,10 @@ impl ComprehensionTarget {
             ComprehensionTarget::Group(items, _) => {
                 items.iter().flat_map(|item| item.names()).collect()
             }
+            // 星号项里那个目标照样绑定名字 ✓（`for id, *_ in …` 的 `_` 是 local ✓）
+            ComprehensionTarget::Starred(inner, _) => inner.names(),
+            // 属性／下标目标**不声明局部**（它们不绑定名字；容器／键是读取 ✓）
+            ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => Vec::new(),
         }
     }
 }
@@ -1489,8 +1578,11 @@ struct Parameter {
     name: String,
     /// `BC-*`：是不是**仅位置**形参（`/` 之前的那些）。
     posonly: bool,
-    /// 注解（标签常量；`None` ⇒ 没写注解）。
-    annotation: Option<Constant>,
+    /// 注解（**两种来源** `TS-47`／`TS-5`；`None` ⇒ 没写注解）：
+    /// - [`AnnotationSource::Type`]：扩展模式下的**编译期类型标签**（`BC-24` 的签名条目）；
+    /// - [`AnnotationSource::Expression`]：普通**表达式**（`.py` 的 3.14 语义 —— 注解是
+    ///   `__annotate__` 里惰性求值的表达式，可以是任意合法的注解表达式，如 `(1).__class__`）。
+    annotation: Option<AnnotationSource>,
     /// 注解在源码里的跨度（`__annotate__` 单元里 `LOAD_GLOBAL` 取它，实测）。
     annotation_span: Option<Span>,
     /// 默认值表达式（`None` ⇒ 没有默认值）。
@@ -1702,6 +1794,11 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
                         ComprehensionTarget::Group(..) => {
                             targets.extend(generator.target.names().into_iter().map(str::to_owned));
                         }
+                        // **星号项**（task-59 ✓）：内层名字同样要进目标集合（cell 判定用 ✓）
+                        ComprehensionTarget::Starred(..) => {
+                            targets.extend(generator.target.names().into_iter().map(str::to_owned));
+                        }
+                        ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => {}
                     }
                 }
                 let mut inner = Vec::new();
@@ -1817,6 +1914,12 @@ enum ForTarget {
     Name(String, Span),
     /// 一层括号／方括号元组（位点取**括号那一段** ✓，可再嵌 ✓）。
     Group(Vec<ForTarget>, Span),
+    /// **星号项**（task-25 ✓）：`for a, *b in …`／`with … as (a, *b)` —— 那一层要发 `UNPACK_EX` ✓。
+    Starred(Box<ForTarget>, Span),
+    /// **属性目标**（task-25 ✓）：`with cm as self.foo:`（参照语法里 `as` 后面是任意 `star_target` ✓）。
+    Attribute(Box<Expression>, String, Span),
+    /// **下标目标**（task-25 ✓）：`with cm as a[0]:`。
+    Subscript(Box<Expression>, Box<Expression>, Span),
 }
 
 /// **`match` 的一条 `case`**（第 290 轮）。
@@ -1862,6 +1965,34 @@ enum Pattern {
     Wildcard(Span),
     /// 或模式（`case "a" | "b":`）—— **备选里不许有捕获**（参照也是语法错）。
     Or(Vec<Pattern>, Span),
+    /// **`as` 模式**（task-45 ✓）：`case A.y as z:`／`case [1] as z:` —— 子模式测完后再把
+    /// 主语绑到名字 ✓（参照 `dis`：`COPY 1` ＋ 子模式 ＋ `STORE` ✓）。
+    As(Box<Pattern>, String, Span),
+    /// **序列模式**（task-37）：`case [a, b, *rest]:`／`case (a, b):`（括号元组同形）。
+    ///
+    /// `items` 按**书写顺序**；星号项是 [`Pattern::Star`] 包着的捕获／通配 ✓。
+    /// 字节码形状照参照 3.14.4 实测：`MATCH_SEQUENCE; POP_JUMP_IF_FALSE; NOT_TAKEN; GET_LEN;
+    /// LOAD_SMALL_INT n; COMPARE_OP 72(==)［有 star 时 172(>=)］; POP_JUMP_IF_FALSE; NOT_TAKEN;
+    /// UNPACK_SEQUENCE n`／`UNPACK_EX (前 | 后<<8)`／（空序列）`POP_TOP` ✓。
+    Sequence {
+        items: Vec<Pattern>,
+        span: Span,
+    },
+    /// **映射模式**（task-37）：`case {"k": v, ...}:`／`case {}:`
+    ///
+    /// 字节码形状：`MATCH_MAPPING; ...; GET_LEN; LOAD_SMALL_INT n; COMPARE_OP 172(>=);
+    /// LOAD_CONST <键元组>; MATCH_KEYS; COPY 1; POP_JUMP_IF_NONE; NOT_TAKEN;
+    /// UNPACK_SEQUENCE n` ✓。
+    ///
+    /// **未接线**（如实报）：`**rest` 剩余项捕获。
+    Mapping {
+        /// `(键模式, 值模式)`：键只能是字面量或值模式（参照同规 ✓）。
+        items: Vec<(Pattern, Pattern)>,
+        span: Span,
+    },
+    /// **序列模式里的星号项**：`case [a, *rest]` ⇒ `UNPACK_EX` 星号那一格 ✓。
+    /// 只允许出现在 [`Pattern::Sequence::items`] 里（解析器保证 ✓）。
+    Star(Box<Pattern>, Span),
 }
 
 /// **PEP 695 的类型参数**（task-24 收口 ① ✓）：名字 ＋ 可选 `bound`（`[T: int]`）／
@@ -2131,8 +2262,8 @@ enum Statement {
         varargs: Option<String>,
         /// `**kw` 的名字（`None` ⇒ 没有）。
         varkw: Option<String>,
-        /// 返回注解（标签常量）。
-        returns: Option<Constant>,
+        /// 返回注解（两种来源，同 [`Parameter::annotation`]）。
+        returns: Option<AnnotationSource>,
         /// 返回注解在源码里的跨度（`__annotate__` 单元的 `LOAD_GLOBAL` 取它，实测）。
         returns_span: Option<Span>,
         body: Vec<Statement>,
@@ -2179,7 +2310,16 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         //（`Constant::BigInt` 不参与折叠 ⇒ 语义不变 ✓，只是少折几条 ✓）。
         Expression::BigInt(text, _) => Ok(Some(Constant::BigInt(text.clone()))),
         Expression::Float(_, _) => Ok(None),
+        // **虚部字面量**（task-29 ✓）：常量形态就是 `Constant::Complex{real:0.0, imag}` ✓。
+        // 参照把 `1+2j` **折叠成单个常量**（`dis` 实测：`LOAD_CONST (1+2j)` ✓）⇒ 下面二元那条
+        // 在"任一侧是复数"时也折（整数／浮点＋复数 ✓；不带复数的 float 折仍保持本层既有口径 ✗）。
+        Expression::Imaginary(bits, _) => Ok(Some(Constant::Complex {
+            real_bits: 0f64.to_bits(),
+            imag_bits: *bits,
+        })),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
+        // **含孤立代理的字符串字面量**（P3-38 S2b ✓）：常量形态就是 `Constant::StrWtf8` ✓
+        Expression::StrWtf8(bytes, _) => Ok(Some(Constant::StrWtf8(bytes.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
         Expression::Constant(constant, _) => Ok(Some(constant.clone())),
         // 列表**不是**编译期常量（实测：`x = [1, 2]` 的常量表里没有列表本身）
@@ -2198,6 +2338,16 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
             match (left_value, right_value) {
                 (Constant::Int(x), Constant::Int(y)) => {
                     fold_int_binary(*operator, x, y)
+                }
+                // **带复数的常量二元运算**（task-29 ✓）：`1+2j`／`2j+1`／`1j*2`／`1/2j` …
+                // 参照都折叠成单个 `complex` 常量（`dis` 实测 ✓）。只有**有一侧是复数**才走这里
+                // ⇒ 不改变本层"float 不折"的既有口径 ✓。
+                (left @ (Constant::Int(_) | Constant::Float(_) | Constant::Complex { .. }),
+                 right @ (Constant::Int(_) | Constant::Float(_) | Constant::Complex { .. }))
+                    if matches!(left, Constant::Complex { .. })
+                        || matches!(right, Constant::Complex { .. }) =>
+                {
+                    fold_complex_binary(*operator, &left, &right)
                 }
                 // `+` 的字符串／bytes 拼接（实测：两者都在编译期折）
                 (Constant::Str(x), Constant::Str(y)) if *operator == BinaryOperator::Add => {
@@ -2263,13 +2413,23 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
             let Some(value) = fold_constant(operand)? else {
                 return Ok(None);
             };
-            match (operator, value) {
+            match (operator, &value) {
                 // `+x` 只对整数等价于 x（`+'a'` 在参照里是 TypeError ⇒ 不折）
-                (UnaryOperator::Positive, Constant::Int(value)) => Ok(Some(Constant::Int(value))),
+                (UnaryOperator::Positive, Constant::Int(value)) => Ok(Some(Constant::Int(*value))),
                 (UnaryOperator::Negative, Constant::Int(value)) => {
-                    fold_int_unary_negative(value)
+                    fold_int_unary_negative(*value)
                 }
-                (UnaryOperator::Invert, Constant::Int(value)) => Ok(Some(Constant::Int(!value))),
+                (UnaryOperator::Invert, Constant::Int(value)) => Ok(Some(Constant::Int(!*value))),
+                // **复数的一元 ±**（task-29 ✓）：参照折成常量（`-1j` ⇒ `(-0-1j)` ✓——
+                // 实部是**负零** ✓；`+1j` 只登记字面量、不折 ✓）。
+                (UnaryOperator::Negative, Constant::Complex {
+                    real_bits,
+                    imag_bits,
+                }) => Ok(Some(Constant::Complex {
+                    real_bits: (-f64::from_bits(*real_bits)).to_bits(),
+                    imag_bits: (-f64::from_bits(*imag_bits)).to_bits(),
+                })),
+                (UnaryOperator::Positive, Constant::Complex { .. }) => Ok(Some(value.clone())),
                 _ => Ok(None),
             }
         }
@@ -2311,7 +2471,12 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::BigInt(text, _) => Some(Constant::BigInt(text.clone())),
         Expression::Float(_, _) => None,
+        Expression::Imaginary(bits, _) => Some(Constant::Complex {
+            real_bits: 0f64.to_bits(),
+            imag_bits: *bits,
+        }),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
+        Expression::StrWtf8(bytes, _) => Some(Constant::StrWtf8(bytes.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
         Expression::Constant(constant, _) => Some(constant.clone()),
         Expression::List(_, _) => None,
@@ -2501,9 +2666,19 @@ fn instantiate_constant(
             .or_else(|| Some(instance.new_none())),
         // **浮点**（第 127 轮）：常量池里存的是 IEEE-754 位模式 ⇒ 建 `float` 对象 ✓
         Constant::Float(bits) => Some(instance.new_float(f64::from_bits(*bits))),
+        // **复数**（task-29 ✓）：位模式 → `complex` 对象 ✓（`task-30` 的 `new_complex` ✓）。
+        Constant::Complex {
+            real_bits,
+            imag_bits,
+        } => Some(instance.new_complex(
+            f64::from_bits(*real_bits),
+            f64::from_bits(*imag_bits),
+        )),
         // **`True`／`False` 是单例**（`OM-23`）⇒ 给调用方一份新引用
         Constant::Bool(value) => Some(instance.retain(instance.singletons().boolean(*value))),
         Constant::Str(text) => Some(instance.new_str(text)),
+        // **含孤立代理的字符串常量**（P3-38 S2b ✓）：`new_str_wtf8`（字节在编译期已校验 ✓）
+        Constant::StrWtf8(bytes) => instance.new_str_wtf8(bytes),
         Constant::Bytes(value) => Some(instance.new_bytes(value)),
         Constant::Slice { start, stop, step } => {
             Some(instance.new_slice(*start, *stop, *step))

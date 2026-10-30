@@ -696,3 +696,127 @@ pub(crate) fn bytes_isspace_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     bytes_all_are(instance, bound, |byte| byte.is_ascii_whitespace())
 }
+
+/// **`bytes.ljust`／`rjust`／`center`**（task-46，`Lib/hmac.py:136` 的
+/// `key.ljust(blocksize, b'\0')` 要它 ✓）：按宽度补填字符（默认 `b' '`）。
+///
+/// 参照 3.14.4 实测口径：
+/// - `width` 走 `__index__`（`b"a".ljust(3.5)` ⇒ `TypeError: 'float' object cannot be interpreted as an integer` ✓）；
+/// - `width <= len` ⇒ 原样返回 ✓；
+/// - 填充字符必须是**长度 1 的 bytes**：bytes 口径的两种文案照实测
+///   （`ljust(): argument 2 must be a byte string of length 1, not a bytes object of length 2`／
+///   `ljust() argument 2 must be a byte string of length 1, not int` ✓）；
+/// - `center` 的多余 1 个补在**右边** ✓（实测 `b"a".center(4, b"x") == b"xaxx"`）。
+fn bytes_justify(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    mode: u8,
+    name: &str,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = match bound {
+        Some(this) => (this, args),
+        None => {
+            let Some((first, remaining)) = args.split_first() else {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("{name}() 缺少 self 实参"),
+                ));
+            };
+            (*first, remaining)
+        }
+    };
+    let value = instance
+        .bytes_value(receiver)
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default();
+    let Some(width_arg) = rest.first() else {
+        // 参照实测：`b"a".ljust()` ⇒ `ljust expected at least 1 argument, got 0` ✓。
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name} expected at least 1 argument, got 0"),
+        ));
+    };
+    let width = instance
+        .index_value(*width_arg)?
+        .ok_or_else(|| {
+            let type_name = instance.type_name(instance.type_of(*width_arg));
+            instance.raise_builtin_error(
+                "TypeError",
+                &format!("'{type_name}' object cannot be interpreted as an integer"),
+            )
+        })?;
+    let width = width.max(0) as usize;
+    let fill = match rest.get(1) {
+        None => b' ',
+        Some(argument) => {
+            let Some(fill_bytes) = instance.bytes_value(*argument) else {
+                let type_name = instance.type_name(instance.type_of(*argument));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!(
+                        "{name}() argument 2 must be a byte string of length 1, not {type_name}"
+                    ),
+                ));
+            };
+            if fill_bytes.len() != 1 {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!(
+                        "{name}(): argument 2 must be a byte string of length 1, not a bytes object of length {}",
+                        fill_bytes.len()
+                    ),
+                ));
+            }
+            fill_bytes[0]
+        }
+    };
+    if width <= value.len() {
+        return Ok(instance.new_bytes(&value));
+    }
+    let margin = width - value.len();
+    let (left, right) = match mode {
+        0 => (0, margin),               // ljust
+        1 => (margin, 0),               // rjust
+        _ => {
+            // center：参照多出的 1 个补右 ✓（`marg & width & 1` 那条 CPython 公式同效）。
+            let left = margin / 2 + (margin & width & 1);
+            (left, margin - left)
+        }
+    };
+    let mut output = Vec::with_capacity(width);
+    output.extend(core::iter::repeat(fill).take(left));
+    output.extend_from_slice(&value);
+    output.extend(core::iter::repeat(fill).take(right));
+    Ok(instance.new_bytes(&output))
+}
+
+/// `bytes.ljust(width[, fillchar])`。
+pub(crate) fn bytes_ljust_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_justify(instance, bound, args, 0, "ljust")
+}
+
+/// `bytes.rjust(width[, fillchar])`。
+pub(crate) fn bytes_rjust_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_justify(instance, bound, args, 1, "rjust")
+}
+
+/// `bytes.center(width[, fillchar])`。
+pub(crate) fn bytes_center_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_justify(instance, bound, args, 2, "center")
+}

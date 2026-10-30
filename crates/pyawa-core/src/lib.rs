@@ -11,6 +11,11 @@
 // `builtin_objects` 是**私有模块** ✗，stdlib 直接调不到 ✓（与 `weakref_new` 同一个教训 ✓）。
 pub use builtin::dict::dict_fromkeys_native;
 pub use builtin::object::object_init_native;
+// **`builtins.compile()`**（task-43）：stdlib 的 `compile` 注册与 `exec`/`eval` 的 code 对象分支用它。
+pub use builtin::compile::{
+    compile_native, eval_code_public, eval_source_public, exec_code_public, implicit_namespaces,
+    is_code_object,
+};
 pub use builtin::dict::dict_init_native;
 pub use builtin::object::object_text_native;
 pub use builtin_objects::str_method_native;
@@ -26,6 +31,7 @@ pub use builtin_objects::{
     str_dunder_new, tuple_new_native,
 };
 pub use builtin::function::function_descriptor_get;
+pub use builtin_objects::weakref_dunder_new;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::dir_new;
@@ -46,6 +52,8 @@ pub use builtin::function::function_globals_native;
 mod diag;
 pub mod argdecode;
 pub mod bigint;
+/// **WTF-8 编解码**（P3-38 S1）：允许孤立代理的 UTF-8 超集；供 `str` 存储迁移（S2）复用。
+pub mod wtf8;
 mod builtin;
 mod builtin_objects;
 mod cell;

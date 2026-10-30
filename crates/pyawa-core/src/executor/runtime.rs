@@ -10,7 +10,6 @@ use crate::frame::Frame;
 use crate::header::Header;
 use crate::instance::Instance;
 use core::ptr::NonNull;
-use crate::builtin_objects::StrObject;
 use crate::type_object::TypeObject;
 use crate::value::Value;
 use crate::executor::ctrls::exception_type;
@@ -53,8 +52,8 @@ pub(crate) fn str_matches_public(instance: &Instance, raw: NonNull<Header>, expe
     if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
         return false;
     }
-    // SAFETY: 类型身份已确认。
-    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
+    // P3-38 S2c：内部**合法 ASCII** 名字比较走合法视图（WTF-8 ⇒ false，不 panic ✓）
+    instance.text_of(raw) == Some(expected)
 }
 
 /// **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测先撞上的是
@@ -75,6 +74,11 @@ pub(crate) fn percent_format(
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
     let _ = opcode;
+    // P3-38 S2a-2 批 2 最小直通：`"%s" % s` 对**恰 str** 是身份转换（参照 `('%s' % s) is s` ✓）
+    // ⇒ 直接回原对象（`String` 输出装不下代理）。带前后缀／宽度等的完整 `%s` 留下批。
+    if template == "%s" && instance.is_str_object(right) {
+        return Ok(instance.retain(right));
+    }
     let characters: Vec<char> = template.chars().collect();
     // 右操作数的两种形态（**一处真相**：类型名取注册表 ✓）。
     // **子类也算** ✓（task-14 真 bug 修 ✗）：先前按**恰好**是 `tuple`／`dict` 判 ✗ ⇒ tuple **子类**
@@ -218,7 +222,18 @@ pub(crate) fn percent_format(
             'd' | 'i' | 'u' | 'o' | 'x' | 'X' | 'f' | 'F' | 'e' | 'E' | 'g' | 'G'
         );
         let sign_and_body: (String, String) = match conversion {
-            's' => (String::new(), instance.object_str(value)?),
+            // P3-38 S2a-2 批 2 最小直通：`%s` 取"恰 str 的 WTF-8 表示"时用**有损文本**（U+FFFD）
+            // 先保证**不 panic**；完整代理语义（输出侧 WTF-8）留下批，如实登记为偏差。
+            's' => {
+                let text = if instance.is_str_object(value) && instance.text_of(value).is_none() {
+                    crate::wtf8::to_string_lossy(
+                        instance.str_wtf8_bytes(value).expect("刚判过是 str"),
+                    )
+                } else {
+                    instance.object_str(value)?
+                };
+                (String::new(), text)
+            }
             'r' => (String::new(), instance.object_repr(value)?),
             // `%a`：参照给 **ascii()**（非 ASCII 转义）—— 本层按 `repr` 的结果再转义非 ASCII ✓
             'a' => (String::new(), ascii_escape(&instance.object_repr(value)?)),
@@ -402,6 +417,92 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
 pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> ExecError {
     let exception = new_exception(instance, exception_type(instance, name), message);
     raise(instance, exception)
+}
+
+/// 抛一个内建异常，`args` 用给定的那批**新引用**（本函数接手；异常对象持有它们）。
+///
+/// 给 `pyawa-stdlib` 用（`CX-22`：stdlib 侧不能碰异常载荷布局）——`sys.exit` 要造
+/// `SystemExit(载荷)`，而载荷的**读取**在 [`uncaught_system_exit`] 里（同一处真相）。
+pub fn raise_builtin_with_args_public(
+    instance: &Instance,
+    name: &str,
+    args: Vec<NonNull<Header>>,
+) -> ExecError {
+    let exception =
+        crate::executor::new_exception_with_args(instance, exception_type(instance, name), args);
+    raise(instance, exception)
+}
+
+/// **未捕获 `SystemExit` 的进程级处置**（`P3-32`）：要么是退出码，要么是要打到 `stderr` 的文本。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExitDisposition {
+    /// 进程退出码（宿主按 `std::process::exit(code as i32)` 落；OS 自然按 8 位截断）。
+    Code(i64),
+    /// 把文本打到 `stderr` 后以 `1` 退出（非 `int` 的载荷：`str(载荷)`）。
+    Message(String),
+}
+
+/// **未捕获的 `SystemExit`**（`P3-32`）：给宿主一个"退出码／`stderr` 文本"的处置。
+///
+/// 返回 `None` ⇒ **不是**可读的 `SystemExit`（或载荷形状对不上）⇒ 宿主维持原有的未捕获诊断。
+/// 口径照参照 3.14.4 **实测**：
+/// - 无实参／`SystemExit(None)` ⇒ 退出码 `0`；
+/// - 单实参是 `int`（含 `bool` 与 `int` 子类）⇒ 它的值；超出 `i64` ⇒ `Code(-1)`（进程层截成 `255`）；
+/// - 其余（单实参非 `int`／多实参）⇒ `str(载荷)` 打到 `stderr`、退出码 `1`
+///   （多实参的载荷是 `args` 元组，`str((3, 4))` ⇒ `(3, 4)`）。
+///
+/// 形状核与 [`crate::executor::exception_uncaught_text`]／`Instance::exception_message_of`
+/// **同一套**：先核「类型是 `SystemExit` 的子类型」＋「载荷大小 == `ExceptionObject`」，再读载荷
+/// （**绝不硬读**）。
+pub fn uncaught_system_exit(
+    instance: &Instance,
+    exception: NonNull<Header>,
+) -> Option<ExitDisposition> {
+    // SAFETY: exception 由调用方保证存活。
+    let ty = unsafe { exception.as_ref() }.ty();
+    let is_system_exit = instance
+        .type_named("SystemExit")
+        .is_some_and(|base| instance.is_subtype(ty, base));
+    // SAFETY: ty 由注册表持有。
+    if !is_system_exit
+        || unsafe { ty.as_ref() }.instance_size()
+            != core::mem::size_of::<crate::builtin_objects::ExceptionObject>()
+    {
+        return None;
+    }
+    // SAFETY: 形状刚核过（与 `Instance::exception_message_of` 同一套检查）。
+    let payload = unsafe { &*exception.as_ptr().cast::<crate::builtin_objects::ExceptionObject>() };
+    let arguments = payload.args();
+    match arguments.as_slice() {
+        // `raise SystemExit`／`SystemExit()`／`sys.exit()` ⇒ 0
+        [] => Some(ExitDisposition::Code(0)),
+        [only] => {
+            // `SystemExit(None)`／`sys.exit(None)` ⇒ 0
+            if *only == instance.singletons().none() {
+                return Some(ExitDisposition::Code(0));
+            }
+            // `int`（含 `bool` 与 `int` 子类）⇒ 该整数；超出 `i64` ⇒ `-1`（进程层截成 255）。
+            if let Some(number) = instance.int_of(*only) {
+                return Some(ExitDisposition::Code(number.to_i64().unwrap_or(-1)));
+            }
+            // 非 `int` ⇒ `str(载荷)` 到 `stderr`、码 1。
+            Some(ExitDisposition::Message(
+                instance.object_str(*only).unwrap_or_default(),
+            ))
+        }
+        _ => {
+            // 多实参 ⇒ `str(args)`（例：`(3, 4)`）。
+            // `new_tuple` **吃掉**每项的新引用 ⇒ 先为每个实参 `retain` 一份；渲染完再释放元组。
+            let items = arguments
+                .iter()
+                .map(|argument| instance.retain(*argument))
+                .collect();
+            let tuple = instance.new_tuple(items);
+            let message = instance.object_str(tuple).unwrap_or_default();
+            release(instance, tuple);
+            Some(ExitDisposition::Message(message))
+        }
+    }
 }
 
 /// **未绑定局部槽** ✓（第 277 轮诊断升级）：参照在同样情形给

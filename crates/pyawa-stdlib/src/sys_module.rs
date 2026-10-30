@@ -17,6 +17,7 @@
 //! 本模块**不碰**平台（`CX-4`：stdlib 在静态扫描范围内 ⇒ `#![forbid(unsafe_code)]`）：
 //! 字节序用 `cfg!(target_endian)`，不调任何平台接口。
 
+use core::cell::RefCell;
 use core::ptr::NonNull;
 
 use pyawa_core::{AttributeObject, ExecError, Header, Instance};
@@ -128,6 +129,31 @@ pub const fn byteorder() -> &'static str {
     }
 }
 
+/// **`sys.implementation._multiarch`** ✓（task-9）：**构建目标（宿主平台）的 Debian/Ubuntu
+/// multiarch 三元组** —— 不是语言版本、也不是本实现自报的版本号。
+///
+/// 为什么需要它 ✓：`Lib/sysconfig/__init__.py:394-399` 用它拼 sysconfigdata 的名字
+/// `_sysconfigdata_{abiflags}_{platform}_{multiarch}`；空值会拼出 `_sysconfigdata__linux_`
+/// ⇒ `ModuleNotFoundError` ⇒ `test.support` 的 sysconfig 链断 ✗（本仓 `Lib/` 里同步了
+/// `_sysconfigdata__linux_x86_64-linux-gnu.py` 与 `_sysconfigdata__x86_64-linux-gnu.py` ✓）。
+///
+/// 取值口径 ✓：CPython 在 **configure 期**把 `MULTIARCH`（`dpkg-architecture
+/// -qDEB_HOST_MULTIARCH` 的同源值）编进解释器 ⇒ 这是**构建目标事实**。本机参照 3.14.4
+/// 实测 `'x86_64-linux-gnu'` ✓；本层对拍／同步的 `Lib/` 来自**同一目标**的上游 deb ⇒ 值必须
+/// 一致。判据用 `cfg!`（**不是**平台接口，`CX-4` ✓；同 [`byteorder`] 的既有手法 ✓）——
+/// **未知目标如实给空串**（不冒充某个三元组 ⇒ sysconfig 会拼出不存在的名字，由它自己报错 ✓）。
+pub fn multiarch() -> &'static str {
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86")) {
+        "i386-linux-gnu"
+    } else {
+        ""
+    }
+}
+
 /// 造一个原生可调用对象（**新引用**；与 `builtins_module` 同一做法）。
 fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -> NonNull<Header> {
     let ty = instance
@@ -141,6 +167,118 @@ fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -
     ));
     object.into_raw().cast::<Header>()
 }
+
+// ---- round 16：`sys._jit`（`Lib/test/support/__init__.py:2736` 的模块级查询口）----
+//
+// 参照 3.14.4 实测：`sys._jit` 是 **module 对象**（`<module 'sys._jit'>`），三个无参查询口
+// `is_available()`／`is_enabled()`／`is_active()`；本机参照是 JIT 构建 ⇒ `(True, False, False)`。
+// **如实登记偏差** ✗：本层**没有 JIT 后端** ⇒ 三个口一律 `False`（`is_available` 的 True 是
+// "构建期带 JIT"这一构建事实，编不出来，也不冒充）。`test.support` 只用它驱动
+// `requires_jit_*` 的 skip，False 的语义正确。
+
+/// `sys._jit` 的三个查询口的共用实现：**无参**，恒 `False`（本层没有 JIT 后端）。
+fn jit_query(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    name: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() takes no keyword arguments"),
+        ));
+    }
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    Ok(instance.new_bool(false))
+}
+
+fn jit_is_available_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    jit_query(instance, args, kwargs, "sys._jit.is_available")
+}
+
+fn jit_is_enabled_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    jit_query(instance, args, kwargs, "sys._jit.is_enabled")
+}
+
+fn jit_is_active_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    jit_query(instance, args, kwargs, "sys._jit.is_active")
+}
+
+// ---- round 19：`sys.monitoring` 最小 import 面（`pdb`／`doctest` 的闸）----
+//
+// 参照 3.14.4 实测：`sys.monitoring` 是 **module 对象**（`<module 'sys.monitoring'>`），
+// `sys.monitoring.events` 是 `types.SimpleNamespace`；`bdb.py:20` 在**导入期**只做
+// `E = sys.monitoring.events` 并用 `E.PY_START | …` 填字典键 ⇒ 本层只需把常量做成**真 int** ✓。
+// pdb 默认 backend='settrace' ⇒ 工具 API（`use_tool_id`／`register_callback` 一族）运行期不调用；
+// 本层**如实**不实现它们（显式调用 ⇒ `NotImplementedError`，**不假返回值** ✓）。
+//
+// **如实偏差** ✗：① `events` 用"属性命名空间"对象（参照是 `types.SimpleNamespace` ⇒ `type` 名／
+// `repr` 不同，属性读法一致）；② 私有的 `_all_events` 未接（bdb 导入期不用）；③ 工具 API 全未接。
+
+/// `sys.monitoring.MISSING`／`DISABLE` 这类"独立哨兵"：参照各是**一个 `object()` 实例**
+/// （两者互不相同）。走真正的 `object()` 构造（`attribute_read` 那条 `call_value` 公开面 ✅）；
+/// `object` 类型在引导期已带 `new` 槽 ⇒ 不会抛。`build` 无返回值通道，构造失败说明引导期坏了 ⇒
+/// 与文件里 `expect("… 已登记")` 同一口径直接 panic（不拿别的对象冒充）。
+fn monitoring_sentinel(instance: &Instance) -> NonNull<Header> {
+    let object_type = instance
+        .type_named("object")
+        .expect("object 在引导期已登记（OM-13）");
+    pyawa_core::executor::call::call_value(instance, object_type.cast(), &[], &[])
+        .expect("`object()` 必须可构造（引导期核心不变量）")
+}
+
+/// 生成 `sys.monitoring` 的"未接线工具 API"原生：真调用一律如实 `NotImplementedError`。
+macro_rules! monitoring_unimplemented_native {
+    ($function:ident => $name:literal $(,)?) => {
+        fn $function(
+            instance: &Instance,
+            _bound: Option<NonNull<Header>>,
+            _args: &[NonNull<Header>],
+            _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+        ) -> Result<NonNull<Header>, ExecError> {
+            Err(instance.raise_builtin_error(
+                "NotImplementedError",
+                concat!(
+                    "`sys.monitoring.",
+                    $name,
+                    "`：round 19 只接 import 期常量（pdb 默认 backend='settrace' 不调用工具 API），真调用如实未实现（随后补）"
+                ),
+            ))
+        }
+    };
+}
+
+monitoring_unimplemented_native!(monitoring_use_tool_id_native => "use_tool_id");
+monitoring_unimplemented_native!(monitoring_free_tool_id_native => "free_tool_id");
+monitoring_unimplemented_native!(monitoring_get_tool_native => "get_tool");
+monitoring_unimplemented_native!(monitoring_set_events_native => "set_events");
+monitoring_unimplemented_native!(monitoring_get_events_native => "get_events");
+monitoring_unimplemented_native!(monitoring_set_local_events_native => "set_local_events");
+monitoring_unimplemented_native!(monitoring_get_local_events_native => "get_local_events");
+monitoring_unimplemented_native!(monitoring_register_callback_native => "register_callback");
+monitoring_unimplemented_native!(monitoring_restart_events_native => "restart_events");
+monitoring_unimplemented_native!(monitoring_clear_tool_id_native => "clear_tool_id");
 
 /// `sys.intern(str)`（第 335 轮）。
 ///
@@ -427,38 +565,187 @@ fn excepthook_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
-/// `sys.exc_info()` ✓（第 724 轮）：**如实口径** ✗ —— 本层不跟踪"当前异常" ⇒ 恒 `(None, None, None)` ✓。
+/// **`sys.exc_info()`**（task-26 真实现）：当前**处理中**的异常 ⇒ `(type, value, traceback)` ✓；
+/// 没有 ⇒ `(None, None, None)` ✓（参照 3.14.4 实测口径 ✓）。
+///
+/// 底座是 `BC-60` ② 的**实例级异常状态**（`PUSH_EXC_INFO` 压、`POP_EXCEPT` 弹 ✓，见
+/// `executor/step_exceptions.rs` ✓）—— 本层现在**真的**记"正在处理的异常" ✓。第 724 轮那个
+/// **如实桩**（恒 `(None, None, None)`）会让 `unittest` 的错误恢复在 `sys.exc_info()[0]` 上拿到
+/// `None` ✗ ⇒ `issubclass(None, failureException)` ⇒ 真实失败被掩盖、官方套件一遇失败就 abort ✗。
+///
+/// `traceback` 取异常实例的 `__traceback__`（`raise` 时挂上的**最小起步对象** ✓；
+/// 未抛过的异常给 `None` ✓）—— 与 `exception_getattr` 的 `"__traceback__"` 臂读**同一格** ✓。
 fn exc_info_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    // `new_tuple` **吃掉**每项引用 ⇒ 各 retain 一份 ✓。
-    let first = instance.retain(instance.singletons().none());
-    let second = instance.retain(instance.singletons().none());
-    let third = instance.retain(instance.singletons().none());
-    Ok(instance.new_tuple(vec![first, second, third]))
+    let none = instance.singletons().none();
+    // `new_tuple` **吃掉**每项引用 ⇒ 每项都自己 retain 一份 ✓。
+    let Some(exception) = instance.current_exception() else {
+        let first = instance.retain(none);
+        let second = instance.retain(none);
+        let third = instance.retain(none);
+        return Ok(instance.new_tuple(vec![first, second, third]));
+    };
+    // `type(value)` 是**类型对象**（参照给的也是类对象本身 ✓）；`retain` 那份给元组 ✓。
+    let exception_type = instance.type_of(exception).cast::<Header>();
+    instance.retain(exception_type);
+    instance.retain(exception);
+    // `__traceback__` 在异常实例的属性字典里（与 `exception_getattr` 同一条读取路径 ✓）。
+    let traceback = pyawa_core::mounted_instance_dict(instance, exception)
+        .and_then(|mapping| instance.dict_get(mapping, "__traceback__"))
+        .map(|value| instance.retain(value))
+        .unwrap_or_else(|| instance.retain(none));
+    Ok(instance.new_tuple(vec![exception_type, exception, traceback]))
+}
+
+/// **`sys.exception()`**（3.11+；task-26）：当前**处理中**的异常**值**；没有 ⇒ `None` ✓
+/// （参照实测：`except` 块里给那个异常实例 ✓、块外给 `None` ✓）。
+fn exception_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(match instance.current_exception() {
+        Some(value) => instance.retain(value),
+        None => instance.retain(instance.singletons().none()),
+    })
+}
+
+/// **`sys.getsizeof(object[, default])`**（P3-38 S3e-3，task-67）：
+/// 先走用户类的 `__sizeof__` 协议（参照同一协议）；没有就走**本实现**的真实占用口径
+/// （[`Instance::object_sizeof`] —— 对象头＋载荷＋容器指针数组；**不冒充** CPython 的具体数字）。
+/// `default` 只在 `__sizeof__` 抛 `TypeError` 时兜底（照参照 ✓）。
+fn getsizeof_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("getsizeof() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    let mut object: Option<NonNull<Header>> = args.first().copied();
+    let mut default: Option<NonNull<Header>> = args.get(1).copied();
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        match name {
+            "object" => object = Some(*value),
+            "default" => default = Some(*value),
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("getsizeof() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
+    }
+    let Some(object) = object else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "getsizeof() missing required argument 'object' (pos 1)",
+        ));
+    };
+    // **`__sizeof__` 协议**：用户类定义了就用它（返回 int）；`TypeError` 且有 default ⇒ default。
+    if let Some(method) = instance.type_lookup(instance.type_of(object), "__sizeof__") {
+        match pyawa_core::executor::call::call_value(instance, method, &[object], &[]) {
+            Ok(result) => {
+                if let Some(size) = instance.int_of(result).and_then(|int| int.to_i64()) {
+                    instance.release(result);
+                    return Ok(instance.new_int(size));
+                }
+                instance.release(result);
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "__sizeof__() should return an int",
+                ));
+            }
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                // stdlib `forbid(unsafe_code)` ⇒ 只走安全访问器（`type_of`／`type_name`）✓。
+                let exception_name = instance.type_name(instance.type_of(exception));
+                if exception_name == "TypeError" {
+                    if let Some(default) = default {
+                        instance.release(exception);
+                        return Ok(instance.retain(default));
+                    }
+                }
+                return Err(pyawa_core::ExecError::Raised { exception });
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(instance.new_int(instance.object_sizeof(object) as i64))
+}
+
+/// **`sys.exit([code])`** ✓（`P3-32`）：**实现＝抛 `SystemExit`** ✓（参照同义：`sys.exit` 本身
+/// 不直接退出进程，`except SystemExit` 必须能接住）——进程级退出码由组合根在**未捕获**时解释
+/// （`pyawa_core::executor::ExitDisposition`）。
+///
+/// 参数校验照参照 3.14.4 **实测**（关键字**先判**）：
+/// - 带关键字 ⇒ `sys.exit() takes no keyword arguments`；
+/// - 位置实参 ≥2 ⇒ `exit expected at most 1 argument, got N`（N 是实际个数）；
+/// - 0 参 ⇒ `SystemExit()`；1 参 ⇒ `SystemExit(该参)`（`int`／`None`／别的都原样交给异常载荷，
+///   退出码／`stderr` 文本的解释在组合根那一处，**不在**这里）。
+///
+/// `CX-22`：载荷布局只有核心能碰 ⇒ 造异常走 `raise_builtin_with_args_public`。
+fn exit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sys.exit() takes no keyword arguments",
+        ));
+    }
+    if args.len() >= 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("exit expected at most 1 argument, got {}", args.len()),
+        ));
+    }
+    // 实参进异常对象 ⇒ 每项交一份**新引用**（`new_exception_with_args` 接手）。
+    let payload: Vec<NonNull<Header>> = args.iter().map(|argument| instance.retain(*argument)).collect();
+    Err(pyawa_core::executor::raise_builtin_with_args_public(
+        instance, "SystemExit", payload,
+    ))
 }
 
 /// 建 `sys` 模块的命名空间（**新引用** 的 `dict`）。
 /// **编码名**（第 265 轮）：`sys.getfilesystemencoding()`／`sys.getdefaultencoding()` ✓。
+///
+/// 值取参照实测：两者都是 `utf-8`（本层还没有"按平台查编码"的能力，如实）。
 fn encoding_native(
     instance: &Instance,
-    bound: Option<NonNull<Header>>,
+    _bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    // `getfilesystemencodeerrors` 与两个"编码名"共用一个原生 ✓ —— 用**函数名**区分值 ✓
-    //（值取参照实测：`utf-8`／`surrogateescape` ✓）。
-    let encode_errors = bound
-        .and_then(|object| instance.text_of(object))
-        .is_some_and(|name| name == "getfilesystemencodeerrors");
-    Ok(instance.new_str(if encode_errors {
-        "surrogateescape"
-    } else {
-        "utf-8"
-    }))
+    Ok(instance.new_str("utf-8"))
+}
+
+/// **`sys.getfilesystemencodeerrors()`**（task-61 收尾，P3-38 S3b）：参照实测
+/// **`'surrogateescape'`**（不是编码名 ✗）。
+///
+/// 旧实现把三个名字共用一个原生、想用"绑定 self 的函数名"区分值 ⇒ **模块函数调用时
+/// `bound` 为 `None`** ⇒ `getfilesystemencodeerrors()` 一直误报 `'utf-8'` ✗ ⇒ `Lib/os.py` 的
+/// `fsdecode` 拿 `'utf-8'` 当错误处理器名 ⇒ `LookupError: unknown error handler name 'utf-8'`
+/// （真 bug）。这里拆成独立原生，名称与值都照参照。
+fn filesystem_encode_errors_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    Ok(instance.new_str("surrogateescape"))
 }
 
 pub fn build(instance: &Instance) -> NonNull<Header> {
@@ -474,6 +761,16 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `modules`：import 系统的模块表；import 未接之前只保证这个键存在
     let modules = instance.new_dict();
     instance.dict_set(namespace, "modules", modules);
+    // **`path_importer_cache`／`path_hooks`**（P3-38 S3e-2）：`importlib._bootstrap_external`
+    // （`invalidate_caches`／`_path_importer_cache`）、`pkgutil.get_importer`、`runpy` 一族都会读写
+    // 这两格（先前缺属性 ⇒ `AttributeError: 'module' object has no attribute
+    // 'path_importer_cache'`）。**本层诚实面** ✗：Pyawa 的导入在原生侧（不走 Python 查找器），
+    // 所以缓存起始为空 `dict`、钩子为空 `list` —— 这正是"一个查找器也没装"的**真实表示** ✓
+    // （不伪造 zipimporter／FileFinder；`importlib.invalidate_caches()` 对空缓存是合法 no-op ✓）。
+    let path_importer_cache = instance.new_dict();
+    instance.dict_set(namespace, "path_importer_cache", path_importer_cache);
+    let path_hooks = instance.new_list(Vec::new());
+    instance.dict_set(namespace, "path_hooks", path_hooks);
     // **`builtin_module_names`**（第 138 轮）：`Lib/os.py` 靠 `'posix' in sys.builtin_module_names`
     // 选平台分支 ✓ ⇒ 报我们**真正内建**的那些名字 ✓（如实 ✓；CPython 这里是元组 ✓）。
     // **第 280 轮据实修正** ✗：先前写的是 `imp`（3.14 已移除 ✗）且漏了 `_io`／`_warnings`／`_weakref`／
@@ -516,15 +813,52 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         excepthook_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "__excepthook__", excepthook_builtin);
-    // **`exc_info()`** ✓（第 724 轮）：`Lib/threading.py` 的 `_make_invoke_excepthook()` 在
-    // **模块级**就取 `sys_exc_info = _sys.exc_info` ✓ ⇒ 缺它同一处再报 AttributeError ✗（实测 ✓）。
-    // **如实口径** ✗：本层**不跟踪"当前异常"** ⇒ 恒返回 `(None, None, None)` ✓（`except` 块内也一样 ✓）。
+    // **`exc_info()`／`exception()`**（task-26 真实现）：`Lib/threading.py` 的
+    // `_make_invoke_excepthook()` 在**模块级**就取 `sys_exc_info = _sys.exc_info` ✓；
+    // `unittest` 的错误恢复靠 `sys.exc_info()` 拿真实异常 ✓（先前是如实桩 ⇒ 官方套件一遇
+    // 失败就 `issubclass() arg 1 must be a class` abort ✗）。两者都读 `BC-60` ② 的
+    // 实例级异常状态 ✓（`PUSH_EXC_INFO`／`POP_EXCEPT` 维护 ✓，见 `executor/step_exceptions.rs` ✓）。
     let exc_info = crate::builtins_module::make_native(
         instance,
         "exc_info",
         exc_info_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "exc_info", exc_info);
+    // `sys.exception()`（3.11+）：同一个状态的**值**那一项 ✓。
+    let exception = crate::builtins_module::make_native(
+        instance,
+        "exception",
+        exception_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "exception", exception);
+
+    // **`sys.exit([code])`** ✓（`P3-32`）：`Lib/` 里遍地 `sys.exit(...)` ✓ —— 实现＝抛 `SystemExit`
+    //（参照同义 ✓）；进程级退出码由组合根在**未捕获**时解释 ✓（`ExitDisposition` 一处真相 ✓）。
+    let exit = make_native(instance, "exit", exit_native);
+    instance.dict_set(namespace, "exit", exit);
+    // **`sys.getsizeof`**（P3-38 S3e-3，task-67）：`test_marshal` 等导入期/用例会读它 ✓。
+    let getsizeof = make_native(instance, "getsizeof", getsizeof_native);
+    instance.dict_set(namespace, "getsizeof", getsizeof);
+    // **`sys.thread_info`**（P3-38 S3e-3，task-67，最小诚实面）：本 VM **没有线程实现**
+    // （单线程解释器；`threading` 只是纯 Python 最小面）⇒ 如实给 `name="none"`、
+    // `lock=None`、`version=None`（参照在有 pthread 的构建里给 `pthread`／`semaphore`／`NPTL…`；
+    // 这是**平台/实现差异**，不冒充）。官方 `test_threadsignals` 读 `.name`／`.lock`／`.version`
+    // 做能力判断（不是 pthread ⇒ 相关用例跳过 ✓）。
+    let thread_info_type = instance.new_attribute_type("thread_info");
+    let thread_info_attributes = instance.new_dict();
+    let thread_info_name = instance.new_str("none");
+    instance.dict_set(thread_info_attributes, "name", thread_info_name);
+    let none = instance.singletons().none();
+    instance.dict_set(thread_info_attributes, "lock", none);
+    instance.dict_set(thread_info_attributes, "version", none);
+    let thread_info = instance
+        .alloc(AttributeObject::new(
+            thread_info_type,
+            RefCell::new(Some(thread_info_attributes)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(namespace, "thread_info", thread_info);
 
     // **`_getframe`** ✓（第 230 轮）：`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓。
     let getframe = crate::builtins_module::make_native(
@@ -544,11 +878,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **`sys.getfilesystemencoding()`／`getdefaultencoding()`** ✓（第 265 轮）：`Lib/os.py` 的
     // `_create_environ_mapping()` 调前者 ✓ ⇒ 缺了它 `import os` 就停在那儿 ✗（实测 ✓）。
     // 值取**参照在本机的实测值** ✓（`utf-8` ✓）——**如实记** ✗：本层还没有"按平台查编码"的能力 ✓。
-    for name in ["getfilesystemencoding", "getdefaultencoding", "getfilesystemencodeerrors", "getfilesystemencoding"] {
+    for name in ["getfilesystemencoding", "getdefaultencoding"] {
         let native =
             crate::builtins_module::make_native(instance, name, encoding_native as pyawa_core::NativeFn);
         instance.dict_set(namespace, name, native);
     }
+    // **`getfilesystemencodeerrors()`** 是**错误处理器名**（`'surrogateescape'`），不是编码名 ✗
+    // —— 旧实现三个名字共用一个原生 ⇒ 模块函数调用时 `bound == None` ⇒ 一直误报 `'utf-8'`
+    // ⇒ `os.fsdecode` 报 `LookupError: unknown error handler name 'utf-8'`（task-61 收尾真 bug）。
+    let encode_errors = crate::builtins_module::make_native(
+        instance,
+        "getfilesystemencodeerrors",
+        filesystem_encode_errors_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "getfilesystemencodeerrors", encode_errors);
 
     // 语言版本（供特性检测）
     let (major, minor, micro, release_level, serial) = LANGUAGE_VERSION;
@@ -667,6 +1010,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_int(i64::from(impl_serial)),
     ]);
     instance.set_type_attribute(namespace_type, "version", impl_version);
+    // **`_multiarch`** ✓（task-9）：`sysconfig._get_sysconfigdata_name()` 拼 sysconfigdata 名字要用它
+    //（`Lib/sysconfig/__init__.py:394-399`）；值是**构建目标事实**，见 [`multiarch`]。
+    let multiarch = instance.new_str(multiarch());
+    instance.set_type_attribute(namespace_type, "_multiarch", multiarch);
     let implementation =
         instance.alloc(AttributeObject::new(namespace_type, core::cell::RefCell::new(None)));
     instance.dict_set(
@@ -674,6 +1021,144 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         "implementation",
         implementation.into_raw().cast::<Header>(),
     );
+
+    // **`sys._jit`**（round 16）：模块对象式的三个查询口（见 `jit_query` 的如实说明）。
+    // 建法与 `install` 里那些 Rust 侧模块同一手法：`module` 类型 ＋ 挂一个命名空间 dict。
+    let jit_namespace = instance.new_dict();
+    for (name, handler) in [
+        ("is_available", jit_is_available_native as pyawa_core::NativeFn),
+        ("is_enabled", jit_is_enabled_native as pyawa_core::NativeFn),
+        ("is_active", jit_is_active_native as pyawa_core::NativeFn),
+    ] {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(jit_namespace, name, function);
+    }
+    let jit_name = instance.new_str("sys._jit");
+    instance.dict_set(jit_namespace, "__name__", jit_name);
+    // `module` 在引导期不保证登记（与 `lib.rs::install` 的兜底同口径），缺就现建一个。
+    let module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let jit_module = instance
+        .alloc(AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(jit_namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(namespace, "_jit", jit_module);
+
+    // **`sys.monitoring`**（round 19）：最小的 **import 期常量** 面（见 `monitoring_sentinel` 上方
+    // 的如实说明）。数值全部照本机 `python3` 3.14.4 逐条实测。
+    let monitoring_namespace = instance.new_dict();
+    // 工具 id 常量（`bdb.MonitoringBackend.__init__` 用 DEBUGGER_ID）。
+    let monitoring_ids: [(&str, i64); 4] = [
+        ("DEBUGGER_ID", 0),
+        ("COVERAGE_ID", 1),
+        ("PROFILER_ID", 2),
+        ("OPTIMIZER_ID", 5),
+    ];
+    for (name, value) in monitoring_ids {
+        let number = instance.new_int(value);
+        instance.dict_set(monitoring_namespace, name, number);
+    }
+    // 两个**互不相同**的 `object()` 哨兵（参照 `MISSING`／`DISABLE` 各是独立实例）。
+    for name in ["MISSING", "DISABLE"] {
+        let sentinel = monitoring_sentinel(instance);
+        instance.dict_set(monitoring_namespace, name, sentinel);
+    }
+    // `sys.monitoring.events`：20 个**整数位**（参照 `types.SimpleNamespace`；见文件头如实偏差）。
+    let events_type = instance.new_attribute_type("sys.monitoring.events");
+    let monitoring_events: [(&str, i64); 20] = [
+        ("NO_EVENTS", 0),
+        ("PY_START", 1),
+        ("PY_RESUME", 2),
+        ("PY_RETURN", 4),
+        ("PY_YIELD", 8),
+        ("CALL", 16),
+        ("LINE", 32),
+        ("INSTRUCTION", 64),
+        ("JUMP", 128),
+        ("BRANCH_LEFT", 256),
+        ("BRANCH_RIGHT", 512),
+        ("STOP_ITERATION", 1024),
+        ("RAISE", 2048),
+        ("EXCEPTION_HANDLED", 4096),
+        ("PY_UNWIND", 8192),
+        ("PY_THROW", 16384),
+        ("RERAISE", 32768),
+        ("C_RETURN", 65536),
+        ("C_RAISE", 131072),
+        ("BRANCH", 262144),
+    ];
+    for (field, value) in monitoring_events {
+        let number = instance.new_int(value);
+        instance.set_type_attribute(events_type, field, number);
+    }
+    let events = instance
+        .alloc(AttributeObject::new(
+            events_type,
+            core::cell::RefCell::new(None),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(monitoring_namespace, "events", events);
+    // 工具 API 的名字要在（运行期真调用 ⇒ 如实 NotImplementedError）。
+    for (name, handler) in [
+        (
+            "use_tool_id",
+            monitoring_use_tool_id_native as pyawa_core::NativeFn,
+        ),
+        (
+            "free_tool_id",
+            monitoring_free_tool_id_native as pyawa_core::NativeFn,
+        ),
+        ("get_tool", monitoring_get_tool_native as pyawa_core::NativeFn),
+        (
+            "set_events",
+            monitoring_set_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "get_events",
+            monitoring_get_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "set_local_events",
+            monitoring_set_local_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "get_local_events",
+            monitoring_get_local_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "register_callback",
+            monitoring_register_callback_native as pyawa_core::NativeFn,
+        ),
+        (
+            "restart_events",
+            monitoring_restart_events_native as pyawa_core::NativeFn,
+        ),
+        (
+            "clear_tool_id",
+            monitoring_clear_tool_id_native as pyawa_core::NativeFn,
+        ),
+    ] {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(monitoring_namespace, name, function);
+    }
+    let monitoring_name = instance.new_str("sys.monitoring");
+    instance.dict_set(monitoring_namespace, "__name__", monitoring_name);
+    let monitoring_module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let monitoring_module = instance
+        .alloc(AttributeObject::new(
+            monitoring_module_type,
+            core::cell::RefCell::new(Some(monitoring_namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(namespace, "monitoring", monitoring_module);
 
     // `float_info`／`int_info`（§5.2.3 的第 216 轮口径；载体与 `implementation` 同一种：
     // **属性命名空间**——点号可访问，structseq 的元组行为（下标／len／迭代／repr）未接线）。

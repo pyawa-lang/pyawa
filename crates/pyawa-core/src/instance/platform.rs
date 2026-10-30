@@ -46,6 +46,110 @@ impl Instance {
         }
     }
 
+    /// **经 `clock` 域取本地时间**（`AB-41` 表尾追加槽 ①）：
+    /// `secs` ⇒ [`pyawa_capabilities::clock::CpTm`]（含 `tm_gmtoff`／`tm_zone`）。
+    ///
+    /// `time.localtime` 用它拿**真实时区**（stdlib 侧没有时区库 ✓）；槽缺失／未实现／机器错误
+    /// 三态照 [`Instance::clock_now_ns`] 的映射（`CP-5`）。
+    pub fn clock_localtime(
+        &self,
+        secs: i64,
+    ) -> Result<pyawa_capabilities::clock::CpTm, CapabilityCallError> {
+        let Some(table) = self.clock_vtable() else {
+            return Err(CapabilityCallError::NotRegistered);
+        };
+        let Some(localtime) = table.localtime else {
+            return Err(CapabilityCallError::NotImplemented);
+        };
+        let mut tm = pyawa_capabilities::clock::CpTm::default();
+        let mut errno = 0i32;
+        match localtime(table.state, secs, &mut tm, &mut errno) {
+            pyawa_capabilities::clock::CapStatus::Ok => Ok(tm),
+            pyawa_capabilities::clock::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::clock::CapStatus::Machine => {
+                Err(CapabilityCallError::Machine(errno))
+            }
+        }
+    }
+
+    /// **经 `clock` 域做 C locale 的 `strftime`**（表尾追加槽 ②）：`fmt` 是 UTF-8 字节、
+    /// `tm` 是 [`pyawa_capabilities::clock::CpTm`] ⇒ 格式化结果。
+    ///
+    /// 缓冲按 `fs.readlink` 的**两段式**约定重试：先 512 字节；provider 回的总长超容量就按总长
+    /// 再要一次（最多 4 次，够不到就按机器错误处理——`CP-5` 不编造成功）。
+    pub fn clock_strftime(
+        &self,
+        fmt: &[u8],
+        tm: &pyawa_capabilities::clock::CpTm,
+    ) -> Result<String, CapabilityCallError> {
+        let Some(table) = self.clock_vtable() else {
+            return Err(CapabilityCallError::NotRegistered);
+        };
+        let Some(strftime) = table.strftime else {
+            return Err(CapabilityCallError::NotImplemented);
+        };
+        let mut capacity = 512usize;
+        for _ in 0..4 {
+            let mut buffer: Vec<u8> = vec![0u8; capacity];
+            let mut needed = 0usize;
+            let mut errno = 0i32;
+            match strftime(
+                table.state,
+                fmt.as_ptr(),
+                fmt.len(),
+                tm,
+                buffer.as_mut_ptr(),
+                capacity,
+                &mut needed,
+                &mut errno,
+            ) {
+                pyawa_capabilities::clock::CapStatus::Ok => {
+                    if needed <= capacity {
+                        buffer.truncate(needed);
+                        return Ok(String::from_utf8_lossy(&buffer).into_owned());
+                    }
+                    capacity = needed;
+                }
+                pyawa_capabilities::clock::CapStatus::Unimplemented => {
+                    return Err(CapabilityCallError::NotImplemented)
+                }
+                pyawa_capabilities::clock::CapStatus::Machine => {
+                    return Err(CapabilityCallError::Machine(errno))
+                }
+            }
+        }
+        // 4 次扩容仍装不下：如实按机器错误报（不截断、不伪装成功）。`errno` 用 0（本层没有
+        // 专门的"缓冲不足"errno；调用方按 `Machine` 转成 `OSError`）。
+        Err(CapabilityCallError::Machine(0))
+    }
+
+    /// **经 `clock` 域做 `mktime`**（表尾追加槽 ③）：本地时间 [`pyawa_capabilities::clock::CpTm`]
+    /// ⇒ Unix 秒（C 语义：越界字段由 provider 的 libc 归一化）。
+    pub fn clock_mktime(
+        &self,
+        tm: &pyawa_capabilities::clock::CpTm,
+    ) -> Result<i64, CapabilityCallError> {
+        let Some(table) = self.clock_vtable() else {
+            return Err(CapabilityCallError::NotRegistered);
+        };
+        let Some(mktime) = table.mktime else {
+            return Err(CapabilityCallError::NotImplemented);
+        };
+        let mut seconds = 0i64;
+        let mut errno = 0i32;
+        match mktime(table.state, tm, &mut seconds, &mut errno) {
+            pyawa_capabilities::clock::CapStatus::Ok => Ok(seconds),
+            pyawa_capabilities::clock::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::clock::CapStatus::Machine => {
+                Err(CapabilityCallError::Machine(errno))
+            }
+        }
+    }
+
     /// **`fs` 域的形状视图**（`SPEC-capabilities.md` §9.1）：把宿主注册的不透明指针按
     /// [`pyawa_capabilities::fs::CpFsVtable`] 解释 ✓。`None` ＝ 该域未提供（`CP-2` ✓）。
     ///

@@ -31,6 +31,10 @@ pub unsafe fn set_getattr(
         // 先前 `'frozenset' object has no attribute 'issuperset'` 把 `ipaddress`
         // ⇒ `urllib.parse` ⇒ `email.utils` 一串压在下面 ✓。
         "issuperset" => set_issuperset_native,
+        // **`union`**（task-46：从 stdlib 的临时补丁迁回 core ✓ —— `Lib/hashlib.py` 导入期
+        // 就 `algorithms_available.union(...)`；round 20 为了先让 hashlib 导入在 stdlib 里
+        // 临时挂了这一格，现按"一处真相"收进 core ✓）。
+        "union" => set_union_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -290,8 +294,12 @@ pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, 
     if items.is_empty() {
         return Ok(format!("{class_text}()"));
     }
-    let mut text = if exact_set || exact_frozenset {
+    // **精确 `frozenset` 的 repr 要带 `frozenset(`** ✓（task-46 顺带修 ✗：先前与 `set` 同形 ⇒
+    // `repr(frozenset({1, 2}))` 给 `{1, 2}` ✗，参照给 `frozenset({1, 2})` ✓）。
+    let mut text = if exact_set {
         String::from("{")
+    } else if exact_frozenset {
+        String::from("frozenset({")
     } else {
         format!("{class_text}({{")
     };
@@ -302,8 +310,113 @@ pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, 
         text.push_str(&crate::executor::protocol::element_repr(instance, *item)?);
     }
     text.push('}');
-    if !exact_set && !exact_frozenset {
+    if !exact_set {
         text.push(')');
     }
     Ok(text)
+}
+
+/// **`set.union(*others)`**（task-46）：返回**新** `set` = 自己 ∪ 其余可迭代实参 ✓
+/// （参照实测：可接多个可迭代；`{1}.union(5)` ⇒ `TypeError: 'int' object is not iterable` ✓；
+/// 关键字实参 ⇒ `TypeError: set.union() takes no keyword arguments` ✓）。
+/// 去重口径与 `set.add` 同一处（`values_equal_public` ✓）。
+pub(crate) fn set_union_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set.union() takes no keyword arguments",
+        ));
+    }
+    let (this, rest) = match bound {
+        Some(this) => (this, args),
+        None => match args.split_first() {
+            Some((this, rest)) => (*this, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "unbound method set.union() needs an argument",
+                ))
+            }
+        },
+    };
+    let mut accumulated: Vec<NonNull<Header>> = Vec::new();
+    let mut push_unique = |item: NonNull<Header>| -> bool {
+        if accumulated.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, item)
+        }) {
+            return false;
+        }
+        accumulated.push(item);
+        true
+    };
+    // 自己那份是**借用** ⇒ 进新集合前各留一份 ✓。
+    for item in instance.set_items(this).unwrap_or_default() {
+        if push_unique(item) {
+            instance.retain(item);
+        }
+    }
+    // 其余实参走**通用迭代协议** ✓（参照：str／bytes／dict／range／生成器都收 ✓）。
+    for argument in rest {
+        let iterator = match instance.iter_object(*argument) {
+            Ok(iterator) => iterator,
+            Err(ExecError::Unsupported { .. }) | Err(ExecError::Raised { .. }) => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!(
+                        "'{}' object is not iterable",
+                        instance.type_name(instance.type_of(*argument))
+                    ),
+                ))
+            }
+            Err(error) => return Err(error),
+        };
+        loop {
+            match instance.advance_iterator(iterator) {
+                Ok(Some(item)) => {
+                    // 元素本身不可哈希 ⇒ 参照文案（`cannot use 'list' as a set element …` ✓）。
+                    if let Some((key_name, bad)) =
+                        crate::builtin::dict::unhashable_key_type(instance, item)
+                    {
+                        instance.release(item);
+                        instance.release(iterator);
+                        return Err(instance.raise_builtin_error(
+                            "TypeError",
+                            &format!(
+                                "cannot use '{key_name}' as a set element (unhashable type: '{bad}')"
+                            ),
+                        ));
+                    }
+                    if !push_unique(item) {
+                        instance.release(item);
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    instance.release(iterator);
+                    return Err(error);
+                }
+            }
+        }
+        instance.release(iterator);
+    }
+    // `frozenset.union` 的结果仍是 frozenset ✓（参照实测）；其余给 set ✓。
+    let receiver_type = instance.type_of(this);
+    let result_is_frozen = instance
+        .type_named("frozenset")
+        .is_some_and(|frozen| instance.is_subtype(receiver_type, frozen));
+    if result_is_frozen {
+        let frozen_type = instance.type_named("frozenset").expect("frozenset 在引导期已登记");
+        let object = instance.alloc(SetObject::new(
+            frozen_type,
+            core::cell::RefCell::new(accumulated),
+        ));
+        Ok(object.into_raw().cast::<Header>())
+    } else {
+        Ok(instance.new_set(accumulated))
+    }
 }

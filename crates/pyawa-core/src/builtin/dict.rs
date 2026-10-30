@@ -10,6 +10,67 @@ use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::{bound_dict, container_receiver};
 
+/// **键可哈希性**（task-46）：参照的 `dict` 用哈希表 ⇒ **不可哈希的键必须报 `TypeError`** ✓；
+/// 本层 `dict` 是"值相等线性表"（不哈希）⇒ 不查就会**静默接受** ✗ ——
+/// `test_decorators.test_memoize` 的 3≠4 正是这条：`saved[args]` 里 `args = ([10],)` 本该抛
+/// `TypeError` 走 `except TypeError` 分支（计数 +1），却"命中缓存"⇒ 少算一次 ✗。
+///
+/// 返回 `(键的类型名, 真正不可哈希的那个类型名)` —— 文案照参照实测：
+/// `cannot use 'tuple' as a dict key (unhashable type: 'list')` ✓（嵌套 tuple 报**最内层** ✗ 的那个）。
+pub(crate) fn unhashable_key_type(
+    instance: &Instance,
+    key: NonNull<Header>,
+) -> Option<(String, String)> {
+    let key_type = instance.type_of(key);
+    let key_name = instance.type_name(key_type);
+    for name in ["list", "dict", "set", "bytearray"] {
+        if instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(key_type, base))
+        {
+            return Some((key_name.clone(), key_name));
+        }
+    }
+    // tuple 的哈希是递归的 ⇒ 元素不可哈希时整键也不可哈希 ✓（`([1],)` ⇒ 'list' ✗）。
+    if instance
+        .type_named("tuple")
+        .is_some_and(|base| instance.is_subtype(key_type, base))
+    {
+        // SAFETY: tuple 子类沿用 tuple 布局（`AB-58` 族）。
+        let items = unsafe { &*key.as_ptr().cast::<TupleObject>() };
+        for index in 0..items.len() {
+            if let Some(item) = items.item(index) {
+                if let Some((_, bad)) = unhashable_key_type(instance, item) {
+                    return Some((key_name, bad));
+                }
+            }
+        }
+        return None;
+    }
+    // 用户类 `__hash__ = None` ⇒ 不可哈希 ✓（参照实测：`cannot use 'A' as a dict key (unhashable type: 'A')`）。
+    if instance
+        .type_lookup(key_type, "__hash__")
+        .is_some_and(|hash| hash == instance.singletons().none())
+    {
+        return Some((key_name.clone(), key_name));
+    }
+    None
+}
+
+/// 不可哈希就报参照文案的 `TypeError`（`dict` 的读／写／`get`／`setdefault`／`in` 共用 ✓）。
+pub(crate) fn reject_unhashable_key(
+    instance: &Instance,
+    key: NonNull<Header>,
+) -> Result<(), crate::ExecError> {
+    if let Some((key_name, bad)) = unhashable_key_type(instance, key) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cannot use '{key_name}' as a dict key (unhashable type: '{bad}')"),
+        ));
+    }
+    Ok(())
+}
+
 /// **按值找键的下标** ✓（引擎统一比较口径 ✓）。
 pub(crate) fn dict_position(
     instance: &Instance,
@@ -105,6 +166,30 @@ fn dict_put_owned(
     }
 }
 
+/// **`left | right`（`PEP 584`，task-13）**：**新建**一个 dict —— 先左后右，右侧**覆盖**同名键 ✓；
+/// 两侧原对象都**不改** ✓（参照 3.14.4 实测：`{"a": 1} | {"b": 2}` ⇒ `{'a': 1, 'b': 2}` ✓，
+/// `{"a": 1, "c": 3} | {"a": 2}` ⇒ `{'a': 2, 'c': 3}` ✓）。
+///
+/// 与 `dict.update`／`dict.__init__` 走**同一处真相**（[`dict_put_owned`] 的"已存在就换值" ✓）——
+/// 不另写一套覆盖／引用账 ✓。两边都必须是 **dict 族**（子类也算 ✓；由调用方
+/// [`crate::executor::arithmetic::arithmetic_public`] 用 `dict_entries` 判型 ✓）。
+pub(crate) fn dict_merge(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+) -> NonNull<Header> {
+    let merged = instance.new_dict();
+    for source in [left, right] {
+        for (key, value) in instance.dict_entries(source).unwrap_or_default() {
+            // **借用 ⇒ 各留一份** ✓：结果字典持有自己的键、值引用 ✓。
+            instance.retain(key);
+            instance.retain(value);
+            dict_put_owned(instance, merged, key, value);
+        }
+    }
+    merged
+}
+
 /// **键值对可迭代 ⇒ 逐对并入**（task-25 ① ✓）：`dict.update` 与 `dict |=` 的**同一处真相** ✓
 ///（`executor/protocol.rs::inplace_dict_merge` 的 ③ 分支直接调本函数 ✓）。
 ///
@@ -173,6 +258,7 @@ pub(crate) fn dict_setdefault_native(
             "setdefault expected at least 1 argument, got 0",
         ));
     };
+    reject_unhashable_key(instance, *key)?;
     if let Some(index) = dict_position(instance, mapping, *key) {
         let entries = instance.dict_entries(mapping).unwrap_or_default();
         return Ok(instance.retain(entries[index].1));
@@ -274,7 +360,13 @@ pub(crate) fn dict_popitem_native(
         None => Err(instance.raise_builtin_error("KeyError", "popitem(): dictionary is empty")),
     }
 }
-/// **按键取值**（本层口径 ✓）：`str` 走名字通道 ✓；`int` 走线性比较 ✓（其余键型随后补 ✗）。
+/// **按键取值**（本层口径 ✓）：`str` 走名字通道 ✓；其余键型走**值相等的线性比较** ✓
+/// （与 `dict_setitem`／`dict_put_owned` 的 [`dict_position`] 同一处口径 ✓）。
+///
+/// 第 104 轮起这里只认 `str`／`int` ✗ ⇒ `d.get(None, default)`／tuple 键等永远返回默认值 ✗。
+/// task-5 补通用分支的动因 ✓：`argparse` 的 `_registry_get` 把 **`None` 当键** 存
+/// （`register('action', None, _StoreAction)` ✓）再 `.get(None)` 取 ✓ ⇒ 官方 `unittest` 卡在
+/// `TypeError: None is not callable` ✗（`Lib/argparse.py:1546-1570` 两处 `_registry_get`）。
 pub(crate) fn dict_lookup(
     instance: &Instance,
     mapping: NonNull<Header>,
@@ -283,14 +375,10 @@ pub(crate) fn dict_lookup(
     if let Some(name) = instance.text_of(key) {
         return instance.dict_get(mapping, name);
     }
-    if let Some(wanted) = instance.int_value(key) {
-        for (candidate, value) in instance.dict_entries(mapping)? {
-            if instance.int_value(candidate) == Some(wanted) {
-                return Some(value);
-            }
-        }
-    }
-    None
+    // **通用键型**（`None`／tuple／用户对象…）：按值相等找位置，再取该位置的值 ✓。
+    // 返回的是字典**借用**的那一份 ✓（`dict_get_native` 出去前会自己 `retain` ✓）。
+    let position = dict_position(instance, mapping, key)?;
+    instance.dict_entries(mapping)?.get(position).map(|(_, value)| *value)
 }
 pub(crate) fn dict_get_native(
     instance: &Instance,
@@ -305,6 +393,7 @@ pub(crate) fn dict_get_native(
             "get expected at least 1 argument, got 0",
         ));
     };
+    reject_unhashable_key(instance, *key)?;
     if let Some(found) = dict_lookup(instance, mapping, *key) {
         // **借来的引用要还一份**（第 145 轮：`dict_get`／`dict_entries` 都是**借用** ✓；
         //   不 retain ⇒ 调用方释放后 double free ✗ —— 这一族在第 131 轮的 `type()` 上已经栽过 ✓）。
@@ -416,6 +505,7 @@ pub fn dict_setitem_native(
     let (Some(container), Some(key), Some(value)) = (receiver, rest.first(), rest.get(1)) else {
         return Err(instance.raise_builtin_error("TypeError", "__setitem__ expected 3 arguments"));
     };
+    reject_unhashable_key(instance, *key)?;
     // **内建实现直奔"原始写"** ✓（第 702 轮 ✗ 修）：`dict.__setitem__` 是**内建实现** ✓ ——
     // 覆盖版 `__setitem__` 结尾常写 `dict.__setitem__(self, k, v)` ✓（上游 `enum._EnumDict` 就是 ✓）
     // ⇒ 这里若再走协议 ✗（`subscript_write` 就是"incref ＋ 转协议"✗）⇒ **自递归** ✓（实测
@@ -440,17 +530,23 @@ pub fn dict_setitem_native(
     }
     Ok(instance.retain(instance.singletons().none()))
 }
-/// **`dict.__init__`**（第 104 轮真实现）：源可以是**映射**（dict 族 ✓），也可以是**成对的可迭代** ✓
-/// （`dict([("a", 1)])` ✓）；无实参 ⇒ 什么都不做 ✓。返回 `None` ✓（`__init__` 的口径 ✓）。
+/// **`dict.__init__`**（第 104 轮真实现；task-1 补**关键字实参**）：源可以是**映射**（dict 族 ✓），
+/// 也可以是**成对的可迭代** ✓（`dict([("a", 1)])` ✓）；**关键字实参最后并入、同名键覆盖** ✓
+/// （`dict({"a": 1}, a=2, b=3)` ⇒ `{"a": 2, "b": 3}` ✓）；无实参 ⇒ 什么都不做 ✓。
+/// 返回 `None` ✓（`__init__` 的口径 ✓）。
 ///
 /// 动因 ✓：`dict.__new__` 只管建**空映射** ✓（第 99 轮照参照改的 ✓）⇒ 填内容必须由 `__init__` 做 ✓，
 /// 而 `dict` 先前**没有自己的 `__init__`** ✗（继承 `object` 的空操作 ✗）⇒ `D([("a", 1)])` 会**静默**给出
 /// 空字典 ✗（比报错更糟 ✓，探针当场抓到 ✓）。
+///
+/// **关键字实参为什么必须有**（task-1）：官方 `Lib/argparse.py` 的
+/// `dict(kwargs, dest=dest, option_strings=[])` 走**这一处** ✓ —— 先前 `_kwargs` 整份没读 ✗
+/// ⇒ 建出来的字典缺 `dest` ⇒ 官方 `unittest.main()` 当场 `KeyError: 'dest'` ✗。
 pub fn dict_init_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     // **`self` 从哪来** ✓：本层的**实例化**会把实例**也放进 `args[0]`** ✓（`bound` 另有其一 ✓，
     // 见 `object_init_native` 的说明 ✓）⇒ 两条都要认 ✓；用户实参是 `self` 之后的那些 ✓。
@@ -463,48 +559,65 @@ pub fn dict_init_native(
             }
         },
     };
-    let Some(source) = rest.first().copied() else {
-        return Ok(instance.retain(instance.singletons().none()));
-    };
-    // SAFETY: 目标由调用方保证存活；`dict` 族的载荷就是 `DictObject` ✓。
-    let object = unsafe { &*target.as_ptr().cast::<DictObject>() };
-    if let Some(entries) = instance.dict_entries(source) {
-        for (key, value) in entries {
-            // SAFETY: 键值由源字典持有；目标要自己那两份 ✓。
-            unsafe {
-                instance.incref_object(key.as_ptr());
-                instance.incref_object(value.as_ptr());
-            }
-            object.insert_raw(key, value);
-        }
-        return Ok(instance.retain(instance.singletons().none()));
-    }
-    let Some(items) = instance.iterable_items(source) else {
-        let name = instance.type_name(instance.type_of(source));
+    // **位置实参最多 1 个** ✓（参照 3.14.4 实测：`dict({}, {})` ⇒
+    // `TypeError: dict expected at most 1 argument, got 2` ✓）。先判个数再碰源 ✓。
+    if rest.len() > 1 {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("'{name}' object is not iterable"),
+            &format!("dict expected at most 1 argument, got {}", rest.len()),
         ));
-    };
-    for pair in items {
-        let Some(parts) = instance.iterable_items(pair) else {
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                "cannot convert dictionary update sequence element to a sequence",
-            ));
-        };
-        if parts.len() != 2 {
-            return Err(instance.raise_builtin_error(
-                "ValueError",
-                "dictionary update sequence element does not have length 2",
-            ));
+    }
+    if let Some(source) = rest.first().copied() {
+        if let Some(entries) = instance.dict_entries(source) {
+            for (key, value) in entries {
+                // SAFETY: 键值由源字典持有；目标要自己那两份 ✓。
+                unsafe {
+                    instance.incref_object(key.as_ptr());
+                    instance.incref_object(value.as_ptr());
+                }
+                // **按"已存在就换值"写** ✓：`dict.__init__` 是 update 语义 ✓
+                //（对**已有内容的字典**再 `__init__` 不该长出重复键 ✓）。
+                dict_put_owned(instance, target, key, value);
+            }
+        } else {
+            let Some(items) = instance.iterable_items(source) else {
+                let name = instance.type_name(instance.type_of(source));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{name}' object is not iterable"),
+                ));
+            };
+            for pair in items {
+                let Some(parts) = instance.iterable_items(pair) else {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "cannot convert dictionary update sequence element to a sequence",
+                    ));
+                };
+                if parts.len() != 2 {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "dictionary update sequence element does not have length 2",
+                    ));
+                }
+                // SAFETY: 两个元素由 `pair` 持有；目标要自己那两份 ✓。
+                unsafe {
+                    instance.incref_object(parts[0].as_ptr());
+                    instance.incref_object(parts[1].as_ptr());
+                }
+                // 同上 ✓：成对可迭代里的**重复键 ⇒ 后者覆盖** ✓（参照实测：
+                // `dict([("a",1),("a",2)])` ⇒ `{"a": 2}` ✓）。
+                dict_put_owned(instance, target, parts[0], parts[1]);
+            }
         }
-        // SAFETY: 两个元素由 `pair` 持有；目标要自己那两份 ✓。
-        unsafe {
-            instance.incref_object(parts[0].as_ptr());
-            instance.incref_object(parts[1].as_ptr());
-        }
-        object.insert_raw(parts[0], parts[1]);
+    }
+    // **关键字实参最后并入** ✓（参照实测：`dict(mapping, **kw)` 里 kw **覆盖**同名键 ✓）。
+    // 引用账照源字典那段 ✓：键、值各留一份再交给字典 ✓；`dict_put_owned` 在"键已存在"时
+    // 归还多留的那份键并释放旧值 ✓。
+    for (key, value) in kwargs {
+        instance.retain(*key);
+        instance.retain(*value);
+        dict_put_owned(instance, target, *key, *value);
     }
     Ok(instance.retain(instance.singletons().none()))
 }
@@ -591,7 +704,7 @@ fn mapping_keys(
     unsafe { instance.release_object(view.as_ptr()) };
     let mut keys = Vec::new();
     loop {
-        match crate::executor::format::advance_iterator(instance, iterator, 0)? {
+        match crate::executor::advance_iterator(instance, iterator, 0)? {
             Some(item) => keys.push(item),
             None => break,
         }

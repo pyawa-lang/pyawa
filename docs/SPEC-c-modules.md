@@ -169,9 +169,9 @@
 
 - **能 import**：`builtins` 始终可 import（它是解释器自带的名字空间）
 - **已落地的函数**（本层只做**不需要能力域、也不需要输出通道**的）：
-  `abs`、`all`、`any`、`bin`、`callable`、`chr`、`hex`、`isinstance`、`issubclass`、`len`、
+  `abs`、`all`、`any`、`bin`、`callable`、`chr`、`hash`、`hex`、`isinstance`、`issubclass`、`len`、
   `max`、`min`、`oct`、`ord`、`repr`、`sorted`、`sum`
-  ＋ **`__build_class__`**（由核心在引导期建好，`OM-14`）
+  ＋ **`__build_class__`**（由核心在引导期建好，`OM-14`）＋ **`complex` 类型**（本轮真类型化，见下）
 - **语义口径**（期望值全部取自参照实现，见 `crates/pyawa-stdlib/tests/builtins.rs`）：
   - `abs(True)` ⇒ `1`，且结果是 **`int` 不是 `bool`**；`abs("x")` ⇒
     `bad operand type for abs(): 'str'`
@@ -206,18 +206,56 @@
   - `all`／`any`：空可迭代 ⇒ `True`／`False`；真值走核心那一处 `Instance::truth_of`
     （`None`／假／数值零／空串／空容器为假，其余为真）；`all()` ⇒
     `all() takes exactly one argument (0 given)`；`all(5)` ⇒ `'int' object is not iterable`
+  - **`hash()`（本轮新注册）**：已接 `int`／`float`／`bool`／`str`／`bytes`／`tuple`／`None`／
+    `complex`／用户类的 `__hash__`（身份哈希协议面）；`list`／`dict`／`set`／`bytearray` ⇒
+    `TypeError: unhashable type: '<类型>'`（参照同文案）；其余**可哈希但未接**的内建（如 `frozenset`）
+    ⇒ **如实 `NotImplementedError`**（不拿身份哈希冒充）
+    - 算法：`int` 走核心那一处（`sign × (|x| mod 2^61-1)`、`-1` ⇒ `-2`）；`float`／`complex` 走核心的
+      `hash_double_value`／`hash_complex_parts`；`str`／`bytes` 走 **siphash13（零密钥）**；
+      `tuple` 走 CPython 3.8+ 的 xxHash 组合；`None` ⇒ `0xFCA86420`
+    - **如实偏差**：① **无哈希随机化**——`str`／`bytes` 固定零密钥（等价 `PYTHONHASHSEED=0`；
+      参照默认每进程随机化 ⇒ 与默认 `python3` 不可比）；② **`nan` 的 hash** 本层给确定性 `0`
+      （参照按对象地址／进程内随机）
+  - **`abs()`／`int()`／`float()` 对 `complex`**：`abs(z)` ⇒ `hypot(real, imag)`（**float**）；
+    `int(z)` ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number,
+    not 'complex'`；`float(z)` ⇒ `TypeError: float() argument must be a string or a real number,
+    not 'complex'`（均照参照）
 - **未落地、且不是"忘了"**：
   - **`print` 与任何需要输出通道的内建**：九域里**没有"输出"域**，
     `DESIGN.md` §9 第 20 条的先例是"由 `pa_create`（`pyawa-abi`）创建实例时注入"。**口径未裁**（见下）
   - 需要能力域的（`open`、`input`、`exec`／`compile`…）：等 `P3-14`
-  - 需要**迭代器对象**（不是容器）／富比较／哈希协议的（`map`、`filter`、`zip`、`enumerate`、
-    `hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的 `richcompare`／`hash` 槽位接线
-    （`min`／`max`／`sorted`／`sum`／`all`／`any` 已按上一段的边界落地）
+  - 需要**迭代器对象**（不是容器）的（`map`、`filter`、`zip`、`enumerate`、`id`…）：等 `§10` 的
+    迭代器族与 `OM-11` 的其余槽位接线（`min`／`max`／`sorted`／`sum`／`all`／`any` 已按上一段的
+    边界落地；`hash` 本轮已落地，见上）
 - **待裁（不自行决定）**：`print` 的输出通道走哪儿——见 `README.md` 的"待裁"一节
 - 落地：`crates/pyawa-stdlib/src/builtins_module.rs`
 - **对拍夹具**：`tools/gen_builtins_fixture.py` ⇒ `crates/pyawa-stdlib/tests/fixtures/builtins.rs`
   （40 个用例；那份夹具是**生成的 Rust 源码**而不是 JSON——消费方 crate 里没有 JSON 解析器，
   生成源码省掉解析，也省掉一份重复的解析器）
+- **类型面（本轮已落地）：`complex`**
+  - **真类型**：载荷 `real`／`imag` 双 `f64`（`TS-43` 布局自选、不进 ABI）；MRO `complex → object`
+    （`OM-13`：C3 由核心算、**禁止**手写）；`isinstance`／`type`／`.real`／`.imag`（**float**）可用
+  - **构造器**（`complex.__new__`）：0 参 ⇒ `0j`；1 参数字（`int`／`float`／`bool`，无 `__complex__`
+    时退 `__float__`）；**单参恰 `complex` ⇒ `complex(z) is z`**；1 参 `str` ⇒ 解析（括号／空白／
+    指数／合法下划线／`inf`／`nan`；非法 ⇒ `ValueError: complex() arg is a malformed string`，
+    下划线位置非法 ⇒ `ValueError: could not convert string to complex: '<原串>'` 两套文案）；
+    `__complex__` 协议（返回非 `complex` ⇒ `__complex__ returned non-complex (type X)`）；两参形态
+    （含 `real=`／`imag=` 关键字）里**复数实参**照参照的历史口径按 `real + imag*1j` 收；
+    **`-0.0` 的符号位保留**；arity／未知关键字／同名重复的 TypeError 文案照参照
+  - **算术与比较**：`+`／`-`／`*`／`/`／`**`（与 `int`／`float`／`bool` 混合走数值塔）、
+    一元 `-`／`+`／`abs`、`==`／`!=`（与实数按 `real`／`imag` 比，`1+0j == 1` 真；与其余类型一律假）；
+    **排序**与 `//`／`%`／`divmod` 照参照报 `TypeError`
+    （`'<' not supported between instances of 'complex' and 'complex'`／
+    `unsupported operand type(s) for divmod(): 'complex' and 'int'`）；真值＝`real != 0 or imag != 0`
+    （`nan` 为真）；`conjugate()` 给新复数、`__complex__()` 返回**自身**；`hash(z)` 见上
+  - **如实偏差**：③ `class C(complex)` 的**子类构造**如实 `NotImplementedError`（core 只造基类
+    实例，**不**造错类型的实例）；④ **类型级**描述符 `complex.real`／`complex.__lt__`／
+    `complex.__add__` **未挂**（本层没有 getset 描述符面；**实例语义正确**）；⑤ 两参里给
+    `complex`／`__complex__` 的 `real` 时参照发 `DeprecationWarning`，本层**无警告通道**（值一致）；
+    ⑥ `setattr(z, "real", 5)` 的文案差异（本层按**无 `__dict__`** 口径报错，参照是
+    `AttributeError: readonly attribute`）
+  - **验收**：`crates/pyawa-core/tests/complex.rs`（表示／属性／算术／比较／真值／哈希算法／类型面；
+    期望值全部为参照 3.14.4 实测）
 - **类型面（本段未落地）：`bytes`**（`P1-12`；阶梯位置见 `TS-42`）
   - **存在性**：它是参照的核心内建类型，`TS-41` 要求集合与参照一致 ⇒ **必须有**。
     **基类是 `object`**、**不是** `str` 的子类（实测）
@@ -266,8 +304,14 @@
   - `hexversion` 是 `version_info` 的整数编码（与参照同式：主 `<<24`｜次 `<<16`｜微 `<<8`｜
     发布级 `<<4`｜序号）
   - `version` 是**构建串**，**必须**含 `pyawa`（**禁止**伪装成 CPython 的构建串）
+- **`implementation._multiarch`**（`P3-32`）：**构建目标事实**——Debian/Ubuntu multiarch 三元组
+  （本机 `x86_64-linux-gnu`；未知目标给**空串**、不冒充）；`sysconfig._get_sysconfigdata_name()`
+  用它拼 sysconfigdata 模块名。**不是**语言版本、也**不是**本实现的版本号
 - **`argv`**：启动参数列表。REPL／嵌入式默认 `[""]`；`-c` 入口给 `["-c"]`（照参照的可见形态）
-- **`path`**：**由 `site.py` 构建**（`IM-24`）——本层只暴露这个列表，**禁止**另立路径逻辑
+- **`path`**：**由 `site.py` 构建**（`IM-24`）——本层只暴露这个列表，**禁止**另立路径逻辑。
+  `site.py` 接上之前的**过渡半**（`P3-33`）：组合根按参照口径装成
+  **[脚本目录] ＋ `PYTHONPATH` 各项 ＋ [`Lib/`]**（`PYTHONPATH` 整体为空 ⇒ 不加项；空组件展开为
+  cwd 的绝对路径），最终形态仍归 `IM-24`
 - **`modules`**：import 系统的模块表（`IM-6` 一族的落点）；import 未接之前只保证这个键存在
 - **与实现无关的常量**（值由探测参照导出、逐项对拍，见 `crates/pyawa-stdlib/tests/sys.rs`）：
   - `maxunicode` ＝ `0x10FFFF`
@@ -280,9 +324,16 @@
   **不是**"审计已实现"（有 hook 可注册时参照会回调 hook——本层没有那条路径）。参数校验照参照 3.14.4
   **实测**（关键字**先判**／0 个位置实参／非 `str` 的 `event` ⇒ `TypeError`，文案逐字；`str` 子类
   事件名接受）；其余位置实参任意、一律忽略。`Lib/http/client.py:1031` 在建连前调它（`P3-29` 硬前置）
+- **`exit([arg])`**（`P3-32`）：**抛 `SystemExit`**——`sys.exit` 自身**不**直接退出进程，因此可被
+  `except SystemExit` 接住；**未捕获**的 `SystemExit` 由 CLI／宿主解释成**进程退出码**，**不是**错误诊断。
+  退出码口径（`raise SystemExit(...)` 直构同源）：`None`／无载荷 ⇒ **0**；`int`（含 `bool`）⇒ 该值
+  （进程按 8 位截断；超出 `i64` 可表示范围 ⇒ **255**）；其余载荷 ⇒ **未接住时**把 `str(载荷)` 打到
+  stderr ＋ **1**（多元素载荷即元组的 `str`）。参数校验照参照 3.14.4 **实测**：位置实参 ≥2 ⇒
+  `TypeError: exit expected at most 1 argument, got N`；带关键字 ⇒
+  `TypeError: sys.exit() takes no keyword arguments`
 - **已落地**（`crates/pyawa-stdlib/src/sys_module.rs`）：`argv`／`path`／`modules`／`version`／
   `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`／
-  **`float_info`／`int_info`（第 216 轮）**
+  **`float_info`／`int_info`（第 216 轮）**／**`exit`（`P3-32`）**／**`implementation._multiarch`（`P3-32`）**
 - **载体的实现观测面**：`implementation`／`float_info`／`int_info` 都是核心的**属性命名空间**
   （`new_attribute_type` ＋ `set_type_attribute`），点号可访问；**structseq 的元组行为**
   （下标／`len`／迭代／`repr`，以及 `count`／`index` 两个方法）**未接线**——那属于"元组子类"那一面
@@ -292,7 +343,9 @@
 - **验收**：`crates/pyawa-stdlib/tests/sys.rs`——身份三条（`name`／`cache_tag`／`version`）、
   语言版本两条（`version_info`／`hexversion` 与参照一致）、常量三条对拍、`argv`／`path`／
   `modules` 的形态；期望值由 `tools/gen_sys_fixture.py` **探测参照实现**导出
-  （`crates/pyawa-stdlib/tests/fixtures/sys.rs`，生成物、禁止手改）
+  （`crates/pyawa-stdlib/tests/fixtures/sys.rs`，生成物、禁止手改）。`exit` 的**进程级**口径由
+  `crates/pyawa-runtime/tests/cli.rs` 端到端对拍（退出码、`stderr` 文本、可被 `except SystemExit`
+  接住、参数错误文案；`PYTHONPATH` 同处有一条导入用例）
 
 #### 5.2.4 `_imp`
 
@@ -656,13 +709,33 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 1. **本节自身的那次审计**（一个 12 行的脚本：对上面 28 个名字逐个 `hasattr` 探测 ✓）
    **没能跑完** ✗ —— 本层报 `指令 70 的这个形态尚未接线：FOR_ITER 的对象不是本层接线的迭代器` ✗
    （最小复现：`target/recon/time_audit.py` ✓，含"列表推导 ＋ `if` 条件"这一形态 ✓）。
-   ⇒ 这是**能力缺口**（`MS-19`：必须修，**不得**登记成差异 ✓），**记为本节的第一条待修** ✓。
+   ⇒ 这是**能力缺口**（`MS-19`：必须修，**不得**登记成差异 ✓），当时**记为本节的第一条待修** ✓
+   ——该 `FOR_ITER` 形态**其后已修**（审计脚本现在能跑完 ✓）。
 2. `errno` 那一路的同类审计**逐项一致** ✓（131 条 `errorcode`、`EPERM`／`ENOENT`／`EINVAL`、
    反向表 `errorcode[2] == "ENOENT"` ✓），作为"审计方法可行"的对照 ✓（§5.2.1 ✓）。
 
-**尚未逐条核对的面（不粉饰 ✓）**：`struct_time` 的字段与元组行为、`strftime`／`strptime` 的格式串面、
-`get_clock_info` 的返回对象、`tzname`／`daylight`／`altzone` 的取值来源（本层无 `TZ` 处理 ✓）
-—— 这些**要在 `FOR_ITER` 缺口修好、审计脚本能跑通之后**逐条补 ✓，不预写"已落地" ✓。
+**已落地面**（`clock` 域的**表尾三槽**，ABI 1.3）：
+- `strftime(format, t=None)`：`format` **必须** `str`；`t` 只接受 **9 元组**（参照对 `list`／`None`
+  报 `TypeError: Tuple or struct_time argument required`；缺省 ⇒ `localtime(now)`），输出经
+  **`clock.strftime`** 槽 —— **C locale**，glibc 扩展（如 `%4Y`）照参照；
+- `asctime(t=None)`／`ctime(secs=None)`：**纯 Rust** 格式化，C 口径 `%a %b %e %H:%M:%S %Y`
+  （`asctime()` 缺省取 now、`asctime(None)` 照参照报 `Tuple or struct_time argument required`；
+  `ctime(None)` ＝ now）；
+- `mktime(t)`：走 **`clock.mktime`** 槽，返回 **float**；
+- `localtime(secs=None)`：改走 **`clock.localtime`** 槽 ⇒ **真实本地时区**（`gmtime` 仍纯 UTC；
+  槽缺失＝旧宿主 ⇒ `localtime`／`asctime`／`ctime` 的缺省路径回退**纯 UTC**，`CP-3`）。
+
+**如实偏差（不粉饰 ✓）**：本层**还没有** `struct_time` 类型 ⇒ `localtime`／`gmtime` 仍返回 **9 元组**、
+`.tm_year` 等属性不可用；`tzname`／`timezone` 由 provider 的 `localtime(0)` 派生（**无 DST 的时区**
+与参照逐值一致），但 `daylight` 恒 **0**、`altzone` ＝ `timezone`（**没有夏令时第二偏移的通道**）
+⇒ 有 DST 的时区不保证；`%Z` 可用，其余 zone 语义未接。
+`strptime`／`tzset`／`process_time`／`process_time_ns`／`thread_time`／`thread_time_ns`／
+`clock_gettime`／`CLOCK_*`／`get_clock_info` **未做**。`strftime` 的格式串面只按实测覆盖
+（C locale／glibc 扩展），**不承诺**穷尽对拍。
+
+**验收**：`crates/pyawa-runtime/tests/time_shapes.rs`（`TZ=UTC` 端到端：`timezone` 一族、`localtime`／
+`gmtime` 的 9 元组、`strftime`（含 `%4Y`／空格式／`%a %b %e`）、`asctime`／`ctime`、`mktime` 的
+`float`、三类参数错误的类型与文案；期望值由本机 `python3` 3.14.4 跑同一探针实测）。
 
 #### 5.2.9 `_thread`（**VM 侧最小面** —— 第 280 轮；用户裁定 A）
 
@@ -836,9 +909,14 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
   `cpu_count`／`getcwd`／`getcwdb`／`urandom`）走组合根提供的最小路径（`DESIGN.md` §9 第 20 条同一先例，
   **不新增能力域**）。
 - **能 import**：内建模块；`import posix` 恒成功（`Lib/os.py:55` 的 `from posix import *` 读 `__all__`）。
-- **已落地面**（`__all__` 当前 **39** 名；逐条照本机参照实测）：
+- **已落地面**（`__all__` 当前 **43** 名；逐条照本机参照实测）：
   - **文件系统**：`stat`／`lstat`／`stat_result`（`st_*` 字段）、`open`／`close`／`read`／`write`、
     `unlink`（`remove` 是它的别名）、`rmdir`、`readlink`；报错按 errno 折成 §5.1 的 `OSError` 子类；
+  - **`stat_result` 的时间字段**（`warnings` 的格式化走到 `linecache` 后 `os.stat` 需要 `st_mtime`）：
+    `st_atime`／`st_mtime`／`st_ctime` 是**浮点秒**、`st_atime_ns`／`st_mtime_ns`／`st_ctime_ns` 是
+    **int 纳秒**（均照参照）；时间戳取自 `fs` 域的 **`stat_times`** 槽（`SPEC-capabilities.md` §9.1）。
+    **如实偏差**：provider 不支持该槽时**如实缺名**（如 conformance harness 未提供 ⇒ 这六个字段
+    不存在，**不编时间**）；`st_*` 字段**逐结果对象写**（每次 `stat` 一个新对象，**不是**共享类型上的字段）；
   - **进程／环境**：`getpid`、`environ`（本进程环境，`_create_environ` 同源）、`cpu_count`、`_exit`；
   - **路径**：`getcwd`（`str`）／`getcwdb`（`bytes`）；
   - **随机**：`urandom`——先经 `fs` 域读 `/dev/urandom`（**能读满才算成功**）；读不满时退回进程内
@@ -847,13 +925,29 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
     **纯逻辑真实现**（退出码／负信号／`ValueError: process stopped by delivery of signal N`／
     `invalid wait status: N` 全部照参照实测）、`waitpid`（见下）；
   - **常量**：`F_OK`／`X_OK`／`W_OK`／`R_OK`、Linux 的 `O_*` 12 个真实取值（供 `Lib/tempfile.py` 等
-    导入期拼标志用）；`_have_functions` **空表**（如实：本层一个可选能力都不声明）。
+    导入期拼标志用）；`_have_functions` **空表**（如实：本层一个可选能力都不声明）；
+  - **终端尺寸**（`P3-32` 框架链）：`terminal_size`（**原生可调用**：收一个 2 元 tuple／list ⇒
+    返回带 `columns`／`lines` 点号属性的对象）与 `get_terminal_size(fd=1)`。**如实偏差**：
+    ① `terminal_size` **不是真 structseq** ⇒ 无 `len()`／下标／元组相等（与 `os.stat_result` 的既有
+    口径一致）；构造只接 tuple／list（参照接任意序列）、**不收关键字**（参照接受 `sequence=`）、
+    第二位置实参的 dict 语义未接线 ⇒ 这些情形本层报 `TypeError`（带关键字那条的措辞
+    `structseq() takes no keyword arguments` 是**本层措辞**，参照无此串）；② 本层没有 `ioctl` ⇒
+    `get_terminal_size` **恒抛** `OSError`（照"不是终端"那档 `[Errno 25] Inappropriate ioctl for
+    device`，**不区分** EBADF）——`shutil` 捕获后回退，链不受阻。参数错误文案照参照实测：
+    `structseq() missing required argument 'sequence' (pos 1)`／`constructor requires a sequence`／
+    `os.terminal_size() takes a 2-sequence (N-sequence given)`／
+    `posix.get_terminal_size() takes no keyword arguments`／
+    `get_terminal_size expected at most 1 argument, got N`。
 - **如实未接线面（`CM-6`；禁止假数据）**：`waitpid` 调用即 `NotImplementedError`（真 `waitpid(2)` 属
   能力域；**不返回假 pid／假 status**）；`readlink` 的 `dir_fd≠None` 未接线（如实报未接线）；`fs` 槽
   未注册／未实现时按 `CM-6` 报 `NotImplementedError`（不静默）。**范围如实**：参照 `posix` 的公开面
-  是 **346** 个非下划线名，本层 `__all__` 39 ⇒ `fork`／`execve`／`chdir`／`listdir`／`scandir`／`dup`／
+  是 **346** 个非下划线名，本层 `__all__` 43 ⇒ `fork`／`execve`／`chdir`／`listdir`／`scandir`／`dup`／
   `pipe`／`kill`／`wait4` 等远未落地（缺名＝少接线，逐批补）。
 - **验收**：`crates/pyawa-runtime/tests/posix_fs_shapes.rs`（`getcwd`／`getcwdb`／`readlink` 两侧逐行）；
+  `terminal_size`／`get_terminal_size` **无专用抽例**（如实记——形态与错误文案在
+  `crates/pyawa-stdlib/src/posix_module.rs` 里逐条对参照实测）；
+  `stat_result` 的时间戳族与**逐结果独立**由 `crates/pyawa-runtime/tests/stat_result.rs` 端到端对拍
+  （`st_mtime == st_mtime_ns / 1e9`、类型分别是 `float`／`int`、两次 `stat` 的 `st_size` 不串）；
   对拍语料 `posix_function_surface.py`／`posix_cwd_readlink.py`／`posix_path_helpers.py`／
   `import_os_surface.py`／`import_posixpath_surface.py`。
 
@@ -868,9 +962,17 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
   - 常量 `DEFAULT_BUFFER_SIZE`＝**8192**；异常 `BlockingIOError`（内建）与 `UnsupportedOperation`
     （**如实说**：参照是 `OSError`＋`ValueError` 子类，本层**别名到 `OSError`** —— 比缺名强、比造类型省，
     随后补真类型）；
-  - **真实现**：`TextIOWrapper`（`sys.stdout`／`sys.stderr` 的最小文本流，`write`／`flush` 经 `fs`）、
-    `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）、`FileIO`（经 `fs` 域：
-    `open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现）；
+  - **真实现**：
+    - `TextIOWrapper`（`sys.stdout`／`sys.stderr` 的最小文本流）：**每个流对象**有
+      `write`／`writeln`／`flush`（**逐对象绑定** —— 句柄烤进原生函数，**不**存进对象或共享类型字典）；
+      `write(str)` **只收 `str`**（UTF-8 编码后经 `fs` 域写，返回**字符数**；非 `str` ⇒ 参照口径
+      `TypeError: write() argument must be str, not <类型>`）；`writeln(str="")` 是**本层便利方法**
+      （参照的文本流没有这个名字；`unittest` 的 `_WritelnDecorator` 在 Python 层）——文本 ＋ 换行
+      **一次**写出、返回 `None`；`flush()` 在本层**无缓冲**下是**真 no-op**（`write` 已落 `fs`，
+      无事可刷；返回 `None`）。用途（`P3-32`）：官方 `unittest` 的 `TextTestRunner`／`TextTestResult`
+      **直接写这两个流**（报告通道）
+    - `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）
+    - `FileIO`（经 `fs` 域）：`open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现
   - **占位类型**（可当基类、可 `isinstance`；**实例化按 CM-6 报错**）：`_IOBase`／`_RawIOBase`／
     `_BufferedIOBase`／`_TextIOBase` 与 `BufferedReader`／`BufferedWriter`／`BufferedRWPair`／
     `BufferedRandom`／`StringIO`／`IncrementalNewlineDecoder`；

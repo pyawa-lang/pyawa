@@ -1094,13 +1094,25 @@ pub(crate) fn str_replace_native(
 /// 内置 `utf-8`／`ascii`／`latin-1`／`cp437` 走快路径，**其余委派 `_codecs.lookup` 注册表**
 /// （⇒ `'あ'.encode('cp932')` 与 `Lib/encodings/*` 全族可用 ✓）。先前这里另有一份 4 编码白名单 ✗
 /// （与 `bytes.decode` 那份重复 ⇒ 两处都得改才通）。
+/// 取绑定 `str` 的 **WTF-8 字节**（P3-38 S3a）：`str.encode` 的输入可含孤立代理 ⇒
+/// `bound_text`（`.value()`）对 WTF-8 表示会 panic ✗，这里走字节视图 ✓。
+fn bound_wtf8(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<Vec<u8>, crate::ExecError> {
+    let Some(bound) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
+    };
+    // SAFETY: 绑定的是 `str`（或子类，布局沿用 str ✓）。
+    Ok(unsafe { &*bound.as_ptr().cast::<crate::StrObject>() }
+        .wtf8_bytes()
+        .to_vec())
+}
+
 pub(crate) fn str_encode_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+    let text = bound_wtf8(instance, bound)?;
     let mut encoding = args.first().and_then(|value| instance.text_of(*value));
     let mut errors = args.get(1).and_then(|value| instance.text_of(*value));
     for (key, value) in kwargs {
@@ -1115,7 +1127,7 @@ pub(crate) fn str_encode_native(
     }
     let encoding = encoding.unwrap_or("utf-8");
     let errors = errors.unwrap_or("strict");
-    instance.encode_with_encoding_and_errors(&text, encoding, errors)
+    instance.encode_wtf8_with_encoding_and_errors(&text, encoding, errors)
 }
 
 /// `str.format(*args, **kwargs)` ✓（第 722 轮 ✓）：`Lib/base64.py:246` 的
@@ -1133,6 +1145,47 @@ pub(crate) fn str_format_native(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let template = bound_text(instance, bound)?;
+    // P3-38 S2a-2 批 2 最小直通：模板就是**单个自动／手工编号字段**（`{}`／`{0}`）且实参恰为
+    // **WTF-8 表示的 `str`**（含孤立代理）⇒ 参照 `"{}".format(s) is s`（实测 ✓）⇒ 直接回原对象，
+    // 避免 `render_format` 的 `String` 装不下代理。**带规格／前后缀／多字段的完整语义留下批** ✓。
+    if kwargs.is_empty() && args.len() == 1 && (template == "{}" || template == "{0}") {
+        if instance.is_str_object(args[0]) && instance.text_of(args[0]).is_none() {
+            return Ok(instance.retain(args[0]));
+        }
+    }
+    // **单字段模板的直通**（P3-38 S2c）：`"{:>5}".format(s)` 的参照结果仍是**含代理的 str**；
+    // 而 `render_format` 的输出通道是 `String`（装不下代理）⇒ 这里对"整条模板就是一个简单字段"
+    // 的形态直接走 `format_value_with_spec`，返回 **str 对象** ✓（合法 UTF-8 结果逐字节同旧路径 ✓）。
+    // 只认：`{字段[:规格]}`（无 `!` 转换、字段名无 `.`/`[`、规格里无花括号）——其余走原路径 ✓。
+    if template.starts_with('{') && template.ends_with('}') && !template[1..template.len() - 1].contains('{') {
+        let inner = &template[1..template.len() - 1];
+        // `!` 转换／嵌套花括号 ⇒ 交回原路径
+        if !inner.contains('!') && !inner.contains('{') && !inner.contains('}') {
+            let (name, spec) = match inner.split_once(':') {
+                Some((name, spec)) => (name, spec),
+                None => (inner, ""),
+            };
+            if !name.contains('.') && !name.contains('[') {
+                let value = if name.is_empty() || name.chars().all(|c| c.is_ascii_digit()) {
+                    let index = if name.is_empty() { 0usize } else { name.parse::<usize>().unwrap_or(usize::MAX) };
+                    args.get(index).copied()
+                } else {
+                    // 关键字字段：名字是合法 UTF-8（代理名不可能等于 `name` ✓）
+                    kwargs
+                        .iter()
+                        .find(|(key, _)| instance.text_of(*key) == Some(name))
+                        .map(|(_, value)| *value)
+                };
+                if let Some(value) = value {
+                    // **只给含代理的 `str`（WTF-8 表示）走这条**：合法 UTF-8 与其它类型仍走原
+                    // render 路径 ⇒ 旧行为逐字节不变 ✓（WTF-8 的 `String` 通道装不下代理，才需直通）。
+                    if instance.is_str_object(value) && instance.text_of(value).is_none() {
+                        return format_value_with_spec(instance, value, spec, 0);
+                    }
+                }
+            }
+        }
+    }
     let mut named: Vec<(String, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
     for (key, value) in kwargs {
         let Some(name) = instance.text_of(*key) else {
@@ -1364,7 +1417,9 @@ fn render_field(
     let formatted = format_value_with_spec(instance, value, &spec_text, 0);
     unsafe { instance.release_object(value.as_ptr()) };
     let formatted = formatted?;
-    let text = instance.text_of(formatted).map(|text| text.to_owned());
+    // P3-38 S2c：`str.format` 的输出通道仍是 `String` ⇒ 含代理字段走**安全口径**（有损 U+FFFD；
+    // `format_value_with_spec` 已在码点层把宽度/填充做好 ✓）。合法 UTF-8 路径逐字节不变 ✓。
+    let text = instance.text_value(formatted);
     unsafe { instance.release_object(formatted.as_ptr()) };
     match text {
         Some(text) => Ok(text),

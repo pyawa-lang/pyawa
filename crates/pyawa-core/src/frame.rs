@@ -87,6 +87,12 @@ py_object! {
         stacksize: usize,
         /// 是否处于挂起状态（`BC-47`）。
         suspended: Cell<bool>,
+        /// **`f_back`**（task-43）：调用者帧（**本帧持有一份引用** ✓ —— 捕获的帧在调用者返回后仍能
+        /// 沿链读到它 ✓，与参照一致；帧链无环 ⇒ 不会成环）。
+        ///
+        /// **生命周期**：入帧时由 `CurrentFrameGuard::install` 链上（`set_f_back` **接手一份新引用** ✓），
+        /// `frame_clear` 时释放 ✓；`f_back` 属性给出**新引用**或 `None` ✓。
+        f_back: RefCell<Option<NonNull<Header>>>,
     }
 }
 
@@ -141,6 +147,10 @@ impl Frame {
         Slots::new(Self::dealloc)
             .with_traverse(frame_traverse)
             .with_clear(frame_clear)
+            // **帧的 `repr`**（task-43）：参照实测
+            // `<frame at 0x…, file '<文件名>', line <行>, code <代码名>>` ✓
+            // （`test_unicodedata`／traceback 一族会打它；先前退化成 `<frame object at 0x…>` ✗）。
+            .with_repr(frame_repr)
             // **属性面** ✓（第 230 轮）：`f_locals` ✓（`_collections_abc.py:89` 要它 ✓）。
             .with_getattr(frame_getattr)
     }
@@ -152,6 +162,7 @@ impl Frame {
         Self {
             header: Header::new(ty),
             code: RefCell::new(Some(code_reference)),
+            f_back: RefCell::new(None),
             locals: RefCell::new(vec![None; info.nlocals()]),
             namespace: RefCell::new(None),
             globals: RefCell::new(None),
@@ -206,6 +217,16 @@ impl Frame {
     /// 帧持有的 code object 裸引用（**借用**）。
     pub fn code(&self) -> Option<NonNull<Header>> {
         *self.code.borrow()
+    }
+
+    /// **`f_back`**（task-43）：调用者帧（**借用**；入口帧给 `None` ✓）。
+    pub fn f_back(&self) -> Option<NonNull<Header>> {
+        *self.f_back.borrow()
+    }
+
+    /// 设置 `f_back`（**接手一份新引用** ✓），返回被顶下来的那份（调用方负责释放 ✓）。
+    pub fn set_f_back(&self, frame: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.f_back.replace(frame)
     }
 
     /// **BC-43**：值栈上界。
@@ -528,6 +549,9 @@ unsafe fn frame_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     if let Some(exception) = *frame.pending_raise.borrow() {
         visit(exception.as_ptr());
     }
+    if let Some(parent) = *frame.f_back.borrow() {
+        visit(parent.as_ptr());
+    }
     for slot in frame.locals.borrow().iter() {
         if let Some(value) = slot {
             visit(value.as_ptr());
@@ -569,6 +593,10 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
         // SAFETY: 这份引用由帧持有。
         unsafe { instance.release_object(exception.as_ptr()) };
     }
+    if let Some(parent) = frame.f_back.borrow_mut().take() {
+        // SAFETY: 这份引用由帧持有。
+        unsafe { instance.release_object(parent.as_ptr()) };
+    }
     if let Some(globals) = frame.globals.borrow_mut().take() {
         // SAFETY: 这份引用由帧持有。
         unsafe { instance.release_object(globals.as_ptr()) };
@@ -608,9 +636,61 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
     }
 }
 
-/// **帧的属性面** ✓（第 230 轮）：目前只接 `f_locals` ✓（快照 `dict` ✓）。
+/// **当前码元指针 → 所在指令的首选行号**（位置表首项 ✓）。
 ///
-/// **如实说** ✗：`f_back`／`f_lineno`／`f_code` 一族随后补 ✓。
+/// 码元指针的单位是**码元**（`BC-33`：每码元 2 字节），而位置表按**指令**一项 ⇒ 遍历时
+/// 要按**内联缓存**占的码元数跨过去（与 `flush_jumps` 的遍历同一口径 ✓）。
+pub fn line_at(code: &crate::CodeObject, instruction_pointer: usize) -> Option<u32> {
+    let raw = code.code();
+    let mut unit = 0usize;
+    let mut index = 0usize;
+    while index < code.positions().len() {
+        if unit == instruction_pointer {
+            return code.positions()[index].0;
+        }
+        if unit > instruction_pointer {
+            return None;
+        }
+        let op = u16::from(*raw.get(unit * 2)?);
+        unit += 1 + crate::opcode::inline_cache_entries(op) as usize;
+        index += 1;
+    }
+    None
+}
+
+/// **帧的 `repr`**（task-43）：参照 3.14.4 实测形状
+/// `<frame at 0x7f…, file '/x.py', line 12, code f>`（地址小写十六进制；文件名用 `repr` 引号；
+/// 行号取**当前指令**的位置表 ✓）。
+pub unsafe fn frame_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, crate::ExecError> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let frame = unsafe { &*ptr.cast::<Frame>() };
+    let address = ptr as usize;
+    let (filename, name, line) = match frame.code() {
+        Some(code_header) => {
+            // SAFETY: code 由帧持有，存活。
+            let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+            (
+                code.filename().to_owned(),
+                code.name().to_owned(),
+                line_at(code, frame.instruction_pointer()).unwrap_or(0),
+            )
+        }
+        None => ("<unknown>".to_owned(), "<unknown>".to_owned(), 0),
+    };
+    Ok(format!(
+        "<frame at 0x{address:x}, file {filename:?}, line {line}, code {name}>"
+    ))
+}
+
+/// **帧的属性面**（第 230 轮：`f_locals` ✓；task-26 补 `f_code`／`f_globals`／`f_lineno` ✓）。
+///
+/// 为什么要后三个：`traceback` 的失败格式化（`unittest` 的 FAIL／ERROR 输出）与
+/// `unittest.result._is_relevant_tb_level`（`'__unittest' in tb.tb_frame.f_globals`）都要它们 ✓
+/// —— `sys.exc_info()` 真实现之后（task-26），traceback 对象第一次真的进到 Python 侧 ✓
+/// ⇒ 缺这三个属性 ⇒ `unittest` 的失败报告仍会 `AttributeError` 中断 ✗。
+///
+/// **`f_back` 链**（task-43）✓：帧入栈时由 `CurrentFrameGuard::install` 链上调用者帧（持有引用 ✓）——
+/// `traceback.walk_stack`／`test_unicodedata` 那条路可用 ✓。
 pub unsafe fn frame_getattr(
     ptr: *mut Header,
     name: &str,
@@ -620,6 +700,36 @@ pub unsafe fn frame_getattr(
     let frame = unsafe { &*ptr.cast::<Frame>() };
     match name {
         "f_locals" => Some(frame.locals_snapshot(instance)),
+        // **`f_code`**：traceback 用它取 `co_filename`／`co_name`／`co_positions` 一族 ✓。
+        "f_code" => frame.code().map(|code| {
+            // SAFETY: code 由帧持有，存活；调用方要自己那份。
+            unsafe { instance.incref_object(code.as_ptr()) };
+            code
+        }),
+        // **`f_globals`**：`linecache.lazycache` 与 `unittest` 的 `_is_relevant_tb_level` 要它 ✓。
+        "f_globals" => frame.effective_globals().map(|mapping| {
+            // SAFETY: 映射由帧（或命名空间）持有，存活；调用方要自己那份。
+            unsafe { instance.incref_object(mapping.as_ptr()) };
+            mapping
+        }),
+        // **`f_back`**（task-43）：调用者帧（**新引用** ✓）或 `None` ✓。
+        "f_back" => Some(match frame.f_back() {
+            Some(parent) => {
+                // SAFETY: parent 由本帧持有，存活；调用方要自己那份。
+                unsafe { instance.incref_object(parent.as_ptr()) };
+                parent
+            }
+            None => instance.retain(instance.singletons().none()),
+        }),
+        // **`f_lineno`**：按当前指令的位置表给（取不到给 `0` ✓ —— 本层位置表是可选面 ✓）。
+        "f_lineno" => {
+            let line = frame.code().and_then(|code_header| {
+                // SAFETY: code 由帧持有，存活。
+                let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+                line_at(code, frame.instruction_pointer())
+            });
+            Some(instance.new_int(i64::from(line.unwrap_or(0))))
+        }
         _ => None,
     }
 }

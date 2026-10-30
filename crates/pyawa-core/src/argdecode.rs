@@ -16,7 +16,7 @@
 
 use core::ptr::NonNull;
 
-use crate::builtin_objects::{BoolObject, FloatObject, IntObject, StrObject, TupleObject};
+use crate::builtin_objects::{BoolObject, FloatObject, IntObject, TupleObject};
 use crate::code::CodeObject;
 use crate::decode::{Decoder, Instruction};
 use crate::header::Header;
@@ -69,8 +69,9 @@ fn render_constant(instance: &Instance, raw: NonNull<Header>) -> Option<String> 
         return Some(format!("{:?}", unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value()));
     }
     if ty == singletons.str_type() {
+        // P3-38 S2c：报错用的文本走安全口径（合法 UTF-8 原样；代理 ⇒ 有损，不 panic ✓）
         // SAFETY: 同上。
-        let text = unsafe { &*raw.as_ptr().cast::<StrObject>() }.value();
+        let text = instance.text_value(raw).unwrap_or_default();
         let mut rendered = String::from("'");
         for character in text.chars() {
             match character {

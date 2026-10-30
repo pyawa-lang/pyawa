@@ -48,6 +48,7 @@
 | `FileFinder.path_hook(*loader_details)` 是类方法工厂 | `_bootstrap_external.py:1440` | Pyawa 的 finder 可以继承 `FileFinder` 并复用该工厂 |
 | 该模块第 30 行 `import marshal` | `_bootstrap_external.py:30` | `marshal` **必须**存在（`SPEC-object-model.md` 已定其义务） |
 | `site.py` 负责 `sys.path`、site-packages、`.pth` | `Lib/site.py` | Pyawa **禁止**另立一套路径逻辑（见 `IM-22`） |
+| `_init_module_attrs` **无条件读** `spec.submodule_search_locations`（另读 `spec.parent`；`_find_and_load_unlocked` 另用 `_uninitialized_submodules` 做父包簿记） | `_bootstrap.py:736–790`（`parent` 见 `:776`；`_uninitialized_submodules` 见 `:1340`） | Pyawa 造的 spec **必须**带这三格——含 `sys.meta_path` 上的过渡 finder（`IM-30`…`IM-32` 一族）；非包顶层模块取 `None`／`""`／空表；缺一格 ⇒ `importlib.import_module` 链当场 `AttributeError` |
 
 ---
 
@@ -151,6 +152,9 @@
 - **IM-25** 包管理**不做**（`REQUIREMENTS.md`：推迟）：Pyawa 不提供安装器与 resolver；
   只保证"能 import 外部已装好的纯 Python 包"。
 - **IM-26** `site.py` 的执行不得因 Pyawa 特有原因被跳过——跳过它会破坏 `IM-24` 的语义。
+
+> `IM-24` 的**最终形态**仍是 `site.py`；它接上之前的 **C 层过渡半**（组合根先装 `sys.path`，含
+> `PYTHONPATH`）由 `P3-33` 跟踪，口径记在 `SPEC-c-modules.md` §5.2.3 的 `path` 条目，本文件**不重述**。
 
 ---
 

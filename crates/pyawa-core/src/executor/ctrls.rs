@@ -15,7 +15,6 @@ use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
 use crate::builtin_objects::SetObject;
 use crate::builtin_objects::SliceObject;
-use crate::builtin_objects::StrObject;
 use crate::builtin_objects::TupleObject;
 use crate::type_object::TypeObject;
 
@@ -100,15 +99,13 @@ pub(crate) fn sequence_items(
     }
     let str_type = instance.singletons().str_type();
     if ty == str_type {
-        // SAFETY: 同上。
-        let text = unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned();
-        // 逐字符造新的 `str` 对象（*临时*：参照实现会intern 单字符，属实现观测面）
-        return Ok(text
-            .chars()
-            .map(|character| {
-                let object = instance.alloc(StrObject::new(str_type, character.to_string()));
-                object.into_raw().cast::<Header>()
-            })
+        // P3-38 S2a-2 批 2：按**码点**逐字符造 `str`（孤立代理各一格；单字符对象走统一入口 ✓）。
+        let points = instance
+            .str_code_point_vec(raw)
+            .expect("类型刚确认是 str");
+        return Ok(points
+            .into_iter()
+            .map(|point| instance.new_str_code_point(point))
             .collect());
     }
     // **兜底：走迭代器协议** ✓（第 314 轮接线；tuple／list／set／str 已在上面走快路 ✓）。
@@ -304,12 +301,21 @@ pub(crate) fn sequence_repeat(
     // SAFETY: sequence 是存活对象。
     let sequence_type = unsafe { sequence.as_ref() }.ty();
     if sequence_type == instance.singletons().str_type() {
-        // SAFETY: 类型身份已确认。
-        let text = unsafe { &*sequence.as_ptr().cast::<StrObject>() }.value().to_owned();
-        if text.len().saturating_mul(count) > MAX_REPEAT_BYTES {
+        // P3-38 S2a-2 批 2：在 **WTF-8 字节层**重复 ✓（合法 UTF-8 结果与旧口径一致；
+        // 含孤立代理的串也能重复 ✓）。长度上限仍按**字节数**算（与旧口径同为 `len()` 字节数 ✓）。
+        // 上限仍按**字节数**算（与旧口径同为 `len()` 字节数 ✓）；载荷级重复抽到
+        // `Instance::str_repeat`（WTF-8 字节层 ✓；测试/后续批次复用同一处真相 ✓）。
+        let bytes_len = instance
+            .str_wtf8_bytes(sequence)
+            .expect("类型刚确认是 str")
+            .len();
+        if bytes_len.saturating_mul(count) > MAX_REPEAT_BYTES {
             return Err(instance.raise_builtin_error("MemoryError", "string repetition too large"));
         }
-        return Ok(Some(instance.new_str(&text.repeat(count))));
+        return instance
+            .str_repeat(sequence, count)
+            .map(Some)
+            .ok_or_else(|| instance.raise_builtin_error("MemoryError", "string repetition too large"));
     }
     if Some(sequence_type) == instance.type_named("bytes") {
         // SAFETY: 同上。

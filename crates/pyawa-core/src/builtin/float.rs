@@ -259,6 +259,13 @@ pub unsafe fn float_new(
                     },
                 };
                 if negative { -number } else { number }
+            } else if instance.complex_value(*only).is_some() {
+                // **`float(复数)`** ✓（task-30／P3-34）：参照**拒绝**（复数不是实数）⇒ 逐字实测文案 ✓
+                // （`float() argument must be a string or a real number, not 'complex'` ✓）。
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "float() argument must be a string or a real number, not 'complex'",
+                ));
             } else {
                 return Err(crate::ExecError::Unsupported {
                     opcode: 0,

@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "getattr", "hasattr",
+    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "getattr", "hasattr", "hash",
     "exec", "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
@@ -55,6 +55,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("callable", callable_native as pyawa_core::NativeFn),
         ("chr", chr_native as pyawa_core::NativeFn),
         ("hex", hex_native as pyawa_core::NativeFn),
+        // **`hash()`**（task-31）：int／float／bool／str／bytes／tuple／None／complex（见下方实现块）
+        ("hash", hash_native as pyawa_core::NativeFn),
         ("isinstance", isinstance_native as pyawa_core::NativeFn),
         ("__import__", import_native as pyawa_core::NativeFn),
         ("issubclass", issubclass_native as pyawa_core::NativeFn),
@@ -66,6 +68,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("globals", globals_native as pyawa_core::NativeFn),
         ("eval", eval_native as pyawa_core::NativeFn),
         ("exec", exec_native as pyawa_core::NativeFn),
+        // **`compile()`**（task-43）：core 的实现（`pyawa_core::compile_native`）——这里只注册 ✓。
+        ("compile", pyawa_core::compile_native as pyawa_core::NativeFn),
         ("id", id_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         // **`reversed`** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
@@ -259,6 +263,19 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
+    // **`complex.__new__`**（task-31／P3-34）：**构造语义在 stdlib**（core 只给"数字面"的
+    // `new` 槽当"类型可构造"的保险）。按 `executor/call.rs` 的既有口径，类型字典里**非默认**的
+    // `__new__` **优先于** new 槽 ⇒ 字符串解析、0/1/2 参与关键字文案都走这里 ✓。
+    // 挂法照 `object.__new__` 那一段的规矩：类型字典 ＋ `make_native` ✓。
+    if let Some(complex_type) = instance.type_named("complex") {
+        let own = make_native(
+            instance,
+            "__new__",
+            complex_dunder_new_native as pyawa_core::NativeFn,
+        );
+        instance.set_type_attribute(complex_type, "__new__", own);
+    }
+
     // **数据类型的 `__str__`／`__repr__` 进类型字典** ✓（第 411 轮，task-22 G3 ✓）：
     // `enum.py` 的 `ReprEnum` 分支读 `member_type.__str__`／`__repr__` 给 `StrEnum`／`IntEnum`
     // 装成员格式化 ✓；先前落到元类兜底的 `object.__str__` ✗ ⇒ `str(StrEnum 成员)` 出 repr 形 ✗。
@@ -330,6 +347,27 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
+    // **`weakref.__new__` 进 `weakref` 的类型字典** ✓（task-7）：`ref.__new__` 在参照里是
+    // weakref 类型**自己的** `tp_new` ✓ ⇒ Python 子类（`class KeyedRef(weakref.ref)` 的
+    // `weakref.ref.__new__(type, ob, callback)` ✓，`Lib/importlib/_bootstrap.py` 的嵌套
+    // `KeyedRef` ＋ `Lib/weakref.py` 的模块级 `KeyedRef` ✓）必须取到它 ✓；缺了它属性通道会
+    // 翻到 `object.__new__` ✗ ⇒ 通用 `AttributeObject` 载荷，**目标根本没处存** ✗。
+    if let Some(weakref_type) = instance.type_named("weakref") {
+        if let Some(namespace) = instance.type_namespace(weakref_type.cast()) {
+            let has_own = instance
+                .type_lookup_owner(weakref_type, "__new__")
+                .is_some_and(|(owner, _)| owner == weakref_type);
+            if !has_own {
+                let own = make_native(
+                    instance,
+                    "__new__",
+                    pyawa_core::weakref_dunder_new as pyawa_core::NativeFn,
+                );
+                instance.dict_set(namespace, "__new__", own);
+            }
+        }
+    }
+
     // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {
@@ -368,54 +406,175 @@ fn print_native(
     instance: &Instance,
     _self_object: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let builtins = instance.builtins().ok_or(ExecError::Unsupported {
         opcode: 0,
         what: "`print` 需要内建名字空间（组合根装配）",
     })?;
-    // 身份检查：`sys.stdout` 那个对象必须在（目的地与它是同一个 ✓）
-    let _stdout = instance
+    let default_stdout = instance
         .dict_get(builtins, "__stdout__")
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`sys.stdout` 尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
         })?;
-    // 句柄与 `stdout` 对象**同源**（组合根一起装 ✓）：对象是身份、句柄是落点 ✓
     let handle_object = instance
         .dict_get(builtins, "__stdout_handle__")
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`sys.stdout` 的句柄尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
         })?;
-    let handle = instance
+    let default_handle = instance
         .int_value(handle_object)
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`__stdout_handle__` 不是整数",
         })? as u64;
 
-    let mut bytes: Vec<u8> = Vec::new();
-    for (index, argument) in args.iter().enumerate() {
-        if index > 0 {
-            bytes.push(b' ');
-        }
-        // **非 `str` 实参走 `str(x)` 的同一处实现**（第 330 轮）：`print(1)`、`print([1, 2])`、
-        // `print(None)` 这些都是 `Lib/` 里遍地都是的写法 ✓ —— 先前一律如实拒绝 ✗
-        // （消息还写着"`str()` 落地前" ✓，而 `str()` 早就落地了 ✓ ⇒ 这里补上 ✓）。
-        // 走核心的 [`Instance::object_str_native`] ✓（一处真相：与 `str(x)` 同一个渲染 ✓）。
-        let rendered = match instance.text_of(*argument) {
-            Some(text) => text.to_owned(),
-            None => instance.object_str_native(*argument)?,
+    // **`print` 的关键字面**（task-61：`sep`／`end`／`file`／`flush`，照参照 3.14.4 实测文案）。
+    let mut separator: Option<NonNull<Header>> = None;
+    let mut terminator: Option<NonNull<Header>> = None;
+    let mut destination: Option<NonNull<Header>> = None;
+    let mut flush = false;
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            continue;
         };
-        bytes.extend_from_slice(rendered.as_bytes());
+        match name {
+            "sep" => separator = Some(*value),
+            "end" => terminator = Some(*value),
+            "file" => destination = Some(*value),
+            "flush" => flush = instance.truthiness_of(*value)?,
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("print() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
     }
-    bytes.push(b'\n');
-    crate::_io_module::write_bytes(instance, handle, &bytes)?;
-    // **必须 `retain`**（返回给 VM 的是**新引用** ✓）：少了它，调用方会释放单例 ⇒
-    // 双重释放 ⇒ 进程退出时报 `tcache_thread_shutdown(): unaligned tcache chunk detected` ✗
-    // （第 94 轮实测：`print` 少了这一句 ✗）
+
+    // `sep`／`end`：缺省 `' '`／`'\n'`；显式 `None` ＝ 缺省（参照实测口径）；其它非 str 报参照文案。
+    let none = instance.singletons().none();
+    let separator_bytes = match separator {
+        None => b" ".to_vec(),
+        Some(value) if value == none => b" ".to_vec(),
+        Some(value) => print_str_argument_bytes(instance, value, "sep")?,
+    };
+    let terminator_bytes = match terminator {
+        None => b"\n".to_vec(),
+        Some(value) if value == none => Vec::new(),
+        Some(value) => print_str_argument_bytes(instance, value, "end")?,
+    };
+
+    // **目标**：`file=` 缺省／显式 `None` ⇒ `sys.stdout` 快路（一次 `fs` 写）；否则走**属性通道**
+    // 调那个对象的 `write`（与参照"每次 print 是一串 write"一致；`file=sys.stderr` 同理 ✓）。
+    let target = match destination {
+        None => Some(default_stdout),
+        Some(value) if value == none => Some(default_stdout),
+        Some(value) => Some(value),
+    };
+    let is_default_stdout = target == Some(default_stdout);
+
+    if is_default_stdout {
+        let mut bytes: Vec<u8> = Vec::new();
+        for (index, argument) in args.iter().enumerate() {
+            if index > 0 {
+                bytes.extend_from_slice(&separator_bytes);
+            }
+            bytes.extend_from_slice(&print_argument_bytes(instance, *argument)?);
+        }
+        bytes.extend_from_slice(&terminator_bytes);
+        crate::_io_module::write_bytes(instance, default_handle, &bytes)?;
+        if flush {
+            // `sys.stdout` 的 `flush` 是本层真实存在的 no-op（无缓冲）⇒ 照参照调用它 ✓。
+            print_call_method(instance, default_stdout, "flush", &[])?;
+        }
+    } else {
+        let file = target.expect("上面判过 target 非空");
+        for (index, argument) in args.iter().enumerate() {
+            if index > 0 {
+                print_write_bytes(instance, file, &separator_bytes)?;
+            }
+            let bytes = print_argument_bytes(instance, *argument)?;
+            print_write_bytes(instance, file, &bytes)?;
+        }
+        print_write_bytes(instance, file, &terminator_bytes)?;
+        if flush {
+            print_call_method(instance, file, "flush", &[])?;
+        }
+    }
+    // **必须 `retain`**（返回给 VM 的是**新引用** ⇒ 调用方会释放单次调用结果 ✓）。
     Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `sep=`／`end=` 实参必须是 `str`（否则照参照：`sep must be None or a string, not <类型>`）。
+fn print_str_argument_bytes(
+    instance: &Instance,
+    value: NonNull<Header>,
+    keyword: &str,
+) -> Result<Vec<u8>, ExecError> {
+    if let Some(raw) = instance.wtf8_of(value) {
+        return Ok(raw.to_vec());
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "{keyword} must be None or a string, not {}",
+            type_name(instance, value)
+        ),
+    ))
+}
+
+/// 一个 `print` 实参的字节：`str` 走 WTF-8 原字节（含孤立代理 ✓）；其它走 `str(x)` 的同一处渲染。
+fn print_argument_bytes(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Vec<u8>, ExecError> {
+    if let Some(raw) = instance.wtf8_of(value) {
+        return Ok(raw.to_vec());
+    }
+    let rendered = instance.object_str_native(value)?;
+    Ok(rendered.into_bytes())
+}
+
+/// 把字节写成 `str` 后调目标对象的 `write`（`print(file=…)` 那条路；含代理字节也不 lossy）。
+fn print_write_bytes(
+    instance: &Instance,
+    file: NonNull<Header>,
+    bytes: &[u8],
+) -> Result<(), ExecError> {
+    let Some(text) = instance.new_str_wtf8(bytes) else {
+        return Err(instance.raise_builtin_error(
+            "UnicodeEncodeError",
+            "print(): 输出字节不是合法 WTF-8（内部不变量）",
+        ));
+    };
+    let outcome = print_call_method(instance, file, "write", &[text]).map(|_| ());
+    instance.release(text);
+    outcome
+}
+
+/// 在目标对象上取一个方法并调用（new 引用自己还；没有该方法照参照报 `AttributeError`）。
+fn print_call_method(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(method) = instance.attribute_optional_of(object, name)? else {
+        return Err(instance.raise_builtin_error(
+            "AttributeError",
+            &format!(
+                "'{}' object has no attribute '{name}'",
+                type_name(instance, object)
+            ),
+        ));
+    };
+    let result = pyawa_core::executor::call::call_value(instance, method, args, &[]);
+    instance.release(method);
+    let value = result?;
+    Ok(value)
 }
 
 /// 造一个原生可调用对象（**新引用**）。
@@ -471,6 +630,600 @@ fn type_name(instance: &Instance, object: NonNull<Header>) -> String {
     instance.type_name(instance.type_of(object))
 }
 
+/// 这个对象是不是 **`complex` 类型**（含子类；只查类型子类型，不碰载荷）。
+fn is_complex_instance(instance: &Instance, object: NonNull<Header>) -> bool {
+    instance
+        .type_named("complex")
+        .is_some_and(|complex| instance.is_subtype(instance.type_of(object), complex))
+}
+
+// --------------------------------------------------------------------------- //
+// `hash()`（task-31，P3-34 面）：int／float／bool／str／bytes／tuple／None／complex
+// --------------------------------------------------------------------------- //
+//
+// **口径**（本机 `python3` 3.14.4 逐值实测）：
+// - int：core 的 `IntValue::hash`（`sign × (|x| mod 2^61-1)`、`-1` 改判 `-2`，一处真相）；
+// - float／complex：core 的 `executor::hash_double_value`／`hash_complex_parts`（同一处真相）；
+// - None：`0xFCA86420`（`hash(None)` ⇒ 4238894112）；
+// - str／bytes：**siphash13（零密钥）**。参照默认每进程随机化（与默认 `python3` 不可比）；
+//   本层**没有随机化**（固定零密钥）⇒ 与 `PYTHONHASHSEED=0 python3` 逐值一致（ASCII／bytes
+//   已对拍；非 ASCII 照 CPython 的"按最大码点选内部宽度"口径：≤0xFF 取 1 字节、≤0xFFFF 取
+//   u16 LE、否则 u32 LE）。**如实偏差**：无哈希随机化。
+// - tuple：CPython 3.8+ 的 xxHash 组合口径（与参照逐值一致，不分进程）；
+// - NaN：参照按对象地址哈希（进程内随机）⇒ 这里用 core 的 `hash_double_value` 口径（0）——
+//   如实登记为偏差（core 的锚点也这么写）；
+// - 参照明确不可哈希的 ⇒ `TypeError: unhashable type: 'X'`；其余**未接线**的可哈希内建 ⇒
+//   如实 `NotImplementedError`（不拿身份哈希冒充）；用户类走它的 `__hash__`（身份哈希协议面）。
+const HASH_NONE: i64 = 0x0FCA_86420;
+
+fn hash_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "hash() takes no keyword arguments"));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("hash() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    Ok(instance.new_int(hash_object(instance, args[0])?))
+}
+
+fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, ExecError> {
+    let ty = instance.type_of(object);
+    if ty == instance.singletons().none_type() {
+        return Ok(HASH_NONE);
+    }
+    if let Some(integer) = instance.int_of(object) {
+        return Ok(integer.hash());
+    }
+    if let Some(number) = instance.float_value(object) {
+        return Ok(pyawa_core::executor::hash_double_value(number));
+    }
+    if let Some(text) = instance.text_of(object) {
+        return Ok(hash_text(text));
+    }
+    if let Some(bytes) = instance.bytes_value(object) {
+        return Ok(hash_bytes(bytes));
+    }
+    if let Some(items) = instance.tuple_items(object) {
+        let mut lanes = Vec::with_capacity(items.len());
+        for item in items {
+            lanes.push(hash_object(instance, item)?);
+        }
+        return Ok(hash_tuple(&lanes));
+    }
+    if let Some((real, imag)) = instance.complex_value(object) {
+        return Ok(pyawa_core::executor::hash_complex_parts(real, imag));
+    }
+    // 参照明确不可哈希的内建（参照置 `__hash__ = None`）⇒ 与参照同文案。
+    let name = type_name(instance, object);
+    for unhashable in ["list", "dict", "set", "bytearray"] {
+        if instance
+            .type_named(unhashable)
+            .is_some_and(|base| instance.is_subtype(ty, base))
+        {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("unhashable type: '{name}'"),
+            ));
+        }
+    }
+    // 用户类：参照走 `object.__hash__`（身份哈希）⇒ 本层调它的 `__hash__`（同一协议面）。
+    let is_builtin = pyawa_core::builtin_types::BUILTIN_TYPES
+        .iter()
+        .any(|entry| entry.name == name);
+    if !is_builtin {
+        if let Some(hash_method) = instance.attribute_optional_of(object, "__hash__")? {
+            if hash_method != instance.singletons().none() {
+                let bound = type_name(instance, hash_method) == "method";
+                let result = if bound {
+                    pyawa_core::executor::call_value(instance, hash_method, &[], &[])?
+                } else {
+                    pyawa_core::executor::call_value(instance, hash_method, &[object], &[])?
+                };
+                let value = instance.int_value(result);
+                instance.release(result);
+                if let Some(value) = value {
+                    return Ok(value);
+                }
+            } else {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("unhashable type: '{name}'"),
+                ));
+            }
+        }
+    }
+    // 可哈希但本轮没接的内建（frozenset 等）：如实未实现，不拿身份哈希冒充。
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        &format!(
+            "`hash()`：本层只接 int／float／bool／str／bytes／tuple／None／complex（`{name}` 未接线，如实报）"
+        ),
+    ))
+}
+
+/// `str` 的哈希：空串 ⇒ 0；否则按 CPython 的**内部宽度**取字节再走 siphash13（零密钥）。
+fn hash_text(text: &str) -> i64 {
+    if text.is_empty() {
+        return 0;
+    }
+    let mut largest = 0u32;
+    for character in text.chars() {
+        largest = largest.max(character as u32);
+    }
+    let bytes: Vec<u8> = if largest <= 0xFF {
+        text.chars().map(|character| character as u8).collect()
+    } else if largest <= 0xFFFF {
+        text.encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect()
+    } else {
+        text.chars()
+            .flat_map(|character| (character as u32).to_le_bytes())
+            .collect()
+    };
+    hash_bytes(&bytes)
+}
+
+/// `bytes` 的哈希（siphash13 零密钥；空串 ⇒ 0）。
+fn hash_bytes(bytes: &[u8]) -> i64 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let mut value = siphash13_zero(bytes) as i64;
+    if value == -1 {
+        value = -2;
+    }
+    value
+}
+
+/// CPython 3.8+ 的 tuple 哈希组合（xxHash 的四个常量 ＋ 31 位旋转）。
+fn hash_tuple(lanes: &[i64]) -> i64 {
+    const PRIME1: u64 = 11_400_714_785_074_694_791;
+    const PRIME2: u64 = 14_029_467_366_897_019_727;
+    const PRIME5: u64 = 2_870_177_450_012_600_261;
+    let mut acc = PRIME5;
+    for lane in lanes {
+        acc = acc.wrapping_add((*lane as u64).wrapping_mul(PRIME2));
+        acc = acc.rotate_left(31);
+        acc = acc.wrapping_mul(PRIME1);
+    }
+    acc = acc.wrapping_add((lanes.len() as u64) ^ (PRIME5 ^ 3_527_539));
+    if acc == u64::MAX {
+        return 1_546_275_796;
+    }
+    acc as i64
+}
+
+/// `SipHash-1-3`（**零密钥**；CPython 的 `_Py_HashBytes` 同算法，`PYTHONHASHSEED=0` 即零密钥）。
+fn siphash13_zero(data: &[u8]) -> u64 {
+    fn round(state: &mut [u64; 4]) {
+        state[0] = state[0].wrapping_add(state[1]);
+        state[1] = state[1].rotate_left(13);
+        state[1] ^= state[0];
+        state[0] = state[0].rotate_left(32);
+        state[2] = state[2].wrapping_add(state[3]);
+        state[3] = state[3].rotate_left(16);
+        state[3] ^= state[2];
+        state[0] = state[0].wrapping_add(state[3]);
+        state[3] = state[3].rotate_left(21);
+        state[3] ^= state[0];
+        state[2] = state[2].wrapping_add(state[1]);
+        state[1] = state[1].rotate_left(17);
+        state[1] ^= state[2];
+        state[2] = state[2].rotate_left(32);
+    }
+    let mut state = [
+        0x736f_6d65_7073_6575u64,
+        0x646f_7261_6e64_6f6d,
+        0x6c79_6765_6e65_7261,
+        0x7465_6462_7974_6573,
+    ];
+    let mut chunks = data.chunks_exact(8);
+    for chunk in &mut chunks {
+        let block = u64::from_le_bytes(chunk.try_into().expect("8 字节块"));
+        state[3] ^= block;
+        round(&mut state);
+        state[0] ^= block;
+    }
+    let remainder = chunks.remainder();
+    let mut tail = ((data.len() as u64) & 0xFF) << 56;
+    for (index, byte) in remainder.iter().enumerate() {
+        tail |= u64::from(*byte) << (8 * index);
+    }
+    state[3] ^= tail;
+    round(&mut state);
+    state[0] ^= tail;
+    state[2] ^= 0xFF;
+    for _ in 0..3 {
+        round(&mut state);
+    }
+    state[0] ^ state[1] ^ state[2] ^ state[3]
+}
+
+// --------------------------------------------------------------------------- //
+// `complex()` 构造器（task-31／P3-34）：语义挂在 `complex.__new__` 上。
+// --------------------------------------------------------------------------- //
+//
+// 参照 3.14.4 实测（全部在 `target/recon/t31` 的对拍脚本里）：
+// - `complex()` ⇒ `0j`；`complex(1)`／`complex(1.5)` ⇒ 实数部分；`complex(1+2j)` 原值；
+// - 单参**位置**实参是 `str` ⇒ 解析：`"1"`／`"1j"`／`"(1+2j)"`／`" 1+2j "`／`"-1-2j"`／
+//   `"infj"`／`"nan+nanj"`／`"1_0j"`（合法下划线）等；**非法** ⇒
+//   `ValueError: complex() arg is a malformed string`；下划线位置非法 ⇒
+//   `ValueError: could not convert string to complex: '<原串>'`（照参照的两种文案）；
+// - 单参 `__complex__` 协议（返回必须是 complex，否则 `__complex__ returned non-complex (type X)`）；
+//   没有 `__complex__` 时退 `__float__`（返回非 float ⇒ `<类型>.__float__ returned non-float (type X)`）；
+// - 两参形态：`real`／`imag` 各取**实数**（int／float／`__float__`）；`complex` 实参照参照的
+//   历史口径按复数运算收（`complex(1+2j, 3)` ⇒ `(1+5j)`），但 `__complex__` 只对 `real` 收
+//   （`imag` 只认实数协议 ⇒ `complex() argument 'imag' must be a real number, not X`）；
+// - 关键字：`complex(real=1)`／`complex(imag=2)`／`complex(1, imag=2)` 合法；关键字 `real="1"`
+//   是**两参形态** ⇒ 不解析字符串（`must be a real number, not str`）；
+// - 计数／文案优先级：关键字数 >2 ⇒ `takes at most 2 keyword arguments (N given)`；位置+关键字
+//   总数 >2 ⇒ `takes at most 2 arguments (N given)`；未知关键字 ⇒ `got an unexpected keyword
+//   argument '<名>'`；位置与同名关键字同给 ⇒ `argument for complex() given by name ('real')
+//   and position (1)`；
+// - **不发的警告**（如实偏差）：参照对"两参里给 complex／`__complex__` 的 real"发
+//   `DeprecationWarning`，本层没有该警告通道（结果值一致）。
+//
+// **如实偏差**：`complex` 的 Python 子类构造未接线（core 的 `new_complex` 只造基类实例 ⇒
+// 本层对 `complex.__new__(子类, …)` 如实 `NotImplementedError`，不造错类型的实例）。
+
+fn complex_dunder_new_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(class) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "complex.__new__() 缺少 class 实参"));
+    };
+    let Some(complex_type) = instance.type_named("complex") else {
+        return Err(instance.raise_builtin_error("NotImplementedError", "`complex` 类型未登记"));
+    };
+    if class != complex_type.cast::<Header>() {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`complex` 的子类构造（`class C(complex)`）本层未接线：core 的 `new_complex` 只造基类实例（如实报）",
+        ));
+    }
+    // 参照实测：`complex(z) is z` ⇒ **True**（单参、恰是 `complex`、无关键字 ⇒ 直接返回原对象）。
+    if kwargs.is_empty() && args.len() == 2 {
+        if instance.type_of(args[1]) == complex_type {
+            return Ok(instance.retain(args[1]));
+        }
+    }
+    let (real, imag) = complex_from_arguments(instance, &args[1..], kwargs)?;
+    Ok(instance.new_complex(real, imag))
+}
+
+/// 把一次 `complex(...)` 调用的实参解析成 `(real, imag)`（口径见上方注释）。
+fn complex_from_arguments(
+    instance: &Instance,
+    positional: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<(f64, f64), ExecError> {
+    if kwargs.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("complex() takes at most 2 keyword arguments ({} given)", kwargs.len()),
+        ));
+    }
+    let total = positional.len() + kwargs.len();
+    if total > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("complex() takes at most 2 arguments ({total} given)"),
+        ));
+    }
+    let mut real_keyword: Option<NonNull<Header>> = None;
+    let mut imag_keyword: Option<NonNull<Header>> = None;
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        match name {
+            "real" => real_keyword = Some(*value),
+            "imag" => imag_keyword = Some(*value),
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("complex() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
+    }
+    if !positional.is_empty() && real_keyword.is_some() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "argument for complex() given by name ('real') and position (1)",
+        ));
+    }
+    if positional.len() >= 2 && imag_keyword.is_some() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "argument for complex() given by name ('imag') and position (2)",
+        ));
+    }
+    // **单实参形态**：只有 1 个位置实参、没有 imag（也没有 real 关键字）⇒ 允许字符串／协议。
+    if positional.len() == 1 && real_keyword.is_none() && imag_keyword.is_none() {
+        return complex_single_argument(instance, positional[0]);
+    }
+    // **两实参形态**（含"只给关键字"与缺省值）。
+    let real = match positional.first().copied().or(real_keyword) {
+        Some(value) => complex_two_argument_real(instance, value, "real")?,
+        None => (0.0, 0.0, false),
+    };
+    let imag = match positional.get(1).copied().or(imag_keyword) {
+        Some(value) => complex_two_argument_imag(instance, value, "imag")?,
+        None => (0.0, 0.0, false),
+    };
+    // 两侧都是**实数** ⇒ 原样成对（**保住 `-0.0` 的符号位**：参照 `complex(1.0, -0.0)`
+    // ⇒ `(1-0j)`、`complex(0.0, -0.0)` ⇒ `-0j`）；任一侧是复数 ⇒ 参照的历史口径
+    // `real + imag * 1j`（实测 `complex(1+2j, 3)` ⇒ `(1+5j)`、`complex(1, 3j)` ⇒ `(-2+0j)`）。
+    if real.2 || imag.2 {
+        Ok((real.0 - imag.1, real.1 + imag.0))
+    } else {
+        Ok((real.0, imag.0))
+    }
+}
+
+/// 单实参转换（str 解析／complex／int／float／`__complex__`／`__float__`）。
+fn complex_single_argument(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<(f64, f64), ExecError> {
+    if let Some(text) = instance.text_of(value) {
+        let text = text.to_owned();
+        return complex_parse_text(instance, &text);
+    }
+    if let Some((real, imag)) = instance.complex_value(value) {
+        return Ok((real, imag));
+    }
+    if let Some(number) = number_as_f64(instance, value)? {
+        return Ok((number, 0.0));
+    }
+    if let Some((real, imag)) = complex_dunder_value(instance, value)? {
+        return Ok((real, imag));
+    }
+    if let Some(number) = float_dunder_value(instance, value)? {
+        return Ok((number, 0.0));
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("complex() argument must be a string or a number, not {}", type_name(instance, value)),
+    ))
+}
+
+/// 两参形态的 `real`：int／float／`__float__`；`complex`（含 `__complex__`）照历史口径收。
+fn complex_two_argument_real(
+    instance: &Instance,
+    value: NonNull<Header>,
+    argument: &str,
+) -> Result<(f64, f64, bool), ExecError> {
+    if let Some((real, imag)) = instance.complex_value(value) {
+        return Ok((real, imag, true));
+    }
+    if let Some(number) = number_as_f64(instance, value)? {
+        return Ok((number, 0.0, false));
+    }
+    if let Some((real, imag)) = complex_dunder_value(instance, value)? {
+        return Ok((real, imag, true));
+    }
+    if let Some(number) = float_dunder_value(instance, value)? {
+        return Ok((number, 0.0, false));
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "complex() argument '{argument}' must be a real number, not {}",
+            type_name(instance, value)
+        ),
+    ))
+}
+
+/// 两参形态的 `imag`：只认实数协议（int／float／`__float__`／complex 的历史口径）。
+fn complex_two_argument_imag(
+    instance: &Instance,
+    value: NonNull<Header>,
+    argument: &str,
+) -> Result<(f64, f64, bool), ExecError> {
+    if let Some((real, imag)) = instance.complex_value(value) {
+        return Ok((real, imag, true));
+    }
+    if let Some(number) = number_as_f64(instance, value)? {
+        return Ok((number, 0.0, false));
+    }
+    if let Some(number) = float_dunder_value(instance, value)? {
+        return Ok((number, 0.0, false));
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "complex() argument '{argument}' must be a real number, not {}",
+            type_name(instance, value)
+        ),
+    ))
+}
+
+/// int／float 折成 `f64`（整数太大 ⇒ 参照的 `OverflowError: int too large to convert to float`）。
+fn number_as_f64(instance: &Instance, value: NonNull<Header>) -> Result<Option<f64>, ExecError> {
+    if let Some(number) = instance.float_value(value) {
+        return Ok(Some(number));
+    }
+    if let Some(integer) = instance.int_of(value) {
+        let number = integer.to_bigint().to_f64();
+        if number.is_infinite() {
+            return Err(instance.raise_builtin_error(
+                "OverflowError",
+                "int too large to convert to float",
+            ));
+        }
+        return Ok(Some(number));
+    }
+    Ok(None)
+}
+
+/// 调 `__float__`（没有 ⇒ `None`）；返回非 float ⇒ 参照的 `__float__ returned non-float` 文案。
+fn float_dunder_value(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Option<f64>, ExecError> {
+    let Some(method) = instance.attribute_optional_of(value, "__float__")? else {
+        return Ok(None);
+    };
+    if method == instance.singletons().none() {
+        return Ok(None);
+    }
+    let bound = type_name(instance, method) == "method";
+    let result = if bound {
+        pyawa_core::executor::call_value(instance, method, &[], &[])?
+    } else {
+        pyawa_core::executor::call_value(instance, method, &[value], &[])?
+    };
+    if let Some(number) = instance.float_value(result) {
+        instance.release(result);
+        return Ok(Some(number));
+    }
+    let returned = type_name(instance, result);
+    instance.release(result);
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "{}.__float__ returned non-float (type {returned})",
+            type_name(instance, value)
+        ),
+    ))
+}
+
+/// 调 `__complex__`（没有 ⇒ `None`）；返回非 complex ⇒ 参照的 `__complex__ returned non-complex` 文案。
+fn complex_dunder_value(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Option<(f64, f64)>, ExecError> {
+    let Some(method) = instance.attribute_optional_of(value, "__complex__")? else {
+        return Ok(None);
+    };
+    if method == instance.singletons().none() {
+        return Ok(None);
+    }
+    let bound = type_name(instance, method) == "method";
+    let result = if bound {
+        pyawa_core::executor::call_value(instance, method, &[], &[])?
+    } else {
+        pyawa_core::executor::call_value(instance, method, &[value], &[])?
+    };
+    if let Some((real, imag)) = instance.complex_value(result) {
+        instance.release(result);
+        return Ok(Some((real, imag)));
+    }
+    let returned = type_name(instance, result);
+    instance.release(result);
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("__complex__ returned non-complex (type {returned})"),
+    ))
+}
+
+/// `complex("…")` 的**字符串解析**（CPython `complex_subtype_from_string` 的口径，逐条实测）。
+///
+/// 规则：两端去空白 → 字符白名单（ASCII 字母数字／`.`／`+`／`-`／`(`／`)`／`_`；内部空白 ⇒
+/// malformed）→ 只剥**一层** `(`…`)` 再 trim → 尾 `j`/`J` 走"实部＋虚部"拆分（最后一个不在
+/// `e`/`E` 之后的 `+`/`-` 当分隔；空虚部 ⇒ 1、`+` ⇒ 1、`-` ⇒ -1）→ 各段按 CPython 的
+/// float 字面量口径解析（合法下划线、`inf`／`infinity`／`nan` 不区分大小写）。
+fn complex_parse_text(instance: &Instance, text: &str) -> Result<(f64, f64), ExecError> {
+    let original = text;
+    let mut body = text.trim();
+    if body.is_empty() {
+        return Err(complex_malformed(instance));
+    }
+    // 先剥**一层**括号再 trim（参照实测：`"( 1+2j)"`／`"(1+2j )"` 合法；空格只在**两端**
+    // 允许——`"( 1 + 2j )"` 中间有空格 ⇒ malformed，由下面的白名单兜住）。
+    let bytes = body.as_bytes();
+    if bytes.first() == Some(&b'(') && bytes.last() == Some(&b')') {
+        body = body[1..body.len() - 1].trim();
+        if body.is_empty() {
+            return Err(complex_malformed(instance));
+        }
+    }
+    let allowed = |character: char| {
+        character.is_ascii_alphanumeric() || matches!(character, '.' | '+' | '-' | '(' | ')' | '_')
+    };
+    if !body.chars().all(allowed) {
+        return Err(complex_malformed(instance));
+    }
+    if body.ends_with('j') || body.ends_with('J') {
+        let working = &body[..body.len() - 1];
+        let working_bytes = working.as_bytes();
+        let mut split = None;
+        for index in (1..working_bytes.len()).rev() {
+            if matches!(working_bytes[index], b'+' | b'-')
+                && !matches!(working_bytes[index - 1], b'e' | b'E')
+            {
+                split = Some(index);
+                break;
+            }
+        }
+        let (real_text, imag_text) = match split {
+            Some(index) => (&working[..index], &working[index..]),
+            None => ("", working),
+        };
+        let real = if real_text.is_empty() {
+            0.0
+        } else {
+            complex_component(instance, real_text, original)?
+        };
+        let imag = match imag_text {
+            "" | "+" => 1.0,
+            "-" => -1.0,
+            other => complex_component(instance, other, original)?,
+        };
+        Ok((real, imag))
+    } else {
+        let real = complex_component(instance, body, original)?;
+        Ok((real, 0.0))
+    }
+}
+
+/// 解析一个**数值分量**（CPython 的 float 字面量口径；下划线位置非法 ⇒ 另一种文案）。
+fn complex_component(
+    instance: &Instance,
+    text: &str,
+    original: &str,
+) -> Result<f64, ExecError> {
+    if text.is_empty() {
+        return Err(complex_malformed(instance));
+    }
+    let bytes = text.as_bytes();
+    let mut cleaned = String::with_capacity(text.len());
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'_' {
+            let before = index > 0 && bytes[index - 1].is_ascii_digit();
+            let after = index + 1 < bytes.len() && bytes[index + 1].is_ascii_digit();
+            if !(before && after) {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    &format!("could not convert string to complex: '{original}'"),
+                ));
+            }
+        } else {
+            cleaned.push(*byte as char);
+        }
+    }
+    match cleaned.parse::<f64>() {
+        Ok(number) => Ok(number),
+        Err(_) => Err(complex_malformed(instance)),
+    }
+}
+
+fn complex_malformed(instance: &Instance) -> ExecError {
+    instance.raise_builtin_error("ValueError", "complex() arg is a malformed string")
+}
+
 /// `abs(x)`：整数给整数、浮点给浮点；别的 `TypeError`。
 ///
 /// 实测：`abs(True)` ⇒ `1`（**int**，不是 bool）；`abs("x")` ⇒
@@ -488,6 +1241,10 @@ fn abs_native(
     }
     if let Some(number) = instance.float_value(value) {
         return Ok(instance.new_float(number.abs()));
+    }
+    // **`abs(complex)` ⇒ 模（float）**（task-31；参照 `abs(1+2j)` ⇒ `2.23606797749979` ✓）。
+    if let Some((real, imag)) = instance.complex_value(value) {
+        return Ok(instance.new_float(real.hypot(imag)));
     }
     let message = format!("bad operand type for abs(): '{}'", type_name(instance, value));
     Err(instance.raise_builtin_error("TypeError", &message))
@@ -524,66 +1281,112 @@ fn ord_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    need_args(instance, "ord", args, 1)?;
-    let value = args[0];
-    let text = match instance.text_value(value) {
-        Some(text) => text,
-        None => {
-            let message = format!(
-                "ord() expected string of length 1, but {} found",
-                type_name(instance, value)
-            );
-            return Err(instance.raise_builtin_error("TypeError", &message));
-        }
-    };
-    // 长度按**码点**（`TS-22`）；本层 `str` 存 UTF-8 ⇒ 先按字符取
-    let mut characters = text.chars();
-    let first = characters.next();
-    if first.is_none() || characters.next().is_some() {
-        // 实测消息里的长度也是**字符数**
-        let message = format!(
-            "ord() expected a character, but string of length {} found",
-            text.chars().count()
-        );
-        return Err(instance.raise_builtin_error("TypeError", &message));
+    // **实参口径照参照 3.14.4 实测**：关键字先拒、再查个数（`ord() takes exactly one argument`）。
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "ord() takes no keyword arguments"));
     }
-    Ok(instance.new_int(i64::from(first.expect("上面确认过有字符") as u32)))
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("ord() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let value = args[0];
+    // **`str` 的码点视图走 WTF-8**（P3-38 S2a-2）：孤立代理各算 1 个码点 ✓ —— 用 `text_of`
+    // （合法 UTF-8 视图）会漏掉 WTF-8 表示的串 ✗。
+    if let Some(bytes) = instance.str_wtf8_bytes(value) {
+        let mut count = 0usize;
+        let mut first = 0u32;
+        for point in pyawa_core::wtf8::code_points(bytes) {
+            let Ok(code_point) = point else {
+                // 已校验的 `str` 不该解不出来；真出现按"长度 0"如实报（不猜一个码点）。
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "ord() expected a character, but string of length 0 found",
+                ));
+            };
+            if count == 0 {
+                first = code_point;
+            }
+            count += 1;
+        }
+        if count != 1 {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("ord() expected a character, but string of length {count} found"),
+            ));
+        }
+        return Ok(instance.new_int(i64::from(first)));
+    }
+    // **`str` 子类**（载荷同布局；`wtf8_of` 只认精确类型）：合法 UTF-8 的走 `object_str` 视图
+    // （参照对 `class S(str)` 的 `ord(S("a"))` 同样给 97 ✓）。
+    if instance
+        .type_named("str")
+        .is_some_and(|base| instance.is_subtype(instance.type_of(value), base))
+    {
+        let text = instance.object_str(value)?;
+        let count = text.chars().count();
+        if count != 1 {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("ord() expected a character, but string of length {count} found"),
+            ));
+        }
+        let code_point = text.chars().next().unwrap_or('\0');
+        return Ok(instance.new_int(i64::from(code_point as u32)));
+    }
+    let message = format!(
+        "ord() expected string of length 1, but {} found",
+        type_name(instance, value)
+    );
+    Err(instance.raise_builtin_error("TypeError", &message))
 }
 
-/// `chr(i)`：码点 → 单字符字符串。
-///
-/// 实测：`chr(-1)`／`chr(0x110000)` ⇒ `chr() arg not in range(0x110000)`；
-/// `chr(1.0)` ⇒ `'float' object cannot be interpreted as an integer`。
 fn chr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    need_args(instance, "chr", args, 1)?;
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "chr() takes no keyword arguments"));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("chr() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
     let value = args[0];
-    let code = match instance.int_value(value) {
-        Some(code) => code,
-        None => {
-            let message = format!(
-                "'{}' object cannot be interpreted as an integer",
-                type_name(instance, value)
-            );
-            return Err(instance.raise_builtin_error("TypeError", &message));
-        }
+    let Some(code) = instance.int_value(value) else {
+        let message = format!(
+            "'{}' object cannot be interpreted as an integer",
+            type_name(instance, value)
+        );
+        return Err(instance.raise_builtin_error("TypeError", &message));
     };
-    let character = match u32::try_from(code).ok().and_then(char::from_u32) {
-        Some(character) => character,
-        None => {
-            return Err(instance.raise_builtin_error(
-                "ValueError",
-                "chr() arg not in range(0x110000)",
-            ))
-        }
+    let Some(code_point) = u32::try_from(code).ok().filter(|point| *point <= 0x10FFFF) else {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "chr() arg not in range(0x110000)",
+        ));
     };
-    Ok(instance.new_str(&character.to_string()))
+    // **单码点 WTF-8 构造**（P3-38 S2a-2）：参照允许**孤立代理** 0xD800–0xDFFF
+    // （`chr(0xD800)` ⇒ `'\ud800'`、len 1、`ord` 回 55296 ✓）；合法标量的 WTF-8 字节就是
+    // UTF-8 ⇒ `new_str_wtf8` 走 UTF-8 表示（**零行为改动** ✓）。
+    let mut bytes = Vec::with_capacity(4);
+    if pyawa_core::wtf8::encode_code_point(code_point, &mut bytes).is_err() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "chr() arg not in range(0x110000)",
+        ));
+    }
+    instance.new_str_wtf8(&bytes).ok_or_else(|| {
+        // 单码点一定合法 ⇒ 不该发生；真发生也如实报范围错误，不造有损串。
+        instance.raise_builtin_error("ValueError", "chr() arg not in range(0x110000)")
+    })
 }
 
 /// `bin`／`oct`／`hex` 的共同实现（`base` 是 2／8／16，前缀照参照实现）。
@@ -803,24 +1606,40 @@ fn eval_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
-        return Err(instance.raise_builtin_error("TypeError", "eval: 第一个实参要是 str"));
+    let Some(first) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "eval() missing required argument 'source' (pos 1)",
+        ));
     };
-    let Some(namespace) = args.get(1).copied() else {
-        // **如实报未实现** ✓：`eval` 拿不到"调用者的帧" ✗（我们只接了 `sys._getframe(0)` ✓）⇒
-        // 只支持**带命名空间**的形态 ✓，其余不假装 ✓。
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "eval：只接了 `eval(源码, 命名空间)` 这一形态（拿不到调用者帧）",
-        });
+    let (globals, locals, locals_owned, globals_owned) = resolve_namespaces(
+        instance,
+        args.get(1).copied(),
+        args.get(2).copied(),
+        "eval",
+    )?;
+    let result = if pyawa_core::is_code_object(instance, first) {
+        // **code 对象分支**（task-43）：`eval(compile(src, f, "eval"), globals)` ✓。
+        pyawa_core::eval_code_public(instance, first, globals, locals)
+    } else if let Some(source) = instance.text_of(first) {
+        pyawa_core::eval_source_public(instance, source, globals, locals)
+    } else {
+        Err(instance.raise_builtin_error(
+            "TypeError",
+            "eval() arg 1 must be a string, bytes or code object",
+        ))
     };
-    instance.eval_source(source, namespace)
+    if locals_owned {
+        instance.release(locals);
+    }
+    if let (Some(globals), true) = (globals, globals_owned) {
+        instance.release(globals);
+    }
+    result
 }
 
-/// **`exec(源码, globals=None, locals=None)`** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py::_create_fn`
-/// 一族靠它把**生成的源码**跑起来 ✓（`exec(txt, globals, locals)` ＋ 再从 `locals` 取名 ✓）。
-/// **如实范围** ✗：只收 `str` 源码 ✓；`locals` 只收 `dict` ✓；没给命名空间时**新建一个**（参照用
-/// 调用者帧的 globals／locals ✗ —— 拿不到调用者帧 ✓，与 `eval` 同一如实口径 ✓）。
+/// **`exec(source, globals=None, locals=None)`** ✓（task-20 第 3 轮；task-43 补齐 code 对象与
+/// 隐式命名空间）：`Lib/dataclasses.py::_create_fn` 一族靠它把**生成的源码**跑起来 ✓。
 fn exec_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -828,27 +1647,78 @@ fn exec_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "exec", args, 1)?;
-    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
-        return Err(instance.raise_builtin_error("TypeError", "exec: 第一个实参要是 str"));
+    let Some(first) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "exec() missing required argument 'source' (pos 1)",
+        ));
     };
-    let globals = args.get(1).copied();
-    let locals = args.get(2).copied().or(globals);
-    let (namespace, owned) = match locals {
-        Some(value) if instance.dict_entries(value).is_some() => (value, false),
-        Some(_) => {
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                "exec: 目前只收 dict 当 locals",
-            ))
-        }
-        // 没有命名空间 ⇒ 新建一个（这一份由本函数持有，跑完归还 ✓）。
-        None => (instance.new_dict(), true),
+    let (globals, locals, locals_owned, globals_owned) = resolve_namespaces(
+        instance,
+        args.get(1).copied(),
+        args.get(2).copied(),
+        "exec",
+    )?;
+    let result = if pyawa_core::is_code_object(instance, first) {
+        // **code 对象分支**（task-43）：`exec(compile(src, f, "exec"), globals, locals)` ✓。
+        pyawa_core::exec_code_public(instance, first, globals, locals)
+    } else if let Some(source) = instance.text_of(first) {
+        instance.exec_source(source, globals, locals)
+    } else {
+        Err(instance.raise_builtin_error(
+            "TypeError",
+            "exec() arg 1 must be a string, bytes or code object",
+        ))
     };
-    let result = instance.exec_source(source, globals, namespace);
-    if owned {
-        instance.release(namespace);
+    if locals_owned {
+        instance.release(locals);
+    }
+    if let (Some(globals), true) = (globals, globals_owned) {
+        instance.release(globals);
     }
     result
+}
+
+/// **`eval`／`exec` 的 (globals, locals) 解析**（task-43）：`None` 单例与"没给"等价 ✓；
+/// 只给 `globals` ⇒ `locals` 就是它 ✓；都没给 ⇒ 用**调用者帧**的 globals／`f_locals` 快照 ✓
+/// （`f_back` 链接好后这条路才成立 ✓）。返回值里两个 bool 表示"这两份要不要本函数归还" ✓。
+fn resolve_namespaces(
+    instance: &Instance,
+    globals_arg: Option<NonNull<Header>>,
+    locals_arg: Option<NonNull<Header>>,
+    what: &str,
+) -> Result<(Option<NonNull<Header>>, NonNull<Header>, bool, bool), ExecError> {
+    let none = instance.singletons().none();
+    let explicit_globals = globals_arg.filter(|value| *value != none);
+    let explicit_locals = locals_arg.filter(|value| *value != none);
+    let check_dict = |value: NonNull<Header>| -> Result<(), ExecError> {
+        if instance.dict_entries(value).is_none() {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{what}: locals 目前只收 dict"),
+            ));
+        }
+        Ok(())
+    };
+    match (explicit_globals, explicit_locals) {
+        (Some(globals), Some(locals)) => {
+            check_dict(locals)?;
+            Ok((Some(globals), locals, false, false))
+        }
+        (Some(globals), None) => Ok((Some(globals), globals, false, false)),
+        (None, Some(locals)) => {
+            check_dict(locals)?;
+            let (implicit_globals, implicit_locals) = pyawa_core::implicit_namespaces(instance);
+            instance.release(implicit_locals);
+            let globals_owned = implicit_globals.is_some();
+            Ok((implicit_globals, locals, false, globals_owned))
+        }
+        (None, None) => {
+            let (globals, locals) = pyawa_core::implicit_namespaces(instance);
+            let globals_owned = globals.is_some();
+            Ok((globals, locals, true, globals_owned))
+        }
+    }
 }
 
 /// **`ascii(obj)`** ✓（task-19 第 3 轮 ✓）：参照口径 ＝ **`repr(obj)` 再把非 ASCII 转义** ✓
@@ -1058,6 +1928,16 @@ fn divmod_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "divmod", args, 2)?;
+    // **`divmod(complex, …)` ⇒ 参照文案**（task-31；实测
+    // `divmod(1+2j, 2)` ⇒ `unsupported operand type(s) for divmod(): 'complex' and 'int'`）。
+    if is_complex_instance(instance, args[0]) || is_complex_instance(instance, args[1]) {
+        let left = type_name(instance, args[0]);
+        let right = type_name(instance, args[1]);
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("unsupported operand type(s) for divmod(): '{left}' and '{right}'"),
+        ));
+    }
     let left = instance
         .int_value(args[0])
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "divmod() 目前只接整数（浮点面随后补）"))?;
@@ -1282,6 +2162,14 @@ fn int_native(
     if let Some(number) = instance.float_value(*value) {
         return Ok(instance.new_int(number as i64));
     }
+    // **`int(complex)` ⇒ 参照文案**（task-31；实测 `int(1+2j)` ⇒
+    // `int() argument must be a string, a bytes-like object or a real number, not 'complex'` ✓）。
+    if is_complex_instance(instance, *value) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "int() argument must be a string, a bytes-like object or a real number, not 'complex'",
+        ));
+    }
     Err(instance.raise_builtin_error("TypeError", "int() 只接整数／字符串／浮点（最小面）"))
 }
 
@@ -1310,6 +2198,14 @@ fn float_native(
                 &format!("could not convert string to float: {text}"),
             )),
         };
+    }
+    // **`float(complex)` ⇒ 参照文案**（task-31；实测 ⇒
+    // `float() argument must be a string or a real number, not 'complex'` ✓）。
+    if is_complex_instance(instance, *value) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "float() argument must be a string or a real number, not 'complex'",
+        ));
     }
     Err(instance.raise_builtin_error("TypeError", "float() 只接浮点／整数／字符串（最小面）"))
 }
@@ -1347,44 +2243,133 @@ fn getattr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    need_args(instance, "getattr", args, 2)?;
+    // **参照的实参口径**（3.14.4 实测）：关键字**先**拒（`getattr(name="x")` 也报"无关键字实参"），
+    // 再查位置实参个数（2..=3）；文案照实测。
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "getattr() takes no keyword arguments"));
+    }
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("getattr expected at least 2 arguments, got {}", args.len()),
+        ));
+    }
+    if args.len() > 3 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("getattr expected at most 3 arguments, got {}", args.len()),
+        ));
+    }
     let Some(name) = instance.text_of(args[1]) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
     // **走真正的属性通道** ✗（不是"把对象当字典查" ✗ —— 那对非字典是 UB ✓）
+    // 这一段内部已经把 AttributeError 吞成 `None` ✓（core `attribute_optional` 的口径）。
     match instance.attribute_optional_of(args[0], name)? {
         Some(found) => return Ok(found),
         None => {}
     }
     // **协议口径** ✓（第 708 轮）：core 里那个公开入口负责 `__getattr__` 回退 ✓。
-    match instance.get_attribute_with_protocol(args[0], name)? {
-        Some(found) => return Ok(found),
-        None => {}
+    // **三参形态要吞掉 `__getattr__` 抛的 AttributeError** ✓（task-34）：CPython 的
+    // `getattr(obj, name, default)` 对属性查找链上的一切 AttributeError 都给 default；
+    // 两参形态仍原样上抛（原先 `?` 让三参也冒出去 ⇒ `MagicMock()` 在 `NonCallableMock.__init__`
+    // 前读 `_mock_methods` 就炸 ✓）。非 AttributeError（用户代码自己抛的）一律不吞 ✓。
+    match instance.get_attribute_with_protocol(args[0], name) {
+        Ok(Some(found)) => return Ok(found),
+        Ok(None) => {}
+        Err(error) => {
+            let has_default = args.len() == 3;
+            if !has_default || !swallow_attribute_error(instance, &error) {
+                return Err(error);
+            }
+        }
     }
     if let Some(default) = args.get(2) {
         return Ok(instance.retain(*default));
     }
+    // 参照的"属性缺失"文案带**接收者的类型名**（实测 `getattr(object(), "nope")` ⇒
+    // `'object' object has no attribute 'nope'`）；旧文案少了类型名。
+    let holder = type_name(instance, args[0]);
     Err(instance.raise_builtin_error(
         "AttributeError",
-        &format!("object has no attribute '{name}'"),
+        &format!("'{holder}' object has no attribute '{name}'"),
     ))
 }
 
+/// 把 `ExecError::Raised` 里的 **AttributeError 完整吞掉**（参照的"探测"口径）。
+///
+/// 返回 `true` ＝ 确实是 AttributeError 且已吞；`false` ＝ 不是（调用方原样上抛）。
+/// **两份所有权都要还**：`executor::runtime::raise` 给"实例状态"与 `Err(Raised)` 各一份引用 ⇒
+/// 先 `set_pending_exception(None)` 取回状态那份并归还，再归还 `Err` 里的那份
+/// （同 `executor/import.rs` 的 `ignore_missing_submodule` 先例 ✓）。
+fn swallow_attribute_error(instance: &Instance, error: &ExecError) -> bool {
+    let ExecError::Raised { exception } = error else {
+        return false;
+    };
+    let Some(attribute_error) = instance.type_named("AttributeError") else {
+        return false;
+    };
+    // SAFETY: `Raised` 里的异常对象由实例的 `pending_exception` 保活（存活）。
+    if !instance.is_subtype(instance.type_of(*exception), attribute_error) {
+        return false;
+    }
+    if let Some(previous) = instance.set_pending_exception(None) {
+        instance.release(previous);
+    }
+    instance.release(*exception);
+    true
+}
+
 /// `hasattr(object, name)` ✓。
+///
+/// 参照口径（3.14.4 实测）：`hasattr` 吞 AttributeError（含 `__getattr__` 抛的）⇒ False；
+/// **非 AttributeError 原样上抛**（`ValueError: boom` 之类必须继续冒 ✓）。
 fn hasattr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    need_args(instance, "hasattr", args, 2)?;
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "hasattr() takes no keyword arguments"));
+    }
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("hasattr expected 2 arguments, got {}", args.len()),
+        ));
+    }
     let Some(name) = instance.text_of(args[1]) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
-    let found = instance.attribute_optional_of(args[0], name)?.is_some();
-    Ok(instance.retain(instance.singletons().boolean(found)))
+    let mut present = false;
+    // **归还新引用** ✓（`attribute_optional_of` 给的是新引用；旧代码 `.is_some()` 直接丢了 ⇒ 泄漏）。
+    match instance.attribute_optional_of(args[0], name)? {
+        Some(value) => {
+            instance.release(value);
+            present = true;
+        }
+        None => {}
+    }
+    if !present {
+        // 本调用顺序下来到这里时，`attribute_lookup` 必然已失败 ⇒ `Ok(Some)` 只可能来自
+        // `__getattr__` 分支（`call_callable` 的新引用）⇒ 也要归还 ✓。
+        match instance.get_attribute_with_protocol(args[0], name) {
+            Ok(Some(value)) => {
+                instance.release(value);
+                present = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if !swallow_attribute_error(instance, &error) {
+                    return Err(error);
+                }
+            }
+        }
+    }
+    Ok(instance.retain(instance.singletons().boolean(present)))
 }
 
 /// **`vars(object)`** ✓（task-25 ① ✓）：就是 `object.__dict__` ✓（实例 ⇒ 那个**可变**字典 ✓ ——
@@ -1469,6 +2454,13 @@ fn setattr_native(
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
     // **协议口径** ✓（第 706 轮）：core 里那个公开入口负责 `__setattr__` ✓（见它的注释 ✓）。
+    // **引用纪律**（task-18 真 bug ✗）：原生函数的实参是 `call_callable` 的**借用视图** ✗
+    // —— 而该入口要的是**新引用**（与 `STORE_ATTR` 从值栈弹出的那一份同契约 ✓）⇒ 先自己
+    // `retain` 一份再交出 ✓。先前漏了这一份 ✗ ⇒ 属性字典持有一份不存在的引用 ✓；实参是
+    // **运行时新建的 dict**（无别处持有 ✓）时当场被释放 ✓ ⇒ 读回该属性 SIGSEGV／
+    // misaligned pointer（官方 `test_decorators` 的 `noteargs` 装饰器把 `(*args, **kwds)`
+    // 存进函数属性时正撞它 ✓）。普通 tuple 常被 code object 的常量表另持一份 ⇒ 症状被遮住 ✓。
+    instance.retain(args[2]);
     instance.set_attribute_with_protocol(args[0], name, args[2])?;
     Ok(instance.retain(instance.singletons().none()))
 }

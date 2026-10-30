@@ -135,12 +135,62 @@ fn pair(instance: &Instance, first: NonNull<Header>, consumed: usize) -> NonNull
     instance.new_tuple(vec![first, instance.new_int(consumed as i64)])
 }
 
+/// 取 **`str` 实参的 WTF-8 字节**（P3-38 S3a）：`text_argument` 用 `text_value`，对含孤立代理的
+/// 表示取不到 ✗；`_codecs.*_encode` 的输入要走字节视图 ✓（消息与 `text_argument` 同形 ✓）。
+fn wtf8_argument(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    index: usize,
+    function: &str,
+) -> Result<Vec<u8>, ExecError> {
+    let Some(value) = args.get(index).copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{function}() takes at least {} argument(s)", index + 1),
+        ));
+    };
+    instance.wtf8_of(value).map(<[u8]>::to_vec).ok_or_else(|| {
+        instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "{function}() argument must be str, not {}",
+                instance.type_name(instance.type_of(value))
+            ),
+        )
+    })
+}
+
+/// **WTF-8 字节 ⇒ `str` 对象**（S3a：解码结果可能含孤立代理 ✓）。
+fn str_from_wtf8(instance: &Instance, bytes: &[u8]) -> NonNull<Header> {
+    instance
+        .new_str_wtf8(bytes)
+        .expect("解码产物必须是合法 WTF-8")
+}
+
+/// **码点个数**（`_codecs.*_encode` 的"消耗码位数"口径 ✓：代理各算 1 ✓）。
+fn code_point_count(bytes: &[u8]) -> usize {
+    pyawa_core::wtf8::code_points(bytes).count()
+}
+
 /// 自定义错误处理器（`errors` 不是那三个内建的）—— 本层**如实报未实现** ✓。
 fn custom_handler_error(instance: &Instance, errors: &str, encoding: &str) -> ExecError {
-    instance.raise_builtin_error(
-        "NotImplementedError",
-        &format!("`{encoding}` codec 的 `{errors}` 错误处理器尚未接线（只认 strict／ignore／replace）"),
-    )
+    // **已注册**的自定义处理器：契约要吃 `UnicodeEncodeError` 的结构化字段（object／start／end），
+    // 本层异常对象还没接 ⇒ 如实 `NotImplementedError` ✓；**没注册的**照参照 `LookupError` ✓。
+    let registered = module_state(instance, ERROR_HANDLERS)
+        .is_some_and(|mapping| instance.dict_get(mapping, errors).is_some());
+    if registered {
+        instance.raise_builtin_error(
+            "NotImplementedError",
+            &format!(
+                "`{encoding}` codec 的 `{errors}` 自定义错误处理器尚未接线（要 `UnicodeEncodeError` 的结构化字段）"
+            ),
+        )
+    } else {
+        instance.raise_builtin_error(
+            "LookupError",
+            &format!("unknown error handler name '{errors}'"),
+        )
+    }
 }
 
 // ---- 注册表 -----------------------------------------------------------------------------------
@@ -306,32 +356,13 @@ fn ascii_encode_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let text = text_argument(instance, args, 0, "ascii_encode")?;
+    // **P3-38 S3a**：输入走 WTF-8 字节视图；四档内置编解码统一交给 `Instance` 的实现 ✓。
+    let text = wtf8_argument(instance, args, 0, "ascii_encode")?;
     let errors = errors_argument(instance, args, 1);
-    let mut out = Vec::with_capacity(text.len());
-    for (position, character) in text.chars().enumerate() {
-        let code = character as u32;
-        if code < 0x80 {
-            out.push(code as u8);
-            continue;
-        }
-        match errors.as_str() {
-            "strict" => {
-                return Err(instance.raise_builtin_error(
-                    "UnicodeEncodeError",
-                    &format!(
-                        "'ascii' codec can't encode character '\\x{:x}' in position {position}: ordinal not in range(128)",
-                        code
-                    ),
-                ))
-            }
-            "ignore" => {}
-            "replace" => out.push(b'?'),
-            other => return Err(custom_handler_error(instance, other, "ascii")),
-        }
-    }
+    let out = instance.encode_with_builtin_codec(&text, "ascii", &errors)?;
     let bytes = instance.new_bytes(&out);
-    Ok(pair(instance, bytes, text.chars().count()))
+    let consumed = code_point_count(&text);
+    Ok(pair(instance, bytes, consumed))
 }
 
 /// `ascii_decode(input, errors='strict')` ✓。
@@ -343,28 +374,9 @@ fn ascii_decode_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let input = bytes_argument(instance, args, 0, "ascii_decode")?;
     let errors = errors_argument(instance, args, 1);
-    let mut out = String::new();
-    for (position, byte) in input.iter().enumerate() {
-        if *byte < 0x80 {
-            out.push(*byte as char);
-            continue;
-        }
-        match errors.as_str() {
-            "strict" => {
-                return Err(instance.raise_builtin_error(
-                    "UnicodeDecodeError",
-                    &format!(
-                        "'ascii' codec can't decode byte 0x{byte:02x} in position {position}: ordinal not in range(128)"
-                    ),
-                ))
-            }
-            "ignore" => {}
-            "replace" => out.push('\u{fffd}'),
-            other => return Err(custom_handler_error(instance, other, "ascii")),
-        }
-    }
-    let text = instance.new_str(&out);
-    Ok(pair(instance, text, input.len()))
+    let out = instance.decode_with_builtin_codec(&input, "ascii", &errors)?;
+    let value = str_from_wtf8(instance, &out);
+    Ok(pair(instance, value, input.len()))
 }
 
 /// `latin_1_encode(input, errors='strict')` ✓（**不可能失败** ✓）。
@@ -374,25 +386,12 @@ fn latin_1_encode_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let text = text_argument(instance, args, 0, "latin_1_encode")?;
-    let mut out = Vec::with_capacity(text.len());
-    for character in text.chars() {
-        match u8::try_from(character as u32) {
-            Ok(byte) => out.push(byte),
-            Err(_) => {
-                // 参照里 latin-1 的 `encode` 对 > U+00FF 会报 UnicodeEncodeError ✓
-                return Err(instance.raise_builtin_error(
-                    "UnicodeEncodeError",
-                    &format!(
-                        "'latin-1' codec can't encode character '\\u{:04x}' in position 0: ordinal not in range(256)",
-                        character as u32
-                    ),
-                ));
-            }
-        }
-    }
+    let text = wtf8_argument(instance, args, 0, "latin_1_encode")?;
+    let errors = errors_argument(instance, args, 1);
+    let out = instance.encode_with_builtin_codec(&text, "latin-1", &errors)?;
     let bytes = instance.new_bytes(&out);
-    Ok(pair(instance, bytes, text.chars().count()))
+    let consumed = code_point_count(&text);
+    Ok(pair(instance, bytes, consumed))
 }
 
 /// `latin_1_decode(input, errors='strict')` ✓（**不可能失败** ✓）。
@@ -403,8 +402,8 @@ fn latin_1_decode_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let input = bytes_argument(instance, args, 0, "latin_1_decode")?;
-    let text: String = input.iter().map(|byte| *byte as char).collect();
-    let value = instance.new_str(&text);
+    let out = instance.decode_with_builtin_codec(&input, "latin-1", "strict")?;
+    let value = str_from_wtf8(instance, &out);
     Ok(pair(instance, value, input.len()))
 }
 
@@ -415,9 +414,12 @@ fn utf_8_encode_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let text = text_argument(instance, args, 0, "utf_8_encode")?;
-    let bytes = instance.new_bytes(text.as_bytes());
-    Ok(pair(instance, bytes, text.chars().count()))
+    let text = wtf8_argument(instance, args, 0, "utf_8_encode")?;
+    let errors = errors_argument(instance, args, 1);
+    let out = instance.encode_with_builtin_codec(&text, "utf-8", &errors)?;
+    let bytes = instance.new_bytes(&out);
+    let consumed = code_point_count(&text);
+    Ok(pair(instance, bytes, consumed))
 }
 
 /// `utf_8_decode(input, errors='strict', final=False)` ✓（`final` 只影响**截断的序列**那一档 ✓）。
@@ -429,46 +431,17 @@ fn utf_8_decode_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let input = bytes_argument(instance, args, 0, "utf_8_decode")?;
     let errors = errors_argument(instance, args, 1);
-    match std::str::from_utf8(&input) {
-        Ok(text) => {
-            let value = instance.new_str(text);
-            Ok(pair(instance, value, input.len()))
+    // 第三参 `final`（`encodings/utf_8.py` 传 True；缺省 False ✓）：只影响**末尾截断**序列。
+    let final_round = match args.get(2) {
+        Some(value) => {
+            *value != instance.singletons().none()
+                && *value != instance.singletons().boolean(false)
         }
-        Err(_) => {
-            if errors == "strict" {
-                let valid = std::str::from_utf8(&input).err().map(|e| e.valid_up_to()).unwrap_or(0);
-                let byte = input.get(valid).copied().unwrap_or(0);
-                return Err(instance.raise_builtin_error(
-                    "UnicodeDecodeError",
-                    &format!(
-                        "'utf-8' codec can't decode byte 0x{byte:02x} in position {valid}: invalid start byte"
-                    ),
-                ));
-            }
-            if errors == "replace" || errors == "ignore" {
-                // **逐字节**退让（不追参照的精确分段 ✓ —— 本层如实只保证"不炸 + 替换/跳过" ✓）
-                let mut out = String::new();
-                for (position, byte) in input.iter().enumerate() {
-                    match std::str::from_utf8(&input[position..]) {
-                        Ok(rest) => {
-                            out.push_str(rest);
-                            break;
-                        }
-                        Err(_) => {
-                            if errors == "replace" {
-                                out.push('\u{fffd}');
-                            }
-                            let _ = byte;
-                        }
-                    }
-                }
-                let value = instance.new_str(&out);
-                Ok(pair(instance, value, input.len()))
-            } else {
-                Err(custom_handler_error(instance, &errors, "utf-8"))
-            }
-        }
-    }
+        None => false,
+    };
+    let (out, consumed) = instance.decode_utf8_with_errors(&input, &errors, final_round)?;
+    let value = str_from_wtf8(instance, &out);
+    Ok(pair(instance, value, consumed))
 }
 
 /// `charmap_build(decoding_table)` ⇒ `{码点: 字节}`（跳过 `\uFFFE` 那些**未用**位 ✓）。
@@ -524,7 +497,7 @@ fn charmap_decode_native(
     let errors = errors_argument(instance, args, 1);
     let mapping = args.get(2).copied().filter(|value| *value != instance.singletons().none());
     let table = decode_table(instance, mapping);
-    let mut out = String::new();
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
     for (position, byte) in input.iter().enumerate() {
         let character = match &table {
             Some(table) => table[*byte as usize],
@@ -533,7 +506,7 @@ fn charmap_decode_native(
         };
         let Some(character) = character else {
             match errors.as_str() {
-                "strict" => {
+                "strict" | "surrogatepass" => {
                     return Err(instance.raise_builtin_error(
                         "UnicodeDecodeError",
                         &format!(
@@ -543,15 +516,23 @@ fn charmap_decode_native(
                 }
                 "ignore" => continue,
                 "replace" => {
-                    out.push('\u{fffd}');
+                    pyawa_core::wtf8::encode_code_point(0xFFFD, &mut out)
+                        .expect("U+FFFD 可编码");
+                    continue;
+                }
+                // **P3-38 S3a**：`surrogateescape` 把该字节映射成 U+DC00+byte ✓。
+                "surrogateescape" => {
+                    pyawa_core::wtf8::encode_code_point(0xDC00 + u32::from(*byte), &mut out)
+                        .expect("U+DC80..U+DCFF 在 WTF-8 范围内");
                     continue;
                 }
                 other => return Err(custom_handler_error(instance, other, "charmap")),
             }
         };
-        out.push(character);
+        pyawa_core::wtf8::encode_code_point(character as u32, &mut out)
+            .expect("charmap 表的码点可编码");
     }
-    let value = instance.new_str(&out);
+    let value = str_from_wtf8(instance, &out);
     Ok(pair(instance, value, input.len()))
 }
 
@@ -577,40 +558,48 @@ fn charmap_encode_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let text = text_argument(instance, args, 0, "charmap_encode")?;
+    let text = wtf8_argument(instance, args, 0, "charmap_encode")?;
     let errors = errors_argument(instance, args, 1);
     let mapping = args.get(2).copied().filter(|value| *value != instance.singletons().none());
     let table = encode_table(instance, mapping);
     let mut out: Vec<u8> = Vec::with_capacity(text.len());
-    for (position, character) in text.chars().enumerate() {
+    let mut position = 0usize;
+    for point in pyawa_core::wtf8::code_points(&text) {
+        let code = point.expect("str 载荷必须是合法 WTF-8");
         let byte = match &table {
-            Some(table) => table[character as usize],
+            Some(table) if (code as usize) < table.len() => table[code as usize],
             // 没有映射 ⇒ 恒等（码点 ≤ 0xFF 才成立 ✓）
-            None => u8::try_from(character as u32).ok(),
+            _ => u8::try_from(code).ok(),
         };
         let Some(byte) = byte else {
+            if errors == "surrogateescape" && (0xDC80..=0xDCFF).contains(&code) {
+                out.push((code - 0xDC00) as u8);
+                position += 1;
+                continue;
+            }
             match errors.as_str() {
-                "strict" => {
+                "strict" | "surrogatepass" => {
                     return Err(instance.raise_builtin_error(
                         "UnicodeEncodeError",
                         &format!(
                             "'charmap' codec can't encode character '\\u{:04x}' in position {position}: character maps to <undefined>",
-                            character as u32
+                            code
                         ),
                     ))
                 }
-                "ignore" => continue,
-                "replace" => {
-                    out.push(b'?');
-                    continue;
-                }
+                "ignore" => {}
+                "replace" => out.push(b'?'),
                 other => return Err(custom_handler_error(instance, other, "charmap")),
             }
+            position += 1;
+            continue;
         };
         out.push(byte);
+        position += 1;
     }
     let bytes = instance.new_bytes(&out);
-    Ok(pair(instance, bytes, text.chars().count()))
+    let consumed = code_point_count(&text);
+    Ok(pair(instance, bytes, consumed))
 }
 
 /// **`strict_errors(exception)`** ✓：原样再抛（真实现 ✓ —— `_codecs` 里它就是 `raise exception` ✓）。
@@ -643,6 +632,69 @@ fn not_implemented_handler_native(
     Err(instance.raise_builtin_error(
         "NotImplementedError",
         "`_codecs` 的这个错误处理器尚未接线（要 `UnicodeEncodeError` 的结构化字段：object／start／end）",
+    ))
+}
+
+/// **`_codecs.encode(obj, encoding='utf-8', errors='strict')`**（P3-38 S3a）：`str` 输入走
+/// 核心编码器（含 `surrogateescape`／`surrogatepass`；非内置编码经 `_codecs.lookup` 委派 ✓）。
+/// **如实范围**：任意对象编解码器（`rot13`／`base64` 等）与 bytes 输入未接 ⇒ `NotImplementedError`。
+fn encode_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "encode() takes at least 1 argument (0 given)",
+        ));
+    };
+    let encoding = args
+        .get(1)
+        .and_then(|value| instance.text_value(*value))
+        .unwrap_or_else(|| "utf-8".to_owned());
+    let errors = args
+        .get(2)
+        .and_then(|value| instance.text_value(*value))
+        .unwrap_or_else(|| "strict".to_owned());
+    if let Some(text) = instance.wtf8_of(object).map(<[u8]>::to_vec) {
+        return instance.encode_wtf8_with_encoding_and_errors(&text, &encoding, &errors);
+    }
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        "`_codecs.encode`：本层只接了 str 输入的文本编码（任意对象编解码器随后补）",
+    ))
+}
+
+/// **`_codecs.decode(obj, encoding='utf-8', errors='strict')`**（P3-38 S3a）：bytes 输入走
+/// 核心解码器（含 `surrogateescape`／`surrogatepass` ✓）；其余对象形态如实未接。
+fn decode_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "decode() takes at least 1 argument (0 given)",
+        ));
+    };
+    let encoding = args
+        .get(1)
+        .and_then(|value| instance.text_value(*value))
+        .unwrap_or_else(|| "utf-8".to_owned());
+    let errors = args
+        .get(2)
+        .and_then(|value| instance.text_value(*value))
+        .unwrap_or_else(|| "strict".to_owned());
+    if let Some(bytes) = instance.bytes_value(object).map(<[u8]>::to_vec) {
+        return instance.decode_with_encoding_and_errors(&bytes, &encoding, &errors);
+    }
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        "`_codecs.decode`：本层只接了 bytes 输入的文本解码（任意对象编解码器随后补）",
     ))
 }
 
@@ -693,6 +745,15 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.retain(native);
         instance.dict_set(handlers, short, native);
     }
+    // **P3-38 S3a**：`surrogateescape`／`surrogatepass` 是**内建处理器** —— 命名照参照
+    // （`codecs.lookup_error` 取到的函数 `__name__` 就是这两个短名 ✓）；本体**如实未接线**
+    // （handler 要吃 `UnicodeEncodeError` 的结构化字段，本层异常对象还没接 ⇒ 调用时诚实
+    // `NotImplementedError`）。编码/解码的**语义**在 `Instance` 的编解码器里真实现 ✓。
+    for short in ["surrogateescape", "surrogatepass"] {
+        let native = make_native(instance, short, not_implemented_handler_native);
+        instance.retain(native);
+        instance.dict_set(handlers, short, native);
+    }
     // 注册表
     for (name, handler) in [
         ("register", register_native as NativeFn),
@@ -714,6 +775,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("charmap_build", charmap_build_native as NativeFn),
         ("charmap_decode", charmap_decode_native as NativeFn),
         ("charmap_encode", charmap_encode_native as NativeFn),
+        // **P3-38 S3a**：`_codecs.encode`／`decode` 的文本编码/解码真实现（`codecs.encode/decode`
+        // 直接转给它们 ✓）。
+        ("encode", encode_native as NativeFn),
+        ("decode", decode_native as NativeFn),
     ] {
         let native = make_native(instance, name, handler);
         instance.dict_set(namespace, name, native);
@@ -740,8 +805,6 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         "unicode_escape_decode",
         "raw_unicode_escape_encode",
         "raw_unicode_escape_decode",
-        "encode",
-        "decode",
     ] {
         let native = make_native(instance, name, not_implemented_native);
         instance.dict_set(namespace, name, native);

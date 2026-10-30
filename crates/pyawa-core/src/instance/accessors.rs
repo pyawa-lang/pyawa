@@ -184,12 +184,20 @@ impl Instance {
     }
 
     /// 读字符串内容（**复制**；不是 `str` 给 `None`）。
+    ///
+    /// **P3-38 S2c**：改成**安全口径** —— 合法 UTF-8 原样返回（旧行为逐字节不变 ✓）；
+    /// WTF-8 表示（含孤立代理）⇒ [`crate::wtf8::to_string_lossy`]（代理位置成 U+FFFD）。
+    /// 这是"必须交出 `String` 的用户可见输出面"的**如实偏差**（完整代理输出面属 S3b ✓），
+    /// 关键是**不再 panic** ✓。需要精确内容的地方走 [`Self::str_wtf8_bytes`]／`text_of`（合法视图）。
     pub fn text_value(&self, object: NonNull<Header>) -> Option<String> {
         if self.type_of(object) != self.singletons().str_type() {
             return None;
         }
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned())
+        let bytes = self.str_wtf8_bytes(object)?;
+        Some(match core::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => crate::wtf8::to_string_lossy(bytes),
+        })
     }
 
     /// **`TS-45` ①**：当前 `int`↔`str` 的位数上限（`0` ＝ 不限）。
@@ -207,7 +215,195 @@ impl Instance {
             return None;
         }
         // SAFETY: 类型身份刚确认是 `str` ✓。
-        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.value())
+        //
+        // **P3-38 S2a 唯一允许的行为改动点**：先前直接 `value()`（对 WTF-8 表示会 panic）⇒
+        // 现在走 `as_utf8()`：WTF-8 表示（含孤立代理）**如实给 `None`** ✓。合法 UTF-8 路径的
+        // 结果**一个字节都不变** ✓（S2a 的生产路径也不会构造 WTF-8 表示 ⇒ 实际无可观测变化）。
+        unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.as_utf8()
+    }
+
+    /// **`str` 对象的 WTF-8 字节**（P3-38 S2a；不是 `str` ⇒ `None`）。
+    ///
+    /// 与 [`Instance::text_of`] 的分工：`text_of` 是"合法 UTF-8 视图"（WTF-8 ⇒ `None`），
+    /// 本函数**总是**给字节（UTF-8 表示的字节就是合法 WTF-8 ✓）——S2b 起语义层用它 ✓。
+    pub fn wtf8_of(&self, object: NonNull<Header>) -> Option<&[u8]> {
+        // **`str` 的子类沿用 str 布局**（`AB-58` 族）⇒ 子类实例也给字节 ✓（S3a：`str.encode`
+        // 对 `class S(str)` 同样成立；先前只认精确 `str` ✗）。
+        if !self.is_str_object(object) {
+            return None;
+        }
+        // SAFETY: 类型身份刚确认是 `str`（或其子类，布局同 str）✓。
+        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes())
+    }
+
+    /// `object` 是不是 **`str` 或其子类**（公开版；`str` 的值语义对子类同样成立 ✓）。
+    pub fn is_str_object(&self, object: NonNull<Header>) -> bool {
+        self.is_str_like(object)
+    }
+
+    /// **`sys.getsizeof` 的底层口径**（P3-38 S3e-3，task-67）：**本实现**的对象占用字节数
+    /// ＝ 类型载荷尺寸 ＋ 容器的指针数组／字符串字节（**不含**元素对象自身；与 CPython 的
+    /// 具体数字不同，这是实现自定量，不冒充 CPython 数值 ✓）。
+    ///
+    /// `dict` 的估算含每项 16 字节（键值指针）＋ 32 字节表头；`str` 含结尾 NUL 一字节。
+    pub fn object_sizeof(&self, object: NonNull<Header>) -> usize {
+        let ty = self.type_of(object);
+        // SAFETY: 类型身份由 `type_of` 给出，注册表持有。
+        let base = unsafe { ty.as_ref() }.instance_size();
+        let extra = match self.type_name(ty).as_str() {
+            "str" => self.wtf8_of(object).map(|bytes| bytes.len() + 1).unwrap_or(0),
+            "bytes" => self.bytes_value(object).map(<[u8]>::len).unwrap_or(0),
+            "list" => 8 * self.list_items(object).map(|items| items.len()).unwrap_or(0),
+            "tuple" => 8 * self.tuple_items(object).map(|items| items.len()).unwrap_or(0),
+            "dict" => self
+                .dict_entries(object)
+                .map(|entries| 32 + 16 * entries.len())
+                .unwrap_or(0),
+            "set" | "frozenset" => 8 * self.set_items(object).map(|items| items.len()).unwrap_or(0),
+            _ => 0,
+        };
+        base + extra
+    }
+
+    /// **`str` 的码点表**（P3-38 S2a-2 批 2）：UTF-8 ⇒ `chars()`；WTF-8 ⇒ 逐码点解码
+    /// （孤立代理各算一个码点 ✓）；不是 `str` ⇒ `None`。
+    pub fn str_code_point_vec(&self, object: NonNull<Header>) -> Option<Vec<u32>> {
+        if !self.is_str_like(object) {
+            return None;
+        }
+        // SAFETY: 类型身份已确认是 `str`（载荷同布局）。
+        let object = unsafe { &*object.as_ptr().cast::<crate::StrObject>() };
+        match object.as_utf8() {
+            Some(text) => Some(text.chars().map(u32::from).collect()),
+            None => {
+                let mut points = Vec::new();
+                for point in crate::wtf8::code_points(object.wtf8_bytes()) {
+                    points.push(point.ok()?);
+                }
+                Some(points)
+            }
+        }
+    }
+
+    /// **`str` 的第 `index` 个码点**（0 起；越界／非 str ⇒ `None`）。
+    pub fn str_code_point_at(&self, object: NonNull<Header>, index: usize) -> Option<u32> {
+        match self.str_code_point_vec(object) {
+            Some(points) => points.get(index).copied(),
+            None => None,
+        }
+    }
+
+    /// 用**一串码点**造一个 `str`（新引用；P3-38 S2a-2 批 2 的"单字符／切片结果"统一入口 ✓）。
+    ///
+    /// 码点必须来自已校验的 WTF-8（本层内部保证 ✓）——编码失败属内部不变量被破坏，如实当场炸。
+    /// 结果走 [`Instance::new_str_wtf8`] ⇒ 合法 UTF-8 仍存 UTF-8 表示（合法字符串零行为改动 ✓）。
+    pub fn new_str_code_points(&self, points: &[u32]) -> NonNull<Header> {
+        let mut bytes = Vec::with_capacity(points.len());
+        for &point in points {
+            crate::wtf8::encode_code_point(point, &mut bytes)
+                .expect("码点必须来自已校验的 WTF-8");
+        }
+        self.new_str_wtf8(&bytes)
+            .expect("由合法码点拼出的 WTF-8 必合法")
+    }
+
+    /// **单个码点 ⇒ 单字符 `str`**（新引用）：标量走 UTF-8 表示、孤立代理走 WTF-8 表示 ✓。
+    pub fn new_str_code_point(&self, point: u32) -> NonNull<Header> {
+        self.new_str_code_points(&[point])
+    }
+
+    /// **`str` 的字节层重复**（`s * n` 的载荷一半；P3-38 S2a-2 批 2）。
+    ///
+    /// 在 **WTF-8 字节层**重复 ✓（合法 UTF-8 结果存 Utf8、旧行为不变；含孤立代理的串也能重复 ✓）；
+    /// 不是 `str` ⇒ `None`。**上限检查**（`MemoryError`）由调用方做（它要能抛异常 ✓）。
+    pub fn str_repeat(&self, object: NonNull<Header>, count: usize) -> Option<NonNull<Header>> {
+        let bytes = self.str_wtf8_bytes(object)?;
+        let mut repeated = Vec::with_capacity(bytes.len().saturating_mul(count));
+        for _ in 0..count {
+            repeated.extend_from_slice(bytes);
+        }
+        self.new_str_wtf8(&repeated)
+    }
+
+    /// **子串判定**（`in` 的安全口径，P3-38 S2a-2 批 2）：两边都是 `str` ⇒ 按 **WTF-8 字节**
+    /// 子串匹配 ✓（`needle` 为空 ⇒ `true` ✓）。
+    ///
+    /// **为什么字节子串对 WTF-8 安全**：WTF-8 是**自同步**编码——首字节（ASCII 或 `>=0xC2`）不会
+    /// 出现在任何多字节序列的续字节位上（续字节恒 `0x80..=0xBF`），且代理的 3 字节形式也是自同步的
+    /// ⇒ 字节子串匹配 ⟺ **码点子序列**匹配 ✓（不会在码点中间"错位命中"）。
+    /// 不是 `str` ⇒ `None`（由调用方报参照的 TypeError ✓）。
+    pub fn str_contains(
+        &self,
+        container: NonNull<Header>,
+        needle: NonNull<Header>,
+    ) -> Option<bool> {
+        if !self.is_str_like(container) || !self.is_str_like(needle) {
+            return None;
+        }
+        // SAFETY: 两边类型身份都已确认是 `str`（载荷同布局）。
+        let haystack = unsafe { &*container.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        let needle = unsafe { &*needle.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        if needle.is_empty() {
+            return Some(true);
+        }
+        Some(haystack.windows(needle.len()).any(|window| window == needle))
+    }
+
+    /// `object` 是不是 **`str` 或其子类**（`str` 的值语义对子类同样成立 ✓）。
+    fn is_str_like(&self, object: NonNull<Header>) -> bool {
+        let ty = self.type_of(object);
+        self.type_named("str")
+            .is_some_and(|base| ty == base || self.is_subtype(ty, base))
+    }
+
+    /// **`str` 的 WTF-8 字节**（P3-38 S2a-2；`wtf8_of` 的语义化别名 ✓）。
+    pub fn str_wtf8_bytes(&self, object: NonNull<Header>) -> Option<&[u8]> {
+        self.wtf8_of(object)
+    }
+
+    /// **`str` 的码点长度**（`len()` 的口径：**代理各算 1 个码点** ✓；不是 `str` ⇒ `None`）。
+    ///
+    /// UTF-8 表示 ⇒ `chars().count()`（与旧口径一致 ✓）；WTF-8 表示 ⇒ 逐码点计数（含孤立代理 ✓）。
+    pub fn str_code_point_len(&self, object: NonNull<Header>) -> Option<usize> {
+        if !self.is_str_like(object) {
+            return None;
+        }
+        // SAFETY: 类型身份已确认是 `str`（或其子类，载荷同布局）。
+        let object = unsafe { &*object.as_ptr().cast::<crate::StrObject>() };
+        match object.as_utf8() {
+            Some(text) => Some(text.chars().count()),
+            None => {
+                let mut count = 0usize;
+                for point in crate::wtf8::code_points(object.wtf8_bytes()) {
+                    // 已校验的 WTF-8 ⇒ 不该出现 Err；真出现就如实 `None`（不吞、不猜 ✓）。
+                    point.ok()?;
+                    count += 1;
+                }
+                Some(count)
+            }
+        }
+    }
+
+    /// **两个 `str` 的相等**（`==` 的值语义）：按 **WTF-8 字节**逐字节相等 ✓
+    /// （合法 UTF-8 的字节相等与旧口径一致 ✓；含代理的串也能正确比较 ✓）。
+    /// 任一不是 `str` ⇒ `None`（由调用方走别的分支 ✓）。
+    pub fn str_equals(&self, left: NonNull<Header>, right: NonNull<Header>) -> Option<bool> {
+        if !self.is_str_like(left) || !self.is_str_like(right) {
+            return None;
+        }
+        // SAFETY: 两个类型身份都已确认是 `str`（载荷同布局）。
+        let left_bytes = unsafe { &*left.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        let right_bytes = unsafe { &*right.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        Some(left_bytes == right_bytes)
+    }
+
+    /// **`str` 是否为空**（真值口径）：两分支都看字节/字符是否为空 ✓；不是 `str` ⇒ `None`。
+    pub fn str_is_empty(&self, object: NonNull<Header>) -> Option<bool> {
+        if !self.is_str_like(object) {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.is_empty())
     }
 
     /// **`OM-11` 的 `str` 槽**：`str(对象)`。
@@ -297,9 +493,11 @@ impl Instance {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         if ty == self.singletons().str_type() {
+            // P3-38 S2c：按 **WTF-8 字节**转义（合法 UTF-8 输出与旧 `quote_str` 逐字节相同 ✓，
+            // 孤立代理 ⇒ `\udXXX` 转义 ✓；不再经 `value()` ⇒ 不 panic ✓）。
             // SAFETY: 类型身份已确认。
-            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return Ok(quote_str(&text, true));
+            let bytes = unsafe { &*object.as_ptr().cast::<StrObject>() }.wtf8_bytes();
+            return Ok(super::quote_wtf8(bytes, true));
         }
         self.object_repr(object)
     }

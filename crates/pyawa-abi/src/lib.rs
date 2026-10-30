@@ -80,7 +80,15 @@ pub const PA_ABI_MAJOR: u32 = 1;
 ///
 /// **1**（`P3-29`，2026-10-18）：`net` 域 vtable 加 `socketpair` 槽（`CP-38`）——那是对**能力接口**
 /// 的追加式改动，按 `AB-39` 三份契约共用一个版本号 ⇒ 本号随 `CP-30` 升次版本。
-pub const PA_ABI_MINOR: u32 = 1;
+///
+/// **2**（round 15，2026-10-24）：`fs` 域 vtable **表尾追加** `stat_times` 槽（`CP-30`；读文件
+/// 时间戳，供 `os.stat_result` 的 `st_mtime` 一族）。属 `AB-41` 的"末尾追加"⇒ 旧宿主（1.1）的
+/// vtable 只是少了这一格，本运行时按 `CP-3` 把它当"该操作未实现"，不受影响。
+///
+/// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
+/// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
+/// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
+pub const PA_ABI_MINOR: u32 = 3;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -400,6 +408,15 @@ impl pa_state {
     /// 不是 C ABI 的一部分（`AB-` 面里没有它 ✓）——C 宿主一律走 `pa_*` 函数 ✓。
     pub fn instance(&self) -> &Instance {
         &self.instance
+    }
+
+    /// **脚本全局字典**（Rust 级访问器；不是 C ABI 面 `AB-` 的一部分）。
+    ///
+    /// 组合根在 `pa_exec_*` 之前要装 `__file__`：参照口径是**绝对路径原样字节**（PEP 383），
+    /// 而 C 面 `pa_pushstring`／`pa_setglobal` 只收 UTF-8 字符串 ⇒ 含孤立代理的脚本路径
+    /// 无法经 C 面表达 ✗ ⇒ 由 `pyawa-runtime` 用本访问器**直接装** WTF-8 `str` ✓。
+    pub fn globals(&self) -> NonNull<Header> {
+        self.globals
     }
 
     /// 造一个新实例（`AB-55`：创建经出参交回，不接触栈）。

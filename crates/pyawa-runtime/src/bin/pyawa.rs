@@ -22,8 +22,8 @@
 use core::ffi::{c_char, c_void};
 use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAIN_NET};
 use pyawa_abi::{
-    pa_setcapability, pa_setcapability_async, pa_setglobal,
-    pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host, pa_pushstring,
+    pa_setcapability, pa_setcapability_async,
+    pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host,
     pa_state, status, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
@@ -36,6 +36,40 @@ use std::ffi::CString;
 const EXIT_HOST: i32 = 2;
 /// 脚本异常／语法错。
 const EXIT_SCRIPT: i32 = 1;
+
+/// **宿主路径的原始字节**（P3-38 S3b-4；PEP 383 的宿主侧落点）。
+fn path_bytes(path: &std::path::Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().as_bytes().to_vec()
+    }
+}
+
+/// 把原始字节按 `utf-8`＋`surrogateescape` 解成 **WTF-8 `str`**（**新引用**；解码不会失败）。
+fn decode_wtf8(
+    instance: &pyawa_core::Instance,
+    bytes: &[u8],
+) -> core::ptr::NonNull<pyawa_core::Header> {
+    instance
+        .decode_with_encoding_and_errors(bytes, "utf-8", "surrogateescape")
+        .expect("utf-8／surrogateescape 解码不会失败")
+}
+
+/// 往模块命名空间写一个**新引用**值（`dict_set` 是借用口径 ⇒ 写完归还本函数那份）。
+fn set_attribute(
+    instance: &pyawa_core::Instance,
+    namespace: core::ptr::NonNull<pyawa_core::Header>,
+    name: &str,
+    value: core::ptr::NonNull<pyawa_core::Header>,
+) {
+    instance.dict_set(namespace, name, value);
+    instance.release(value);
+}
 
 use pyawa_core::compile::{CheckTier, Mode};
 use pyawa_runtime::pyac;
@@ -167,14 +201,65 @@ fn main() {
     // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾 ✓。
     let state_ref = unsafe { &*state };
     let instance = state_ref.instance();
-    let program_name = path.to_string_lossy().into_owned();
-    let script_arguments_text: Vec<String> = script_arguments
+    // **`sys.argv` 走字节**（PEP 383）：参数从 `OsString` 取原始字节，稍后按
+    // utf-8＋surrogateescape 解成 WTF-8 `str`；`program_name` 只作为**编译期 chunk 名**
+    // （编译器收 `&str`，非 UTF-8 时如实 lossy，见报告）。
+    let program_bytes = path_bytes(&path);
+    let script_argument_bytes: Vec<Vec<u8>> = script_arguments
         .iter()
-        .map(|argument| argument.to_string_lossy().into_owned())
+        .map(|argument| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt;
+                argument.as_os_str().as_bytes().to_vec()
+            }
+            #[cfg(not(unix))]
+            {
+                argument.to_string_lossy().as_bytes().to_vec()
+            }
+        })
+        .collect();
+    let program_name = path.to_string_lossy().into_owned();
+    let script_arguments_text: Vec<String> = script_argument_bytes
+        .iter()
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
         .collect();
     // 平台常量（`errno` 一族）**已由 `pa_create` 注入**（task-20 ✓，一处真相：CLI／语料 harness／
     // C 宿主同源）⇒ 这里**不再**手动补（第 134 轮那段手注入已删 ✓）。
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
+    // **`sys.argv`／`sys.executable`／`sys.orig_argv` 的字节口径**（P3-38 S3b-4）：
+    // `install` 那条路收 `&[String]`（组合根既有签名）⇒ 非 UTF-8 参数会被 lossy ✗；
+    // 这里按 PEP 383 用 WTF-8 `str` **直接覆盖**（含孤立代理的参数 ⇒ `'\udcff'` 一类）。
+    if let Some(sys_object) = instance
+        .modules()
+        .and_then(|modules| instance.dict_get(modules, "sys"))
+    {
+        if let Some(namespace) = pyawa_core::mounted_instance_dict(instance, sys_object) {
+            let mut argv_items: Vec<core::ptr::NonNull<pyawa_core::Header>> =
+                Vec::with_capacity(script_argument_bytes.len() + 1);
+            argv_items.push(decode_wtf8(instance, &program_bytes));
+            for bytes in &script_argument_bytes {
+                argv_items.push(decode_wtf8(instance, bytes));
+            }
+            let argv = instance.new_list(argv_items);
+            set_attribute(instance, namespace, "argv", argv);
+            // 参照：`sys.orig_argv = [解释器, 脚本, 参数…]`；`sys.executable` = 解释器路径。
+            if let Ok(executable) = std::env::current_exe() {
+                let executable_bytes = path_bytes(&executable);
+                let executable_value = decode_wtf8(instance, &executable_bytes);
+                set_attribute(instance, namespace, "executable", executable_value);
+                let mut orig_items: Vec<core::ptr::NonNull<pyawa_core::Header>> =
+                    Vec::with_capacity(script_argument_bytes.len() + 2);
+                orig_items.push(decode_wtf8(instance, &executable_bytes));
+                orig_items.push(decode_wtf8(instance, &program_bytes));
+                for bytes in &script_argument_bytes {
+                    orig_items.push(decode_wtf8(instance, bytes));
+                }
+                let orig_argv = instance.new_list(orig_items);
+                set_attribute(instance, namespace, "orig_argv", orig_argv);
+            }
+        }
+    }
 
     // **脚本本体的 `__file__`**（第 407 轮，task-14 ✓）：参照口径＝**命令行给的路径原样**
     // （`python3 t.py` ⇒ `"t.py"`、`python3 /abs/t.py` ⇒ `"/abs/t.py"` ✓，**不** canonicalize ✗）。
@@ -186,15 +271,14 @@ fn main() {
         // 但**不解析符号链接** ✗（`ln -s zz.py link.py && python3 link.py` ⇒ `…/link.py` ✓）
         // ⇒ 用"cwd ＋ 词法消去 `.`／`..`"，**不** canonicalize ✓（与 `os.path.abspath` 同口径；
         // `sys.argv[0]` 仍保持命令行原样 ✓）。
-        let file_for_script = absolute_script_path(&path).to_string_lossy().into_owned();
-        let file_path = CString::new(file_for_script).expect("路径里没有 NUL");
-        let file_name = CString::new("__file__").expect("ASCII 名字");
-        // SAFETY: `state` 由 `pa_create` 交回、活到本函数末尾；两个 C 字符串都在本块内存活。
-        unsafe {
-            if pa_pushstring(state, file_path.as_ptr(), -1) == status::PA_OK {
-                pa_setglobal(state, file_name.as_ptr());
-            }
-        }
+        // **P3-38 S3b-4**：路径按**原始字节**（PEP 383）→ WTF-8 `str` 直接写脚本全局。
+        // C 面 `pa_pushstring`／`pa_setglobal` 只收 UTF-8 字符串 ✗ ⇒ 含孤立代理的路径
+        // 无法经 C 面表达（如实偏差）；这里用 ABI 的 Rust 级 `globals()` 访问器装真值 ✓。
+        let file_for_script = absolute_script_path(&path);
+        let file_bytes = path_bytes(&file_for_script);
+        let file_value = decode_wtf8(instance, &file_bytes);
+        instance.dict_set(state_ref.globals(), "__file__", file_value);
+        instance.release(file_value);
     }
 
     // **`.pyac` 容器 ＋ 两步陈旧判定接进运行路径**（第 405 轮；`IM-18`…`IM-21`）：
@@ -303,15 +387,32 @@ fn main() {
     let exit = if executed == status::PA_OK {
         0
     } else {
-        // 宿主侧诊断（**不是** `sys.stderr`；`print`／`sys` 落地后替换为合规通道）
-        let pointer = unsafe { pa_errmsg(state) };
-        let message = if pointer.is_null() {
-            String::new()
-        } else {
-            unsafe { core::ffi::CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
-        };
-        eprintln!("pyawa: 未捕获（状态 {executed}）：{message}");
-        EXIT_SCRIPT
+        // **未捕获的 `SystemExit` 决定进程退出码**（`P3-32`，参照 3.14.4 实测口径）：
+        // `sys.exit(n)`／`raise SystemExit(n)` ⇒ 退出码 n；无实参／`None` ⇒ 0；
+        // 非 `int` 载荷 ⇒ `str(载荷)` 打到 stderr、码 1。**它不是错误** ⇒ 不打"未捕获"诊断。
+        // **先读异常再 `pa_destroy`**：`pending_exception` 是实例状态，销毁后不可再用。
+        let pending = state_ref.instance().pending_exception();
+        match pending.and_then(|exception| {
+            pyawa_core::executor::uncaught_system_exit(state_ref.instance(), exception)
+        }) {
+            Some(pyawa_core::executor::ExitDisposition::Code(code)) => code as i32,
+            Some(pyawa_core::executor::ExitDisposition::Message(message)) => {
+                eprintln!("{message}");
+                EXIT_SCRIPT
+            }
+            // 不是 `SystemExit` ⇒ 维持原有的宿主侧诊断
+            None => {
+                // 宿主侧诊断（**不是** `sys.stderr`；`print`／`sys` 落地后替换为合规通道）
+                let pointer = unsafe { pa_errmsg(state) };
+                let message = if pointer.is_null() {
+                    String::new()
+                } else {
+                    unsafe { core::ffi::CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
+                };
+                eprintln!("pyawa: 未捕获（状态 {executed}）：{message}");
+                EXIT_SCRIPT
+            }
+        }
     };
     // 实参已经装进 `sys.argv` ✓（第 97 轮起不再是「收了没用」✓；`argv[0]` 是脚本路径 ✓）
     unsafe { pa_destroy(state) };
@@ -326,7 +427,7 @@ fn read_through_fs(
     let (Some(open), Some(read), Some(close)) = (vtable.open, vtable.read, vtable.close) else {
         return Err("`fs` 域的读槽位未提供".to_owned());
     };
-    let name = path.to_string_lossy().into_owned().into_bytes();
+    let name = path_bytes(path);
     let mut handle = pyawa_capabilities::fs::Handle(0);
     let mut errno = 0i32;
     let status = open(

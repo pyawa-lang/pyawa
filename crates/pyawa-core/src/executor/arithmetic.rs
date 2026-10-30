@@ -59,6 +59,20 @@ pub fn arithmetic_public(
             return Ok(set_operation(instance, left, right, symbol));
         }
     }
+    // **`dict | dict`**（`PEP 584` ✓，task-13）：两边都是 **dict 族**（子类也算 ✓）⇒ **新建** dict，
+    // 先左后右、右侧**覆盖**同名键 ✓（参照 3.14.4 实测；语义见
+    // [`crate::builtin::dict::dict_merge`] ✓）。动因：`Lib/sysconfig/__init__.py:427` 的
+    // `_get_sysconfigdata() | vars` ✓ ⇒ `sysconfig.get_config_var()` 崩 ⇒ 官方 `test.support`
+    // 导入链（`P3-32` 框架门槛）的最后一格之一 ✓。
+    // 非 dict 的对侧**不在这里接** ✓（照旧落到文件末尾"一处真相"的 `unsupported_operand` ✓）；
+    // `dict |= dict` 走 `protocol::inplace_dict_merge` ✓（那条行为不动 ✓）。
+    let dict_type = instance.type_named("dict");
+    let is_dict = |value: NonNull<Header>| {
+        dict_type.is_some_and(|base| instance.is_subtype(instance.type_of(value), base))
+    };
+    if symbol == "|" && is_dict(left) && is_dict(right) {
+        return Ok(crate::builtin::dict::dict_merge(instance, left, right));
+    }
     // **序列重复 `*`**（第 305 轮）：`"-" * 40`、`[0] * 3`、`b"ab" * 2` —— `Lib/` 里遍地都是。
     // 实测第一处撞上的是 `Lib/traceback.py` 的 `f"{'a' * 3}"`：先前直接落到整数那条路 ⇒
     // `TypeError: unsupported operand type(s) for *: 'str' and 'int'`。
@@ -75,6 +89,13 @@ pub fn arithmetic_public(
     // `@=` 一族由 `inplace_arithmetic` 走到这里，消息里的符号随之是 `@`
     if symbol == "@" {
         return Err(unsupported_operand(instance, left, right, "@"));
+    }
+    // **复数运算** ✓（task-30／P3-34）：任一侧是 `complex` ⇒ 整条走**复数塔** ✓
+    //（`+ - * / **`；`int`／`float`／`bool` 混入按参照升到复数 ✓）。`//`／`%` 落进
+    // `complex_arithmetic` 的兜底 ⇒ `unsupported_operand` 的既有文案 ✓（实测
+    // `unsupported operand type(s) for //: 'complex' and 'int'` ✓）。
+    if instance.complex_value(left).is_some() || instance.complex_value(right).is_some() {
+        return complex_arithmetic(instance, left, right, symbol, opcode);
     }
     if symbol == "/" {
         let left_number = numeric_payload(instance, left).ok_or_else(|| {
@@ -363,4 +384,259 @@ fn call_user_dunder(
         return Ok(None);
     }
     Ok(Some(result))
+}
+
+// ===================== **复数塔**（task-30／P3-34） =====================
+
+/// **数值实参升到复数**（`(real, imag)`）：`complex` 原值；`float`／`int`／`bool` ⇒ 虚部 0 ✓。
+///
+/// 大整数折 `f64` 溢出 ⇒ 参照报 `OverflowError: int too large to convert to float` ✓
+/// （与 `/` 那条同一口径 ✓）。
+fn complex_operand(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Option<(f64, f64)>, ExecError> {
+    if let Some(parts) = instance.complex_value(value) {
+        return Ok(Some(parts));
+    }
+    if let Some(number) = instance.float_value(value) {
+        return Ok(Some((number, 0.0)));
+    }
+    if let Some(integer) = instance.int_of(value) {
+        let number = integer.to_bigint().to_f64();
+        if number.is_infinite() {
+            return Err(instance.raise_builtin_error(
+                "OverflowError",
+                "int too large to convert to float",
+            ));
+        }
+        return Ok(Some((number, 0.0)));
+    }
+    Ok(None)
+}
+
+/// 复数乘法（**复用给幂的重复平方** ✓）。
+fn complex_multiply(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    (
+        a.0 * b.0 - a.1 * b.1,
+        a.0 * b.1 + a.1 * b.0,
+    )
+}
+
+/// 复数除法：CPython `_Py_c_quot` 的 **Smith 算法** ✓（除零由调用方先拦 ✓）。
+fn complex_quotient(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let (abs_real, abs_imag) = (b.0.abs(), b.1.abs());
+    if abs_real >= abs_imag {
+        let ratio = b.1 / b.0;
+        let denominator = b.0 + b.1 * ratio;
+        (
+            (a.0 + a.1 * ratio) / denominator,
+            (a.1 - a.0 * ratio) / denominator,
+        )
+    } else {
+        let ratio = b.0 / b.1;
+        let denominator = b.0 * ratio + b.1;
+        (
+            (a.0 * ratio + a.1) / denominator,
+            (a.1 * ratio - a.0) / denominator,
+        )
+    }
+}
+
+/// 复数幂：CPython `_Py_c_pow` 的两条路 ✓ —— 指数是**小整数**（`|n| <= 100` 的整数值）时
+/// 走**重复平方**（结果与参照逐位一致 ✓，`(2+3j)**100` 那种靠它 ✓）；否则走极坐标 ✓。
+fn complex_power(
+    instance: &Instance,
+    base: (f64, f64),
+    exponent: (f64, f64),
+) -> Result<NonNull<Header>, ExecError> {
+    let (real, imag) = base;
+    let (exponent_real, exponent_imag) = exponent;
+    // 零底的特殊口径（参照实测）：`0j**0` ⇒ `(1+0j)`；`0j**2` ⇒ `0j`；
+    // `0j**-1`／`0j**-1j` ⇒ `ZeroDivisionError: zero to a negative or complex power` ✓。
+    if real == 0.0 && imag == 0.0 {
+        if exponent_real < 0.0 || exponent_imag != 0.0 {
+            return Err(instance.raise_builtin_error(
+                "ZeroDivisionError",
+                "zero to a negative or complex power",
+            ));
+        }
+        if exponent_real == 0.0 {
+            return Ok(instance.new_complex(1.0, 0.0));
+        }
+        return Ok(instance.new_complex(0.0, 0.0));
+    }
+    // **小整数指数**：重复平方（C 实现在 `_Py_c_pow` 里同一分支 ✓）。
+    if exponent_imag == 0.0
+        && exponent_real == (exponent_real as i32) as f64
+        && exponent_real >= -100.0
+        && exponent_real <= 100.0
+    {
+        let mut remaining = (exponent_real as i32).unsigned_abs();
+        let mut factor = base;
+        let mut result = (1.0, 0.0);
+        while remaining > 0 {
+            if remaining & 1 == 1 {
+                result = complex_multiply(result, factor);
+            }
+            remaining >>= 1;
+            if remaining > 0 {
+                factor = complex_multiply(factor, factor);
+            }
+        }
+        if exponent_real < 0.0 {
+            result = complex_quotient((1.0, 0.0), result);
+        }
+        return Ok(instance.new_complex(result.0, result.1));
+    }
+    // **极坐标**（参照 `_Py_c_pow` 的通用分支 ✓）。
+    let magnitude = real.hypot(imag);
+    let mut length = magnitude.powf(exponent_real);
+    let angle = imag.atan2(real);
+    let mut phase = angle * exponent_real;
+    if exponent_imag != 0.0 {
+        length /= (angle * exponent_imag).exp();
+        phase += exponent_imag * magnitude.ln();
+    }
+    Ok(instance.new_complex(length * phase.cos(), length * phase.sin()))
+}
+
+/// **复数算术**（`+ - * / **` ✓；其余符号 ⇒ 参照那条 `unsupported operand type(s)` ✓）。
+fn complex_arithmetic(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    _opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(a) = complex_operand(instance, left)? else {
+        return Err(unsupported_operand(instance, left, right, symbol));
+    };
+    let Some(b) = complex_operand(instance, right)? else {
+        return Err(unsupported_operand(instance, left, right, symbol));
+    };
+    match symbol {
+        "+" => Ok(instance.new_complex(a.0 + b.0, a.1 + b.1)),
+        "-" => Ok(instance.new_complex(a.0 - b.0, a.1 - b.1)),
+        "*" => {
+            let (real, imag) = complex_multiply(a, b);
+            Ok(instance.new_complex(real, imag))
+        }
+        "/" => {
+            if b.0 == 0.0 && b.1 == 0.0 {
+                return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
+            }
+            let (real, imag) = complex_quotient(a, b);
+            Ok(instance.new_complex(real, imag))
+        }
+        "**" => complex_power(instance, a, b),
+        _ => Err(unsupported_operand(instance, left, right, symbol)),
+    }
+}
+
+// ===================== **数值哈希**（task-30；stdlib 的 `hash()` 内置入口用 ✓） =====================
+
+/// `sys.hash_info.modulus`：`2**61 - 1` ✓（CPython 3.14 口径，`sys` 模块同值 ✓）。
+const HASH_MODULUS: u64 = (1u64 << 61) - 1;
+/// `sys.hash_info.width`：61 位 ✓。
+const HASH_BITS: i32 = 61;
+/// `sys.hash_info.inf` ✓。
+const HASH_INFINITY: i64 = 314159;
+/// `sys.hash_info.nan` ✓。
+const HASH_NAN: i64 = 0;
+/// `sys.hash_info.imag`：复数哈希的虚部乘数 ✓。
+const HASH_IMAG: i64 = 1_000_003;
+
+/// `f64` 的 `frexp`（`v = m * 2^e`，`0.5 <= |m| < 1`）——`_Py_HashDouble` 的起点 ✓。
+fn frexp(value: f64) -> (f64, i32) {
+    if value == 0.0 || !value.is_finite() {
+        return (value, 0);
+    }
+    let bits = value.to_bits();
+    let exponent = ((bits >> 52) & 0x7FF) as i32;
+    if exponent == 0 {
+        // 次正规数：先乘 2^54 归一，再把指数补回去 ✓。
+        let (mantissa, extra) = frexp(value * 18_014_398_509_481_984.0);
+        return (mantissa, extra - 54);
+    }
+    let mantissa_bits = (bits & 0x800F_FFFF_FFFF_FFFF) | 0x3FE0_0000_0000_0000;
+    (f64::from_bits(mantissa_bits), exponent - 1022)
+}
+
+/// **`_Py_HashDouble`**（CPython 3.14 口径）：`hash(<float>)` 的算法 ✓。
+///
+/// 实测锚点（3.14.4，`sys.hash_info` 同上）：`hash(1.0) == 1`、`hash(0.5) == 1152921504606846976`、
+/// `hash(-1.0) == -2`、`hash(1.5) == 1152921504606846977`、`hash(inf) == 314159`、
+/// `hash(-inf) == -314159`、`hash(nan) == 0` ✓。
+pub fn hash_double_value(value: f64) -> i64 {
+    if !value.is_finite() {
+        if value.is_infinite() {
+            return if value > 0.0 { HASH_INFINITY } else { -HASH_INFINITY };
+        }
+        return HASH_NAN;
+    }
+    let (mut mantissa, mut exponent) = frexp(value);
+    let sign = if mantissa < 0.0 {
+        mantissa = -mantissa;
+        -1i64
+    } else {
+        1i64
+    };
+    let mut hash: u64 = 0;
+    while mantissa != 0.0 {
+        hash = (hash.wrapping_shl(28) & HASH_MODULUS) | (hash >> (HASH_BITS as u32 - 28));
+        mantissa *= 268_435_456.0; // 2^28
+        exponent -= 28;
+        let digit = mantissa as u64;
+        mantissa -= digit as f64;
+        hash = hash.wrapping_add(digit);
+        if hash >= HASH_MODULUS {
+            hash -= HASH_MODULUS;
+        }
+    }
+    exponent = if exponent >= 0 {
+        exponent % HASH_BITS
+    } else {
+        HASH_BITS - 1 - ((-1 - exponent) % HASH_BITS)
+    };
+    hash = (hash.wrapping_shl(exponent as u32) & HASH_MODULUS)
+        | (hash >> (HASH_BITS as u32 - exponent as u32));
+    let mut result = (hash as i64) * sign;
+    if result == -1 {
+        result = -2;
+    }
+    result
+}
+
+/// **小整数 `hash()`**：CPython 里 `hash(n) == n`（`-1` 例外 ⇒ `-2` ✓）。
+pub fn hash_integer_value(value: i64) -> i64 {
+    if value == -1 { -2 } else { value }
+}
+
+/// **大整数 `hash()`**（CPython `long_hash` ✓）：`|n| mod (2**61-1)`，负数取反，`-1` ⇒ `-2` ✓。
+pub fn hash_bigint_value(value: &crate::bigint::BigInt) -> i64 {
+    let modulus = crate::bigint::BigInt::from_i64((1i64 << 61) - 1);
+    let Some((_, remainder)) = value.divmod_floor(&modulus) else {
+        return HASH_NAN;
+    };
+    let mut folded = remainder.to_i64().unwrap_or(0);
+    if folded == (1i64 << 61) - 1 {
+        folded = 0;
+    }
+    if value.signum() < 0 && folded != 0 {
+        folded = -folded;
+    }
+    if folded == -1 {
+        folded = -2;
+    }
+    folded
+}
+
+/// **复数的 `hash()`**：`hash(real) + 1000003 * hash(imag)` ✓（CPython `complex_hash` ✓；
+/// 实测 `hash(1+0j) == hash(1) == 1`、`hash(complex(0,0)) == 0` ✓）。
+pub fn hash_complex_parts(real: f64, imag: f64) -> i64 {
+    let real_hash = hash_double_value(real);
+    let imag_hash = hash_double_value(imag);
+    let combined = real_hash.wrapping_add(HASH_IMAG.wrapping_mul(imag_hash));
+    if combined == -1 { -2 } else { combined }
 }

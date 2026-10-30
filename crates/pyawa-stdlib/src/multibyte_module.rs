@@ -476,15 +476,20 @@ fn known_error_handler(instance: &Instance, handler: &str) -> bool {
     instance.dict_get(handlers, handler).is_some()
 }
 
-/// 解码整段输入（`final=true` 的静态路径；`errors` 的三条都接 ✓）。
+/// 解码整段输入（P3-38 S3a：返回 **WTF-8 字节**；`errors` 含 `surrogateescape`／`surrogatepass` ✓）。
+///
+/// 口径（照参照 3.14.4 实测）：
+/// - `surrogateescape`：非法／未完成的**每个字节**映射成 `U+DC00+byte`（`b'\\x81'` 截断 ⇒ `'\\udc81'`）✓；
+/// - `surrogatepass`：多字节编解码器**不支持**该处理器 ⇒ 与 strict 同报 `UnicodeDecodeError` ✓；
+/// - `ignore`／`replace` 不变（替换成一个 `U+FFFD`）✓。
 fn decode_text(
     instance: &Instance,
     table: &CodecTable,
     input: &[u8],
     errors: &str,
     is_final: bool,
-) -> Result<(String, usize, Option<usize>), ExecError> {
-    let mut out = String::new();
+) -> Result<(Vec<u8>, usize, Option<usize>), ExecError> {
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
     let mut position = 0usize;
     while position < input.len() {
         match decode_step(table, input, position) {
@@ -493,12 +498,13 @@ fn decode_text(
                     if codepoint == NO_SECOND {
                         continue;
                     }
-                    out.push(char::from_u32(codepoint).unwrap_or('\u{fffd}'));
+                    pyawa_core::wtf8::encode_code_point(codepoint, &mut out)
+                        .expect("表里的码点可编码");
                 }
                 position += used;
             }
             DecodeStep::Illegal => match errors {
-                "strict" => {
+                "strict" | "surrogatepass" => {
                     return Err(decode_error(
                         instance,
                         table.name,
@@ -510,7 +516,16 @@ fn decode_text(
                 }
                 "ignore" => position += 1,
                 "replace" => {
-                    out.push('\u{fffd}');
+                    pyawa_core::wtf8::encode_code_point(0xFFFD, &mut out)
+                        .expect("U+FFFD 可编码");
+                    position += 1;
+                }
+                "surrogateescape" => {
+                    pyawa_core::wtf8::encode_code_point(
+                        0xDC00 + u32::from(input[position]),
+                        &mut out,
+                    )
+                    .expect("U+DC80..U+DCFF 在 WTF-8 范围内");
                     position += 1;
                 }
                 other => return Err(error_handler_failure(instance, table.name, other)),
@@ -521,7 +536,7 @@ fn decode_text(
                     return Ok((out, position, Some(position)));
                 }
                 match errors {
-                    "strict" => {
+                    "strict" | "surrogatepass" => {
                         return Err(decode_error(
                             instance,
                             table.name,
@@ -533,7 +548,18 @@ fn decode_text(
                     }
                     "ignore" => position = end,
                     "replace" => {
-                        out.push('\u{fffd}');
+                        pyawa_core::wtf8::encode_code_point(0xFFFD, &mut out)
+                            .expect("U+FFFD 可编码");
+                        position = end;
+                    }
+                    "surrogateescape" => {
+                        for index in position..end {
+                            pyawa_core::wtf8::encode_code_point(
+                                0xDC00 + u32::from(input[index]),
+                                &mut out,
+                            )
+                            .expect("U+DC80..U+DCFF 在 WTF-8 范围内");
+                        }
                         position = end;
                     }
                     other => return Err(error_handler_failure(instance, table.name, other)),
@@ -544,20 +570,23 @@ fn decode_text(
     Ok((out, position, None))
 }
 
-/// 编码整段文本（返回**编码字节**与**消耗码位数** ✓）。
+/// 编码整段文本（P3-38 S3a：输入是 **WTF-8 字节**；`surrogateescape` 把 `U+DC80..=U+DCFF`
+/// 还原成单字节；`surrogatepass` 对多字节编解码器**不支持** ⇒ 与 strict 同报 ✓）。
 fn encode_text(
     instance: &Instance,
     table: &CodecTable,
-    text: &str,
+    text: &[u8],
     errors: &str,
 ) -> Result<(Vec<u8>, usize), ExecError> {
-    let characters: Vec<char> = text.chars().collect();
+    let points: Vec<u32> = pyawa_core::wtf8::code_points(text)
+        .map(|point| point.expect("str 载荷必须是合法 WTF-8"))
+        .collect();
     let mut out: Vec<u8> = Vec::with_capacity(text.len());
     let mut position = 0usize;
-    while position < characters.len() {
+    while position < points.len() {
         // **两码位组合字符先试**（JIS X 0213；照参照：`'か' + '\u309a'` 合成一条序列 ✓）
-        if let Some(second) = characters.get(position + 1) {
-            let key = (u64::from(characters[position] as u32) << 32) | u64::from(*second as u32);
+        if let Some(second) = points.get(position + 1) {
+            let key = (u64::from(points[position]) << 32) | u64::from(*second);
             if let Ok(index) = table
                 .encode_pairs
                 .binary_search_by_key(&key, |entry| entry.0)
@@ -567,22 +596,32 @@ fn encode_text(
                 continue;
             }
         }
-        let character = characters[position];
+        let code = points[position];
         match table
             .encode
-            .binary_search_by_key(&(character as u32), |entry| entry.0)
+            .binary_search_by_key(&code, |entry| entry.0)
         {
             Ok(index) => out.extend_from_slice(&unpack_encoded(table.encode[index].1)),
-            Err(_) => match errors {
-                "strict" => return Err(encode_error(instance, table.name, character as u32, position)),
-                "ignore" => {}
-                "replace" => out.push(b'?'),
-                other => return Err(error_handler_failure(instance, table.name, other)),
-            },
+            Err(_) => {
+                if errors == "surrogateescape" && (0xDC80..=0xDCFF).contains(&code) {
+                    out.push((code - 0xDC00) as u8);
+                } else {
+                    match errors {
+                        // 多字节编解码器对 `surrogatepass` **不支持** ⇒ 与 strict 同报 ✓；
+                        // `surrogateescape` 只救 `U+DC80..=U+DCFF`，其余照 strict ✓。
+                        "strict" | "surrogatepass" | "surrogateescape" => {
+                            return Err(encode_error(instance, table.name, code, position))
+                        }
+                        "ignore" => {}
+                        "replace" => out.push(b'?'),
+                        other => return Err(error_handler_failure(instance, table.name, other)),
+                    }
+                }
+            }
         }
         position += 1;
     }
-    Ok((out, characters.len()))
+    Ok((out, points.len()))
 }
 
 // ---- 小工具（与其它模块同一做法） -------------------------------------------------------------
@@ -677,11 +716,14 @@ fn codec_errors_argument(
 }
 
 /// 编码实参：参照对**任意对象**先 `str(obj)` 再编码（不解对象类型 ⇒ `b'x'` 编成 `"b'x'"` ✓）。
-fn encode_input_text(instance: &Instance, value: NonNull<Header>) -> Result<String, ExecError> {
-    if let Some(text) = instance.text_value(value) {
-        return Ok(text);
+///
+/// **P3-38 S3a**：`str` 输入走 **WTF-8 字节**（可能含孤立代理；`text_value` 会取不到 ✗）；
+/// 非 str 对象仍走 `str(obj)`（结果是合法 UTF-8）✓。
+fn encode_input_bytes(instance: &Instance, value: NonNull<Header>) -> Result<Vec<u8>, ExecError> {
+    if let Some(bytes) = instance.wtf8_of(value) {
+        return Ok(bytes.to_vec());
     }
-    instance.object_str(value)
+    instance.object_str(value).map(|text| text.into_bytes())
 }
 
 /// 解码实参：必须是 bytes-like（照参照 `TypeError: a bytes-like object is required, not '...'`）。
@@ -719,7 +761,7 @@ fn multibyte_encode_native(
         ));
     };
     let errors = codec_errors_argument(instance, rest, kwargs, "encode")?;
-    let text = encode_input_text(instance, *input)?;
+    let text = encode_input_bytes(instance, *input)?;
     let (bytes, consumed) = encode_text(instance, table, &text, &errors)?;
     let value = instance.new_bytes(&bytes);
     Ok(instance.new_tuple(vec![value, instance.new_int(consumed as i64)]))
@@ -747,7 +789,9 @@ fn multibyte_decode_native(
     let errors = codec_errors_argument(instance, rest, kwargs, "decode")?;
     let bytes = decode_input_bytes(instance, *input)?;
     let (text, consumed, _) = decode_text(instance, table, &bytes, &errors, true)?;
-    let value = instance.new_str(&text);
+    let value = instance
+        .new_str_wtf8(&text)
+        .expect("解码产物必须是合法 WTF-8");
     Ok(instance.new_tuple(vec![value, instance.new_int(consumed as i64)]))
 }
 
@@ -940,16 +984,36 @@ fn incremental_encoder_encode(
         .get(1)
         .map(|value| *value != instance.singletons().none() && *value != instance.singletons().boolean(false))
         .unwrap_or(false);
-    let text = encode_input_text(instance, input)?;
-    let mut combined = if buffer.is_empty() { text } else { buffer + &text };
+    let text = encode_input_bytes(instance, input)?;
+    let mut combined = if buffer.is_empty() {
+        text
+    } else {
+        let mut bytes = buffer.into_bytes();
+        bytes.extend_from_slice(&text);
+        bytes
+    };
     // **末尾的组合字符首码位先留着** ✓（照参照：`ie.encode('か', False)` 交 `b''`、
-    // 下一段接上 `'\u309a'` 才输出组合编码 —— 见模块头的增量口径）
+    // 下一段接上 `'\u309a'` 才输出组合编码 —— 见模块头的增量口径）。
+    // **P3-38 S3a**：在 **WTF-8 字节层**找"最后一个码点"（代理也算一个码点 ✓）。
     let mut held = String::new();
     if !final_round {
-        if let Some(last) = combined.chars().last() {
-            if table.pair_starts.contains(&(last as u32)) {
-                held.push(last);
-                combined.truncate(combined.len() - last.len_utf8());
+        let mut last: Option<(u32, usize)> = None;
+        let mut offset = 0usize;
+        while offset < combined.len() {
+            match pyawa_core::wtf8::next_code_point(&combined, offset) {
+                Ok((code, next)) => {
+                    last = Some((code, offset));
+                    offset = next;
+                }
+                Err(_) => break,
+            }
+        }
+        if let Some((code, start)) = last {
+            if table.pair_starts.contains(&code) {
+                if let Some(character) = char::from_u32(code) {
+                    held.push(character);
+                    combined.truncate(start);
+                }
             }
         }
     }
@@ -1065,7 +1129,9 @@ fn incremental_decoder_decode(
         Some(start) => set_instance_bytes(instance, this, BUFFER_ATTRIBUTE, &combined[start..])?,
         None => set_instance_bytes(instance, this, BUFFER_ATTRIBUTE, b"")?,
     }
-    Ok(instance.new_str(&text))
+    Ok(instance
+        .new_str_wtf8(&text)
+        .expect("解码产物必须是合法 WTF-8"))
 }
 
 /// `IncrementalDecoder.reset()`。

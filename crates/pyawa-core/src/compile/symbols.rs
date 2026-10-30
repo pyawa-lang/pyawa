@@ -436,7 +436,19 @@ pub(super) fn analyze_cells(
                         demanded.push(wanted.clone());
                     }
                 }
-                for referenced in &probe.names {
+                // **类体里 `def` 单元引用的名字**也算（task-12 ✓）：类作用域不是函数闭包边界 ⇒
+                // 方法体里引用的外层局部要**穿过类体**索取（`def make(): base = 10; class K:
+                // def plain(self): return base`）。先前只遍历 `probe.names`（类体**自己**的
+                // `co_names`）✗ ⇒ `base` 不进取舍 ⇒ 外层函数不把它变 cell ⇒ 类体重编时
+                // `deref_slot` 找不到 ✗（运行期 `NameError: base`）。方法单元的名字在**嵌套 code
+                // 常量**里 ⇒ 用 `nested_unit_names` 递归收 ✓。
+                let mut class_names = probe.names.clone();
+                for name in nested_unit_names(&probe) {
+                    if !class_names.iter().any(|item| item == &name) {
+                        class_names.push(name);
+                    }
+                }
+                for referenced in &class_names {
                     if emitter.unit.varnames.iter().any(|local| local == referenced) {
                         if !cells.iter().any(|cell| cell == referenced) {
                             cells.push(referenced.clone());
@@ -1033,6 +1045,18 @@ fn declare_comprehension_target(emitter: &mut Emitter, target: &ComprehensionTar
             for item in items {
                 declare_comprehension_target(emitter, item);
             }
+        }
+        // **星号项**（task-59 ✓）：内层目标照常声明 ✓。
+        ComprehensionTarget::Starred(inner, _) => {
+            declare_comprehension_target(emitter, inner);
+        }
+        // **属性／下标目标**（task-45 ✓）：不声明局部；容器／键是**读** ⇒ 预登记名字 ✓。
+        ComprehensionTarget::Attribute(object, _, _) => {
+            pre_intern_expression(emitter, object);
+        }
+        ComprehensionTarget::Subscript(object, key, _) => {
+            pre_intern_expression(emitter, object);
+            pre_intern_expression(emitter, key);
         }
     }
 }
@@ -1687,7 +1711,9 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
         Expression::Int(_, _)
         | Expression::BigInt(_, _)
         | Expression::Float(_, _)
+        | Expression::Imaginary(_, _)
         | Expression::Str(_, _)
+        | Expression::StrWtf8(_, _)
         | Expression::Bytes(_, _)
         | Expression::Constant(_, _) => {}
         Expression::Starred(value, _) => pre_intern_expression(emitter, value),
@@ -2051,6 +2077,10 @@ fn collect_for_target(emitter: &mut Emitter, target: &ForTarget, pre_intern: boo
                 collect_for_target(emitter, item, pre_intern);
             }
         }
+        // 星号项只是标记 ⇒ 递归收它包着的目标 ✓（`for a, *b in …` 的 `b` 也是本作用域局部 ✓）。
+        ForTarget::Starred(inner, _) => collect_for_target(emitter, inner, pre_intern),
+        // 属性／下标目标**不声明**局部（`with … as self.foo` ✓）。
+        ForTarget::Attribute(..) | ForTarget::Subscript(..) => {}
     }
 }
 
@@ -2080,6 +2110,24 @@ fn pre_intern_pattern(emitter: &mut Emitter, pattern: &Pattern) {
                 pre_intern_pattern(emitter, sub);
             }
         }
+        // **序列／映射模式**（task-37）：子模式里的捕获名／值表达式都要预登记 ✓。
+        Pattern::Sequence { items, .. } => {
+            for item in items {
+                pre_intern_pattern(emitter, item);
+            }
+        }
+        Pattern::Mapping { items, .. } => {
+            for (key, value) in items {
+                pre_intern_pattern(emitter, key);
+                pre_intern_pattern(emitter, value);
+            }
+        }
+        Pattern::Star(inner, _) => pre_intern_pattern(emitter, inner),
+        // **`as` 模式**（task-45 ✓）：子模式照做，绑定名要登记成局部 ✓。
+        Pattern::As(inner, name, _) => {
+            pre_intern_pattern(emitter, inner);
+            pre_intern_target(emitter, name);
+        }
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }
@@ -2097,6 +2145,10 @@ fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
             }
         }
         Pattern::Value(_, _) => {}
+        Pattern::As(inner, name, _) => {
+            collect_pattern_locals(emitter, inner);
+            declare_local(emitter, name);
+        }
         Pattern::Class {
             positional, keywords, ..
         } => {
@@ -2107,6 +2159,17 @@ fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
                 collect_pattern_locals(emitter, sub);
             }
         }
+        Pattern::Sequence { items, .. } => {
+            for item in items {
+                collect_pattern_locals(emitter, item);
+            }
+        }
+        Pattern::Mapping { items, .. } => {
+            for (_, value) in items {
+                collect_pattern_locals(emitter, value);
+            }
+        }
+        Pattern::Star(inner, _) => collect_pattern_locals(emitter, inner),
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }

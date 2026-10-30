@@ -57,6 +57,12 @@ pub mod select_module;
 pub mod array_module;
 pub mod io_module;
 pub mod warnings_module;
+/// **`gc`**（`P3-37` 第一片，task-27）：**最小诚实面**——`collect`／`enable`／`disable`／阈值
+/// 是真实现（阈值即 core 的自动回收开关），`get_objects`／`get_referrers` 等如实
+/// `NotImplementedError`（见模块头与挂账）。
+pub mod gc_module;
+/// **`faulthandler`**（P3-38 S3e-2）：最小诚实面（状态/`dump_traceback` 真实现，信号/定时器/崩溃钩子如实未接）。
+pub mod faulthandler_module;
 
 /// **`sys.platform` 的值** ✓（第 194 轮）：本 crate 不碰平台（`CX-4` ✓）⇒ 先给常量 ✓，
 /// 真值应由平台集中点（`pyawa-runtime` ✓）注入 ✓ —— 已登记 ✓。
@@ -69,6 +75,9 @@ pub const PLATFORM: &str = "linux";
 /// ⇒ 上限诊断反而 **-1** ✗（这正是"表错一行，import 链就断"的又一例 ✓）。
 pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (imp_module::NAME, imp_module::build),
+        // **`faulthandler`**（P3-38 S3e-2）：官方 `test_faulthandler`／`test_regrtest`／
+        // `test_xxtestfuzz` 导入期就要它 ✓。
+        (faulthandler_module::NAME, faulthandler_module::build),
         (atexit_module::NAME, atexit_module::build),
         (_typing_module::NAME, _typing_module::build),
         (ast_module::NAME, ast_module::build),
@@ -130,6 +139,16 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         ("_string", build_string_stub),
         (struct_module::NAME, struct_module::build),
         ("_opcode", build_opcode_module),
+        // **`gc`**（`P3-37` 第一片，task-27 ✓）：官方套件 `gc` ×10 的导入闸，也是
+        // `test.support` 的 `gc_collect()`／`disable_gc()`／`gc_threshold()` 的底座 ✓。
+        // **最小诚实面**：能真做的真做、做不了的如实 `NotImplementedError`（见 `gc_module` 头）。
+        (gc_module::NAME, gc_module::build),
+        // **`unicodedata`**（round 19）：`_pyrepl` 一族（pdb/doctest）导入期要 `category`／`combining`／`east_asian_width`。
+        (unicodedata_module::NAME, unicodedata_module::build),
+        // **`_hashlib`**（round 20）：md5／sha1／sha256 纯 Rust 实现 + HASH 对象面。
+        (_hashlib_module::NAME, _hashlib_module::build),
+        // **`_blake2`**（round 20）：上游 `hashlib.py` 对 blake2 只走 builtin 路径 ⇒ 名字占位、真调用如实未实现。
+        (_hashlib_module::BLAKE2_NAME, _hashlib_module::build_blake2),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
@@ -416,6 +435,10 @@ pub mod collections_module;
 /// **`_tokenize`** ✓（task-19 ✓）：`Lib/tokenize.py` 的词法底层 ✓。
 pub mod tokenize_module;
 pub mod unicode_tables;
+/// **`_hashlib`**（round 20）：纯 Rust md5／sha1／sha256 的最小诚实面（`Lib/hashlib.py` 的底座）。
+pub mod _hashlib_module;
+/// **`unicodedata`**（round 19）：最小诚实面；数据复用 `unicode_tables`（pdb/doctest 的闸）。
+pub mod unicodedata_module;
 
 /// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。
 ///
@@ -510,6 +533,18 @@ fn finder_find_spec(
     set_field(instance, spec, "name", instance.new_str(&name));
     set_field(instance, spec, "origin", instance.new_str(&name));
     set_field(instance, spec, "has_location", instance.retain(instance.singletons().boolean(false)));
+    // **Python 层 `importlib._bootstrap` 要的 spec 形状** ✓（task-11）：`_init_module_attrs`
+    // **无条件读** `spec.submodule_search_locations`（`Lib/importlib/_bootstrap.py:750`／`786`）
+    // 与 `spec.parent`（`:776`）⇒ 缺一个就是 `AttributeError: 'module' object has no attribute …`
+    // ✗ ⇒ 经 `importlib.import_module` 的**任何**导入都崩 ✗（纯 `import` 语句走核心 Rust 路径、
+    // 不读这个 spec ⇒ 先前没露 ✓，但 `sysconfig`／`test.support` 走 Python 层 importlib ✓）。
+    // 本桥**只定位顶层文件模块**（不是包）⇒ `submodule_search_locations` 如实给 `None`；
+    // 顶层名字没有点分 ⇒ `parent` 是空串。`_uninitialized_submodules` 是
+    // `_find_and_load_unlocked` 给**父包**做的循环导入簿记（`:_bootstrap.py:1340`）——顶层用不到，
+    // 但补空表更稳 ✓（`_load_unlocked` 会往 spec 上写 `_initializing`，属性可写 ✓）。
+    set_field(instance, spec, "submodule_search_locations", instance.retain(instance.singletons().none()));
+    set_field(instance, spec, "parent", instance.new_str(""));
+    set_field(instance, spec, "_uninitialized_submodules", instance.new_list(Vec::new()));
     if let Some(loader) = module_like(instance, "loader") {
         set_field(instance, loader, "create_module", native_fn(instance, "create_module", loader_create));
         set_field(instance, loader, "exec_module", native_fn(instance, "exec_module", loader_exec));
@@ -564,6 +599,23 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         let text = directory.to_string_lossy().into_owned();
         if !text.is_empty() {
             path_entries.push(text);
+        }
+    }
+    // **`PYTHONPATH`**（`P3-33`）：参照的 `sys.path` 次序是 `[脚本所在目录, PYTHONPATH 各项, Lib]`
+    // ——这里插在**脚本目录之后、`Lib/` 之前** ✓。用 `std::env::split_paths` 按平台分隔符拆 ✓；
+    // **整体空串 ⇒ 不加项** ✓；**空组件** ⇒ 参照取 **cwd 的绝对路径** ✓（实测：`PYTHONPATH=:x`
+    // ⇒ `sys.path[1]` 是 cwd）。`std::env` 不违反 `CX-4`（`posix_module` 有先例 ✓）。
+    if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
+        if !pythonpath.is_empty() {
+            for component in std::env::split_paths(&pythonpath) {
+                if component.as_os_str().is_empty() {
+                    if let Ok(cwd) = std::env::current_dir() {
+                        path_entries.push(cwd.to_string_lossy().into_owned());
+                    }
+                } else {
+                    path_entries.push(component.to_string_lossy().into_owned());
+                }
+            }
         }
     }
     // **暂由组合根把 `Lib/` 放进 `sys.path`**（第 138 轮）——按 `IM-24`／`IM-26`（**A2**）这活

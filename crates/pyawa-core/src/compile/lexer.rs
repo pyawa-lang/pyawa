@@ -10,6 +10,9 @@ pub(super) enum Lexeme {
     /// （常量池那一格也是十进制串 ✓ ⇒ 词法期只做一次进制换算 ✓）。
     BigInt(String),
     Str(String),
+    /// **含孤立代理的字符串字面量**（P3-38 S2b ✓）：**已校验的 WTF-8 字节**。
+    /// 合法 UTF-8 的字面量仍走 [`Lexeme::Str`]（旧路径/夹具零变化 ✓）。
+    StrWtf8(Vec<u8>),
     /// **f-string 的原文**（`f'…'`／`rf'…'`；花括号留给 `parse_fstring` 切片）。
     /// `offset` 是**内容**在源码里的起始列（插值里的表达式要按它平移跨度）；
     /// `contents` 是**原文**（转义**不解码**——第 251 轮起由切段时按源下标解码 ⇒ 位点保留源偏移），
@@ -32,6 +35,9 @@ pub(super) enum Lexeme {
     Colon,
     /// **浮点字面量**（第 127 轮）：值是 **IEEE-754 位模式** ✓
     Float(u64),
+    /// **虚部字面量**（task-29 ✓）：`1j`／`1.5j`／`1e3j` —— 值＝**虚部**的 IEEE-754 位模式
+    /// （实部恒为 `0.0`；`Constant::Complex` 在编译期补实部 ✓）。
+    Imaginary(u64),
     /// `:=`（**海象**／赋值表达式；与 `:` 分开 ✓）
     Walrus,
     LeftParen,
@@ -125,52 +131,121 @@ pub(super) struct Lexed {
 /// 回 `(字节, 吃掉几个字符)`。支持集＝参照实测里出现过的那批：`\n \t \r \\ \' \" \a \b \f \v`、
 /// `\xNN`（**两位**十六进制）、`\ooo`（一至三位八进制）。其余如实报**未实现**——`\u`／`\U`／
 /// `\N{}` 在 bytes 里的口径没实测过，不猜。
-/// 解码**一处**字符串转义（`position` 指在反斜杠上）⇒ `(替换文本, 消费的字符数)`。
+/// 解码**一处**字符串转义（`position` 指在反斜杠上）⇒ `(WTF-8 字节, 消费的字符数)`。
 ///
-/// 行继续返回空串（消费掉反斜杠与换行）。`\\N{…}` 具名转义要 Unicode 名字表 ⇒ 如实报未实现；
-/// 认不出的转义按 CPython 原样留下（反斜杠 ＋ 那个字符）。
-pub(super) fn lex_string_escape(characters: &[char], position: usize) -> Result<(String, usize), CompileError> {
+/// **P3-38 S2b**：结果按 **WTF-8** 累积 —— `\uXXXX`／`\UXXXXXXXX` 解出**孤立代理**时用
+/// [`crate::wtf8::encode_code_point`] 写 3 字节形式（不再 `char::from_u32` 拒绝 ✓）；
+/// 合法标量仍写 UTF-8（与旧口径**逐字节相同** ✓）。行继续返回空字节（消费掉反斜杠与换行）。
+/// `\N{…}` 具名转义要 Unicode 名字表 ⇒ 如实报未实现；认不出的转义按 CPython 原样留下。
+pub(super) fn lex_string_escape(
+    characters: &[char],
+    position: usize,
+) -> Result<(Vec<u8>, usize), CompileError> {
     let Some(next) = characters.get(position + 1).copied() else {
         return Err(CompileError::Syntax("反斜杠后面没有字符".to_owned()));
     };
-    Ok(match next {
-        'n' => ("\n".to_owned(), 2),
-        't' => ("\t".to_owned(), 2),
-        'r' => ("\r".to_owned(), 2),
-        '\\' => ("\\".to_owned(), 2),
-        '\'' => ("\'".to_owned(), 2),
-        '"' => ("\"".to_owned(), 2),
-        'a' => ("\u{7}".to_owned(), 2),
-        'b' => ("\u{8}".to_owned(), 2),
-        'f' => ("\u{c}".to_owned(), 2),
-        'v' => ("\u{b}".to_owned(), 2),
-        '\n' => (String::new(), 2),
-        '\r' => (
-            String::new(),
-            if characters.get(position + 2) == Some(&'\n') { 3 } else { 2 },
-        ),
-        'x' => (lex_hex_escape(characters, position + 2, 2)?.to_string(), 4),
-        'u' => (lex_hex_escape(characters, position + 2, 4)?.to_string(), 6),
-        'U' => (lex_hex_escape(characters, position + 2, 8)?.to_string(), 10),
+    let mut out: Vec<u8> = Vec::new();
+    let consumed = match next {
+        'n' => {
+            out.push(b'\n');
+            2
+        }
+        't' => {
+            out.push(b'\t');
+            2
+        }
+        'r' => {
+            out.push(b'\r');
+            2
+        }
+        '\\' => {
+            out.push(b'\\');
+            2
+        }
+        '\'' => {
+            out.push(b'\'');
+            2
+        }
+        '"' => {
+            out.push(b'"');
+            2
+        }
+        'a' => {
+            out.push(0x07);
+            2
+        }
+        'b' => {
+            out.push(0x08);
+            2
+        }
+        'f' => {
+            out.push(0x0C);
+            2
+        }
+        'v' => {
+            out.push(0x0B);
+            2
+        }
+        '\n' => 2,
+        '\r' => {
+            if characters.get(position + 2) == Some(&'\n') {
+                3
+            } else {
+                2
+            }
+        }
+        'x' => {
+            let value = lex_hex_value(characters, position + 2, 2)?;
+            push_escaped_code_point(&mut out, value)?;
+            4
+        }
+        'u' => {
+            let value = lex_hex_value(characters, position + 2, 4)?;
+            push_escaped_code_point(&mut out, value)?;
+            6
+        }
+        'U' => {
+            let value = lex_hex_value(characters, position + 2, 8)?;
+            push_escaped_code_point(&mut out, value)?;
+            10
+        }
         digit @ '0'..='7' => {
             let (value, consumed) = lex_octal_escape(characters, position + 1, digit)?;
-            (value.to_string(), 1 + consumed)
+            // 八进制 <= 0xFF ⇒ 一定是标量 ✓（与旧口径同：那个码点的 UTF-8 字节）
+            push_escaped_code_point(&mut out, u32::from(value))?;
+            1 + consumed
         }
         'N' => {
             return Err(CompileError::Unsupported(
                 "`\\N{…}` 具名转义要整张 Unicode 名字表（与 M3 的 `Lib/`／数据面绑定）".to_owned(),
             ))
         }
-        other => (format!("\\{other}"), 2),
+        other => {
+            out.push(b'\\');
+            let mut buffer = [0u8; 4];
+            out.extend_from_slice(other.encode_utf8(&mut buffer).as_bytes());
+            2
+        }
+    };
+    Ok((out, consumed))
+}
+
+/// 把转义解出的**码点**按 WTF-8 写进字节流（孤立代理 ⇒ 3 字节形式 ✓；超界 ⇒ 语法错 ✓）。
+pub(super) fn push_escaped_code_point(
+    out: &mut Vec<u8>,
+    value: u32,
+) -> Result<(), CompileError> {
+    crate::wtf8::encode_code_point(value, out).map_err(|_| {
+        CompileError::Syntax(format!("invalid unicode escape \\U{value:08x}"))
     })
 }
 
-/// 字符串转义的十六进制段（`\x` 2 位、`\u` 4 位、`\U` 8 位）⇒ 一个码点。
-pub(super) fn lex_hex_escape(
+/// 字符串转义的十六进制段（`\x` 2 位、`\u` 4 位、`\U` 8 位）⇒ 一个**码点值**（不检查范围）。
+pub(super) fn lex_hex_value(
     characters: &[char],
     position: usize,
     digits: usize,
-) -> Result<char, CompileError> {
+) -> Result<u32, CompileError> {
     let mut value: u32 = 0;
     for offset in 0..digits {
         let Some(character) = characters.get(position + offset) else {
@@ -183,8 +258,7 @@ pub(super) fn lex_hex_escape(
         };
         value = value * 16 + digit;
     }
-    char::from_u32(value)
-        .ok_or_else(|| CompileError::Syntax(format!("invalid unicode escape \\U{value:08x}")))
+    Ok(value)
 }
 
 /// 字符串转义的八进制段（最多 3 位、`0o400` 以上越界）。
@@ -264,6 +338,35 @@ pub(super) fn lex_bytes_escape(characters: &[char], position: usize) -> Result<(
             "unterminated string literal (detected at line 1)".to_owned(),
         )),
     }
+}
+
+/// **标识符继续字符**（PEP 3131 的 XID_Continue 近似，task-45 ✓）：字母数字／下划线之外，
+/// 还包括**组合记号**与**变体选择符**那批（官方 `test_unicode_identifiers.py:10` 的
+/// `x` 后跟 U+E0100 正是变体选择符 —— Rust 的 `char::is_alphanumeric` 不含它 ✗ ⇒ 先前
+/// 在词法期报"不认识的字符" ✓）。这里按**常用区间**收：覆盖组合用记号（Mn/Mc/Me 的主要块）
+/// 与变体选择符；XID_Start 仍用 `is_alphabetic`（字母面足够）。
+fn is_identifier_continue(character: char) -> bool {
+    if character == '_' || character.is_alphanumeric() {
+        return true;
+    }
+    matches!(
+        character as u32,
+        0x0300..=0x036F      // Combining Diacritical Marks
+            | 0x0483..=0x0489 // Cyrillic combining
+            | 0x0591..=0x05BD | 0x05BF | 0x05C1..=0x05C2 | 0x05C4..=0x05C5 | 0x05C7
+            | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670
+            | 0x06D6..=0x06DC | 0x06DF..=0x06E4 | 0x06E7..=0x06E8 | 0x06EA..=0x06ED
+            | 0x0900..=0x0903 | 0x093A..=0x093C | 0x093E..=0x094F | 0x0951..=0x0957
+            | 0x0962..=0x0963 | 0x0981..=0x0983 | 0x09BC | 0x09BE..=0x09CD
+            | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
+            | 0x1AB0..=0x1AFF // Combining Diacritical Marks Extended
+            | 0x1DC0..=0x1DFF // Combining Diacritical Marks Supplement
+            | 0x20D0..=0x20F0 // Combining Diacritical Marks for Symbols
+            | 0x302A..=0x302F | 0x3099..=0x309A
+            | 0xFE00..=0xFE0F // Variation Selectors
+            | 0xFE20..=0xFE2F // Combining Half Marks
+            | 0xE0100..=0xE01EF // Variation Selectors Supplement
+    )
 }
 
 pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
@@ -524,6 +627,28 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         }
                     }
                 }
+                // **前导点虚部**（task-42 ✓）：`.01j`（官方 `test_format.py:608` 的
+                // `f"{.01j:z.1f}"` ✗ —— 先前 `.01` 收成 Float、`j` 成名字 ⇒ f-string 解析失败）。
+                if matches!(characters.get(scan), Some('j' | 'J')) {
+                    let after = characters.get(scan + 1).copied();
+                    if after.is_some_and(|item| item.is_ascii_alphanumeric() || item == '_') {
+                        return Err(CompileError::Syntax(
+                            "invalid imaginary literal".to_owned(),
+                        ));
+                    }
+                    let digits: String = characters[index + 1..scan]
+                        .iter()
+                        .filter(|item| **item != '_')
+                        .collect();
+                    let text = format!("0.{digits}");
+                    let value: f64 = text.parse().map_err(|_| {
+                        CompileError::Unsupported(format!("虚部 {text} 解析不了"))
+                    })?;
+                    index = scan + 1;
+                    lexemes.push(Lexeme::Imaginary(value.to_bits()));
+                    spans.push(Span::new(line, line, start, column!(index)));
+                    continue;
+                }
                 let digits: String = characters[index + 1..scan]
                     .iter()
                     .filter(|item| **item != '_')
@@ -590,7 +715,9 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                 let triple = characters.get(index + 1) == Some(&quote)
                     && characters.get(index + 2) == Some(&quote);
                 index += if triple { 3 } else { 1 };
-                let mut text = String::new();
+                // P3-38 S2b：按 **WTF-8 字节**累积（`\ud800` 一类孤立代理也收 ✓）；扫描结束后
+                // 是合法 UTF-8 仍产出旧同形的 `Lexeme::Str(String)`（夹具零变化 ✓），否则 `StrWtf8`。
+                let mut text: Vec<u8> = Vec::new();
                 loop {
                     match characters.get(index) {
                         Some(character)
@@ -602,10 +729,10 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             index += if triple { 3 } else { 1 };
                             break;
                         }
-                        // **字符串转义**（解码逻辑在 `lex_string_escape`，一处真相）
+                        // **字符串转义**（解码逻辑在 `lex_string_escape`，一处真相；返回 WTF-8 字节 ✓）
                         Some('\\') => {
                             let (decoded, consumed) = lex_string_escape(&characters, index)?;
-                            text.push_str(&decoded);
+                            text.extend_from_slice(&decoded);
                             // 消费掉的换行（行继续／`\r\n`）⇒ 行号与行首索引要跟上
                             for offset in 0..consumed {
                                 if characters.get(index + offset) == Some(&'\n') {
@@ -621,15 +748,20 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                                 line += 1;
                                 line_start_index = index + 1;
                             }
-                            text.push(*character);
+                            let mut buffer = [0u8; 4];
+                            text.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
                             index += 1;
                         }
                         None => {
-                            return Err(CompileError::Syntax("字符串没有收尾引号".to_owned()))
+                            return Err(CompileError::Syntax(format!("字符串没有收尾引号（第 {line} 行，列 {}）", column!(index))))
                         }
                     }
                 }
-                lexemes.push(Lexeme::Str(text));
+                let lexeme = match String::from_utf8(text) {
+                    Ok(text) => Lexeme::Str(text),
+                    Err(error) => Lexeme::StrWtf8(error.into_bytes()),
+                };
+                lexemes.push(lexeme);
                 // 跨度**跨行**（实测 `x = "a\<换行>b"` 的常量位点是 `(1, 2, …)`）
                 spans.push(Span::new(start_line, line, start, column!(index)));
             }
@@ -676,6 +808,28 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             }
                         }
                     }
+                    // **虚部字面量**（task-29 ✓）：十进制整数／浮点／指数形式后接 `j`／`J`
+                    // （`1j`／`1.5j`／`1e3j`／`0j`／`1_0j` ✓；`0x1j` 这类走下面 radix≠10 的报错 ✓）。
+                    // 值＝虚部（f64 位模式）；实部由编译期补 `0.0` ⇒ `Constant::Complex` ✓。
+                    if matches!(characters.get(scan), Some('j' | 'J')) {
+                        let after = characters.get(scan + 1).copied();
+                        if after.is_some_and(|item| item.is_ascii_alphanumeric() || item == '_') {
+                            return Err(CompileError::Syntax(
+                                "invalid imaginary literal".to_owned(),
+                            ));
+                        }
+                        let text: String = characters[digits_start..scan]
+                            .iter()
+                            .filter(|item| **item != '_')
+                            .collect();
+                        let value: f64 = text.parse().map_err(|_| {
+                            CompileError::Unsupported(format!("虚部 {text} 解析不了"))
+                        })?;
+                        index = scan + 1;
+                        lexemes.push(Lexeme::Imaginary(value.to_bits()));
+                        spans.push(Span::new(line, line, start, column!(index)));
+                        continue;
+                    }
                     if is_float {
                         let text: String = characters[digits_start..scan]
                             .iter()
@@ -708,9 +862,15 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         // 先前这里当场报"超出本层范围" ✗ —— `Lib/test/support` 一族 **26** 个模块压在它上面 ✓。
                         let magnitude = crate::bigint::BigInt::from_str_radix(&digits, radix)
                             .ok_or_else(|| {
-                                CompileError::Unsupported(format!(
-                                    "整数 {digits}（进制 {radix}）解析不了"
-                                ))
+                                // **非法进制字面量**（task-29 ✓）：`0x1j` 一类照参照报
+                                // `invalid hexadecimal literal` 的语义（本层给带原文的语法错 ✓）。
+                                let what = match radix {
+                                    16 => "invalid hexadecimal literal",
+                                    8 => "invalid octal literal",
+                                    2 => "invalid binary literal",
+                                    _ => "invalid decimal literal",
+                                };
+                                CompileError::Syntax(format!("{what}：{digits}"))
                             })?;
                         Lexeme::BigInt(magnitude.to_decimal())
                     }
@@ -780,29 +940,60 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                                     break;
                                 }
                                 // **转义花括号**：在插值**之外**成对出现时是字面量 ✓（不改变深度 ✓）
-                                Some('{') if brace_depth == 0 && characters.get(index + 1) == Some(&'{') => {
+                                Some('{') if prefix_has_f && brace_depth == 0 && characters.get(index + 1) == Some(&'{') => {
                                     contents.push('{');
                                     contents.push('{');
                                     index += 2;
                                 }
-                                Some('}') if brace_depth == 0 && characters.get(index + 1) == Some(&'}') => {
+                                Some('}') if prefix_has_f && brace_depth == 0 && characters.get(index + 1) == Some(&'}') => {
                                     contents.push('}');
                                     contents.push('}');
                                     index += 2;
                                 }
                                 Some('{') => {
-                                    brace_depth += 1;
+                                    // **普通字符串里的 `{`／`}` 是字面量**（task-45 ✓）：
+                                    // 花括号/引号嵌套那套只对 **f-string** 成立；先前不分前缀 ⇒
+                                    // 普通串里的 `{` 把深度顶成 1 ⇒ 收尾引号认不出 ⇒
+                                    // "字符串没有收尾引号"（官方 test_fstring.py 的测试数据串 ✗）。
+                                    if prefix_has_f {
+                                        brace_depth += 1;
+                                    }
                                     contents.push('{');
                                     index += 1;
                                 }
                                 Some('}') => {
-                                    brace_depth = brace_depth.saturating_sub(1);
+                                    if prefix_has_f {
+                                        brace_depth = brace_depth.saturating_sub(1);
+                                    }
                                     contents.push('}');
                                     index += 1;
                                 }
+                                // **插值表达式里的注释**（task-45 ✓，PEP 701）：`# 到行尾`，
+                                // 注释里的引号**不是**字符串起始 ✓。动因：官方 test_fstring.py:770
+                                // 的三引号 f-string 里 `{ # the following operation it's \n3 * 2}`
+                                // —— 先前把注释里的 `'` 当内层字符串开头 ⇒ 一路吞到 109 行之后的
+                                // 反斜杠 ⇒ 报"不认识的字符" ✗。
+                                // **启发式**：`#` 后紧跟空白/换行才算注释（格式说明里的 `#` 是**格式
+                                // 标志**：`f'{x:#x}'`／`f'{10:#{1}0x}'` ⇒ `#` 后不是空白 ⇒ 不当注释 ✓）。
+                                Some('#')
+                                    if prefix_has_f && brace_depth > 0
+                                        && characters
+                                            .get(index + 1)
+                                            .is_some_and(|next| next.is_whitespace()) =>
+                                {
+                                    while let Some(current) = characters.get(index) {
+                                        contents.push(*current);
+                                        index += 1;
+                                        if *current == '\n' {
+                                            line += 1;
+                                            line_start_index = index;
+                                            break;
+                                        }
+                                    }
+                                }
                                 // **插值里的嵌套字符串**：原样吞到它的收尾引号 ✓
                                 Some(current)
-                                    if brace_depth > 0 && (*current == '\'' || *current == '"') =>
+                                    if prefix_has_f && brace_depth > 0 && (*current == '\'' || *current == '"') =>
                                 {
                                     let inner_quote = *current;
                                     contents.push(*current);
@@ -858,9 +1049,10 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                                     index += 1;
                                 }
                                 None => {
-                                    return Err(CompileError::Syntax(
-                                        "字符串没有收尾引号".to_owned(),
-                                    ))
+                                    return Err(CompileError::Syntax(format!(
+                                        "字符串没有收尾引号（第 {line} 行，列 {}）",
+                                        column!(index)
+                                    )))
                                 }
                             }
                         }
@@ -911,6 +1103,11 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             // **原始** ⇒ 反斜杠原样是两个字节 ✓（不解码 ✓）
                             Some(current) if current.is_ascii() => {
                                 value.push(*current as u8);
+                                // 三引号跨行：行号与行首索引都要跟上（否则后续词元位点整体漂移 ✗）
+                                if triple && *current == '\n' {
+                                    line += 1;
+                                    line_start_index = index + 1;
+                                }
                                 index += 1;
                             }
                             Some(_) => {
@@ -935,17 +1132,27 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                     && matches!(characters.get(index + 1), Some('\'') | Some('"'))
                 {
                     let start = column!(index);
+                    let start_line = line;
                     let quote = characters[index + 1];
-                    index += 2;
+                    // **三引号 bytes** ✓（task-25 ✓）：`b"""…"""`（可跨行）—— 先前只认单引号 ✗
+                    // ⇒ `b"""…"""` 被拆成 `Bytes(空)` ＋ 一堆词元 ⇒ 实参表报"实参表里出现 …" ✗
+                    //（官方 `test_exceptions` 的 tokenizer 用例正是它 ✓）。
+                    let triple = characters.get(index + 2) == Some(&quote)
+                        && characters.get(index + 3) == Some(&quote);
+                    index += if triple { 4 } else { 2 };
                     // 转义报错里的 `position` 是**相对字面量内容**的下标（实测口径）
                     let content_start = index;
                     let mut value: Vec<u8> = Vec::new();
                     loop {
+                        let at_quote = characters.get(index) == Some(&quote)
+                            && (!triple
+                                || (characters.get(index + 1) == Some(&quote)
+                                    && characters.get(index + 2) == Some(&quote)));
+                        if at_quote {
+                            index += if triple { 3 } else { 1 };
+                            break;
+                        }
                         match characters.get(index) {
-                            Some(current) if *current == quote => {
-                                index += 1;
-                                break;
-                            }
                             Some('\\') => {
                                 let (byte, width) =
                                     lex_bytes_escape(&characters[index..], index - content_start)?;
@@ -954,6 +1161,11 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             }
                             Some(current) if current.is_ascii() => {
                                 value.push(*current as u8);
+                                // 三引号跨行：行号与行首索引都要跟上（后续词元位点不漂移 ✓）
+                                if triple && *current == '\n' {
+                                    line += 1;
+                                    line_start_index = index + 1;
+                                }
                                 index += 1;
                             }
                             Some(_) => {
@@ -969,13 +1181,13 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         }
                     }
                     lexemes.push(Lexeme::Bytes(value));
-                    spans.push(Span::new(line, line, start, column!(index)));
+                    spans.push(Span::new(start_line, line, start, column!(index)));
                     continue;
                 }
                 let start = column!(index);
                 let start_index = index;
                 while index < characters.len()
-                    && (characters[index].is_alphanumeric() || characters[index] == '_')
+                    && is_identifier_continue(characters[index])
                 {
                     index += 1;
                 }
@@ -1083,8 +1295,10 @@ pub struct PythonToken {
 fn public_kind(lexeme: &Lexeme) -> PythonTokenKind {
     match lexeme {
         Lexeme::Name(_) => PythonTokenKind::Name,
-        Lexeme::Int(_) | Lexeme::BigInt(_) | Lexeme::Float(_) => PythonTokenKind::Number,
-        Lexeme::Str(_) => PythonTokenKind::Str,
+        Lexeme::Int(_) | Lexeme::BigInt(_) | Lexeme::Float(_) | Lexeme::Imaginary(_) => {
+            PythonTokenKind::Number
+        }
+        Lexeme::Str(_) | Lexeme::StrWtf8(_) => PythonTokenKind::Str,
         Lexeme::Bytes(_) => PythonTokenKind::Bytes,
         Lexeme::FStr { .. } => PythonTokenKind::FString,
         Lexeme::Newline => PythonTokenKind::Newline,

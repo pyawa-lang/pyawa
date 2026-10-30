@@ -694,14 +694,6 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         ladder: Ladder::Later,
     },
     BuiltinType {
-        // **`complex`** ✓（第 640 轮）：`Lib/copyreg.py` 在**模块级**就要它 ✓（`pickle(complex, …)` ✓）
-        // ⇒ 与 `range`／`memoryview` 同款：**名字必须是类型** ✓。
-        name: "complex",
-        bases: &["object"],
-        mro: &["complex", "object"],
-        ladder: Ladder::Later,
-    },
-    BuiltinType {
         name: "memoryview",
         bases: &["object"],
         mro: &["memoryview", "object"],
@@ -802,13 +794,6 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         name: "super",
         bases: &["object"],
         mro: &["super", "object"],
-        ladder: Ladder::Later,
-    },
-    BuiltinType {
-        name: "super",
-        bases: &["object"],
-        mro: &["super", "object"],
-        // **零参 `super()`** ✓（第 233 轮）：`Lib/abc.py` 的 `ABCMeta.__new__` 要它 ✓。
         ladder: Ladder::Later,
     },
     BuiltinType {

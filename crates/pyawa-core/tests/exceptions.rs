@@ -734,3 +734,172 @@ fn compiled_try_except_catches_by_type() {
     )
     .expect("没异常时处理块不应当执行");
 }
+
+/// 把一次调用的结果读成异常消息（不是 `Raised` 就 panic）。
+fn raised_message(instance: &Instance, outcome: Result<NonNull<Header>, ExecError>) -> String {
+    match outcome {
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 由异常机制持有，存活。
+            unsafe { &*exception.as_ptr().cast::<ExceptionObject>() }
+                .message_with(instance)
+                .unwrap_or_default()
+        }
+        other => panic!("应当抛异常，实际 {other:?}"),
+    }
+}
+
+/// **`BaseException.with_traceback(tb, /)`**（task-24 扩；参照 3.14.4 实测）：
+/// `e.with_traceback(None) is e` ✓、`e.__traceback__` 变 `None` ✓；0／2 参、关键字、
+/// 非 traceback 的 `TypeError` 文案逐条照参照 ✓（本层 traceback 对象只做最小档 ✓）。
+#[test]
+fn exceptions_expose_with_traceback_like_the_reference() {
+    let instance = Instance::new();
+    let value_error = instance.type_value(instance.type_named("ValueError").expect("已注册"));
+    let boom = instance.new_str("boom");
+    let error = pyawa_core::call_value(&instance, value_error, &[boom], &[])
+        .expect("ValueError('boom') 应当成功");
+    let method = pyawa_core::attribute_read(&instance, error, "with_traceback")
+        .expect("异常实例应当有 with_traceback");
+    let none = instance.singletons().none();
+    // 成功档：返回 self，且 `__traceback__` 置成 None。
+    let result = pyawa_core::call_value(&instance, method, &[none], &[])
+        .expect("with_traceback(None) 应当成功");
+    assert_eq!(result, error, "with_traceback 应当返回 self");
+    let traceback = pyawa_core::attribute_read(&instance, error, "__traceback__")
+        .expect("异常实例应当有 __traceback__");
+    assert_eq!(traceback, none, "__traceback__ 应当被设成 None");
+    // 0 参／2 参的文案（参照逐字）。
+    assert_eq!(
+        raised_message(&instance, pyawa_core::call_value(&instance, method, &[], &[])),
+        "BaseException.with_traceback() takes exactly one argument (0 given)"
+    );
+    assert_eq!(
+        raised_message(
+            &instance,
+            pyawa_core::call_value(&instance, method, &[none, none], &[])
+        ),
+        "BaseException.with_traceback() takes exactly one argument (2 given)"
+    );
+    // 关键字实参。
+    let key = instance.new_str("tb");
+    assert_eq!(
+        raised_message(
+            &instance,
+            pyawa_core::call_value(&instance, method, &[], &[(key, none)])
+        ),
+        "BaseException.with_traceback() takes no keyword arguments"
+    );
+    // 非 traceback／None。
+    let one = instance.new_int(1);
+    assert_eq!(
+        raised_message(&instance, pyawa_core::call_value(&instance, method, &[one], &[])),
+        "__traceback__ must be a traceback or None"
+    );
+    // SAFETY: 这些引用都由本测试持有。
+    unsafe {
+        for value in [result, traceback, method, error, boom, value_error, key, one] {
+            instance.release_object(value.as_ptr());
+        }
+    }
+}
+
+/// `snapshot()`：把**当前处理中的异常**的类型名交回脚本（`sys.exc_info()` 的核心面观察窗 ✓）。
+fn snapshot_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(match instance.current_exception() {
+        Some(value) => instance.new_str(&instance.type_name(instance.type_of(value))),
+        None => instance.new_str("None"),
+    })
+}
+
+/// 跑一段编出来的源码，成功时交回**命名空间**（读脚本里存的观测值用）。
+fn run_source_namespace(vm: &Vm, source: &str) -> Result<NonNull<Header>, ExecError> {
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+    use pyawa_core::Frame;
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0)
+        .unwrap_or_else(|error| panic!("编不过：{error:?}"));
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本函数持有，帧接手一份引用。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).map(|_| namespace)
+}
+
+fn namespace_text(vm: &Vm, namespace: NonNull<Header>, name: &str) -> String {
+    let value = vm
+        .instance
+        .dict_get(namespace, name)
+        .unwrap_or_else(|| panic!("命名空间里应当有 {name}"));
+    vm.instance.text_value(value).expect("应当是 str")
+}
+
+/// **`BC-60` ② 的"当前处理中的异常"**（task-26）：`sys.exc_info()`／`sys.exception()` 的底座。
+///
+/// 关键点：嵌套 handler 退出后必须**恢复外层**、最外层退出后必须**回到无异常** ✓。
+/// 先前 `PUSH_EXC_INFO` 用"偷看"再 push ✗ ⇒ 每层嵌套 handler 多留一层重复 ✗ ⇒
+/// `sys.exc_info()` 在"handler 里再套 try/except"之后仍报旧异常（实测 `ValueError` 泄漏 ✓）。
+#[test]
+fn current_exception_state_tracks_nested_handlers() {
+    let vm = Vm::new();
+    let builtins = vm.instance.new_dict();
+    for name in ["ValueError", "KeyError", "ZeroDivisionError"] {
+        let value = vm
+            .instance
+            .type_value(vm.instance.type_named(name).expect("内建表里应当有"));
+        vm.instance.dict_set(builtins, name, value);
+    }
+    let native = vm
+        .instance
+        .alloc(pyawa_core::BuiltinFunctionObject::new(
+            vm.instance
+                .type_named("builtin_function_or_method")
+                .expect("builtin_function_or_method 已登记"),
+            "snapshot",
+            core::cell::Cell::new(snapshot_native as pyawa_core::NativeFn),
+        ));
+    vm.instance
+        .dict_set(builtins, "snapshot", native.as_ptr().cast::<Header>());
+    vm.instance.set_builtins(Some(builtins));
+
+    let namespace = run_source_namespace(
+        &vm,
+        r#"
+try:
+    raise ValueError("outer")
+except ValueError:
+    outer = snapshot()
+    try:
+        raise KeyError("inner")
+    except KeyError:
+        inner = snapshot()
+    after_inner = snapshot()
+after_all = snapshot()
+"#,
+    )
+    .expect("应当跑得起来");
+    assert_eq!(namespace_text(&vm, namespace, "outer"), "ValueError", "外层 handler 里应当看到外层异常");
+    assert_eq!(namespace_text(&vm, namespace, "inner"), "KeyError", "内层 handler 里应当看到内层异常");
+    assert_eq!(
+        namespace_text(&vm, namespace, "after_inner"),
+        "ValueError",
+        "内层 handler 退出后应当恢复外层异常"
+    );
+    assert_eq!(
+        namespace_text(&vm, namespace, "after_all"),
+        "None",
+        "最外层 handler 退出后应当回到无异常"
+    );
+    // 直接核对 VM 状态：跑完之后异常栈必须为空 ✓。
+    assert!(
+        vm.instance.current_exception().is_none(),
+        "脚本跑完后 `exception_state` 应当是空的（PUSH/POP 配对 ✓）"
+    );
+}

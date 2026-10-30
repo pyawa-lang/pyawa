@@ -12,7 +12,6 @@ use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
-use crate::builtin_objects::StrObject;
 use crate::builtin_objects::TupleObject;
 
 
@@ -66,15 +65,16 @@ pub(crate) fn subscript_slice(
         return Ok(instance.new_tuple(items));
     }
     if container_type == instance.singletons().str_type() {
-        // SAFETY: 同上。`str` 按**字符**切（不是字节）
-        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
-        let characters: Vec<char> = text.chars().collect();
-        let (start, stop, step) = slice_bounds(instance, key, characters.len())?;
-        let picked: String = slice_positions(start, stop, step)
+        // P3-38 S2a-2 批 2：`str` 按**码点**切（孤立代理各占一格 ✓；不再是 UTF-8 字节层）。
+        let points = instance
+            .str_code_point_vec(container)
+            .expect("类型刚确认是 str");
+        let (start, stop, step) = slice_bounds(instance, key, points.len())?;
+        let picked: Vec<u32> = slice_positions(start, stop, step)
             .into_iter()
-            .map(|position| characters[position])
+            .map(|position| points[position])
             .collect();
-        return Ok(instance.new_str(&picked));
+        return Ok(instance.new_str_code_points(&picked));
     }
     // **`__getitem__` 协议** ✓（第 626 轮）：参照里 `obj[i:j]` 一律把 **slice 对象**交给**类型上**的
     // `__getitem__` ✓（特殊方法走类型 ✓）⇒ 任何实现了 `__getitem__` 的类型／用户类都能切 ✓。
@@ -165,6 +165,8 @@ pub(crate) fn subscript_get(
         return Ok(value);
     }
     if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
+        // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46；本层 dict 不哈希 ⇒ 必须显式拦 ✗）。
+        crate::builtin::dict::reject_unhashable_key(instance, key)?;
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息
@@ -197,18 +199,18 @@ pub(crate) fn subscript_get(
     }
     let str_type = instance.singletons().str_type();
     if container_type == str_type {
-        // SAFETY: 同上。
-        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
-        let characters: Vec<char> = text.chars().collect();
+        // P3-38 S2a-2 批 2：整数下标按**码点**取（负下标照旧归一 ✓；孤立代理也占一格 ✓）。
+        let points = instance
+            .str_code_point_vec(container)
+            .expect("类型刚确认是 str");
         let index = index_payload(instance, key, opcode)?;
-        let position = match normalize_index(index, characters.len()) {
+        let position = match normalize_index(index, points.len()) {
             Some(position) => position,
             None => {
                 return Err(raise_builtin(instance, "IndexError", "string index out of range"))
             }
         };
-        let object = instance.alloc(StrObject::new(str_type, characters[position].to_string()));
-        return Ok(object.into_raw().cast::<Header>());
+        return Ok(instance.new_str_code_point(points[position]));
     }
     // `bytes`：整数下标给**整数**（`b'abc'[0] == 97`，实测）；切片随 `slice` 类型（M3+）再接线
     if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
@@ -370,6 +372,11 @@ pub(crate) fn subscript_set(
         && instance.type_lookup(container_type, "__setitem__")
             == instance.type_lookup(builtin_type(instance, "dict"), "__setitem__")
     {
+        // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46）；`value` 的接管契约在错误路上要还掉 ✓。
+        if let Err(error) = crate::builtin::dict::reject_unhashable_key(instance, key) {
+            release(instance, value);
+            return Err(error);
+        }
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         let position = object

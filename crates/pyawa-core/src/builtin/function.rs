@@ -184,10 +184,22 @@ pub unsafe fn function_getattr(
                 unsafe { instance.incref_object(override_value.as_ptr()) };
                 return Some(override_value);
             }
+            // **默认值也缓存** ✓（task-22）：同一函数的 `f.__name__` 必须是**同一对象** ✓
+            // —— 官方 `test_decorators` 的 `assertIs(getattr(wrapper, …), getattr(func, …))` 靠它 ✓。
+            if let Some(cached) = *object.name_cache.borrow() {
+                // SAFETY: 缓存值由函数持有，调用方要自己那份。
+                unsafe { instance.incref_object(cached.as_ptr()) };
+                return Some(cached);
+            }
             let code = object.code();
             // SAFETY: code 由函数持有，存活。
             let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
-            Some(instance.new_str(code.name()))
+            let name = instance.new_str(code.name());
+            // 缓存持一份、返回值是另一份 ✓（`new_str` 给的是新引用，各拿各的）。
+            // SAFETY: name 是新引用，缓存接手一份。
+            unsafe { instance.incref_object(name.as_ptr()) };
+            *object.name_cache.borrow_mut() = Some(name);
+            Some(name)
         }
         "__qualname__" => {
             if let Some(override_value) = object.qualname_override() {
@@ -195,10 +207,20 @@ pub unsafe fn function_getattr(
                 unsafe { instance.incref_object(override_value.as_ptr()) };
                 return Some(override_value);
             }
+            // **默认值也缓存** ✓（同上）。
+            if let Some(cached) = *object.qualname_cache.borrow() {
+                // SAFETY: 缓存值由函数持有，调用方要自己那份。
+                unsafe { instance.incref_object(cached.as_ptr()) };
+                return Some(cached);
+            }
             let code = object.code();
             // SAFETY: code 由函数持有，存活。
             let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
-            Some(instance.new_str(code.qualname()))
+            let qualname = instance.new_str(code.qualname());
+            // SAFETY: qualname 是新引用，缓存接手一份。
+            unsafe { instance.incref_object(qualname.as_ptr()) };
+            *object.qualname_cache.borrow_mut() = Some(qualname);
+            Some(qualname)
         }
         "__doc__" => {
             // **覆盖值优先** ✓：`del f.__doc__` 之后参照给 `None`（不是 code 的文档串 ✓）。
@@ -280,6 +302,12 @@ pub unsafe fn function_getattr(
                 unsafe { instance.incref_object(override_value.as_ptr()) };
                 return Some(override_value);
             }
+            // **默认值也缓存** ✓（task-22）：同一函数的 `f.__module__` 必须是**同一对象** ✓。
+            if let Some(cached) = *object.module_cache.borrow() {
+                // SAFETY: 缓存值由函数持有，调用方要自己那份。
+                unsafe { instance.incref_object(cached.as_ptr()) };
+                return Some(cached);
+            }
             // 注意：`globals()` 给的是**命名空间字典本身** ⇒ 直接查 `__name__` ✓
             // （`module_text` 要的是**模块对象** ✗，第一版传错了 ⇒ 一律退回 `builtins` ✗）。
             let module = object
@@ -287,7 +315,11 @@ pub unsafe fn function_getattr(
                 .and_then(|globals| instance.dict_get(globals, "__name__"))
                 .and_then(|value| instance.text_of(value).map(str::to_owned))
                 .unwrap_or_else(|| "builtins".to_owned());
-            Some(instance.new_str(&module))
+            let module = instance.new_str(&module);
+            // SAFETY: module 是新引用，缓存接手一份。
+            unsafe { instance.incref_object(module.as_ptr()) };
+            *object.module_cache.borrow_mut() = Some(module);
+            Some(module)
         }
         // **`__class__`**（同上）：函数对象的类型就是 `function` ✓（参照给的就是那个类 ✓）。
         "__class__" => {
@@ -336,11 +368,15 @@ pub(crate) unsafe fn function_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*
         visit(value.as_ptr());
     }
     // **可写属性的覆盖值**（`py_object!` 第二臂的四个默认字段 ✓）：持引用 ⇒ 必须走 GC ✓。
+    // ＋ **默认值缓存**（task-22：`name_cache`／`qualname_cache`／`module_cache` 也是本对象持有的引用 ✓）。
     for value in [
         object.name_override(),
         object.qualname_override(),
         object.doc_override(),
         object.module_override(),
+        object.name_cache(),
+        object.qualname_cache(),
+        object.module_cache(),
     ]
     .into_iter()
     .flatten()
@@ -385,11 +421,15 @@ pub(crate) unsafe fn function_clear(ptr: *mut Header, instance: &Instance) {
         unsafe { instance.release_object(value.as_ptr()) };
     }
     // **可写属性的覆盖值**（四个默认字段；`OM-12` 的"持引用字段必须被 clear 覆盖" ✓）。
+    // ＋ **默认值缓存**（task-22：同上，持引用 ⇒ 必须被 clear 覆盖并归还 ✓）。
     for value in [
         object.set_name_override(None),
         object.set_qualname_override(None),
         object.set_doc_override(None),
         object.set_module_override(None),
+        object.name_cache.borrow_mut().take(),
+        object.qualname_cache.borrow_mut().take(),
+        object.module_cache.borrow_mut().take(),
     ]
     .into_iter()
     .flatten()

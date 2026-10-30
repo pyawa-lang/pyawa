@@ -160,6 +160,11 @@
 | `seek(file, offset, whence)` / `tell(file)` | 位置 |
 | `truncate(file, size)` / `fsync(file)` | 截断／落盘 |
 | `close(handle)` | 释放（CP-17） |
+| `stat_times(name)` | **时间戳**（`FileTimes { atime_ns, mtime_ns, ctime_ns }`，三个 **i64 纳秒**字段；取不到的字段为 `0`、provider **不编造**）——`stat_result` 的 `st_*time*` 字段来源；槽为 null ⇒ 该操作未实现（`CP-3`） |
+
+**追加式改动**：`stat_times` 是 `CpFsVtable` **表尾追加**的槽（`AB-44`）⇒ 按 `AB-41` **次版本 +1**、
+旧宿主**仍可用**（`AB-43` 以 `min(宿主 size, 自身 size)` 为界读；新槽读不到 ⇒ 未实现，`CP-3`）。
+版本号是**共用版本号**（`CP-30`／`AB-39`），当前值见 `SPEC-c-abi.md` §12。
 
 **建议**：`dup`／`fdopen` 一类由实例能力表复制槽位实现（CP-14／CP-31），**不需要** provider 提供。
 可异步化：上表全部。
@@ -200,6 +205,17 @@
 | `time_ns()` / `monotonic_ns()` | 墙钟／单调钟 |
 | `sleep_ns(n)` | 可取消的睡眠（CP-27） |
 | `resolution_ns()` | 时钟精度 |
+| `localtime(secs)` | 本地时间 ⇒ `CpTm`（形状见下） |
+| `strftime(fmt, tm)` | 按 `CpTm` 格式化 ⇒ 字符串 |
+| `mktime(tm)` | `CpTm` ⇒ 秒 |
+
+**追加式改动**：`localtime`／`strftime`／`mktime` 是 `CpClockVtable` **表尾追加**的三个槽（`AB-44`）⇒
+按 `AB-41` **次版本 +1**、旧宿主**仍可用**（`AB-43` 以 `min(宿主 size, 自身 size)` 为界读；读不到新槽
+⇒ 未实现，`CP-3`）。版本号是**共用版本号**（`CP-30`／`AB-39`），当前值见 `SPEC-c-abi.md` §12。
+
+**`CpTm`**：跨 ABI 的**裸结构**，C 布局＝参照 `struct tm` 的九项（`tm_sec`／`tm_min`／`tm_hour`／
+`tm_mday`／`tm_mon`／`tm_year`／`tm_wday`／`tm_yday`／`tm_isdst`，**各 i32**）＋ `tm_gmtoff: i64`
+＋ `tm_zone[16]` ＋ `tm_zone_len: u32`；**字段顺序即线格式**，不含 VM 对象（`CP-10`）。
 
 时区规则**不**在本域：`zoneinfo` 是纯 Python，数据经 `fs` 读（`DESIGN.md` §9）。
 可异步化：全部。

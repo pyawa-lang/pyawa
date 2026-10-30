@@ -19,10 +19,12 @@
 用法::
 
     python3 tests/ci/heap_and_concurrency.py
+    python3 tests/ci/heap_and_concurrency.py --release  # release 测试二进制（闸门提速；判定不变）
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import pathlib
 import re
@@ -34,11 +36,22 @@ SUMMARY = re.compile(r"计数：共 (\d+) ⇒ 通过 (\d+) · 已知差异 (\d+)
 PERTURB = "170"
 
 
-def run_conformance(env_extra: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def conformance_command(release: bool) -> list[str]:
+    """对拍测试命令：默认档与旧命令**逐字一致**；`--release` 只在 `test` 后追加一个词。"""
+    command = ["cargo", "test"]
+    if release:
+        command.append("--release")
+    command += ["-p", "pyawa-abi", "--test", "conformance", "--", "--nocapture"]
+    return command
+
+
+def run_conformance(
+    env_extra: dict[str, str], release: bool = False
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_extra)
     return subprocess.run(
-        ["cargo", "test", "-p", "pyawa-abi", "--test", "conformance", "--", "--nocapture"],
+        conformance_command(release),
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -60,7 +73,15 @@ def green(output: str) -> bool:
     return all(total == passed and new == 0 for total, passed, _known, new in found)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="堆扰动 ＋ 并发自压（MS-25 守卫）")
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="内部 conformance 测试透传 `--release`（闸门提速；MALLOC_PERTURB_ 语义不变）",
+    )
+    args = parser.parse_args(argv)
+    release = args.release
     failures: list[str] = []
 
     # ① **诊断**（不判失败）：堆扰动下跑对拍语料三次，报出绿了几次。
@@ -70,7 +91,7 @@ def main() -> int:
     runs = 3
     perturbed_green = 0
     for _ in range(runs):
-        if green(run_conformance({"MALLOC_PERTURB_": PERTURB}).stdout):
+        if green(run_conformance({"MALLOC_PERTURB_": PERTURB}, release).stdout):
             perturbed_green += 1
     # if perturbed_green != runs:
     #     failures.append(f"堆扰动 {runs} 次里只有 {perturbed_green} 次全绿")
@@ -80,7 +101,7 @@ def main() -> int:
     env["MALLOC_PERTURB_"] = PERTURB
     processes = [
         subprocess.Popen(
-            ["cargo", "test", "-p", "pyawa-abi", "--test", "conformance", "--", "--nocapture"],
+            conformance_command(release),
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -106,7 +127,7 @@ def main() -> int:
             print(f"[FAIL] {failure}")
         return 1
 
-    total = summaries(run_conformance({"MALLOC_PERTURB_": PERTURB}).stdout)
+    total = summaries(run_conformance({"MALLOC_PERTURB_": PERTURB}, release).stdout)
     count = total[0][0] if total else 0
     note = "缺陷未修期间允许间歇红" if perturbed_green < runs else "本次全绿"
     print(

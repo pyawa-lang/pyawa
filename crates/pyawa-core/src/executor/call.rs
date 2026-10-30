@@ -232,6 +232,28 @@ pub(crate) fn call_callable(
             }
             return call_callable(instance, function, Some(this), call_args, kwargs, opcode);
         }
+        // **`tp_call` 沿 MRO 继承** ✓（task-7）：上面只查了**精确类型**的 `call` 槽 ✗ ——
+        // 参照的 `tp_call` 在**建子类时从基类继承** ✓（`class KeyedRef(weakref.ref)` 的实例照旧
+        // 可调用 ✓）。动因：`Lib/importlib/_bootstrap.py` 的 `_WeakValueDictionary` 把嵌套
+        // `KeyedRef` 放进 `data` 并在 `data[key]()` 里调用 ✓ —— 先前报
+        // `TypeError: 'KeyedRef' object is not callable` ✗ ⇒ `importlib.import_module` 进
+        // `_ModuleLock`（第二跳）就崩 ✗。
+        // **只在"实例调用"这条路上找** ✓：类对象（含元类实例）走下面的实例化分派 ✓，
+        // 且它们已在上面 `callable_type_ok` 判为 true ⇒ 到不了这里 ✓。
+        // **`__call__` 优先** ✓：上面那条属性通道已先试过（`__call__` 在参照里就是"在更近的类上
+        // 定义 tp_call 槽"的同义物 ✓），到这里说明整条 MRO 都没有 `__call__` ✓ ⇒ 才退到原生槽 ✓。
+        if let Some(slot) = inherited_call_slot(ty) {
+            // SAFETY: 槽位契约见 `CallFn`（借用视图 ＋ 新引用返回值）；`callable` 仍是原对象 ✓。
+            let result = unsafe { slot(callable.as_ptr(), bound_self, &args, &kwargs, instance) };
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return result;
+        }
     }
     if !callable_type_ok {
         for value in args {
@@ -511,15 +533,45 @@ pub(crate) fn call_callable(
     // （走原生分支、self 当 `bound` 递进去）。顺序很要紧——原生的
     // `BuiltinFunctionObject` 与 `FunctionObject` 布局不同，先当函数读会读到错位的内存
     // （症状是"misaligned pointer dereference"）。
+    //
+    // **可以嵌套多层**（task-18 实测 ✗）：`classmethod(A().foo)` 的 `__func__` 本身就是一个
+    // **绑定方法**（`MethodObject` 里再套 `MethodObject`）；`B.bar()` 在参照里等价
+    // `A().foo(B)` ✓。先前只剥**一层** ✗ ⇒ 剩下的仍是 `method` 对象却按 `FunctionObject`
+    // 读载荷 ✗ ⇒ `function_defaults` 的 `to_vec` 读到垃圾长度 ⇒ `capacity overflow`／
+    // misaligned panic（官方 `test_decorators` 的 `test_bound_function_inside_classmethod` ✓）。
+    //
+    // 剥法照参照的 `MethodType(f, x)(*a) == f(x, *a)` ✓：**每层方法对象的 `this`** 都是
+    // "下一层的第一个位置实参"，**最内层**的 `this` 才是真正的绑定 self ✓。
+    // **调用方交来的 `bound_self` 在 callable 是方法对象时按旧口径丢弃** ✓ —— 那是内部调用点
+    // （`iter_value` 的 `__iter__`、`call_dunder_method` 一族）给"**未绑定**函数"准备的 self；
+    // 方法对象自带 `this` ✓，再塞一份会把 receiver 重复传进去 ✗（实测 `range` 迭代当场
+    // `TypeError: range indices must be integers or slices, not range` ✗）。
     // SAFETY: callable 是存活对象。
-    let callable_type = unsafe { callable.as_ref() }.ty();
-    let (callable, bound_self) = if callable_type == builtin_type(instance, "method") {
-        // SAFETY: 类型身份已确认。
+    let method_type = builtin_type(instance, "method");
+    let caller_bound_self = bound_self;
+    let mut callable = callable;
+    let mut args = args;
+    let mut layer_self: Option<NonNull<Header>> = None;
+    while unsafe { callable.as_ref() }.ty() == method_type {
+        // SAFETY: 类型身份刚确认 ⇒ 载荷是 `MethodObject`；函数与实例都由它持有、存活
+        //（方法对象各持一份引用 ⇒ 整条链在调用期间都活着 ✓）。
         let method = unsafe { &*callable.as_ptr().cast::<MethodObject>() };
-        // 函数与实例都由该方法对象持有、存活；`bound_self` 是**借用**（见本函数开头的契约）
-        (method.function(), Some(method.this()))
-    } else {
-        (callable, bound_self)
+        let inner = method.function();
+        let this = method.this();
+        if let Some(previous_layer) = layer_self {
+            // 上一层方法对象的 `this` ⇒ 本层调用的**第一个位置实参** ✓（上面那条 `MethodType` 等式）。
+            // 实参表按"转移语义"被下面的调用路径消费 ⇒ 这里先新增一份 ✓。
+            // SAFETY: previous_layer 由上一层方法对象持有、存活。
+            unsafe { instance.incref_object(previous_layer.as_ptr()) };
+            args.insert(0, previous_layer);
+        }
+        layer_self = Some(this);
+        callable = inner;
+    }
+    // 单层方法 ⇒ 最内层 `this` 就是它自己的绑定 self（与旧口径一致 ✓）；没有方法层 ⇒ 用调用方的。
+    let bound_self = match layer_self {
+        Some(innermost) => Some(innermost),
+        None => caller_bound_self,
     };
 
     // **原生可调用对象**（`AB-24`：宿主函数与内建函数的落点）：实参以**借用视图**递进去，
@@ -562,7 +614,6 @@ pub(crate) fn call_callable(
     // SAFETY: 函数持有一份对 code object 的引用，故它在函数存活期间有效。
     let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
 
-    let mut args = args;
     if let Some(self_object) = bound_self {
         // 契约：`bound_self` 是**借用**（调用方持有那份引用）；实参表由 `bind_arguments` 接手，
         // 故这里先为它新增一份。
@@ -651,4 +702,35 @@ pub(crate) fn call_callable(
             what: "非生成器函数不该让出（码元被改坏了？）",
         }),
     }
+}
+
+/// **沿 MRO 继承来的 `call` 槽**（task-7）——**一处口径**：`call_callable` 的实例调用回退与
+/// [`Instance::is_callable`] 共用本函数 ⇒ "调用"与"`callable()`"不漂 ✓。
+///
+/// 语义：参照的 `tp_call` 在**建子类时从基类继承** ✓ ⇒ 实例的**精确类型**没有 `call` 槽时，
+/// 沿 `mro()`（`mro[0]` 是自己，已由调用方查过 ✓）找**第一个带 `call` 槽的基类** ✓。
+///
+/// **载荷必须同构**（`instance_size` 相同）才会返回槽 ✓：`CallFn` 按**基类的载荷**强转实例
+/// （`weakref_call` 读 `WeakRefObject.target` ✓）⇒ 布局不同的子类若走上基类槽，读到的是别人的
+/// 字段（实测：`class KeyedRef(weakref.ref)` 未继承载荷时强调 ⇒ `null pointer dereference` abort ✗）。
+/// 所以这把"谁能继承谁的槽"与 `classes.rs` 的"内建布局族"口径绑在一起 ✓ —— 布局没继承 ⇒
+/// 明确回 `None`、照旧报"不可调用" ✓，绝不冒险强转 ✓。
+pub(crate) fn inherited_call_slot(
+    ty: NonNull<TypeObject>,
+) -> Option<crate::type_object::CallFn> {
+    // SAFETY: 调用方保证 `ty` 是存活对象的类型（注册表持有 ✓）。
+    let info = unsafe { ty.as_ref() };
+    let instance_size = info.instance_size();
+    for base in info.mro().into_iter().skip(1) {
+        // SAFETY: base 由注册表持有。
+        let base_info = unsafe { base.as_ref() };
+        let Some(slot) = base_info.slots().call else {
+            continue;
+        };
+        if base_info.instance_size() != instance_size {
+            continue;
+        }
+        return Some(slot);
+    }
+    None
 }

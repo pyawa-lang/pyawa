@@ -454,3 +454,309 @@ fn match_judgements_match_the_reference_fixture() {
     }
     assert!(checked >= 8, "对拍的用例要够多，实际 {checked} 条");
 }
+
+// --------------------------------------------------------------------------- #
+// task-37：序列／映射／类模式的**编译＋执行端到端**（发射器 ＋ executor 一起验）
+// --------------------------------------------------------------------------- #
+
+/// 编一段源码跑起来，返回命名空间里 `result` 的 `repr`（期望值与参照 3.14.4 实测一致）。
+fn eval_source(vm: &Vm, source: &str) -> String {
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+    use pyawa_core::Frame;
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0)
+        .unwrap_or_else(|error| panic!("编不过：{error:?}"));
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // 类模式要用到这几个**内建类型对象**（core 的测试不装 stdlib 的 builtins ⇒ 这里给最小几个）。
+    let builtins = vm.instance.new_dict();
+    for name in ["str", "int", "list", "tuple", "dict"] {
+        let value = vm
+            .instance
+            .type_value(vm.instance.type_named(name).expect("内建类型已登记"));
+        vm.instance.dict_set(builtins, name, value);
+    }
+    vm.instance.set_builtins(Some(builtins));
+    // SAFETY: namespace 由本函数持有，帧接手一份引用。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("源码应当跑得起来");
+    let result = vm
+        .instance
+        .dict_get(namespace, "result")
+        .expect("命名空间里应当有 result");
+    vm.instance.object_repr(result).expect("repr 应当成功")
+}
+
+/// 编一段源码跑起来，返回它抛出的（类型名, 消息）。
+fn eval_error(vm: &Vm, source: &str) -> (String, String) {
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+    use pyawa_core::Frame;
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0)
+        .unwrap_or_else(|error| panic!("编不过：{error:?}"));
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本函数持有，帧接手一份引用。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    match pyawa_core::execute(&vm.instance, &frame) {
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            // SAFETY: exception 由实例保活。
+            let ty = unsafe { exception.as_ref() }.ty();
+            // SAFETY: 同上。
+            let type_name = unsafe { ty.as_ref() }.name().to_owned();
+            // SAFETY: 同上。
+            let message = unsafe {
+                &*exception
+                    .as_ptr()
+                    .cast::<pyawa_core::ExceptionObject>()
+            }
+            .message_with(&vm.instance)
+            .unwrap_or_default();
+            (type_name, message)
+        }
+        Err(other) => panic!("应当抛异常，实际 {other:?}"),
+        Ok(_) => panic!("应当抛异常，实际成功"),
+    }
+}
+
+#[test]
+fn sequence_patterns_compile_and_run_like_the_reference() {
+    let vm = Vm::new();
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "two",
+            "def f(x):\n    match x:\n        case [a, b]:\n            return ('two', a, b)\n        case _:\n            return None\nresult = f((1, 2))\n",
+            "('two', 1, 2)",
+        ),
+        (
+            "list too",
+            "def f(x):\n    match x:\n        case [a, b]:\n            return ('two', a, b)\n        case _:\n            return None\nresult = f([3, 4])\n",
+            "('two', 3, 4)",
+        ),
+        (
+            "no match len",
+            "def f(x):\n    match x:\n        case [a, b]:\n            return 'two'\n        case _:\n            return None\nresult = f([1, 2, 3])\n",
+            "None",
+        ),
+        (
+            "no match type",
+            "def f(x):\n    match x:\n        case [a, b]:\n            return 'two'\n        case _:\n            return None\nresult = f('ab')\n",
+            "None",
+        ),
+        (
+            "star",
+            "def f(x):\n    match x:\n        case [a, *rest]:\n            return ('star', a, rest)\n        case _:\n            return None\nresult = f([1, 2, 3])\n",
+            "('star', 1, [2, 3])",
+        ),
+        (
+            "star only",
+            "def f(x):\n    match x:\n        case [*rest]:\n            return ('staronly', rest)\n        case _:\n            return None\nresult = f((7, 8))\n",
+            "('staronly', [7, 8])",
+        ),
+        (
+            "mixed star",
+            "def f(x):\n    match x:\n        case [a, *rest, b]:\n            return ('mixed', a, rest, b)\n        case _:\n            return None\nresult = f([1, 2, 3, 4])\n",
+            "('mixed', 1, [2, 3], 4)",
+        ),
+        (
+            "empty",
+            "def f(x):\n    match x:\n        case []:\n            return 'empty'\n        case _:\n            return None\nresult = f([])\n",
+            "'empty'",
+        ),
+        (
+            "nested",
+            "def f(x):\n    match x:\n        case [a, [b, c]]:\n            return ('nested', a, b, c)\n        case _:\n            return None\nresult = f([1, [2, 3]])\n",
+            "('nested', 1, 2, 3)",
+        ),
+        (
+            "literal item",
+            "def f(x):\n    match x:\n        case [1, a]:\n            return ('lit', a)\n        case _:\n            return None\nresult = f([1, 5])\n",
+            "('lit', 5)",
+        ),
+        (
+            "literal item miss",
+            "def f(x):\n    match x:\n        case [1, a]:\n            return ('lit', a)\n        case _:\n            return None\nresult = f([2, 5])\n",
+            "None",
+        ),
+        (
+            "paren tuple",
+            "def f(x):\n    match x:\n        case (a, b):\n            return ('tuple', a, b)\n        case _:\n            return None\nresult = f((5, 6))\n",
+            "('tuple', 5, 6)",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        assert_eq!(&eval_source(&vm, source), expected, "序列模式：{name}");
+    }
+}
+
+#[test]
+fn mapping_patterns_compile_and_run_like_the_reference() {
+    let vm = Vm::new();
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "kv",
+            "def f(x):\n    match x:\n        case {'k': v}:\n            return ('kv', v)\n        case _:\n            return None\nresult = f({'k': 1})\n",
+            "('kv', 1)",
+        ),
+        (
+            "empty",
+            "def f(x):\n    match x:\n        case {}:\n            return 'map'\n        case _:\n            return None\nresult = f({'a': 2})\n",
+            "'map'",
+        ),
+        (
+            "empty not mapping",
+            "def f(x):\n    match x:\n        case {}:\n            return 'map'\n        case _:\n            return None\nresult = f([1])\n",
+            "None",
+        ),
+        (
+            "multi",
+            "def f(x):\n    match x:\n        case {'a': 1, 'b': v}:\n            return ('multi', v)\n        case _:\n            return None\nresult = f({'a': 1, 'b': 2})\n",
+            "('multi', 2)",
+        ),
+        (
+            "missing key",
+            "def f(x):\n    match x:\n        case {'a': v}:\n            return ('kv', v)\n        case _:\n            return None\nresult = f({'b': 1})\n",
+            "None",
+        ),
+        (
+            "nested",
+            "def f(x):\n    match x:\n        case {'k': [a, b]}:\n            return ('nestedmap', a, b)\n        case _:\n            return None\nresult = f({'k': [3, 4]})\n",
+            "('nestedmap', 3, 4)",
+        ),
+        (
+            "guard hit",
+            "def f(x):\n    match x:\n        case {'k': v} if v > 0:\n            return ('guard', v)\n        case _:\n            return None\nresult = f({'k': 5})\n",
+            "('guard', 5)",
+        ),
+        (
+            "guard miss",
+            "def f(x):\n    match x:\n        case {'k': v} if v > 0:\n            return ('guard', v)\n        case _:\n            return None\nresult = f({'k': -5})\n",
+            "None",
+        ),
+        (
+            "nested mapping",
+            "def f(x):\n    match x:\n        case {'outer': {'inner': v}}:\n            return v\n        case _:\n            return None\nresult = f({'outer': {'inner': 9}})\n",
+            "9",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        assert_eq!(&eval_source(&vm, source), expected, "映射模式：{name}");
+    }
+}
+
+#[test]
+fn class_patterns_positional_and_match_self_like_the_reference() {
+    let vm = Vm::new();
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "user __match_args__",
+            "class P:\n    __match_args__ = ('x', 'y')\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\ndef f(v):\n    match v:\n        case P(a, b):\n            return ('p', a, b)\n        case _:\n            return None\nresult = f(P(1, 2))\n",
+            "('p', 1, 2)",
+        ),
+        (
+            "match self str",
+            "def f(v):\n    match v:\n        case str(s):\n            return ('str', s)\n        case _:\n            return None\nresult = f('abc')\n",
+            "('str', 'abc')",
+        ),
+        (
+            "match self int",
+            "def f(v):\n    match v:\n        case int(i):\n            return ('int', i)\n        case _:\n            return None\nresult = f(5)\n",
+            "('int', 5)",
+        ),
+        (
+            "match self list",
+            "def f(v):\n    match v:\n        case list(items):\n            return ('list', items)\n        case _:\n            return None\nresult = f([1, 2])\n",
+            "('list', [1, 2])",
+        ),
+        (
+            "class empty",
+            "class P:\n    def __init__(self, x):\n        self.x = x\ndef f(v):\n    match v:\n        case P():\n            return 'is-p'\n        case _:\n            return None\nresult = f(P(1))\n",
+            "'is-p'",
+        ),
+        (
+            "keyword",
+            "class P:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\ndef f(v):\n    match v:\n        case P(x=a, y=b):\n            return (a, b)\n        case _:\n            return None\nresult = f(P(3, 4))\n",
+            "(3, 4)",
+        ),
+        (
+            "no match",
+            "class P:\n    def __init__(self):\n        pass\ndef f(v):\n    match v:\n        case P():\n            return 'is-p'\n        case _:\n            return None\nresult = f([1])\n",
+            "None",
+        ),
+        (
+            "missing attr is no match",
+            "class P:\n    __match_args__ = ('nope',)\ndef f(v):\n    match v:\n        case P(a):\n            return 'yes'\n        case _:\n            return None\nresult = f(P())\n",
+            "None",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        assert_eq!(&eval_source(&vm, source), expected, "类模式：{name}");
+    }
+    // 错误文案：没有 `__match_args__` 的用户类不接受位置子模式 ✓（参照逐字）
+    let (type_name, message) = eval_error(
+        &vm,
+        "class Plain:\n    def __init__(self):\n        pass\ndef f(v):\n    match v:\n        case Plain(a):\n            return 'yes'\n        case _:\n            return None\nresult = f(Plain())\n",
+    );
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(message, "Plain() accepts 0 positional sub-patterns (1 given)");
+    // `__match_args__` 长度不足 ✓
+    let (type_name, message) = eval_error(
+        &vm,
+        "class P:\n    __match_args__ = ('x',)\n    def __init__(self):\n        self.x = 1\ndef f(v):\n    match v:\n        case P(a, b):\n            return 'yes'\n        case _:\n            return None\nresult = f(P())\n",
+    );
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(message, "P() accepts 1 positional sub-pattern (2 given)");
+}
+
+/// **子模式里的或模式**（`|` 在序列／映射／类模式的子模式位置 ✓）：参照实测形状见
+/// `_pyrepl/utils.py:242`（每个备选先 `COPY 1` 复制值来测、原值留给下一个备选 ✓）。
+#[test]
+fn or_patterns_in_subpatterns_like_the_reference() {
+    let vm = Vm::new();
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "sequence first element or",
+            "def f(x):\n    match x:\n        case [None | 1 | 2, y]:\n            return ('or', y)\n        case _:\n            return None\nresult = f([2, 9])\n",
+            "('or', 9)",
+        ),
+        (
+            "sequence or miss",
+            "def f(x):\n    match x:\n        case [None | 1 | 2, y]:\n            return ('or', y)\n        case _:\n            return None\nresult = f([3, 9])\n",
+            "None",
+        ),
+        (
+            "mapping value or",
+            "def f(x):\n    match x:\n        case {'k': 1 | 2}:\n            return 'orval'\n        case _:\n            return None\nresult = f({'k': 2})\n",
+            "'orval'",
+        ),
+        (
+            "class keyword or",
+            "class T:\n    def __init__(self, string):\n        self.string = string\ndef f(v):\n    match v:\n        case T(string=':' | '('):\n            return 'kwor'\n        case _:\n            return None\nresult = f(T('('))\n",
+            "'kwor'",
+        ),
+        (
+            "class positional or",
+            "class P:\n    __match_args__ = ('x',)\n    def __init__(self, x):\n        self.x = x\ndef f(v):\n    match v:\n        case P(1 | 2):\n            return 'posor'\n        case _:\n            return None\nresult = f(P(2))\n",
+            "'posor'",
+        ),
+        (
+            "class positional or miss",
+            "class P:\n    __match_args__ = ('x',)\n    def __init__(self, x):\n        self.x = x\ndef f(v):\n    match v:\n        case P(1 | 2):\n            return 'posor'\n        case _:\n            return None\nresult = f(P(3))\n",
+            "None",
+        ),
+        (
+            "or branches fall through to next case",
+            "def f(x):\n    match x:\n        case [None | 1]:\n            return 'first'\n        case [2]:\n            return 'second'\n        case _:\n            return None\nresult = f([2])\n",
+            "'second'",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        assert_eq!(&eval_source(&vm, source), expected, "子模式或模式：{name}");
+    }
+}

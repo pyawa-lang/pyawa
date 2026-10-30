@@ -226,8 +226,11 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
     let mut out = Vec::new();
     match constant {
         Constant::None => out.push(0),
-        // **`...`**（第 177 轮）：`.pyac` 里记成标记 ✓。
-        Constant::Ellipsis => { out.push(0x07); }
+        // **`...`**（第 177 轮；task-36 修 ✗）：先前这里发 `0x07` —— **与 `Bool` 的标签 7 撞了** ✗
+        // ⇒ 解码侧按 `Bool` 读一个载荷字节（多读 1 字节）⇒ 其后整段错位 ⇒
+        // `BadCodeSection`（`test_types.py` 一族的 10 个官方文件正是卡在某个嵌套单元里的
+        // `...` 常量 ✓）。现在用**独占**标签 20（7 只留给 `Bool` ✓）。
+        Constant::Ellipsis => out.push(20),
         Constant::Int(value) => {
             out.push(1);
             out.extend_from_slice(&value.to_le_bytes());
@@ -272,9 +275,25 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(12);
             out.extend_from_slice(&bits.to_le_bytes());
         }
+        // **复数常量**（task-29 ✓）：标签 19 ＝ 实部位模式 ＋ 虚部位模式（各 8 字节 LE）✓。
+        Constant::Complex {
+            real_bits,
+            imag_bits,
+        } => {
+            out.push(19);
+            out.extend_from_slice(&real_bits.to_le_bytes());
+            out.extend_from_slice(&imag_bits.to_le_bytes());
+        }
         Constant::Str(text) => {
             out.push(2);
             write_text(&mut out, text);
+        }
+        // **含孤立代理的字符串**（P3-38 S2b ✓）：新标签 21 ＝ `u32` 长度 ＋ **WTF-8 字节**；
+        // 旧标签/旧顺序一个字节都没动（旧产物照读 ✓）。
+        Constant::StrWtf8(bytes) => {
+            out.push(21);
+            out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            out.extend_from_slice(bytes);
         }
         Constant::Code(inner) => {
             out.push(3);
@@ -462,9 +481,16 @@ impl UnitReader<'_> {
     fn constant(&mut self) -> Result<Constant, PyacError> {
         Ok(match self.u8()? {
             0 => Constant::None,
+            // **`...`**（task-36 修 ✓）：与 `Bool`（7）分开的独占标签 ✓
+            20 => Constant::Ellipsis,
             1 => Constant::Int(self.i64()?),
             // 位模式按  读回来再转（两种表示无损往返 ✓）
             12 => Constant::Float(self.i64()? as u64),
+            // **复数常量**（task-29 ✓）：实部／虚部两个位模式 ✓
+            19 => Constant::Complex {
+                real_bits: self.i64()? as u64,
+                imag_bits: self.i64()? as u64,
+            },
             // **任意精度整数字面量**（第 285 轮）
             13 => Constant::BigInt(self.text()?),
             // **注解表达式**（第 287 轮）
@@ -497,6 +523,8 @@ impl UnitReader<'_> {
                 Constant::AnnList(items)
             }
             2 => Constant::Str(self.text()?),
+            // **含孤立代理的字符串**（P3-38 S2b ✓）：长度 ＋ WTF-8 字节 ✓
+            21 => Constant::StrWtf8(self.bytes()?),
             3 => Constant::Code(Box::new(self.unit()?)),
             7 => Constant::Bool(self.u8()? != 0),
             4 => Constant::Names(self.text_table()?),
