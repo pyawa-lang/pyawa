@@ -4,10 +4,10 @@
 核心是**像 Lua 一样易嵌入**：宿主直接实现沙箱接口、脚本不可信且不可逃逸、纯 Python 库逐字可用。
 另提供**程序级可选的安全谱**（渐进类型，非强制）。**目标不是更快的 Python。**
 
-当前状态：**M0 · M1 · M2 · M3 · M4 · M5 均已成立**。
+当前状态：**M0 · M1 · M2 · M3 · M4 · M5 · M6 均已成立**。
 
 - **M0**（文档集）：13 份全部写出（状态列见 `docs/SPEC-INDEX.md` §1）；两条判据（`CX-1` 编号零悬空
-  ＋重复定义、`CX-2` 文档集状态一致）由 `tests/ci/check.py` 承载，当前 **12/12 绿**
+  ＋重复定义、`CX-2` 文档集状态一致）由 `tests/ci/check.py` 承载，当前 **14/14 绿**
 - **M1**（最小可嵌入内核，`docs/PLAN-milestones.md` §6 ①）：判据本件是
   [`examples/m1.c`](examples/m1.c)——**45 行** ≤ 50（`MS-21` 要求入库），真编译、真链接、真运行，
   输出 `42`、退出码 0；验收脚本 [`tests/ci/t_ab_1.py`](tests/ci/t_ab_1.py)（**缺 C 编译器即红，
@@ -15,8 +15,8 @@
   `tools/measure_footprint.py` 实测（release）VM 引导 **48 µs**、宿主整程 **1.05 ms**、峰值 RSS
   **3.4 MB**，数值与口径的唯一出处是 `docs/DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"
 - **M2**（核心语义，`docs/PLAN-milestones.md` §6）：判据是"对拍 harness 在 `MS-13` 的语料上**无新差异**"。
-  实测（`cargo test -p pyawa-abi --test conformance`）：**112/112 通过 · 0 已知差异 · 0 新差异**；
-  `MS-8` 的比对项**齐**（退出码／stdout／stderr／未捕获异常 ＋ 探针）；`MS-12` 自检 **112/112**；
+  实测（`cargo test -p pyawa-abi --test conformance`）：**407/407 通过 · 0 已知差异 · 0 新差异**；
+  `MS-8` 的比对项**齐**（退出码／stdout／stderr／未捕获异常 ＋ 探针）；`MS-12` 自检 **407/407**；
   `MS-13` 的语料下限**逐面满足**（可执行判据 `tools/check_corpus_floor.py`）；`MS-25` 连跑三次数值一致。
   在册已知差异 3 条（`DIV-1`／`DIV-2`／`DIV-8`）**全属 `MS-19` 的合法类**，且当前**无语料命中**
 - **M4**（类型系统，`docs/PLAN-milestones.md` §6）：扩展模式（`.pyawa`）的渐进类型 **A 批（类型链）**——
@@ -36,10 +36,19 @@
   如实缺口（不阻塞判据）：`CP-22` 的 `os.getcwd/chdir` stdlib 面未接；`CP-21` 的逐段 Dir 能力链为 v1 简化档；
   `T-CP-10` 不含无 timeout 的阻塞 `recv/send` 与 Python 层 `KeyboardInterrupt` 投递；`AB-43` 消费方有界读取待做；
   `dup/dup2` 到 0/1/2 未接；C 面 `_codecs_hk`／iso2022／gb18030／hz 未做（台账卷 05 的 round 12–13 节）
+- **M6**（兼容性验收，`docs/PLAN-milestones.md` §6）：判据 **`MS-14` 报告可发布、新差异为零**——
+  `cargo test -p pyawa-abi --test conformance` 实测（参照 Python 3.14.4）：**407/407 通过 · 已知差异 0 · 新差异 0**，
+  四要素齐，`PYAWA_DANGLING=1` 双档均绿；语料 **407** 条与在册差异 **3** 条（`DIV-1`／`DIV-2`／`DIV-8`）未变。
+  `MS-19` 判据补充（合法 Python 被拒必须修）随 `P3-38` surrogate epic 收口：`Lib/test` 体检 **语法错 0／可编译 397/397＝100%**，
+  `import test.support.os_helper` 通过、`multibytecodec_support.py` 同步且可导入，`\ud800` 字面量／PEP 383
+  `surrogateescape`·`surrogatepass`／fs 路径·argv·readlink·输出边界均落地；判据① **477/628＝76.0%**、
+  `Lib/` 逐字节同步 **739** 文件（`--check` 全一致）。如实缺口（不阻塞判据、留队列）：未实现形态（`\N{…}`／`except*`／
+  async 推导式／PEP 695／下标删除／`import *`）、`socket` I/O、若干缺模块、3 个编译器 cell/free panic 用例、`tb_next` 链、
+  fs/io 其余面（台账卷 05 的 round 22–30 节；技术落点见 `docs/PLAN-milestones.md` §6「M6 的要求」）
 - **缺口**：**规格内已无未写小节**（原先两处——`SPEC-bytecode.md` 的"超出 §10 的指令"与
   `SPEC-c-modules.md` 的"逐模块合约表"——**均已落地**：前者为按需流程、后者为维护中的表）；
   `PLAN-milestones.md` §10 里的 **harness 实现**与**基线语料下限**也均已落地，
-  余下只有 **M5…M6 的可执行判据**（M3 判据① **已达标：451/628 ＝ 71.8%** ✓ 仪器 `tools/lib_import_ratio.py`；判据② **已裁定达成** ✓ 仪器 `tools/corpus_coverage.py`）。这是 `v0` 的既定含义
+  余下只有 **M6 的可执行判据**已由 `cargo test -p pyawa-abi --test conformance` 承担（M3 判据① **477/628 ＝ 76.0%** ✓ 仪器 `tools/lib_import_ratio.py`；判据② **已裁定达成** ✓ 仪器 `tools/corpus_coverage.py`）。这是 `v0` 的既定含义
 
 ## 文档（`docs/`，全部平铺）
 

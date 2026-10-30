@@ -2169,3 +2169,31 @@
   下标删除 5／`import *` 4、socket I/O 17、缺模块（zipimport/urllib.request/pyexpat/fork_wait 等）、编译器 cell/free 表 3 个 panic 用例、
   `FAILED(errors=1)` 泛化 16、`tb_next` 链、fs/io 其余（`os.pipe`/标准流 dup/`sys.prefix`）。
 - **下一轮**：收口前复核（判据① 已 76.0%、语料 floor 407、MS-14 407/407、新差异 0）＋ 十项闸门 → 出 M6 收口报告并**按用户目标执行 `--no-ff` 收 `main` ＋ tag `m6` ＋ push**（若仍有明确门控项，先如实报告）。
+
+---
+
+## round 31（会话 10 · M6 收口）落地 ✓ —— **M6 兼容性验收达成并收录 `main`＋tag `m6`**
+
+- **口径**：`HEAD`（本笔前）＝`faf685a`（`dev`，round 30 收口轮）；工作区起始干净；`check.py` 14/14。
+- **M6 三条判据实测（全 ✓）**：
+  1. **`MS-14` 报告可发布**：`target/conformance/report.md`（参照 Python 3.14.4）⇒ **407/407 通过、已知差异 0、新差异 0**，
+     四要素齐；语料 **407** 条与在册差异 **3** 条（`DIV-1`／`DIV-2`／`DIV-8`）未变；`PYAWA_DANGLING=1` 双档均绿（十项闸门草 9/10 项）。
+  2. **`MS-19` 补充（合法 Python 被拒必须修）**：`P3-38` surrogate epic 收口 ⇒ `Lib/test` 体检 **语法错 0／可编译 397/397＝100%**；
+     `import test.support.os_helper` ✓、`multibytecodec_support` 同步且可导入 ✓；`\ud800`/`\uDC80` 字面量、`surrogateescape`/`surrogatepass`、
+     fs 路径/argv/readlink/输出边界全部落地（证据链：台账 round 22–30）。
+  3. **判据① / 语料**：判据① **477/628＝76.0%**（≥67% 阈值 ✓；`tools/lib_import_ratio.py` 双跑复核一致）；`Lib/` 逐字节同步 **739** 文件
+     （CX-8 `--check` 全一致，169 按第二来源根）；语料下限 407/112 ✓。
+- **十项闸门（代码树）**：`tools/slowcheck.sh --release` 于 round 30 末在**同一代码树**上十项全绿（墙钟 **1172s**：①0 警告 ②.compile 逐字节 4 passed
+  ③workspace 371s ④check.py 14/14 ⑤stability 256s ⑥heap 并发+堆扰动 ⑦夹具 ⑧语料 407 ⑨conformance 61s ⑩DANGLING 62s）；
+  本轮仅文档/README 变更（无代码改动），`check.py` 14/14 复跑绿。
+- **文档同步**：
+  - `docs/PLAN-milestones.md` §6 新增「**M6 的要求**」（判据落地口径＋证据＋**如实缺口**清单）；兼容边界声明刷新
+    （判据① 477/628＝76.0%、Lib 739 文件、能力层 M5、M6 已达成）；§6 修订区追加 **M6 阶段边界（tag `m6`）** 行。
+  - `README.md` 当前状态改 **M0…M6 均已成立**，新增 M6 条（判据证据＋P3-38 收口＋如实缺口），M0/M2 数字刷新（14/14、407/407），
+    「缺口」段更新（M6 可执行判据已由 conformance 承担）。
+  - `NEXT.md` 终态（M6 已收口、`main` 指向合并提交、下一步 M7/后续）；`docs/ROUNDS.md` 索引行（行数 2168→现文、round 31 摘要）。
+- **收口动作（用户目标已授权）**：`git checkout main && git merge --no-ff dev`（合并提交注明 M6 证据）＋ `git tag m6` ＋ `git push origin main dev --tags`，
+  最后切回 `dev`。
+- **如实缺口（不阻塞 M6 三条判据、留队列）**：未实现形态 `\N{…}` 15／`except*` 7／async 推导式 4／PEP 695 `*Ts`·`**P` 4／下标删除 5／`import *` 4；
+  `socket` I/O 17；缺模块（`zipimport`／`urllib.request`／`pyexpat`／`fork_wait` 等）；3 个编译器 cell/free 表 panic 用例；`FAILED(errors=1)` 泛化 16；
+  `tb_next` 链；fs/io 其余（`os.pipe`／标准流 `dup`／`sys.prefix`）；`P3-38` 的 4 条有损输出通道边界。以上均**未登记为差异、未用 KNOWN 绕过**。
