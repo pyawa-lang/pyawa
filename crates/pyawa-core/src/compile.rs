@@ -1542,6 +1542,9 @@ enum ComprehensionTarget {
     /// **下标目标**（task-45 ✓）：`for (l[0], l) in [[1, 2]]`（官方 test_listcomps:433）——
     /// 参照 `dis`：`LOAD l; LOAD_SMALL_INT 0; STORE_SUBSCR` ✓。
     Subscript(Expression, Expression, Span),
+    /// **星号项**（task-59 ✓）：`for id, *_ in …` —— 这一层要发 `UNPACK_EX`（低字节＝星号前个数、
+    /// 高字节＝星号后个数 ✓）；星号本身绑定 `inner`（通常是名字，拿 list）。
+    Starred(Box<ComprehensionTarget>, Span),
 }
 
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
@@ -1560,6 +1563,8 @@ impl ComprehensionTarget {
             ComprehensionTarget::Group(items, _) => {
                 items.iter().flat_map(|item| item.names()).collect()
             }
+            // 星号项里那个目标照样绑定名字 ✓（`for id, *_ in …` 的 `_` 是 local ✓）
+            ComprehensionTarget::Starred(inner, _) => inner.names(),
             // 属性／下标目标**不声明局部**（它们不绑定名字；容器／键是读取 ✓）
             ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => Vec::new(),
         }
@@ -1787,6 +1792,10 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
                     match &generator.target {
                         ComprehensionTarget::Name(name, _) => targets.push(name.clone()),
                         ComprehensionTarget::Group(..) => {
+                            targets.extend(generator.target.names().into_iter().map(str::to_owned));
+                        }
+                        // **星号项**（task-59 ✓）：内层名字同样要进目标集合（cell 判定用 ✓）
+                        ComprehensionTarget::Starred(..) => {
                             targets.extend(generator.target.names().into_iter().map(str::to_owned));
                         }
                         ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => {}

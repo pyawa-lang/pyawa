@@ -191,6 +191,13 @@ pub(crate) fn parse_comprehension_target(
 ) -> Result<(ComprehensionTarget, usize), CompileError> {
     let (first, mut cursor) = parse_comprehension_target_item(lexed, cursor)?;
     if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+        // **裸星号目标**（`for *a in …`）参照是 SyntaxError（星号必须在列表／元组目标里 ✓）；
+        // `for *a, in …` 会带逗号 ⇒ 走下面组那条路 ✓（task-59）。
+        if matches!(first, ComprehensionTarget::Starred(..)) {
+            return Err(CompileError::Syntax(
+                "starred assignment target must be in a list or tuple".to_owned(),
+            ));
+        }
         return Ok((first, cursor));
     }
     // **裸目标表**：`a, b`／`(a, b), c` —— 首项之后按逗号收 ✓（尾随逗号 ⇒ 仍是一层组 ✓）
@@ -216,6 +223,14 @@ pub(crate) fn parse_comprehension_target_item(
     cursor: usize,
 ) -> Result<(ComprehensionTarget, usize), CompileError> {
     match lexed.lexemes.get(cursor) {
+        // **星号项**（task-59 ✓）：`for id, *_ in …`／`for *a, b in …` —— 与 `for` 语句目标同口径
+        //（这一层发 `UNPACK_EX` ✓；星号只允许一个，由发射期核）。
+        Some(Lexeme::Star) => {
+            let star_span = lexed.spans[cursor];
+            let (inner, next) = parse_comprehension_target_item(lexed, cursor + 1)?;
+            let span = star_span.to(comprehension_target_span(&inner));
+            Ok((ComprehensionTarget::Starred(Box::new(inner), span), next))
+        }
         // **属性／下标目标**（task-45 ✓）：`for (l[0], l) in …`（官方 test_listcomps:433）。
         // 只取"原子＋后缀链"（`parse_atom` 不碰顶层 `in` ✓），再按形状转目标 ✓。
         Some(Lexeme::Name(_))
@@ -308,7 +323,8 @@ pub(crate) fn comprehension_target_span(target: &ComprehensionTarget) -> Span {
         ComprehensionTarget::Name(_, span)
         | ComprehensionTarget::Group(_, span)
         | ComprehensionTarget::Attribute(_, _, span)
-        | ComprehensionTarget::Subscript(_, _, span) => *span,
+        | ComprehensionTarget::Subscript(_, _, span)
+        | ComprehensionTarget::Starred(_, span) => *span,
     }
 }
 

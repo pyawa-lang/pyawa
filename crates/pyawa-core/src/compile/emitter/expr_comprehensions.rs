@@ -288,6 +288,14 @@ impl Emitter {
                                 self.emit_expression(key)?;
                                 self.emit_named(*target_span, "STORE_SUBSCR", 0);
                             }
+                            // **裸星号目标**（task-59）：解析器已按参照报 SyntaxError
+                            //（星号必须在列表／元组目标里）⇒ 走不到这里；给穷尽匹配兜一句。
+                            ComprehensionTarget::Starred(_, target_span) => {
+                                return Err(CompileError::Syntax(format!(
+                                    "starred assignment target must be in a list or tuple（第 {} 行）",
+                                    target_span.line_start
+                                )));
+                            }
                         }
                     }
                     // 最内层：条件 → 元素

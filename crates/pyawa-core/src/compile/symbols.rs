@@ -1046,6 +1046,10 @@ fn declare_comprehension_target(emitter: &mut Emitter, target: &ComprehensionTar
                 declare_comprehension_target(emitter, item);
             }
         }
+        // **星号项**（task-59 ✓）：内层目标照常声明 ✓。
+        ComprehensionTarget::Starred(inner, _) => {
+            declare_comprehension_target(emitter, inner);
+        }
         // **属性／下标目标**（task-45 ✓）：不声明局部；容器／键是**读** ⇒ 预登记名字 ✓。
         ComprehensionTarget::Attribute(object, _, _) => {
             pre_intern_expression(emitter, object);

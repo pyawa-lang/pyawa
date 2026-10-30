@@ -33,6 +33,11 @@ pub(crate) fn comprehension_target_as_for_target(target: &ComprehensionTarget) -
         ComprehensionTarget::Subscript(object, key, span) => {
             ForTarget::Subscript(Box::new(object.clone()), Box::new(key.clone()), *span)
         }
+        // **星号项**（task-59 ✓）：`for` 语句那条路的同形目标（生成器表达式用 ✓）。
+        ComprehensionTarget::Starred(inner, span) => ForTarget::Starred(
+            Box::new(comprehension_target_as_for_target(inner)),
+            *span,
+        ),
     }
 }
 
@@ -59,6 +64,10 @@ pub(crate) fn collect_comprehension_target_names<'a>(
                 collect_comprehension_target_names(item, out);
             }
         }
+        // **星号项**（task-59 ✓）：内层的名字照常收集（保存/还原顺序按源码序 ✓）。
+        ComprehensionTarget::Starred(inner, _) => {
+            collect_comprehension_target_names(inner, out);
+        }
         // 属性／下标目标**不占名字槽**（不绑定局部 ✓）
         ComprehensionTarget::Attribute(..) | ComprehensionTarget::Subscript(..) => {}
     }
@@ -70,7 +79,8 @@ pub(crate) fn comprehension_target_span_of(target: &ComprehensionTarget) -> Span
         ComprehensionTarget::Name(_, span)
         | ComprehensionTarget::Group(_, span)
         | ComprehensionTarget::Attribute(_, _, span)
-        | ComprehensionTarget::Subscript(_, _, span) => *span,
+        | ComprehensionTarget::Subscript(_, _, span)
+        | ComprehensionTarget::Starred(_, span) => *span,
     }
 }
 
@@ -957,7 +967,23 @@ impl Emitter {
         slot_index: &mut usize,
         scaffold: Span,
     ) -> Result<(), CompileError> {
-        self.emit_indexed(group_span, "UNPACK_SEQUENCE", items.len());
+        // **含星号项的层**（task-59 ✓）：`UNPACK_EX (前 | 后 << 8)`（参照 `dis` 实测：
+        // `for id, *_ in …` ⇒ `UNPACK_EX 1; STORE_FAST_STORE_FAST (id, _)` ✓）；
+        // 不含星号仍是 `UNPACK_SEQUENCE <项数>`（旧路径零变化 ✓）。
+        match items
+            .iter()
+            .position(|item| matches!(item, ComprehensionTarget::Starred(..)))
+        {
+            Some(star_index) => {
+                let after = items.len() - star_index - 1;
+                self.emit_indexed(
+                    group_span,
+                    "UNPACK_EX",
+                    star_index | (after << 8),
+                );
+            }
+            None => self.emit_indexed(group_span, "UNPACK_SEQUENCE", items.len()),
+        }
         // **单名字组**（`[off]`）：照参照"存完紧接着读"能融成 `STORE_FAST_LOAD_FAST` ✓
         //（`[off for [off] in …]` 实测 ⇒ `UNPACK_SEQUENCE 1; STORE_FAST_LOAD_FAST (off, off)` ✓）。
         if items.len() == 1 {
@@ -968,10 +994,16 @@ impl Emitter {
                 return Ok(());
             }
         }
-        if items
-            .iter()
-            .all(|item| matches!(item, ComprehensionTarget::Name(..)))
-        {
+        // **全名字层**（含"星号包名字"项，task-59）：星号那格和普通名字一样占一个槽 ✓，
+        // 参照对 `id, *_` 就是 `UNPACK_EX 1; STORE_FAST_STORE_FAST (id, _)` ✓（融合照旧）。
+        let simple_name_item = |item: &ComprehensionTarget| match item {
+            ComprehensionTarget::Name(..) => true,
+            ComprehensionTarget::Starred(inner, _) => {
+                matches!(**inner, ComprehensionTarget::Name(..))
+            }
+            _ => false,
+        };
+        if items.iter().all(simple_name_item) {
             let first_span = items
                 .first()
                 .map(comprehension_target_span_of)
@@ -1034,6 +1066,32 @@ impl Emitter {
                     self.emit_expression(key)?;
                     self.emit_named(*span, "STORE_SUBSCR", 0);
                 }
+                // **星号项**（task-59 ✓）：栈顶就是它绑定的值（list）⇒ 存内层目标 ✓
+                //（内层是名字／嵌套组都认；属性／下标目标罕见，如实报未接线 ✓）。
+                ComprehensionTarget::Starred(inner, span) => match &**inner {
+                    ComprehensionTarget::Name(_, _) => {
+                        let slot = slots[*slot_index];
+                        *slot_index += 1;
+                        self.emit_indexed(*span, "STORE_FAST", slot);
+                    }
+                    ComprehensionTarget::Group(inner_items, inner_span) => {
+                        self.emit_comprehension_target_group(
+                            inner_items,
+                            *inner_span,
+                            element,
+                            generators,
+                            index,
+                            slots,
+                            slot_index,
+                            scaffold,
+                        )?;
+                    }
+                    other => {
+                        return Err(CompileError::Unsupported(format!(
+                            "推导式星号目标的这个内层形态尚未接线：{other:?}"
+                        )))
+                    }
+                },
             }
         }
         Ok(())

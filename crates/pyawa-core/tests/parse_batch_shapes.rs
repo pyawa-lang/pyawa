@@ -494,6 +494,48 @@ const CASES: &[Case] = &[
             ("RETURN_VALUE", -1, Some((4, 4, 4, 12))),
         ],
     },
+    // ===== P3-38 S2b 后续（task-59）：推导式目标星号 `for x, *y in …` =====
+    // 参照 `dis`（python3 3.14.4）原样导出：`UNPACK_EX 1`（前 1 个、后 0 个）＋
+    // `STORE_FAST_STORE_FAST (x, y)` 融合；保存/还原顺序与普通元组目标一致 ✓。
+    Case {
+        name: "comprehension_starred_target",
+        source: "def f(pairs):\n    return [x for x, *y in pairs]\n",
+        expected: &[
+            ("RESUME", 0, Some((0, 1, 0, 0))),
+            ("LOAD_CONST", 0, Some((1, 2, 0, 33))),
+            ("MAKE_FUNCTION", -1, Some((1, 2, 0, 33))),
+            ("STORE_NAME", 0, Some((1, 2, 0, 33))),
+            ("LOAD_CONST", 1, Some((1, 2, 0, 33))),
+            ("RETURN_VALUE", -1, Some((1, 2, 0, 33))),
+            ("--CODE--", 0, None),
+            ("RESUME", 0, Some((1, 1, 0, 0))),
+            ("LOAD_FAST_BORROW", 0, Some((2, 2, 27, 32))),
+            ("GET_ITER", -1, Some((2, 2, 27, 32))),
+            ("LOAD_FAST_AND_CLEAR", 1, Some((2, 2, 11, 33))),
+            ("LOAD_FAST_AND_CLEAR", 2, Some((2, 2, 11, 33))),
+            ("SWAP", 3, Some((2, 2, 11, 33))),
+            ("BUILD_LIST", 0, Some((2, 2, 11, 33))),
+            ("SWAP", 2, Some((2, 2, 11, 33))),
+            ("FOR_ITER", 6, Some((2, 2, 27, 32))),
+            ("UNPACK_EX", 1, Some((2, 2, 18, 23))),
+            ("STORE_FAST_STORE_FAST", 18, Some((2, 2, 18, 19))),
+            ("LOAD_FAST_BORROW", 1, Some((2, 2, 12, 13))),
+            ("LIST_APPEND", 2, Some((2, 2, 12, 13))),
+            ("JUMP_BACKWARD", 8, Some((2, 2, 12, 13))),
+            ("END_FOR", -1, Some((2, 2, 27, 32))),
+            ("POP_ITER", -1, Some((2, 2, 27, 32))),
+            ("SWAP", 3, Some((2, 2, 11, 33))),
+            ("STORE_FAST", 2, Some((2, 2, 11, 33))),
+            ("STORE_FAST", 1, Some((2, 2, 11, 33))),
+            ("RETURN_VALUE", -1, Some((2, 2, 4, 33))),
+            ("SWAP", 2, None),
+            ("POP_TOP", -1, None),
+            ("SWAP", 3, Some((2, 2, 11, 33))),
+            ("STORE_FAST", 2, Some((2, 2, 11, 33))),
+            ("STORE_FAST", 1, Some((2, 2, 11, 33))),
+            ("RERAISE", 0, Some((2, 2, 11, 33))),
+        ],
+    },
 ];
 
 #[test]
