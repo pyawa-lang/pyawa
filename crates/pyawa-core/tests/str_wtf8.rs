@@ -283,3 +283,175 @@ fn repr_of_legal_strings_is_unchanged() {
         assert_eq!(repr_of(instance.new_str(text)), expected, "{text:?} 的 repr");
     }
 }
+
+// --------------------------------------------------------------------------- #
+// P3-38 S2a-2 批 2：迭代／下标／切片／拼接／重复（码点面）
+// --------------------------------------------------------------------------- #
+
+use pyawa_core::executor::{advance, concat_public, subscript_read, values_equal_public};
+
+/// `a` + U+D800 + `b` 的对象（批 2 的核心样例）。
+fn lone_surrogate_object(instance: &Instance) -> NonNull<pyawa_core::Header> {
+    instance
+        .new_str_wtf8(LONE_SURROGATE_TEXT)
+        .expect("合法 WTF-8")
+}
+
+#[test]
+fn iteration_yields_one_object_per_code_point() {
+    let instance = Instance::new();
+    let object = lone_surrogate_object(&instance);
+    let iterator = instance.iter_object(object).expect("str 可迭代");
+    let mut items = Vec::new();
+    while let Some(item) = advance(&instance, iterator).expect("迭代成功") {
+        items.push(item);
+    }
+    unsafe { instance.release_object(iterator.as_ptr()) };
+    assert_eq!(items.len(), 3, "`a\\ud800b` 迭代出 3 个单字符");
+    // 第 0／2 个是普通 ASCII；第 1 个是孤立代理（WTF-8 表示、`text_of` ⇒ None ✓）
+    assert_eq!(instance.text_of(items[0]), Some("a"));
+    assert_eq!(instance.text_of(items[1]), None, "代理单字符没有 &str 视图");
+    assert_eq!(instance.wtf8_of(items[1]), Some(b"\xED\xA0\x80".as_slice()));
+    assert_eq!(instance.text_of(items[2]), Some("b"));
+    assert_eq!(instance.str_code_point_len(items[1]), Some(1));
+    // 合法 UTF-8 回归：'🦀' 迭代只给 1 个
+    let crab = instance.new_str("🦀");
+    let crab_iterator = instance.iter_object(crab).expect("str 可迭代");
+    let first = advance(&instance, crab_iterator)
+        .expect("迭代成功")
+        .expect("应有一个元素");
+    assert_eq!(instance.text_of(first), Some("🦀"));
+    assert!(advance(&instance, crab_iterator)
+        .expect("迭代成功")
+        .is_none());
+    unsafe {
+        instance.release_object(first.as_ptr());
+        instance.release_object(crab_iterator.as_ptr());
+    }
+}
+
+#[test]
+fn subscripts_follow_code_points_including_negative_indices() {
+    let instance = Instance::new();
+    let object = lone_surrogate_object(&instance);
+    let int_key = |value: i64| instance.new_int(value);
+    // 0／1／2 ⇒ a／代理／b；负下标 -1／-2／-3 对称 ✓
+    for (index, expected_wtf8, expected_text) in [
+        (0i64, b"a".as_slice(), Some("a")),
+        (1, b"\xED\xA0\x80".as_slice(), None),
+        (2, b"b".as_slice(), Some("b")),
+        (-1, b"b".as_slice(), Some("b")),
+        (-2, b"\xED\xA0\x80".as_slice(), None),
+        (-3, b"a".as_slice(), Some("a")),
+    ] {
+        let key = int_key(index);
+        let item = subscript_read(&instance, object, key).expect("下标应成功");
+        assert_eq!(instance.wtf8_of(item), Some(expected_wtf8), "下标 {index}");
+        assert_eq!(instance.text_of(item), expected_text, "下标 {index} 的 &str 视图");
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+    // 越界文案照参照：`string index out of range` ✓（异常对象在 `Err(Raised)` 里 ✓）
+    for index in [3i64, -4] {
+        let key = int_key(index);
+        match subscript_read(&instance, object, key) {
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                let text = instance.object_str(exception).expect("异常对象的 str");
+                unsafe { instance.release_object(exception.as_ptr()) };
+                assert!(
+                    text.contains("string index out of range"),
+                    "越界文案：{text}"
+                );
+            }
+            other => panic!("越界应报 IndexError，实际 {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn slices_follow_code_points_and_steps() {
+    let instance = Instance::new();
+    let object = lone_surrogate_object(&instance);
+    // [1:] ⇒ 代理+b；[::-1] ⇒ b+代理+a；[:-1] ⇒ a+代理
+    for (start, stop, step, expected) in [
+        (Some(1i64), None, None, b"\xED\xA0\x80b".as_slice()),
+        (None, None, Some(-1i64), b"b\xED\xA0\x80a".as_slice()),
+        (None, Some(-1i64), None, b"a\xED\xA0\x80".as_slice()),
+    ] {
+        let key = instance.new_slice(start, stop, step);
+        let sliced = subscript_read(&instance, object, key).expect("切片应成功");
+        assert_eq!(
+            instance.wtf8_of(sliced),
+            Some(expected),
+            "slice {start:?}:{stop:?}:{step:?}"
+        );
+        unsafe { instance.release_object(sliced.as_ptr()) };
+    }
+    // 合法 UTF-8 回归：`"héllo🦀"[1:]` 按码点 ✓
+    let text = instance.new_str("héllo🦀");
+    let key = instance.new_slice(Some(1), None, None);
+    let sliced = subscript_read(&instance, text, key).expect("切片应成功");
+    assert_eq!(instance.text_of(sliced), Some("éllo🦀"));
+    unsafe { instance.release_object(sliced.as_ptr()) };
+}
+
+#[test]
+fn concatenation_and_repetition_work_on_wtf8_bytes() {
+    let instance = Instance::new();
+    let lone = lone_surrogate_object(&instance);
+    let prefix = instance.new_str("x");
+    let suffix = instance.new_str("y");
+    // "x" + a + "y" == "xa\ud800by" ✓（两次拼接，含代理 ✓）
+    let first = concat_public(&instance, prefix, lone, 0).expect("拼接应成功");
+    let whole = concat_public(&instance, first, suffix, 0).expect("拼接应成功");
+    assert_eq!(
+        instance.wtf8_of(whole),
+        Some(b"xa\xED\xA0\x80by".as_slice())
+    );
+    assert_eq!(instance.str_code_point_len(whole), Some(5));
+    // `s * 2`：字节层重复 ✓
+    let doubled = instance.str_repeat(lone, 2).expect("重复应成功");
+    assert_eq!(
+        instance.wtf8_of(doubled),
+        Some(b"a\xED\xA0\x80ba\xED\xA0\x80b".as_slice())
+    );
+    // `0 * s` ⇒ 空串（单例）
+    let empty = instance.str_repeat(lone, 0).expect("重复应成功");
+    assert_eq!(instance.text_of(empty), Some(""));
+    // `+=` 走的也是 `concat_public`：字节相等 ✓
+    let via_iadd = concat_public(&instance, prefix, lone, 0).expect("拼接应成功");
+    assert_eq!(instance.str_equals(via_iadd, first), Some(true));
+    // 合法 UTF-8 回归
+    let hello = instance.new_str("héllo");
+    let repeated = instance.str_repeat(hello, 2).expect("重复应成功");
+    assert_eq!(instance.text_of(repeated), Some("héllohéllo"));
+    let joined = concat_public(&instance, hello, instance.new_str("🦀"), 0).expect("拼接应成功");
+    assert_eq!(instance.text_of(joined), Some("héllo🦀"));
+}
+
+#[test]
+fn membership_and_equality_use_wtf8_code_points() {
+    let instance = Instance::new();
+    let whole = lone_surrogate_object(&instance);
+    let lone = instance
+        .new_str_wtf8(b"\xED\xA0\x80")
+        .expect("合法 WTF-8");
+    // `代理 in a代理b` ⇒ True；普通字符子串照旧 ✓；空串 ⇒ True ✓
+    assert_eq!(instance.str_contains(whole, lone), Some(true));
+    assert_eq!(
+        instance.str_contains(whole, instance.new_str("z")),
+        Some(false)
+    );
+    assert_eq!(
+        instance.str_contains(whole, instance.new_str("")),
+        Some(true)
+    );
+    assert_eq!(
+        instance.str_contains(whole, instance.new_str("a\u{FFFD}b")),
+        Some(false)
+    );
+    // `==`／`!=`：WTF-8 字节相等（`values_equal_public` 走 `str_equals` ✓）
+    let same = lone_surrogate_object(&instance);
+    assert!(values_equal_public(&instance, whole, same));
+    let other = instance.new_str_wtf8(b"a\xED\xA0\x81b").expect("合法 WTF-8");
+    assert!(!values_equal_public(&instance, whole, other));
+}

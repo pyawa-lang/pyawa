@@ -1160,66 +1160,112 @@ fn ord_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    need_args(instance, "ord", args, 1)?;
-    let value = args[0];
-    let text = match instance.text_value(value) {
-        Some(text) => text,
-        None => {
-            let message = format!(
-                "ord() expected string of length 1, but {} found",
-                type_name(instance, value)
-            );
-            return Err(instance.raise_builtin_error("TypeError", &message));
-        }
-    };
-    // 长度按**码点**（`TS-22`）；本层 `str` 存 UTF-8 ⇒ 先按字符取
-    let mut characters = text.chars();
-    let first = characters.next();
-    if first.is_none() || characters.next().is_some() {
-        // 实测消息里的长度也是**字符数**
-        let message = format!(
-            "ord() expected a character, but string of length {} found",
-            text.chars().count()
-        );
-        return Err(instance.raise_builtin_error("TypeError", &message));
+    // **实参口径照参照 3.14.4 实测**：关键字先拒、再查个数（`ord() takes exactly one argument`）。
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "ord() takes no keyword arguments"));
     }
-    Ok(instance.new_int(i64::from(first.expect("上面确认过有字符") as u32)))
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("ord() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let value = args[0];
+    // **`str` 的码点视图走 WTF-8**（P3-38 S2a-2）：孤立代理各算 1 个码点 ✓ —— 用 `text_of`
+    // （合法 UTF-8 视图）会漏掉 WTF-8 表示的串 ✗。
+    if let Some(bytes) = instance.str_wtf8_bytes(value) {
+        let mut count = 0usize;
+        let mut first = 0u32;
+        for point in pyawa_core::wtf8::code_points(bytes) {
+            let Ok(code_point) = point else {
+                // 已校验的 `str` 不该解不出来；真出现按"长度 0"如实报（不猜一个码点）。
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "ord() expected a character, but string of length 0 found",
+                ));
+            };
+            if count == 0 {
+                first = code_point;
+            }
+            count += 1;
+        }
+        if count != 1 {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("ord() expected a character, but string of length {count} found"),
+            ));
+        }
+        return Ok(instance.new_int(i64::from(first)));
+    }
+    // **`str` 子类**（载荷同布局；`wtf8_of` 只认精确类型）：合法 UTF-8 的走 `object_str` 视图
+    // （参照对 `class S(str)` 的 `ord(S("a"))` 同样给 97 ✓）。
+    if instance
+        .type_named("str")
+        .is_some_and(|base| instance.is_subtype(instance.type_of(value), base))
+    {
+        let text = instance.object_str(value)?;
+        let count = text.chars().count();
+        if count != 1 {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("ord() expected a character, but string of length {count} found"),
+            ));
+        }
+        let code_point = text.chars().next().unwrap_or('\0');
+        return Ok(instance.new_int(i64::from(code_point as u32)));
+    }
+    let message = format!(
+        "ord() expected string of length 1, but {} found",
+        type_name(instance, value)
+    );
+    Err(instance.raise_builtin_error("TypeError", &message))
 }
 
-/// `chr(i)`：码点 → 单字符字符串。
-///
-/// 实测：`chr(-1)`／`chr(0x110000)` ⇒ `chr() arg not in range(0x110000)`；
-/// `chr(1.0)` ⇒ `'float' object cannot be interpreted as an integer`。
 fn chr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    need_args(instance, "chr", args, 1)?;
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "chr() takes no keyword arguments"));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("chr() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
     let value = args[0];
-    let code = match instance.int_value(value) {
-        Some(code) => code,
-        None => {
-            let message = format!(
-                "'{}' object cannot be interpreted as an integer",
-                type_name(instance, value)
-            );
-            return Err(instance.raise_builtin_error("TypeError", &message));
-        }
+    let Some(code) = instance.int_value(value) else {
+        let message = format!(
+            "'{}' object cannot be interpreted as an integer",
+            type_name(instance, value)
+        );
+        return Err(instance.raise_builtin_error("TypeError", &message));
     };
-    let character = match u32::try_from(code).ok().and_then(char::from_u32) {
-        Some(character) => character,
-        None => {
-            return Err(instance.raise_builtin_error(
-                "ValueError",
-                "chr() arg not in range(0x110000)",
-            ))
-        }
+    let Some(code_point) = u32::try_from(code).ok().filter(|point| *point <= 0x10FFFF) else {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "chr() arg not in range(0x110000)",
+        ));
     };
-    Ok(instance.new_str(&character.to_string()))
+    // **单码点 WTF-8 构造**（P3-38 S2a-2）：参照允许**孤立代理** 0xD800–0xDFFF
+    // （`chr(0xD800)` ⇒ `'\ud800'`、len 1、`ord` 回 55296 ✓）；合法标量的 WTF-8 字节就是
+    // UTF-8 ⇒ `new_str_wtf8` 走 UTF-8 表示（**零行为改动** ✓）。
+    let mut bytes = Vec::with_capacity(4);
+    if pyawa_core::wtf8::encode_code_point(code_point, &mut bytes).is_err() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "chr() arg not in range(0x110000)",
+        ));
+    }
+    instance.new_str_wtf8(&bytes).ok_or_else(|| {
+        // 单码点一定合法 ⇒ 不该发生；真发生也如实报范围错误，不造有损串。
+        instance.raise_builtin_error("ValueError", "chr() arg not in range(0x110000)")
+    })
 }
 
 /// `bin`／`oct`／`hex` 的共同实现（`base` 是 2／8／16，前缀照参照实现）。

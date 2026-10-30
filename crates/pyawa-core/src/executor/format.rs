@@ -37,6 +37,18 @@ pub(crate) fn format_value_with_spec(
     spec_text: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // P3-38 S2a-2 批 2 最小直通：**恰 str 的 WTF-8 表示**（含孤立代理）——
+    // 空规格 ⇒ 身份返回（参照 `format(s) is s` ✓；`String` 装不下代理，不能再走 `object_str`）；
+    // 非空规格 ⇒ 本批只保证**不 panic**：用有损文本（U+FFFD）渲染，**如实登记为偏差**（完整规格语义留下批）。
+    if instance.is_str_object(value) && instance.text_of(value).is_none() {
+        if spec_text.is_empty() {
+            return Ok(instance.retain(value));
+        }
+        let lossy = crate::wtf8::to_string_lossy(
+            instance.str_wtf8_bytes(value).expect("刚判过是 str"),
+        );
+        return Ok(instance.new_str(&lossy));
+    }
     // SAFETY: value 由调用方保证存活。
     let value_type = unsafe { value.as_ref() }.ty();
     // SAFETY: 类型名由注册表持有。

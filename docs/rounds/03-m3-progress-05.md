@@ -1936,3 +1936,35 @@
   ⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（440s）。
 - **下一轮（S2a-2 批 2）**：`str()`/print 输出边界（`str_str`/`object_str`）→ 迭代/索引/切片/`in`/`ord`/`chr` 码点面 → 拼接/重复在 WTF-8 字节层；
   之后 S2b（lexer/AST/Constant/emitter/pyac 走 WTF-8）→ S2c → S3a（codecs，解锁 os_helper）→ S3b → S3e → M6 收口。
+
+---
+
+## round 25（会话 10 · P3-38 续）落地 ✓ —— S2a-2 批 2：码点操作面（迭代/索引/切片/拼接/重复/in/len/str()/format 直通）＋ `chr`/`ord` 支持孤立代理
+
+- **口径**：`HEAD`（本笔前）＝`6c25663`（`dev`，round 24）；工作区起始干净；`check.py` 14/14。生产路径首次出现 WTF-8 串的来源＝`chr(0xD800)`（stdlib）。
+- **落地（core 批 2 ＋ stdlib 面）**：
+  1. **core（super-fix）**：`iter.rs` str 迭代按**码点**产出单字符（新增 `new_str_code_point`：标量⇒Utf8、代理⇒WTF-8 单码点）；`subscript.rs` str
+     下标/切片按码点（负下标/步长/越界文案照参照）；`concat_public` 的 `+`/`+=` 与 `ctrls.rs` 的 `*` 在 **WTF-8 字节层**（新增 `Instance::str_repeat`）；
+     str 解包与 f-string `BUILD_STRING` 字节层；`in` 改 `Instance::str_contains`（WTF-8 字节子串，自同步编码等价码点子序列）；
+     **追加**（Lead 预批）：`instance/containers.rs::length_of` str 分支改 `str_code_point_len`（`len(chr(0xD800))==1` 不再 panic）、
+     `FORMAT_SIMPLE`/`!s`/`"{}".format(s)`/`"{0}".format(s)`/空规格/`"%s" % s` 对恰 str **身份直通**（带非空规格/前后缀 `%s` 暂用有损 U+FFFD 保证不 panic，
+     完整语义留下批，如实）；`Instance` 新增 `str_code_point_vec`/`str_code_point_at`/`new_str_code_points`/`new_str_code_point`/`str_contains`/`str_repeat`/`is_str_object`。
+  2. **stdlib（sys-exit）**：`chr(i)` 收 0–0x10FFFF **全范围**（孤立代理真构造，单码点 WTF-8 经 `new_str_wtf8`；合法标量仍 UTF-8 ⇒ 零行为改动）；
+     `ord(c)` 改走 `str_wtf8_bytes`/`wtf8::code_points` 按码点计数（接受含代理单码点、str 子类兜底）；范围/类型/实参/长度文案照参照；
+     `str()` 对 str identity 现状确认已满足。
+- **验收（全 ✓）**：e2e（当前工作区含 `chr`）与 python3 3.14.4 **逐行一致**：`len=1`、`==`、`repr='\\ud800'`、`"a"+s+"b"` len=3、
+  下标/切片/反转、`s*2`/`*3`、`in`、`iter` 三元素、`str(s) is s`、`f"{s}" is s`、`"x{s}"`、`"%s" % s`、`+=`、`format` 直通；
+  `--test str_wtf8` **18 passed**（含合法 UTF-8 回归）、`--test slicing` 4 passed；stdlib 新 `tests/surrogate_chr_ord.rs` 4 passed；
+  **红线 `--test compile` 逐字节 4 passed**；`-p pyawa-core` 全量 0 failed；0 warning；check.py 14/14。
+- **未覆盖的 `value()`/panic 站点（下一批派活用，已列给 Lead）**：`scalars.rs` 12、`protocol.rs` 5、`executor.rs` 5、`classes.rs` 4、
+  `instance/convert.rs` 3（编解码面）、`accessors.rs` 2（`text_value`/ascii）、`step_match.rs` 2、`formatting.rs` 2、`argdecode.rs` 2、
+  `util.rs`/`gc.rs`/`step_format.rs`（非空规格）/`runtime.rs`（`%` 另一处）/`representations.rs`（`str_str` 槽）/`exceptions.rs` 各 1；
+  另：`format()` 内建名本身未定义（stdlib 面，另格）；`print`/`stdout.write` 写端属 S3b（未动）。
+- **数字**：本轮仍无编译/Lib 面行为改动（WTF-8 串只经 `chr` 构造），survey 沿用 round 21 基线：可编译 **367/397＝92.4%**、跑通 9/397、
+  语法错 30（全 surrogate）、判据① **477/628＝76.0%**、语料 407／新差异 0（MS-14 407/407）。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **5338s**）：① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（30s）；
+  ③ `cargo test --workspace` **全部测试绿**（566s；含 `str_wtf8` 18／`surrogate_chr_ord` 4／`slicing` 4）；④ `check.py` **14/14**（2s）；⑤ `stability.py`（1674s）；
+  ⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2173s）；⑦ 夹具（0s）；⑧ 语料下限 407/112（1s）；⑨ `conformance` **5 passed**（436s）；
+  ⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（456s）。
+- **下一轮（S2a-2 批 3）**：`str.upper/lower/strip/split/join/replace/find/startswith` 等方法的码点面？→ 或优先 **S3b 写端**（`print`/`stdout.write`）
+  与 **S2b 编译管线**打通 `\ud800` 字面量（epic 编译闸）；之后 S3a codecs → S3e 同步回归 → M6 收口。

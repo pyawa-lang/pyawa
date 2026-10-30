@@ -75,6 +75,11 @@ pub(crate) fn percent_format(
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
     let _ = opcode;
+    // P3-38 S2a-2 批 2 最小直通：`"%s" % s` 对**恰 str** 是身份转换（参照 `('%s' % s) is s` ✓）
+    // ⇒ 直接回原对象（`String` 输出装不下代理）。带前后缀／宽度等的完整 `%s` 留下批。
+    if template == "%s" && instance.is_str_object(right) {
+        return Ok(instance.retain(right));
+    }
     let characters: Vec<char> = template.chars().collect();
     // 右操作数的两种形态（**一处真相**：类型名取注册表 ✓）。
     // **子类也算** ✓（task-14 真 bug 修 ✗）：先前按**恰好**是 `tuple`／`dict` 判 ✗ ⇒ tuple **子类**
@@ -218,7 +223,18 @@ pub(crate) fn percent_format(
             'd' | 'i' | 'u' | 'o' | 'x' | 'X' | 'f' | 'F' | 'e' | 'E' | 'g' | 'G'
         );
         let sign_and_body: (String, String) = match conversion {
-            's' => (String::new(), instance.object_str(value)?),
+            // P3-38 S2a-2 批 2 最小直通：`%s` 取"恰 str 的 WTF-8 表示"时用**有损文本**（U+FFFD）
+            // 先保证**不 panic**；完整代理语义（输出侧 WTF-8）留下批，如实登记为偏差。
+            's' => {
+                let text = if instance.is_str_object(value) && instance.text_of(value).is_none() {
+                    crate::wtf8::to_string_lossy(
+                        instance.str_wtf8_bytes(value).expect("刚判过是 str"),
+                    )
+                } else {
+                    instance.object_str(value)?
+                };
+                (String::new(), text)
+            }
             'r' => (String::new(), instance.object_repr(value)?),
             // `%a`：参照给 **ascii()**（非 ASCII 转义）—— 本层按 `repr` 的结果再转义非 ASCII ✓
             'a' => (String::new(), ascii_escape(&instance.object_repr(value)?)),

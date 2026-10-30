@@ -138,13 +138,17 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     parts.reverse();
 
                     let str_type = instance.singletons().str_type();
-                    let mut text = String::new();
+                    // P3-38 S2a-2 批 2：f-string 的拼接在 **WTF-8 字节层**做 ✓（合法 UTF-8 输出
+                    // 与旧口径逐字节一致；孤立代理段也能拼 ✓）。
+                    let mut bytes: Vec<u8> = Vec::new();
                     let mut wrong_type = false;
                     for part in parts {
                         // SAFETY: part 是刚出栈的存活对象。
                         if unsafe { part.as_ref() }.ty() == str_type {
                             // SAFETY: 类型身份已确认。
-                            text.push_str(unsafe { &*part.as_ptr().cast::<StrObject>() }.value());
+                            bytes.extend_from_slice(
+                                unsafe { &*part.as_ptr().cast::<StrObject>() }.wtf8_bytes(),
+                            );
                         } else {
                             wrong_type = true;
                         }
@@ -156,11 +160,16 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                             what: "BUILD_STRING 只接线了 str",
                         });
                     }
-                    if text.is_empty() {
+                    if bytes.is_empty() {
                         // OM-23：空串走单例
                         push(instance, frame.get(), instance.singletons().empty_str())?;
                     } else {
-                        push_container(instance, frame.get(), StrObject::new(str_type, text))?;
+                        push_container(
+                            instance,
+                            frame.get(),
+                            StrObject::new_wtf8(str_type, bytes)
+                                .expect("f-string 各段都是合法 WTF-8"),
+                        )?;
                     }
                 }
                 "UNPACK_SEQUENCE" | "UNPACK_EX" => {

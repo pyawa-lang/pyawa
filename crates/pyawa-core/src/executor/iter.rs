@@ -16,7 +16,6 @@ use crate::builtin_objects::IteratorObject;
 use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
 use crate::builtin_objects::SetObject;
-use crate::builtin_objects::StrObject;
 use crate::builtin_objects::TupleObject;
 use crate::executor::arithmetic_public;
 use crate::executor::builtin_type;
@@ -381,17 +380,15 @@ pub(crate) fn iterable_item(
         });
     }
     if type_is_subtype_of(instance, ty, "str") {
-        // SAFETY: 类型身份已确认。
-        let text = unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned();
-        let character = text.chars().nth(index).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "迭代器游标越界",
-        })?;
-        let object = instance.alloc(StrObject::new(
-            instance.singletons().str_type(),
-            character.to_string(),
-        ));
-        return Ok(object.into_raw().cast::<Header>());
+        // P3-38 S2a-2 批 2：按**码点**取第 `index` 个（孤立代理也各占一格 ✓），单字符对象走
+        // `new_str_code_point`（标量⇒UTF-8 表示；代理⇒WTF-8 表示 ✓）。
+        let point = instance
+            .str_code_point_at(raw, index)
+            .ok_or(ExecError::Unsupported {
+                opcode,
+                what: "迭代器游标越界",
+            })?;
+        return Ok(instance.new_str_code_point(point));
     }
     // `bytes`：迭代给**整数**（实测 `list(b'ab') == [97, 98]`）
     if type_is_subtype_of(instance, ty, "bytes") {
@@ -447,23 +444,21 @@ pub(crate) fn contains(
     // SAFETY: container 是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
     if container_type == instance.singletons().str_type() {
-        // SAFETY: 类型身份已确认。
-        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value();
-        let needle = instance.text_value(item);
-        return match needle {
-            Some(needle) => Ok(text.contains(&needle)),
-            None => {
-                // SAFETY: item 是存活对象。
-                let item_type = unsafe { item.as_ref() }.ty();
-                // SAFETY: 类型名由注册表持有。
-                let name = unsafe { item_type.as_ref() }.name();
-                Err(raise_builtin(
-                    instance,
-                    "TypeError",
-                    &format!("'in <string>' requires string as left operand, not {name}"),
-                ))
-            }
-        };
+        // P3-38 S2a-2 批 2：`in` 改**安全口径**——两边都是 str 时按 WTF-8 字节子串判 ✓
+        //（自同步编码 ⇒ 等价码点子序列 ✓，见 `Instance::str_contains` 的注释）。
+        if let Some(found) = instance.str_contains(container, item) {
+            return Ok(found);
+        }
+        // 左操作数不是 str ⇒ 参照的 TypeError 文案 ✓
+        // SAFETY: item 是存活对象。
+        let item_type = unsafe { item.as_ref() }.ty();
+        // SAFETY: 类型名由注册表持有。
+        let name = unsafe { item_type.as_ref() }.name();
+        return Err(raise_builtin(
+            instance,
+            "TypeError",
+            &format!("'in <string>' requires string as left operand, not {name}"),
+        ));
     }
     // `bytes`：**子串**查找（实测 `b'ab' in b'abc'`）；左操作数不是 bytes 时报实测的消息。
     // **整数那一档**（第 284 轮按参照实测补 ✓）：`98 in b"b"` ⇒ `True` ✓、
@@ -640,10 +635,17 @@ pub fn concat_public(
 ) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: 两个都是存活对象（调用方保证）。
     let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
-    let left_text = instance.text_value(left);
-    let right_text = instance.text_value(right);
-    if let (Some(a), Some(b)) = (left_text, right_text) {
-        return Ok(instance.new_str(&format!("{a}{b}")));
+    // **`str + str`**（P3-38 S2a-2 批 2）：在 **WTF-8 字节层**拼接 ✓（合法 UTF-8 的拼接字节与旧口径
+    // 完全一致；含孤立代理的串也能拼 ✓）。结果走 `new_str_wtf8` ⇒ 合法 UTF-8 结果仍存 Utf8 ✓。
+    if instance.is_str_object(left) && instance.is_str_object(right) {
+        let mut joined = instance
+            .str_wtf8_bytes(left)
+            .expect("刚判过是 str")
+            .to_vec();
+        joined.extend_from_slice(instance.str_wtf8_bytes(right).expect("刚判过是 str"));
+        return Ok(instance
+            .new_str_wtf8(&joined)
+            .expect("两个合法 WTF-8 的拼接仍合法"));
     }
     // **`bytearray` 拼接** ✓（第 643 轮）：任一操作数是 `bytearray` ⇒ 结果给 **`bytearray`** ✓（参照口径 ✓）；
     // 另一侧要是 `bytes`／`bytearray` ✓。`re._compiler` 的 `data += chunk` 正需要它 ✓

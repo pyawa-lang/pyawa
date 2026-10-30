@@ -9,6 +9,12 @@ pub(super) fn step_format<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                 "FORMAT_SIMPLE" => {
                     // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
                     let value = frame.get().pop()?;
+                    // P3-38 S2a-2 批 2 最小直通：**恰 `str` 的 WTF-8 表示**（含孤立代理）
+                    // `str(x) is x`（参照实测 ✓）⇒ 原样压回去，避免经 `object_str`（String 装不下代理）。
+                    if instance.is_str_object(value) && instance.text_of(value).is_none() {
+                        push(instance, frame.get(), value)?;
+                        return Ok(Step::Continue);
+                    }
                     // **直接走 `object_str`** ✓（第 210 轮修正 ✗）：它自己就是"**槽位优先** ＋ 覆写通道 ＋
                     // 兜底" ✓ —— 与参照的默认 `object.__format__`（= `str(self)` ✓）同序 ✓。
                     // 先前这里"**先查 `__str__` 覆写**" ✗ ⇒ 一旦 `object.__str__` 存在（本轮起 ✓），
@@ -20,6 +26,12 @@ pub(super) fn step_format<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                 "CONVERT_VALUE" => {
                     // 净 0：`!s`／`!r`／`!a`（实测 oparg 1／2／3）
                     let value = frame.get().pop()?;
+                    // P3-38 S2a-2 批 2 最小直通：`!s` 对**恰 str 的 WTF-8 表示**同样是身份转换
+                    //（参照 `f"{s!s}" is s` ✓）⇒ 原样压回，避免 `object_str` 的 String 装不下代理。
+                    if oparg == 1 && instance.is_str_object(value) && instance.text_of(value).is_none() {
+                        push(instance, frame.get(), value)?;
+                        return Ok(Step::Continue);
+                    }
                     // `!s`／`!r`／`!a`（实测 oparg 1／2／3），都走 `OM-11` 的槽位
                     let text = match oparg {
                         // **同 `FORMAT_SIMPLE`** ✓（第 210 轮修正 ✗）。
@@ -67,6 +79,15 @@ pub(super) fn step_format<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     release(instance, spec_object);
 
                     let value = frame.get().pop()?;
+                    // P3-38 S2a-2 批 2 最小直通：**空规格 + 恰 str 的 WTF-8 表示** ⇒ 身份返回
+                    //（参照 `format(s) is s` ✓；带非空规格的完整语义留下批）。
+                    if spec_text.is_empty()
+                        && instance.is_str_object(value)
+                        && instance.text_of(value).is_none()
+                    {
+                        frame.get().push(value)?;
+                        return Ok(Step::Continue);
+                    }
                     // 渲染整段**抽到 `format_value_with_spec`** ✓（第 722 轮：`str.format` 要调**同一处** ✓
                     // —— 先前这段内联逻辑只有 `FORMAT_WITH_SPEC` 能走 ✗）。
                     let formatted = format_value_with_spec(instance, value, &spec_text, opcode_number);

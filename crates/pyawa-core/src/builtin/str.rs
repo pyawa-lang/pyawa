@@ -1133,6 +1133,14 @@ pub(crate) fn str_format_native(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let template = bound_text(instance, bound)?;
+    // P3-38 S2a-2 批 2 最小直通：模板就是**单个自动／手工编号字段**（`{}`／`{0}`）且实参恰为
+    // **WTF-8 表示的 `str`**（含孤立代理）⇒ 参照 `"{}".format(s) is s`（实测 ✓）⇒ 直接回原对象，
+    // 避免 `render_format` 的 `String` 装不下代理。**带规格／前后缀／多字段的完整语义留下批** ✓。
+    if kwargs.is_empty() && args.len() == 1 && (template == "{}" || template == "{0}") {
+        if instance.is_str_object(args[0]) && instance.text_of(args[0]).is_none() {
+            return Ok(instance.retain(args[0]));
+        }
+    }
     let mut named: Vec<(String, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
     for (key, value) in kwargs {
         let Some(name) = instance.text_of(*key) else {

@@ -9,39 +9,42 @@
 > r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）；
 > r23：**S2a-1** `StrObject` 存储升 WTF-8 表示（`StrRepr` 双分支、`new_str_wtf8`/`wtf8_of`/`as_utf8`，**零行为改动**＋8 测试）。
 > **M6 收口结论（2026-10-25）**：`MS-14` ✓（407/407、新差异 0）；但 `MS-19` 补充下 **surrogate 未解 ⇒ M6 不标记完成**；
-> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓（repr/eq/len）→ 批 2 起继续**；**未合并 main、未 tag m6**。
+> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓（repr/eq/len）→ 批 2 ✓（码点操作面＋chr/ord）→ 批 3/S2b 起继续**；**未合并 main、未 tag m6**。
 > 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
 
-- **HEAD**：`94e2a04`（`dev`，本笔前）—— 本笔＝**round 24**：P3-38 **S2a-2 批 1** —— repr／相等／len 面 WTF-8 支持（`str_code_point_len`/`str_equals`/`str_is_empty`、`quote_wtf8`（孤立代理⇒`\udXXX`）、`str_repr`/容器嵌套、`==`/len/真值逐点迁；**合法 UTF-8 零变化**）；`tests/str_wtf8.rs` 13 passed；细节见台账 round 24。
-- **工作区**：本笔待提交 ＝ **10 项**（`git status --porcelain` 实测：`builtin_objects/representations.rs`、`executor/iter.rs`、`executor/values.rs`、`instance.rs`（re-export 一行）、`instance/accessors.rs`、`instance/quote.rs`、`tests/str_wtf8.rs` ＋ `NEXT.md` ＋ 台账 round 24 ＋ `ROUNDS.md`）。
+- **HEAD**：`6c25663`（`dev`，本笔前）—— 本笔＝**round 25**：P3-38 **S2a-2 批 2** —— 码点操作面（迭代/下标/切片/拼接/重复/`in`/`len`/`str()`/`format` 直通）＋ **`chr`/`ord` 支持孤立代理**；`str_wtf8` 18 passed、`surrogate_chr_ord` 4 passed；e2e `chr(0xD800)` 全链与 python3 逐行一致；细节见台账 round 25。
+- **工作区**：本笔待提交 ＝ **16 项**（`git status --porcelain` 实测：core `executor/{iter,subscript,ctrls,step_containers,step_format,format,runtime}.rs`、`builtin/str.rs`、`instance/{accessors,containers}.rs`、`tests/str_wtf8.rs`；stdlib `builtins_module.rs`、`tests/surrogate_chr_ord.rs`；`NEXT.md`＋台账 round 25＋`ROUNDS.md`）。
 - **stash**：**空** ✓
-- **round 24 新增验收（全 ✓）**：
-  1. **repr/eq/len 面 WTF-8 支持**（S2a-2 批 1）：新增 `str_wtf8_bytes`/`str_code_point_len`（代理各 1）/`str_equals`（WTF-8 字节相等）/`str_is_empty`；
-     `quote_wtf8`（孤立代理⇒`\udXXX` 小写转义、输出仍合法 UTF-8 ASCII）＋`str_repr`/容器嵌套走它（合法 UTF-8 输出逐字节不变）；
-     `values.rs` 的 `==` 走 `str_equals`、`iter.rs` 的 len/真值走码点计数/`str_is_empty`。
-  2. **参照对拍**：`repr(chr(0xd800))`=`'\ud800'`、`repr('a\ud800b')`、`repr('\ud800\udfff')`、`repr("x\ud800'")`、`repr(['a\ud800b'])` 与 python3 逐条一致；
-     合法串 repr 回归表（引号/`\n`/`\x0b`/`é`/`中`/🦀）逐字节不变。
-  3. **测试**：`--test str_wtf8` **13 passed**、`--test wtf8` 13；红线 `--test compile` 逐字节 4 passed；core 全量 0 failed；0 warning；check.py 14/14。
-  4. **未覆盖的 `value()` 站点清单**已如实列在台账（`str_str`/print 输出边界、迭代/索引/切片、`ord/chr`、拼接/重复、codecs、fs 等留后续批）。
-- **数字**：本轮仍零可观测行为改动（Wtf8 仅测试构造），沿用 round 21 基线：**可编译 367/397＝92.4%**、跑通 9/397、语法错 30（全 surrogate）、
-  未实现 48、运行期 271、超时 39；判据① **477/628＝76.0%**；语料 407／新差异 0（MS-14 407/407）。
-- **M6 收口结论**：MS-14 ✓／新差异 0 ✓；**P3-38 未完成 ⇒ 不满足 M6 收口**（MS-19 补充）。epic 进度：**S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓**。
-- **下一轮（S2a-2 批 2）**：`str()`/print 输出边界（`str_str`/`object_str`）→ 迭代/索引/切片/`in`/`ord`/`chr` 码点面 → 拼接/重复在 WTF-8 字节层；
-  然后 **S2b**（lexer/AST/Constant/emitter/pyac 走 WTF-8；守 compile 逐字节＋`lib_compile`）→ S2c → S3a（codecs，解锁 os_helper）→ S3b → S3e → M6 收口（报用户批准）。
+- **round 25 新增验收（全 ✓）**：
+  1. **码点操作面**（S2a-2 批 2）：str 迭代按码点（代理⇒`new_str_code_point` WTF-8）、下标/切片按码点、`+`/`+=`/`*` 与 f-string `BUILD_STRING`
+     在 WTF-8 字节层、`in` 改 `str_contains`、`len` 走 `str_code_point_len`（`len(chr(0xD800))==1` 不再 panic）；
+     `str()`/`FORMAT_SIMPLE`/`!s`/`"{}".format`/`"{0}"`/空规格/`"%s"` 对恰 str 身份直通（非空规格/嵌入 `%s` 暂有损 U+FFFD 保证不 panic，如实）。
+  2. **`chr`/`ord` 支持孤立代理**（stdlib）：`chr(0xD800)` 真构造 WTF-8 串（0–0x10FFFF 全范围、合法标量零行为改动）、
+     `ord` 按码点计数（含代理、str 子类兜底）；范围/类型/长度文案照 python3 3.14.4。
+  3. **e2e 对拍**：`chr(0xD800)` 全链（len/eq/repr/concat/mul/idx/slice/iter/in/str identity/format/percent/f-string/iadd）与 python3 **逐行一致**；
+     `--test str_wtf8` **18 passed**、`slicing` 4 passed、`surrogate_chr_ord` 4 passed；红线 compile 逐字节 4 passed；core 全量 0 failed；0 warning；check.py 14/14。
+  4. **未覆盖站点清单**已入台账（`scalars.rs`/`protocol.rs`/`convert.rs`/`str_str` 槽/`FORMAT_WITH_SPEC` 规格串/`%` 另一处等）。
+- **数字**：本轮仍无编译/Lib 面行为改动（WTF-8 串仅经 `chr` 构造），沿用 round 21 基线：**可编译 367/397＝92.4%**、跑通 9/397、
+  语法错 30（全 surrogate）、未实现 48、运行期 271、超时 39；判据① **477/628＝76.0%**；语料 407／新差异 0（MS-14 407/407）。
+- **M6 收口结论**：MS-14 ✓／新差异 0 ✓；**P3-38 未完成 ⇒ 不满足 M6 收口**。epic 进度：S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓ → 批 2 ✓。
+- **下一轮（S2a-2 批 3 / S2b 起）**：优先 **S2b 编译管线**（lexer 转义/AST/Constant/emitter/pyac 走 WTF-8；守 compile 逐字节＋`lib_compile`＝epic 编译闸），
+  让 `\\ud800` 字面量从源码可用（届时 30 个语法错可开始归零）；同时补 `print`/`stdout.write` 写端（S3b）与剩余 `str` 方法面（trim/split/join/find 等）。
+  之后 S3a codecs → S3e 同步 os_helper/multibytecodec_support 回归 → M6 收口（报用户批准）。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
 1. **M6 判据**：`MS-14` ✓（407/407、新差异 0）＋ **`P3-38` 必须完成**（`MS-19` 补充）才能收口。
-2. **P3-38 阶段**：S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓ → 批 2（输出边界/码点面）→ S2b（编译管线，epic 编译闸）→ S2c → S3a → S3b → S3e。
+2. **P3-38 阶段**：S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓ → 批 2 ✓ → **S2b（编译管线，epic 编译闸）** → S2c → S3a → S3b → S3e。
 3. **收口动作**（epic 完成后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                      # 应干净（round 24 已提交）
-# 下一步：S2a-2 批 2 —— str()/print 输出边界（str_str/object_str）＋ 迭代/索引/切片/in/ord/chr 码点面＋拼接/重复（WTF-8 字节层）
+git status --short                      # 应干净（round 25 已提交）
+# 下一步：S2b —— lexer 转义返回 WTF-8 字节（\\ud800/\\uDC80 合法），Lexeme/Expression/Constant/AnnString/f-string 字面段/emitter/pyac
+#   全部改 WTF-8 字节流；守 --test compile 逐字节 4 passed 与 lib_compile 绿＝epic 编译闸
 cargo test -p pyawa-core --test str_wtf8
 ```
 
