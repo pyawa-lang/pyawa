@@ -1078,6 +1078,12 @@ impl Emitter {
                     );
                 }
                 let saved_collect = self.collect_condition_exits;
+                // **条件出口的落点是"本条 if"私有的**（task-63 真 bug 修 ✗）：`condition_landings`
+                // 是发射器上的共享队列，而 `take` 发生在**体发完之后** ⇒ 体里若还有 `if`
+                // （典型：`if A and B and C:` 体内的 `if`），内层 `take` 会把**外层**的落点
+                // 一起拿走 ⇒ 外层前两个假出口被回填到**体内**（UnboundLocalError 的根因 ✓）。
+                // 所以在发条件之前记下队列长度，发完之后立刻 `split_off` 出"本条自己的"落点 ✓。
+                let landings_base = self.condition_landings.len();
                 // **"块尾的条件出口各带一份收尾副本"还得块本身在尾位**（第 279 轮修 ✗）：
                 // 先前只看"本条 `if` 是块里最后一条" ✗ ⇒ **嵌套**在非尾块里的 `if` 也会给出口
                 // 建独立落点 ✗，而那些落点由 `flush_condition_copies` 排在**收尾之后** ✗
@@ -1088,6 +1094,8 @@ impl Emitter {
                     else_body.is_empty() && rest.is_empty() && self.block_tail && !inverted;
                 let skip = self.emit_condition_jump(condition, inverted)?;
                 self.collect_condition_exits = saved_collect;
+                // 本条 `if` 自己的条件出口（内层 `if` 的落点不会混进来 ✓）
+                let own_landings = self.condition_landings.split_off(landings_base);
                 // **粘性继承**：条件那串发完之后"最后一条指令"的位置（`if a:` 是 `a`、`if not a:`
                 // 是 `a`（`not` 被折进跳转 ⇒ 末条是操作数））。无 `else` 的 `if` 收尾就用它（实测）
                 let condition_tail = self.last_span;
@@ -1140,7 +1148,7 @@ impl Emitter {
                     self.emit_implicit_return();
                 }
                 if else_body.is_empty() {
-                    let landings = core::mem::take(&mut self.condition_landings);
+                    let landings = own_landings;
                     if rest.is_empty() {
                         for landing in landings {
                             self.pending_condition_copies

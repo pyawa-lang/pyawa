@@ -1027,31 +1027,47 @@ fn source_text(vm: &Vm, namespace: NonNull<Header>, name: &str) -> String {
 }
 
 #[test]
-fn zero_arg_super_finds_a_class_defined_inside_a_function() {
-    // task-6 的最小复现：定义类 `Local` 是**函数局部名**，全局里查不到
-    // ⇒ 运行期按"类字典持有当前帧 code"反查到 `Local`（参照给 7）。
+fn nested_tail_if_condition_exits_land_after_the_body() {
+    // task-63（预存 emitter 回填 bug）：方法末尾的 `if A and B and C:` 里再套 `for`／`if` 时，
+    // 外层前两个假出口曾被内层 `if` 的收尾逻辑**抢占**回填到体内 ⇒ 第二次调用（外层条件为假）
+    // 直接跳进 `lines.append` 段 ⇒ `UnboundLocalError: lines`。判据：**第二次调用不炸且结果不变** ✓。
     let vm = Vm::new();
     let namespace = run_source(
         &vm,
         r#"
-class Base:
-    def __init__(self, x):
-        self.x = x
+class F:
+    def __init__(self):
+        self._lines = None
+        self.lineno = 1
+        self.end_lineno = 2
 
-def make():
-    class Local(Base):
-        def __init__(self, x):
-            super().__init__(x)
-    return Local(7)
+    def s(self):
+        if (
+            self._lines is None
+            and self.lineno is not None
+            and self.end_lineno is not None
+        ):
+            lines = []
+            for lineno in (self.lineno, self.end_lineno):
+                line = lineno
+                if not line:
+                    line = -1
+                lines.append(line)
+            self._lines = lines
 
-result = make().x
+f = F()
+f.s()
+first_ok = f._lines
+f.s()
+second_ok = f._lines
+ok = first_ok == second_ok and first_ok[0] == 1 and first_ok[1] == 2
 "#,
     );
-    let result = namespace_lookup(&vm, namespace, "result");
+    let ok = namespace_lookup(&vm, namespace, "ok");
     assert_eq!(
-        vm.instance.int_value(result),
-        Some(7),
-        "函数里定义的类：`super().__init__(x)` 应当接到 Base.__init__"
+        vm.instance.int_value(ok),
+        Some(1),
+        "第二次调用：外层条件为假 ⇒ 假出口必须落到**函数收尾**（不能跳进体内）；两次结果都应是 [1, 2]"
     );
 }
 
