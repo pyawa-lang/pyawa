@@ -2055,3 +2055,43 @@
   之后才能报 M6 收口（`--no-ff`＋tag m6，需用户批准）。
 - **下一轮**：S3b-2（`os.fsencode`/`fsdecode` 真实文件路径面：posix `stat`/`open`/`listdir`/`readlink` 对含代理路径 + abort 面）→ S3e-2 官方测试抽样回归 →
   MS-14／判据①／语料复核 → 报用户批准 M6 收口。
+
+---
+
+## round 28（会话 10 · P3-38 续）落地 ✓ —— 编译器"块尾条件落点"预存 bug 修 ＋ fs 路径 surrogateescape ＋ S3e-2 小格批（跑通 15→17）
+
+- **口径**：`HEAD`（本笔前）＝`8af7029`（`dev`，round 27）；工作区起始干净；`check.py` 14/14。
+- **落地（三块）**：
+  1. **预存编译器 bug（`UnboundLocalError: lines`）**：根因＝`condition_landings` 是发射器上的**共享队列**、`take` 发生在"体发完之后"——
+     外层尾位 `if A and B and C:` 把前两个假出口落点入队后，**体内嵌套的 `if`** 发完自己的体时 `take` 走整条队列 ⇒ 外层落点被就地标在体内；
+     第二次调用（外层条件为假）直接跳进 `lines.append` 段 ⇒ `UnboundLocalError`。修法（`stmt_compound.rs` 一处）：发条件前记 `landings_base`、
+     发完立即 `split_off` 出**本条 if 私有**落点，收尾用私有集合。修后 `PYAWA_JUMP_DEBUG` 前两条假出口落到收尾副本（182/184）、第三条 180，
+     与参照"各假出口各有收尾副本"同构。回归测试（`classes.rs`：方法跑两次）**回退即失败、修复即过**；多种形状（体内 for/if、`not (A and B)`、
+     elif 链、条件带 `in`/`is`、嵌套块尾 if）与 python3 逐行一致。**进度**：`test_hmac.py` 不再崩（Ran 75, 3F/79E/34S）、`test_traceback.py` 不再崩
+     （新卡点 `except*` 未接线）；两者全文 0 条 `UnboundLocalError: lines`。
+  2. **S3b-2：fs 路径面 surrogateescape 往返（PEP 383）**：`fs_posix.rs` 的 `path_of` 改为**原始字节**（`OsStr::from_bytes`）、补 `listdir` 槽
+     （NUL 分隔两段式、句柄经 `/proc/self/fd` 读目录）与 `symlink` 槽；`instance/fs.rs` 新增 `fs_listdir`/`fs_rename`/`fs_symlink`（字节路径经既有 VM 解析）；
+     `posix_module.rs` 新增 `path_argument`/`decode_path_text`（str⇒utf-8+surrogateescape 原始字节；合法 UTF-8 零变化、`'\udcff'`⇒`0xff`、
+     其它孤立代理抛 `UnicodeEncodeError`；报错显示形 `'\udcff'` 一致），改造 `open/stat/readlink/unlink/rmdir`、新增 `os.listdir`/`rename`/`symlink`/`access`
+     （进 `__all__`）；`io_module.rs` 仅 `open` 路径编码一处（报备超域一行）。端到端探针（临时目录造 `b'\xff'` 文件）与 python3 **0 diff**：
+     `listdir` 得 `'\udcff'`/`b'\xff'`、`fsdecode/fsencode` 往返、`exists`、`stat.st_size`、`open` 写读回环、`access`、`symlink/readlink`、`rename`、`remove`；
+     `ls -b`/xxd 字节证据（symlink 目标 `74 67 74 2d ff`）。如实边界：`os.access` 按 mode 位启发（无 euid/root 语义）、`getcwd` 仍 lossy、受限 provider 的 `symlink` 未实现；
+     另报 core 缺口：含代理 str 的 `sorted`/`<` 仍 panic（`StrObject::value()` 排序面，留下一轮）。
+  3. **S3e-2 triage ＋ 小格批（5 条）**：① `sys.path_importer_cache`/`sys.path_hooks` 补空 dict/list（原生导入无 Python 查找器 ⇒ 真实表示；
+     `importlib.invalidate_caches()` no-op）⇒ `test_hmac` 真正跑起来；② `_imp._override_frozen_modules_for_tests`（×9）照参照参数契约、
+     `_override_multi_interp_extensions_check` 主解释器 RuntimeError；③ **新增 `faulthandler` 模块**（15 名字齐；`enable/disable/is_enabled` 真状态机、
+     `register/unregister` 真登记表、`dump_traceback` 沿 `f_back` 写真实栈；信号/定时器/C 栈/崩溃钩子如实未接）；④ `math.isclose`/`nextafter` 全语义
+     （大 steps 全序键一步精确）＋修正 math 的 `real_argument` TypeError 文案；⑤ `operator` 补 28 个有 native 的 dunder 别名。新增 `tests/small_cells.rs`（5 项）。
+- **验收（全 ✓）**：**release survey：可编译 397/397＝100.0%、跑通 17/397＝4.3%**（新增 `test___all__`/`test_math_property` 等）、
+  未实现 80、运行期错 293、超时 7；**消失的签名**：`_override_frozen_modules_for_tests` ×9→0、`No module named faulthandler` ×3→0、
+  `UnboundLocalError lines` ×6→0、`path_importer_cache` 0；`test_hmac` 导入崩溃→真跑、`test_os` 推进到 async 推导式、`test_richcmp`/`test_math` 推进到 state-5。
+  **MS-14 本树**：407/407、已知 0、新差异 0。红线 `--test compile` 逐字节 4 passed；core 75／stdlib 19 目标全绿；0 warning；check.py 14/14。
+- **闸门**（`tools/slowcheck.sh --release` 单次连续 **十项全绿**，墙钟 **1036s（17min16s）**）：步骤 0 构建 0s（已预热）；
+  ① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（30s）；③ workspace（122s）；④ `check.py` **14/14**（2s）；
+  ⑤ stability（316s）；⑥ heap_and_concurrency（428s，4 路并发 4/4＋堆扰动 3/3）；⑦ 夹具 0s；⑧ 语料下限 0s；
+  ⑨ conformance **5 passed**（69s）；⑩ `PYAWA_DANGLING=1` **5 passed**（69s）。**MS-14 报告本树：407/407、已知差异 0、新差异 0**。
+- **M6 收口结论**：MS-14 ✓、新差异 0 ✓、可编译 100%、语法错 0（`MS-19` 补充的"合法 Python 被拒"已消除）；**P3-38 剩余**：
+  S2a-2 排序/比较面（含代理 str 的 `sorted`/`<` panic）、`\N{…}` 具名转义 15（Unicode 名字表）、`except*` 7、async 推导式 4、PEP 695、下标删除 5、
+  `import *` 属性字典 4、socket I/O 17、`__traceback__` 上下文 11（下一轮首选 triage）、fs/io 其余面 → 之后报 M6 收口。
+- **下一轮**：① `_AssertRaisesContext`/`_GeneratorContextManager.__traceback__`（×11，triage 首选）② 含代理 str 的排序/比较（core）③ `\N{…}` 名字表评估
+  ④ `except*`/async 推导式 ⑤ release survey 回归。

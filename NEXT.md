@@ -9,45 +9,48 @@
 > r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）；
 > r23：**S2a-1** `StrObject` 存储升 WTF-8 表示（`StrRepr` 双分支、`new_str_wtf8`/`wtf8_of`/`as_utf8`，**零行为改动**＋8 测试）。
 > **M6 收口结论（2026-10-25）**：`MS-14` ✓（407/407、新差异 0）；但 `MS-19` 补充下 **surrogate 未解 ⇒ M6 不标记完成**；
-> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → 批1 ✓ → 批2 ✓ → S2b ✓ → S3a ✓（surrogateescape/pass）→ S3b-1 ✓（输出/fs 属性）→ S3e-1 ✓（os_helper 解禁）**；
-> **语法错已 0、可编译 397/397＝100%、跑通 15/397**；闸门已提速（`slowcheck --release` ≈18min；release survey ≈2.5min）；**未合并 main、未 tag m6**。
+> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → 批1 ✓ → 批2 ✓ → S2b ✓ → S3a ✓ → S3b-1 ✓ → S3e-1 ✓ → S3b-2 ✓（fs surrogateescape 路径）→ S3e-2 ✓（小格批）**；
+> **语法错 0、可编译 397/397＝100%、跑通 17/397**；闸门 release 档 ≈17min；**未合并 main、未 tag m6**。
 > 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
 
 - **HEAD**：`e70644d`（`dev`，本笔前）—— 本笔＝**round 26**：P3-38 **S2b**（lexer/AST/emitter/pyac 走 WTF-8 ⇒ `'\ud800'` 字面量可编译，**语法错 30→1、可编译 396/397＝99.7%**）＋ release 档两处测试门控 ＋ **闸门提速 `slowcheck --release`**（≈4.2×：③163s/⑤490s/⑥385s/⑨107s/⑩66s，合计 ≈21min）＋ release 全量 survey（2m24s，跑通 10/397）；细节见台账 round 26。
-- **工作区**：本笔待提交 ＝ **26 项**（以 `git status --porcelain` 实测为准：编译/推导式 5 文件；S3a core `instance/convert.rs`/`builtin/str.rs`/`constructors.rs`/`scalars.rs`/`accessors.rs`＋stdlib `codecs_module.rs`/`multibyte_module.rs`＋2 新测试；S3b `_io_module.rs`/`builtins_module.rs`/`sys_module.rs`＋2 新测试；S3e `tools/sync_lib.py`＋3 个 `Lib/` 新文件；`NEXT.md`＋台账 round 27＋`ROUNDS.md`）。
+- **工作区**：本笔待提交 ＝ **16 项**（以 `git status --porcelain` 实测为准：BI 编译器 `stmt_compound.rs`＋`classes.rs`；BJ fs `posix_module.rs`/`instance/fs.rs`/`fs_posix.rs`/`io_module.rs`；BK `sys_module.rs`/`imp_module.rs`/`math_module.rs`/`operator_module.rs`/新 `faulthandler_module.rs`/`lib.rs`＋`small_cells.rs`（新增）；`NEXT.md`＋台账 round 28＋`ROUNDS.md`）。
 - **stash**：**空** ✓
-- **round 27 新增验收（全 ✓）**：
-  1. **语法错归零 & 可编译 100%**：推导式目标支持星号（`[id for id, *_ in …]`，`UNPACK_EX`＋`STORE_FAST_STORE_FAST` 与参照 `dis` 逐条一致）⇒
-     release survey **可编译 397/397＝100.0%**、语法错 **0**。
-  2. **S3a codecs**：`surrogateescape`/`surrogatepass` 在 utf-8/ascii/latin-1/cp437/multibyte/`_codecs`/薄包装四套实现统一，
-     170+ 行探针除允许未接的 utf-16/32 外 **0 diff**；顺修 UTF-8 `replace` 错误单元跨度真 bug（截断前缀 1 个 U+FFFD）。
-  3. **S3b 输出/fs 属性**：`print`/`sys.stdout.write`/`stderr` 写 WTF-8 原始字节（`print(chr(0xD800))`⇒`ed a0 80`；合法 UTF-8 与 python3 字节 0 diff）；
-     `print` 的 `sep/end/file/flush` 补齐；`sys.getfilesystemencodeerrors` 真 bug 修复（`surrogateescape`）；`os.fsdecode(b'\xff')⇒'\udcff'`、`os.fsencode('\udcff')⇒b'\xff'`。
-  4. **S3e-1 同步**：`Lib/test/support/os_helper.py`、`libregrtest/utils.py`、`multibytecodec_support.py`（第二来源根）⇒ `Lib/` 571 文件逐字节一致、
-     `lib_compile` 绿；**仓库 Lib 下 `import test.support.os_helper` ✓**（×100+ 缺模块归零）、`test.support`/`doctest` 不回归。
-  5. **survey（release，2m28s）**：可编译 **397/397＝100.0%**、**跑通 15/397＝3.8%**、语法错 **0**、未实现 69、运行期错 305、超时 8；
-     `ModuleNotFoundError` 158→**54**、`SkipTest` 56。
-- **数字**：判据① 待下一轮复核（本轮 Lib 新增 3 文件、编译面变化，预期微升）；MS-14 待本轮树重跑（预期 407/407、新差异 0）。
-- **M6 收口结论**：MS-14 ✓（上轮 407/407）；**P3-38 剩余 S3b-2（fs/io/argv/ABI 真实文件路径面）、S3c（正则/unicodedata/marshal 策略）、
-  S3d（动态名字面，可后置）、S3e-2（官方测试抽样回归/剩余 ImportError）** ⇒ **仍未到 M6 收口**。
-- **下一轮**：S3b-2 fs 路径面（posix `stat`/`open`/`listdir`/`readlink` 对含代理路径；`os.fspath`/`fsencode` 真实往返）→ S3e-2 官方测试抽样
-  → 判据①／语料／MS-14 复核 → 报用户批准 M6 收口（`--no-ff`＋tag m6）。
+- **round 28 新增验收（全 ✓）**：
+  1. **编译器预存 bug 修复**：`condition_landings` 共享队列被体内嵌套 `if` 的 `take` 偷走 ⇒ 外层尾位 `if A and B and C:` 假出口落到体内
+     ⇒ 第二次调用 `UnboundLocalError: lines`；改为"本条 if 私有落点 `split_off`"⇒ 假出口正确落收尾副本。回归测试（跑方法两次，回退即失败）、
+     多种形状与 python3 逐行一致；`test_hmac.py`/`test_traceback.py` 不再崩（全文 0 条该错）。
+  2. **S3b-2 fs 路径面**：`path_of` 改原始字节、补 `listdir`/`symlink` 槽、`fs_listdir/fs_rename/fs_symlink`、posix `path_argument`/`decode_path_text`
+     （surrogateescape 真路径）＋ `os.listdir/rename/symlink/access`；端到端探针与 python3 **0 diff**（`b'\xff'` 文件 listdir/open/stat/rename/symlink/readlink/access；
+     `ls -b`/xxd 字节证据）；合法 UTF-8 路径零变化。如实边界：`access` 按 mode 启发、`getcwd` lossy、受限 symlink 未实现、含代理 str 的 `sorted`/`<` 仍 panic（留下一轮）。
+  3. **S3e-2 小格批**：`sys.path_importer_cache`/`path_hooks` 空 dict/list（`test_hmac` 真跑起来）、`_imp` override 契约（×9→0）、
+     **`faulthandler` 模块**（15 名字、enable/disable/register/dump_traceback 真实现，信号/定时器/C 栈如实未接）、`math.isclose`/`nextafter` 全语义
+     ＋ math TypeError 文案修正、`operator` 28 个 dunder 别名；新增 `tests/small_cells.rs`（5 项）。
+  4. **release survey（2m31s）**：可编译 **397/397＝100.0%**、**跑通 17/397＝4.3%**（新入 `test___all__`/`test_math_property` 等）、
+     未实现 80、运行期错 293、超时 7；`UnboundLocalError lines` ×6→0、`faulthandler` 缺模块 ×3→0、`_imp override` ×9→0、`path_importer_cache` 0。
+     **MS-14：407/407、已知差异 0、新差异 0**；红线 compile 逐字节 4 passed；core 75／stdlib 19 全绿；0 warning；check.py 14/14。
+- **数字**：判据① 待复核（next round）；语料 407／新差异 0。
+- **M6 收口结论**：`MS-14` ✓、新差异 0 ✓、**可编译 100%、语法错 0**（`MS-19` 补充的"合法 Python 被拒"已消除）；
+  P3-38 剩余：含代理 str 排序/比较、`\N{…}` 名字表 15、`except*` 7、async 推导式 4、PEP 695、下标删除 5、`import *` 属性字典 4、socket I/O 17、
+  `__traceback__` 上下文 11（triage 首选）、fs/io 其余面 ⇒ **仍未到 M6 收口**。
+- **下一轮**：① `_AssertRaisesContext`/`_GeneratorContextManager.__traceback__` ×11 triage ② 含代理 str 的 `sorted`/`<` panic（core）③ `\N{…}` 名字表评估
+  ④ `except*`/async 推导式 ⑤ 判据①／语料复核。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
-1. **M6 判据**：`MS-14` 报告可发布 ＋ 新差异 0 ＋ `MS-19` 补充（合法 Python 不再被拒）——**语法错已 0、surrogate 字面量已可编译**，主要剩 fs/io 运行时面与少数未实现形态。
-2. **P3-38 剩余**：S3b-2 → S3c（策略待定：正则引擎只吃 `&str`，代理遇到如实未实现即可）→ S3d 后置 → S3e-2 回归。
+1. **M6 判据**：`MS-14` 报告可发布 ＋ 新差异 0 ＋ `MS-19` 补充——**语法错 0/可编译 100% 已达成**，主要剩运行时形态与少数未实现面。
+2. **P3-38 剩余**：排序/比较面 → `\N{…}` 名字表 → `except*`/async 推导式/PEP 695/下标删除 → `import *` → socket I/O → fs/io 其余。
 3. **收口动作**（全部绿后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                      # 应干净（round 27 已提交）
-tools/slowcheck.sh --release            # ≈18min
+git status --short                      # 应干净（round 28 已提交）
+tools/slowcheck.sh --release            # ≈17min
 python3 tools/libtests_survey.py --release   # ≈2.5min
-# 下一格：S3b-2 fs 路径面（含代理文件名的 stat/open/listdir/readlink；os.fspath/fsencode 真实往返）+ S3e-2 官方测试抽样回归
+# 下一格：① `__traceback__` 上下文 ×11 ② 含代理 str 排序/比较 ③ `\N{…}` 名字表评估
 ```
 
 ## 本战役的关键口径（新会话必读）
