@@ -12,7 +12,6 @@ use crate::instance::Instance;
 use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
 use crate::builtin_objects::SetObject;
-use crate::builtin_objects::StrObject;
 use crate::builtin_objects::TupleObject;
 use crate::type_object::TypeObject;
 
@@ -76,14 +75,9 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         ty == str_type || instance.is_subtype(ty, str_type)
     };
     if subtype_of_str(left_type) && subtype_of_str(right_type) {
-        // SAFETY: 类型身份已确认（`str` 及其子类的载荷都是 `StrObject`）。
-        let (left_text, right_text) = unsafe {
-            (
-                &*left.as_ptr().cast::<StrObject>(),
-                &*right.as_ptr().cast::<StrObject>(),
-            )
-        };
-        return left_text.value() == right_text.value();
+        // P3-38 S2a-2：按 **WTF-8 字节**相等判 ✓（合法 UTF-8 与旧口径一致；含孤立代理的串也能
+        // 正确比较 ✓）。辅助 API 见 `Instance::str_equals`。
+        return instance.str_equals(left, right).unwrap_or(false);
     }
     // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
     let subtype_of_bytes = |ty: NonNull<crate::TypeObject>| {

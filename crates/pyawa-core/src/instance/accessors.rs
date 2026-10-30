@@ -226,6 +226,63 @@ impl Instance {
         Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes())
     }
 
+    /// `object` 是不是 **`str` 或其子类**（`str` 的值语义对子类同样成立 ✓）。
+    fn is_str_like(&self, object: NonNull<Header>) -> bool {
+        let ty = self.type_of(object);
+        self.type_named("str")
+            .is_some_and(|base| ty == base || self.is_subtype(ty, base))
+    }
+
+    /// **`str` 的 WTF-8 字节**（P3-38 S2a-2；`wtf8_of` 的语义化别名 ✓）。
+    pub fn str_wtf8_bytes(&self, object: NonNull<Header>) -> Option<&[u8]> {
+        self.wtf8_of(object)
+    }
+
+    /// **`str` 的码点长度**（`len()` 的口径：**代理各算 1 个码点** ✓；不是 `str` ⇒ `None`）。
+    ///
+    /// UTF-8 表示 ⇒ `chars().count()`（与旧口径一致 ✓）；WTF-8 表示 ⇒ 逐码点计数（含孤立代理 ✓）。
+    pub fn str_code_point_len(&self, object: NonNull<Header>) -> Option<usize> {
+        if !self.is_str_like(object) {
+            return None;
+        }
+        // SAFETY: 类型身份已确认是 `str`（或其子类，载荷同布局）。
+        let object = unsafe { &*object.as_ptr().cast::<crate::StrObject>() };
+        match object.as_utf8() {
+            Some(text) => Some(text.chars().count()),
+            None => {
+                let mut count = 0usize;
+                for point in crate::wtf8::code_points(object.wtf8_bytes()) {
+                    // 已校验的 WTF-8 ⇒ 不该出现 Err；真出现就如实 `None`（不吞、不猜 ✓）。
+                    point.ok()?;
+                    count += 1;
+                }
+                Some(count)
+            }
+        }
+    }
+
+    /// **两个 `str` 的相等**（`==` 的值语义）：按 **WTF-8 字节**逐字节相等 ✓
+    /// （合法 UTF-8 的字节相等与旧口径一致 ✓；含代理的串也能正确比较 ✓）。
+    /// 任一不是 `str` ⇒ `None`（由调用方走别的分支 ✓）。
+    pub fn str_equals(&self, left: NonNull<Header>, right: NonNull<Header>) -> Option<bool> {
+        if !self.is_str_like(left) || !self.is_str_like(right) {
+            return None;
+        }
+        // SAFETY: 两个类型身份都已确认是 `str`（载荷同布局）。
+        let left_bytes = unsafe { &*left.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        let right_bytes = unsafe { &*right.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        Some(left_bytes == right_bytes)
+    }
+
+    /// **`str` 是否为空**（真值口径）：两分支都看字节/字符是否为空 ✓；不是 `str` ⇒ `None`。
+    pub fn str_is_empty(&self, object: NonNull<Header>) -> Option<bool> {
+        if !self.is_str_like(object) {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.is_empty())
+    }
+
     /// **`OM-11` 的 `str` 槽**：`str(对象)`。
     ///
     /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。失败经 `Result` 上抛

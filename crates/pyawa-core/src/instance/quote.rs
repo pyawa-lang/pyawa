@@ -39,44 +39,80 @@ fn str_character_is_printable(character: char) -> bool {
 }
 
 
-pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
-    let has_single = text.contains('\'');
-    let has_double = text.contains('"');
-    let quote = if has_single && !has_double { '"' } else { '\'' };
-    let mut out = String::new();
-    out.push(quote);
-    for character in text.chars() {
-        // **ASCII 也要看可打印性** ✓（`\x00`／`\x7f` 都得转义 ✓ —— 先前写成"ASCII 一律不转" ✗）；
-        // `ascii=true` 只**额外**把可打印的非 ASCII 也转掉 ✓。
-        let escape_code = if ascii && !character.is_ascii() {
-            true
-        } else {
-            !str_character_is_printable(character)
-        };
-        match character {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ if character == quote => {
-                out.push('\\');
-                out.push(character);
+/// 把一个**字符**按 `repr` 规则追加到 `out`（引号与转义规则见 [`quote_str`] 的说明 ✓）。
+fn push_repr_character(out: &mut String, character: char, quote: char, ascii: bool) {
+    // **ASCII 也要看可打印性** ✓（`\x00`／`\x7f` 都得转义 ✓ —— 先前写成"ASCII 一律不转" ✗）；
+    // `ascii=true` 只**额外**把可打印的非 ASCII 也转掉 ✓。
+    let escape_code = if ascii && !character.is_ascii() {
+        true
+    } else {
+        !str_character_is_printable(character)
+    };
+    match character {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        _ if character == quote => {
+            out.push('\\');
+            out.push(character);
+        }
+        _ if escape_code => {
+            let code = character as u32;
+            if code <= 0xFF {
+                out.push_str(&format!("\\x{code:02x}"));
+            } else if code <= 0xFFFF {
+                out.push_str(&format!("\\u{code:04x}"));
+            } else {
+                out.push_str(&format!("\\U{code:08x}"));
             }
-            _ if escape_code => {
-                let code = character as u32;
-                if code <= 0xFF {
-                    out.push_str(&format!("\\x{code:02x}"));
-                } else if code <= 0xFFFF {
-                    out.push_str(&format!("\\u{code:04x}"));
-                } else {
-                    out.push_str(&format!("\\U{code:08x}"));
-                }
-            }
-            _ => out.push(character),
+        }
+        _ => out.push(character),
+    }
+}
+
+/// **`str` 的 `repr`**：`bytes` 是**已校验的 WTF-8**（P3-38 S2a-2）——
+/// **孤立代理**按 CPython 口径转义成 `\udXXX`（结果仍是**合法 UTF-8** ✓）。
+///
+/// 合法 UTF-8 输入与旧的 [`quote_str`] **逐字节相同** ✓（后者现在只是本函数对
+/// `text.as_bytes()` 的转调 ✓）。代理的转义口径照参照实测：
+/// `repr('\ud800')` ⇒ `"'\\ud800'"`、`repr('a\ud800b')` ⇒ `"'a\\ud800b'"`。
+pub(crate) fn quote_wtf8(bytes: &[u8], ascii: bool) -> String {
+    // 引号选择与旧口径一致：内容里有 `'` 且没有 `"` ⇒ 用双引号 ✓（代理不参与引号判断 ✓）。
+    let mut has_single = false;
+    let mut has_double = false;
+    let mut text = String::new();
+    for point in crate::wtf8::code_points(bytes) {
+        match point {
+            Ok(code_point) if code_point == u32::from(b'\'') => has_single = true,
+            Ok(code_point) if code_point == u32::from(b'"') => has_double = true,
+            _ => {}
         }
     }
-    out.push(quote);
-    out
+    let quote = if has_single && !has_double { '"' } else { '\'' };
+    text.push(quote);
+    for point in crate::wtf8::code_points(bytes) {
+        match point {
+            // **孤立代理**：`\udXXX`（小写十六进制，CPython 同形 ✓；ASCII 结果 ⇒ 仍是合法 UTF-8）
+            Ok(code_point) if crate::wtf8::is_surrogate(code_point) => {
+                text.push_str(&format!("\\u{code_point:04x}"));
+            }
+            Ok(code_point) => match char::from_u32(code_point) {
+                Some(character) => push_repr_character(&mut text, character, quote, ascii),
+                // 校验过的 WTF-8 不会走到这里（超界码点在 `encode`/`validate` 就拒了）⇒ 如实转义兜底
+                None => text.push_str(&format!("\\U{code_point:08x}")),
+            },
+            // 同上：校验过的 WTF-8 不该有坏字节 ⇒ 替换符兜底（不 panic ✓）
+            Err(_) => text.push(crate::wtf8::REPLACEMENT_CHARACTER),
+        }
+    }
+    text.push(quote);
+    text
+}
+
+pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
+    // 合法 UTF-8 ⇒ 就是合法 WTF-8（S2a-2：旧函数转调新实现，字节输出不变 ✓）。
+    quote_wtf8(text.as_bytes(), ascii)
 }
 
 

@@ -152,3 +152,134 @@ fn non_str_objects_have_no_wtf8_bytes() {
     assert_eq!(instance.wtf8_of(integer), None);
     assert_eq!(instance.text_of(integer), None);
 }
+
+// --------------------------------------------------------------------------- #
+// P3-38 S2a-2 批 1：len／真值／相等／repr 面在 WTF-8 表示下的口径
+// --------------------------------------------------------------------------- #
+
+/// `a` + U+D800 + `b`（WTF-8 合法、UTF-8 非法）——批 1 的核心样例 ✓。
+const LONE_SURROGATE_TEXT: &[u8] = b"a\xED\xA0\x80b";
+
+#[test]
+fn code_point_len_counts_surrogate_each_as_one() {
+    let instance = Instance::new();
+    // `len("a\ud800b") == 3`（代理各算 **1 个码点** ✓；UTF-8 的 `chars().count()` 在这里会 panic/错）
+    let object = instance
+        .new_str_wtf8(LONE_SURROGATE_TEXT)
+        .expect("合法 WTF-8");
+    assert_eq!(instance.str_code_point_len(object), Some(3));
+    // 只有孤立代理
+    let object = instance.new_str_wtf8(b"\xED\xA0\x80").expect("合法 WTF-8");
+    assert_eq!(instance.str_code_point_len(object), Some(1));
+    // 连续两个代理 ⇒ 2 ✓
+    let object = instance
+        .new_str_wtf8(b"\xED\xA0\x80\xED\xBF\xBF")
+        .expect("合法 WTF-8");
+    assert_eq!(instance.str_code_point_len(object), Some(2));
+    // **合法 UTF-8 回归**：BMP／非 BMP／emoji 都是码点计数 ✓
+    assert_eq!(instance.str_code_point_len(instance.new_str("abc")), Some(3));
+    assert_eq!(instance.str_code_point_len(instance.new_str("🦀")), Some(1));
+    assert_eq!(instance.str_code_point_len(instance.new_str("你好")), Some(2));
+    // 通过 `new_str_wtf8` 造的非 BMP 也是 1 ✓
+    let object = instance.new_str_wtf8("🦀".as_bytes()).expect("合法 UTF-8");
+    assert_eq!(instance.str_code_point_len(object), Some(1));
+    // 不是 str ⇒ None
+    assert_eq!(instance.str_code_point_len(instance.new_int(7)), None);
+}
+
+#[test]
+fn str_is_empty_covers_both_representations() {
+    let instance = Instance::new();
+    assert_eq!(instance.str_is_empty(instance.new_str("")), Some(true));
+    assert_eq!(instance.str_is_empty(instance.new_str("x")), Some(false));
+    assert_eq!(
+        instance
+            .str_is_empty(instance.new_str_wtf8(LONE_SURROGATE_TEXT).expect("合法 WTF-8")),
+        Some(false)
+    );
+    assert_eq!(
+        instance.str_is_empty(instance.new_str_wtf8(b"").expect("空")),
+        Some(true)
+    );
+    assert_eq!(instance.str_is_empty(instance.new_int(0)), None);
+}
+
+#[test]
+fn str_equals_is_wtf8_byte_equality() {
+    let instance = Instance::new();
+    let lone = |bytes: &[u8]| instance.new_str_wtf8(bytes).expect("合法 WTF-8");
+    // 相同字节 ⇒ true（含孤立代理 ✓）
+    let first = lone(LONE_SURROGATE_TEXT);
+    let second = lone(LONE_SURROGATE_TEXT);
+    assert_eq!(instance.str_equals(first, second), Some(true));
+    // 不同代理 ⇒ false
+    let other = lone(b"a\xED\xA0\x81b");
+    assert_eq!(instance.str_equals(first, other), Some(false));
+    // 长度不同 ⇒ false
+    assert_eq!(
+        instance.str_equals(first, lone(b"ab")),
+        Some(false)
+    );
+    // **合法 UTF-8 回归**：与旧口径一致 ✓
+    let plain = instance.new_str("héllo");
+    let plain_again = instance.new_str("héllo");
+    assert_eq!(instance.str_equals(plain, plain_again), Some(true));
+    assert_eq!(
+        instance.str_equals(plain, instance.new_str("hello")),
+        Some(false)
+    );
+    // UTF-8 表示与"字节相同的 WTF-8 构造"相等 ✓（合法 UTF-8 字节存 Utf8 表示）
+    assert_eq!(
+        instance.str_equals(plain, lone("héllo".as_bytes())),
+        Some(true)
+    );
+    // 不是 str ⇒ None（由调用方走别的分支 ✓）
+    assert_eq!(instance.str_equals(instance.new_int(1), instance.new_int(1)), None);
+    assert_eq!(instance.str_equals(first, instance.new_int(1)), None);
+}
+
+#[test]
+fn repr_escapes_lone_surrogates_like_the_reference() {
+    let instance = Instance::new();
+    let repr_of = |object| instance.object_repr(object).expect("repr 应成功");
+    let lone = |bytes: &[u8]| instance.new_str_wtf8(bytes).expect("合法 WTF-8");
+
+    // 参照 `repr(chr(0xd800))` ⇒ `'\ud800'`（结果的字节仍是**合法 UTF-8 ASCII** ✓）
+    assert_eq!(repr_of(lone(b"\xED\xA0\x80")), "'\\ud800'");
+    // `repr('a'+chr(0xd800)+'b')` ⇒ `'a\ud800b'`
+    assert_eq!(repr_of(lone(LONE_SURROGATE_TEXT)), "'a\\ud800b'");
+    // 两个代理 ⇒ `'\ud800\udfff'`
+    assert_eq!(
+        repr_of(lone(b"\xED\xA0\x80\xED\xBF\xBF")),
+        "'\\ud800\\udfff'"
+    );
+    // **引号选择照旧**：内容里有 `'` 时改用双引号（代理不参与引号判断 ✓）
+    assert_eq!(
+        repr_of(lone(b"x\xED\xA0\x80\x27")),
+        "\"x\\ud800'\""
+    );
+    // **容器里嵌套的 str** 也走新 repr ✓（`repr([...])`）
+    let element = lone(LONE_SURROGATE_TEXT);
+    let list = instance.new_list(vec![element]);
+    assert_eq!(repr_of(list), "['a\\ud800b']");
+}
+
+#[test]
+fn repr_of_legal_strings_is_unchanged() {
+    let instance = Instance::new();
+    let repr_of = |object| instance.object_repr(object).expect("repr 应成功");
+    // 既有 repr 规则逐字节不变（引号/转义/可打印非 ASCII ✓）
+    for (text, expected) in [
+        ("abc", "'abc'"),
+        ("héllo", "'héllo'"),
+        ("a b", "'a b'"),
+        ("it's", "\"it's\""),
+        ("say \"hi\"", "'say \"hi\"'"),
+        ("a\nb", "'a\\nb'"),
+        ("a\x0bb", "'a\\x0bb'"),
+        ("中", "'中'"),
+        ("🦀", "'🦀'"),
+    ] {
+        assert_eq!(repr_of(instance.new_str(text)), expected, "{text:?} 的 repr");
+    }
+}

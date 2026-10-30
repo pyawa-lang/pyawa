@@ -1905,3 +1905,34 @@
   **因此未合并 `main`、未打 `m6` tag**；收口动作（`--no-ff` 收 `main` ＋ tag `m6`）留待 P3-38 完成并复核后再报用户批准。
 - **续做入口**：`NEXT.md`（下一条命令＝S2a-2：按 `target/recon/t48_str_audit.md` §2.3 分批迁 surrogate-aware 调用点）＋
   `docs/PLAN-milestones.md` §9.2 `P3-38`（S1…S5 与逐阶段验收）。
+
+---
+
+## round 24（会话 10 · P3-38 续）落地 ✓ —— S2a-2 批 1：repr／相等／len 面 WTF-8 支持
+
+- **口径**：`HEAD`（本笔前）＝`94e2a04`（`dev`，M6 收口结论文档）；工作区起始干净；`check.py` 14/14。按 `t48_str_audit.md` §2.3 逐点迁，**生产路径仍不构造 Wtf8 ⇒ 合法 UTF-8 可观测行为不变**。
+- **落地（7 处，逐点）**：
+  1. `instance/accessors.rs`：新增 `str_wtf8_bytes`（`wtf8_of` 别名）、`str_code_point_len`（Utf8⇒`chars().count()`；Wtf8⇒`wtf8::code_points` 计数，代理各 1；非 str⇒None）、
+     `str_equals`（两 str⇒**WTF-8 字节相等**；非 str⇒None）、`str_is_empty`（两分支）；私有 `is_str_like` 认 str 子类。
+  2. `instance/quote.rs`：新增 `quote_wtf8(bytes, ascii)`（按 WTF-8 码点走；**孤立代理⇒`\udXXX` 小写转义**，输出仍合法 UTF-8 ASCII；引号/控制字符/可打印非 ASCII 规则逐字节照旧）；
+     `quote_str` 转调（旧路径输出不变）。
+  3. `builtin_objects/representations.rs`：`str_repr` 改读 `wtf8_bytes()` 调 `quote_wtf8` ⇒ **容器里嵌套的 str** 经 `element_repr`→repr 槽自动受益。
+  4. `instance.rs`：`pub(crate) use quote::{quote_bytes, quote_str, quote_wtf8};`（1 行，供 3 调用）。
+  5. `executor/values.rs`：str `==` 分支走 `str_equals`。
+  6. `executor/iter.rs`：真值走 `str_is_empty`、`len` 走 `str_code_point_len`；**迭代/索引/切片未动**（留下批）。
+  7. `tests/str_wtf8.rs` 扩到 **13 条**。
+- **验收（全 ✓）**：`repr(chr(0xd800))`=`'\ud800'`、`repr('a\ud800b')`、`repr('\ud800\udfff')`、`repr("x\ud800'")`、`repr(['a\ud800b'])` 与 python3 **逐条一致**；
+  合法串 repr 回归表（引号/`\n`/`\x0b`/`é`/`中`/🦀）逐字节不变；`--test str_wtf8` **13 passed**（`len("a\ud800b")==3`、代理/emoji/非 BMP 码点计数、
+  空判、同/异/长度差/与 UTF-8 表示互比的 `==`、repr 转义＋容器嵌套、合法串回归）；`--test wtf8` 13 passed；
+  **红线 `--test compile` 逐字节 4 passed**；`-p pyawa-core` 全量 0 failed；0 warning；check.py 14/14。
+- **未覆盖的 `value()` 站点清单（留下批，报告如实）**：`iter.rs` 另 10 处（迭代取元素/`in` 判定等）、`instance/containers.rs` 5、`executor/protocol.rs` 5、
+  `executor.rs` 5、`ctrls.rs` 4、`classes.rs` 4、`convert.rs` 3、`subscript.rs` 3、`accessors.rs` 2（`text_value`/ascii）、`step_match.rs` 2、`formatting.rs` 2、
+  `argdecode.rs` 2、`util.rs`/`gc.rs`/`step_format.rs`/`step_containers.rs`/`runtime.rs`/`representations.rs`（`str_str`，`str()` 对代理会 panic，未在本批）/`exceptions.rs` 各 1。
+- **数字**：本轮仍零可观测行为改动（Wtf8 仅测试构造），survey 沿用 round 21 基线：可编译 **367/397＝92.4%**、跑通 9/397、语法错 30（全 surrogate）、
+  判据① **477/628＝76.0%**、语料 407／新差异 0（MS-14 407/407）。
+- **闸门**（`tools/slowcheck.sh` 单次连续 **十项全绿**，墙钟 **5356s**）：① check **0 警告**（1s）；② `--test compile` 逐字节 **4 passed**（30s）；
+  ③ `cargo test --workspace` **全部测试绿**（569s；含 `str_wtf8` 13／`wtf8` 13）；④ `check.py` **14/14**（5s）；⑤ `stability.py`（1675s）；
+  ⑥ `heap_and_concurrency.py` **4 路并发 4/4＋堆扰动 3/3**（2203s）；⑦ 夹具（0s）；⑧ 语料下限 407/112；⑨ `conformance` **5 passed**（433s）；
+  ⑩ `PYAWA_DANGLING=1 conformance` **5 passed**（440s）。
+- **下一轮（S2a-2 批 2）**：`str()`/print 输出边界（`str_str`/`object_str`）→ 迭代/索引/切片/`in`/`ord`/`chr` 码点面 → 拼接/重复在 WTF-8 字节层；
+  之后 S2b（lexer/AST/Constant/emitter/pyac 走 WTF-8）→ S2c → S3a（codecs，解锁 os_helper）→ S3b → S3e → M6 收口。

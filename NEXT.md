@@ -9,41 +9,40 @@
 > r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）；
 > r23：**S2a-1** `StrObject` 存储升 WTF-8 表示（`StrRepr` 双分支、`new_str_wtf8`/`wtf8_of`/`as_utf8`，**零行为改动**＋8 测试）。
 > **M6 收口结论（2026-10-25）**：`MS-14` ✓（407/407、新差异 0）；但 `MS-19` 补充下 **surrogate 未解 ⇒ M6 不标记完成**；
-> 用户已拍板 P3-38 epic，进度 **S1 ✓ → S2a-1 ✓ → S2a-2 起继续**；**未合并 main、未 tag m6**。
+> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓（repr/eq/len）→ 批 2 起继续**；**未合并 main、未 tag m6**。
 > 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
 
-- **HEAD**：`b9061db`（`dev`，本笔前）—— 本笔＝**round 23**：P3-38 **S2a-1** —— `StrObject` 存储升 WTF-8 表示（`StrRepr{Utf8(String), Wtf8(Vec<u8>)}`、`new_wtf8`、`Instance::new_str_wtf8`/`wtf8_of`、`as_utf8()`；`value()` 守卫、`text_of` 只对合法 UTF-8 给值 ⇒ **零可观测行为改动**）；新 `tests/str_wtf8.rs` 8 passed；细节见台账 round 23。
-- **工作区**：本笔待提交 ＝ **7 项**（`git status --porcelain` 实测：`builtin_objects/scalars.rs`、`instance/accessors.rs`、`instance/alloc.rs`、`crates/pyawa-core/tests/str_wtf8.rs`（新增）、`NEXT.md`、台账 round 23、`ROUNDS.md`）。
+- **HEAD**：`94e2a04`（`dev`，本笔前）—— 本笔＝**round 24**：P3-38 **S2a-2 批 1** —— repr／相等／len 面 WTF-8 支持（`str_code_point_len`/`str_equals`/`str_is_empty`、`quote_wtf8`（孤立代理⇒`\udXXX`）、`str_repr`/容器嵌套、`==`/len/真值逐点迁；**合法 UTF-8 零变化**）；`tests/str_wtf8.rs` 13 passed；细节见台账 round 24。
+- **工作区**：本笔待提交 ＝ **10 项**（`git status --porcelain` 实测：`builtin_objects/representations.rs`、`executor/iter.rs`、`executor/values.rs`、`instance.rs`（re-export 一行）、`instance/accessors.rs`、`instance/quote.rs`、`tests/str_wtf8.rs` ＋ `NEXT.md` ＋ 台账 round 24 ＋ `ROUNDS.md`）。
 - **stash**：**空** ✓
-- **round 23 新增验收（全 ✓）**：
-  1. **S2a-1 落地**：`StrObject` 载荷改 `StrRepr{Utf8(String), Wtf8(Vec<u8>)}`（手写保持既有 8 处 `new(ty,String)` 签名；`#[repr(C)]`/header 首字段/dealloc 同形）；
-     `new_wtf8`（`wtf8::validate` 失败⇒None；合法 UTF-8 仍存 Utf8 ⇒ 零行为改动）、`wtf8_bytes()`、`as_utf8()`、`value()` 守卫；
-     `Instance::new_str_wtf8`（空串单例）、`Instance::wtf8_of`；`text_of` 改走 `as_utf8()`（Wtf8⇒None，唯一允许的行为改动点，已点名）。
-  2. **测试**：新 `tests/str_wtf8.rs` **8 passed**（旧面不变／空串单例同指针／合法 UTF-8 留 Utf8／孤立代理 `a\xED\xA0\x80b` ⇒
-     `wtf8_of` 原字节、`text_of`=None、`#[should_panic]` 守卫／WTF-8 形状往返／非法 WTF-8 六类 None／非 str ⇒ None）；`--test wtf8` 13 passed。
-  3. 既有验收仍全过：`test_decorators` 16/16；`import test.support` ok；`--test compile` 逐字节 4 passed；check.py 14/14。
-- **数字**：本轮零可观测行为改动（WTF-8 分支尚未被生产路径构造），沿用 round 21/22 基线：**可编译 367/397＝92.4%**、跑通 9/397、
-  语法错 30（全部 surrogate）、未实现 48、运行期错 271、超时 39；判据① **477/628＝76.0%**；语料 407／新差异 0（MS-14 407/407）。
-- **M6 收口结论**：MS-14 ✓／新差异 0 ✓；**P3-38 未完成 ⇒ 不满足 M6 收口**（MS-19 补充）。epic 进度：**S1 ✓ → S2a-1 ✓ → S2a-2/S2b 待开工**。
-- **下一轮**：**S2a-2**（按审计 §2.3 分批把必须 surrogate-aware 的调用点迁到 `wtf8_bytes()`/`as_utf8()`，不改语义、逐批提交）→
-  **S2b**（lexer 转义/AST/Constant/emitter/pyac 走 WTF-8；须过 compile 逐字节＋`lib_compile`＝epic 编译闸）→ S2c → S3a（codecs，解锁 os_helper）→
-  S3b（fs/io/argv/ABI）→ S3e（`os_helper`/`multibytecodec_support` 同步回归）→ 才能报 M6 收口（`--no-ff`＋tag `m6`）。
+- **round 24 新增验收（全 ✓）**：
+  1. **repr/eq/len 面 WTF-8 支持**（S2a-2 批 1）：新增 `str_wtf8_bytes`/`str_code_point_len`（代理各 1）/`str_equals`（WTF-8 字节相等）/`str_is_empty`；
+     `quote_wtf8`（孤立代理⇒`\udXXX` 小写转义、输出仍合法 UTF-8 ASCII）＋`str_repr`/容器嵌套走它（合法 UTF-8 输出逐字节不变）；
+     `values.rs` 的 `==` 走 `str_equals`、`iter.rs` 的 len/真值走码点计数/`str_is_empty`。
+  2. **参照对拍**：`repr(chr(0xd800))`=`'\ud800'`、`repr('a\ud800b')`、`repr('\ud800\udfff')`、`repr("x\ud800'")`、`repr(['a\ud800b'])` 与 python3 逐条一致；
+     合法串 repr 回归表（引号/`\n`/`\x0b`/`é`/`中`/🦀）逐字节不变。
+  3. **测试**：`--test str_wtf8` **13 passed**、`--test wtf8` 13；红线 `--test compile` 逐字节 4 passed；core 全量 0 failed；0 warning；check.py 14/14。
+  4. **未覆盖的 `value()` 站点清单**已如实列在台账（`str_str`/print 输出边界、迭代/索引/切片、`ord/chr`、拼接/重复、codecs、fs 等留后续批）。
+- **数字**：本轮仍零可观测行为改动（Wtf8 仅测试构造），沿用 round 21 基线：**可编译 367/397＝92.4%**、跑通 9/397、语法错 30（全 surrogate）、
+  未实现 48、运行期 271、超时 39；判据① **477/628＝76.0%**；语料 407／新差异 0（MS-14 407/407）。
+- **M6 收口结论**：MS-14 ✓／新差异 0 ✓；**P3-38 未完成 ⇒ 不满足 M6 收口**（MS-19 补充）。epic 进度：**S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓**。
+- **下一轮（S2a-2 批 2）**：`str()`/print 输出边界（`str_str`/`object_str`）→ 迭代/索引/切片/`in`/`ord`/`chr` 码点面 → 拼接/重复在 WTF-8 字节层；
+  然后 **S2b**（lexer/AST/Constant/emitter/pyac 走 WTF-8；守 compile 逐字节＋`lib_compile`）→ S2c → S3a（codecs，解锁 os_helper）→ S3b → S3e → M6 收口（报用户批准）。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
 1. **M6 判据**：`MS-14` ✓（407/407、新差异 0）＋ **`P3-38` 必须完成**（`MS-19` 补充）才能收口。
-2. **P3-38 阶段**：S1 ✓ → S2a-1 ✓ → S2a-2 → S2b → S2c → S3a → S3b → S3e；每阶段独立提交＋十项闸门＋survey 对应格归零。
+2. **P3-38 阶段**：S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓ → 批 2（输出边界/码点面）→ S2b（编译管线，epic 编译闸）→ S2c → S3a → S3b → S3e。
 3. **收口动作**（epic 完成后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                      # 应干净（round 23 已提交）
-# 下一步：S2a-2 —— 按 target/recon/t48_str_audit.md §2.3 的"必须 surrogate-aware"清单，分批迁调用点（先 repr/print/编码面，再名字面）
+git status --short                      # 应干净（round 24 已提交）
+# 下一步：S2a-2 批 2 —— str()/print 输出边界（str_str/object_str）＋ 迭代/索引/切片/in/ord/chr 码点面＋拼接/重复（WTF-8 字节层）
 cargo test -p pyawa-core --test str_wtf8
-# M6 收口（仅当 P3-38 完成并复核 MS-14/新差异后）：报用户批准 → git checkout main && git merge --no-ff dev && git tag m6 && git push --tags
 ```
 
 ## 本战役的关键口径（新会话必读）

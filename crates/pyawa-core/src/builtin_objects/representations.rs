@@ -24,7 +24,9 @@ pub unsafe fn none_repr(_ptr: *mut Header, _instance: &Instance) -> Result<Strin
 pub unsafe fn str_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<StrObject>() };
-    Ok(crate::instance::quote_str(object.value(), false))
+    // P3-38 S2a-2：按 **WTF-8 字节**取内容（合法 UTF-8 的 repr 输出逐字节不变 ✓；
+    // 孤立代理由 `quote_wtf8` 转义成 `\udXXX` ✓）。
+    Ok(crate::instance::quote_wtf8(object.wtf8_bytes(), false))
 }
 
 /// `str` 的 `str`：内容本身。

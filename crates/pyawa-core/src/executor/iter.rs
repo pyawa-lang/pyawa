@@ -165,8 +165,8 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) 
         .type_named("str")
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
-        // SAFETY: 类型身份已确认是 `str`。
-        return Ok(!unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().is_empty());
+        // P3-38 S2a-2：真值按"码点/字节是否为空"（两分支一致 ✓；合法 UTF-8 结果不变 ✓）。
+        return Ok(!instance.str_is_empty(raw).unwrap_or(false));
     }
     if instance
         .type_named("bytes")
@@ -299,8 +299,10 @@ pub(crate) fn iterable_length(
         return Ok(unsafe { &*raw.as_ptr().cast::<SetObject>() }.len());
     }
     if type_is_subtype_of(instance, ty, "str") {
-        // SAFETY: 同上。
-        return Ok(unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().chars().count());
+        // P3-38 S2a-2：`len(str)` 按**码点计数**（代理各算 1 ✓；合法 UTF-8 与旧口径一致 ✓）。
+        if let Some(length) = instance.str_code_point_len(raw) {
+            return Ok(length);
+        }
     }
     if type_is_subtype_of(instance, ty, "bytes") {
         // SAFETY: 同上。
