@@ -9,48 +9,45 @@
 > r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）；
 > r23：**S2a-1** `StrObject` 存储升 WTF-8 表示（`StrRepr` 双分支、`new_str_wtf8`/`wtf8_of`/`as_utf8`，**零行为改动**＋8 测试）。
 > **M6 收口结论（2026-10-25）**：`MS-14` ✓（407/407、新差异 0）；但 `MS-19` 补充下 **surrogate 未解 ⇒ M6 不标记完成**；
-> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → 批1 ✓ → 批2 ✓ → S2b ✓ → S3a ✓ → S3b-1 ✓ → S3e-1 ✓ → S3b-2 ✓（fs surrogateescape 路径）→ S3e-2 ✓（小格批）**；
-> **语法错 0、可编译 397/397＝100%、跑通 17/397**；闸门 release 档 ≈17min；**未合并 main、未 tag m6**。
+> 用户已拍板并指示继续 P3-38 epic；进度 **S1…S2b ✓ → S3a ✓ → S3b-1/2/3 ✓ → S3e-1/2/3 ✓ → S2a-2 排序/比较 ✓**；
+> **语法错 0、可编译 397/397＝100%、跑通 17/397、运行期错 288、超时 7**；闸门 release 档 ≈15min；**未合并 main、未 tag m6**。
 > 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
 
 - **HEAD**：`e70644d`（`dev`，本笔前）—— 本笔＝**round 26**：P3-38 **S2b**（lexer/AST/emitter/pyac 走 WTF-8 ⇒ `'\ud800'` 字面量可编译，**语法错 30→1、可编译 396/397＝99.7%**）＋ release 档两处测试门控 ＋ **闸门提速 `slowcheck --release`**（≈4.2×：③163s/⑤490s/⑥385s/⑨107s/⑩66s，合计 ≈21min）＋ release 全量 survey（2m24s，跑通 10/397）；细节见台账 round 26。
-- **工作区**：本笔待提交 ＝ **16 项**（以 `git status --porcelain` 实测为准：BI 编译器 `stmt_compound.rs`＋`classes.rs`；BJ fs `posix_module.rs`/`instance/fs.rs`/`fs_posix.rs`/`io_module.rs`；BK `sys_module.rs`/`imp_module.rs`/`math_module.rs`/`operator_module.rs`/新 `faulthandler_module.rs`/`lib.rs`＋`small_cells.rs`（新增）；`NEXT.md`＋台账 round 28＋`ROUNDS.md`）。
+- **工作区**：本笔待提交 ＝ **N 项**（以 `git status --porcelain` 实测为准：BL `instance/convert.rs`/`executor/protocol.rs`＋新 `str_wtf8_ordering.rs`；BM `executor/step_exceptions.rs`/`instance/accessors.rs`/`instance/alloc.rs`/`sys_module.rs`/`small_cells.rs`；BN `posix_module.rs`/`_io_module.rs`/`io_wtf8_output.rs`；`NEXT.md`＋台账 round 29＋`ROUNDS.md`）。
 - **stash**：**空** ✓
-- **round 28 新增验收（全 ✓）**：
-  1. **编译器预存 bug 修复**：`condition_landings` 共享队列被体内嵌套 `if` 的 `take` 偷走 ⇒ 外层尾位 `if A and B and C:` 假出口落到体内
-     ⇒ 第二次调用 `UnboundLocalError: lines`；改为"本条 if 私有落点 `split_off`"⇒ 假出口正确落收尾副本。回归测试（跑方法两次，回退即失败）、
-     多种形状与 python3 逐行一致；`test_hmac.py`/`test_traceback.py` 不再崩（全文 0 条该错）。
-  2. **S3b-2 fs 路径面**：`path_of` 改原始字节、补 `listdir`/`symlink` 槽、`fs_listdir/fs_rename/fs_symlink`、posix `path_argument`/`decode_path_text`
-     （surrogateescape 真路径）＋ `os.listdir/rename/symlink/access`；端到端探针与 python3 **0 diff**（`b'\xff'` 文件 listdir/open/stat/rename/symlink/readlink/access；
-     `ls -b`/xxd 字节证据）；合法 UTF-8 路径零变化。如实边界：`access` 按 mode 启发、`getcwd` lossy、受限 symlink 未实现、含代理 str 的 `sorted`/`<` 仍 panic（留下一轮）。
-  3. **S3e-2 小格批**：`sys.path_importer_cache`/`path_hooks` 空 dict/list（`test_hmac` 真跑起来）、`_imp` override 契约（×9→0）、
-     **`faulthandler` 模块**（15 名字、enable/disable/register/dump_traceback 真实现，信号/定时器/C 栈如实未接）、`math.isclose`/`nextafter` 全语义
-     ＋ math TypeError 文案修正、`operator` 28 个 dunder 别名；新增 `tests/small_cells.rs`（5 项）。
-  4. **release survey（2m31s）**：可编译 **397/397＝100.0%**、**跑通 17/397＝4.3%**（新入 `test___all__`/`test_math_property` 等）、
-     未实现 80、运行期错 293、超时 7；`UnboundLocalError lines` ×6→0、`faulthandler` 缺模块 ×3→0、`_imp override` ×9→0、`path_importer_cache` 0。
-     **MS-14：407/407、已知差异 0、新差异 0**；红线 compile 逐字节 4 passed；core 75／stdlib 19 全绿；0 warning；check.py 14/14。
-- **数字**：判据① 待复核（next round）；语料 407／新差异 0。
-- **M6 收口结论**：`MS-14` ✓、新差异 0 ✓、**可编译 100%、语法错 0**（`MS-19` 补充的"合法 Python 被拒"已消除）；
-  P3-38 剩余：含代理 str 排序/比较、`\N{…}` 名字表 15、`except*` 7、async 推导式 4、PEP 695、下标删除 5、`import *` 属性字典 4、socket I/O 17、
-  `__traceback__` 上下文 11（triage 首选）、fs/io 其余面 ⇒ **仍未到 M6 收口**。
-- **下一轮**：① `_AssertRaisesContext`/`_GeneratorContextManager.__traceback__` ×11 triage ② 含代理 str 的 `sorted`/`<` panic（core）③ `\N{…}` 名字表评估
-  ④ `except*`/async 推导式 ⑤ 判据①／语料复核。
+- **round 29 新增验收（全 ✓）**：
+  1. **含代理 str 排序/比较**：`Instance::str_order_cmp`（码点序；合法 UTF-8 走 `str::cmp` 零变化）接入 `order_of`（sorted/min/max/list.sort）与
+     `compare_public` 四运算符；`text_value`→安全 `text_of`；新测 4 项；e2e 与 python3 逐行一致；**`StrObject::value()` panic 行归零**。
+  2. **`RERAISE` 栈效应真 bug**：参照 `stack_effect(RERAISE,·)==-1`，本层多弹 `oparg` 格 ⇒ `with` 清理块把 CM self 压进异常状态 ⇒ `__context__` 错
+     ⇒ `exc.__traceback__` AttributeError ×11；修后 **11→0**、`test_raise` 从崩溃转真跑；`tb_lineno`/`tb_lasti` 真值；"每帧 traceback 链"实验因 140s GC 爆炸回退。
+  3. **S3b-3/S3e-3 小格**：`getcwdb` 字节/`getcwd=fsdecode(getcwdb)`（含代理目录名/PWD 与 python3 0 diff；顺修启动 `vars()` panic）；
+     `sys.stdout.buffer`（`_io.BufferedWriter`，write 字节直写、flush no-op；无缓冲等偏差如实）；`sys.getsizeof`（真实占用口径，不加 CPython GC 头，已登记）；
+     `sys.thread_info`（无线程 VM ⇒ 如实 none/None）；三签名各 1→0。
+  4. **release survey（2m32s）**：可编译 **397/397＝100.0%**、跑通 **17/397＝4.3%**、未实现 85、运行期错 **288**、超时 **7**；
+     `__traceback__` 11→0、`getsizeof` 1→0、`thread_info` 1→0；**MS-14 407/407、新差异 0**；红线 compile 4 passed；core 76／stdlib 19 全绿；0 warning；check.py 14/14。
+- **数字**：判据① 待复核；语料 407／新差异 0。
+- **M6 收口结论**：`MS-14` ✓、新差异 0 ✓、可编译 100%/语法错 0（`MS-19` 补充已满足）；**P3-38 剩余运行时面**：socket I/O 17、`\N{…}` 名字表 15、
+  `except*` 7、`import *` 属性字典 4、async 推导式 4、下标删除 5、`FAILED(errors=1)` 泛化 16、`mapping_tests`/lib-sync、缺模块、`except … as` 字节码/异常表、
+  stack overflow 3、`tb_next` 链 ⇒ **仍未到 M6 收口**。
+- **下一轮**：`except … as 名字` 的字节码/异常表（BL 已给证据：参照 4 段 exctable vs 本层 2 段）→ `\N{…}` 名字表方案拍板 → `import *`/async 推导式
+  → socket I/O/缺模块 → lib-sync 同步 mapping_tests → release survey 回归 → 判据① 复核。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
-1. **M6 判据**：`MS-14` 报告可发布 ＋ 新差异 0 ＋ `MS-19` 补充——**语法错 0/可编译 100% 已达成**，主要剩运行时形态与少数未实现面。
-2. **P3-38 剩余**：排序/比较面 → `\N{…}` 名字表 → `except*`/async 推导式/PEP 695/下标删除 → `import *` → socket I/O → fs/io 其余。
+1. **M6 判据**：`MS-14` 报告可发布 ＋ 新差异 0 ＋ `MS-19` 补充（合法 Python 不再被拒）——**后两条均已达成**；主要剩运行时形态与少数未实现面。
+2. **P3-38 剩余**：`except … as` 字节码/异常表 → `\N{…}` 名字表 → `except*`/async 推导式/`import *`/下标删除 → socket I/O/缺模块 → fs/io 其余。
 3. **收口动作**（全部绿后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                      # 应干净（round 28 已提交）
-tools/slowcheck.sh --release            # ≈17min
+git status --short                      # 应干净（round 29 已提交）
+tools/slowcheck.sh --release            # ≈15min
 python3 tools/libtests_survey.py --release   # ≈2.5min
-# 下一格：① `__traceback__` 上下文 ×11 ② 含代理 str 排序/比较 ③ `\N{…}` 名字表评估
+# 下一格：`except … as 名字` 字节码/异常表（compile/emitter）；`\N{…}` 名字表方案；import */async 推导式
 ```
 
 ## 本战役的关键口径（新会话必读）

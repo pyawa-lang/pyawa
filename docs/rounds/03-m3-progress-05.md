@@ -2095,3 +2095,37 @@
   `import *` 属性字典 4、socket I/O 17、`__traceback__` 上下文 11（下一轮首选 triage）、fs/io 其余面 → 之后报 M6 收口。
 - **下一轮**：① `_AssertRaisesContext`/`_GeneratorContextManager.__traceback__`（×11，triage 首选）② 含代理 str 的排序/比较（core）③ `\N{…}` 名字表评估
   ④ `except*`/async 推导式 ⑤ release survey 回归。
+
+---
+
+## round 29（会话 10 · P3-38 续）落地 ✓ —— 含代理 str 排序/比较 ＋ `RERAISE` 栈效应真 bug（`__traceback__` ×11→0）＋ cwd 字节口径/`stdout.buffer`
+
+- **口径**：`HEAD`（本笔前）＝`1eb8120`（`dev`，round 28）；工作区起始干净；`check.py` 14/14。
+- **落地（三块）**：
+  1. **含孤立代理 str 的排序/比较（`StrObject::value()` panic 面消除）**：新增 `Instance::str_order_cmp`（一处真相）——两恰 str 按**码点序**：
+     合法 UTF-8 走 `str::cmp`（UTF-8 保序 ⇒ 旧行为零变化）、含代理走 `wtf8::code_points` 逐码点比（前缀短者更小）；`order_of`
+     （`sorted`/`min`/`max`/`list.sort` 共用）与 `compare_public` 四运算符接入；把会 panic 的 `text_value` 换安全视图 `text_of`
+     （含代理串 vs int 落既有 TypeError 文案）。新测 `str_wtf8_ordering.rs` **4 passed**（码点序/前缀/四运算符/排序模拟/合法 UTF-8 全配对回归）；
+     e2e 与 python3 逐行一致（`sorted`/reverse/min/max/list.sort/混合类型 TypeError/tuple 字典序）。**survey 中 `StrObject::value()` panic 行归零**。
+  2. **`RERAISE` 栈效应真 bug（`_AssertRaisesContext.__traceback__` ×11 的根因）**：参照 `dis.stack_effect(RERAISE, 0/1/2)==-1`（只弹异常本身，
+     oparg 格交给异常表按 depth 截平）；本层先前多弹 `oparg` 格 ⇒ `with` 清理块 `COPY 3; POP_EXCEPT` 把**上下文管理器 self** 当"上一个异常"
+     塞进异常状态 ⇒ 后续 raise 的 `__context__` 是 CM ⇒ traceback 格式化读 `exc.__traceback__` 时 AttributeError。修 `step_exceptions.rs`（只弹异常）后
+     **签名 11→0**，`test_raise` 从崩溃变为真正跑完（7F/7E）；残留 "`except … as 名字` 的字节码/异常表差异"已定位为 compile/emitter 面（下一轮）。
+     附带 `tb_lineno`/`tb_lasti` 从抛出帧算真值；"每帧都挂 traceback 链"实验因 test_base64 数秒→140s（GC 爆炸）回退（`tb_next` 留"顶层补链/GC 优化"）。
+  3. **S3b-3 与 S3e-3 小格**：`os.getcwdb()` 返回原始字节（`OsStrExt`）、`os.getcwd()=fsdecode(getcwdb())`（PEP 383；**顺带修启动 panic**：
+     cwd 含 `0xff` 时 shell `PWD` 非 UTF-8 ⇒ 原 `vars()` unwrap panic，改 `vars_os()` 按字节）；`sys.stdout.buffer`/`stderr.buffer` 最小诚实面
+     （`_io.BufferedWriter`，`write(bytes-like)` 直写 fs 原始字节、`flush` no-op；如实偏差：无缓冲/无 `raw`/`closed`/`name`，与文本层交替写顺序不同）；
+     `sys.getsizeof` 最小面（`Instance::object_sizeof` 真实占用＋`__sizeof__` 协议/default/文案；**如实**：不加 CPython GC 头，数值口径不同已登记）；
+     `sys.thread_info` 最小诚实面（无线程 VM ⇒ `name='none'`/`lock=None`/`version=None`，不冒充 pthread）；`sys.thread_info`/`getsizeof` 签名各 1→0。
+- **验收（全 ✓）**：**release survey：可编译 397/397＝100.0%、跑通 17/397＝4.3%**、未实现 85、运行期错 **288**、超时 **7**（均较上轮改善或推进）；
+  关键签名 `__traceback__` 11→0、`getsizeof` 1→0、`thread_info` 1→0；`getcwd/getcwdb` 含代理目录名与 python3 **0 diff**（PWD/environ 同）；`stdout.buffer` 字节验证 `42 ff`/`45 ff 0a`；
+  **MS-14 本树**：407/407、已知差异 0、新差异 0；红线 `--test compile` 逐字节 4 passed；core **76**／stdlib **19** 目标全绿；0 warning；check.py 14/14。
+- **闸门**（`tools/slowcheck.sh --release` 单次连续 **十项全绿**，墙钟 **869s（14min29s）**）：步骤 0 构建 0s（已预热）；
+  ① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（17s）；③ workspace（110s）；④ `check.py` **14/14**（4s）；
+  ⑤ stability（263s）；⑥ heap_and_concurrency（353s，4 路并发 4/4＋堆扰动 3/3）；⑦ 夹具 0s；⑧ 语料下限 0s；
+  ⑨ conformance **5 passed**（60s）；⑩ `PYAWA_DANGLING=1` **5 passed**（62s）。**MS-14 报告本树：407/407、已知差异 0、新差异 0**。
+- **M6 收口结论**：MS-14 ✓／新差异 0 ✓／可编译 100%／语法错 0（`MS-19` 补充的"合法 Python 被拒"已消除）；**P3-38 剩余运行时面（按 survey）**：
+  socket I/O 17（能力域）、`\N{…}` 名字表 15（数据面）、`except*` 7、`import *` 属性字典 4、async 推导式 4、下标删除 5、`FAILED(errors=1)` 泛化 16、
+  `mapping_tests`/lib-sync 5、缺模块若干、`except … as` 字节码与异常表（compile/emitter）、stack overflow 3、`tb_next` 链 → 之后才能报 M6 收口。
+- **下一轮**：`except … as 名字` 字节码/异常表（compile，BL 已定位证据）→ `\N{…}` 名字表方案拍板 → `import *`/async 推导式 → socket I/O/缺模块
+  → lib-sync 同步 mapping_tests → release survey 回归 → 判据① 复核。
