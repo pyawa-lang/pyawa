@@ -2009,3 +2009,49 @@
   步骤 0 release 构建 **23s**；① check **0 警告**（2s）；② `--test compile` 逐字节 **4 passed**（19s）；③ workspace **112s**（5.1×）；④ check.py **14/14**（3s）；
   ⑤ stability **360s**（4.7×）；⑥ heap_and_concurrency **408s**（5.3×，4 路并发 4/4＋堆扰动 3/3）；⑦ 夹具 0s；⑧ 语料下限 0s；
   ⑨ conformance **76s**（5.7×）；⑩ `PYAWA_DANGLING=1` **71s**（6.4×）。另 debug 档红线 `--test compile` 逐字节 4 passed、`check.py` 14/14。
+
+---
+
+## round 27（会话 10 · P3-38 续）落地 ✓ —— 语法错归零（可编译 397/397＝100%）＋ S3a codecs ＋ S3b 输出/fs 边界 ＋ S3e-1 同步（`os_helper` 解禁）
+
+- **口径**：`HEAD`（本笔前）＝`d8530a2`（`dev`，round 26）；工作区起始干净；`check.py` 14/14。
+- **落地（四块）**：
+  1. **最后一条语法错归零**：推导式目标支持**星号**（`[id for id, *_ in pairs]`）——新增 `ComprehensionTarget::Starred`，
+     parser 支持 `a,*b`／`*a,b`／`*a,`／组内嵌套（裸星号照参照 SyntaxError）；内联发射按 **`UNPACK_EX (前|后<<8)`**＋
+     `STORE_FAST_STORE_FAST` 融合（旧 `UNPACK_SEQUENCE` 路径零变化），生成器表达式经 `ForTarget::Starred` 同口径；
+     形状抽例由 python3 3.14.4 `dis` 原样导出并逐条一致。⇒ **survey 语法错 1→0、可编译 397/397＝100.0%**。
+  2. **S3a：`surrogateescape`/`surrogatepass` 四套实现统一**（`os_helper` 关键前置）：utf-8 的 decode/encode 两 handler 全矩阵
+     （`surrogateescape` 逐字节 U+DC80–DCFF⇔单字节、`surrogatepass` 3 字节代理序列）、ascii/latin-1/cp437、multibyte（cp932 等）、
+     `_codecs`（`utf_8_*`／`ascii_*`／`charmap_*`／`_codecs.encode/decode` 真实现）与薄包装（`str.encode`/`bytes.decode`/
+     `str(bytes, enc, errors)`）；含代理但 handler 不匹配的 `UnicodeEncodeError` 文案照参照；未知 handler `LookupError`；
+     **顺带修真 bug**：UTF-8 `replace`/`ignore` 的错误单元跨度按 `Utf8Error::error_len`（截断前缀整段 1 个 U+FFFD，
+     `b"ab\xe3\x81"` 不再吐 2 个）⇒ multi-byte codecs 回归转绿。探针 170+ 行除任务允许未接的 utf-16/32 外 **0 diff**。
+     如实未接：utf-7/16/32 与 unicode_escape 一族、`lookup_error` 返回的 handler 本体、`bytes(str,enc,errors)` 三参。
+  3. **S3b：输出边界（写端）＋ fs 编码属性真 bug**：
+     - `_io.write/writeln` 与 `print` 统一走 **`Instance::wtf8_of` → `fs.write_bytes`**（不 lossy、不替换）；`print` 顺序补齐 `sep/end/file/flush`
+       （此前全部被忽略）；`sys.stdout/stderr` 补 `encoding='utf-8'`/`errors='surrogateescape'`/`name`/`mode`/`line_buffering`。
+       实测字节：`print(chr(0xD800))`⇒`ed a0 80`、`chr(0xDC80)`⇒`ed b2 80`、stderr 同口径；合法 UTF-8 与 python3 **逐字节 0 diff**。
+       如实偏差：参照**管道**下 stdout `errors='strict'`、stderr `backslashreplace`，本层写端统一写内部 WTF-8 原始字节（不抛/不转义/不替换）⇒
+       `errors` 如实报 `surrogateescape`（已在代码/测试注明）。
+     - **真 bug 修复**：`sys.getfilesystemencodeerrors()` 因"三个名字共用一个原生、靠绑定名区分"而**一直误报 `'utf-8'`**
+       ⇒ `os.fsdecode/fsencode` 抛 `LookupError: unknown error handler name 'utf-8'`；拆独立原生后返回 `'surrogateescape'`、
+       `getfilesystemencoding()`/`getdefaultencoding()`⇒`'utf-8'`。实测 `os.fsdecode(b'\xff')`⇒`'\udcff'`、`os.fsencode('\udcff')`⇒`b'\xff'` 与参照一致。
+  4. **S3e-1：Lib/test 骨架同步 3 个**：`test/support/os_helper.py`、`test/libregrtest/utils.py`（主来源）、
+     `test/multibytecodec_support.py`（**第二来源根**）⇒ `Lib/` **571 文件**（`--check` 全部逐字节一致，含"按第二来源根比对"）、
+     `Lib/` `.py` **567**、`lib_compile` 绿；仓库 Lib（无外部 PYTHONPATH）下 **`import test.support.os_helper` ✓**、
+     `from test.support import os_helper, import_helper, script_helper` ✓、`import test.multibytecodec_support` ✓。
+     仍不同步 1 个：`ann_module695.py`（PEP 695 `*Ts` 仍 Unsupported ⇒ 不入库、不登记 KNOWN，如实）。
+- **验收（全 ✓）**：**release 全量 survey：可编译 397/397＝100.0%、语法错 0、跑通 15/397＝3.8%**（新增
+  `test__osx_support`/`test_eintr`/`test_lltrace`/`test_osx_env`/`test_tabnanny` 等）、未实现 69、运行期错 305、超时 8；
+  `ModuleNotFoundError` 从 158 降到 **54**（`os_helper` 缺模块 ×100+ 归零）；`SkipTest` 56（跳过口径正常工作）。
+  S3a 探针 0 diff；`os_helper`/`fsdecode`/`fsencode` 探针 0 diff；`test.support`/`doctest`/`unittest.main()` 不回归；
+  `-p pyawa-core` 75／`-p pyawa-stdlib` 18／`-p pyawa-runtime` 83 目标全绿；**红线 `--test compile` 逐字节 4 passed**。
+- **闸门**（`tools/slowcheck.sh --release` 单次连续 **十项全绿**，墙钟 **962s（16min）**）：步骤 0 release 构建 0s（已预热）；
+  ① check **0 警告**（0s）；② `--test compile` 逐字节 **4 passed**（29s）；③ workspace（118s）；④ `check.py` **14/14**（3s）；
+  ⑤ stability（304s）；⑥ heap_and_concurrency（378s，4 路并发 4/4＋堆扰动 3/3）；⑦ 夹具 0s；⑧ 语料下限 0s；
+  ⑨ `conformance` **5 passed**（65s）；⑩ `PYAWA_DANGLING=1` **5 passed**（65s）。**MS-14 报告本树重跑：407/407、已知差异 0、新差异 0**（报告已刷新）。
+- **M6 收口结论**：MS-14 仍需在本树重跑复核（预计 407/407、新差异 0）；P3-38 还差 **S3b-2 fs/io 其余面**（argv/ABI/readlink/`sys.stdout.buffer`
+  等）、**S3c 正则/unicodedata/marshal**（策略待定）、**S3d 动态名字面**（可后置）、**S3e-2 survey 回归**（`os_helper` 已解，接下来清 SkipTest/剩余 ImportError）；
+  之后才能报 M6 收口（`--no-ff`＋tag m6，需用户批准）。
+- **下一轮**：S3b-2（`os.fsencode`/`fsdecode` 真实文件路径面：posix `stat`/`open`/`listdir`/`readlink` 对含代理路径 + abort 面）→ S3e-2 官方测试抽样回归 →
+  MS-14／判据①／语料复核 → 报用户批准 M6 收口。

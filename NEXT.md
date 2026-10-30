@@ -9,44 +9,45 @@
 > r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）；
 > r23：**S2a-1** `StrObject` 存储升 WTF-8 表示（`StrRepr` 双分支、`new_str_wtf8`/`wtf8_of`/`as_utf8`，**零行为改动**＋8 测试）。
 > **M6 收口结论（2026-10-25）**：`MS-14` ✓（407/407、新差异 0）；但 `MS-19` 补充下 **surrogate 未解 ⇒ M6 不标记完成**；
-> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓ → 批 2 ✓ → S2b ✓（`'\ud800'` 字面量可编译，可编译 99.7%）→ S2c/S3 起继续**；
-> 另：**闸门已提速**（`tools/slowcheck.sh --release`，十项 ≈21min vs debug 89min；release survey 2m24s vs ~25min）；**未合并 main、未 tag m6**。
+> 用户已拍板并指示继续 P3-38 epic；进度 **S1 ✓ → S2a-1 ✓ → 批1 ✓ → 批2 ✓ → S2b ✓ → S3a ✓（surrogateescape/pass）→ S3b-1 ✓（输出/fs 属性）→ S3e-1 ✓（os_helper 解禁）**；
+> **语法错已 0、可编译 397/397＝100%、跑通 15/397**；闸门已提速（`slowcheck --release` ≈18min；release survey ≈2.5min）；**未合并 main、未 tag m6**。
 > 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
 
 - **HEAD**：`e70644d`（`dev`，本笔前）—— 本笔＝**round 26**：P3-38 **S2b**（lexer/AST/emitter/pyac 走 WTF-8 ⇒ `'\ud800'` 字面量可编译，**语法错 30→1、可编译 396/397＝99.7%**）＋ release 档两处测试门控 ＋ **闸门提速 `slowcheck --release`**（≈4.2×：③163s/⑤490s/⑥385s/⑨107s/⑩66s，合计 ≈21min）＋ release 全量 survey（2m24s，跑通 10/397）；细节见台账 round 26。
-- **工作区**：本笔待提交 ＝ **22 项**（`git status --porcelain` 实测：S2b 产品 12 个 core compile/pyac 文件＋`tests/str_wtf8_literals.rs`（新增）；`header.rs`＋`capability_acceptance.rs`（release 测试门控）；`tools/slowcheck.sh`＋`tests/ci/{stability,heap_and_concurrency}.py`＋`tools/libtests_survey.py`（提速工具）；`NEXT.md`＋台账 round 26＋`ROUNDS.md`）。
+- **工作区**：本笔待提交 ＝ **26 项**（以 `git status --porcelain` 实测为准：编译/推导式 5 文件；S3a core `instance/convert.rs`/`builtin/str.rs`/`constructors.rs`/`scalars.rs`/`accessors.rs`＋stdlib `codecs_module.rs`/`multibyte_module.rs`＋2 新测试；S3b `_io_module.rs`/`builtins_module.rs`/`sys_module.rs`＋2 新测试；S3e `tools/sync_lib.py`＋3 个 `Lib/` 新文件；`NEXT.md`＋台账 round 27＋`ROUNDS.md`）。
 - **stash**：**空** ✓
-- **round 26 新增验收（全 ✓）**：
-  1. **S2b（epic 编译闸）**：源码 `'\ud800'`/`'\uDC80'` 合法可编译可运行；lexer 转义走 WTF-8 字节流（合法 UTF-8 仍同形 `Lexeme::Str`、夹具零变化）、
-     新增 `Lexeme::StrWtf8`/`Expression::StrWtf8`/`Constant::StrWtf8`、f-string 字面段 `LiteralWtf8`、emitter `new_str_wtf8`、`.pyac` 新 tag 21（旧 tag 零改动、旧产物照读）；
-     e2e 与 python3 逐行一致、连跑两次命中缓存；**语法错 30→1、可编译 396/397＝99.7%**；红线 compile 逐字节 4 passed。
-  2. **release 档测试门控**（不改产品语义）：`header.rs` 的 debug-only 契约测试加 `#[cfg(debug_assertions)]`；`cancellable_sleep…` 时序断言放宽（未删测试）；
-     `cargo test --release --workspace --no-fail-fast` **0 failed**。
-  3. **闸门提速 `slowcheck --release`**（默认 debug 档逐字不变，stub-cargo argv diff 自证）：实测 ③163s/⑤490s/⑥385s/⑨107s/⑩66s，
-     合计预计 **≈1266s（21min）vs debug 5338s（89min）≈4.2×**；**release 全量 survey 2m24s**（debug ~25min；抽样 11×）。
-  4. **release survey 数字**：**可编译 396/397＝99.7%**、**跑通 10/397＝2.5%**（新入 `test_decorators` 等）、未实现 54、运行期错 326、**超时 6**；
-     唯一语法错＝`test__interpreters.py` 的推导式星号目标（`for id, *_ in`）。
-- **数字**：判据① 本轮未重测（编译产物逐字节不变，预期仍 **477/628＝76.0%**、语料 407／差异 3；下轮复核）；MS-14 仍 407/407、新差异 0。
-- **M6 收口结论**：MS-14 ✓／新差异 0 ✓；**P3-38 未完成（S2c／S3a codecs／S3b fs·io·argv·ABI／S3e Lib 同步回归）⇒ 不满足 M6 收口**。
-- **下一轮**：① 修推导式星号目标（语法错→0）② **S3b 写端**（`print`/`stdout.write`/`_io.write_text` 的 WTF-8 输出）③ **S3a codecs**
-  （`surrogateescape`/`surrogatepass`，解锁 `os_helper`）④ **S3e** 同步 `os_helper`/`multibytecodec_support` ＋ survey 回归 → M6 收口（报用户批准）。
-- **提速后的每轮节奏**：闸门 `slowcheck --release` ≈21min（+步骤 0 构建；增量为增量编译）＋ release survey 2m24s ⇒ 一轮从 ~2.5h 降到 ~40–50min。
+- **round 27 新增验收（全 ✓）**：
+  1. **语法错归零 & 可编译 100%**：推导式目标支持星号（`[id for id, *_ in …]`，`UNPACK_EX`＋`STORE_FAST_STORE_FAST` 与参照 `dis` 逐条一致）⇒
+     release survey **可编译 397/397＝100.0%**、语法错 **0**。
+  2. **S3a codecs**：`surrogateescape`/`surrogatepass` 在 utf-8/ascii/latin-1/cp437/multibyte/`_codecs`/薄包装四套实现统一，
+     170+ 行探针除允许未接的 utf-16/32 外 **0 diff**；顺修 UTF-8 `replace` 错误单元跨度真 bug（截断前缀 1 个 U+FFFD）。
+  3. **S3b 输出/fs 属性**：`print`/`sys.stdout.write`/`stderr` 写 WTF-8 原始字节（`print(chr(0xD800))`⇒`ed a0 80`；合法 UTF-8 与 python3 字节 0 diff）；
+     `print` 的 `sep/end/file/flush` 补齐；`sys.getfilesystemencodeerrors` 真 bug 修复（`surrogateescape`）；`os.fsdecode(b'\xff')⇒'\udcff'`、`os.fsencode('\udcff')⇒b'\xff'`。
+  4. **S3e-1 同步**：`Lib/test/support/os_helper.py`、`libregrtest/utils.py`、`multibytecodec_support.py`（第二来源根）⇒ `Lib/` 571 文件逐字节一致、
+     `lib_compile` 绿；**仓库 Lib 下 `import test.support.os_helper` ✓**（×100+ 缺模块归零）、`test.support`/`doctest` 不回归。
+  5. **survey（release，2m28s）**：可编译 **397/397＝100.0%**、**跑通 15/397＝3.8%**、语法错 **0**、未实现 69、运行期错 305、超时 8；
+     `ModuleNotFoundError` 158→**54**、`SkipTest` 56。
+- **数字**：判据① 待下一轮复核（本轮 Lib 新增 3 文件、编译面变化，预期微升）；MS-14 待本轮树重跑（预期 407/407、新差异 0）。
+- **M6 收口结论**：MS-14 ✓（上轮 407/407）；**P3-38 剩余 S3b-2（fs/io/argv/ABI 真实文件路径面）、S3c（正则/unicodedata/marshal 策略）、
+  S3d（动态名字面，可后置）、S3e-2（官方测试抽样回归/剩余 ImportError）** ⇒ **仍未到 M6 收口**。
+- **下一轮**：S3b-2 fs 路径面（posix `stat`/`open`/`listdir`/`readlink` 对含代理路径；`os.fspath`/`fsencode` 真实往返）→ S3e-2 官方测试抽样
+  → 判据①／语料／MS-14 复核 → 报用户批准 M6 收口（`--no-ff`＋tag m6）。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
-1. **M6 判据**：`MS-14` ✓（407/407、新差异 0）＋ **`P3-38` 必须完成**（`MS-19` 补充）才能收口。
-2. **P3-38 阶段**：S1 ✓ → S2a-1 ✓ → S2a-2 批 1 ✓ → 批 2 ✓ → **S2b ✓** → S2c → S3a（codecs）→ S3b（写端/fs/io/argv/ABI）→ S3e（Lib 同步回归）。
-3. **收口动作**（epic 完成后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
+1. **M6 判据**：`MS-14` 报告可发布 ＋ 新差异 0 ＋ `MS-19` 补充（合法 Python 不再被拒）——**语法错已 0、surrogate 字面量已可编译**，主要剩 fs/io 运行时面与少数未实现形态。
+2. **P3-38 剩余**：S3b-2 → S3c（策略待定：正则引擎只吃 `&str`，代理遇到如实未实现即可）→ S3d 后置 → S3e-2 回归。
+3. **收口动作**（全部绿后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                              # 应干净（round 26 已提交）
-tools/slowcheck.sh --release                    # 提速后的十项（≈21min）；debug 档仍可 `tools/slowcheck.sh`
-python3 tools/libtests_survey.py --release      # 全量体检 ≈2m24s
-# 下一格：推导式星号目标 / S3b 写端（print/stdout.write WTF-8 输出）/ S3a codecs(surrogateescape/pass)
+git status --short                      # 应干净（round 27 已提交）
+tools/slowcheck.sh --release            # ≈18min
+python3 tools/libtests_survey.py --release   # ≈2.5min
+# 下一格：S3b-2 fs 路径面（含代理文件名的 stat/open/listdir/readlink；os.fspath/fsencode 真实往返）+ S3e-2 官方测试抽样回归
 ```
 
 ## 本战役的关键口径（新会话必读）

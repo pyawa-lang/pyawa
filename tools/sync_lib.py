@@ -12,8 +12,8 @@
 上游前缀默认取**本机 python3 的 stdlib 路径**（必须报 3.14.x；`CX-8` 只对 3.14.x 成立）。
 **第二来源根**：`target/upstream/extracted/usr/lib/python3.14`（`libpython3.14-testsuite` deb 的
 解包数据根，**不进仓库**）—— 本机 stdlib 里**没有**、只在 testsuite deb 里的文件从这里取 ✓
-（例：`test/multibytecodec_support.py` 就只在这里；但它因 **P3-35 surrogate** 暂不同步，
-见 `SLICE` 注释 ✓）。规则：**只对主来源缺失的文件使用**（主来源存在 ⇒ 仍以主来源为准 ✓；
+（例：`test/multibytecodec_support.py` 就只在这里 ⇒ **task-62 已按第二来源根同步** ✓）。
+规则：**只对主来源缺失的文件使用**（主来源存在 ⇒ 仍以主来源为准 ✓；
 第二来源根不存在 ⇒ 退回单来源 ✓）；`--sync` 拷入后对每个文件做**逐字节校验**，`--check`
 对这类文件与第二来源比对 ✓（`CX-8` 口径不变：仍与上游 CPython 3.14.x 逐字节一致）。
 """
@@ -33,8 +33,8 @@ LIB = ROOT / "Lib"
 #: **第二来源根**（task-38 ✓）：`libpython3.14-testsuite` deb 解到 `target/upstream/extracted/`
 #: 的数据根（**不进仓库** ✓）。只用于**主来源缺失**的文件 ✓（主来源存在时仍以主来源为准 ✗ ——
 #: `CX-8` 的上游口径是本机 stdlib 前缀 ✓）；目录不存在时自动退回单来源 ✓。
-#: **当前 `SLICE` 里暂无文件用到它** ✓（`test/multibytecodec_support.py` 因 **P3-35 surrogate**
-#: 暂不同步 —— 见 `SLICE` 注释；epic 落地后把该文件加回 `SLICE` 即可 ✓）——机制本身是通用能力 ✓。
+#: **当前 `SLICE` 里用到它的**：`test/multibytecodec_support.py` ✓（task-62 收进；本机 stdlib
+#: 前缀没有它、只有 testsuite deb 里有 ✓）。机制本身是通用能力 ✓。
 SECOND_SOURCE_ROOT = ROOT / "target/upstream/extracted/usr/lib/python3.14"
 
 #: 初始切片：`site.py` 直接导入的那些 ＋ 它们最短的依赖链（**只增不改** ✓）。名字带目录时按原样拷贝。
@@ -439,18 +439,27 @@ SLICE = (
     "test/support/channels.py",
     "test/typinganndata/ann_module.py",
     "test/typinganndata/ann_module2.py",
-    # **`P3-35` 剩余 4 个仍不同步** ✓：`test/libregrtest/utils.py`（surrogate `\uD800-\uDFFF`
-    # 字面量 ⇒ 要**string repr 级**改造，不是纯解析器格）、`test/support/os_helper.py`
-    # （`\uDC80` 的运行时 surrogateescape 口径）、`test/typinganndata/ann_module695.py`
-    # （PEP 695 `*Ts` 未接线）、`test/multibytecodec_support.py`（第 24 行
-    # `unmappedunicode = '\udeee'` 是**合法孤立代理** ⇒ 同上，走 **P3-35 surrogate epic**；
-    # 它**只**在 `libpython3.14-testsuite` deb 的解包目录里 ✓、本机 stdlib 前缀里**没有** ⇒
-    # 修好后用**第二来源根**（`SECOND_SOURCE_ROOT`）同步 ✓，见 task-38）⇒ 修完再收；
-    # 按 `MS-19` 判据补充：**不登记 KNOWN**、不改编译器 ✗。
-    # **task-38 记**（2026-10-25 ✓）：8 个 `test_codecencodings_*`／`test_codecmaps_*` 的
-    # ×11 签名实测已从 `ImportError: cannot import name 'multibytecodec_support' from 'test'`
-    # 推进到**下一格** `SyntaxError: invalid unicode escape \U0000deee`（临时拷入验证后按裁决撤回，
-    # **当前不入库**）；等 surrogate epic 落地后回归（届时 `--sync` 用第二来源根即可 ✓）。
+    # **`P3-35` 剩余 1 个仍不同步** ✓：`test/typinganndata/ann_module695.py`
+    # （PEP 695 `*Ts`（TypeVarTuple）尚未接线 —— task-62 复验仍报 `状态 5`
+    # `Unsupported`）⇒ 修完再收；按 `MS-19` 判据补充：**不登记 KNOWN**、不改编译器 ✗。
+    # **task-38 → task-62 记**：`test/multibytecodec_support.py`（第 24 行
+    # `unmappedunicode = '\udeee'` 是**合法孤立代理**；本机 stdlib 前缀里**没有**、只在
+    # `libpython3.14-testsuite` deb 的解包目录里 ✓）task-38 时因 surrogate **暂不入库**
+    # （×11 签名从 `ImportError … multibytecodec_support` 推进到 `SyntaxError invalid unicode
+    # escape` 后按裁决撤回）；`P3-38` **S2b 后已解锁** ✓ ⇒ **task-62 用第二来源根收进** ✓。
+    # **task-62 收账**（`P3-38` S3e-1，2026-10-31 ✓）：S2b（`'\ud800'` 字面量可编译）＋
+    # S3a（surrogateescape／pass codec）＋ S3b（`sys.getfilesystemencodeerrors` =
+    # `'surrogateescape'`、写端 WTF-8）落地后，原 `P3-35` 剩余三格**全部解锁** ✓：
+    # `test/support/os_helper.py`（`b'-\xff'.decode(…, 'surrogateescape')`）、
+    # `test/libregrtest/utils.py`（`'\uD800-\uDFFF'` 一族）都过了 `lib_compile` ✓；
+    # 连同 `test/multibytecodec_support.py` 一并收 ✓（探针：`import test.support.os_helper`／
+    # `from test.support import os_helper, import_helper, script_helper`／
+    # `import test.multibytecodec_support`／`os.fsdecode(b'\xff') == '\udcff'` 全过 ✓；
+    # `utils.py` 导入期仍缺 `faulthandler` C 模块——那是**下一格**，不影响编译 ✅）。
+    "test/libregrtest/utils.py",
+    "test/support/os_helper.py",
+    # **第二来源根**（本机 stdlib 前缀没有它 ⇒ 用 testsuite deb 解包目录 ✓，见 `SECOND_SOURCE_ROOT`）。
+    "test/multibytecodec_support.py",
     # **`sysconfig` 的 `_sysconfigdata` 数据模块**（task-3 顺带 ✓）：`sysconfig.get_config_var()`
     # 走 `importlib.import_module(_get_sysconfigdata_name())` ✓，官方 `test.support` 导入期的
     # `check_sanitizer()` 就要 `CFLAGS` ⇒ 这两个名字按本机 `sys.platform`／multiarch 口径列出 ✓
