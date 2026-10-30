@@ -9,8 +9,8 @@
 > r22：用户拍板**启动 P3-38 surrogate epic** ⇒ 立项（S1…S5）＋**S1 WTF-8 基础模块**（23 测试）＋S2/S3 落地审计（28KB）；
 > r23：**S2a-1** `StrObject` 存储升 WTF-8 表示（`StrRepr` 双分支、`new_str_wtf8`/`wtf8_of`/`as_utf8`，**零行为改动**＋8 测试）。
 > **M6 收口结论（2026-10-25）**：`MS-14` ✓（407/407、新差异 0）；但 `MS-19` 补充下 **surrogate 未解 ⇒ M6 不标记完成**；
-> 用户已拍板并指示继续 P3-38 epic；进度 **S1…S2b ✓ → S3a ✓ → S3b-1/2/3 ✓ → S3e-1/2/3 ✓ → S2a-2 排序/比较 ✓**；
-> **语法错 0、可编译 397/397＝100%、跑通 17/397、运行期错 288、超时 7**；闸门 release 档 ≈15min；**未合并 main、未 tag m6**。
+> 用户已拍板并指示继续 P3-38 epic；**P3-38 阶段全部落地**：S1 ✓ → S2a-1/2 ✓ → S2b ✓ → S2c ✓（`value()` panic 清零）→ S3a ✓ → S3b-1…4 ✓ → S3e-1/2 ✓；
+> **语法错 0、可编译 397/397＝100%、跑通 18/397、判据① 477/628＝76.0%、MS-14 407/407 新差异 0**；release 闸门 1172s 全绿；**下一步：M6 收口（`--no-ff` 收 main ＋ tag m6，用户目标已授权）**。
 > 逐轮复盘见 `docs/rounds/03-m3-progress-05.md` 的 **round 14…22** 节 ✓（本笔追加 round 22）。
 
 ## 现在
@@ -18,36 +18,36 @@
 - **HEAD**：`e70644d`（`dev`，本笔前）—— 本笔＝**round 26**：P3-38 **S2b**（lexer/AST/emitter/pyac 走 WTF-8 ⇒ `'\ud800'` 字面量可编译，**语法错 30→1、可编译 396/397＝99.7%**）＋ release 档两处测试门控 ＋ **闸门提速 `slowcheck --release`**（≈4.2×：③163s/⑤490s/⑥385s/⑨107s/⑩66s，合计 ≈21min）＋ release 全量 survey（2m24s，跑通 10/397）；细节见台账 round 26。
 - **工作区**：本笔待提交 ＝ **N 项**（以 `git status --porcelain` 实测为准：BL `instance/convert.rs`/`executor/protocol.rs`＋新 `str_wtf8_ordering.rs`；BM `executor/step_exceptions.rs`/`instance/accessors.rs`/`instance/alloc.rs`/`sys_module.rs`/`small_cells.rs`；BN `posix_module.rs`/`_io_module.rs`/`io_wtf8_output.rs`；`NEXT.md`＋台账 round 29＋`ROUNDS.md`）。
 - **stash**：**空** ✓
-- **round 29 新增验收（全 ✓）**：
-  1. **含代理 str 排序/比较**：`Instance::str_order_cmp`（码点序；合法 UTF-8 走 `str::cmp` 零变化）接入 `order_of`（sorted/min/max/list.sort）与
-     `compare_public` 四运算符；`text_value`→安全 `text_of`；新测 4 项；e2e 与 python3 逐行一致；**`StrObject::value()` panic 行归零**。
-  2. **`RERAISE` 栈效应真 bug**：参照 `stack_effect(RERAISE,·)==-1`，本层多弹 `oparg` 格 ⇒ `with` 清理块把 CM self 压进异常状态 ⇒ `__context__` 错
-     ⇒ `exc.__traceback__` AttributeError ×11；修后 **11→0**、`test_raise` 从崩溃转真跑；`tb_lineno`/`tb_lasti` 真值；"每帧 traceback 链"实验因 140s GC 爆炸回退。
-  3. **S3b-3/S3e-3 小格**：`getcwdb` 字节/`getcwd=fsdecode(getcwdb)`（含代理目录名/PWD 与 python3 0 diff；顺修启动 `vars()` panic）；
-     `sys.stdout.buffer`（`_io.BufferedWriter`，write 字节直写、flush no-op；无缓冲等偏差如实）；`sys.getsizeof`（真实占用口径，不加 CPython GC 头，已登记）；
-     `sys.thread_info`（无线程 VM ⇒ 如实 none/None）；三签名各 1→0。
-  4. **release survey（2m32s）**：可编译 **397/397＝100.0%**、跑通 **17/397＝4.3%**、未实现 85、运行期错 **288**、超时 **7**；
-     `__traceback__` 11→0、`getsizeof` 1→0、`thread_info` 1→0；**MS-14 407/407、新差异 0**；红线 compile 4 passed；core 76／stdlib 19 全绿；0 warning；check.py 14/14。
-- **数字**：判据① 待复核；语料 407／新差异 0。
-- **M6 收口结论**：`MS-14` ✓、新差异 0 ✓、可编译 100%/语法错 0（`MS-19` 补充已满足）；**P3-38 剩余运行时面**：socket I/O 17、`\N{…}` 名字表 15、
-  `except*` 7、`import *` 属性字典 4、async 推导式 4、下标删除 5、`FAILED(errors=1)` 泛化 16、`mapping_tests`/lib-sync、缺模块、`except … as` 字节码/异常表、
-  stack overflow 3、`tb_next` 链 ⇒ **仍未到 M6 收口**。
-- **下一轮**：`except … as 名字` 的字节码/异常表（BL 已给证据：参照 4 段 exctable vs 本层 2 段）→ `\N{…}` 名字表方案拍板 → `import *`/async 推导式
-  → socket I/O/缺模块 → lib-sync 同步 mapping_tests → release survey 回归 → 判据① 复核。
+- **round 30 新增验收（全 ✓）**：
+  1. **S2c 收尾**：`StrObject::value()`（WTF-8 panic）用户可触发调用点**清零**（core+stdlib）；`text_value` 安全有损、`str_str`/`object_ascii`（`quote_wtf8`）/
+     formatting/protocol/step_format/step_match/argdecode/classes/exceptions/gc/convert 等 21 文件安全化；新增码点层格式化 `format_wtf8_str`
+     （`f"{s:>5}"`/`"{:>5}".format(s)` 逐字符一致）；探针矩阵 20 条无 panic（4 条已登记有损偏差：`%s` 嵌入/宽度、混合模板、`str.__str__`、`str(e)`）；
+     新测 `str_wtf8_no_panic`（3 passed）。
+  2. **S3b-4**：脚本参数/`__file__`/源码读取按原始字节；`sys.argv`/`orig_argv`/`executable` 按 utf-8+surrogateescape 解 WTF-8；非 UTF-8 参数/脚本名与 python3
+     **0 diff**；`sys.executable` 修为真实路径；`readlink` str/bytes 两形状 0 diff。如实边界：`co_filename`/`.pyac` 名 lossy、`sys.prefix` cargo 目录、
+     `os.pipe` 缺、标准流 dup EBADF。
+  3. **Lib/test 差集同步**：新增 **168** 个（顶层支持模块 45＋`test_*` 7＋包 116）；`--check` **739** 逐字节一致、`Lib/` `.py` **735**、`sync_lib.py` +192/−1、
+     `lib_compile` 绿；**892 个未入库**逐类记因（70 编译期缺口含 3 个 cell/free panic ＋66 `\N{…}`/`except*`/async/PEP695 等 ＋1 debug-only；822 非 triage；
+     **无 KNOWN、未改上游**）；`--check` 顺带跳过 `Lib/**/__pyawa__/`；`mapping_tests`/`support.os_helper`/`multibytecodec_support` 探针全过。
+  4. **release survey（2m48s）**：可编译 **397/397＝100.0%**、跑通 **18/397＝4.5%**、语法错 0、未实现 96、运行期错 271、超时 12；
+     **判据① 477/628＝76.0%**；进度指标 477/735＝64.9%；**MS-14 407/407、已知差异 0、新差异 0**；红线 compile 4 passed；lib_compile 绿；check.py 14/14。
+- **P3-38 结论**：S1…S3e 阶段全部落地；剩余非 gate 面（未实现形态 `\N{…}` 15／`except*` 7／async 推导式 4／PEP695 4／下标删除 5／`import *` 4、
+  socket I/O 17、缺模块若干、cell/free 表 3 个 panic 用例、`FAILED(errors=1)` 泛化 16、`tb_next`、fs/io 其余）如实记录，**不影响 M6 三条判据**
+  （MS-14 可发布＋新差异 0＋MS-19 合法 Python 不再被拒：语法错 0/可编译 100%）。
+- **下一轮（收口）**：复核判据①（76.0% ≥ 阈值 67%）／语料 floor（407）／MS-14（407/407、新差异 0）＋ 十项闸门 → 更新 PLAN-milestones（M6 标记完成、
+  P3-38 标记完成）→ **按用户目标执行 `git checkout main && git merge --no-ff dev && git tag m6 && git push`** → 出 M6 收口最终报告。
 
 ## 下一阶段（M6 兼容性验收；`DESIGN.md` §12）
 
-1. **M6 判据**：`MS-14` 报告可发布 ＋ 新差异 0 ＋ `MS-19` 补充（合法 Python 不再被拒）——**后两条均已达成**；主要剩运行时形态与少数未实现面。
-2. **P3-38 剩余**：`except … as` 字节码/异常表 → `\N{…}` 名字表 → `except*`/async 推导式/`import *`/下标删除 → socket I/O/缺模块 → fs/io 其余。
-3. **收口动作**（全部绿后）：复核 MS-14／新差异 → 报用户批准 `--no-ff` 收 `main` ＋ tag `m6`。
+1. **M6 判据**：`MS-14` 可发布 ✓（407/407、已知差异 0、新差异 0）＋ `MS-19` 补充 ✓（语法错 0、可编译 100%）＋ 判据① 76.0% ≥ 67% ✓。
+2. **P3-38**：S1…S3e 全部落地 ✓；剩余非 gate 形态见上（后续里程碑再收）。
+3. **收口动作**（下一轮）：PLAN/台账更新 → `--no-ff` 收 `main` ＋ `tag m6` ＋ push → 最终报告。
 
 ## 下一条命令（下一轮开工）
 
 ```text
-git status --short                      # 应干净（round 29 已提交）
-tools/slowcheck.sh --release            # ≈15min
-python3 tools/libtests_survey.py --release   # ≈2.5min
-# 下一格：`except … as 名字` 字节码/异常表（compile/emitter）；`\N{…}` 名字表方案；import */async 推导式
+git status --short                      # 应干净（round 30 已提交）
+git checkout main && git merge --no-ff dev -m "M6: ..." && git tag m6 && git push --tags origin main dev && git checkout dev
 ```
 
 ## 本战役的关键口径（新会话必读）

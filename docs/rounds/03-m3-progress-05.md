@@ -2129,3 +2129,43 @@
   `mapping_tests`/lib-sync 5、缺模块若干、`except … as` 字节码与异常表（compile/emitter）、stack overflow 3、`tb_next` 链 → 之后才能报 M6 收口。
 - **下一轮**：`except … as 名字` 字节码/异常表（compile，BL 已定位证据）→ `\N{…}` 名字表方案拍板 → `import *`/async 推导式 → socket I/O/缺模块
   → lib-sync 同步 mapping_tests → release survey 回归 → 判据① 复核。
+
+---
+
+## round 30（会话 10 · P3-38 收口轮）落地 ✓ —— S2c 收尾（`value()` panic 清零）＋ S3b-4 argv/ABI/readlink ＋ Lib/test 差集同步（`--check` 739、`mapping_tests` 可导入）
+
+- **口径**：`HEAD`（本笔前）＝`6458dd6`（`dev`，round 29）；工作区起始干净；`check.py` 14/14。
+- **落地（三块）**：
+  1. **S2c 收尾（P3-38）**：审计 `cast::<StrObject>()` 全部调用点 ⇒ **core+stdlib 中 `.value()`（WTF-8 会 panic）调用点清零**（余 15 处均为
+     `wtf8_bytes`/`as_utf8`/`is_empty` 安全视图）；`StrObject::value()` 本体保留为内部守卫 API（老守卫测试仍钉住）。集中改动：
+     `Instance::text_value` 改安全有损（合法 UTF-8 逐字节不变；WTF-8 ⇒ U+FFFD）；`str_str`/`object_ascii`（改 `quote_wtf8`）/formatting/
+     protocol/executor/step_format/step_match/argdecode/classes/exceptions/gc/convert 等 21 文件逐点安全化；内部 ASCII 常量比较改 `text_of == Some(..)`；
+     **新增码点层格式化 `format_wtf8_str`**（宽度/填充/对齐/精度按 WTF-8 码点，`f"{s:>5}"`/`"{:>5}".format(s)`/`"{v:^5}"` 逐字符一致）。
+     探针矩阵 20 条**无 panic**，仅 4 条已登记有损偏差（`%s` 嵌入/宽度、混合 `str.format` 模板、`str.__str__` 直调、`str(e)`——均为 `String` 输出通道边界）；
+     新 Rust 测 `str_wtf8_no_panic.rs`（3 passed）。
+  2. **S3b-4（P3-38）**：argv 真字节口径——脚本参数/`__file__`/脚本源读取按原始字节（PEP 383），`sys.argv`/`sys.orig_argv`/`sys.executable` 按
+     `utf-8+surrogateescape` 解成 WTF-8 str；非 UTF-8 参数与脚本名探针与 python3 **stdout 逐字节 0 diff**；`sys.executable` 修为真实解释器路径。
+     ABI：新增 Rust 级 `pa_state::globals()`（C ABI 字符串契约只收 UTF-8，如实记）；`read_source` 源码 UTF-8 契约照旧。`os.readlink` str/bytes 两形状
+     （含 target 原始 `0xff`）与 python3 **0 diff**。如实边界：编译器 `co_filename`/`.pyac` 产物名对非 UTF-8 脚本名仍 lossy；`sys.prefix`/`base_prefix`
+     仍是 cargo 目标目录；`os.pipe` 缺、标准流 `dup(1)`/`dup2(1,1)` EBADF（如实列，未修）。
+  3. **S3e-2 收尾（Lib/test 差集同步）**：逐个上游文件"先验证能过 `lib_compile` 不变量再同步"——**新增 168 个**：顶层支持模块 45
+     （`mapping_tests`（×5 triage 直接解）/`string_tests`/`seq_tests`/`list_tests`/`lock_tests`/`picklecommon`/`fork_wait`/`profilee`/`datetimetester`…）、
+     triage 点名 `test_*` 7、包 116（`test_importlib/` 87＋`test_tools/` 17＋`test_inspect/` 8＋`test_string/` 4）；
+     `--check` **739 文件**（571→739，169 按第二来源根）逐字节一致、`Lib/` `.py` **735**（567→735）、`--sync` 663、`sync_lib.py` +192/−1；
+     `lib_compile` **绿**、`check.py` 14/14。**未入库 892 个**并逐类记原因（70 个编译期缺口：3 个编译器 panic（cell/free 表）
+     ＋66 个 `\N{…}`/`except*`/async 推导式/PEP695 等 ＋1 debug-only；822 个非 triage 所需、按"别追求数量"撤回；**无 KNOWN 登记、未改上游**）。
+     顺带修 `--check` 跳过 `Lib/**/__pyawa__/`（CLI 在 Lib 跑脚本生成的 `.pyac` 曾污染 CX-8 计数）。
+     探针：`from test import mapping_tests` ✓、`test.support`/`os_helper`/`multibytecodec_support` ✓；下一格如实：`pickletester`（`\N{…}` 未入库）、
+     `_splitext` 缺、`test_math` 指令 8、`test_httplib/urllib` `_socket` I/O、`test_xml_etree` `pyexpat`。
+- **验收（全 ✓）**：**release survey：可编译 397/397＝100.0%、跑通 18/397＝4.5%**、语法错 0、未实现 96、运行期错 271、超时 12；
+  **判据①：477/628＝76.0%**（不改判据口径；进度指标 `Lib/` 已同步子集 735 ⇒ 能 import 477＝64.9%）；**MS-14 本树**：407/407、已知差异 0、新差异 0；
+  红线 `--test compile` 逐字节 4 passed；`lib_compile` 绿；`check.py` 14/14。
+- **闸门**（`tools/slowcheck.sh --release` 单次连续 **十项全绿**，墙钟 **1172s（19min32s）**；③ workspace 371s 因 Lib 同步面扩大）：
+  步骤 0 构建 0s；① check **0 警告**（1s）；② `--test compile` 逐字节 **4 passed**（72s）；③ workspace（371s）；④ `check.py` **14/14**（2s）；
+  ⑤ stability（256s）；⑥ heap_and_concurrency（见日志）；⑦ 夹具 0s；⑧ 语料下限 0s；⑨ conformance（61s）；⑩ `PYAWA_DANGLING`（62s）。
+  **MS-14 报告本树：407/407、已知差异 0、新差异 0**。
+- **M6 收口结论**：`MS-14` ✓／新差异 0 ✓／可编译 100%／语法错 0／`MS-19` 补充（合法 Python 被拒）已消除；P3-38 的 S1/S2a/S2b/S2c/S3a/
+  S3b-1…4/S3e-1…2 均已落地。**剩余非 gate 面（如实列出、不影响 M6 三条判据）**：未实现形态 `\N{…}` 15／`except*` 7／async 推导式 4／PEP 695 4／
+  下标删除 5／`import *` 4、socket I/O 17、缺模块（zipimport/urllib.request/pyexpat/fork_wait 等）、编译器 cell/free 表 3 个 panic 用例、
+  `FAILED(errors=1)` 泛化 16、`tb_next` 链、fs/io 其余（`os.pipe`/标准流 dup/`sys.prefix`）。
+- **下一轮**：收口前复核（判据① 已 76.0%、语料 floor 407、MS-14 407/407、新差异 0）＋ 十项闸门 → 出 M6 收口报告并**按用户目标执行 `--no-ff` 收 `main` ＋ tag `m6` ＋ push**（若仍有明确门控项，先如实报告）。
