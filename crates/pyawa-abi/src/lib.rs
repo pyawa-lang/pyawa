@@ -410,6 +410,15 @@ impl pa_state {
         &self.instance
     }
 
+    /// **脚本全局字典**（Rust 级访问器；不是 C ABI 面 `AB-` 的一部分）。
+    ///
+    /// 组合根在 `pa_exec_*` 之前要装 `__file__`：参照口径是**绝对路径原样字节**（PEP 383），
+    /// 而 C 面 `pa_pushstring`／`pa_setglobal` 只收 UTF-8 字符串 ⇒ 含孤立代理的脚本路径
+    /// 无法经 C 面表达 ✗ ⇒ 由 `pyawa-runtime` 用本访问器**直接装** WTF-8 `str` ✓。
+    pub fn globals(&self) -> NonNull<Header> {
+        self.globals
+    }
+
     /// 造一个新实例（`AB-55`：创建经出参交回，不接触栈）。
     fn new() -> Self {
         let instance = Instance::new();
