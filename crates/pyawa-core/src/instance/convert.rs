@@ -159,6 +159,50 @@ impl Instance {
     ///
     /// 其余给 `None`——调用方据此报参照实现那条
     /// `TypeError: '<' not supported between instances of 'str' and 'int'`（实测）。
+    /// **两个 `str` 的码点序比较**（Task-66：含孤立代理也照码点比 ✓；不是两个恰 `str` ⇒ `None`）。
+    ///
+    /// 口径：逐**码点**比较（代理各算 1 个码点 ✓，U+D800 < U+DFFF ✓），一方是另一方前缀 ⇒ 短的更小 ✓。
+    /// **合法 UTF-8 快速路径**：UTF-8 的字节序与码点序**保序一致**（前缀关系也一致 ✓）⇒
+    /// 直接 `str::cmp`——与旧的 `String::cmp` 逐字节相同 ⇒ 合法字符串行为零变化 ✓。
+    /// 含孤立代理 ⇒ 走 [`crate::wtf8::code_points`] 逐码点比（不做字节捷径，代理的 3 字节形式
+    /// 虽也保序，但显式按码点更不容易在边界上出错 ✓）。
+    pub fn str_order_cmp(
+        &self,
+        left: NonNull<Header>,
+        right: NonNull<Header>,
+    ) -> Option<core::cmp::Ordering> {
+        let text_type = self.singletons().str_type();
+        if self.type_of(left) != text_type || self.type_of(right) != text_type {
+            return None;
+        }
+        let left_bytes = self.str_wtf8_bytes(left)?;
+        let right_bytes = self.str_wtf8_bytes(right)?;
+        if let (Ok(left_text), Ok(right_text)) = (
+            core::str::from_utf8(left_bytes),
+            core::str::from_utf8(right_bytes),
+        ) {
+            return Some(left_text.cmp(right_text));
+        }
+        let mut left_points = crate::wtf8::code_points(left_bytes);
+        let mut right_points = crate::wtf8::code_points(right_bytes);
+        loop {
+            match (left_points.next(), right_points.next()) {
+                (None, None) => return Some(core::cmp::Ordering::Equal),
+                (None, Some(_)) => return Some(core::cmp::Ordering::Less),
+                (Some(_), None) => return Some(core::cmp::Ordering::Greater),
+                (Some(left_point), Some(right_point)) => {
+                    // 已校验的 WTF-8 ⇒ 不该出现 `Err`；真出现就当"不可比"（不吞成相等 ✓）。
+                    let left_point = left_point.ok()?;
+                    let right_point = right_point.ok()?;
+                    match left_point.cmp(&right_point) {
+                        core::cmp::Ordering::Equal => {}
+                        ordering => return Some(ordering),
+                    }
+                }
+            }
+        }
+    }
+
     pub fn order_of(
         &self,
         left: NonNull<Header>,
@@ -217,16 +261,10 @@ impl Instance {
                 return Some(left_items.len().cmp(&right_items.len()));
             }
         }
-        // SAFETY: 两者都是存活对象。
-        let left_type = unsafe { left.as_ref() }.ty();
-        let right_type = unsafe { right.as_ref() }.ty();
-        let text_type = self.singletons().str_type();
-        if left_type == text_type && right_type == text_type {
-            // SAFETY: 类型身份已确认。
-            let left_text = unsafe { &*left.as_ptr().cast::<StrObject>() }.value().to_owned();
-            // SAFETY: 同上。
-            let right_text = unsafe { &*right.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return Some(left_text.cmp(&right_text));
+        // **`str` 的码点序**（Task-66 ✓）：合法 UTF-8 走 `str::cmp`（字节序＝码点序 ⇒ 旧行为零变化 ✓），
+        // 含孤立代理按码点逐位比（不再经 `value()` ⇒ 不 panic ✓）。
+        if let Some(ordering) = self.str_order_cmp(left, right) {
+            return Some(ordering);
         }
         // **富比较协议**（task-12 ✓）：内建快速路径都判不出时，照 `COMPARE_OP` 的**同一处真相**
         // （`executor::compare_public`：正向方法 → `NotImplemented` 走反向 → 再判不出报 `TypeError`）

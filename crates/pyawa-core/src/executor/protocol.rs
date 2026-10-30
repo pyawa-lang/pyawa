@@ -685,13 +685,25 @@ pub fn compare_public(
     }
     let left_int = instance.int_of(left);
     let right_int = instance.int_of(right);
-    let left_text = instance.text_value(left);
-    let right_text = instance.text_value(right);
+    // **`str` 的码点序**（Task-66 ✓）：两个恰 `str` 就走这里（含孤立代理也按码点比 ✓，
+    // 不再经 `value()` ⇒ 不 panic）；合法 UTF-8 路径与旧的 `String::cmp` 结果逐例相同 ✓。
+    if let Some(ordering) = instance.str_order_cmp(left, right) {
+        return Ok(match symbol {
+            "<" => ordering.is_lt(),
+            "<=" => ordering.is_le(),
+            ">" => ordering.is_gt(),
+            ">=" => ordering.is_ge(),
+            _ => false,
+        });
+    }
+    // `text_of` 是**安全**视图（WTF-8 表示 ⇒ `None`；上面已处理两个恰 str 的情形 ✓）
+    let left_text = instance.text_of(left);
+    let right_text = instance.text_of(right);
     let left_bytes = instance.bytes_value(left);
     let right_bytes = instance.bytes_value(right);
     let ordering = match (left_int, right_int, left_text, right_text, left_bytes, right_bytes) {
         (Some(a), Some(b), _, _, _, _) => Some(a.cmp(&b)),
-        (_, _, Some(a), Some(b), _, _) => a.partial_cmp(&b),
+        (_, _, Some(a), Some(b), _, _) => Some(a.cmp(b)),
         // `bytes` 按**字节**字典序（`P1-12`；实测 `b'ab' < b'b'` 为真）
         (_, _, _, _, Some(a), Some(b)) => Some(a.cmp(b)),
         _ => None,
