@@ -406,54 +406,175 @@ fn print_native(
     instance: &Instance,
     _self_object: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let builtins = instance.builtins().ok_or(ExecError::Unsupported {
         opcode: 0,
         what: "`print` 需要内建名字空间（组合根装配）",
     })?;
-    // 身份检查：`sys.stdout` 那个对象必须在（目的地与它是同一个 ✓）
-    let _stdout = instance
+    let default_stdout = instance
         .dict_get(builtins, "__stdout__")
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`sys.stdout` 尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
         })?;
-    // 句柄与 `stdout` 对象**同源**（组合根一起装 ✓）：对象是身份、句柄是落点 ✓
     let handle_object = instance
         .dict_get(builtins, "__stdout_handle__")
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`sys.stdout` 的句柄尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
         })?;
-    let handle = instance
+    let default_handle = instance
         .int_value(handle_object)
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`__stdout_handle__` 不是整数",
         })? as u64;
 
-    let mut bytes: Vec<u8> = Vec::new();
-    for (index, argument) in args.iter().enumerate() {
-        if index > 0 {
-            bytes.push(b' ');
-        }
-        // **非 `str` 实参走 `str(x)` 的同一处实现**（第 330 轮）：`print(1)`、`print([1, 2])`、
-        // `print(None)` 这些都是 `Lib/` 里遍地都是的写法 ✓ —— 先前一律如实拒绝 ✗
-        // （消息还写着"`str()` 落地前" ✓，而 `str()` 早就落地了 ✓ ⇒ 这里补上 ✓）。
-        // 走核心的 [`Instance::object_str_native`] ✓（一处真相：与 `str(x)` 同一个渲染 ✓）。
-        let rendered = match instance.text_of(*argument) {
-            Some(text) => text.to_owned(),
-            None => instance.object_str_native(*argument)?,
+    // **`print` 的关键字面**（task-61：`sep`／`end`／`file`／`flush`，照参照 3.14.4 实测文案）。
+    let mut separator: Option<NonNull<Header>> = None;
+    let mut terminator: Option<NonNull<Header>> = None;
+    let mut destination: Option<NonNull<Header>> = None;
+    let mut flush = false;
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            continue;
         };
-        bytes.extend_from_slice(rendered.as_bytes());
+        match name {
+            "sep" => separator = Some(*value),
+            "end" => terminator = Some(*value),
+            "file" => destination = Some(*value),
+            "flush" => flush = instance.truthiness_of(*value)?,
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("print() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
     }
-    bytes.push(b'\n');
-    crate::_io_module::write_bytes(instance, handle, &bytes)?;
-    // **必须 `retain`**（返回给 VM 的是**新引用** ✓）：少了它，调用方会释放单例 ⇒
-    // 双重释放 ⇒ 进程退出时报 `tcache_thread_shutdown(): unaligned tcache chunk detected` ✗
-    // （第 94 轮实测：`print` 少了这一句 ✗）
+
+    // `sep`／`end`：缺省 `' '`／`'\n'`；显式 `None` ＝ 缺省（参照实测口径）；其它非 str 报参照文案。
+    let none = instance.singletons().none();
+    let separator_bytes = match separator {
+        None => b" ".to_vec(),
+        Some(value) if value == none => b" ".to_vec(),
+        Some(value) => print_str_argument_bytes(instance, value, "sep")?,
+    };
+    let terminator_bytes = match terminator {
+        None => b"\n".to_vec(),
+        Some(value) if value == none => Vec::new(),
+        Some(value) => print_str_argument_bytes(instance, value, "end")?,
+    };
+
+    // **目标**：`file=` 缺省／显式 `None` ⇒ `sys.stdout` 快路（一次 `fs` 写）；否则走**属性通道**
+    // 调那个对象的 `write`（与参照"每次 print 是一串 write"一致；`file=sys.stderr` 同理 ✓）。
+    let target = match destination {
+        None => Some(default_stdout),
+        Some(value) if value == none => Some(default_stdout),
+        Some(value) => Some(value),
+    };
+    let is_default_stdout = target == Some(default_stdout);
+
+    if is_default_stdout {
+        let mut bytes: Vec<u8> = Vec::new();
+        for (index, argument) in args.iter().enumerate() {
+            if index > 0 {
+                bytes.extend_from_slice(&separator_bytes);
+            }
+            bytes.extend_from_slice(&print_argument_bytes(instance, *argument)?);
+        }
+        bytes.extend_from_slice(&terminator_bytes);
+        crate::_io_module::write_bytes(instance, default_handle, &bytes)?;
+        if flush {
+            // `sys.stdout` 的 `flush` 是本层真实存在的 no-op（无缓冲）⇒ 照参照调用它 ✓。
+            print_call_method(instance, default_stdout, "flush", &[])?;
+        }
+    } else {
+        let file = target.expect("上面判过 target 非空");
+        for (index, argument) in args.iter().enumerate() {
+            if index > 0 {
+                print_write_bytes(instance, file, &separator_bytes)?;
+            }
+            let bytes = print_argument_bytes(instance, *argument)?;
+            print_write_bytes(instance, file, &bytes)?;
+        }
+        print_write_bytes(instance, file, &terminator_bytes)?;
+        if flush {
+            print_call_method(instance, file, "flush", &[])?;
+        }
+    }
+    // **必须 `retain`**（返回给 VM 的是**新引用** ⇒ 调用方会释放单次调用结果 ✓）。
     Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `sep=`／`end=` 实参必须是 `str`（否则照参照：`sep must be None or a string, not <类型>`）。
+fn print_str_argument_bytes(
+    instance: &Instance,
+    value: NonNull<Header>,
+    keyword: &str,
+) -> Result<Vec<u8>, ExecError> {
+    if let Some(raw) = instance.wtf8_of(value) {
+        return Ok(raw.to_vec());
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "{keyword} must be None or a string, not {}",
+            type_name(instance, value)
+        ),
+    ))
+}
+
+/// 一个 `print` 实参的字节：`str` 走 WTF-8 原字节（含孤立代理 ✓）；其它走 `str(x)` 的同一处渲染。
+fn print_argument_bytes(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Vec<u8>, ExecError> {
+    if let Some(raw) = instance.wtf8_of(value) {
+        return Ok(raw.to_vec());
+    }
+    let rendered = instance.object_str_native(value)?;
+    Ok(rendered.into_bytes())
+}
+
+/// 把字节写成 `str` 后调目标对象的 `write`（`print(file=…)` 那条路；含代理字节也不 lossy）。
+fn print_write_bytes(
+    instance: &Instance,
+    file: NonNull<Header>,
+    bytes: &[u8],
+) -> Result<(), ExecError> {
+    let Some(text) = instance.new_str_wtf8(bytes) else {
+        return Err(instance.raise_builtin_error(
+            "UnicodeEncodeError",
+            "print(): 输出字节不是合法 WTF-8（内部不变量）",
+        ));
+    };
+    let outcome = print_call_method(instance, file, "write", &[text]).map(|_| ());
+    instance.release(text);
+    outcome
+}
+
+/// 在目标对象上取一个方法并调用（new 引用自己还；没有该方法照参照报 `AttributeError`）。
+fn print_call_method(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(method) = instance.attribute_optional_of(object, name)? else {
+        return Err(instance.raise_builtin_error(
+            "AttributeError",
+            &format!(
+                "'{}' object has no attribute '{name}'",
+                type_name(instance, object)
+            ),
+        ));
+    };
+    let result = pyawa_core::executor::call::call_value(instance, method, args, &[]);
+    instance.release(method);
+    let value = result?;
+    Ok(value)
 }
 
 /// 造一个原生可调用对象（**新引用**）。

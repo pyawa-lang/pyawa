@@ -61,25 +61,48 @@ pub fn write_bytes(
 // `unittest.main()` 当场 `AttributeError: '_io.TextIOWrapper' object has no attribute 'write'` ✗
 // —— 这是 `P3-32` 验收②（最小 `unittest.main()` 退出码 `0`）的最后一格 ✓。
 //
-// **口径（如实 ✗）**：
-// - 编码**固定 `utf-8`** ✓（参照的标准流编码随 locale／`PYTHONUTF8` 走；本层只接最小面 ✓）；
+// **口径（task-61／P3-38 S3b-1 起：写端走 WTF-8）**：
+// - **字节＝ `str` 的 WTF-8 表示**（`Instance::wtf8_of` ✓）：合法 UTF-8 串写出的字节与旧版
+//   **完全相同**（零回归）；含**孤立代理**的串写原始 WTF-8 字节（**不做 lossy／替换** ✗ 不假数据）；
+//   内部就是参照 `surrogateescape` 想表达的那类"原样字节"，但编码是 WTF-8（见报告如实偏差）。
+// - 编码**固定 `utf-8`** ✓；`errors` 属性照参照的"最小档"补（见 [`make_stream`]）。
 // - **不缓冲** ✓：一次 `write` 就是一次 `fs` 落点 ⇒ `flush` **真的无事可做** ✓（返回 `None` ✓）；
-// - `write` 只收 `str` ✓（`bytes` 等按参照报 `TypeError` ✓）；返回**字符数** ✓（参照口径 ✓）；
+// - `write` 只收 `str` ✓（`bytes` 等按参照报 `TypeError` ✓）；返回**字符数** ✓（码点计数，
+//   孤立代理算 1 ✓；参照 `TextIOWrapper.write` 的返回口径 ✓）；
 // - `writeln` 是**本层的便利方法** ✓（参照的文本流没有它；`unittest` 的那份在 Python 层
 //   `_WritelnDecorator` 里 ✓）——`writeln(str="")` ⇒ `write(str)` ＋ `"\n"` ✓，返回 `None` ✓。
 
-/// 文本流的编码（**如实** ✗：只接 `utf-8` 一档，见上面的"口径"）。
-const STREAM_ENCODING: &str = "utf-8";
+/// 文本流对象的 `encoding` 属性值（参照 3.14.4 实测：`utf-8`；本层只接这一档，见上面的"口径"）。
+const STREAM_ENCODING_NAME: &str = "utf-8";
 
-/// 把一段文本编码后经 `fs` 域写出去，返回**字符数** ✓（参照 `TextIOWrapper.write` 的返回口径 ✓）。
-fn write_text(instance: &Instance, handle: u64, text: &str) -> Result<usize, ExecError> {
-    let characters = text.chars().count();
-    let encoded = instance.encode_with_encoding(text, STREAM_ENCODING)?;
-    let bytes = instance
-        .bytes_value(encoded)
-        .map(|raw| raw.to_vec())
-        .unwrap_or_default();
-    instance.release(encoded);
+/// 取一个 `str` 实参的**写出字节**与**字符数**（WTF-8 口径；合法 UTF-8 字节零变化）。
+///
+/// 不是 `str` ⇒ 调用方约定的 `TypeError`（消息带 `method` 名，照参照）。
+fn text_argument(
+    instance: &Instance,
+    method: &str,
+    value: NonNull<Header>,
+) -> Result<(Vec<u8>, usize), ExecError> {
+    if let Some(raw) = instance.wtf8_of(value) {
+        // 码点计数（孤立代理各算 1 ✓）——`write` 的返回值口径。
+        let characters = instance.str_code_point_len(value).unwrap_or(raw.len());
+        return Ok((raw.to_vec(), characters));
+    }
+    // 非精确 `str`（如 `str` 子类）：合法 UTF-8 面走文本视图；含代理的子类此处如实报 TypeError。
+    if let Some(text) = instance.text_of(value) {
+        return Ok((text.as_bytes().to_vec(), text.chars().count()));
+    }
+    Err(not_str_error(instance, method, value))
+}
+
+/// 把一段文本经 `fs` 域写出去，返回**字符数** ✓（写出字节＝该 `str` 的 WTF-8 表示）。
+fn write_text(
+    instance: &Instance,
+    handle: u64,
+    method: &str,
+    value: NonNull<Header>,
+) -> Result<usize, ExecError> {
+    let (bytes, characters) = text_argument(instance, method, value)?;
     // **不缓冲** ✓：`print` 那条快路也是直接落一次 `fs` ✓（一处落点 ✓）。
     write_bytes(instance, handle, &bytes)?;
     Ok(characters)
@@ -94,17 +117,14 @@ fn not_str_error(instance: &Instance, method: &str, value: NonNull<Header>) -> E
     )
 }
 
-/// 取 `write` 的那个**唯一文本实参** ✓（多了少了都按参照报 `TypeError` ✓）。
-fn one_text_argument(
+/// 取 `write` 的那个**唯一文本实参** ✓（多了少了都按参照报 `TypeError` ✓；类型在写点校验）。
+fn one_argument(
     instance: &Instance,
     args: &[NonNull<Header>],
     method: &str,
-) -> Result<String, ExecError> {
+) -> Result<NonNull<Header>, ExecError> {
     match args {
-        [value] => match instance.text_of(*value) {
-            Some(text) => Ok(text.to_owned()),
-            None => Err(not_str_error(instance, method, *value)),
-        },
+        [value] => Ok(*value),
         [] => Err(instance.raise_builtin_error(
             "TypeError",
             &format!("{method}() takes exactly one argument (0 given)"),
@@ -122,8 +142,8 @@ fn stream_write(
     handle: u64,
     args: &[NonNull<Header>],
 ) -> Result<NonNull<Header>, ExecError> {
-    let text = one_text_argument(instance, args, "write")?;
-    let written = write_text(instance, handle, &text)?;
+    let value = one_argument(instance, args, "write")?;
+    let written = write_text(instance, handle, "write", value)?;
     Ok(instance.new_int(written as i64))
 }
 
@@ -139,18 +159,16 @@ fn stream_writeln(
             &format!("writeln() takes at most one argument ({} given)", args.len()),
         ));
     }
-    let mut text = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
     if let Some(value) = args.first() {
         // `None` 与"不给实参"同义 ✓（参照的 `print(end=None)` 一类写法口径 ✓）。
         if *value != instance.singletons().none() {
-            match instance.text_of(*value) {
-                Some(given) => text.push_str(given),
-                None => return Err(not_str_error(instance, "writeln", *value)),
-            }
+            let (raw, _characters) = text_argument(instance, "writeln", *value)?;
+            bytes.extend_from_slice(&raw);
         }
     }
-    text.push('\n');
-    write_text(instance, handle, &text)?;
+    bytes.push(b'\n');
+    write_bytes(instance, handle, &bytes)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -237,6 +255,30 @@ pub fn make_stream(instance: &Instance, handle: u64) -> NonNull<Header> {
         instance.dict_set(attributes, name, native);
         instance.release(native);
     }
+    // **`sys.stdout`／`sys.stderr` 的文本层属性**（task-61：照参照 3.14.4 实测补）。
+    // 参照（**管道**下实测）：stdout `encoding='utf-8'`／`errors='strict'`／`name='<stdout>'`／
+    // `mode='w'`／`line_buffering=False`；stderr `errors='backslashreplace'`／`name='<stderr>'`。
+    // **如实偏差** ✗：本层写端**总是**写 WTF-8 原始字节（含孤立代理也不做 lossy），行为等价于
+    // `surrogateescape` 那一类"原样字节"口径 ⇒ `errors` 报 `surrogateescape`（**不是**参照管道下的
+    // `strict`／`backslashreplace`；参照的对 D800 会抛 UnicodeEncodeError／写反斜杠转义）。
+    let (stream_name, stream_errors) = if handle == STDERR_HANDLE {
+        ("<stderr>", "surrogateescape")
+    } else {
+        ("<stdout>", "surrogateescape")
+    };
+    for (name, value) in [
+        ("encoding", STREAM_ENCODING_NAME),
+        ("errors", stream_errors),
+        ("name", stream_name),
+        ("mode", "w"),
+    ] {
+        let text = instance.new_str(value);
+        instance.dict_set(attributes, name, text);
+        instance.release(text);
+    }
+    let line_buffering = instance.new_bool(false);
+    instance.dict_set(attributes, "line_buffering", line_buffering);
+    instance.release(line_buffering);
     let object = instance.alloc(AttributeObject::new(
         stream_type,
         RefCell::new(Some(attributes)),

@@ -652,22 +652,31 @@ fn exit_native(
 
 /// 建 `sys` 模块的命名空间（**新引用** 的 `dict`）。
 /// **编码名**（第 265 轮）：`sys.getfilesystemencoding()`／`sys.getdefaultencoding()` ✓。
+///
+/// 值取参照实测：两者都是 `utf-8`（本层还没有"按平台查编码"的能力，如实）。
 fn encoding_native(
     instance: &Instance,
-    bound: Option<NonNull<Header>>,
+    _bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    // `getfilesystemencodeerrors` 与两个"编码名"共用一个原生 ✓ —— 用**函数名**区分值 ✓
-    //（值取参照实测：`utf-8`／`surrogateescape` ✓）。
-    let encode_errors = bound
-        .and_then(|object| instance.text_of(object))
-        .is_some_and(|name| name == "getfilesystemencodeerrors");
-    Ok(instance.new_str(if encode_errors {
-        "surrogateescape"
-    } else {
-        "utf-8"
-    }))
+    Ok(instance.new_str("utf-8"))
+}
+
+/// **`sys.getfilesystemencodeerrors()`**（task-61 收尾，P3-38 S3b）：参照实测
+/// **`'surrogateescape'`**（不是编码名 ✗）。
+///
+/// 旧实现把三个名字共用一个原生、想用"绑定 self 的函数名"区分值 ⇒ **模块函数调用时
+/// `bound` 为 `None`** ⇒ `getfilesystemencodeerrors()` 一直误报 `'utf-8'` ✗ ⇒ `Lib/os.py` 的
+/// `fsdecode` 拿 `'utf-8'` 当错误处理器名 ⇒ `LookupError: unknown error handler name 'utf-8'`
+/// （真 bug）。这里拆成独立原生，名称与值都照参照。
+fn filesystem_encode_errors_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    Ok(instance.new_str("surrogateescape"))
 }
 
 pub fn build(instance: &Instance) -> NonNull<Header> {
@@ -767,11 +776,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **`sys.getfilesystemencoding()`／`getdefaultencoding()`** ✓（第 265 轮）：`Lib/os.py` 的
     // `_create_environ_mapping()` 调前者 ✓ ⇒ 缺了它 `import os` 就停在那儿 ✗（实测 ✓）。
     // 值取**参照在本机的实测值** ✓（`utf-8` ✓）——**如实记** ✗：本层还没有"按平台查编码"的能力 ✓。
-    for name in ["getfilesystemencoding", "getdefaultencoding", "getfilesystemencodeerrors", "getfilesystemencoding"] {
+    for name in ["getfilesystemencoding", "getdefaultencoding"] {
         let native =
             crate::builtins_module::make_native(instance, name, encoding_native as pyawa_core::NativeFn);
         instance.dict_set(namespace, name, native);
     }
+    // **`getfilesystemencodeerrors()`** 是**错误处理器名**（`'surrogateescape'`），不是编码名 ✗
+    // —— 旧实现三个名字共用一个原生 ⇒ 模块函数调用时 `bound == None` ⇒ 一直误报 `'utf-8'`
+    // ⇒ `os.fsdecode` 报 `LookupError: unknown error handler name 'utf-8'`（task-61 收尾真 bug）。
+    let encode_errors = crate::builtins_module::make_native(
+        instance,
+        "getfilesystemencodeerrors",
+        filesystem_encode_errors_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "getfilesystemencodeerrors", encode_errors);
 
     // 语言版本（供特性检测）
     let (major, minor, micro, release_level, serial) = LANGUAGE_VERSION;
