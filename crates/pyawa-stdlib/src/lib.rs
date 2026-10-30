@@ -61,6 +61,8 @@ pub mod warnings_module;
 /// 是真实现（阈值即 core 的自动回收开关），`get_objects`／`get_referrers` 等如实
 /// `NotImplementedError`（见模块头与挂账）。
 pub mod gc_module;
+/// **`faulthandler`**（P3-38 S3e-2）：最小诚实面（状态/`dump_traceback` 真实现，信号/定时器/崩溃钩子如实未接）。
+pub mod faulthandler_module;
 
 /// **`sys.platform` 的值** ✓（第 194 轮）：本 crate 不碰平台（`CX-4` ✓）⇒ 先给常量 ✓，
 /// 真值应由平台集中点（`pyawa-runtime` ✓）注入 ✓ —— 已登记 ✓。
@@ -73,6 +75,9 @@ pub const PLATFORM: &str = "linux";
 /// ⇒ 上限诊断反而 **-1** ✗（这正是"表错一行，import 链就断"的又一例 ✓）。
 pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (imp_module::NAME, imp_module::build),
+        // **`faulthandler`**（P3-38 S3e-2）：官方 `test_faulthandler`／`test_regrtest`／
+        // `test_xxtestfuzz` 导入期就要它 ✓。
+        (faulthandler_module::NAME, faulthandler_module::build),
         (atexit_module::NAME, atexit_module::build),
         (_typing_module::NAME, _typing_module::build),
         (ast_module::NAME, ast_module::build),

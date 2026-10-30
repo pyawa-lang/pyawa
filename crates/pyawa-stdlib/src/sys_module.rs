@@ -692,6 +692,16 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `modules`：import 系统的模块表；import 未接之前只保证这个键存在
     let modules = instance.new_dict();
     instance.dict_set(namespace, "modules", modules);
+    // **`path_importer_cache`／`path_hooks`**（P3-38 S3e-2）：`importlib._bootstrap_external`
+    // （`invalidate_caches`／`_path_importer_cache`）、`pkgutil.get_importer`、`runpy` 一族都会读写
+    // 这两格（先前缺属性 ⇒ `AttributeError: 'module' object has no attribute
+    // 'path_importer_cache'`）。**本层诚实面** ✗：Pyawa 的导入在原生侧（不走 Python 查找器），
+    // 所以缓存起始为空 `dict`、钩子为空 `list` —— 这正是"一个查找器也没装"的**真实表示** ✓
+    // （不伪造 zipimporter／FileFinder；`importlib.invalidate_caches()` 对空缓存是合法 no-op ✓）。
+    let path_importer_cache = instance.new_dict();
+    instance.dict_set(namespace, "path_importer_cache", path_importer_cache);
+    let path_hooks = instance.new_list(Vec::new());
+    instance.dict_set(namespace, "path_hooks", path_hooks);
     // **`builtin_module_names`**（第 138 轮）：`Lib/os.py` 靠 `'posix' in sys.builtin_module_names`
     // 选平台分支 ✓ ⇒ 报我们**真正内建**的那些名字 ✓（如实 ✓；CPython 这里是元组 ✓）。
     // **第 280 轮据实修正** ✗：先前写的是 `imp`（3.14 已移除 ✗）且漏了 `_io`／`_warnings`／`_weakref`／

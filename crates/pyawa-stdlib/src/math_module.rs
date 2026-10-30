@@ -19,6 +19,194 @@ use core::ptr::NonNull;
 
 use pyawa_core::{ExecError, Header, Instance, NativeFn};
 
+/// **`math.isclose(a, b, *, rel_tol=1e-09, abs_tol=0.0)`**（P3-38 S3e-2，task-65）：
+/// 照参照 3.14.4 的语义（含 NaN/Inf/等价零/容差校验；位置实参恰好 2 个、容差**关键字限定**）✓。
+fn isclose_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "isclose() takes exactly 2 positional arguments ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let mut rel_tol: Option<f64> = None;
+    let mut abs_tol: Option<f64> = None;
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        match name {
+            "rel_tol" => rel_tol = Some(real_argument(instance, *value)?),
+            "abs_tol" => abs_tol = Some(real_argument(instance, *value)?),
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("isclose() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
+    }
+    let a = real_argument(instance, args[0])?;
+    let b = real_argument(instance, args[1])?;
+    let rel_tol = rel_tol.unwrap_or(1e-09);
+    let abs_tol = abs_tol.unwrap_or(0.0);
+    if rel_tol < 0.0 || abs_tol < 0.0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "tolerances must be non-negative",
+        ));
+    }
+    let close = if a == b {
+        true
+    } else if a.is_infinite() || b.is_infinite() {
+        false
+    } else if a.is_nan() || b.is_nan() {
+        false
+    } else {
+        let difference = (a - b).abs();
+        let tolerance = (rel_tol * a.abs().max(b.abs())).max(abs_tol);
+        difference <= tolerance
+    };
+    Ok(instance.new_bool(close))
+}
+
+/// 浮点的**全序键**（`nextafter` 用）：把 `f64` 位模式映射成"沿 `nextafter` 每步 ±1"的整数；
+/// `+0` 与 `-0` 都映到 `0`（零的符号由调用方按方向特判 ✓）。
+fn float_order_key(value: f64) -> i128 {
+    let bits = value.to_bits();
+    if bits & 0x8000_0000_0000_0000 != 0 {
+        -i128::from(bits & 0x7FFF_FFFF_FFFF_FFFF)
+    } else {
+        i128::from(bits)
+    }
+}
+
+/// 全序键 ⇒ `f64`（`key` 超出 `±inf` 的键 ⇒ 对应方向的无穷 ✓）。
+fn float_from_order_key(key: i128) -> f64 {
+    let inf_key = i128::from(f64::INFINITY.to_bits() & 0x7FFF_FFFF_FFFF_FFFF);
+    if key > inf_key {
+        return f64::INFINITY;
+    }
+    if key < -inf_key {
+        return f64::NEG_INFINITY;
+    }
+    if key >= 0 {
+        f64::from_bits(key as u64)
+    } else {
+        f64::from_bits(((-key) as u64) | 0x8000_0000_0000_0000)
+    }
+}
+
+/// **`math.nextafter(x, y, *, steps=None)`**（P3-38 S3e-2，task-65）：照参照 3.14.4 实测语义：
+/// 朝 `y` 方向走 `steps` 个"相邻浮点"；`steps` 缺省/`None` ⇒ 1；**非负整数**（负数 ⇒
+/// `ValueError: steps must be a non-negative integer`）；NaN 传染；`x == y` ⇒ `y`；
+/// 越过 `y` 或到无穷即止（大 `steps` 用全序键**一步算到位**，不循环）✓。
+fn nextafter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 参照 3.14.4 的**原样文案**（位置实参计数在 3/4 处口径不同，照抄实测 ✓）：
+    // 0/1 个 ⇒ `takes exactly 2 positional arguments (N given)`；3 个 ⇒ 同句；4+ ⇒
+    // `takes at most 3 arguments (N given)`。
+    match args.len() {
+        2 => {}
+        0 | 1 => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!(
+                    "nextafter() takes exactly 2 positional arguments ({} given)",
+                    args.len()
+                ),
+            ))
+        }
+        3 => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "nextafter() takes exactly 2 positional arguments (3 given)",
+            ))
+        }
+        given => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("nextafter() takes at most 3 arguments ({given} given)"),
+            ))
+        }
+    }
+    let mut steps_value: Option<NonNull<Header>> = None;
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        match name {
+            "steps" => steps_value = Some(*value),
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("nextafter() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
+    }
+    let steps = match steps_value {
+        None => 1i64,
+        Some(value) if value == instance.singletons().none() => 1i64,
+        Some(value) => {
+            let Some(steps) = instance.index_value(value)? else {
+                let name = instance.type_name(instance.type_of(value));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{name}' object cannot be interpreted as an integer"),
+                ));
+            };
+            if steps < 0 {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "steps must be a non-negative integer",
+                ));
+            }
+            steps
+        }
+    };
+    let x = real_argument(instance, args[0])?;
+    let y = real_argument(instance, args[1])?;
+    let result = if x.is_nan() || y.is_nan() {
+        f64::NAN
+    } else if x == y {
+        y
+    } else if steps == 0 {
+        x
+    } else if x == 0.0 {
+        // 零的特殊：朝正方向给最小正次正规数、朝负方向给最小负次正规数（`-0.0` 也如此 ✓）。
+        if y > 0.0 {
+            f64::from_bits(1)
+        } else if y < 0.0 {
+            f64::from_bits(0x8000_0000_0000_0001)
+        } else {
+            y
+        }
+    } else {
+        let x_key = float_order_key(x);
+        let y_key = float_order_key(y);
+        let distance = (y_key - x_key).unsigned_abs();
+        // `steps` 已检查过非负 ⇒ 直接转 u128 ✓（**不要**写 `u64::MAX as i64`：那是 -1，
+        // 会把任何 steps 夹成 u64::MAX —— 先前正是这个坑 ✗）。
+        let steps = u128::from(steps as u64);
+        if steps >= distance {
+            y
+        } else if y_key > x_key {
+            float_from_order_key(x_key + steps as i128)
+        } else {
+            float_from_order_key(x_key - steps as i128)
+        }
+    };
+    Ok(instance.new_float(result))
+}
+
 /// 模块名。
 pub const NAME: &str = "math";
 
@@ -62,7 +250,11 @@ fn real_argument(instance: &Instance, value: NonNull<Header>) -> Result<f64, Exe
     if let Some(integer) = instance.int_of(value).and_then(|value| value.to_i64()) {
         return Ok(integer as f64);
     }
-    Err(instance.raise_builtin_error("TypeError", "must be real number, not something else"))
+    let name = instance.type_name(instance.type_of(value));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("must be real number, not {name}"),
+    ))
 }
 
 /// 取一个整数实参（`int_of` ✓）。
@@ -568,6 +760,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("fsum", fsum_native as NativeFn),
         ("erfc", erfc_native as NativeFn),
         ("sumprod", sumprod_native as NativeFn),
+        // **P3-38 S3e-2**（task-65）：`test_math` 导入期/用例要 `isclose`／`nextafter` ✓
+        ("isclose", isclose_native as NativeFn),
+        ("nextafter", nextafter_native as NativeFn),
     ];
     for (name, handler) in natives {
         let native = make_native(instance, name, *handler);
