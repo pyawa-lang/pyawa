@@ -9,8 +9,9 @@
 
 用法::
 
-    python3 tests/ci/stability.py            # 默认连跑 3 次
+    python3 tests/ci/stability.py            # 默认连跑 3 次（debug 档）
     python3 tests/ci/stability.py --runs 5
+    python3 tests/ci/stability.py --release  # 用 release 测试二进制（闸门提速；计数口径不变）
 
 退出码：任何一次运行失败（非零退出／出现 FAILED／出现 error）或**计数不一致** ⇒ 1。
 计数抖动必须按**崩溃／内存损坏**排查，不要当成偶发。
@@ -38,13 +39,20 @@ RESULT = re.compile(
 #: `Doc-tests …` 那一组的名字在别处；用 target 路径的最后一段做标识即可。
 
 
-def run_once() -> tuple[dict[str, tuple[int, int, str]], bool, str]:
-    """跑一次 `cargo test --workspace --no-fail-fast`，返回 `(每个二进制的计数, 是否正常, 原始尾部)`。"""
+def run_once(release: bool = False) -> tuple[dict[str, tuple[int, int, str]], bool, str]:
+    """跑一次 `cargo test [--release] --workspace --no-fail-fast`，返回 `(每个二进制的计数, 是否正常, 原始尾部)`。
+
+    `release=True` 只**追加** `--release`（默认档命令逐字不变；测试数与判定口径完全一样）。
+    """
     # **注意**：cargo 把 `Running …` 写 **stderr**、把 `test result:` 写 **stdout**。
     # 分别捕获再拼接会丢掉真实顺序（结果全在前、Running 全在后），归组就全错了 ⇒
     # 必须把 stderr 重定向进 stdout，保持"Running → 该二进制的结果"这一对。
+    command = ["cargo", "test"]
+    if release:
+        command.append("--release")
+    command += ["--workspace", "--no-fail-fast"]
     completed = subprocess.run(
-        ["cargo", "test", "--workspace", "--no-fail-fast"],
+        command,
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -77,6 +85,11 @@ def run_once() -> tuple[dict[str, tuple[int, int, str]], bool, str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MS-25：测试计数稳定性")
     parser.add_argument("--runs", type=int, default=3, help="连跑次数（默认 3，MS-25 要求 ≥3）")
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="透传 `--release` 给内部 cargo test（闸门提速；默认档行为不变）",
+    )
     args = parser.parse_args(argv)
     if args.runs < 3:
         print("MS-25 要求至少连跑 3 次（--runs >= 3）")
@@ -84,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
     runs: list[dict[str, tuple[int, int, str]]] = []
     for index in range(args.runs):
-        counts, healthy, tail = run_once()
+        counts, healthy, tail = run_once(release=args.release)
         total = sum(passed for passed, _, _ in counts.values())
         print(f"第 {index + 1} 次：{len(counts)} 个二进制，{total} 项通过"
               f"{'' if healthy else '  ⚠ 本次运行不正常'}")

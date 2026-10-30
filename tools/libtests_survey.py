@@ -19,9 +19,10 @@
 
 用法::
 
-    python3 tools/libtests_survey.py                      # 全量
+    python3 tools/libtests_survey.py                      # 全量（target/debug/pyawa）
     python3 tools/libtests_survey.py --limit 50 --jobs 8
     python3 tools/libtests_survey.py --dir /path/to/Lib/test
+    python3 tools/libtests_survey.py --release --limit 40  # 用 target/release/pyawa（提速抽样）
 """
 import argparse
 import collections
@@ -37,6 +38,8 @@ WORKSPACE = pathlib.Path(__file__).resolve().parent.parent
 # （**不进仓库** ✓）。文件名口径：deb 数据根 ＋ `/usr/lib/python3.14/test`。
 DEFAULT_DIR = WORKSPACE / "target/upstream/extracted/usr/lib/python3.14/test"
 DEFAULT_BIN = WORKSPACE / "target/debug/pyawa"
+#: `--release` 且没显式给 `--bin` 时的默认 CLI（显式 `--bin` 仍优先）。
+RELEASE_BIN = WORKSPACE / "target/release/pyawa"
 OUT = WORKSPACE / "target/libtests_survey.tsv"
 
 
@@ -77,21 +80,33 @@ def run_one(binary: pathlib.Path, path: pathlib.Path, timeout: float):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default=str(DEFAULT_DIR))
-    ap.add_argument("--bin", default=str(DEFAULT_BIN))
+    ap.add_argument("--bin", default=None)
+    ap.add_argument(
+        "--release",
+        action="store_true",
+        help="默认用 target/release/pyawa（显式 --bin 仍优先；仅改默认路径，口径不变）",
+    )
     ap.add_argument("--jobs", type=int, default=max(4, (os.cpu_count() or 4) - 1))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=30.0)
     args = ap.parse_args()
 
     root = pathlib.Path(args.dir).resolve()
-    binary = pathlib.Path(args.bin).resolve()
+    # 默认档＝debug（旧行为逐字不变）；`--release` 只换默认 CLI；显式 `--bin` 永远优先。
+    if args.bin is not None:
+        binary = pathlib.Path(args.bin).resolve()
+    elif args.release:
+        binary = RELEASE_BIN
+    else:
+        binary = DEFAULT_BIN
     if not root.is_dir():
         sys.exit(
             f"找不到 Lib/test 目录：{root}\n"
             "（先解开 `libpython3.14-testsuite` deb 到 `target/upstream/extracted/`）"
         )
     if not binary.is_file():
-        sys.exit(f"找不到 CLI：{binary}（先 cargo build --bin pyawa）")
+        build_hint = "cargo build --release --bin pyawa" if args.release else "cargo build --bin pyawa"
+        sys.exit(f"找不到 CLI：{binary}（先 {build_hint}）")
 
     files = sorted(root.glob("test_*.py"))
     if args.limit:
