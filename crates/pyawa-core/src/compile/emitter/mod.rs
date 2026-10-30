@@ -249,7 +249,7 @@ impl Emitter {
 
     pub(super) fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
-            Expression::Float (..) | Expression::Imaginary (..) | Expression::Map (..) | Expression::TupleLiteral (..) | Expression::SliceLiteral { .. } | Expression::List (..) | Expression::Constant (..) | Expression::SetLiteral (..) | Expression::BigInt (..) | Expression::Int (..) | Expression::Str (..) | Expression::Bytes (..) => self.emit_expression_literals(expression),
+            Expression::Float (..) | Expression::Imaginary (..) | Expression::Map (..) | Expression::TupleLiteral (..) | Expression::SliceLiteral { .. } | Expression::List (..) | Expression::Constant (..) | Expression::SetLiteral (..) | Expression::BigInt (..) | Expression::Int (..) | Expression::Str (..) | Expression::StrWtf8 (..) | Expression::Bytes (..) => self.emit_expression_literals(expression),
             Expression::Subscript (..) | Expression::ChainSubject (..) | Expression::Lambda { .. } | Expression::Attribute (..) | Expression::Name (..) | Expression::Call { .. } | Expression::Starred (..) | Expression::Walrus { .. } => self.emit_expression_names(expression),
             Expression::Comprehension { .. } => self.emit_expression_comprehensions(expression),
             Expression::FString { .. } => self.emit_expression_fstrings(expression),

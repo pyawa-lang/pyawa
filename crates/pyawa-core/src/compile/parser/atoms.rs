@@ -177,7 +177,9 @@ pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         // `_b85alphabet = (b"0123456789…" \n b"abcdef…")` 跨行相邻 ⇒ 先前**不并** ✗ ⇒ 括号那一组
         // 见到第二个 bytes 字面量 ⇒ 报"括号没有闭合，实际 Some(Bytes([…]))" ✗（那一族 **10** 个模块 ✓）。
         Some(Lexeme::Bytes(_)) => parse_atom_bytes(lexed, cursor, span)?,
-        Some(Lexeme::Str(_)) => parse_atom_str(lexed, cursor, span)?,
+        Some(Lexeme::Str(_)) | Some(Lexeme::StrWtf8(_)) => {
+            parse_atom_str(lexed, cursor, span)?
+        }
         // **f-string**（第 238 轮）：切片成「字面段／插值段」，插值里的表达式按**相对列偏移**重新词法。
         // **相邻字面量拼接**（第 113 轮）：后随 **f-string**（`f"a{x}" f"b"` ✓）或**普通串**
         // （`f"a{x}" "b"` ✓）都要并进来 —— 实测上游 `_bootstrap.py:1426`／`site.py:210` 就卡在
@@ -610,81 +612,90 @@ fn parse_atom_bytes(lexed: &Lexed, cursor: usize, span: Span) -> Result<(Express
     Ok((term, cursor))
 }
 
-/// `parse_atom` 的 `Str` 分支（原样搬入，`break 'atom` 语义不变）。
+/// `parse_atom` 的 `Str` 分支（P3-38 S2b：**WTF-8 字节层**合并；合法 UTF-8 输出与旧路径逐字节相同 ✓）。
 fn parse_atom_str(lexed: &Lexed, cursor: usize, span: Span) -> Result<(Expression, usize), CompileError> {
-    let (term, cursor) = {
-        match lexed.lexemes.get(cursor) {
-            Some(Lexeme::Str(text)) => {
-            // **隐式字符串拼接**（第 283 轮）：相邻字符串字面量**合成一个常量**——
-            // 实测 `y = "a" "b" "c"` ⇒ `co_consts` 只有 `'abc'`（不产生任何拼接指令）。
-            // 跨度取**首尾**两段（位置要比的话按这个走）。与 f-string 混排是另一码事，未接线。
-            let mut merged = text.clone();
-            let mut end_span = span;
-            let mut cursor = cursor + 1;
-            while let Some(Lexeme::Str(next_text)) = lexed.lexemes.get(cursor) {
-                merged.push_str(next_text);
-                if let Some(next_span) = lexed.spans.get(cursor) {
-                    end_span = *next_span;
-                }
-                cursor += 1;
-            }
-            // **与前导 f-string 相邻**（`"a" f"b{c}"`）：参照把前导串并进 f-string 的**第一段**
-            // （实测 ⇒ `LOAD_CONST 'ab'; … FORMAT_SIMPLE; BUILD_STRING 2`）。纯字面量的 f-string
-            // 已被 `parse_fstring` 降级成普通串 ⇒ 走上面那条合并即可。
-            if let Some(Lexeme::FStr { .. }) = lexed.lexemes.get(cursor) {
-                let (fstring, after) = parse_fstring(lexed, cursor)?;
-                let fspan = fstring.span();
-                let mut parts = match fstring {
-                    Expression::FString { parts, .. } => parts,
-                    Expression::Str(text, mspan) => vec![FStringPart::Literal { text, span: mspan }],
-                    other => return Ok((other, after)),
-                };
-                // 首段**本来就是字面量** ⇒ 并进去（实测 `"a" "b" f"c{d}"` 的常量池只有
-                // `'abc'`，不是 `'ab'` ＋ `'c'` 两段 ✗）；否则插一段新的。
-                match parts.first_mut() {
-                    Some(FStringPart::Literal { text, span: head_span }) => {
-                        // 跨度取"**前导串起点 → 原段终点**"（实测 `"a" "b" f"c{d}"` 的
-                        // 合并段是 `(1,1,4,15)` ✗ 不是原段的 `(14,15)`）
-                        let merged_span = span.to(*head_span);
-                        let mut head = merged.clone();
-                        head.push_str(text);
-                        *text = head;
-                        *head_span = merged_span;
-                    }
-                    _ => parts.insert(
-                        0,
-                        FStringPart::Literal {
-                            text: merged.clone(),
-                            span: span.to(end_span),
-                        },
-                    ),
-                }
-                // **后面若还有相邻字面量（含**第二枚** f-string ✓）继续吃** ✓ ——
-                // task-19 第 3 轮真 bug：先前只吃一枚后随 f-string ✗ ⇒
-                // `('Field(' f'name={…!r},' f'type={…!r},' …)` 报「括号没有闭合」✗。
-                let (parts, after, tail_span) =
-                    consume_adjacent_string_parts(lexed, after, parts, fspan)?;
-                let parts = merge_adjacent_literal_parts(parts);
-                if parts
-                    .iter()
-                    .all(|part| matches!(part, FStringPart::Literal { .. }))
-                {
-                    let mut joined = String::new();
-                    for part in &parts {
-                        if let FStringPart::Literal { text, .. } = part {
-                            joined.push_str(text);
-                        }
-                    }
-                    return Ok((Expression::Str(joined, span.to(tail_span)), after));
-                }
-                return Ok((Expression::FString { parts, span: span.to(tail_span) }, after));
-            }
-            (Expression::Str(merged, span.to(end_span)), cursor)
-            }
-            _ => unreachable!("parse_atom_str 只接收 Str"),
-        }
+    // **隐式字符串拼接**（第 283 轮）：相邻字符串字面量**合成一个常量**——
+    // 实测 `y = "a" "b" "c"` ⇒ `co_consts` 只有 `'abc'`（不产生任何拼接指令）。
+    // P3-38 S2b：按 WTF-8 字节累积（`StrWtf8` 也认 ✓）；合法 UTF-8 结果仍走旧 `Expression::Str` ✓。
+    let mut merged: Vec<u8> = match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Str(text)) => text.as_bytes().to_vec(),
+        Some(Lexeme::StrWtf8(bytes)) => bytes.clone(),
+        _ => unreachable!("parse_atom_str 只接收 Str／StrWtf8"),
     };
-    Ok((term, cursor))
+    let mut end_span = span;
+    let mut cursor = cursor + 1;
+    loop {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::Str(next_text)) => merged.extend_from_slice(next_text.as_bytes()),
+            Some(Lexeme::StrWtf8(next_bytes)) => merged.extend_from_slice(next_bytes),
+            _ => break,
+        }
+        if let Some(next_span) = lexed.spans.get(cursor) {
+            end_span = *next_span;
+        }
+        cursor += 1;
+    }
+    // **与前导 f-string 相邻**（`"a" f"b{c}"`）：参照把前导串并进 f-string 的**第一段**
+    // （实测 ⇒ `LOAD_CONST 'ab'; … FORMAT_SIMPLE; BUILD_STRING 2`）。纯字面量的 f-string
+    // 已被 `parse_fstring` 降级成普通串 ⇒ 走上面那条合并即可。
+    if let Some(Lexeme::FStr { .. }) = lexed.lexemes.get(cursor) {
+        let (fstring, after) = parse_fstring(lexed, cursor)?;
+        let fspan = fstring.span();
+        let mut parts = match fstring {
+            Expression::FString { parts, .. } => parts,
+            Expression::Str(text, mspan) => vec![FStringPart::Literal { text, span: mspan }],
+            Expression::StrWtf8(bytes, mspan) => {
+                vec![FStringPart::LiteralWtf8 { bytes, span: mspan }]
+            }
+            other => return Ok((other, after)),
+        };
+        // 首段**本来就是字面量** ⇒ 并进去（实测 `"a" "b" f"c{d}"` 的常量池只有
+        // `'abc'`，不是 `'ab'` ＋ `'c'` 两段 ✗）；否则插一段新的。
+        match parts.first_mut() {
+            Some(head) if literal_part_bytes(head).is_some() => {
+                let head_span = literal_part_span(head).expect("刚判过是字面段");
+                let mut bytes = merged.clone();
+                bytes.extend_from_slice(literal_part_bytes(head).expect("刚判过是字面段"));
+                // 跨度取"**前导串起点 → 原段终点**"（实测 `"a" "b" f"c{d}"` 的
+                // 合并段是 `(1,1,4,15)` ✗ 不是原段的 `(14,15)`）
+                *head = literal_part_from_bytes(bytes, span.to(head_span));
+            }
+            _ => parts.insert(
+                0,
+                literal_part_from_bytes(merged.clone(), span.to(end_span)),
+            ),
+        }
+        // **后面若还有相邻字面量（含第二枚 f-string ✓）继续吃** ✓
+        let (parts, after, tail_span) =
+            consume_adjacent_string_parts(lexed, after, parts, fspan)?;
+        let parts = merge_adjacent_literal_parts(parts);
+        if parts.iter().all(|part| {
+            matches!(
+                part,
+                FStringPart::Literal { .. } | FStringPart::LiteralWtf8 { .. }
+            )
+        }) {
+            let mut joined: Vec<u8> = Vec::new();
+            for part in &parts {
+                joined.extend_from_slice(literal_part_bytes(part).expect("刚判过全是字面段"));
+            }
+            return Ok((
+                string_expression_from_bytes(joined, span.to(tail_span)),
+                after,
+            ));
+        }
+        return Ok((
+            Expression::FString {
+                parts,
+                span: span.to(tail_span),
+            },
+            after,
+        ));
+    }
+    Ok((
+        string_expression_from_bytes(merged, span.to(end_span)),
+        cursor,
+    ))
 }
 
 /// `parse_atom` 的 `FStr` 分支（原样搬入，`break 'atom` 语义不变）。
@@ -701,6 +712,9 @@ fn parse_atom_fstr(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), 
                 // ⇒ 下一个 f-string 留在原地 ⇒ 报 "实参表里出现 Some(FStr …)" ✗，
                 // 上游 `Lib/_collections_abc.py:481` 正是这个形状 ✓）。
                 Expression::Str(text, span) => vec![FStringPart::Literal { text, span }],
+                Expression::StrWtf8(bytes, span) => {
+                    vec![FStringPart::LiteralWtf8 { bytes, span }]
+                }
                 other => return Ok((other, after)),
             };
             // **后续相邻字面量**（`FStr`／`Str` 都吃 ✓）走同一处 ✓

@@ -11,6 +11,15 @@ impl Emitter {
                 self.emit_indexed(*literal_span, "LOAD_CONST", index);
                 Ok(())
             }
+            // **含孤立代理的字面段**（P3-38 S2b ✓）：与普通段同形，只是常量走 WTF-8 表示 ✓。
+            FStringPart::LiteralWtf8 {
+                bytes,
+                span: literal_span,
+            } => {
+                let index = self.intern_constant(Constant::StrWtf8(bytes.clone()));
+                self.emit_indexed(*literal_span, "LOAD_CONST", index);
+                Ok(())
+            }
             FStringPart::Formatted {
                 expression,
                 conversion,

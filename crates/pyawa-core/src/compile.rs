@@ -168,8 +168,11 @@ pub enum Constant {
         real_bits: u64,
         imag_bits: u64,
     },
-    /// 字符串。
+    /// 字符串（**合法 UTF-8**；字面量/common case 都是它 ✓）。
     Str(String),
+    /// **含孤立代理的字符串常量**（P3-38 S2b ✓）：**已校验的 WTF-8 字节**。
+    /// 合法 UTF-8 的字面量仍走 [`Constant::Str`]（常量池形状/夹具零变化 ✓）。
+    StrWtf8(Vec<u8>),
     /// **`bytes` 字面量**（`P1-12`；不进 `co_consts` 的文本形态，实例化时建 `BytesObject`）。
     Bytes(Vec<u8>),
     /// **常量切片**（实测：界全是常量时参照把 `slice(...)` 放进常量池 ⇒ `LOAD_CONST slice(1, 2, None)`）。
@@ -1065,6 +1068,8 @@ fn truthiness(constant: &Constant) -> Option<bool> {
         | Constant::AnnAttribute { .. }
         | Constant::AnnString(_) => true,
         Constant::Str(text) => !text.is_empty(),
+        // 含孤立代理的串：WTF-8 字节非空即真（空字节串不会以该形态出现 ✓）
+        Constant::StrWtf8(bytes) => !bytes.is_empty(),
         Constant::Bytes(bytes) => !bytes.is_empty(),
         // **复数真值**：任一分量非零即真（`0j` 假 ✓；`nan` 分量按非零算 ✓，与参照一致）
         Constant::Complex {
@@ -1215,6 +1220,9 @@ enum Expression {
     /// （实部恒 `0.0` ⇒ 常量池里是 `Constant::Complex` ✓）。
     Imaginary(u64, Span),
     Str(String, Span),
+    /// **含孤立代理的字符串字面量**（P3-38 S2b ✓）：**已校验的 WTF-8 字节**；
+    /// 合法 UTF-8 字面量仍走 [`Expression::Str`]（旧路径/夹具零变化 ✓）。
+    StrWtf8(Vec<u8>, Span),
     /// **`bytes` 字面量**（`P1-12`）。
     Bytes(Vec<u8>, Span),
     Name(String, Span),
@@ -1442,6 +1450,7 @@ impl Expression {
             | Expression::Float(_, span)
             | Expression::Imaginary(_, span)
             | Expression::Str(_, span)
+            | Expression::StrWtf8(_, span)
             | Expression::Bytes(_, span)
             | Expression::Yield(_, span)
             | Expression::YieldFrom(_, span)
@@ -1503,6 +1512,8 @@ enum ComprehensionKind {
 enum FStringPart {
     /// 字面段（跨度取**字面文字本身**，实测 `f"a{x}b"` 里 `'a'` 是 `(1,1,6,7)`）。
     Literal { text: String, span: Span },
+    /// **含孤立代理的字面段**（P3-38 S2b ✓）：已校验的 WTF-8 字节（合法 UTF-8 段仍走上一条 ✓）。
+    LiteralWtf8 { bytes: Vec<u8>, span: Span },
     Formatted {
         expression: Expression,
         /// `!s` ＝ 1、`!r` ＝ 2、`!a` ＝ 3（实测 `!r` ⇒ `CONVERT_VALUE 2`）。
@@ -2298,6 +2309,8 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
             imag_bits: *bits,
         })),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
+        // **含孤立代理的字符串字面量**（P3-38 S2b ✓）：常量形态就是 `Constant::StrWtf8` ✓
+        Expression::StrWtf8(bytes, _) => Ok(Some(Constant::StrWtf8(bytes.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
         Expression::Constant(constant, _) => Ok(Some(constant.clone())),
         // 列表**不是**编译期常量（实测：`x = [1, 2]` 的常量表里没有列表本身）
@@ -2454,6 +2467,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
             imag_bits: *bits,
         }),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
+        Expression::StrWtf8(bytes, _) => Some(Constant::StrWtf8(bytes.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
         Expression::Constant(constant, _) => Some(constant.clone()),
         Expression::List(_, _) => None,
@@ -2654,6 +2668,8 @@ fn instantiate_constant(
         // **`True`／`False` 是单例**（`OM-23`）⇒ 给调用方一份新引用
         Constant::Bool(value) => Some(instance.retain(instance.singletons().boolean(*value))),
         Constant::Str(text) => Some(instance.new_str(text)),
+        // **含孤立代理的字符串常量**（P3-38 S2b ✓）：`new_str_wtf8`（字节在编译期已校验 ✓）
+        Constant::StrWtf8(bytes) => instance.new_str_wtf8(bytes),
         Constant::Bytes(value) => Some(instance.new_bytes(value)),
         Constant::Slice { start, stop, step } => {
             Some(instance.new_slice(*start, *stop, *step))

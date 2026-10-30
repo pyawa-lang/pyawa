@@ -240,6 +240,11 @@ pub(crate) fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pat
             Pattern::Literal(Constant::Str(text.clone()), span),
             cursor + 1,
         )),
+        // **含孤立代理的字符串模式**（P3-38 S2b ✓）
+        Some(Lexeme::StrWtf8(bytes)) => Ok((
+            Pattern::Literal(Constant::StrWtf8(bytes.clone()), span),
+            cursor + 1,
+        )),
         Some(Lexeme::Bytes(value)) => Ok((
             Pattern::Literal(Constant::Bytes(value.clone()), span),
             cursor + 1,

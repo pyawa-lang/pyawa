@@ -288,6 +288,13 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(2);
             write_text(&mut out, text);
         }
+        // **含孤立代理的字符串**（P3-38 S2b ✓）：新标签 21 ＝ `u32` 长度 ＋ **WTF-8 字节**；
+        // 旧标签/旧顺序一个字节都没动（旧产物照读 ✓）。
+        Constant::StrWtf8(bytes) => {
+            out.push(21);
+            out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            out.extend_from_slice(bytes);
+        }
         Constant::Code(inner) => {
             out.push(3);
             out.extend_from_slice(&encode_unit(inner));
@@ -516,6 +523,8 @@ impl UnitReader<'_> {
                 Constant::AnnList(items)
             }
             2 => Constant::Str(self.text()?),
+            // **含孤立代理的字符串**（P3-38 S2b ✓）：长度 ＋ WTF-8 字节 ✓
+            21 => Constant::StrWtf8(self.bytes()?),
             3 => Constant::Code(Box::new(self.unit()?)),
             7 => Constant::Bool(self.u8()? != 0),
             4 => Constant::Names(self.text_table()?),

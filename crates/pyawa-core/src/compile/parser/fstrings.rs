@@ -4,6 +4,43 @@
 
 use super::*;
 
+/// 用**WTF-8 字节**造一个字面段：合法 UTF-8 仍是旧的 [`FStringPart::Literal`] ✓，
+/// 含孤立代理才走新的 [`FStringPart::LiteralWtf8`]（P3-38 S2b ✓）。
+pub(crate) fn literal_part_from_bytes(bytes: Vec<u8>, span: Span) -> FStringPart {
+    match String::from_utf8(bytes) {
+        Ok(text) => FStringPart::Literal { text, span },
+        Err(error) => FStringPart::LiteralWtf8 {
+            bytes: error.into_bytes(),
+            span,
+        },
+    }
+}
+
+/// 字面段的 WTF-8 字节视图（两种形态都行 ✓）。
+pub(crate) fn literal_part_bytes(part: &FStringPart) -> Option<&[u8]> {
+    match part {
+        FStringPart::Literal { text, .. } => Some(text.as_bytes()),
+        FStringPart::LiteralWtf8 { bytes, .. } => Some(bytes),
+        _ => None,
+    }
+}
+
+/// 字面段的跨度。
+pub(crate) fn literal_part_span(part: &FStringPart) -> Option<Span> {
+    match part {
+        FStringPart::Literal { span, .. } | FStringPart::LiteralWtf8 { span, .. } => Some(*span),
+        _ => None,
+    }
+}
+
+/// 用**WTF-8 字节**造一个字符串表达式（合法 UTF-8 ⇒ 旧的 `Expression::Str` ✓，代理 ⇒ `StrWtf8`）。
+pub(crate) fn string_expression_from_bytes(bytes: Vec<u8>, span: Span) -> Expression {
+    match String::from_utf8(bytes) {
+        Ok(text) => Expression::Str(text, span),
+        Err(error) => Expression::StrWtf8(error.into_bytes(), span),
+    }
+}
+
 /// **f-string**：把原文切成"字面段／插值段"；插值里的表达式按**内容起始列**平移跨度后重新词法解析。
 pub(crate) fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
     let Some(Lexeme::FStr {
@@ -16,15 +53,15 @@ pub(crate) fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression,
     };
     let span = lexed.spans[cursor];
     let parts = parse_fstring_parts(contents, *raw, span.line_start, *offset, lexed.mode)?;
-    if parts
-        .iter()
-        .all(|part| matches!(part, FStringPart::Literal { .. }))
-    {
-        let mut joined = String::new();
+    if parts.iter().all(|part| {
+        matches!(
+            part,
+            FStringPart::Literal { .. } | FStringPart::LiteralWtf8 { .. }
+        )
+    }) {
+        let mut joined: Vec<u8> = Vec::new();
         for part in &parts {
-            if let FStringPart::Literal { text, .. } = part {
-                joined.push_str(text);
-            }
+            joined.extend_from_slice(literal_part_bytes(part).expect("刚判过全是字面段"));
         }
         // **纯字面量**的位点：取**内容**那一段（实测 `f"a"` ⇒ `(6,7)`、`f"{{}}"` ⇒ `(6,10)`）；
         // 内容为空（`f""`）才取整条字面量（`(4,7)`）
@@ -38,7 +75,11 @@ pub(crate) fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression,
                 *offset + contents.chars().count() as u32,
             )
         };
-        return Ok(merge_fstring_tail(Expression::Str(joined, lowered_span), cursor + 1, lexed));
+        return Ok(merge_fstring_tail(
+            string_expression_from_bytes(joined, lowered_span),
+            cursor + 1,
+            lexed,
+        ));
     }
     Ok(merge_fstring_tail(
         Expression::FString { parts, span },
@@ -48,34 +89,32 @@ pub(crate) fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression,
 }
 
 /// **相邻字面段合并** ✓（`f"a{x} " f"b{x}"` ⇒ `' b'` **一段** ✓）：合并段跨度取两段首尾 ✓
-/// （与 `"a" "b" f"c{d}"` 那条口径一致 ✓）。
+/// （与 `"a" "b" f"c{d}"` 那条口径一致 ✓）。P3-38 S2b：按 **WTF-8 字节**合并
+/// （合法 UTF-8 结果仍产出旧同形的 `Literal` ✓；混入代理后改走 `LiteralWtf8` ✓）。
 pub(crate) fn merge_adjacent_literal_parts(parts: Vec<FStringPart>) -> Vec<FStringPart> {
     let mut merged_parts: Vec<FStringPart> = Vec::with_capacity(parts.len());
     for part in parts {
-        match (merged_parts.last_mut(), part) {
-            (
-                Some(FStringPart::Literal { text, span: head_span }),
-                FStringPart::Literal {
-                    text: tail,
-                    span: tail_span,
-                },
-            ) => {
-                text.push_str(&tail);
-                *head_span = head_span.to(tail_span);
+        if let (Some(head), Some(head_span)) = (
+            merged_parts.last().and_then(literal_part_bytes).map(<[u8]>::to_vec),
+            merged_parts.last().and_then(literal_part_span),
+        ) {
+            if let (Some(tail), Some(tail_span)) = (literal_part_bytes(&part), literal_part_span(&part))
+            {
+                let mut bytes = head;
+                bytes.extend_from_slice(tail);
+                let merged_span = head_span.to(tail_span);
+                *merged_parts.last_mut().expect("刚判过非空") =
+                    literal_part_from_bytes(bytes, merged_span);
+                continue;
             }
-            (_, part) => merged_parts.push(part),
         }
+        merged_parts.push(part);
     }
     merged_parts
 }
 
-/// **继续吃后续相邻的字面量** ✓（`FStr` 与 `Str` 都吃 ✓）—— 「一处真相」：
+/// **继续吃后续相邻的字面量** ✓（`FStr`／`Str`／`StrWtf8` 都吃 ✓）—— 「一处真相」：
 /// `f"a{x}" f"b"`／`"p" f"a" f"b"`／`f"a" "b"` 三段路都走它 ✓。
-///
-/// **task-19 第 3 轮真 bug** ✗：`Str` 臂先前只吃**一枚**后随 f-string ✗ ⇒
-/// `('Field(' f'name={…!r},' f'type={…!r},' ')')` 里**第二枚**留在原地 ⇒ 括号那一组报
-/// 「括号没有闭合，实际 Some(FStr …)」✗（`Lib/dataclasses.py:314` 正是这个形状 ✓，
-/// 它把 `_colorize`／`traceback`／`logging` 一族全挡在上面 ✓）。
 pub(crate) fn consume_adjacent_string_parts(
     lexed: &Lexed,
     mut after: usize,
@@ -93,6 +132,9 @@ pub(crate) fn consume_adjacent_string_parts(
                 match next {
                     Expression::FString { parts: more, .. } => parts.extend(more),
                     Expression::Str(text, span) => parts.push(FStringPart::Literal { text, span }),
+                    Expression::StrWtf8(bytes, span) => {
+                        parts.push(FStringPart::LiteralWtf8 { bytes, span })
+                    }
                     _ => break,
                 }
                 after = next_after;
@@ -104,6 +146,13 @@ pub(crate) fn consume_adjacent_string_parts(
                 parts.push(FStringPart::Literal { text, span });
                 after += 1;
             }
+            Some(Lexeme::StrWtf8(bytes)) => {
+                let bytes = bytes.clone();
+                let span = lexed.spans[after];
+                tail_span = span;
+                parts.push(FStringPart::LiteralWtf8 { bytes, span });
+                after += 1;
+            }
             _ => break,
         }
     }
@@ -112,11 +161,20 @@ pub(crate) fn consume_adjacent_string_parts(
 
 /// **f-string 后面紧跟普通字符串**（`f"a{c}" "b"`）：并进它的**最后一段**（第 285 轮）。
 /// 参照实测：后接串并入最后一段字面量；`"a" f"b{c}"` 则是并入**第一段**（那一半在 `Str` 分支做）。
-pub(crate) fn merge_fstring_tail(mut value: Expression, mut cursor: usize, lexed: &Lexed) -> (Expression, usize) {
-    let mut tail = String::new();
+/// P3-38 S2b：按 **WTF-8 字节**合并（`StrWtf8` 也认 ✓）。
+pub(crate) fn merge_fstring_tail(
+    value: Expression,
+    mut cursor: usize,
+    lexed: &Lexed,
+) -> (Expression, usize) {
+    let mut tail: Vec<u8> = Vec::new();
     let mut end_span = value.span();
-    while let Some(Lexeme::Str(next_text)) = lexed.lexemes.get(cursor) {
-        tail.push_str(next_text);
+    loop {
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::Str(next_text)) => tail.extend_from_slice(next_text.as_bytes()),
+            Some(Lexeme::StrWtf8(next_bytes)) => tail.extend_from_slice(next_bytes),
+            _ => break,
+        }
         if let Some(next_span) = lexed.spans.get(cursor) {
             end_span = *next_span;
         }
@@ -125,24 +183,36 @@ pub(crate) fn merge_fstring_tail(mut value: Expression, mut cursor: usize, lexed
     if tail.is_empty() {
         return (value, cursor);
     }
-    match &mut value {
-        Expression::FString { parts, span } => {
-            match parts.last_mut() {
-                Some(FStringPart::Literal { text, span }) => {
-                    // 后接那半对称：跨度延到后接串的终点
-                    *span = span.to(end_span);
-                    text.push_str(&tail);
+    let value = match value {
+        Expression::FString { mut parts, span } => {
+            match parts.last().and_then(literal_part_span) {
+                Some(last_span) => {
+                    let mut bytes = literal_part_bytes(parts.last().expect("刚取到跨度"))
+                        .expect("刚取到跨度")
+                        .to_vec();
+                    bytes.extend_from_slice(&tail);
+                    let index = parts.len() - 1;
+                    parts[index] = literal_part_from_bytes(bytes, last_span.to(end_span));
                 }
-                _ => parts.push(FStringPart::Literal { text: tail, span: end_span }),
+                None => parts.push(literal_part_from_bytes(tail, end_span)),
             }
-            *span = span.to(end_span);
+            Expression::FString {
+                parts,
+                span: span.to(end_span),
+            }
         }
         Expression::Str(text, span) => {
-            text.push_str(&tail);
-            *span = span.to(end_span);
+            let mut bytes = text.into_bytes();
+            bytes.extend_from_slice(&tail);
+            string_expression_from_bytes(bytes, span.to(end_span))
         }
-        _ => {}
-    }
+        Expression::StrWtf8(bytes, span) => {
+            let mut bytes = bytes;
+            bytes.extend_from_slice(&tail);
+            string_expression_from_bytes(bytes, span.to(end_span))
+        }
+        other => other,
+    };
     (value, cursor)
 }
 
@@ -188,7 +258,8 @@ pub(crate) fn parse_fstring_parts(
         (at_line, at_col)
     };
     let mut parts: Vec<FStringPart> = Vec::new();
-    let mut literal = String::new();
+    // P3-38 S2b：字面段按 **WTF-8 字节**累积（合法 UTF-8 段最终仍产出旧同形的 Literal ✓）
+    let mut literal: Vec<u8> = Vec::new();
     let mut literal_line = line;
     let mut literal_col = offset;
     while index < characters.len() {
@@ -198,7 +269,7 @@ pub(crate) fn parse_fstring_parts(
                     literal_line = line_now;
                     literal_col = col_now;
                 }
-                literal.push('{');
+                literal.push(b'{');
                 walk!(index + 2);
             }
             '}' if characters.get(index + 1) == Some(&'}') => {
@@ -206,7 +277,7 @@ pub(crate) fn parse_fstring_parts(
                     literal_line = line_now;
                     literal_col = col_now;
                 }
-                literal.push('}');
+                literal.push(b'}');
                 walk!(index + 2);
             }
             '}' => {
@@ -216,10 +287,10 @@ pub(crate) fn parse_fstring_parts(
             }
             '{' => {
                 if !literal.is_empty() {
-                    parts.push(FStringPart::Literal {
-                        text: core::mem::take(&mut literal),
-                        span: Span::new(literal_line, line_now, literal_col, col_now),
-                    });
+                    parts.push(literal_part_from_bytes(
+                        core::mem::take(&mut literal),
+                        Span::new(literal_line, line_now, literal_col, col_now),
+                    ));
                 }
                 let open_line = line_now;
                 let open_col = col_now;
@@ -406,7 +477,7 @@ pub(crate) fn parse_fstring_parts(
                     literal_col = col_now;
                 }
                 let (decoded, consumed) = lex_string_escape(&characters, index)?;
-                literal.push_str(&decoded);
+                literal.extend_from_slice(&decoded);
                 walk!(index + consumed);
             }
             other => {
@@ -414,16 +485,17 @@ pub(crate) fn parse_fstring_parts(
                     literal_line = line_now;
                     literal_col = col_now;
                 }
-                literal.push(other);
+                let mut buffer = [0u8; 4];
+                literal.extend_from_slice(other.encode_utf8(&mut buffer).as_bytes());
                 walk!(index + 1);
             }
         }
     }
     if !literal.is_empty() {
-        parts.push(FStringPart::Literal {
-            text: literal,
-            span: Span::new(literal_line, line_now, literal_col, col_now),
-        });
+        parts.push(literal_part_from_bytes(
+            literal,
+            Span::new(literal_line, line_now, literal_col, col_now),
+        ));
     }
     Ok(parts)
 }

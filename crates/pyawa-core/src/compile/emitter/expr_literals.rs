@@ -357,6 +357,13 @@ impl Emitter {
                     self.emit_indexed(*span, "LOAD_CONST", index);
                     Ok(())
                 }
+                // **含孤立代理的字符串字面量**（P3-38 S2b ✓）：常量走 `Constant::StrWtf8`
+                //（实例化时 `new_str_wtf8` ✓；`LOAD_CONST` 形状与普通串同形 ✓）。
+                Expression::StrWtf8(bytes, span) => {
+                    let index = self.intern_constant(Constant::StrWtf8(bytes.clone()));
+                    self.emit_indexed(*span, "LOAD_CONST", index);
+                    Ok(())
+                }
                 Expression::Bytes(value, span) => {
                     // `bytes` 字面量与字符串同形：一条 `LOAD_CONST`（实例化时常量池里那项建 `BytesObject`）
                     let index = self.intern_constant(Constant::Bytes(value.clone()));

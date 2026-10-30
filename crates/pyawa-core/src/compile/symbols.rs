@@ -1709,6 +1709,7 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
         | Expression::Float(_, _)
         | Expression::Imaginary(_, _)
         | Expression::Str(_, _)
+        | Expression::StrWtf8(_, _)
         | Expression::Bytes(_, _)
         | Expression::Constant(_, _) => {}
         Expression::Starred(value, _) => pre_intern_expression(emitter, value),

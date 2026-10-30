@@ -99,6 +99,15 @@ fn render_constant(constant: &Constant) -> String {
             };
             format!("complex:{}:{}", show(*real_bits), show(*imag_bits))
         }
+        // **含孤立代理的字符串常量**（P3-38 S2b ✓）：夹具里暂无该形状（合法 UTF-8 仍走 `Str`），
+        // 这里给一个可读的十六进制形态仅为穷尽匹配 ✓。
+        Constant::StrWtf8(bytes) => format!(
+            "strwtf8:{}",
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
         Constant::Str(text) => format!("str:{text}"),
         // `P1-12` 的 `bytes` 字面量：记成十六进制（与生成器同一口径）
         // 常量切片：记成 `slice(a, b, c)`（`None` 照写；与生成器同一口径）

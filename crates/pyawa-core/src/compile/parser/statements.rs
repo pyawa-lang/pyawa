@@ -364,6 +364,7 @@ pub(crate) fn parse_statements(
             // `Lexeme::Dot` 也收 ✓（第 177 轮）：`class C: ...` 这类**表达式语句** ✓（单个 `.` 会由
             // 表达式解析器如实报错 ✓）。
             Some(Lexeme::Str(_))
+            | Some(Lexeme::StrWtf8(_))
             | Some(Lexeme::Int(_))
             | Some(Lexeme::BigInt(_))
             | Some(Lexeme::Float(_))

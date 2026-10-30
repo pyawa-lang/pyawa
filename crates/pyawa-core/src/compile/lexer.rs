@@ -10,6 +10,9 @@ pub(super) enum Lexeme {
     /// （常量池那一格也是十进制串 ✓ ⇒ 词法期只做一次进制换算 ✓）。
     BigInt(String),
     Str(String),
+    /// **含孤立代理的字符串字面量**（P3-38 S2b ✓）：**已校验的 WTF-8 字节**。
+    /// 合法 UTF-8 的字面量仍走 [`Lexeme::Str`]（旧路径/夹具零变化 ✓）。
+    StrWtf8(Vec<u8>),
     /// **f-string 的原文**（`f'…'`／`rf'…'`；花括号留给 `parse_fstring` 切片）。
     /// `offset` 是**内容**在源码里的起始列（插值里的表达式要按它平移跨度）；
     /// `contents` 是**原文**（转义**不解码**——第 251 轮起由切段时按源下标解码 ⇒ 位点保留源偏移），
@@ -128,52 +131,121 @@ pub(super) struct Lexed {
 /// 回 `(字节, 吃掉几个字符)`。支持集＝参照实测里出现过的那批：`\n \t \r \\ \' \" \a \b \f \v`、
 /// `\xNN`（**两位**十六进制）、`\ooo`（一至三位八进制）。其余如实报**未实现**——`\u`／`\U`／
 /// `\N{}` 在 bytes 里的口径没实测过，不猜。
-/// 解码**一处**字符串转义（`position` 指在反斜杠上）⇒ `(替换文本, 消费的字符数)`。
+/// 解码**一处**字符串转义（`position` 指在反斜杠上）⇒ `(WTF-8 字节, 消费的字符数)`。
 ///
-/// 行继续返回空串（消费掉反斜杠与换行）。`\\N{…}` 具名转义要 Unicode 名字表 ⇒ 如实报未实现；
-/// 认不出的转义按 CPython 原样留下（反斜杠 ＋ 那个字符）。
-pub(super) fn lex_string_escape(characters: &[char], position: usize) -> Result<(String, usize), CompileError> {
+/// **P3-38 S2b**：结果按 **WTF-8** 累积 —— `\uXXXX`／`\UXXXXXXXX` 解出**孤立代理**时用
+/// [`crate::wtf8::encode_code_point`] 写 3 字节形式（不再 `char::from_u32` 拒绝 ✓）；
+/// 合法标量仍写 UTF-8（与旧口径**逐字节相同** ✓）。行继续返回空字节（消费掉反斜杠与换行）。
+/// `\N{…}` 具名转义要 Unicode 名字表 ⇒ 如实报未实现；认不出的转义按 CPython 原样留下。
+pub(super) fn lex_string_escape(
+    characters: &[char],
+    position: usize,
+) -> Result<(Vec<u8>, usize), CompileError> {
     let Some(next) = characters.get(position + 1).copied() else {
         return Err(CompileError::Syntax("反斜杠后面没有字符".to_owned()));
     };
-    Ok(match next {
-        'n' => ("\n".to_owned(), 2),
-        't' => ("\t".to_owned(), 2),
-        'r' => ("\r".to_owned(), 2),
-        '\\' => ("\\".to_owned(), 2),
-        '\'' => ("\'".to_owned(), 2),
-        '"' => ("\"".to_owned(), 2),
-        'a' => ("\u{7}".to_owned(), 2),
-        'b' => ("\u{8}".to_owned(), 2),
-        'f' => ("\u{c}".to_owned(), 2),
-        'v' => ("\u{b}".to_owned(), 2),
-        '\n' => (String::new(), 2),
-        '\r' => (
-            String::new(),
-            if characters.get(position + 2) == Some(&'\n') { 3 } else { 2 },
-        ),
-        'x' => (lex_hex_escape(characters, position + 2, 2)?.to_string(), 4),
-        'u' => (lex_hex_escape(characters, position + 2, 4)?.to_string(), 6),
-        'U' => (lex_hex_escape(characters, position + 2, 8)?.to_string(), 10),
+    let mut out: Vec<u8> = Vec::new();
+    let consumed = match next {
+        'n' => {
+            out.push(b'\n');
+            2
+        }
+        't' => {
+            out.push(b'\t');
+            2
+        }
+        'r' => {
+            out.push(b'\r');
+            2
+        }
+        '\\' => {
+            out.push(b'\\');
+            2
+        }
+        '\'' => {
+            out.push(b'\'');
+            2
+        }
+        '"' => {
+            out.push(b'"');
+            2
+        }
+        'a' => {
+            out.push(0x07);
+            2
+        }
+        'b' => {
+            out.push(0x08);
+            2
+        }
+        'f' => {
+            out.push(0x0C);
+            2
+        }
+        'v' => {
+            out.push(0x0B);
+            2
+        }
+        '\n' => 2,
+        '\r' => {
+            if characters.get(position + 2) == Some(&'\n') {
+                3
+            } else {
+                2
+            }
+        }
+        'x' => {
+            let value = lex_hex_value(characters, position + 2, 2)?;
+            push_escaped_code_point(&mut out, value)?;
+            4
+        }
+        'u' => {
+            let value = lex_hex_value(characters, position + 2, 4)?;
+            push_escaped_code_point(&mut out, value)?;
+            6
+        }
+        'U' => {
+            let value = lex_hex_value(characters, position + 2, 8)?;
+            push_escaped_code_point(&mut out, value)?;
+            10
+        }
         digit @ '0'..='7' => {
             let (value, consumed) = lex_octal_escape(characters, position + 1, digit)?;
-            (value.to_string(), 1 + consumed)
+            // 八进制 <= 0xFF ⇒ 一定是标量 ✓（与旧口径同：那个码点的 UTF-8 字节）
+            push_escaped_code_point(&mut out, u32::from(value))?;
+            1 + consumed
         }
         'N' => {
             return Err(CompileError::Unsupported(
                 "`\\N{…}` 具名转义要整张 Unicode 名字表（与 M3 的 `Lib/`／数据面绑定）".to_owned(),
             ))
         }
-        other => (format!("\\{other}"), 2),
+        other => {
+            out.push(b'\\');
+            let mut buffer = [0u8; 4];
+            out.extend_from_slice(other.encode_utf8(&mut buffer).as_bytes());
+            2
+        }
+    };
+    Ok((out, consumed))
+}
+
+/// 把转义解出的**码点**按 WTF-8 写进字节流（孤立代理 ⇒ 3 字节形式 ✓；超界 ⇒ 语法错 ✓）。
+pub(super) fn push_escaped_code_point(
+    out: &mut Vec<u8>,
+    value: u32,
+) -> Result<(), CompileError> {
+    crate::wtf8::encode_code_point(value, out).map_err(|_| {
+        CompileError::Syntax(format!("invalid unicode escape \\U{value:08x}"))
     })
 }
 
-/// 字符串转义的十六进制段（`\x` 2 位、`\u` 4 位、`\U` 8 位）⇒ 一个码点。
-pub(super) fn lex_hex_escape(
+/// 字符串转义的十六进制段（`\x` 2 位、`\u` 4 位、`\U` 8 位）⇒ 一个**码点值**（不检查范围）。
+pub(super) fn lex_hex_value(
     characters: &[char],
     position: usize,
     digits: usize,
-) -> Result<char, CompileError> {
+) -> Result<u32, CompileError> {
     let mut value: u32 = 0;
     for offset in 0..digits {
         let Some(character) = characters.get(position + offset) else {
@@ -186,8 +258,7 @@ pub(super) fn lex_hex_escape(
         };
         value = value * 16 + digit;
     }
-    char::from_u32(value)
-        .ok_or_else(|| CompileError::Syntax(format!("invalid unicode escape \\U{value:08x}")))
+    Ok(value)
 }
 
 /// 字符串转义的八进制段（最多 3 位、`0o400` 以上越界）。
@@ -644,7 +715,9 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                 let triple = characters.get(index + 1) == Some(&quote)
                     && characters.get(index + 2) == Some(&quote);
                 index += if triple { 3 } else { 1 };
-                let mut text = String::new();
+                // P3-38 S2b：按 **WTF-8 字节**累积（`\ud800` 一类孤立代理也收 ✓）；扫描结束后
+                // 是合法 UTF-8 仍产出旧同形的 `Lexeme::Str(String)`（夹具零变化 ✓），否则 `StrWtf8`。
+                let mut text: Vec<u8> = Vec::new();
                 loop {
                     match characters.get(index) {
                         Some(character)
@@ -656,10 +729,10 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                             index += if triple { 3 } else { 1 };
                             break;
                         }
-                        // **字符串转义**（解码逻辑在 `lex_string_escape`，一处真相）
+                        // **字符串转义**（解码逻辑在 `lex_string_escape`，一处真相；返回 WTF-8 字节 ✓）
                         Some('\\') => {
                             let (decoded, consumed) = lex_string_escape(&characters, index)?;
-                            text.push_str(&decoded);
+                            text.extend_from_slice(&decoded);
                             // 消费掉的换行（行继续／`\r\n`）⇒ 行号与行首索引要跟上
                             for offset in 0..consumed {
                                 if characters.get(index + offset) == Some(&'\n') {
@@ -675,7 +748,8 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                                 line += 1;
                                 line_start_index = index + 1;
                             }
-                            text.push(*character);
+                            let mut buffer = [0u8; 4];
+                            text.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
                             index += 1;
                         }
                         None => {
@@ -683,7 +757,11 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         }
                     }
                 }
-                lexemes.push(Lexeme::Str(text));
+                let lexeme = match String::from_utf8(text) {
+                    Ok(text) => Lexeme::Str(text),
+                    Err(error) => Lexeme::StrWtf8(error.into_bytes()),
+                };
+                lexemes.push(lexeme);
                 // 跨度**跨行**（实测 `x = "a\<换行>b"` 的常量位点是 `(1, 2, …)`）
                 spans.push(Span::new(start_line, line, start, column!(index)));
             }
@@ -1220,7 +1298,7 @@ fn public_kind(lexeme: &Lexeme) -> PythonTokenKind {
         Lexeme::Int(_) | Lexeme::BigInt(_) | Lexeme::Float(_) | Lexeme::Imaginary(_) => {
             PythonTokenKind::Number
         }
-        Lexeme::Str(_) => PythonTokenKind::Str,
+        Lexeme::Str(_) | Lexeme::StrWtf8(_) => PythonTokenKind::Str,
         Lexeme::Bytes(_) => PythonTokenKind::Bytes,
         Lexeme::FStr { .. } => PythonTokenKind::FString,
         Lexeme::Newline => PythonTokenKind::Newline,
