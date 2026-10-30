@@ -46,5 +46,18 @@ fn stdout_and_stderr_text_attributes_match_the_reference() {
                 .unwrap_or_else(|_| panic!("读 `{method}` 时抛异常"))
                 .unwrap_or_else(|| panic!("文本流必须有 `{method}`"));
         }
+        // **`sys.stdout.buffer`／`sys.stderr.buffer`**（P3-38 S3b-3 最小面）：存在且带
+        // `write`／`flush`；类型名 `_io.BufferedWriter`（参照是 `BufferedWriter`，如实偏差）。
+        let buffer = instance
+            .attribute_optional_of(stream, "buffer")
+            .unwrap_or_else(|_| panic!("读 `buffer` 时抛异常"))
+            .expect("文本流必须有 `buffer`");
+        assert_eq!(instance.type_name(instance.type_of(buffer)), "_io.BufferedWriter");
+        for method in ["write", "flush"] {
+            let _found = instance
+                .attribute_optional_of(buffer, method)
+                .unwrap_or_else(|_| panic!("读 buffer.`{method}` 时抛异常"))
+                .unwrap_or_else(|| panic!("buffer 必须有 `{method}`"));
+        }
     }
 }

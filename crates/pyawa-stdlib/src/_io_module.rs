@@ -183,6 +183,119 @@ fn stream_flush(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+// ==== `sys.stdout.buffer`／`sys.stderr.buffer`（P3-38 S3b-3 的最小诚实面）==================
+//
+// 参照：`sys.stdout.buffer` 是底层 `_io.BufferedWriter`（`write(bytes)`／`flush()` 等）。
+// 本层文本流**不缓冲**（每次 write 已落 fs）⇒ 只给最小面：`buffer.write(bytes-like)` 直写 fs
+// 字节、`buffer.flush()` no-op；**如实偏差** ✗：没有 `BufferedWriter` 的缓冲/`raw`/`closed` 面，
+// 类型名是 `_io.BufferedWriter` 但方法面只有这两个。
+
+/// 取一个**字节实参**（`bytes` 原样；`bytearray` 经 `bytes(bytearray)`；其它照参照报 TypeError）。
+fn buffer_argument(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Vec<u8>, ExecError> {
+    if let Some(bytes) = instance.bytes_value(value) {
+        return Ok(bytes.to_vec());
+    }
+    if instance.type_name(instance.type_of(value)) == "bytearray" {
+        let bytes_type = instance.type_named("bytes").expect("bytes 已登记");
+        let converted =
+            pyawa_core::executor::call::call_value(instance, bytes_type.cast(), &[value], &[])?;
+        let raw = instance.bytes_value(converted).map(|slice| slice.to_vec());
+        instance.release(converted);
+        if let Some(raw) = raw {
+            return Ok(raw);
+        }
+    }
+    // 文案照参照 3.14.4 实测（`BufferedWriter.write`）：`a bytes-like object is required, not 'str'`。
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "a bytes-like object is required, not '{}'",
+            instance.type_name(instance.type_of(value))
+        ),
+    ))
+}
+
+/// `buffer.write(bytes)`：写出实际字节数（本层一次落 `fs` ⇒ 成功即全写）。
+fn buffer_write(
+    instance: &Instance,
+    handle: u64,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "write() takes exactly one argument (0 given)",
+        ));
+    };
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("write() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let raw = buffer_argument(instance, value)?;
+    let written = write_bytes(instance, handle, &raw)?;
+    Ok(instance.new_int(written as i64))
+}
+
+/// `buffer.flush()`：本层无缓冲 ⇒ no-op（与文本流 `flush` 同一条真话）。
+fn buffer_flush(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn stdout_buffer_write(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    buffer_write(instance, STDOUT_HANDLE, args)
+}
+
+fn stderr_buffer_write(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    buffer_write(instance, STDERR_HANDLE, args)
+}
+
+/// 造一个流的 `buffer` 对象（**新引用**）：类型 `_io.BufferedWriter`，句柄烤进方法（同文本流手法）。
+fn make_buffer(instance: &Instance, handle: u64) -> NonNull<Header> {
+    let buffer_type = match instance.type_named("_io.BufferedWriter") {
+        Some(existing) => existing,
+        None => instance.new_attribute_type("_io.BufferedWriter"),
+    };
+    let write: NativeFn = if handle == STDERR_HANDLE {
+        stderr_buffer_write as NativeFn
+    } else {
+        stdout_buffer_write as NativeFn
+    };
+    let attributes = instance.new_dict();
+    for (name, handler) in [
+        ("write", write),
+        ("flush", buffer_flush as NativeFn),
+    ] {
+        let native = crate::builtins_module::make_native(instance, name, handler);
+        instance.dict_set(attributes, name, native);
+        instance.release(native);
+    }
+    let object = instance.alloc(AttributeObject::new(
+        buffer_type,
+        RefCell::new(Some(attributes)),
+    ));
+    object.into_raw().cast::<Header>()
+}
+
 // **句柄烤进函数里** ✓：`NativeFn` 只能收 `(实例, self 槽, 实参, 关键字)`，没有"闭包"格 ✓
 // ⇒ `stdout`／`stderr` 各写一个**只有 handle 不同**的薄壳 ✓（`write` 与 `writeln` 各两个 ✓）。
 
@@ -255,6 +368,10 @@ pub fn make_stream(instance: &Instance, handle: u64) -> NonNull<Header> {
         instance.dict_set(attributes, name, native);
         instance.release(native);
     }
+    // **`sys.stdout.buffer`／`sys.stderr.buffer`**（P3-38 S3b-3 最小面；见上方如实偏差）。
+    let buffer_object = make_buffer(instance, handle);
+    instance.dict_set(attributes, "buffer", buffer_object);
+    instance.release(buffer_object);
     // **`sys.stdout`／`sys.stderr` 的文本层属性**（task-61：照参照 3.14.4 实测补）。
     // 参照（**管道**下实测）：stdout `encoding='utf-8'`／`errors='strict'`／`name='<stdout>'`／
     // `mode='w'`／`line_buffering=False`；stderr `errors='backslashreplace'`／`name='<stderr>'`。

@@ -750,8 +750,10 @@ fn getcwd_native(
             "posix.getcwd() takes no keyword arguments",
         ));
     }
-    match std::env::current_dir() {
-        Ok(path) => Ok(instance.new_str(&path.to_string_lossy())),
+    match current_dir_bytes() {
+        // **PEP 383**：`getcwd()` = `fsdecode(getcwdb())` —— 原始字节按
+        // utf-8＋surrogateescape 解成 WTF-8 str（含代理的目录名 ⇒ `'\udcff'` 一类）✓。
+        Ok(bytes) => decode_path_text(instance, &bytes),
         Err(error) => Err(fs_error(
             instance,
             pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
@@ -760,10 +762,25 @@ fn getcwd_native(
     }
 }
 
-/// **`posix.getcwdb()`** ✓（task-10）：与 [`getcwd_native`] 同源 ✓，返回 **`bytes`** ✓。
+/// **当前工作目录的原始字节**（P3-38 S3b-3）：`getcwdb` 的真值、`getcwd` 的输入。
 ///
-/// **如实说** ✗：本 crate 不碰平台接口（`CX-4`）⇒ 拿不到 `OsStr` 的**原始字节** ✗ ⇒ 走
-/// `to_string_lossy()`（非 UTF-8 的 cwd 会被替换字符化；参照给原字节）✓。POSIX 下正常路径不受影响 ✓。
+/// `std::env::current_dir()` 给的 `PathBuf` 在 Unix 上可经 `OsStrExt` **原样取字节**
+/// （安全视图；`T-CX-4` 的禁面是 `std::fs`／`std::net`／`libc`／`cfg(target_os)`，不含
+/// `std::os::unix::ffi`——既有 `std::env` 先例同口径）。非 Unix 目标回退 lossy（如实偏差）。
+fn current_dir_bytes() -> Result<Vec<u8>, std::io::Error> {
+    let path = std::env::current_dir()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(path.as_os_str().as_bytes().to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(path.to_string_lossy().as_bytes().to_vec())
+    }
+}
+
+/// **`posix.getcwdb()`** ✓（task-10；P3-38 S3b-3 修字节口径）：返回 **`bytes`**（原始字节 ✓）。
 fn getcwdb_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -782,11 +799,8 @@ fn getcwdb_native(
             "posix.getcwdb() takes no keyword arguments",
         ));
     }
-    match std::env::current_dir() {
-        Ok(path) => {
-            let text = path.to_string_lossy().into_owned();
-            Ok(instance.new_bytes(text.as_bytes()))
-        }
+    match current_dir_bytes() {
+        Ok(bytes) => Ok(instance.new_bytes(&bytes)),
         Err(error) => Err(fs_error(
             instance,
             pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
@@ -1039,6 +1053,25 @@ fn access_native(
 }
 
 
+/// 本进程环境的**原始字节对**（P3-38 S3b-3）：`std::env::vars()` 在**非 UTF-8 环境值**上会
+/// `unwrap` panic（实测：cwd 目录名含 `0xff` 时 shell 的 `PWD` 就是非 UTF-8 ⇒ 启动即 panic ✗）；
+/// `vars_os()` ＋ `OsStrExt` 按字节原样取 ⇒ PEP 383 往返正确、正常 UTF-8 零变化 ✓。
+fn environ_pairs() -> Vec<(Vec<u8>, Vec<u8>)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::env::vars_os()
+            .map(|(key, value)| (key.as_bytes().to_vec(), value.as_bytes().to_vec()))
+            .collect()
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::vars()
+            .map(|(key, value)| (key.into_bytes(), value.into_bytes()))
+            .collect()
+    }
+}
+
 /// **`posix._create_environ()`** ✓（第 195 轮）：`Lib/os.py:68` 要它 ✓ —— 返回**环境变量字典** ✓。///
 /// **一处真相** ✓：真值就是**本进程的环境** ✓（`std::env::vars` ✓）⇒ 本层不另造一份 ✓。
 fn create_environ_native(
@@ -1053,9 +1086,9 @@ fn create_environ_native(
     // `AttributeError: 'str' object has no attribute 'decode'` ✗（`os.environ` 整条面一直是坏的 ✓，
     // `wsgiref.handlers` 的类体 `os_environ = read_environ()` 正是撞在这 ✓））。
     let environment = instance.new_dict();
-    for (key, value) in std::env::vars() {
-        let key_object = instance.new_bytes(key.as_bytes());
-        let value_object = instance.new_bytes(value.as_bytes());
+    for (key, value) in environ_pairs() {
+        let key_object = instance.new_bytes(&key);
+        let value_object = instance.new_bytes(&value);
         instance.dict_insert_raw(environment, key_object, value_object);
     }
     Ok(environment)
@@ -1515,9 +1548,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 那个 `environ` ✓ —— 与 `_create_environ` **同一处真相** ✓（本进程的环境 ✓，`std::env::vars` ✓）。
     // **同 `_create_environ`：bytes → bytes** ✓（`os.environb` 的底子 ✓；`os.environ` 由它解码 ✓）。
     let environ = instance.new_dict();
-    for (key, value) in std::env::vars() {
-        let key_object = instance.new_bytes(key.as_bytes());
-        let value_object = instance.new_bytes(value.as_bytes());
+    for (key, value) in environ_pairs() {
+        let key_object = instance.new_bytes(&key);
+        let value_object = instance.new_bytes(&value);
         instance.dict_insert_raw(environ, key_object, value_object);
     }
     instance.dict_set(namespace, "environ", environ);
