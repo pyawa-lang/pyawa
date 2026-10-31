@@ -317,7 +317,43 @@ pub(crate) fn starts_ends_with(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let value = bytes_receiver(instance, bound)?;
     let other = bytes_argument(instance, args, 0)?;
-    let matched = if ends {
+    let matched = if args.len() > 1 {
+        // **`start`／`end` 生效**（`P3-41` round 40 修 ✗）：与 `str` 同一条切片口径 —— 负数先
+        // `+len` 再夹到 `>=0`；`start > len` ⇒ **False**（含空串）；`end` 超界夹到 `len`；
+        // `start > end` ⇒ False ✓。bytes 下标就是**字节**下标 ✓（没有字符映射）。
+        let length = value.len() as i64;
+        let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
+            match args.get(index) {
+                None => Ok(default),
+                Some(value) if *value == instance.singletons().none() => Ok(default),
+                Some(value) => instance.int_value(*value).ok_or_else(|| {
+                    instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("{}: 下标要是整数", if ends { "endswith" } else { "startswith" }),
+                    )
+                }),
+            }
+        };
+        let start = read(1, 0)?;
+        let end = read(2, length)?;
+        let start = if start < 0 { start + length } else { start };
+        if start > length {
+            false
+        } else {
+            let start = start.max(0) as usize;
+            let end = (if end < 0 { end + length } else { end }).clamp(0, length) as usize;
+            if start > end {
+                false
+            } else {
+                let window = &value[start..end];
+                if ends {
+                    window.ends_with(&other)
+                } else {
+                    window.starts_with(&other)
+                }
+            }
+        }
+    } else if ends {
         value.ends_with(&other)
     } else {
         value.starts_with(&other)

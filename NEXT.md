@@ -4,15 +4,17 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 39：`P3-41` 慢因 `test_frame`＝GC O(n²) 修复）；`main` ＝ M6 合并提交（tag `m6`）。
-  **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（单代 GC 固定阈值 O(n²) ⇒ 自适应水位；
-  官方套件超时 9⇒3、跑通 21/397），round 40＝`test_userstring`（`startswith/endswith` 的 start/end ＋ `split/rsplit` 的 `None` 分隔符）。
+- **HEAD**：`dev` 见 `git log -1`（round 40：`test_userstring` ＝ `str` 边界语义 ＋ `weakref.ref` 相等/哈希按目标）；`main` ＝ M6 合并提交（tag `m6`）。
+  **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
+  round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
+  **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
 - **工作区**：干净（`git status --porcelain` 空）。
 - **下一条命令**（续做时）：`git fetch && git reset --hard origin/dev`（历史会被重写 ✗，先核对）；
-  **round 40（进行中）**：`test_userstring` 的 941 failures／9 errors —— 904 个来自
-  `test_find_periodic_pattern` 的 `s.startswith(p, i)`（本层忽略 `start`）⇒ 修 `str.startswith/endswith`
-  的 `start`/`end`（含 bytes 族）；另 9 个 error 来自 `str.split/rsplit(None, maxsplit)`（`None` 分隔符未接）。
-  然后（按用户取活顺序）：**`P3-42` 剩余两格**——(a) 特殊方法派发缺口（`==`/`!=` 不走 `__eq__`、
+  **round 41 候选（`test_userstring` 剩余 38 failures／4 errors，都是普通语义缺口）**：`zfill`／`upper`／
+  `title`／`swapcase`／`subscript`／`slice`／`strip(None)`／`splitlines(keepends)`／`split`／`rsplit` 的
+  `UserString` 实参形态／`find/index` 的 `__index__` 实参与 `UserString` 实参／一处 `RecursionError`。
+  **另外 6 个 hang 的剩余账**：`test_tempfile`＝`map()` 急求值（真 hang）／`test_dict`・`test_weakref`＝
+  dict 线性扫描 O(n²)（两个仍是超时）。然后（按用户取活顺序）：**`P3-42` 剩余两格**——(a) 特殊方法派发缺口（`==`/`!=` 不走 `__eq__`、
   `__add__` 等不派发）；(b) `unittest` contextmanager 里 `KeyError` 污染断言异常 `__context__`。
   然后 **`P3-35` 剩余 5 形态**：`\N{…}`／`except*`／`import *`／async 推导式／PEP 695 `*Ts`。**`P3-35` 剩余 5 形态（未清，见 round 36 台账）**：`\N{…}` 15（要 Unicode 名字表
   生成进 core）／`except*` 7（PEP 654）／`import *` 4（模块帧失败导入静默成 None 的 import 机制缺口，

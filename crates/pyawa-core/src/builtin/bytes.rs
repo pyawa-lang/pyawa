@@ -220,6 +220,8 @@ fn bytes_bounds(
     let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
         match args.get(index) {
             None => Ok(default),
+            // **`None` ＝ 缺省**（本机 3.14.4：`b"abc".find(b"b", None)` ⇒ 1 ✓）。
+            Some(value) if *value == instance.singletons().none() => Ok(default),
             Some(value) => instance
                 .int_value(*value)
                 .ok_or_else(|| instance.raise_builtin_error("TypeError", &format!("{method}: 下标要是整数")))

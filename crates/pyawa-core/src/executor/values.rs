@@ -13,6 +13,7 @@ use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
 use crate::builtin_objects::SetObject;
 use crate::builtin_objects::TupleObject;
+use crate::builtin_objects::WeakRefObject;
 use crate::type_object::TypeObject;
 
 
@@ -162,6 +163,25 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
             }
         }
         return true;
+    }
+    // **`weakref.ref` 按"指称对象"比** ✓（`P3-41` round 40 修 ✗）：参照的 `ref.__eq__` 比的是
+    // **目标**（`weakref.ref(a) == weakref.ref(b)` ⇔ `a == b`；同一目标的两个不同 `ref` 对象也相等 ✓）。
+    // 先前落到最后那条 `false`（按身份）⇒ `Lib/_weakrefset.py` 的 `WeakSet` **不去重** ✓：
+    // `weakref.WeakSet.add` 每次真的塞一条 ⇒ `_abc_cache` 一次 `isinstance` 长一条 ⇒ 成员查询
+    // 线性扫、越查越慢 ⇒ **O(n²)**（实测 `test_userstring` 的 6.5 万次循环 >900 s ✗）。
+    let weakref_type = instance.type_named("weakref");
+    let is_weakref = |ty: NonNull<crate::TypeObject>| {
+        weakref_type.is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    if is_weakref(left_type) && is_weakref(right_type) {
+        // SAFETY: 类型身份已确认（弱引用载荷是 `WeakRefObject`）。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<WeakRefObject>(),
+                &*right.as_ptr().cast::<WeakRefObject>(),
+            )
+        };
+        return values_equal(instance, a.target(), b.target());
     }
     // **`set`／`frozenset`**：同族（含跨 `set`／`frozenset`——Python 允许，`{1} == frozenset({1})`
     // 为真）时"长度相等 ＋ 左的每一项在右里找得到"（双向包含由长度 ＋ 单向包含推出）。

@@ -605,6 +605,22 @@ impl WeakRefObject {
 }
 
 // **手写** ✓（第 158／160／161 轮的教训 ✓：机械改名会留下错误强转 ✗，而 GC 静态检查**只查结构** ✓）。
+/// **`weakref.ref` 的目标**（借用视图；不是弱引用 ⇒ `None`）。
+///
+/// 给 stdlib 的 `hash`／`values_equal` 用（`P3-41` round 40：弱引用按**目标**比／哈希 ✓）——
+/// stdlib 禁 `unsafe` ⇒ 载荷的读取留在 core 这一处 ✓。
+pub fn weakref_target(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    let base = instance.type_named("weakref")?;
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认（弱引用载荷是 `WeakRefObject`）。
+    Some(unsafe { &*object.as_ptr().cast::<WeakRefObject>() }.target())
+}
+
 pub(crate) unsafe fn weakref_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<WeakRefObject>() };

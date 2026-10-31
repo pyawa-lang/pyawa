@@ -32,6 +32,7 @@ pub use builtin_objects::{
 };
 pub use builtin::function::function_descriptor_get;
 pub use builtin_objects::weakref_dunder_new;
+pub use builtin_objects::weakref_target;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::dir_new;

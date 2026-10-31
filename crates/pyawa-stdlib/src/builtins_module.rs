@@ -701,6 +701,13 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
     if let Some((real, imag)) = instance.complex_value(object) {
         return Ok(pyawa_core::executor::hash_complex_parts(real, imag));
     }
+    // **`weakref.ref` 的哈希 ＝ 目标的哈希** ✓（`P3-41` round 40 修 ✗）：参照的
+    // `_weakref.ref.__hash__` 就是 `hash(目标)`（目标不可哈希 ⇒ 同一 TypeError ✓）。
+    // 没有它 ⇒ 同一目标的两个 `ref` 哈希不同 ⇒ `WeakSet` 的 set 去重不成立 ⇒ `_abc_cache`
+    // 一次 `isinstance` 长一条 ⇒ 成员查询线性增长（`test_userstring` 的 O(n²) 源头之一）。
+    if let Some(target) = pyawa_core::weakref_target(instance, object) {
+        return hash_object(instance, target);
+    }
     // 参照明确不可哈希的内建（参照置 `__hash__ = None`）⇒ 与参照同文案。
     let name = type_name(instance, object);
     for unhashable in ["list", "dict", "set", "bytearray"] {
@@ -1568,6 +1575,16 @@ fn call_type_hook(
 ) -> Result<Option<bool>, ExecError> {
     // **元类**：`type(U)` ✓。
     let metaclass = instance.type_of(target).cast::<Header>();
+    // **快路径：先在类型字典里看有没有这个钩子** ✓（`P3-41` round 40 修 ✗）：
+    // 绝大多数类是普通类（元类就是 `type`）⇒ 没有 `__instancecheck__`／`__subclasscheck__` ✓。
+    // 先前直接 `attribute_optional_of` ⇒ 缺失时**内部造 `AttributeError`** ⇒ 本层异常对象带
+    // 回溯捕获 ⇒ 单次 `isinstance` **5.4 ms** ✗（实测 `test_userstring` 的
+    // `isinstance(sub, UserString)` 每个 5 ms、整个测试文件因此跑不完 ✓）。
+    // 类型字典查不到 ⇒ 直接判"没有钩子"（与 `attribute_optional_of` 同结果，但没有异常成本 ✓）。
+    let metaclass_type = metaclass.cast::<pyawa_core::TypeObject>();
+    if instance.type_lookup(metaclass_type, hook).is_none() {
+        return Ok(None);
+    }
     let Some(callable) = instance.attribute_optional_of(metaclass, hook)? else {
         return Ok(None);
     };
