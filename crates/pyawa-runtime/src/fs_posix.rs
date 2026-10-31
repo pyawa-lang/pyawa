@@ -16,6 +16,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+/// C 符号（`mkdir(2)`／`pipe(2)` 的 POSIX 名；本 crate 是平台集中点，`CX-4` 不扫它）。
+#[allow(unsafe_code)]
+mod sys {
+    use core::ffi::{c_char, c_int};
+
+    unsafe extern "C" {
+        /// `mkdir(2)`：按 `mode`（**经平台 umask** ✓）建目录。
+        pub fn mkdir(path: *const c_char, mode: u32) -> c_int;
+        /// `pipe(2)`：造一个管道，两个新 fd 写进 `fds`（读端、写端）。
+        pub fn pipe(fds: *mut c_int) -> c_int;
+    }
+}
+
 /// `fs` 域的 provider 状态：句柄表（`CP-17`：`close` 即释放）。
 #[derive(Default)]
 pub struct PosixFs {
@@ -74,6 +87,8 @@ impl PosixFs {
             // **`CP-30` 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 1→2）：读文件时间戳，
             // 供 `os.stat_result` 的 `st_mtime` 一族（`linecache` 靠它判缓存新鲜度）。
             stat_times: Some(fs_stat_times),
+            // **`P3-40` 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 3→4）：`os.pipe` 的两端句柄。
+            pipe: Some(fs_pipe),
         }
     }
 }
@@ -384,15 +399,16 @@ fn info_of(meta: &std::fs::Metadata) -> FileInfo {
     }
 }
 
-/// `mkdir(name, mode)`。
+/// `mkdir(name, mode)`（`P3-40`：**真把 `mode` 交给内核** ✓ —— 先前的 `_mode` 丢掉了 ✗）。
 #[allow(unsafe_code)]
 extern "C" fn fs_mkdir(
     _state: *mut c_void,
     name: *const u8,
     len: usize,
-    _mode: u32,
+    mode: u32,
     errno_out: *mut i32,
 ) -> CapStatus {
+    use std::os::unix::ffi::OsStrExt;
     let path = match path_of(name, len) {
         Ok(path) => path,
         Err(errno) => {
@@ -401,13 +417,23 @@ extern "C" fn fs_mkdir(
             return CapStatus::Machine;
         }
     };
-    match std::fs::create_dir(&path) {
-        Ok(()) => CapStatus::Ok,
-        Err(error) => {
-            // SAFETY: 出参由调用方提供。
-            unsafe { *errno_out = errno_of(&error) };
-            CapStatus::Machine
-        }
+    // 走 `mkdir(2)`（不是 `create_dir`）：`mode` 语义与**平台 umask** 一致 ✓（参照同口径）。
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = fallback_errno("EINVAL") };
+        return CapStatus::Machine;
+    };
+    // SAFETY: `c_path` 是以 NUL 结尾的有效 C 字符串，生命周期覆盖本次调用。
+    let status = unsafe { sys::mkdir(c_path.as_ptr(), mode) };
+    if status == 0 {
+        CapStatus::Ok
+    } else {
+        let errno = std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or_else(|| fallback_errno("EIO"));
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno };
+        CapStatus::Machine
     }
 }
 
@@ -765,6 +791,51 @@ extern "C" fn fs_fsync(
     }
 }
 
+/// `pipe()`（`P3-40` 的追加槽）：造一个真管道，两端作**不透明句柄**交出。
+///
+/// **`fd` 不在 provider 这一层** ✓：句柄号由本 provider 的句柄表分配（与 `open` 同一套），
+/// VM 侧再把它映射成**实例能力表下标**（`CP-31`）—— 调用方（`pyawa-core::Instance::fs_pipe`）
+/// 只认表下标 ✓。
+#[allow(unsafe_code)]
+extern "C" fn fs_pipe(
+    state: *mut c_void,
+    read_out: *mut Handle,
+    write_out: *mut Handle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::unix::io::FromRawFd;
+    let mut fds = [0i32; 2];
+    // SAFETY: `fds` 是两元素数组，`pipe(2)` 只写这两个槽。
+    let status = unsafe { sys::pipe(fds.as_mut_ptr()) };
+    if status != 0 {
+        let errno = std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or_else(|| fallback_errno("EIO"));
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno };
+        return CapStatus::Machine;
+    }
+    // SAFETY: `pipe(2)` 成功即把两个新 fd 的所有权交给调用方；`File` 的 `Drop` 会 `close` 它们。
+    let read_file = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    // SAFETY: 同上。
+    let write_file = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+    // SAFETY: 同 `fs_open`：`state` 由 `vtable()` 给出且比 vtable 活得久。
+    let provider = unsafe { &*(state as *const PosixFs) };
+    let read_id = provider.next.fetch_add(1, Ordering::Relaxed);
+    let write_id = provider.next.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut files = provider.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        files.insert(read_id, read_file);
+        files.insert(write_id, write_file);
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe {
+        *read_out = Handle(read_id);
+        *write_out = Handle(write_id);
+    }
+    CapStatus::Ok
+}
+
 /// `close(handle)`（`CP-17`：释放；**必须幂等**）。
 ///
 /// **`CP-17` 要求 `close` 幂等** ⇒ 对"已经不在句柄表里"的 handle（第二次 close／从未成功的
@@ -907,6 +978,8 @@ impl RestrictedFs {
         table.truncate = Some(restricted_truncate);
         table.fsync = Some(restricted_fsync);
         table.close = Some(restricted_close);
+        // **`P3-40` 的追加槽**：句柄类（不解析名字）⇒ 直接交内层 `state`（同 `fstat` 一族）。
+        table.pipe = Some(restricted_pipe);
         table
     }
 }
@@ -1095,6 +1168,19 @@ extern "C" fn restricted_fstat(
     // SAFETY: 同 `resolve_name!`。
     let provider = unsafe { &*(state as *const RestrictedFs) };
     fs_fstat(provider.inner_state(), handle, out, errno_out)
+}
+
+/// `pipe()` 的受限根转发（句柄类：只换 provider 状态，不解析名字 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn restricted_pipe(
+    state: *mut c_void,
+    read_out: *mut Handle,
+    write_out: *mut Handle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `resolve_name!`。
+    let provider = unsafe { &*(state as *const RestrictedFs) };
+    fs_pipe(provider.inner_state(), read_out, write_out, errno_out)
 }
 
 #[allow(unsafe_code)]

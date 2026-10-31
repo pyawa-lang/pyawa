@@ -168,6 +168,15 @@ pub struct CpFsVtable {
     pub stat_times: Option<
         extern "C" fn(*mut c_void, *const u8, usize, *mut FileTimes, *mut i32) -> CapStatus,
     >,
+    /// **`P3-40` 的追加槽**（`AB-41`：**只能从表尾追加** ⇒ `PA_ABI_MINOR` 3→4，旧宿主仍可用）：
+    /// `pipe()` ⇒ 两个**新句柄**（读端先、写端后）。
+    ///
+    /// 语义：provider 造一个管道并把两端作**不透明句柄**交出；`fd` 的分配仍归 VM 的实例能力表
+    /// （`CP-31`），provider **不认识** `fd`。消费方（`pyawa-core` 的 `fs_pipe`）按 `CP-3` 处理：
+    /// 宿主 vtable 没有这一格（1.3 及更早）或给 `None` ⇒ 只有 `os.pipe` "未实现"，同域其余槽位不受影响。
+    pub pipe: Option<
+        extern "C" fn(*mut c_void, *mut Handle, *mut Handle, *mut i32) -> CapStatus,
+    >,
 }
 
 impl CpFsVtable {
@@ -196,6 +205,7 @@ impl CpFsVtable {
         fsync: None,
         close: None,
         stat_times: None,
+        pipe: None,
     };
 }
 

@@ -4,8 +4,9 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 33：`P3-39` `_io.StringIO` 落地）；`main` ＝ M6 合并提交（tag `m6`）。
-  **批次进度**：7 轮里已完成 round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）；下一轮第 3/7。
+- **HEAD**：`dev` 见 `git log -1`（round 34：`P3-40` os 面落地）；`main` ＝ M6 合并提交（tag `m6`）。
+  **批次进度**：7 轮里已完成 round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）、round 34（`P3-40` os 面）；
+  下一轮第 4/7（`P3-42` 断言失败签名批次）。
 - **工作区**：干净（`git status --porcelain` 空）。
 - **下一条命令**（续做时）：`git fetch && git reset --hard origin/dev`（历史会被重写 ✗，先核对）；
   然后 `python3 tools/libtests_triage.py --release` 复核签名 → **第 2 轮 `P3-39`（`io.StringIO`）**：
@@ -26,6 +27,8 @@
     `compile()` 不认 flags(2)／`Exception.__setstate__` 缺(2)／`_opcode.is_valid` 缺(1)／`KeyError: 'closed'`(3)／
     `KeyError: N`(8)；另本批新量：`str.startswith/endswith` 的 `start`/`end`、`IntLike`（`int.__index__`）。
   - **`P3-39` 剩余（如实）**：`StringIO` 的 `newline` 换行翻译、`__getstate__`／`__setstate__`／pickle。
+  - **`P3-40` 剩余（如实）**：`os.close` 已关 fd 仍静默（参照 `EBADF`）、`get/set_inheritable`、
+    `os.chmod`／`os.scandir`（本轮顺带暴露的新层缺口）。
   - **`P3-35` 剩余**：`\N{…}` 15／下标删除 8／`except*` 7／`import *` 4／async 推导式 4／PEP 695 `*Ts` 2。
   - **`P3-29`**：socket I/O 18（getaddrinfo 按 A2 推迟）；**`P3-37` 剩余**：`pyexpat`。
   - 其余旧账（不阻塞 M6 gate）：`zipimport`／`urllib.request` 等缺模块、3 个编译器 cell/free 表 panic 用例、
@@ -44,7 +47,8 @@
   ＋ `find target/upstream -name '*.pyac' -delete`（陈旧判定只看源字节，看不到编译器版本 ✗）。
 - **阶段边界**：`main` 只在阶段完成时以 `--no-ff` 收录（现 tag `m1`…`m6`）；**不 reset／不重写历史／不 force-push**
   （`agents-rules/branch-rule.md`）；历史已被重写过 ⇒ 续做先 `git fetch && git reset --hard origin/dev`（有未推送活儿则 `git rebase origin/dev`）。
-- **ABI／接口版本**：`PA_ABI_VERSION`＝**1.3**；指令集版本 `INSTRUCTION_SET_VERSION`＝**2**。
+- **ABI／接口版本**：`PA_ABI_VERSION`＝**1.4**（round 34 的 `fs.pipe` 表尾追加 ⇒ `PA_ABI_MINOR` 3→4；`AB-41`）；
+  指令集版本 `INSTRUCTION_SET_VERSION`＝**2**。
 - **`fd` 语义（`CP-31`）**：`fd`＝实例能力表下标，动态段从 **3** 起（0／1／2 标准流不占槽）；fs／net 共用一张表。
 - **路径解析（`CP-21`/`CP-32`）**：VM 侧 guest 绝对路径空间解析；`sys.path` 最终归 `site.py`（`IM-24`），现在是过渡半。
 - **编号现最大**：`BC-65`／`TS-50`／`T-BC-22`／`CP-39`／`CX-22`／**`P3-42`**（新增前先查已定义；墓碑算定义）。

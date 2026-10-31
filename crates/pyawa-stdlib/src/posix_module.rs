@@ -1144,6 +1144,92 @@ fn remove_path(
     }
 }
 
+/// **`posix.mkdir(path, mode=0o777)`** ✓（`P3-40`）：经 `fs` 域建目录（叶子不跟随符号链接 ✓）。
+///
+/// 参照口径（本机 3.14.4 实测）：缺 `path` ⇒ `TypeError: mkdir() missing required argument 'path' (pos 1)`；
+/// `mode` 缺省 `0o777`（**平台 umask 由内核施加** ✓）；`mode` 非整数 ⇒
+/// `TypeError: 'str' object cannot be interpreted as an integer`。
+fn mkdir_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "mkdir() missing required argument 'path' (pos 1)",
+        ));
+    };
+    let path = path_argument(instance, value, "mkdir")?;
+    let mode = match args.get(1) {
+        None => 0o777u32,
+        Some(mode_value) => match instance.int_value(*mode_value) {
+            Some(raw) => raw as u32,
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "'str' object cannot be interpreted as an integer",
+                ))
+            }
+        },
+    };
+    match instance.fs_mkdir(&path.bytes, mode) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(pyawa_core::CapabilityCallError::NotImplemented) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "mkdir：provider 没有这条 fs 槽（CM-8）",
+        )),
+        Err(pyawa_core::CapabilityCallError::NotRegistered) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "mkdir：fs 能力域未注册（CM-8）",
+        )),
+        Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+    }
+}
+
+/// **`posix.pipe()`** ✓（`P3-40`）：返回 `(读端 fd, 写端 fd)`，**两个都是实例能力表下标**
+///（`CP-31`：动态段从 3 起、与 fs 的其余 fd 同一张表 ⇒ 可以直接交给 `os.read`／`os.write`／
+/// `os.close`／`select` 一族 ✓）。
+///
+/// 参照口径（本机 3.14.4 实测）：带实参 ⇒ `TypeError: posix.pipe() takes no arguments (1 given)`；
+/// 带关键字 ⇒ `TypeError: posix.pipe() takes no keyword arguments`。
+fn pipe_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.pipe() takes no keyword arguments",
+        ));
+    }
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("posix.pipe() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    match instance.fs_pipe() {
+        Ok((read_fd, write_fd)) => {
+            let read = instance.new_int(read_fd as i64);
+            let write = instance.new_int(write_fd as i64);
+            Ok(instance.new_tuple(vec![read, write]))
+        }
+        Err(pyawa_core::CapabilityCallError::NotImplemented) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "pipe：provider 没有这条 fs 槽（CM-8；旧宿主 ≤ ABI 1.3）",
+        )),
+        Err(pyawa_core::CapabilityCallError::NotRegistered) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "pipe：fs 能力域未注册（CM-8）",
+        )),
+        Err(error) => Err(capability_error(instance, error)),
+    }
+}
+
 /// **`posix.urandom(n)`** ✓（第 722 轮）：`Lib/random.py:57` 的 `from os import urandom as _urandom`
 /// 要这个名字 ✓（`SystemRandom` 用它 ✓）。
 ///
@@ -1431,6 +1517,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // （实测：`hasattr(os, "remove")` False、`unlink` True ✓）。
         ("remove", unlink_native as pyawa_core::NativeFn),
         ("rmdir", rmdir_native as pyawa_core::NativeFn),
+        // **P3-40**：目录创建（带 mode）＋管道（两个真 fd，CP-31 的表下标）。
+        ("mkdir", mkdir_native as pyawa_core::NativeFn),
+        ("pipe", pipe_native as pyawa_core::NativeFn),
         ("urandom", urandom_native as pyawa_core::NativeFn),
         ("getpid", getpid_native as pyawa_core::NativeFn),
         // **task-10**：`sysconfig` 族的 import 闸（`getcwd` 经 `posixpath.realpath` 隐式要 ✓）＋
@@ -1499,6 +1588,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("unlink"),
         instance.new_str("remove"),
         instance.new_str("rmdir"),
+        instance.new_str("mkdir"),
+        instance.new_str("pipe"),
         instance.new_str("urandom"),
         instance.new_str("getpid"),
         instance.new_str("getcwd"),

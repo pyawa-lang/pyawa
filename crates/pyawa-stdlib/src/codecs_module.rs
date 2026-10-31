@@ -212,6 +212,40 @@ fn register_native(
     Ok(instance.new_none())
 }
 
+/// **`unregister(search_function)`**：把**同一个对象**从注册表里删掉 ✓（照参照：按对象身份比；
+/// 找不到就**静默**返回 `None`、不报错 ✓ —— 本机 3.14.4 实测）。
+///
+/// 动因（`P3-40` 顺带；分诊里的 `'module' object has no attribute 'unregister'` 实际是
+/// **`codecs.unregister`**，不是 `os.unregister` —— CPython 的 `os` 没有这个名字）：
+/// `test_charmapcodec`／`test_str` 都在 `addCleanup(codecs.unregister, …)` 上要它。
+fn unregister_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("unregister() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let target = args[0];
+    let mut kept: Vec<NonNull<Header>> = Vec::new();
+    if let Some(list) = module_state(instance, SEARCH_FUNCTIONS) {
+        if let Some(existing) = instance.list_items(list) {
+            for entry in existing {
+                if entry != target {
+                    // 新列表是"接管"语义 ⇒ 留下的每一项自己 retain 一份 ✓（被删的那项由旧列表释放 ✓）。
+                    kept.push(instance.retain(entry));
+                }
+            }
+        }
+    }
+    set_module_state(instance, SEARCH_FUNCTIONS, instance.new_list(kept));
+    Ok(instance.new_none())
+}
+
 /// **按注册顺序问一遍 search function**：都没有 ⇒ `None`（`codecs.register` 的注册表）。
 ///
 /// 直接转发调用方那个**对象**（借用 ⇒ `call_value` 自己 retain ✓）；返回的是**新引用**。
@@ -757,6 +791,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 注册表
     for (name, handler) in [
         ("register", register_native as NativeFn),
+        ("unregister", unregister_native as NativeFn),
         ("lookup", lookup_native as NativeFn),
         ("register_error", register_error_native as NativeFn),
         ("lookup_error", lookup_error_native as NativeFn),

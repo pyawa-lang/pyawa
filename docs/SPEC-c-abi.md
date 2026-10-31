@@ -246,10 +246,11 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.3**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **2 → 3**）——`AB-41` 的又一次应用：
-> `clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime` 三槽（形状见 `SPEC-capabilities.md` §9.4）
-> ⇒ 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新槽 ⇒ "未实现"，`CP-3`）。上一次 1→2 是
-> `fs` 域追加 `stat_times`（`SPEC-capabilities.md` §9.1）。`CP-30` 的注册校验口径**不变**：公共头的
+> **当前版本：1.4**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **3 → 4**）——`AB-41` 的又一次应用：
+> `fs` 域 vtable **表尾追加** `pipe` 槽（形状见 `SPEC-capabilities.md` §9.1）
+> ⇒ 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新槽 ⇒ "未实现"，`CP-3`）。此前 1→2 是
+> `fs` 域追加 `stat_times`、2→3 是 `clock` 域追加 `localtime`／`strftime`／`mktime`
+> （形状见 `SPEC-capabilities.md` §9.1／§9.4）。`CP-30` 的注册校验口径**不变**：公共头的
 > version／size 规则不动（vtable 的形状归 `CP-`，本文件只管"如何注册"）。
 
 - **AB-45** 头文件**必须**是**单一** `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；

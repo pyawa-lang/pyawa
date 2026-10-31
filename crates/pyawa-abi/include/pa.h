@@ -17,7 +17,7 @@
  * 次版本 2：fs 域 vtable 表尾追加 stat_times 槽（AB-41：旧宿主仍可用）。
  * 次版本 3：clock 域 vtable 表尾追加 localtime／strftime／mktime 三槽（同上，追加式）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 3u
+#define PA_ABI_MINOR 4u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
