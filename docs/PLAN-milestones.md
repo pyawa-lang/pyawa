@@ -220,7 +220,8 @@
 >   **阶段边界时把这两个数记入本块** ✓（否则"兼容性验收"名不副实 ✗）。
 > - **保证层（语义零差异）**：**单线程** ＋ 纯 Python 源 ＋ 只用**已声明的 C 模块面** ⇒ 以 `MS-13` 的语料为准
 >   （现 **407** 例，含 `Lib/` 165＋`Lib/test/` 50；来源列格式 A 见 `tests/conformance/corpus/manifest.tsv`）＋ `MS-19` 的在册差异（现 **3** 条：`DIV-1`／`DIV-2`／`DIV-8`）。
-> - **已兼容面（当前实况）**：`Lib/` 已同步 **544/628**；可 import 比例 **466/628（74.2%）** ⇒ **判据① 已达标** ✓（阈值 421／67%；复核用
+> - **已兼容面（当前实况）**：`Lib/` **逐字节同步 739** 个文件（`--check` 全一致 ✓；判据① 的分母仍是上游顶层 **628**）；
+>   可 import 比例 **477/628（76.0%）** ⇒ **判据① 已达标** ✓（阈值 421／67%；复核用
 >   `tools/lib_import_ratio.py`——该仪器**单次读数有 ±1 噪声**，判涨跌要多跑取众数 ✓）；C ABI `AB-1`…`AB-64` 可用；C 模块面按 `CM-14` 的 fan-in 增长，
 >   未提供的走 `CM-6`（`ImportError`，如实）。**能力层**已正式化（M5）：`T-CP-*` 13/13、两 provider 写法不变、体量阻塞阈值已拍板
 >   （`DESIGN.md` §9 的 M5 小节）。**兼容性验收**已达成（M6）：`MS-14` 报告 407/407、新差异 0；`MS-19` 补充（合法 Python 被拒）已消除
@@ -368,8 +369,8 @@
 | ~~**P3-31**~~ **已解除（round 3）** | **解析器缺口批**：**10 格全落**（嵌套元组目标／`.05` 前导点浮点／行内 if 分号表＋次行 else／`*` 后置关键字实参／`with … as (a,b)`／推导式模式目标／元组里的 `*`／带注解赋值非名字目标／制表符缩进／调用基底下标赋值）⇒ `difflib`／`gettext`／`xml.etree.ElementTree`／`tomllib`／`argparse` 等 11 个模块同步 ⇒ 判据① 341→358 ✓。剩余同族缺口（PEP 604 union 注解 dataclass 字段的 `__builtins__` 面）挂账后续。清单全文＝台账卷 `03-m3-progress-05.md` 的 task-7 表 ✓（一处真相，不重述） | `BC-14`、`CM-14` | 无 |
 | ~~**P3-32**~~ **已完成（round 14）** | **官方 `Lib/test` 的框架门槛**（`tools/libtests_survey.py` 实测 397 模块 **0 通过** ✗）：根因＝**`sys.exit` 缺失**（`unittest.main()` 结尾必用）＋ **`unittest.main()` 直接崩 `KeyError: 'dest'`**（选项解析路）⇒ 修好这两处，官方套件才**开始**跑。**落地**：`sys.exit`（抛 `SystemExit`；退出码口径见 `SPEC-c-modules.md` §5.2.3）＋ CLI 把未捕获 `SystemExit` 解释成进程退出码；`unittest.main()` 全路打通（`dict` kwargs／`None` 键、argparse 的 `os.terminal_size`、`sys` 流 `write`、富比较协议、类内方法闭包转发等前置一并落地）⇒ **官方套件首次跑通**（≥1 个模块；全量调查与台账见 `NEXT.md` 与 `docs/rounds/`） | `REQUIREMENTS` 的兼容承诺（保证层）＋ `MS-19` 判据补充 | 无 |
 | ~~**P3-33**~~ **已完成（round 14）** | **`sys.path` 不认 `PYTHONPATH`**（参照认 ✓、本层只有"脚本目录 ＋ `Lib`" ✗）⇒ `import test.support` 一类外部路径全灭；与 `IM-24`（`sys.path` 由 `site.py` 构造）的 C 层那半需补齐。**落地**：`PYTHONPATH` 进 `sys.path`（组合根过渡半，口径见 `SPEC-c-modules.md` §5.2.3 的 `path` 条目）＋ `test/support` 包骨架补同步 **21** 个上游文件（19 个骨架 ＋ `_sysconfigdata*` 2 个数据模块）⇒ `Lib/test` 的 .py **42→61**、`Lib/` 同步 **544/628**、`sync_lib.py --check` **548** 个文件逐字节一致（例外清单空）。**缺口如实记**：另有 **7** 个 `Lib/test/*` 骨架因 `P3-35` 的合法 Python 被拒（surrogate escape／链式赋值非名字目标／for-star／PEP 695 等）**暂不同步**（不登记 `KNOWN`，列进 `P3-35` 队列）；`SYNC_EXCLUDE` 另排除 `multiprocessing/heap.py`／`unittest/mock.py`（同因）。细节见 `NEXT.md` 与 `docs/rounds/` | `IM-24`／`IM-26`、`MS-19` 判据补充 | 无 |
-| **P3-34** | **`complex` 类型面**：`1j` 字面量解析不了（状态 5）⇒ **52 个官方测试直接阻塞**（调查实测） | `TS-42`、`CM-27` | 无 |
-| **P3-35** | **合法 Python 被拒的语法缺口**（`MS-19` 判据补充：**必须修、不得登记为差异** ✗）：surrogate escape `\ud800` 类 **20 个**／同行 `try:`·`for:` **8 个**／解析器瑕疵（`语句结尾多出了 Some(Str(…))` 5、`async` 在列表里 1、`要冒号却得 Some(Dot)` 1） | `MS-19` 判据补充、`BC-15` | 无 |
+| ~~**P3-34**~~ **已完成（M6 期实测 `1j` ✓）** | **`complex` 类型面**：`1j` 字面量解析不了（状态 5）⇒ **52 个官方测试直接阻塞**（调查实测） | `TS-42`、`CM-27` | 无 |
+| ~~**P3-35**~~ **主体已完成（M6 期；剩余形态见 `NEXT` 的未修清单）** | **合法 Python 被拒的语法缺口**（`MS-19` 判据补充：**必须修、不得登记为差异** ✗）：surrogate escape `\ud800` 类 **20 个**／同行 `try:`·`for:` **8 个**／解析器瑕疵（`语句结尾多出了 Some(Str(…))` 5、`async` 在列表里 1、`要冒号却得 Some(Dot)` 1） | `MS-19` 判据补充、`BC-15` | 无 |
 | **P3-36** | **`.pyac` `BadCodeSection`**（6 个官方测试触发 ✗）：代码段读不出来 ⇒ 缓存/序列化真 bug，按 `IM-18`…`IM-21` 的容器契约查 | `IM-18`…`IM-21` | 无 |
 | **P3-37** | **官方套件的缺模块**：`doctest`(15)／`unittest.mock`(12)／`gc`(10)／`unicodedata`(4)／`hashlib`(4) —— 按 `CM-14` 的 fan-in 取；`unittest.mock` 与 `P3-32` 同族（先修框架） | `CM-14`、`P3-14` | 无 |
 | **P3-38** | **`str` 表示层支持合法孤立代理**（**WTF-8 级改造；surrogate epic**，**用户已拍板 2026-10-25**）：动机＝`MS-19` 判据补充「**合法 Python 被拒必须修、不得登记差异**」——当前 `Lib/test/support/os_helper.py`（`'\udeee'`／`'\uDC80'` 等）与 `Lib/test/multibytecodec_support.py`（`'\udeee'`）是**唯一阻塞**；survey 里 **30** 个 `test_*.py` 因 surrogate 转义报**语法错**、`os_helper` 缺模块 **×106**；另 `surrogateescape`／`surrogatepass` 是 **PEP 383** 的语义面。**分阶段（每阶段＝可提交的独立切片）**：**S1 `wtf8.rs` 编解码基础**（本轮 super-fix 落地中：`encode`／`decode`／`validate`／往返／错误用例；**零风险**，不动既有表示）；**S2 `StrObject` 存储迁 WTF-8 字节 ＋ `text_of` 语义**（`Some(&str)` **仅对合法 UTF-8**，新增 `wtf8_bytes()` 逃生口）；**S3 各 API 面迁移**（按审计报告分小片：repr／print／encode／decode／比较／哈希／切片／格式化／属性名／字典键／fs 路径／正则／`unicodedata`）；**S4 lexer 接受合法孤立代理转义** ＋ `str.encode`／`decode` 的 `surrogateescape`／`surrogatepass`；**S5 `Lib/test/{support/os_helper,multibytecodec_support}.py` 等重试同步 ＋ 回归**。**逐阶段验收**：S1 ＝ WTF-8 合法／非法样例的往返与错误分类对拍夹具；S2 ＝ 既有 `text_of` 调用点全绿 ＋ 合法 UTF-8 路径零行为变化（`.py` 编译产物逐字节不变）；S3 ＝ 每片单独提交、该片含代理样本的对拍用例通过且不回归；S4 ＝ survey 的 **30** 个 surrogate 语法错族归零 ＋ PEP 383 两套 codec 语义对拍；S5 ＝ `tools/libtests_survey.py` 的 `os_helper` 缺模块 **×106** 与对应两文件相关格归零、语料无新差异（`MS-19`）。**M6 收口 gate 含本条完成**（"新差异为零" ＋ `MS-19` 补充；`MS-14` 的报告口径不变）。 | `MS-19` 判据补充、`CM-13`（不变量）、`BC-15`；`str` 的既有条目只引用（`TS-41`／`TS-42`／`TS-43`、`BC-4`） | 无（用户已拍板；S1→S5 顺序、每阶段独立提交） |
@@ -409,13 +410,14 @@
 > **提交**：逐轮记录、台账与进度注记**必须随当轮的实质改动一起提交**，**禁止**纯台账轮次
 > （`agents-rules/commit-rule.md` §1）✓
 
-**M5 开局顺序（2026-10-18 起，给 Team Lead）** ✓
+**M5 开局顺序（2026-10-18；已于 round 10–13 全部完成 ✓ 归档，仅供追溯 ✗）** ✓
 
 > **真实脚本冒烟清单（每轮抽一个真跑）** ✓：日志分析（`re`＋`json`＋`Counter`＋`with open` ✓）· BFS（`pop(i)` ✓）·
 > JSON 数据处理（`dataclasses.asdict` ✓）· 命令行小工具（`sys.exit` ✓）· 目录遍历（`deque`／`pathlib` ✓）。
 > **红字即记一条缺口** ✓（并按 `MS-19` 的新增补充：**合法 .py 被拒 ⇒ 必须修** ✗）。
-> 当前已知必用面缺口：**`sys.exit`** ✗ · `list.pop(i)` ✗ · `try:` 同行 ✗ · `match` ✗ · `json.load(f)` ✗ ·
-> `deque` 迭代 ✗ · `dataclasses.asdict` ✗ · 异常 `errno` 属性 ✗。
+> 当前已知必用面缺口（2026-10-31 复测 ✓）：**`json.load(f)`** ✗ · **`deque` 迭代** ✗ · **`defaultdict`** ✗ ·
+> **异常 `errno` 属性** ✗ · **`match` 的同行 suite**（`case [1,*r]:` ⇒ "冒号后面要换行"）✗ ——
+> 其余旧缺口（`sys.exit`／`list.pop(i)`／同行 `try:`／`dataclasses.asdict`／`complex`／下标删除）**已修** ✓。
 
 1. **`P3-28` 实例体量三档实测**：① 裸实例 ② 导入 `site` ＋常用模块的实例 ③ **N 个实例并行**
    （每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/measure_footprint.py`。**已完成（round 10）** ✓：

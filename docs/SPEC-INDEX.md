@@ -22,6 +22,7 @@
 | 7 | `SPEC-c-modules.md` | 113 个 C 模块的实现顺序与逐模块合约 | `CM-` | v0 |
 | 8 | `PLAN-milestones.md` | 里程碑、验收、对拍 harness 定义 | `MS-` | v0 |
 | 9 | `CONSTRAINTS.md` | 不变量与 CI 强制项清单 | `CX-` | v0 |
+| 10 | `CORE-MODULES.md` | **核心模块地图**（目录／模块职责／依赖／逐模块说明；**非规范**，实现说明） | — | v0 |
 
 ---
 
