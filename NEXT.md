@@ -4,7 +4,8 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 32：`P3-41` 第 1 轮落地）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 33：`P3-39` `_io.StringIO` 落地）；`main` ＝ M6 合并提交（tag `m6`）。
+  **批次进度**：7 轮里已完成 round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）；下一轮第 3/7。
 - **工作区**：干净（`git status --porcelain` 空）。
 - **下一条命令**（续做时）：`git fetch && git reset --hard origin/dev`（历史会被重写 ✗，先核对）；
   然后 `python3 tools/libtests_triage.py --release` 复核签名 → **第 2 轮 `P3-39`（`io.StringIO`）**：
@@ -23,13 +24,13 @@
     复现脚本：`target/recon/hang1/`、`hang2/`（细节见 `docs/rounds/04-post-m6-01.md` round 32）。
   - **断言失败签名批次（`P3-42`，下一批逐条）**：`int.from_bytes` 缺 `byteorder`(2)／`time.struct_time` 缺(2)／
     `compile()` 不认 flags(2)／`Exception.__setstate__` 缺(2)／`_opcode.is_valid` 缺(1)／`KeyError: 'closed'`(3)／
-    `KeyError: N`(7)；另本批新量：`str.startswith/endswith` 的 `start`/`end`。
-  - **`P3-40`**：`os.mkdir`(8)／`os.pipe`(6)／`os.unregister`(2)。
+    `KeyError: N`(8)；另本批新量：`str.startswith/endswith` 的 `start`/`end`、`IntLike`（`int.__index__`）。
+  - **`P3-39` 剩余（如实）**：`StringIO` 的 `newline` 换行翻译、`__getstate__`／`__setstate__`／pickle。
   - **`P3-35` 剩余**：`\N{…}` 15／下标删除 8／`except*` 7／`import *` 4／async 推导式 4／PEP 695 `*Ts` 2。
   - **`P3-29`**：socket I/O 18（getaddrinfo 按 A2 推迟）；**`P3-37` 剩余**：`pyexpat`。
   - 其余旧账（不阻塞 M6 gate）：`zipimport`／`urllib.request` 等缺模块、3 个编译器 cell/free 表 panic 用例、
     `FAILED(errors=1)` 泛化、"`tb_next` 链"、fs/io 其余（标准流 `dup`／`sys.prefix`）、`P3-38` 的 4 条有损输出通道边界。
-- **闸门命令**：`tools/slowcheck.sh --release`（十项 ≈15–20 min；round 32 全绿）＋
+- **闸门命令**：`tools/slowcheck.sh --release`（十项 ≈15–20 min；round 32 全绿、round 33 全绿）＋
   `python3 tools/libtests_survey.py --release`（≈2.5 min）＋ `python3 tools/lib_import_ratio.py`（≈5–10 min）＋
   `python3 tests/ci/check.py`（14/14）。
 

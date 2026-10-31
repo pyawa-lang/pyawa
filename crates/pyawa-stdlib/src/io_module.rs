@@ -128,6 +128,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     }
     // **`BytesIO` 真实现** ✓（第 726 轮）：`Lib/io.py` 的 `BytesIO` 由它转发 ✓。
     build_bytes_io(instance, namespace);
+    // **`StringIO` 真实现** ✓（`P3-39`）：覆盖上面那个占位类型 ✓。
+    build_string_io(instance, namespace);
     // **`FileIO` 真实现** ✓（task-18）：`open()` 的实例就是它 ✓。
     build_file_io(instance, namespace);
     // **真的那个文本流类型**（`sys.stdout` 那类的类型 ✓）—— 先导出占位类型 ✓
@@ -313,12 +315,24 @@ fn bytesio_readlines(
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // **EOF 不产生空串元素**（`test_memoryio` 的 `test_readlines` 钉住 ✓：先前多推一个 `b''` ✗）；
+    // `sizehint > 0` ⇒ 累计到提示量就停 ✓（参照口径："lines totaling approximately sizehint"）。
+    let hint = args
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(-1);
+    let mut total: i64 = 0;
     let mut items: Vec<NonNull<Header>> = Vec::new();
     loop {
-        let line = bytesio_readline(instance, bound, args, kwargs)?;
-        let empty = instance.bytes_value(line).map(|raw| raw.is_empty()).unwrap_or(true);
+        let line = bytesio_readline(instance, bound, &[], kwargs)?;
+        let length = instance.bytes_value(line).map(|raw| raw.len()).unwrap_or(0);
+        if length == 0 {
+            instance.release(line);
+            return Ok(instance.new_list(items));
+        }
+        total += length as i64;
         items.push(line);
-        if empty {
+        if hint > 0 && total >= hint {
             return Ok(instance.new_list(items));
         }
     }
@@ -1739,4 +1753,537 @@ fn file_next(
         return Err(instance.raise_builtin_error("StopIteration", ""));
     }
     Ok(line)
+}
+
+// ==== `_io.StringIO` 真实现（`P3-39` 第 2 轮）=========================================
+//
+// **为什么真做** ✓：`TypeError: cannot create 'StringIO' instances` 是分诊里的头号签名之一
+//（15 个官方测试阻塞；`unittest` 的失败消息格式化、`pprint.pformat`、`test.support.captured_stderr`
+// 一族都压在它上面）。**口径（如实 ✗）**：文本缓冲放**实例字典**（`_buf` 是 `str`、`_pos` 是
+// **码点下标**、`_closed`）；`newline` 形参**收下但不做换行翻译** ✗；`encoding`／`errors`／
+// `newlines` 未接（`encoding` 给 `None`，与参照实测同 ✓）；不做真缓冲/流式（本来就在内存 ✓）。
+//
+// 语义照本机 CPython 3.14.4 实测：`StringIO("abc").tell()`＝0；`seek(5)` 后 `write("x")` 用
+// `'\x00'` 补齐；`write(b"x")` ⇒ `TypeError: string argument expected, got 'bytes'`；
+// `StringIO(b"x")` ⇒ `TypeError: initial_value must be str or None, not 'bytes'`；关闭后
+// `getvalue`／`read`／`tell`／`readable` 一族 ⇒ `ValueError: I/O operation on closed file.`，
+// 而 `flush()` 仍返回 `None` ✓；`iter(StringIO())` 在关闭后同报 `ValueError` ✓。
+
+/// 文本缓冲（`str` 对象；**借用**）。
+fn stringio_buffer(instance: &Instance, this: NonNull<Header>) -> Option<NonNull<Header>> {
+    attr_of(instance, this, "_buf")
+}
+
+/// 文本缓冲的**码点表**（`StringIO` 的位置口径＝码点下标 ✓；不是字节下标 ✗）。
+fn stringio_code_points(instance: &Instance, this: NonNull<Header>) -> Vec<u32> {
+    stringio_buffer(instance, this)
+        .and_then(|value| instance.wtf8_of(value).map(|raw| raw.to_vec()))
+        .and_then(|raw| pyawa_core::wtf8::decode(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// 码点表 ⇒ `str`（**新引用**；走 `new_str_wtf8`，合法 UTF-8 表示逐字节不变 ✓）。
+fn stringio_text_from_points(instance: &Instance, points: &[u32]) -> NonNull<Header> {
+    let mut bytes: Vec<u8> = Vec::with_capacity(points.len());
+    for &point in points {
+        // 码点来自已校验的 WTF-8 ⇒ 编码不会失败；失败也只可能是内部不变量被破坏。
+        let _ = pyawa_core::wtf8::encode_code_point(point, &mut bytes);
+    }
+    instance
+        .new_str_wtf8(&bytes)
+        .unwrap_or_else(|| instance.new_str(""))
+}
+
+/// 写回 StringIO 状态（`_buf`／`_pos`／`_closed` ＋ 属性读用的 `closed` 镜像 ✓）。
+fn stringio_store(
+    instance: &Instance,
+    this: NonNull<Header>,
+    points: &[u32],
+    position: i64,
+    closed: bool,
+) {
+    let text = stringio_text_from_points(instance, points);
+    set_attr(instance, this, "_buf", text);
+    let pos = instance.new_int(position);
+    set_attr(instance, this, "_pos", pos);
+    let frozen = instance.new_bool(closed);
+    set_attr(instance, this, "_closed", frozen);
+    let mirror = instance.new_bool(closed);
+    set_attr(instance, this, "closed", mirror);
+}
+
+/// 关闭态守卫：参照的 `ValueError: I/O operation on closed file`（**无句点** —— 这是
+/// `write`／`read`／`tell`／`seek`／`truncate`／`getvalue`／`readable` 一族的文案 ✓）。
+fn stringio_check_open(instance: &Instance, this: NonNull<Header>) -> Result<(), ExecError> {
+    if state_closed(instance, this) {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "I/O operation on closed file",
+        ));
+    }
+    Ok(())
+}
+
+/// 关闭态守卫的**带句点**变体：参照只在 `isatty`／`__iter__`／`__enter__` 上用这个文案 ✓
+///（本机 3.14.4 实测；`__next__` 走 `readline` ⇒ 无句点 ✓）。
+fn stringio_check_open_period(instance: &Instance, this: NonNull<Header>) -> Result<(), ExecError> {
+    if state_closed(instance, this) {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "I/O operation on closed file.",
+        ));
+    }
+    Ok(())
+}
+
+/// `StringIO(initial_value='', newline='\n')` ✓（`newline` 收下不生效 ✗，见本节头注）。
+fn stringio_init(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.__init__ 缺少 self"));
+    };
+    let none = instance.singletons().none();
+    let points: Vec<u32> = match rest.first() {
+        None => Vec::new(),
+        Some(value) if *value == none => Vec::new(),
+        Some(value) => match instance.wtf8_of(*value) {
+            Some(raw) => pyawa_core::wtf8::decode(raw).unwrap_or_default(),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!(
+                        "initial_value must be str or None, not {}",
+                        instance.type_name(instance.type_of(*value))
+                    ),
+                ))
+            }
+        },
+    };
+    stringio_store(instance, this, &points, 0, false);
+    // **文本流属性面**（`test_memoryio` 的 `test_textio_properties` ✓）：参照实测
+    // `encoding is None`／`errors is None`／`newlines is None`／`line_buffering is False` ✓。
+    let none_value = instance.retain(instance.singletons().none());
+    set_attr(instance, this, "encoding", none_value);
+    let errors = instance.retain(instance.singletons().none());
+    set_attr(instance, this, "errors", errors);
+    let newlines = instance.retain(instance.singletons().none());
+    set_attr(instance, this, "newlines", newlines);
+    let line_buffering = instance.new_bool(false);
+    set_attr(instance, this, "line_buffering", line_buffering);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `StringIO.write(s)` ⇒ 写入的**字符数** ✓（在 `_pos` 处覆盖；越过末尾用 `'\x00'` 补齐 ✓）。
+fn stringio_write(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.write 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    let Some(data) = rest.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "StringIO.write() takes exactly one argument (0 given)",
+        ));
+    };
+    let Some(raw) = instance.wtf8_of(*data) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "string argument expected, got '{}'",
+                instance.type_name(instance.type_of(*data))
+            ),
+        ));
+    };
+    let written = pyawa_core::wtf8::decode(raw).unwrap_or_default();
+    let length = written.len();
+    let mut points = stringio_code_points(instance, this);
+    let start = state_pos(instance, this).max(0) as usize;
+    if start > points.len() {
+        points.resize(start, 0);
+    }
+    if start + length > points.len() {
+        points.resize(start + length, 0);
+    }
+    points[start..start + length].copy_from_slice(&written);
+    stringio_store(instance, this, &points, (start + length) as i64, false);
+    Ok(instance.new_int(length as i64))
+}
+
+/// `StringIO.getvalue()` ⇒ 整个缓冲 ✓（**关闭后**报 `ValueError`，照参照实测 ✓）。
+fn stringio_getvalue(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.getvalue 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    match stringio_buffer(instance, this) {
+        Some(value) => Ok(instance.retain(value)),
+        None => Ok(instance.new_str("")),
+    }
+}
+
+/// `StringIO.read([size])` ✓。
+fn stringio_read(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.read 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    let size = rest
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(-1);
+    let points = stringio_code_points(instance, this);
+    let start = (state_pos(instance, this).max(0) as usize).min(points.len());
+    let count = if size < 0 {
+        points.len() - start
+    } else {
+        (size as usize).min(points.len() - start)
+    };
+    let result = stringio_text_from_points(instance, &points[start..start + count]);
+    stringio_store(instance, this, &points, (start + count) as i64, false);
+    Ok(result)
+}
+
+/// `StringIO.readline([size])` ✓（含行尾 `'\n'` ✓）。
+fn stringio_readline(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.readline 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    let size = rest
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(-1);
+    let points = stringio_code_points(instance, this);
+    let start = (state_pos(instance, this).max(0) as usize).min(points.len());
+    let mut end = points.len();
+    if let Some(offset) = points[start..].iter().position(|point| *point == b'\n' as u32) {
+        end = start + offset + 1;
+    }
+    if size >= 0 {
+        end = end.min(start + size as usize);
+    }
+    let result = stringio_text_from_points(instance, &points[start..end]);
+    stringio_store(instance, this, &points, end as i64, false);
+    Ok(result)
+}
+
+/// `StringIO.readlines()` ✓。
+fn stringio_readlines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 同 `bytesio_readlines`：**EOF 不推空串** ✓；`sizehint > 0` ⇒ 累计到提示量就停 ✓
+    //（`test_memoryio` 的 StringIO `test_readlines` 钉住 ✓）。
+    let hint = args
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(-1);
+    let mut total: i64 = 0;
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        let line = stringio_readline(instance, bound, &[], kwargs)?;
+        let length = instance
+            .text_of(line)
+            .map(|text| text.chars().count())
+            .unwrap_or(0);
+        if length == 0 {
+            instance.release(line);
+            return Ok(instance.new_list(items));
+        }
+        total += length as i64;
+        items.push(line);
+        if hint > 0 && total >= hint {
+            return Ok(instance.new_list(items));
+        }
+    }
+}
+
+/// `StringIO.seek(offset[, whence])` ✓（**码点**下标；越过末尾允许 ✓）。
+fn stringio_seek(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.seek 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    let offset = rest
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(0);
+    let whence = rest
+        .get(1)
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(0);
+    let points = stringio_code_points(instance, this);
+    // **文本流口径**（本机 3.14.4 实测）：`whence=1/2` 只允许 `offset == 0`，其它一律
+    // `OSError("Can't do nonzero cur-relative seeks")` ✓（`test_memoryio` 的 StringIO
+    // `test_relative_seek` 就钉这一条 ✓）；`whence` 不在 0/1/2 ⇒ `ValueError("invalid whence")`。
+    let base = match whence {
+        0 => 0,
+        1 | 2 if offset != 0 => {
+            return Err(unsupported_error(
+                instance,
+                "Can't do nonzero cur-relative seeks",
+            ))
+        }
+        1 => state_pos(instance, this),
+        2 => points.len() as i64,
+        _ => return Err(instance.raise_builtin_error("ValueError", "invalid whence")),
+    };
+    let position = base + offset;
+    if position < 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("negative seek value {position}"),
+        ));
+    }
+    stringio_store(instance, this, &points, position, false);
+    Ok(instance.new_int(position))
+}
+
+/// `StringIO.tell()` ✓。
+fn stringio_tell(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.tell 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    Ok(instance.new_int(state_pos(instance, this)))
+}
+
+/// `StringIO.truncate([size])` ✓（缺省＝当前位置；返回新长度 ✓）。
+fn stringio_truncate(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.truncate 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    let mut points = stringio_code_points(instance, this);
+    let size = rest
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or_else(|| state_pos(instance, this));
+    if size < 0 {
+        return Err(instance.raise_builtin_error("ValueError", "negative size value"));
+    }
+    if (size as usize) < points.len() {
+        points.truncate(size as usize);
+    }
+    stringio_store(instance, this, &points, state_pos(instance, this), false);
+    Ok(instance.new_int(size))
+}
+
+/// `StringIO.close()` ✓（幂等；`closed` 属性置真 ✓）。
+fn stringio_close(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.close 缺少 self"));
+    };
+    let points = stringio_code_points(instance, this);
+    stringio_store(instance, this, &points, state_pos(instance, this), true);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `StringIO.flush()` ✓（内存缓冲无事可做；**关闭后也照参照返回 `None`** ✓）。
+fn stringio_flush(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `readable()`／`writable()`／`seekable()`：开着就 `True`；关着报 `ValueError`（照参照 ✓）。
+fn stringio_true(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO 谓词缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    Ok(instance.new_bool(true))
+}
+
+/// `isatty()`：开着就 `False`；关着报 `ValueError`（照参照 ✓）。
+fn stringio_isatty(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.isatty 缺少 self"));
+    };
+    stringio_check_open_period(instance, this)?;
+    Ok(instance.new_bool(false))
+}
+
+/// `__iter__`：开着返回 `self`；关着报 `ValueError` ✓。
+fn stringio_enter(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.__iter__ 缺少 self"));
+    };
+    stringio_check_open_period(instance, this)?;
+    Ok(instance.retain(this))
+}
+
+/// `__next__`：读一行；EOF ⇒ `StopIteration` ✓。
+fn stringio_next(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let line = stringio_readline(instance, bound, args, kwargs)?;
+    let empty = instance
+        .text_of(line)
+        .map(|text| text.is_empty())
+        .unwrap_or(true);
+    if empty {
+        instance.release(line);
+        return Err(instance.raise_builtin_error("StopIteration", ""));
+    }
+    Ok(line)
+}
+
+/// `StringIO.writelines(lines)` ✓（逐个 `write`；非 `str` 元素照参照：`TypeError: string argument
+/// expected, got '<类型>'` ✓；返回 `None` ✓）。
+fn stringio_writelines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.writelines 缺少 self"));
+    };
+    stringio_check_open(instance, this)?;
+    let Some(lines) = rest.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "writelines() takes exactly one argument (0 given)",
+        ));
+    };
+    let iterator = pyawa_core::executor::iter::iter_value(instance, *lines)?;
+    loop {
+        match instance.advance_iterator(iterator)? {
+            Some(item) => {
+                let outcome = stringio_write(instance, Some(this), &[item], &[]);
+                instance.release(item);
+                outcome?;
+            }
+            None => break,
+        }
+    }
+    instance.release(iterator);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `StringIO.detach()` ✓ ⇒ 参照抛 `UnsupportedOperation`（本层别名到 `OSError`，消息 `detach` ✓）。
+fn stringio_detach(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((_this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "StringIO.detach 缺少 self"));
+    };
+    Err(unsupported_error(instance, "detach"))
+}
+
+/// 建 `_io.StringIO` 真类 ✓（状态在实例字典 ✓；基类取 `_TextIOBase` 占位类型 ⇒ `isinstance` 成立 ✓）。
+fn build_string_io(instance: &Instance, namespace: NonNull<Header>) {
+    let base = instance
+        .type_named("_TextIOBase")
+        .or_else(|| instance.type_named("_IOBase"))
+        .or_else(|| instance.type_named("object"))
+        .expect("`object` 已登记");
+    let class_namespace = instance.new_dict();
+    let handlers: [(&str, NativeFn); 21] = [
+        ("__init__", stringio_init as NativeFn),
+        ("write", stringio_write as NativeFn),
+        ("getvalue", stringio_getvalue as NativeFn),
+        ("read", stringio_read as NativeFn),
+        ("readline", stringio_readline as NativeFn),
+        ("readlines", stringio_readlines as NativeFn),
+        ("writelines", stringio_writelines as NativeFn),
+        ("detach", stringio_detach as NativeFn),
+        ("seek", stringio_seek as NativeFn),
+        ("tell", stringio_tell as NativeFn),
+        ("truncate", stringio_truncate as NativeFn),
+        ("close", stringio_close as NativeFn),
+        ("flush", stringio_flush as NativeFn),
+        ("readable", stringio_true as NativeFn),
+        ("writable", stringio_true as NativeFn),
+        ("seekable", stringio_true as NativeFn),
+        ("isatty", stringio_isatty as NativeFn),
+        ("__iter__", stringio_enter as NativeFn),
+        ("__next__", stringio_next as NativeFn),
+        ("__enter__", stringio_enter as NativeFn),
+        ("__exit__", stringio_close as NativeFn),
+    ];
+    for (name, handler) in handlers {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(class_namespace, name, function);
+    }
+    if let Ok(class) = pyawa_core::build_class_from_parts(
+        instance,
+        "StringIO".to_owned(),
+        vec![base.cast()],
+        class_namespace,
+        None,
+    ) {
+        instance.dict_set(namespace, "StringIO", class);
+    }
 }
