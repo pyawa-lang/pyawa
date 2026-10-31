@@ -41,6 +41,8 @@ pub mod ast_module;
 /// **`_socket`**（`P3-29` socket 战役第一轮）：常量/`has_ipv6`/类与异常面为真；
 /// 一切 I/O 函数面如实报 `NotImplementedError`（能力域 `CM-8` 未接）——见模块头。
 pub mod _socket_module;
+/// **`pyexpat`**（`P3-37` 剩余，round 38）：形状面 ＋ 诚实解析桩（整块 expat C 扩展未移植）。
+pub mod pyexpat_module;
 /// **`_signal`**（task-13）：`import signal` 的导入闸（asyncio 族 118 的第一道 C 模块闸）。
 /// 导出面**刻意收窄**（常量 ＋ `signal`/`getsignal`）；两个函数调用如实报 `NotImplementedError`
 /// （能力域 `CM-8` 未接）——见模块头。
@@ -149,6 +151,12 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (_hashlib_module::NAME, _hashlib_module::build),
         // **`_blake2`**（round 20）：上游 `hashlib.py` 对 blake2 只走 builtin 路径 ⇒ 名字占位、真调用如实未实现。
         (_hashlib_module::BLAKE2_NAME, _hashlib_module::build_blake2),
+        // **`pyexpat`**（`P3-37` 剩余，round 38）：`xml.etree`／`minidom`／`docxmlrpc` 在导入期要它；
+        // 形状面 ＋ 诚实解析桩（真 expat 移植属独立评估）。`errors`／`model` 按参照是**子模块** ✓
+        //（`sys.modules['pyexpat.errors']` 也要有键 ✓ ⇒ 三个名字都进模块表）。
+        (pyexpat_module::NAME, pyexpat_module::build),
+        (pyexpat_module::ERRORS_NAME, pyexpat_module::build_errors),
+        (pyexpat_module::MODEL_NAME, pyexpat_module::build_model),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
@@ -736,6 +744,9 @@ let namespace = _sre_module::build(instance);
         instance.dict_set(modules, name, module);
     }
     instance.set_modules(Some(modules));
+    // `pyexpat` 的 `errors`／`model` 两个**模块对象**要挂回 `pyexpat` 命名空间
+    //（`xml.parsers.expat` 的重导出用 `sys.modules[...] = model/errors`，必须是模块对象 ✓）。
+    pyexpat_module::install_submodules(instance);
     install_meta_path(instance);
 
 }

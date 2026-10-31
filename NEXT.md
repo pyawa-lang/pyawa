@@ -4,15 +4,17 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 37：`P3-29` socket I/O 主体落地）；`main` ＝ M6 合并提交（tag `m6`）。
-  **批次进度**：已完成 round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）、round 34（`P3-40` os 面）、
-  round 35（`P3-42` 断言签名 5/6 组）、round 36（`P3-35` 下标删除 1/6）、round 37（`P3-29` socket I/O 主体）；
-  下一轮第 7/7（`P3-37` 剩余：`pyexpat`）。
+- **HEAD**：`dev` 见 `git log -1`（round 38：`P3-37` 剩余 `pyexpat` 形状面＝**本批 7 轮全部落地**）；`main` ＝ M6 合并提交（tag `m6`）。
+  **批次进度**：7 轮全部完成 —— round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）、round 34（`P3-40` os 面）、
+  round 35（`P3-42` 断言签名 5/6 组）、round 36（`P3-35` 下标删除 1/6）、round 37（`P3-29` socket I/O 主体）、
+  round 38（`P3-37` 剩余 `pyexpat` 形状面）。**官方套件跑通 18⇒21/397**。
 - **工作区**：干净（`git status --porcelain` 空）。
 - **下一条命令**（续做时）：`git fetch && git reset --hard origin/dev`（历史会被重写 ✗，先核对）；
-  然后**第 7 轮 `P3-37` 剩余（`pyexpat`）**：官方套件 `test_xml_etree*`／`test_pyexpat` 等压在
-  `pyexpat` 上；先做模块存在性与最小解析面（或如实记"整块 C 扩展移植，需要独立评估"）。
-  验收：`import pyexpat` 的缺口签名消失；`test_pyexpat` 能跑到断言层。**`P3-35` 剩余 5 形态（未清，见 round 36 台账）**：`\N{…}` 15（要 Unicode 名字表
+  下一批（按用户取活顺序）：**`P3-42` 剩余两格**——(a) 特殊方法派发缺口（`==`/`!=` 不走 `__eq__`、
+  `__add__` 等不派发；`executor/values.rs::values_equal` ＋ `protocol::compare_public`）；
+  (b) `unittest` contextmanager 里 `KeyError` 污染断言异常 `__context__`（证据见 round 35 台账 §3）。
+  然后 **`P3-35` 剩余 5 形态**：`\N{…}`（要 Unicode 名字表生成进 core）／`except*`（PEP 654）／
+  `import *`（模块帧失败导入静默成 None 的 import 机制缺口，证据见 round 36 台账）／async 推导式／PEP 695 `*Ts`。**`P3-35` 剩余 5 形态（未清，见 round 36 台账）**：`\N{…}` 15（要 Unicode 名字表
   生成进 core）／`except*` 7（PEP 654）／`import *` 4（模块帧失败导入静默成 None 的 import 机制缺口，
   证据在台账）／async 推导式 4／PEP 695 `*Ts` 2。**`P3-42` 剩余两格（未清）**：
   `KeyError` 族 12 行 = (a) **特殊方法派发缺口**（`==`/`!=` 不走 `__eq__`、`__add__` 等不派发，
@@ -35,7 +37,8 @@
   - **`P3-35` 剩余**：`\N{…}` 15／`except*` 7／`import *` 4／async 推导式 4／PEP 695 `*Ts` 2（下标删除已落地 round 36）。
   - **`P3-29` 剩余（如实）**：IPv6／AF_UNIX 地址线、真超时语义（`settimeout` 只记值）、
     `_socket.poll`／`select` 的 socket 分流、`sendto`／`recvfrom`／`getsockopt`、`getaddrinfo` 一族（A2）。
-  - **`P3-37` 剩余**：`pyexpat`（整块 C 扩展；`test_xml_etree*` 一族的前置）。
+  - **`P3-37` 剩余（如实）**：`pyexpat` 的**解析本体**（整块 expat C 扩展：XML/DTD/实体/命名空间/错误码语义）未移植；
+    形状面已落（round 38），`test_pyexpat` 仍到不了断言层。
   - 其余旧账：`zipimport`／`urllib.request` 等缺模块、3 个编译器 cell/free 表 panic 用例、
     `FAILED(errors=1)` 泛化、"`tb_next` 链"、fs/io 其余（标准流 `dup`／`sys.prefix`）、`P3-38` 的 4 条有损输出通道边界。
 - **闸门命令**：`tools/slowcheck.sh --release`（十项 ≈15–20 min；round 32–35 均全绿）＋
