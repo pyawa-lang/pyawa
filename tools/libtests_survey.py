@@ -88,7 +88,7 @@ def main() -> None:
     )
     ap.add_argument("--jobs", type=int, default=max(4, (os.cpu_count() or 4) - 1))
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--timeout", type=float, default=120.0)
     args = ap.parse_args()
 
     root = pathlib.Path(args.dir).resolve()
