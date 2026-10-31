@@ -4,14 +4,17 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 35：`P3-42` 6 组签名里 5 组归零）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 36：`P3-35` 的 `DELETE_SUBSCR` 协议补齐，1/6 形态）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：已完成 round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）、round 34（`P3-40` os 面）、
-  round 35（`P3-42` 断言签名 5/6 组）；下一轮第 5/7（`P3-35` 剩余合法 Python 形态）。
+  round 35（`P3-42` 断言签名 5/6 组）、round 36（`P3-35` 下标删除 1/6）；下一轮第 6/7（`P3-29` socket I/O）。
 - **工作区**：干净（`git status --porcelain` 空）。
 - **下一条命令**（续做时）：`git fetch && git reset --hard origin/dev`（历史会被重写 ✗，先核对）；
-  然后**第 5 轮 `P3-35` 剩余（合法 Python 形态）**：`\N{…}`(15)／下标删除(8)／`except*`(7)／`import *`(4)／
-  async 推导式(4)／PEP 695 `*Ts`(2) ⇒ `crates/pyawa-core/src/compile/`（词法／解析／发射）＋ `Lib/test`
-  对应文件；验收：每条形态可编译／可运行（或诚实未实现），调查里对应签名消失。**`P3-42` 剩余两格（未清）**：
+  然后**第 6 轮 `P3-29`（socket I/O 18）**：`connect`／`bind`／`listen`／`accept`／`poll` 一族
+  （`getaddrinfo` 按 A2 推迟）⇒ `crates/pyawa-stdlib/src/_socket_module.rs` 的 I/O 方法面接
+  `crates/pyawa-runtime/src/net_posix.rs` 的 net 能力域（fd 语义沿用 `CP-31`）；验收：对应分诊签名消失、
+  socket 一族测试推进。**`P3-35` 剩余 5 形态（未清，见 round 36 台账）**：`\N{…}` 15（要 Unicode 名字表
+  生成进 core）／`except*` 7（PEP 654）／`import *` 4（模块帧失败导入静默成 None 的 import 机制缺口，
+  证据在台账）／async 推导式 4／PEP 695 `*Ts` 2。**`P3-42` 剩余两格（未清）**：
   `KeyError` 族 12 行 = (a) **特殊方法派发缺口**（`==`/`!=` 不走 `__eq__`、`__add__` 等不派发，
   `executor/values.rs::values_equal` ＋ `protocol::compare_public`）＋ (b) `unittest` 的 contextmanager
   生成器里 `KeyError` 在测试体执行期间仍处"正在处理"⇒ 断言异常的 `__context__` 被污染；
@@ -29,7 +32,7 @@
   - **`P3-39` 剩余（如实）**：`StringIO` 的 `newline` 换行翻译、`__getstate__`／`__setstate__`／pickle。
   - **`P3-40` 剩余（如实）**：`os.close` 已关 fd 仍静默（参照 `EBADF`）、`get/set_inheritable`、
     `os.chmod`／`os.scandir`（顺带暴露的新层缺口）。
-  - **`P3-35` 剩余**：`\N{…}` 15／下标删除 8／`except*` 7／`import *` 4／async 推导式 4／PEP 695 `*Ts` 2。
+  - **`P3-35` 剩余**：`\N{…}` 15／`except*` 7／`import *` 4／async 推导式 4／PEP 695 `*Ts` 2（下标删除已落地 round 36）。
   - **`P3-29`**：socket I/O 18（getaddrinfo 按 A2 推迟）；**`P3-37` 剩余**：`pyexpat`。
   - 其余旧账：`zipimport`／`urllib.request` 等缺模块、3 个编译器 cell/free 表 panic 用例、
     `FAILED(errors=1)` 泛化、"`tb_next` 链"、fs/io 其余（标准流 `dup`／`sys.prefix`）、`P3-38` 的 4 条有损输出通道边界。

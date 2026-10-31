@@ -792,7 +792,7 @@ fn rich_compare(
 /// `__repr__`**（那是给**成员实例**用的 ✓）⇒ 里面 `self.__class__._value_repr_` 把类当成实例读 ✗
 /// ⇒ `AttributeError: 'type' object has no attribute '_value_repr_'` ✗（真 `enum.py` 第 39 条
 /// `class IntFlag(...)` 当场炸 —— 调试信息里当前帧是 `Flag.__repr__` ✓）。
-fn call_special_method(
+pub(crate) fn call_special_method(
     instance: &Instance,
     object: NonNull<Header>,
     name: &str,

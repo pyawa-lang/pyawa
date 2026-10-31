@@ -5,7 +5,7 @@
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
 use crate::executor::{builtin_type, exception_type, index_payload, new_exception_with_args, normalize_index, raise, raise_builtin, release, sequence_items, slice_bounds, slice_positions, values_equal};
-use crate::builtin_objects::BytesObject;
+use crate::builtin_objects::{BytearrayObject, BytesObject};
 use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
 use crate::header::Header;
@@ -536,19 +536,60 @@ pub fn subscript_del(
     // **内建类型不支持删除**（第 311 轮）：参照给
     // `TypeError: '<类型>' object does not support item deletion` ✓
     //（实测：`del "abc"[1:2]`／`del (1, 2)[0]` ✓）。用户类那条（`__delitem__`）随后补 ✓。
+    // **文案两档**（本机 3.14.4 实测）：整数下标 ⇒ `doesn't support item deletion`；
+    // **切片** ⇒ `does not support item deletion` ✗（同一族内 CPython 也不一致 ⇒ 逐字照抄 ✓）。
+    let slice_delete = Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice");
     for name in ["str", "tuple", "bytes", "int", "float", "bool", "NoneType", "frozenset"] {
         if Some(container_type) == instance.type_named(name) {
             let type_name = instance.type_name(container_type);
-            return Err(raise_builtin(
-                instance,
-                "TypeError",
-                &format!("'{type_name}' object does not support item deletion"),
-            ));
+            let message = if slice_delete {
+                format!("'{type_name}' object does not support item deletion")
+            } else {
+                format!("'{type_name}' object doesn't support item deletion")
+            };
+            return Err(raise_builtin(instance, "TypeError", &message));
         }
+    }
+    // **`bytearray` 的删除**（`P3-35`）：`del ba[i]`／`del ba[a:b:c]` ✓（它就是"可变 bytes"）。
+    if instance.is_subtype(container_type, builtin_type(instance, "bytearray")) {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<BytearrayObject>() };
+        let mut value = object.value();
+        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+            let picks = crate::executor::ctrls::slice_pick_public(instance, key, value.len())?;
+            for position in picks.into_iter().rev() {
+                value.remove(position);
+            }
+            return Ok(());
+        }
+        let index = index_payload(instance, key, opcode)?;
+        let position = match normalize_index(index, value.len()) {
+            Some(position) => position,
+            None => {
+                return Err(raise_builtin(
+                    instance,
+                    "IndexError",
+                    "bytearray index out of range",
+                ))
+            }
+        };
+        value.remove(position);
+        return Ok(());
+    }
+    // **`__delitem__` 协议**（`P3-35`）：用户类／容器子类（`deque`／自定义映射…）✓。
+    // 先于最后那条"未接线"：参照里 `del obj[k]` 一律先问**类型上**的 `__delitem__` ✓。
+    if let Some(result) = crate::executor::protocol::call_special_method(
+        instance,
+        container,
+        "__delitem__",
+        &[key],
+    )? {
+        release(instance, result);
+        return Ok(());
     }
     Err(ExecError::Unsupported {
         opcode,
-        what: "下标删除只接线了 list／dict",
+        what: "下标删除只接线了 list／dict／bytearray（含 `__delitem__` 协议）",
     })
 }
 
