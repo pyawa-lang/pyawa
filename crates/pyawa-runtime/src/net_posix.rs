@@ -67,6 +67,28 @@ mod sys {
         pub fn send(fd: c_int, buf: *const c_void, len: usize, flags: c_int) -> isize;
         /// `recv(2)`。
         pub fn recv(fd: c_int, buf: *mut c_void, len: usize, flags: c_int) -> isize;
+        /// `bind(2)`。
+        pub fn bind(fd: c_int, addr: *const c_void, len: u32) -> c_int;
+        /// `connect(2)`。
+        pub fn connect(fd: c_int, addr: *const c_void, len: u32) -> c_int;
+        /// `listen(2)`。
+        pub fn listen(fd: c_int, backlog: c_int) -> c_int;
+        /// `accept(2)`（阻塞；成功返回新 fd，地址经 `addr`／`len` 两段式出参）。
+        pub fn accept(fd: c_int, addr: *mut c_void, len: *mut u32) -> c_int;
+        /// `getsockname(2)`。
+        pub fn getsockname(fd: c_int, addr: *mut c_void, len: *mut u32) -> c_int;
+        /// `getpeername(2)`。
+        pub fn getpeername(fd: c_int, addr: *mut c_void, len: *mut u32) -> c_int;
+        /// `shutdown(2)`。
+        pub fn shutdown(fd: c_int, how: c_int) -> c_int;
+        /// `setsockopt(2)`。
+        pub fn setsockopt(
+            fd: c_int,
+            level: c_int,
+            optname: c_int,
+            optval: *const c_void,
+            optlen: u32,
+        ) -> c_int;
         /// `close(2)`。
         pub fn close(fd: c_int) -> c_int;
         /// `poll(2)`（`fds` 必须是 [`super::KernelPollFd`]；`nfds_t` 在 POSIX 里是 `unsigned long`）。
@@ -109,17 +131,17 @@ impl PosixNet {
             size: core::mem::size_of::<CpNetVtable>() as u32,
             state: (self as *const Self).cast_mut().cast::<c_void>(),
             socket: Some(net_socket),
-            connect: None,
-            bind: None,
-            listen: None,
-            accept: None,
+            connect: Some(net_connect),
+            bind: Some(net_bind),
+            listen: Some(net_listen),
+            accept: Some(net_accept),
             send: Some(net_send),
             recv: Some(net_recv),
-            shutdown: None,
-            getsockname: None,
-            getpeername: None,
+            shutdown: Some(net_shutdown),
+            getsockname: Some(net_getsockname),
+            getpeername: Some(net_getpeername),
             getsockopt: None,
-            setsockopt: None,
+            setsockopt: Some(net_setsockopt),
             poll: Some(net_poll),
             socketpair: Some(net_socketpair),
             close: Some(net_close),
@@ -174,6 +196,408 @@ fn ebadf() -> i32 {
 
 fn eintr() -> i32 {
     fallback_errno("EINTR")
+}
+
+/// 内核 `sockaddr_in`（Linux 布局；本 crate 是平台集中点）。
+///
+/// `port`／`addr` 用**字节数组**而不是整数，避免主机字节序把网络序写反。
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KernelSockaddrIn {
+    family: u16,
+    port: [u8; 2],
+    addr: [u8; 4],
+    zero: [u8; 8],
+}
+
+/// `CP-39` 的 v1 线格式 ⇒ 内核 `sockaddr_in`；**只有 `AF_INET` 在 v1 里**，
+/// 其它族按真实机器语义回 `EAFNOSUPPORT`（调用方据此走 `OSError`，`CP-6`）。
+fn sockaddr_in_of(family: i32, wire: &[u8]) -> Result<KernelSockaddrIn, i32> {
+    if family != pyawa_capabilities::net::family::AF_INET {
+        return Err(fallback_errno("EAFNOSUPPORT"));
+    }
+    let Some((addr, port)) = pyawa_capabilities::net::decode_ipv4(wire) else {
+        return Err(fallback_errno("EINVAL"));
+    };
+    Ok(KernelSockaddrIn {
+        family: family as u16,
+        port: port.to_be_bytes(),
+        addr,
+        zero: [0; 8],
+    })
+}
+
+/// 内核 `sockaddr` 出参 ⇒ `CP-39` 线格式（两段式：`out_len` 回总长，`out` 只写 `min(总长, 容量)`）。
+#[allow(unsafe_code)]
+fn write_sockaddr_out(
+    family: i32,
+    port: [u8; 2],
+    addr: [u8; 4],
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+) -> CapStatus {
+    let wire = pyawa_capabilities::net::encode_ipv4(addr, u16::from_be_bytes(port));
+    let written = wire.len().min(capacity);
+    if !out.is_null() && written > 0 {
+        // SAFETY: `out` 由调用方按 `capacity` 给出；源与目标不重叠。
+        unsafe { core::ptr::copy_nonoverlapping(wire.as_ptr(), out, written) };
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe { *out_len = wire.len() };
+    let _ = family;
+    CapStatus::Ok
+}
+
+/// `bind(sock, family, addr)`：`AF_INET` 的 `CP-39` 线格式 ⇒ 真 `bind(2)`。
+#[allow(unsafe_code)]
+extern "C" fn net_bind(
+    state: *mut c_void,
+    socket: SocketHandle,
+    family: i32,
+    addr: *const u8,
+    addr_len: usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    // SAFETY: 调用方按 vtable 契约给出 `addr`／`addr_len`。
+    let wire = unsafe { core::slice::from_raw_parts(addr, addr_len) };
+    let sockaddr = match sockaddr_in_of(family, wire) {
+        Ok(value) => value,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    // SAFETY: `sockaddr` 是有效的 `sockaddr_in`，长度取它的字节数。
+    let result = unsafe {
+        sys::bind(
+            fd,
+            (&sockaddr as *const KernelSockaddrIn).cast::<c_void>(),
+            core::mem::size_of::<KernelSockaddrIn>() as u32,
+        )
+    };
+    if result == 0 {
+        CapStatus::Ok
+    } else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = last_errno() };
+        CapStatus::Machine
+    }
+}
+
+/// `connect(sock, family, addr)`：`AF_INET` 的 `CP-39` 线格式 ⇒ 真 `connect(2)`。
+#[allow(unsafe_code)]
+extern "C" fn net_connect(
+    state: *mut c_void,
+    socket: SocketHandle,
+    family: i32,
+    addr: *const u8,
+    addr_len: usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    // SAFETY: 调用方按 vtable 契约给出 `addr`／`addr_len`。
+    let wire = unsafe { core::slice::from_raw_parts(addr, addr_len) };
+    let sockaddr = match sockaddr_in_of(family, wire) {
+        Ok(value) => value,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    loop {
+        // SAFETY: 同 `net_bind`；`EINTR` 重试（与 send／recv 同口径）。
+        let result = unsafe {
+            sys::connect(
+                fd,
+                (&sockaddr as *const KernelSockaddrIn).cast::<c_void>(),
+                core::mem::size_of::<KernelSockaddrIn>() as u32,
+            )
+        };
+        if result == 0 {
+            return CapStatus::Ok;
+        }
+        let errno = last_errno();
+        if errno == eintr() {
+            continue;
+        }
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno };
+        return CapStatus::Machine;
+    }
+}
+
+/// `listen(sock, backlog)`。
+#[allow(unsafe_code)]
+extern "C" fn net_listen(
+    state: *mut c_void,
+    socket: SocketHandle,
+    backlog: i32,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    // SAFETY: fd 来自句柄表；backlog 原样转发。
+    let result = unsafe { sys::listen(fd, backlog) };
+    if result == 0 {
+        CapStatus::Ok
+    } else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = last_errno() };
+        CapStatus::Machine
+    }
+}
+
+/// `accept(sock)` ⇒ 新 socket 能力 ＋ 地址（两段式出参）。
+#[allow(unsafe_code)]
+extern "C" fn net_accept(
+    state: *mut c_void,
+    socket: SocketHandle,
+    out_socket: *mut SocketHandle,
+    out_family: *mut i32,
+    out_addr: *mut u8,
+    out_capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    let mut sockaddr = KernelSockaddrIn {
+        family: 0,
+        port: [0; 2],
+        addr: [0; 4],
+        zero: [0; 8],
+    };
+    let mut length = core::mem::size_of::<KernelSockaddrIn>() as u32;
+    loop {
+        // SAFETY: `sockaddr`／`length` 是本函数持有的可写出参。
+        let raw = unsafe {
+            sys::accept(
+                fd,
+                (&mut sockaddr as *mut KernelSockaddrIn).cast::<c_void>(),
+                &mut length,
+            )
+        };
+        if raw < 0 {
+            let errno = last_errno();
+            if errno == eintr() {
+                continue;
+            }
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+        // SAFETY: `raw` 是刚由 accept(2) 交回、尚未交给别人的 fd。
+        let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+        let handle = provider.insert(owned);
+        // SAFETY: 出参由调用方提供。
+        unsafe {
+            *out_socket = handle;
+            *out_family = pyawa_capabilities::net::family::AF_INET;
+        }
+        return write_sockaddr_out(
+            pyawa_capabilities::net::family::AF_INET,
+            sockaddr.port,
+            sockaddr.addr,
+            out_addr,
+            out_capacity,
+            out_len,
+        );
+    }
+}
+
+/// `getsockname(sock)` ⇒ 本地地址（两段式出参）。
+#[allow(unsafe_code)]
+extern "C" fn net_getsockname(
+    state: *mut c_void,
+    socket: SocketHandle,
+    out_family: *mut i32,
+    out_addr: *mut u8,
+    out_capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    let mut sockaddr = KernelSockaddrIn {
+        family: 0,
+        port: [0; 2],
+        addr: [0; 4],
+        zero: [0; 8],
+    };
+    let mut length = core::mem::size_of::<KernelSockaddrIn>() as u32;
+    // SAFETY: `sockaddr`／`length` 是本函数持有的可写出参。
+    let result = unsafe {
+        sys::getsockname(
+            fd,
+            (&mut sockaddr as *mut KernelSockaddrIn).cast::<c_void>(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = last_errno() };
+        return CapStatus::Machine;
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe { *out_family = pyawa_capabilities::net::family::AF_INET };
+    write_sockaddr_out(
+        pyawa_capabilities::net::family::AF_INET,
+        sockaddr.port,
+        sockaddr.addr,
+        out_addr,
+        out_capacity,
+        out_len,
+    )
+}
+
+/// `getpeername(sock)` ⇒ 对端地址（两段式出参）。
+#[allow(unsafe_code)]
+extern "C" fn net_getpeername(
+    state: *mut c_void,
+    socket: SocketHandle,
+    out_family: *mut i32,
+    out_addr: *mut u8,
+    out_capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    let mut sockaddr = KernelSockaddrIn {
+        family: 0,
+        port: [0; 2],
+        addr: [0; 4],
+        zero: [0; 8],
+    };
+    let mut length = core::mem::size_of::<KernelSockaddrIn>() as u32;
+    // SAFETY: `sockaddr`／`length` 是本函数持有的可写出参。
+    let result = unsafe {
+        sys::getpeername(
+            fd,
+            (&mut sockaddr as *mut KernelSockaddrIn).cast::<c_void>(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = last_errno() };
+        return CapStatus::Machine;
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe { *out_family = pyawa_capabilities::net::family::AF_INET };
+    write_sockaddr_out(
+        pyawa_capabilities::net::family::AF_INET,
+        sockaddr.port,
+        sockaddr.addr,
+        out_addr,
+        out_capacity,
+        out_len,
+    )
+}
+
+/// `shutdown(sock, how)`。
+#[allow(unsafe_code)]
+extern "C" fn net_shutdown(
+    state: *mut c_void,
+    socket: SocketHandle,
+    how: i32,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    // SAFETY: fd 来自句柄表；how 原样转发。
+    let result = unsafe { sys::shutdown(fd, how) };
+    if result == 0 {
+        CapStatus::Ok
+    } else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = last_errno() };
+        CapStatus::Machine
+    }
+}
+
+/// `setsockopt(sock, level, name, value)`：值按**裸字节**转发（整数选项由内核按 `int` 解释）。
+#[allow(unsafe_code)]
+extern "C" fn net_setsockopt(
+    state: *mut c_void,
+    socket: SocketHandle,
+    level: i32,
+    name: i32,
+    value: *const u8,
+    value_len: usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `net_send`。
+    let provider = unsafe { &*(state as *const PosixNet) };
+    let Some(fd) = provider.fd_of(socket) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = ebadf() };
+        return CapStatus::Machine;
+    };
+    // SAFETY: 调用方按 vtable 契约给出 `value`／`value_len`。
+    let bytes = if value_len == 0 {
+        &[][..]
+    } else {
+        unsafe { core::slice::from_raw_parts(value, value_len) }
+    };
+    // SAFETY: fd 来自句柄表；值缓冲活到调用结束。
+    let result = unsafe {
+        sys::setsockopt(
+            fd,
+            level,
+            name,
+            bytes.as_ptr().cast::<c_void>(),
+            bytes.len() as u32,
+        )
+    };
+    if result == 0 {
+        CapStatus::Ok
+    } else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = last_errno() };
+        CapStatus::Machine
+    }
 }
 
 /// `socket(family, type, proto)`（`SPEC-capabilities.md` §9.2）：申请一枚 socket `fd`。
@@ -460,8 +884,13 @@ mod tests {
         assert!(!table.state.is_null());
         assert!(table.socketpair.is_some() && table.send.is_some() && table.recv.is_some());
         assert!(table.close.is_some());
-        // 本片未实现的槽位如实留 None（CP-3）
-        assert!(table.connect.is_none() && table.bind.is_none());
+        // **`P3-29` round 37**：AF_INET 的 TCP 面向已真接线（8 个槽不再是 None）——
+        // 其余（IPv6／UNIX 地址线、真超时、sendto/recvfrom/getsockopt）如实未接（见模块文档）。
+        assert!(table.connect.is_some() && table.bind.is_some());
+        assert!(table.listen.is_some() && table.accept.is_some());
+        assert!(table.getsockname.is_some() && table.getpeername.is_some());
+        assert!(table.shutdown.is_some() && table.setsockopt.is_some());
+        assert!(table.getsockopt.is_none(), "`getsockopt` 仍如实未接（CP-3）");
         assert!(table.poll.is_some(), "`poll` 槽（T-CP-3 的底座）本片已实现");
     }
 }

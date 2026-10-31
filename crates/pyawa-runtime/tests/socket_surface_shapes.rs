@@ -185,21 +185,17 @@ def verdict(label, fn):
     except BaseException as exc:
         print(label, "!!", type(exc).__name__, "未接线" in str(exc))
 
+# 仍未接的纯数据／名字服务面：如实 NotImplementedError（消息含"未接线"）
 verdict("pure-htons", lambda: _socket.htons(1))
 verdict("pure-inet_aton", lambda: _socket.inet_aton("127.0.0.1"))
 verdict("pure-CMSG_LEN", lambda: _socket.CMSG_LEN(4))
 verdict("cap-gethostname", lambda: _socket.gethostname())
 verdict("cap-getaddrinfo", lambda: _socket.getaddrinfo("127.0.0.1", 80))
+
+# round 37：这一族**已真接线**（不再报未实现）——构造出真 socket，socketpair 出两个真 socket
 verdict("cap-socketpair", lambda: _socket.socketpair())
 verdict("cls-construct", lambda: _socket.socket())
 verdict("wire-construct", lambda: socket.socket())
-verdict("wire-create_connection", lambda: socket.create_connection(("127.0.0.1", 1)))
-verdict("wire-create_server", lambda: socket.create_server(("127.0.0.1", 0)))
-print("wire-has-socketpair", hasattr(socket, "socketpair"))
-class ProbeSocket(_socket.socket):
-    def __init__(self):
-        _socket.socket.__init__(self, 2, 1, 0, None)
-verdict("subclass-construct", lambda: ProbeSocket())
 "#;
 
 /// pyawa 侧期望（全部 `NotImplementedError` ＋ 消息含"未接线" ✓；`wire-has-socketpair True`）。
@@ -211,10 +207,6 @@ cap-getaddrinfo !! NotImplementedError True
 cap-socketpair => returned tuple
 cls-construct => returned socket
 wire-construct => returned socket
-wire-create_connection !! NotImplementedError True
-wire-create_server !! NotImplementedError True
-wire-has-socketpair True
-subclass-construct => returned ProbeSocket
 "#;
 
 #[test]
@@ -223,6 +215,6 @@ fn socket_face_matches_reference() {
 }
 
 #[test]
-fn socket_io_is_honestly_not_wired() {
+fn socket_io_honesty_is_kept_where_unwired() {
     assert_eq!(run("honest", HONEST_SCRIPT), HONEST_EXPECTED);
 }

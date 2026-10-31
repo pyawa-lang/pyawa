@@ -358,6 +358,34 @@ pub(crate) fn super_lookup(
                         this,
                     }));
                 }
+                // **描述符协议**（`P3-29` 连带修 ✗）：MRO 上取到的属性若其类型有 `__get__`
+                // （`property` 是最常见的一种），参照的 `super.__getattribute__` 要调它 ✓
+                // —— 先前**直接交属性对象本身** ✗ ⇒ `Lib/socket.py` 的
+                // `@property def family(self): return _intenum_converter(super().family, …)`
+                // 拿到 `property` 对象 ⇒ `super().family == AF_INET` 为假／数值运算报 TypeError ✗。
+                // 函数／内建方法／staticmethod／classmethod 已在上面的分支处理掉 ✓ ⇒ 这里只处理其余。
+                if let Some(get) = instance.type_lookup(found_type, "__get__") {
+                    let owner = if instance.is_type_object(this) {
+                        this
+                    } else {
+                        instance.type_of(this).cast::<Header>()
+                    };
+                    // 实参是**借用**（`call_callable` 只借不接管）⇒ 各 retain 一份。
+                    // SAFETY: this／owner 都是存活对象（注册表或实例持有）。
+                    unsafe {
+                        instance.incref_object(this.as_ptr());
+                        instance.incref_object(owner.as_ptr());
+                    }
+                    let result = crate::executor::call::call_callable(
+                        instance,
+                        get,
+                        Some(found),
+                        vec![this, owner],
+                        Vec::new(),
+                        0,
+                    )?;
+                    return Ok(Some(Attribute::Value(result)));
+                }
                 return Ok(Some(Attribute::Value(found)));
             }
         }
