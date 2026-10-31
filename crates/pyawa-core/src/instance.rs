@@ -193,6 +193,14 @@ pub struct Instance {
     gc_threshold: Cell<(usize, usize, usize)>,
     /// 自上次回收以来的分配计数。
     gc_alloc_count: Cell<usize>,
+    /// **下一次自动回收的分配计数水位**（`P3-41` 慢因修复）：
+    /// 单代标记-清除的每次代价是 **O(存活对象数)** ⇒ 固定阈值（2000）会让"存活对象多"的
+    /// 工作负载退化成 **O(n²)**（`test_frame` 的 15 万层嵌套 ≈ 26.9 s，实测见 round 39 台账）。
+    /// ⇒ 每次回收后把水位调到"再分配 `max(阈值, 当前存活数)` 次"：每次回收的 O(存活) 摊到
+    /// 至少同样多次分配上 ⇒ 摊还 O(1)。`sys.get_threshold()` 仍只报**配置**值（口径不变 ✓）。
+    gc_next_collect: Cell<usize>,
+    /// 自动／手动回收的**实际执行次数**（诊断面；`gc.get_stats` 的口径底座）。
+    gc_collections: Cell<usize>,
     /// 回收进行中：这些对象只减计数、由本次回收统一释放（见 [`Instance::collect`]）。
     gc_frozen: RefCell<HashSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。

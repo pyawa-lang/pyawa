@@ -96,9 +96,15 @@ impl Instance {
             return 0;
         }
         self.gc_running.set(true);
+        self.gc_collections.set(self.gc_collections.get() + 1);
         let freed = self.collect_inner();
         self.gc_running.set(false);
         freed
+    }
+
+    /// **已执行的回收次数**（诊断；`P3-41` 慢因修复的回归测试用）。
+    pub fn gc_collections(&self) -> usize {
+        self.gc_collections.get()
     }
 }
 
@@ -156,4 +162,42 @@ pub(crate) fn float_getformat_native(
         }
     };
     Ok(instance.new_str(format))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **`P3-41` 慢因修复的回归**：自动回收的水位必须随**存活对象数**放大。
+    ///
+    /// 固定阈值（2000）下，单代标记-清除每 2000 次分配就做一次 **O(存活)** 的全堆扫描 ⇒
+    /// "存活对象多"的工作负载退化成 O(n²)（`test_frame` 的 15 万层嵌套：26.9 s）。
+    /// 这里撑起 256 个可达 dict ＋ 引导期的固定对象，然后做 6400 次分配：
+    /// 固定阈值会收 ~100 次，放大水位后应收得少得多。
+    #[test]
+    fn auto_collection_waterline_scales_with_live_objects() {
+        let instance = Instance::new();
+        instance.set_gc_threshold((64, 10, 0));
+        let root = instance.new_dict();
+        let mut held = Vec::new();
+        for index in 0..256 {
+            let child = instance.new_dict();
+            instance.dict_set(root, &format!("k{index}"), child);
+            held.push(child);
+        }
+        let baseline = instance.gc_collections();
+        for index in 0..6_400 {
+            let temporary = instance.new_dict();
+            let value = instance.new_int(index as i64);
+            instance.dict_set_int(temporary, index, value);
+            let _ = temporary;
+        }
+        let collections = instance.gc_collections() - baseline;
+        assert!(collections >= 1, "阈值仍然生效：6400 次分配里必须真的回收过");
+        assert!(
+            collections < 40,
+            "水位应随存活放大（固定阈值下约 100 次），实测 {collections} 次"
+        );
+        let _ = (&root, &held);
+    }
 }

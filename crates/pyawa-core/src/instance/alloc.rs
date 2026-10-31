@@ -359,13 +359,18 @@ impl Instance {
     pub fn alloc<'a, T: PyObject>(&'a self, value: T) -> Owned<'a, T> {
         let ptr = self.adopt(value);
         self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
-        if self.gc_alloc_count.get() >= self.gc_threshold.get().0 {
+        if self.gc_alloc_count.get() >= self.gc_next_collect.get() {
             // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
             // **开关**（第 93 轮，`PYAWA_NO_GC=1` 才跳过 ✓）：用来判定"刚造好就是垃圾"是不是
             // **这次回收**干的 ✓ —— 若关掉之后崩就没了 ✓，那病灶就在"回收与刚分配对象"的时序上 ✓。
             if crate::diag::flag_off("PYAWA_NO_GC") {
                 self.collect();
             }
+            // **自适应水位**（`P3-41` 慢因修复）：单代标记-清除每次 O(存活) ⇒ 让"下一次回收"
+            // 至少等到**同样多次**分配之后，摊还 O(1)（固定阈值下存活多的工作负载是 O(n²)）。
+            let step = self.live_objects().max(self.gc_threshold.get().0);
+            self.gc_next_collect
+                .set(self.gc_alloc_count.get().saturating_add(step));
         }
 
         Owned::new(ptr, self)

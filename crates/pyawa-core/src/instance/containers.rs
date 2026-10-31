@@ -362,5 +362,6 @@ impl Instance {
         // 阈值之上 ✗ ⇒ 判据一旦设定就**立刻**满足 ⇒ 自回收的时机变得不可预期 ✗
         // （`object_model.rs` 的 `auto_collection_triggers_at_threshold` 当场变红 ✓）。
         self.gc_alloc_count.set(0);
+        self.gc_next_collect.set(threshold.0);
     }
 }
