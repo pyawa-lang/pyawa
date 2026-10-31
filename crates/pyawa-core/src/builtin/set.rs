@@ -282,6 +282,13 @@ pub unsafe fn set_new(
 pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<SetObject>() };
+    // `P3-41`：与 `list`／`tuple`／`dict` 同口径的递归守卫（自引用 ⇒ `{...}`；
+    // 嵌套太深 ⇒ `RecursionError`，**不得**顶穿原生栈；守卫 RAII 摘除）。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("{...}".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
     // **子类的 repr 用子类名** ✓（第 410 轮，task-21 G2 顺带 ✓）：参照实测
     // `class St(set): pass` ⇒ `repr(St())` ＝ `'St()'` ✓（先前硬编码 `set()` ✗）。
     // 精确的 `set`／`frozenset` 保持原来的形式 ✓（`set()`／`frozenset()`）。

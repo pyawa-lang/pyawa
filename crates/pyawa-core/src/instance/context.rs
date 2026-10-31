@@ -4,6 +4,34 @@
 
 use super::*;
 
+/// **`OM-11`**：`repr` 递归守卫的进入结果（见 [`Instance::enter_repr`]）。
+///
+/// 分三支（`P3-41` 第 1 轮 ✓：**崩溃是硬要求**——不能再让深嵌套 `repr` 顶穿原生栈 ✗）：
+/// * `Entered`：进入成功；离开由 [`ReprScope`] 的 `Drop` 负责（**含任何提前 `?` 返回** ✓）；
+/// * `Cycle`：同一个对象已在生成中 ⇒ 容器按参照给 `[...]`／`{...}` ✓；
+/// * `TooDeep`：嵌套深度达到 [`Instance::recursion_limit`] ⇒ 按参照报 `RecursionError` ✓
+///   （参照里 `repr` 的 C 递归与 Python 调用共用同一个额度 ⇒ 这里同口径 ✓）。
+pub enum ReprEntry<'a> {
+    /// 进入成功（离开时由作用域守卫摘除）。
+    Entered(ReprScope<'a>),
+    /// 自引用（同一个对象已在生成中）。
+    Cycle,
+    /// 嵌套太深 ⇒ 必须报 `RecursionError`，不得继续吃原生栈。
+    TooDeep,
+}
+
+/// [`ReprEntry::Entered`] 的守卫：`Drop` 时从 `repr_guard` 里摘掉自己那一条。
+pub struct ReprScope<'a> {
+    instance: &'a Instance,
+    address: usize,
+}
+
+impl Drop for ReprScope<'_> {
+    fn drop(&mut self) {
+        self.instance.leave_repr(self.address);
+    }
+}
+
 impl Instance {
     /// 把**内建容器**摊成元素表（`bytes(<可迭代>)` 用）。
     ///
@@ -39,15 +67,35 @@ impl Instance {
         })
     }
 
-    /// **`OM-11`**：`repr` 的递归守卫——已经在生成中的对象返回 `false`
-    /// （容器据此给出 `[...]`／`{...}`，与参照实现一致）。
-    pub fn enter_repr(&self, address: usize) -> bool {
+    /// **`OM-11`**：`repr` 的递归守卫——已经在生成中的对象给 [`ReprEntry::Cycle`]
+    /// （容器据此给出 `[...]`／`{...}`，与参照实现一致）；
+    /// 嵌套深度超过有效递归上限给 [`ReprEntry::TooDeep`]（调用方报 `RecursionError`）。
+    ///
+    /// **为什么深度要设限**（`P3-41` ✗✗）：本层 `repr` 是**原生递归** ⇒ 深嵌套容器（如
+    /// `test_frame` 的 15 万层嵌套 `dict`）会在守卫来得及之前顶穿 8 MiB 原生栈，
+    /// 进程以 `SIGABRT` 退出 ✗。参照的 C 递归守卫与 Python 调用的额度**同一个**
+    /// （`Py_EnterRecursiveCall`）⇒ 这里也照 [`Instance::recursion_limit`] 算 ✓。
+    pub fn enter_repr(&self, address: usize) -> ReprEntry<'_> {
         let mut guard = self.repr_guard.borrow_mut();
         if guard.contains(&address) {
-            return false;
+            return ReprEntry::Cycle;
+        }
+        if guard.len() >= self.recursion_limit.get() {
+            return ReprEntry::TooDeep;
         }
         guard.push(address);
-        true
+        ReprEntry::Entered(ReprScope {
+            instance: self,
+            address,
+        })
+    }
+
+    /// [`ReprEntry::TooDeep`] 对应的 `RecursionError`（消息照参照口径）。
+    pub fn repr_recursion_error(&self) -> ExecError {
+        self.raise_builtin_error(
+            "RecursionError",
+            "maximum recursion depth exceeded while getting the repr of an object",
+        )
     }
 
     /// 退出 `repr` 的递归守卫。

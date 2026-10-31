@@ -533,9 +533,13 @@ pub unsafe fn list_new(
 pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<ListObject>() };
-    if !instance.enter_repr(ptr as usize) {
-        return Ok("[...]".to_owned());
-    }
+    // `P3-41`：自引用 ⇒ `[...]`；嵌套太深 ⇒ `RecursionError`（**不得**顶穿原生栈 ✗）；
+    // 守卫用 RAII 摘除（任何提前 `?` 返回都不留脏条目）。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("[...]".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
     let items = object.items();
     let mut text = String::from("[");
     for (index, item) in items.iter().enumerate() {
@@ -545,6 +549,5 @@ pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Result<String,
         text.push_str(&crate::executor::protocol::element_repr(instance, *item)?);
     }
     text.push(']');
-    instance.leave_repr(ptr as usize);
     Ok(text)
 }

@@ -914,15 +914,8 @@ impl Emitter {
                 self.emit_block(body, false)?;
                 self.loops.pop();
                 // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）；
-                // 末尾那条"体不落到末尾的 `if`"由 `If` 臂代发 ⇒ 这里让位
-                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
-                    Statement::If {
-                        then_body,
-                        else_body,
-                        ..
-                    } => else_body.is_empty() && block_terminates(then_body),
-                    _ => false,
-                });
+                // 末尾那条"体不落到末尾的 `if`"由 `If` 臂代发 ⇒ 这里让位（判据见 helper 文档）。
+                let tail_owned_by_if = tail_if_owns_back_edge(body);
                 if !loop_body_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（参照的粘性 loc：回跳是合成指令，继承前一条的位点；
                     // 实测 `for i in s:\n    x = i\n` 的回跳与 `STORE_NAME x` 同为 `(2,2,4,5)`）
@@ -1014,14 +1007,8 @@ impl Emitter {
                 self.in_loop_body = true;
                 self.emit_block(body, false)?;
                 self.loops.pop();
-                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
-                    Statement::If {
-                        then_body,
-                        else_body,
-                        ..
-                    } => else_body.is_empty() && block_terminates(then_body),
-                    _ => false,
-                });
+                // **同口径**（与 `for` 一致 ✓，判据见 helper 文档）。
+                let tail_owned_by_if = tail_if_owns_back_edge(body);
                 if !loop_body_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（同 `for`；实测与 `STORE_NAME x` 同为 `(2,2,4,5)`）
                     let back_span = self.last_span;
@@ -1221,4 +1208,29 @@ impl Emitter {
             _ => unreachable!("emit_statement_if 只接收 Statement::If"),
         }
     }
+}
+
+/// 循环体末尾那条 `if` 会不会**自己发回边**（即 `If` 臂的"反转形态"）——决定循环臂是否让位。
+///
+/// **`P3-41` 真 bug 修 ✗**：先前判据只看语法（"末尾是无 `else` 的 `if` 且体终止"）⇒ 让位 ✗；
+/// 但**前面的 `try`／`with` 会把余部分别重放**（`emit_rest_and_tail`），重放块里 `loop_last_if`
+/// 不成立 ⇒ 末尾 `if` 走**非反转**形态、**不回发**回边 ✗ ⇒ 整段没有回边 ⇒ 第二圈
+/// `FOR_ITER` 弹空栈（`帧操作失败：StackUnderflow` ✗）。⇒ 只有"末尾 `if` 会被**直接**发出"
+/// 时才让位 ✓（体内末尾之外的语句里出现 `Try`／`With` 就意味着它会走重放路径 ✓）。
+///
+/// 实测原形：`Lib/unittest/case.py::assertSequenceEqual`（任何**列表**断言失败都会中止
+/// 整个官方测试文件 ✗）；最小复现 `target/recon/p341/r/r2.py` ✓。
+fn tail_if_owns_back_edge(body: &[Statement]) -> bool {
+    !body
+        .iter()
+        .take(body.len().saturating_sub(1))
+        .any(|statement| matches!(statement, Statement::Try { .. } | Statement::With { .. }))
+        && body.last().is_some_and(|statement| match statement {
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => else_body.is_empty() && block_terminates(then_body),
+            _ => false,
+        })
 }

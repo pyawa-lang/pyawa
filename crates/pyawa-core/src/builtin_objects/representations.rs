@@ -45,9 +45,12 @@ pub unsafe fn str_str(ptr: *mut Header, _instance: &Instance) -> Result<String, 
 pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<TupleObject>() };
-    if !instance.enter_repr(ptr as usize) {
-        return Ok("(...)".to_owned());
-    }
+    // `P3-41`：自引用 ⇒ `(...)`；嵌套太深 ⇒ `RecursionError`；守卫 RAII 摘除。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("(...)".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
     let mut text = String::from("(");
     for index in 0..object.len() {
         if index > 0 {
@@ -62,7 +65,6 @@ pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String
         text.push(',');
     }
     text.push(')');
-    instance.leave_repr(ptr as usize);
     Ok(text)
 }
 
@@ -244,9 +246,12 @@ pub unsafe fn tuple_index_native(
 pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<DictObject>() };
-    if !instance.enter_repr(ptr as usize) {
-        return Ok("{...}".to_owned());
-    }
+    // `P3-41`：自引用 ⇒ `{...}`；嵌套太深 ⇒ `RecursionError`；守卫 RAII 摘除。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("{...}".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
     let mut text = String::from("{");
     for (index, (key, value)) in object.entries().into_iter().enumerate() {
         if index > 0 {
@@ -257,7 +262,6 @@ pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String,
         text.push_str(&crate::executor::protocol::element_repr(instance, value)?);
     }
     text.push('}');
-    instance.leave_repr(ptr as usize);
     Ok(text)
 }
 

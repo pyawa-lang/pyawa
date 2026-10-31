@@ -30,6 +30,8 @@ mod convert;
 pub(crate) use convert::CP437;
 mod gc;
 mod context;
+// `P3-41`：`repr` 递归守卫的三支结果（`OM-11`）。
+pub(crate) use context::ReprEntry;
 mod accessors;
 mod constructors;
 mod query;
