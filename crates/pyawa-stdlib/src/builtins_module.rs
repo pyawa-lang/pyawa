@@ -674,7 +674,7 @@ fn hash_native(
     Ok(instance.new_int(hash_object(instance, args[0])?))
 }
 
-fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, ExecError> {
+pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, ExecError> {
     let ty = instance.type_of(object);
     if ty == instance.singletons().none_type() {
         return Ok(HASH_NONE);

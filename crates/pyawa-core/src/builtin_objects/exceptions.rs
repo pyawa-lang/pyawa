@@ -278,6 +278,29 @@ pub unsafe fn exception_getattr(
         // **`with_traceback(tb, /)`**（task-24 扩）：参照里它是 `BaseException` 的方法 ✓
         //（`Lib/unittest/case.py:279` 的 `exc_value.with_traceback(None)` 正靠它 ✓）。
         // 与 `dict_getattr` 同一做法：把原生函数**绑到本实例**上交出去 ✓（调用时 `bound` 就是 self ✓）。
+        "__setstate__" => {
+            // `P3-42`：`BaseException.__setstate__(state)`（`test_baseexception` 的
+            // gh-97591 用例直接调它）。与 `with_traceback` 同一「绑到本实例」的做法 ✓。
+            // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+            let owner = unsafe { NonNull::new_unchecked(ptr) };
+            let method_type = instance
+                .type_named("builtin_function_or_method")
+                .expect("引导期已登记");
+            let native = instance.alloc(BuiltinFunctionObject::new(
+                method_type,
+                "__setstate__",
+                Cell::new(exception_setstate_native),
+            ));
+            let native_raw = native.into_raw().cast::<Header>();
+            // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+            unsafe { instance.incref_object(ptr) };
+            let bound = instance.alloc(MethodObject::new(
+                instance.type_named("method").expect("method 已登记"),
+                native_raw,
+                owner,
+            ));
+            Some(bound.into_raw().cast::<Header>())
+        }
         "with_traceback" => {
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
             let owner = unsafe { NonNull::new_unchecked(ptr) };
@@ -313,6 +336,57 @@ pub unsafe fn exception_getattr(
         }
         _ => None,
     }
+}
+
+/// **`BaseException.__setstate__(state)`**（`P3-42`）：把 `state` 字典里的项逐条设成实例属性 ✓。
+///
+/// 语义照本机 3.14.4 实测：`state is None` ⇒ 什么都不做；非字典 ⇒
+/// `TypeError: state is not a dictionary`；0 参／2 参／关键字 ⇒ 各自 TypeError（见下）✓。
+unsafe fn exception_setstate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "unbound method BaseException.__setstate__() needs an argument",
+        ));
+    };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "BaseException.__setstate__() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "BaseException.__setstate__() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let state = args[0];
+    if state == instance.singletons().none() {
+        return Ok(instance.retain(instance.singletons().none()));
+    }
+    let Some(entries) = instance.dict_entries(state) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "state is not a dictionary",
+        ));
+    };
+    for (key, value) in entries {
+        // **借用语义**：`set_attribute_value` 自己 retain 一份 ✓（键转文本，非文本键跳过——如实）。
+        let Some(name) = instance.text_of(key).map(str::to_owned) else {
+            continue;
+        };
+        instance.set_attribute_value(this, &name, value)?;
+    }
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 /// **`BaseException.with_traceback(tb, /)`**（task-24 扩）：把 `__traceback__` 设成 `tb` 并返回 `self` ✓。

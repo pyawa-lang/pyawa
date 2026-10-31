@@ -419,12 +419,40 @@ pub fn compile_native(
             instance.raise_builtin_error("TypeError", "compile() arg 4（flags）要整数")
         })?,
     };
-    // `flags`：只认 `PyCF_ONLY_AST`（0x400）／`PyCF_ALLOW_TOP_LEVEL_AWAIT`（0x2000）这两个**已知**位；
-    // 其它位 ⇒ 参照的 `ValueError: compile(): unrecognised flags` ✓（实测）；已知位本身尚未接线 ⇒
-    // 诚实 `NotImplementedError`（AST 面 / 顶层 await）。
+    // **`flags` 的已知位**（`P3-42`）：
+    // * 参照内部位：`PyCF_DONT_IMPLY_DEDENT`(0x200)／`PyCF_ALLOW_INCOMPLETE_INPUT`(0x4000)
+    //   —— `Lib/codeop.py` 正是靠它们（先前一律 `ValueError: compile(): unrecognised flags` ✗
+    //   ⇒ `test_codeop.test_filename` ERROR ✗）。本层解析器是整段解析、不区分交互式补全 ⇒
+    //   **收下但按普通编译处理**（如实记 ✗：不实现"不完整输入"的交互语义）；
+    // * `PyCF_ONLY_AST`(0x400)／`PyCF_ALLOW_TOP_LEVEL_AWAIT`(0x2000) —— 已知但**尚未接线**
+    //   ⇒ 诚实 `NotImplementedError`；
+    // * `__future__` 的 `CO_FUTURE_*` 位（`Lib/__future__.py` 的 `compiler_flag`，0x10 与
+    //   0x20000…0x1000000）：Py3 下它们多数是默认语义 ⇒ 收下（此前 `test_flufl` 的
+    //   `compile(..., __future__.CO_FUTURE_BARRY_AS_BDFL)` 报 unrecognised ✗）；
+    //   **`CO_FUTURE_BARRY_AS_BDFL`(0x400000) 除外** —— 它改语法（`<>`），本层解析器不支持 ⇒
+    //   诚实 `NotImplementedError`（不静默忽略 ✗）；
+    // * 其它位 ⇒ 参照的 `ValueError: compile(): unrecognised flags` ✓（实测）。
+    const PYCF_DONT_IMPLY_DEDENT: i64 = 0x200;
     const PYCF_ONLY_AST: i64 = 0x400;
+    const PYCF_ALLOW_INCOMPLETE_INPUT: i64 = 0x4000;
     const PYCF_ALLOW_TOP_LEVEL_AWAIT: i64 = 0x2000;
-    let unknown = flags & !(PYCF_ONLY_AST | PYCF_ALLOW_TOP_LEVEL_AWAIT);
+    const CO_NESTED: i64 = 0x10;
+    const CO_FUTURE_FLAGS: i64 = 0x20000
+        | 0x40000
+        | 0x80000
+        | 0x100000
+        | 0x200000
+        | 0x800000
+        | 0x1000000;
+    const CO_FUTURE_BARRY_AS_BDFL: i64 = 0x400000;
+    let accepted = PYCF_DONT_IMPLY_DEDENT
+        | PYCF_ONLY_AST
+        | PYCF_ALLOW_INCOMPLETE_INPUT
+        | PYCF_ALLOW_TOP_LEVEL_AWAIT
+        | CO_NESTED
+        | CO_FUTURE_FLAGS
+        | CO_FUTURE_BARRY_AS_BDFL;
+    let unknown = flags & !accepted;
     if unknown != 0 {
         return Err(instance.raise_builtin_error("ValueError", "compile(): unrecognised flags"));
     }
@@ -438,6 +466,12 @@ pub fn compile_native(
         return Err(ExecError::Unsupported {
             opcode: 0,
             what: "compile()：`PyCF_ALLOW_TOP_LEVEL_AWAIT` 尚未接线",
+        });
+    }
+    if flags & CO_FUTURE_BARRY_AS_BDFL != 0 {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "compile()：`CO_FUTURE_BARRY_AS_BDFL`（`<>` 语法）尚未接线",
         });
     }
     // optimize：接受 `-1`（默认）／0..2；本层**没有优化器** ⇒ 暂不参与发射 ✓（不影响产物语义）。

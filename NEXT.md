@@ -4,36 +4,36 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 34：`P3-40` os 面落地）；`main` ＝ M6 合并提交（tag `m6`）。
-  **批次进度**：7 轮里已完成 round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）、round 34（`P3-40` os 面）；
-  下一轮第 4/7（`P3-42` 断言失败签名批次）。
+- **HEAD**：`dev` 见 `git log -1`（round 35：`P3-42` 6 组签名里 5 组归零）；`main` ＝ M6 合并提交（tag `m6`）。
+  **批次进度**：已完成 round 32（`P3-41` 崩溃面）、round 33（`P3-39` StringIO）、round 34（`P3-40` os 面）、
+  round 35（`P3-42` 断言签名 5/6 组）；下一轮第 5/7（`P3-35` 剩余合法 Python 形态）。
 - **工作区**：干净（`git status --porcelain` 空）。
 - **下一条命令**（续做时）：`git fetch && git reset --hard origin/dev`（历史会被重写 ✗，先核对）；
-  然后 `python3 tools/libtests_triage.py --release` 复核签名 → **第 2 轮 `P3-39`（`io.StringIO`）**：
-  `TypeError: cannot create 'StringIO' instances` 是当前头号签名（15 个官方测试阻塞；round 32 修的
-  `test_frame` 的那 3 个 subTest ERROR 也是它）⇒ `crates/pyawa-stdlib/src/` 的 `_io`／`io` 面补
-  `StringIO`（可实例化；`write`／`getvalue`／`close` 语义对齐；`test_io` 对应子集不再因 `TypeError` 失败）。
+  然后**第 5 轮 `P3-35` 剩余（合法 Python 形态）**：`\N{…}`(15)／下标删除(8)／`except*`(7)／`import *`(4)／
+  async 推导式(4)／PEP 695 `*Ts`(2) ⇒ `crates/pyawa-core/src/compile/`（词法／解析／发射）＋ `Lib/test`
+  对应文件；验收：每条形态可编译／可运行（或诚实未实现），调查里对应签名消失。**`P3-42` 剩余两格（未清）**：
+  `KeyError` 族 12 行 = (a) **特殊方法派发缺口**（`==`/`!=` 不走 `__eq__`、`__add__` 等不派发，
+  `executor/values.rs::values_equal` ＋ `protocol::compare_public`）＋ (b) `unittest` 的 contextmanager
+  生成器里 `KeyError` 在测试体执行期间仍处"正在处理"⇒ 断言异常的 `__context__` 被污染；
+  以及 `time.struct_time` 不是 `tuple` 子类（`test_structseq.test_tuple`）。
 - **未修 bug＋判据**（如实，非 M6 gate）：
-  - **官方套件（release）**：跑通 **18/397**（可编译 397/397、超时 7／未实现 98／运行期错 274）；语料 `MS-14` 407/407 **未动** ✓。
+  - **官方套件（release）**：跑通 **20/397＝5.0%**（可编译 397/397、未实现 100／运行期错 269／超时 8）；语料 `MS-14` 407/407 **未动** ✓。
   - **真 hang（1）**：`test_tempfile` —— `map()` 急求值（`type_runtime.rs:485`）消费无限 `_RandomNameSequence`
-    （`Lib/tempfile.py:373`）⇒ 无限循环＋无界内存；复现 `target/recon/hang2/repro_tempfile_min.py`
-    （`map(str, itertools.count())`）。修法方向：`map`／`filter`／`zip` 改正惰性迭代器（未修 ✓）。
-  - **慢（不是 hang，已实测）**：`test_dict`／`test_weakref`＝dict 线性扫描 O(n²)（`dict.rs:75`，
-    64k 建表 123.6 s／70k 弱键约 10–12 min）；`test_long`／`test_peepholer`＝`unittest.subTest` 机器开销
-    ＋对象不释放（`test_peepholer` 全量 442 s 跑完；`test_long` 单方法 259.6 s）；`test_userstring`≈15 min
-    （次因 `startswith/endswith` **忽略 `start`／`end`** ⇒ 87–91% 断言失败，`str.rs:986`／`scalars.rs:805`）。
-    复现脚本：`target/recon/hang1/`、`hang2/`（细节见 `docs/rounds/04-post-m6-01.md` round 32）。
-  - **断言失败签名批次（`P3-42`，下一批逐条）**：`int.from_bytes` 缺 `byteorder`(2)／`time.struct_time` 缺(2)／
-    `compile()` 不认 flags(2)／`Exception.__setstate__` 缺(2)／`_opcode.is_valid` 缺(1)／`KeyError: 'closed'`(3)／
-    `KeyError: N`(8)；另本批新量：`str.startswith/endswith` 的 `start`/`end`、`IntLike`（`int.__index__`）。
+    （`Lib/tempfile.py:373`）⇒ 无限循环＋无界内存；复现 `target/recon/hang2/repro_tempfile_min.py`。
+    修法方向：`map`／`filter`／`zip` 改正惰性迭代器（未修 ✓）。
+  - **慢（不是 hang，已实测）**：`test_dict`／`test_weakref`＝dict 线性扫描 O(n²)（`dict.rs:75`）；
+    `test_long`／`test_peepholer`＝`unittest.subTest` 机器开销＋对象不释放；`test_userstring`≈15 min
+    （次因 `startswith/endswith` **忽略 `start`／`end`**）。复现脚本：`target/recon/hang1/`、`hang2/`。
+  - **`P3-42` 剩余（如实）**：`KeyError` 族 12 行（两层根因见上）；`time.struct_time` 非 tuple 子类；
+    `str.startswith/endswith` 的 `start`/`end` 仍不收；`IntLike`（`int.__index__`）实参族。
   - **`P3-39` 剩余（如实）**：`StringIO` 的 `newline` 换行翻译、`__getstate__`／`__setstate__`／pickle。
   - **`P3-40` 剩余（如实）**：`os.close` 已关 fd 仍静默（参照 `EBADF`）、`get/set_inheritable`、
-    `os.chmod`／`os.scandir`（本轮顺带暴露的新层缺口）。
+    `os.chmod`／`os.scandir`（顺带暴露的新层缺口）。
   - **`P3-35` 剩余**：`\N{…}` 15／下标删除 8／`except*` 7／`import *` 4／async 推导式 4／PEP 695 `*Ts` 2。
   - **`P3-29`**：socket I/O 18（getaddrinfo 按 A2 推迟）；**`P3-37` 剩余**：`pyexpat`。
-  - 其余旧账（不阻塞 M6 gate）：`zipimport`／`urllib.request` 等缺模块、3 个编译器 cell/free 表 panic 用例、
+  - 其余旧账：`zipimport`／`urllib.request` 等缺模块、3 个编译器 cell/free 表 panic 用例、
     `FAILED(errors=1)` 泛化、"`tb_next` 链"、fs/io 其余（标准流 `dup`／`sys.prefix`）、`P3-38` 的 4 条有损输出通道边界。
-- **闸门命令**：`tools/slowcheck.sh --release`（十项 ≈15–20 min；round 32 全绿、round 33 全绿）＋
+- **闸门命令**：`tools/slowcheck.sh --release`（十项 ≈15–20 min；round 32–35 均全绿）＋
   `python3 tools/libtests_survey.py --release`（≈2.5 min）＋ `python3 tools/lib_import_ratio.py`（≈5–10 min）＋
   `python3 tests/ci/check.py`（14/14）。
 

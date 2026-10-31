@@ -251,20 +251,34 @@ pub(crate) fn int_from_bytes_native(
         }
         collected
     };
-    let Some(order) = args.get(1).and_then(|object| instance.text_of(*object)) else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "from_bytes() missing required argument 'byteorder' (pos 2)",
-        ));
-    };
-    let big_endian = match order {
-        "big" => true,
-        "little" => false,
-        _ => {
-            return Err(instance.raise_builtin_error(
-                "ValueError",
-                "byteorder must be either 'little' or 'big'",
-            ))
+    // **`byteorder` 自 3.11 起缺省 `'big'`**（`P3-42`；本机 3.14.4 实测
+    // `int.from_bytes(b"\x01\x00")` ⇒ 256）——先前要求必给 ⇒ 官方 `test_base64`／`test_secrets`
+    // 等 2 个测试直接 `TypeError: from_bytes() missing required argument`。位置实参与关键字都收。
+    let order_argument = args.get(1).copied().or_else(|| {
+        kwargs
+            .iter()
+            .find(|(key, _)| instance.text_of(*key).as_deref() == Some("byteorder"))
+            .map(|(_, value)| *value)
+    });
+    let big_endian = match order_argument {
+        None => true,
+        Some(value) => {
+            let Some(order) = instance.text_of(value) else {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "from_bytes() argument 'byteorder' must be str, not non-str",
+                ));
+            };
+            match order {
+                "big" => true,
+                "little" => false,
+                _ => {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "byteorder must be either 'little' or 'big'",
+                    ))
+                }
+            }
         }
     };
     // `signed=`（默认 `False` ✓）：照 `to_bytes` 那条同一口径判真值 ✓。

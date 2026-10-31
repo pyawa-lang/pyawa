@@ -227,12 +227,33 @@ fn build_string_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyaw
 /// 表（`BC-30`／`BC-37`／`BC-38` 的**数值唯一出处** ✓），本层不另造表 ✓。
 /// **如实偏差** ✗：只有 `get_executor`（JIT 执行器）**调用即报未接线** ✓ —— 它在 `dis()` 一族里
 /// 走**运行期**才用 ✓，故 `import opcode`／`import dis` 不受影响 ✓。
+/// **`_opcode.is_valid(op)`**（`P3-42`）：`op` 是不是本指令集里**有效**的编号（bool）✓。
+///
+/// 口径照本机 CPython 3.14.4 实测：`0..=266` 有效，但 **121–127**（预留）与 **212–233**
+/// （do-not-use／instrumented 下界之前的一批）无效；负数／`> 266` 无效。
+/// 指令集基线归 `BC-30`（数值不在这里另立一份名单 ✓）。
+fn is_valid_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    let value = args
+        .first()
+        .and_then(|object| instance.int_of(*object))
+        .and_then(|integer| integer.to_i64())
+        .unwrap_or(-1);
+    let valid =
+        (0..=266).contains(&value) && !(121..=127).contains(&value) && !(212..=233).contains(&value);
+    Ok(instance.new_bool(valid))
+}
+
 fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
     let namespace = instance.new_dict();
     let method_type = instance
         .type_named("builtin_function_or_method")
         .expect("builtin_function_or_method 在引导期已登记");
-    let handlers: [(&str, pyawa_core::NativeFn); 12] = [
+    let handlers: [(&str, pyawa_core::NativeFn); 13] = [
         ("has_arg", has_arg_native as pyawa_core::NativeFn),
         ("has_const", has_const_native as pyawa_core::NativeFn),
         ("has_name", has_name_native as pyawa_core::NativeFn),
@@ -245,6 +266,8 @@ fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<py
         ("get_special_method_names", get_special_method_names_native as pyawa_core::NativeFn),
         ("get_nb_ops", get_nb_ops_native as pyawa_core::NativeFn),
         ("stack_effect", stack_effect_native as pyawa_core::NativeFn),
+        // **`P3-42`**：`_opcode.is_valid(op)`（`test__opcode` 直接调它）✓。
+        ("is_valid", is_valid_native as pyawa_core::NativeFn),
     ];
     for (name, handler) in handlers {
         let object = instance.alloc(pyawa_core::BuiltinFunctionObject::new(
@@ -267,6 +290,7 @@ fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<py
             "has_arg", "has_const", "has_name", "has_jump", "has_free", "has_local",
             "has_exc", "get_intrinsic1_descs", "get_intrinsic2_descs",
             "get_special_method_names", "get_nb_ops", "stack_effect", "get_executor",
+            "is_valid",
         ]
         .iter()
         .map(|name| instance.new_str(name))

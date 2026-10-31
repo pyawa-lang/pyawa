@@ -142,6 +142,19 @@ pub(crate) fn normalize_index(index: i64, length: usize) -> Option<usize> {
 ///
 /// 判据是 `tests/fixture-slice-3.14.json`（`tools/gen_slice_fixture.py` 实测：16 种切法
 /// × `bytes`／`str`／`list`／`tuple`）。
+/// **`slice` 对象 ⇒ 命中下标表**（`P3-42` 的公开入口：stdlib 里做序列类型的切片用 ✓）。
+///
+/// 与执行器的 `subscript_slice` **同一处实现**（`slice_bounds` ＋ `slice_positions` ✓）——
+/// 一处真相：切片边界规则不在 stdlib 里另写一遍 ✓。
+pub fn slice_pick_public(
+    instance: &Instance,
+    key: NonNull<Header>,
+    length: usize,
+) -> Result<Vec<usize>, ExecError> {
+    let (start, stop, step) = slice_bounds(instance, key, length)?;
+    Ok(slice_positions(start, stop, step))
+}
+
 pub(crate) fn slice_bounds(
     instance: &Instance,
     key: NonNull<Header>,

@@ -215,6 +215,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
     }
+    // **`struct_time` 类型**（`P3-42`）：`localtime`／`gmtime` 的返回值就是它 ✓。
+    if let Some(class) = build_struct_time(instance) {
+        let class_value = class.cast::<Header>();
+        instance.dict_set(namespace, "struct_time", class_value);
+    }
+    instance.dict_set(namespace, "_STRUCT_TM_ITEMS", instance.new_int(11));
     // `timezone`／`altzone`／`daylight`／`tzname`：参照里是模块级变量 ✓ —— **能问到 provider 就据实填**
     // （`clock.localtime(0)` 的 `tm_gmtoff`／`tm_zone`）；问不到（旧宿主、或 conformance harness
     // 在 `install` 之后才注册 clock）就保留原来的 UTC 常量并登记偏差 ✓。
@@ -254,6 +260,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("asctime"),
         instance.new_str("ctime"),
         instance.new_str("mktime"),
+        instance.new_str("struct_time"),
     ]);
     instance.dict_set(namespace, "__all__", exports);
     let module_name = instance.new_str(NAME);
@@ -450,7 +457,8 @@ fn tuple_to_tm(
     func: &str,
     raw: bool,
 ) -> Result<pyawa_capabilities::clock::CpTm, ExecError> {
-    let Some(items) = instance.tuple_items(object) else {
+    // `P3-42`：`struct_time` 不是 tuple 子类 ⇒ 先认它的 `_items` 序列（`mktime(loctime_result)` ✓）。
+    let Some(items) = instance.tuple_items(object).or_else(|| struct_time_items(instance, object)) else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "Tuple or struct_time argument required",
@@ -610,7 +618,7 @@ fn localtime_native(
         Some(value) => seconds_argument(instance, *value)?,
     };
     let tm = local_tm(instance, seconds)?;
-    Ok(tm_to_tuple(instance, &tm))
+    Ok(tm_to_struct_time(instance, &tm).unwrap_or_else(|| tm_to_tuple(instance, &tm)))
 }
 
 /// `time.gmtime([secs])`：**纯 UTC**（不依赖 provider），返回 9 元组（参数校验同 `localtime`）。
@@ -638,7 +646,7 @@ fn gmtime_native(
         Some(value) => seconds_argument(instance, *value)?,
     };
     let tm = utc_tm(seconds);
-    Ok(tm_to_tuple(instance, &tm))
+    Ok(tm_to_struct_time(instance, &tm).unwrap_or_else(|| tm_to_tuple(instance, &tm)))
 }
 
 /// `time.strftime(format[, t])`：`clock.strftime` 槽（C locale）的消费者。
@@ -769,4 +777,472 @@ fn mktime_native(
         Ok(seconds) => Ok(instance.new_float(seconds as f64)),
         Err(error) => Err(clock_slot_error(instance, error, "mktime")),
     }
+}
+
+// ==== `time.struct_time`（`P3-42` 第 4 轮）=================================================
+//
+// **动因** ✓：`'module' object has no attribute 'struct_time'` 是官方分诊里的两条签名
+//（`test_strftime`／`test_structseq`）；且 `localtime`／`gmtime` 的返回值在参照里**就是**
+// struct_time（`t.tm_year` 一类属性可用 ✓），本层先前只给 9 元组 ✗。
+//
+// **口径（如实 ✗）**：本层的 `struct_time` 是**可序列类型**（`__getitem__`／`__len__`／
+// `__iter__`／`__eq__`／`__hash__`／`__add__`／`__mul__`／`__contains__` ＋ `tm_*` 属性），
+// 但**不是 `tuple` 的子类** ✗（`isinstance(t, tuple)` 为假 ⇒ `test_structseq.test_tuple` 仍 FAIL，
+// 如实记）。构造语义照本机 3.14.4 实测：`t(seq)` 要 9 项以上、只取前 9 项进序列；额外的第 10 项
+// 当 `tm_zone`（字符串）；`dict=` 只认 `tm_zone`／`tm_gmtoff`，与九个字段名冲突或未知键 ⇒
+// `TypeError: got duplicate or unexpected field name(s)` ✓。
+
+/// `struct_time` 的九个字段名（顺序即序列下标 ✓）。
+const STRUCT_TIME_FIELDS: [&str; 9] = [
+    "tm_year", "tm_mon", "tm_mday", "tm_hour", "tm_min", "tm_sec", "tm_wday", "tm_yday",
+    "tm_isdst",
+];
+
+/// 取 `struct_time` 的序列（`_items` 元组；借用视图）。
+fn struct_time_items(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+    let stored = instance.attribute_optional_of(object, "_items").ok().flatten()?;
+    instance.tuple_items(stored)
+}
+
+fn struct_time_this(
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+) -> Option<(NonNull<Header>, &[NonNull<Header>])> {
+    match bound {
+        Some(this) => Some((this, args)),
+        None => args.split_first().map(|(first, rest)| (*first, rest)),
+    }
+}
+
+/// 把任意序列收成元素表（`str` 按码点逐个造单字符；`bytes` 同理；tuple／list 借用后再 retain ✓）。
+fn struct_time_sequence(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Vec<NonNull<Header>>, ExecError> {
+    if let Some(items) = instance.tuple_items(value) {
+        return Ok(items.iter().map(|item| instance.retain(*item)).collect());
+    }
+    if let Some(items) = instance.list_items(value) {
+        return Ok(items.iter().map(|item| instance.retain(*item)).collect());
+    }
+    if let Some(text) = instance.str_wtf8_bytes(value) {
+        let mut items = Vec::new();
+        if let Ok(points) = pyawa_core::wtf8::decode(text) {
+            for point in points {
+                items.push(instance.new_str_code_point(point));
+            }
+        }
+        return Ok(items);
+    }
+    if let Some(raw) = instance.bytes_value(value) {
+        return Ok(raw.iter().map(|byte| instance.new_int(*byte as i64)).collect());
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        "struct_time() argument must be a sequence",
+    ))
+}
+
+/// 键的文本（非文本键 ⇒ 报参照的 duplicate/unexpected 文案 ✓）。
+fn struct_time_key(instance: &Instance, key: NonNull<Header>) -> Option<String> {
+    instance.text_of(key).map(str::to_owned)
+}
+
+/// `struct_time(sequence, dict)`：构造并写状态。
+fn struct_time_init(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "struct_time() takes at least 1 argument (0 given)",
+        ));
+    };
+    let mut sequence_arg = rest.first().copied();
+    let mut dict_arg = rest.get(1).copied();
+    for (key, value) in kwargs {
+        match instance.text_of(*key).as_deref() {
+            Some("sequence") => sequence_arg = Some(*value),
+            Some("dict") => dict_arg = Some(*value),
+            Some(other) => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("struct_time() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "struct_time() keywords must be strings",
+                ))
+            }
+        }
+    }
+    let Some(sequence_arg) = sequence_arg else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "struct_time() takes at least 1 argument (0 given)",
+        ));
+    };
+    let items = struct_time_sequence(instance, sequence_arg)?;
+    if items.len() < 9 {
+        for item in &items {
+            instance.release(*item);
+        }
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "time.struct_time() takes a sequence of length 9",
+        ));
+    }
+    // **字典**（可选）：只认 `tm_zone`／`tm_gmtoff`；与字段名重复／未知键 ⇒ 参照文案。
+    let mut zone_override: Option<NonNull<Header>> = None;
+    let mut gmtoff_override: Option<NonNull<Header>> = None;
+    if let Some(dict_arg) = dict_arg.filter(|value| *value != instance.singletons().none()) {
+        let Some(entries) = instance.dict_entries(dict_arg) else {
+            for item in &items {
+                instance.release(*item);
+            }
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "struct_time() argument 2 must be a dict",
+            ));
+        };
+        for (key, value) in entries {
+            let name = struct_time_key(instance, key);
+            let known = matches!(
+                name.as_deref(),
+                Some("tm_zone") | Some("tm_gmtoff")
+            );
+            if !known || STRUCT_TIME_FIELDS.contains(&name.as_deref().unwrap_or("")) {
+                for item in &items {
+                    instance.release(*item);
+                }
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "got duplicate or unexpected field name(s)",
+                ));
+            }
+            if name.as_deref() == Some("tm_zone") {
+                zone_override = Some(instance.retain(value));
+            } else {
+                gmtoff_override = Some(instance.retain(value));
+            }
+        }
+    }
+    // 序列前 9 项 ⇒ 字段值；第 10 项 ⇒ 额外的 `tm_zone`（参照实测）。
+    let extra_zone = items.get(9).map(|value| instance.retain(*value));
+    let sequence: Vec<NonNull<Header>> = items[..9]
+        .iter()
+        .map(|item| instance.retain(*item))
+        .collect();
+    let stored = instance.new_tuple(sequence);
+    for (index, name) in STRUCT_TIME_FIELDS.iter().enumerate() {
+        instance.set_attribute_value(this, name, items[index])?;
+    }
+    let zone = zone_override.or(extra_zone);
+    match zone {
+        Some(zone) => {
+            instance.set_attribute_value(this, "tm_zone", zone)?;
+            instance.release(zone);
+        }
+        None => {
+            let none = instance.new_none();
+            instance.set_attribute_value(this, "tm_zone", none)?;
+            instance.release(none);
+        }
+    }
+    match gmtoff_override {
+        Some(value) => {
+            instance.set_attribute_value(this, "tm_gmtoff", value)?;
+            instance.release(value);
+        }
+        None => {
+            // **如实**：`tm_gmtoff` 未给 ⇒ 不挂属性（读取时按普通缺名处理；本层没有删除接口 ✗）。
+        }
+    }
+    instance.set_attribute_value(this, "_items", stored)?;
+    for item in &items {
+        instance.release(*item);
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `struct_time.__repr__`：`time.struct_time(tm_year=…, …, tm_isdst=…)` ✓（照参照逐字）。
+fn struct_time_repr(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__repr__' needs an argument"));
+    };
+    let items = struct_time_items(instance, this).unwrap_or_default();
+    let mut text = String::from("time.struct_time(");
+    for (index, name) in STRUCT_TIME_FIELDS.iter().enumerate() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        let rendered = match items.get(index) {
+            Some(item) => instance.object_repr(*item)?,
+            None => "None".to_owned(),
+        };
+        text.push_str(name);
+        text.push('=');
+        text.push_str(&rendered);
+    }
+    text.push(')');
+    Ok(instance.new_str(&text))
+}
+
+fn struct_time_len(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__len__' needs an argument"));
+    };
+    let length = struct_time_items(instance, this).map(|items| items.len()).unwrap_or(0);
+    Ok(instance.new_int(length as i64))
+}
+
+/// `__getitem__`：整数（含负）⇒ 一项；切片 ⇒ **普通 `tuple`** ✓（参照口径）。
+fn struct_time_getitem(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__getitem__' needs an argument"));
+    };
+    let Some(key) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "struct_time.__getitem__() takes exactly one argument",
+        ));
+    };
+    let items = struct_time_items(instance, this).unwrap_or_default();
+    if let Some(index) = instance.int_of(key).and_then(|value| value.to_i64()) {
+        let length = items.len() as i64;
+        let resolved = if index < 0 { index + length } else { index };
+        if resolved < 0 || resolved >= length {
+            return Err(instance.raise_builtin_error("IndexError", "tuple index out of range"));
+        }
+        return Ok(instance.retain(items[resolved as usize]));
+    }
+    // **切片** ⇒ 普通 `tuple` ✓（照参照）。边界规则走执行器的**同一处实现**（`slice_pick_public` ✓，
+    // 一处真相；stdlib 禁 `unsafe` ⇒ 不直接读 `SliceObject` 载荷 ✗）。
+    if Some(instance.type_of(key)) == instance.type_named("slice") {
+        let picked: Vec<NonNull<Header>> =
+            pyawa_core::executor::ctrls::slice_pick_public(instance, key, items.len())?
+                .into_iter()
+                .map(|index| instance.retain(items[index]))
+                .collect();
+        return Ok(instance.new_tuple(picked));
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        "struct_time indices must be integers or slices",
+    ))
+}
+
+fn struct_time_iter(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__iter__' needs an argument"));
+    };
+    let items = struct_time_items(instance, this).unwrap_or_default();
+    let tuple = instance.new_tuple(items);
+    instance.iter_object(tuple)
+}
+
+fn struct_time_eq(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__eq__' needs an argument"));
+    };
+    let Some(other) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "struct_time.__eq__() takes exactly one argument",
+        ));
+    };
+    let left = struct_time_items(instance, this).unwrap_or_default();
+    let right = match struct_time_items(instance, other) {
+        Some(items) => items,
+        None => match instance.tuple_items(other) {
+            Some(items) => items,
+            None => return Ok(instance.new_bool(false)),
+        },
+    };
+    if left.len() != right.len() {
+        return Ok(instance.new_bool(false));
+    }
+    for (a, b) in left.iter().zip(right.iter()) {
+        if !pyawa_core::executor::values::values_equal_public(instance, *a, *b) {
+            return Ok(instance.new_bool(false));
+        }
+    }
+    Ok(instance.new_bool(true))
+}
+
+fn struct_time_hash(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__hash__' needs an argument"));
+    };
+    let items = struct_time_items(instance, this).unwrap_or_default();
+    let tuple = instance.new_tuple(items);
+    let outcome = crate::builtins_module::hash_object(instance, tuple)?;
+    instance.release(tuple);
+    Ok(instance.new_int(outcome))
+}
+
+fn struct_time_contains(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__contains__' needs an argument"));
+    };
+    let Some(wanted) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "struct_time.__contains__() takes exactly one argument",
+        ));
+    };
+    let items = struct_time_items(instance, this).unwrap_or_default();
+    for item in items {
+        if pyawa_core::executor::values::values_equal_public(instance, item, wanted) {
+            return Ok(instance.new_bool(true));
+        }
+    }
+    Ok(instance.new_bool(false))
+}
+
+/// `t + other`：返回**普通 tuple**（`tuple(t) + other`，照参照 ✓）。
+fn struct_time_add(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__add__' needs an argument"));
+    };
+    let Some(other) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "struct_time.__add__() takes exactly one argument",
+        ));
+    };
+    let items = struct_time_items(instance, this).unwrap_or_default();
+    let tuple = instance.new_tuple(items);
+    let outcome = pyawa_core::executor::iter::concat_public(instance, tuple, other, 0);
+    instance.release(tuple);
+    outcome
+}
+
+/// `t * n`（以及 `n * t` 的 `__rmul__`）：返回**普通 tuple** ✓。
+fn struct_time_repeat(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = struct_time_this(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__mul__' needs an argument"));
+    };
+    let Some(count) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "struct_time.__mul__() takes exactly one argument",
+        ));
+    };
+    let count = instance
+        .int_of(count)
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let items = struct_time_items(instance, this).unwrap_or_default();
+    let mut repeated: Vec<NonNull<Header>> = Vec::with_capacity(items.len() * count);
+    for _ in 0..count {
+        for item in &items {
+            repeated.push(instance.retain(*item));
+        }
+    }
+    Ok(instance.new_tuple(repeated))
+}
+
+/// 建 `time.struct_time`（`build_class_from_parts`；`P3-42`）。
+fn build_struct_time(instance: &Instance) -> Option<NonNull<Header>> {
+    let base = instance
+        .type_named("object")
+        .expect("`object` 已登记");
+    let namespace = instance.new_dict();
+    let handlers: [(&str, NativeFn); 12] = [
+        ("__init__", struct_time_init as NativeFn),
+        ("__repr__", struct_time_repr as NativeFn),
+        ("__len__", struct_time_len as NativeFn),
+        ("__getitem__", struct_time_getitem as NativeFn),
+        ("__iter__", struct_time_iter as NativeFn),
+        ("__eq__", struct_time_eq as NativeFn),
+        ("__hash__", struct_time_hash as NativeFn),
+        ("__contains__", struct_time_contains as NativeFn),
+        ("__add__", struct_time_add as NativeFn),
+        ("__mul__", struct_time_repeat as NativeFn),
+        ("__rmul__", struct_time_repeat as NativeFn),
+        ("__ne__", struct_time_eq as NativeFn),
+    ];
+    for (name, handler) in handlers {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(namespace, name, function);
+    }
+    // 字段数常量（`test_structseq.test_fields`）：9 个可见字段 ＋ `tm_zone` ＋ `tm_gmtoff` = 11。
+    for (name, value) in [
+        ("n_fields", 11i64),
+        ("n_sequence_fields", 9),
+        ("n_unnamed_fields", 0),
+    ] {
+        let number = instance.new_int(value);
+        instance.dict_set(namespace, name, number);
+    }
+    let class = pyawa_core::build_class_from_parts(
+        instance,
+        "struct_time".to_owned(),
+        vec![base.cast()],
+        namespace,
+        None,
+    )
+    .ok()?;
+    Some(class)
+}
+
+/// `tm` ⇒ `struct_time` 实例（`localtime`／`gmtime` 的返回值 ✓）。
+fn tm_to_struct_time(instance: &Instance, tm: &pyawa_capabilities::clock::CpTm) -> Option<NonNull<Header>> {
+    let tuple = tm_to_tuple(instance, tm);
+    let class = instance.type_named("struct_time")?;
+    let outcome = pyawa_core::call_value(instance, class.cast::<Header>(), &[tuple], &[]);
+    instance.release(tuple);
+    outcome.ok()
 }
