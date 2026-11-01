@@ -443,6 +443,18 @@ fn bytesio_getvalue(
     Ok(instance.new_bytes(&buffer))
 }
 
+/// `BytesIO.getbuffer()` ✓（round 47）：**如实口径** ✗ —— 返回的是当前内容的 **`bytes` 拷贝**，
+/// 不是真正的 `memoryview` 视图（本层 `memoryview` 只有形状、没有视图语义 ✓）。`Lib/pickle.py:214`
+/// 只做 `len(data)` ＋ `write(data)` ⇒ 拷贝足够 ✓；视图语义（可变、`release()`）随后补 ✓。
+fn bytesio_getbuffer(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    bytesio_getvalue(instance, bound, args, &[])
+}
+
 fn bytesio_truncate(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -530,7 +542,7 @@ fn bytesio_none(
 fn build_bytes_io(instance: &Instance, namespace: NonNull<Header>) {
     let object_type = instance.type_named("object").expect("object 已登记");
     let class_namespace = instance.new_dict();
-    let handlers: [(&str, NativeFn); 18] = [
+    let handlers: [(&str, NativeFn); 19] = [
         ("__init__", bytesio_init as NativeFn),
         ("read", bytesio_read as NativeFn),
         ("read1", bytesio_read as NativeFn),
@@ -540,6 +552,7 @@ fn build_bytes_io(instance: &Instance, namespace: NonNull<Header>) {
         ("seek", bytesio_seek as NativeFn),
         ("tell", bytesio_tell as NativeFn),
         ("getvalue", bytesio_getvalue as NativeFn),
+        ("getbuffer", bytesio_getbuffer as NativeFn),
         ("truncate", bytesio_truncate as NativeFn),
         ("close", bytesio_close as NativeFn),
         ("flush", bytesio_none as NativeFn),

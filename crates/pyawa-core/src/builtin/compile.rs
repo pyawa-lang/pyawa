@@ -296,8 +296,14 @@ pub fn eval_source_public(
     execute_code(instance, code, globals, locals)?;
     // SAFETY: code 是 code_with_filename 给的新引用；用完归还。
     unsafe { instance.release_object(code.as_ptr()) };
-    let namespace = globals.or(Some(locals)).expect("locals 一定在");
-    match instance.dict_get(namespace, EVAL_RESULT_NAME) {
+    // 结果落在**本次执行的命名空间**里：模块级代码的 `STORE_NAME` 写的是**locals** ✗ ——
+    // 先前先查 `globals` ✗ ⇒ 在函数里 `eval("False")` 取不回结果（拿到 `None` ✗，
+    // `test_bool.test_repr` 的 `eval(repr(False))` 同型 ✓）。与 `eval_code_public` **同一口径**：
+    // **先 locals、再 globals** ✓。
+    let found = instance
+        .dict_get(locals, EVAL_RESULT_NAME)
+        .or_else(|| globals.and_then(|globals| instance.dict_get(globals, EVAL_RESULT_NAME)));
+    match found {
         Some(value) => Ok(instance.retain(value)),
         None => Ok(instance.retain(instance.singletons().none())),
     }

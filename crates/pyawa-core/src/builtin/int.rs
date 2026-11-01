@@ -104,11 +104,30 @@ pub unsafe fn int_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
+    // **数值属性面**（round 47，`test_bool.test_real_and_imag` 钉住）：`int`（含 `bool`）
+    // 的 `.real`／`.imag`／`.numerator`／`.denominator` ✓ —— 参照：`(1).real == 1`（int 本体）、
+    // `imag == 0`、`numerator == 1`、`denominator == 1`；`True.real` 是 **int 1**（不是 True）✓。
+    match name {
+        "real" | "numerator" => {
+            // `bool` 要换成 int 本体；`int`（含大整数）直接回本体那份 ✓。
+            if unsafe { &*ptr }.ty() == instance.singletons().bool_type() {
+                let value = i64::from(unsafe { &*ptr.cast::<crate::builtin_objects::BoolObject>() }.value);
+                return Some(instance.new_int(value));
+            }
+            // SAFETY: 方法面由类型持有；这里交出新引用。
+            unsafe { instance.incref_object(ptr) };
+            return Some(unsafe { core::ptr::NonNull::new_unchecked(ptr) });
+        }
+        "imag" => return Some(instance.new_int(0)),
+        "denominator" => return Some(instance.new_int(1)),
+        _ => {}
+    }
     let handler: NativeFn = match name {
         "to_bytes" => int_to_bytes_native,
         "bit_length" => int_bit_length_native,
         // **第 352 轮补**：`int.bit_count` ✓（`Lib/` 与测试里常用 ✓）。
         "bit_count" => int_bit_count_native,
+        "conjugate" => int_conjugate_native,
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
@@ -202,6 +221,36 @@ pub(crate) fn int_to_bytes_native(
 ///
 /// 这是**类型级**用法（`int.from_bytes` ⇒ 没有接收者 ✓），注册走 `set_type_attribute` ✓
 /// —— 与 `str.maketrans` 同一条路 ✓（见 `instance.rs` 那张类型属性表 ✓）。
+/// `int.conjugate()` ✓（round 47）：返回本体（`bool` ⇒ **int** 本体，参照 ✓）。
+pub(crate) fn int_conjugate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
+    };
+    if unsafe { this.as_ref() }.ty() == instance.singletons().bool_type() {
+        let value = i64::from(unsafe { &*this.as_ptr().cast::<crate::builtin_objects::BoolObject>() }.value);
+        return Ok(instance.new_int(value));
+    }
+    Ok(instance.retain(this))
+}
+
+/// `bool.from_bytes(bytes, byteorder)` ✓（round 47）：算 `int.from_bytes` 再取真值、回**单例** ✓。
+pub(crate) fn bool_from_bytes_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = int_from_bytes_native(instance, bound, args, kwargs)?;
+    let truth = instance.int_of(value).map(|number| !number.is_zero()).unwrap_or(false);
+    unsafe { instance.release_object(value.as_ptr()) };
+    Ok(instance.retain(instance.singletons().boolean(truth)))
+}
+
 pub(crate) fn int_from_bytes_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -352,10 +401,19 @@ fn make_int(
 
 /// `int()`：0（零参形态）、整数、十进制串、**浮点**（向零截断）。
 pub unsafe fn int_new(
-    _class: NonNull<crate::TypeObject>,
+    class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    // **`int.__new__(bool, 0)` ⇒ TypeError** ✓（round 47；参照原文
+    // `int.__new__(bool) is not safe, use bool.__new__()` ✓，`test_bool.test_subclass` 钉住）。
+    // `bool` 有自己的构造槽（真值语义）⇒ 拿 `int.__new__` 去建 `bool` 是"不安全"的。
+    if Some(class) == instance.type_named("bool") {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "int.__new__(bool) is not safe, use bool.__new__()",
+        ));
+    }
     // **实测口径**（`tools/gen_constructors_fixture.py` 的 12 条里那两条 `int`）：
     //   `int('a')` ⇒ `ValueError: invalid literal for int() with base 10: 'a'`
     //   `int([])`  ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
@@ -364,11 +422,11 @@ pub unsafe fn int_new(
     // ✗，而是如实报未实现）。
     // 任意精度本身**已落地**（`P1-11` 第一刀之后：不再有"超出 i64"这一说）。
     match args {
-        [] => Ok(make_int(_class, instance, IntValue::Small(0))),
+        [] => Ok(make_int(class, instance, IntValue::Small(0))),
         [only] => {
             if let Some(value) = instance.int_of(*only) {
                 // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）；大整数原样再交回
-                return Ok(make_int(_class, instance, value));
+                return Ok(make_int(class, instance, value));
             }
             if let Some(number) = instance.float_value(*only) {
                 // `int(浮点)`：**向零截断**；`inf`／`nan` 各按参照实测的消息报错
@@ -385,7 +443,7 @@ pub unsafe fn int_new(
                     ));
                 }
                 return Ok(make_int(
-                    _class,
+                    class,
                     instance,
                     IntValue::from_big(crate::bigint::BigInt::from_f64_truncated(number)),
                 ));
@@ -393,7 +451,7 @@ pub unsafe fn int_new(
             // **`__int__`／`__index__`** ✓（第 722 轮 ✓）：`int(IPv4Address)` 这类外部对象走它 ✓
             // —— 放在**内建数之后、字符串之前** ✓（`int('5')` 那条路不受影响 ✓）。
             if let Some(value) = dunder_int_value(instance, *only)? {
-                return Ok(make_int(_class, instance, value));
+                return Ok(make_int(class, instance, value));
             }
             let Some(text) = instance.text_value(*only) else {
                 let name = instance.type_name(instance.type_of(*only));
@@ -421,7 +479,7 @@ pub unsafe fn int_new(
             }
             match parse_decimal(&text) {
                 Decimal::Value(value) => {
-                    Ok(make_int(_class, instance, IntValue::from_big(value)))
+                    Ok(make_int(class, instance, IntValue::from_big(value)))
                 }
                 Decimal::NotALiteral => Err(instance.raise_builtin_error(
                     "ValueError",
@@ -474,7 +532,7 @@ pub unsafe fn int_new(
                 ));
             };
             match parse_radix(&text, base) {
-                Some(value) => Ok(make_int(_class, instance, IntValue::from_big(value))),
+                Some(value) => Ok(make_int(class, instance, IntValue::from_big(value))),
                 None => Err(instance.raise_builtin_error(
                     "ValueError",
                     &format!("invalid literal for int() with base {base}: '{text}'"),

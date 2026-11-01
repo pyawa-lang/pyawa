@@ -314,6 +314,24 @@ pub(crate) fn call_callable(
             }
             return Err(raise_builtin(instance, "TypeError", &message));
         };
+        // **`bool(x=10)` ⇒ TypeError** ✓（round 47；参照 `bool() takes no keyword arguments`）。
+        // 本层 `NewFn` 契约里没有关键字一路 ⇒ 关键字会被静默丢掉 ✗（`test_bool.test_keyword_args`
+        // 钉住）。先只收 `bool`（参照里 `float`／`list` 同款、`int`／`str` 是另一句 TypeError，
+        // 那些留给后续轮按类型收口 —— 别在这里一刀切 ✗）。
+        if class_name == "bool" && !kwargs.is_empty() {
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "bool() takes no keyword arguments",
+            ));
+        }
         // **覆写优先、槽兜底**（第 605 轮真 bug 修 ✗）：参照的 `type.__call__` 只做
         // `cls.__new__(cls, *args)` ✓ —— 槽只是"C 层默认实现" ✓ ⇒ 有 Python 级 `__new__` 覆写时
         // **不能先调槽** ✗（否则 `class N(int)` 覆写 `__new__(cls, value, name)` 时槽先吃全部实参 ✓

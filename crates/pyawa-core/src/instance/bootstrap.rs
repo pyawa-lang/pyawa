@@ -251,8 +251,16 @@ impl Instance {
             Slots::new(BoolObject::dealloc)
                 .with_new(crate::builtin_objects::bool_new)
                 .with_repr(crate::builtin_objects::bool_repr)
-                .with_str(crate::builtin_objects::bool_repr),
+                .with_str(crate::builtin_objects::bool_repr)
+                // **`bool` 也走 `int` 的属性面** ✓（round 47）：`.real`／`.imag`／`to_bytes` …
+                // 参照里都是 `int` 那一套描述符 ✓（`test_bool.test_real_and_imag` 钉住 ✓）。
+                // 属性查找只看**实例自己的类型**的 getattr 槽（不走 MRO）⇒ 必须显式挂同一份 ✓。
+                .with_getattr(crate::builtin::int::int_getattr),
         );
+        // **`bool` 不可被继承** ✓（`AB-37` 的 `PA_TYPE_FINAL`；参照 `class C(bool)` ⇒
+        // `TypeError: type 'bool' is not an acceptable base type` ✓，`test_bool.test_subclass` 钉住 ✓）。
+        // SAFETY: 刚由本实例分配、存活。
+        unsafe { _bool_type.as_ref() }.mark_final();
         let _int_type = self.alloc_type_raw(
             "int",
             core::mem::size_of::<IntObject>(),
@@ -1338,6 +1346,13 @@ impl Instance {
                 self.type_named("int").expect("int 已登记"),
                 "from_bytes",
                 crate::builtin::int::int_from_bytes_native as crate::NativeFn,
+            ),
+            // **`bool.from_bytes`** ✓（round 47）：参照返回 **`bool` 单例**（`int.from_bytes` 的
+            // int 结果再取真值）—— `test_bool.test_from_bytes` 用 `assertIs` 钉住 ✓。
+            (
+                self.type_named("bool").expect("bool 已登记"),
+                "from_bytes",
+                crate::builtin::int::bool_from_bytes_native as crate::NativeFn,
             ),
             // **`int.bit_length` 描述符**（第 406 轮 ✓）：`_pydecimal.py:5648` 导入期
             // `_nbits = int.bit_length` ✓（描述符语义：接收者是第一个实参 ✓）。

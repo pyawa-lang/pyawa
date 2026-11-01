@@ -191,6 +191,21 @@ pub fn arithmetic_public(
         };
         return Ok(instance.new_float(result));
     }
+    // **`bool & bool`／`|`／`^` ⇒ `bool`** ✓（round 47）：参照只有"两边都恰是 `bool`"时结果仍是
+    // `bool`（`True & True` ⇒ `True`；`True & 1` ⇒ **int** `1`）✓（`test_bool.test_boolean` 钉住）。
+    if matches!(symbol, "&" | "|" | "^")
+        && instance.type_of(left) == instance.singletons().bool_type()
+        && instance.type_of(right) == instance.singletons().bool_type()
+    {
+        let left_value = instance.bool_value(left).expect("类型刚确认是 bool");
+        let right_value = instance.bool_value(right).expect("类型刚确认是 bool");
+        let result = match symbol {
+            "&" => left_value && right_value,
+            "|" => left_value || right_value,
+            _ => left_value != right_value,
+        };
+        return Ok(instance.retain(instance.singletons().boolean(result)));
+    }
     if let (Some(a), Some(b)) = (instance.int_of(left), instance.int_of(right)) {
         // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
         if b.is_zero() && matches!(symbol, "//" | "%") {

@@ -202,10 +202,22 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let value = frame.get().peek()?;
                         // SAFETY: value 在帧值栈上，存活。
                         let ty = unsafe { value.as_ref() }.ty();
+                        // **`+bool` ⇒ `int`** ✓（round 47；参照 `+True` ⇒ `1`、`type` 是 `int` ✓）。
+                        // 先前"原地不动" ✗ ⇒ `+False` 仍是 `False` ✓（`test_bool.test_math` 钉住 ✓）。
+                        if ty == instance.singletons().bool_type() {
+                            let value = frame.get().pop()?;
+                            let truth = instance
+                                .bool_value(value)
+                                .expect("类型刚确认是 bool");
+                            release(instance, value);
+                            let result = instance.new_int(i64::from(truth));
+                            push(instance, frame.get(), result)?;
+                            release(instance, result);
+                            return Ok(Step::Continue);
+                        }
                         // **浮点也要过**（第 318 轮）：`+1.5` 参照给 `1.5` ✓ —— 先前只接
                         // 整数／布尔 ✗ ⇒ `f(+1.5)` 报"只接线了整数／布尔" ✗。
                         if ty != instance.singletons().int_type()
-                            && ty != instance.singletons().bool_type()
                             && ty != builtin_type(instance, "float")
                         {
                             // **实例走 `__pos__`**（第 220 轮；`MS-19`：能力缺口必须修 ✓）：
