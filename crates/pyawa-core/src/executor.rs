@@ -143,7 +143,7 @@ fn push_container<T: crate::header::PyObject>(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-pub(crate) const ITERATOR_TYPE_NAMES: [&str; 30] = [
+pub(crate) const ITERATOR_TYPE_NAMES: [&str; 32] = [
     // **`reversed`** ✓（第 727 轮）：通用反向迭代器（序列协议 ✓）。
     "reversed",
     "tuple_iterator",
@@ -162,6 +162,9 @@ pub(crate) const ITERATOR_TYPE_NAMES: [&str; 30] = [
     "range_iterator",
     // **`zip()` 的迭代器** ✓（第 229 轮）：参照的名字也是 `zip` ✓。
     "zip",
+    // **`map()`／`filter()` 的迭代器** ✓（`P3-41` round 41：参照的 `map`／`filter` 对象就是迭代器 ✓）。
+    "map",
+    "filter",
     "dict_keyiterator",
     "set_iterator",
     // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）

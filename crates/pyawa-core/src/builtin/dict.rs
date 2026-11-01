@@ -642,27 +642,72 @@ pub fn dict_fromkeys_native(
         None => instance.retain(instance.singletons().none()),
     };
     let source_ty = instance.type_name(instance.type_of(*source));
+    // **键一律收成"本函数持有一份引用"的形态** ✓（下面 `dict_insert_raw` 接管一份 ✓）——
+    // 容器分支从容器**借用** ⇒ 收集时 incref ✓；其它可迭代分支（`P3-41` round 41：通用迭代器协议 ✓）
+    // 交出来的本来就是新引用 ✓。
     let keys: Vec<NonNull<Header>> = match source_ty.as_str() {
-        "list" => unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
-        "tuple" => unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
-        "set" | "frozenset" => unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec(),
-        "dict" => unsafe { &*source.as_ptr().cast::<DictObject>() }
-            .entries()
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect::<Vec<NonNull<Header>>>(),
+        "list" | "tuple" | "set" | "frozenset" | "dict" => {
+            let borrowed: Vec<NonNull<Header>> = match source_ty.as_str() {
+                "list" => unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
+                "tuple" => unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
+                "set" | "frozenset" => {
+                    unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
+                }
+                _ => unsafe { &*source.as_ptr().cast::<DictObject>() }
+                    .entries()
+                    .into_iter()
+                    .map(|(key, _)| key)
+                    .collect::<Vec<NonNull<Header>>>(),
+            };
+            for key in &borrowed {
+                // SAFETY: key 由源容器持有，存活；这里新增一份交给本函数。
+                unsafe { instance.incref_object(key.as_ptr()) };
+            }
+            borrowed
+        }
         _ => {
-            unsafe { instance.release_object(value.as_ptr()) };
-            return Err(crate::ExecError::Unsupported {
-                opcode: 0,
-                what: "dict.fromkeys：这个可迭代对象的形态随后补",
-            });
+            // **通用可迭代**（`dict.fromkeys(range(3))`、生成器、`itertools.count()` 一类 ✓）：
+            // 走执行器**同一处**的迭代协议 ✓（`test_tempfile` 的 `_RandomNameSequence` 就卡在这 ✓）。
+            let iterator = match instance.iter_object(*source) {
+                Ok(iterator) => iterator,
+                Err(error) => {
+                    // SAFETY: value 的这份引用由本函数持有。
+                    unsafe { instance.release_object(value.as_ptr()) };
+                    return Err(error);
+                }
+            };
+            let mut collected: Vec<NonNull<Header>> = Vec::new();
+            loop {
+                match instance.advance_iterator(iterator)? {
+                    Some(item) => collected.push(item),
+                    None => break,
+                }
+            }
+            // SAFETY: iterator 的这份引用由本函数持有。
+            unsafe { instance.release_object(iterator.as_ptr()) };
+            collected
         }
     };
     let mapping = instance.new_dict();
     for key in keys {
-        // SAFETY: key 由源容器持有，存活。
-        unsafe { instance.incref_object(key.as_ptr()) };
+        // **重复键要合并** ✓（照参照：`dict.fromkeys([1, 1])` ⇒ 一个键 ✓）：
+        // `insert_raw` 不查重 ⇒ 先按值相等扫一遍现有键 ✓。
+        // SAFETY: mapping 是刚建的 dict，存活。
+        let duplicated = {
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            dict.entries()
+                .iter()
+                .any(|(existing, _)| crate::executor::values_equal_public(instance, *existing, key))
+        };
+        if duplicated {
+            // SAFETY: key 这份引用由本函数持有。
+            unsafe { instance.release_object(key.as_ptr()) };
+            continue;
+        }
+        // **每个键都要一份 value** ✓（`insert_raw` 接管一份；先前只留了最初那一份 ⇒
+        // 多个键时 value 的引用计数**欠账** ✗ —— 非 immortal 的 value 会成悬垂 ✓）。
+        // SAFETY: value 由本函数持有（最初那份），存活。
+        unsafe { instance.incref_object(value.as_ptr()) };
         instance.dict_insert_raw(mapping, key, value);
     }
     // 每个键都接管了一份 value ✓ ⇒ 这里还掉最初那一份 ✓。

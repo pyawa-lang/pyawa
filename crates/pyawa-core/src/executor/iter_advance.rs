@@ -85,6 +85,13 @@ pub(crate) fn advance_iterator(
     if ty == builtin_type(instance, "zip") {
         return advance_zip(instance, iterator, opcode);
     }
+    // **内建 `map`／`filter`**（`P3-41` round 41）：参照里它们是**惰性迭代器** ✓。
+    if ty == builtin_type(instance, "map") {
+        return advance_map(instance, iterator, opcode);
+    }
+    if ty == builtin_type(instance, "filter") {
+        return advance_filter(instance, iterator, opcode);
+    }
     if ty == builtin_type(instance, "zip_longest") {
         return advance_zip_longest(instance, iterator, opcode);
     }
@@ -671,6 +678,101 @@ fn advance_zip(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Re
             }
         }
         return Ok(Some(instance.new_tuple(row)));
+}
+
+/// 内建 **`map`** 的推进分支（`P3-41` round 41：从"急求值成列表"改正为惰性）。
+///
+/// 语义同 `zip`（各 inner 各取一项，**任一耗尽就收摊** ✓）＋ 每行交 `function(*row)` ✓；
+/// 函数抛异常 ⇒ 原样上抛（本轮已取的项都归还 ✓）。
+fn advance_map(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    // SAFETY: 类型身份刚确认。
+    let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
+    let crate::builtin_objects::ItStateKind::Map {
+        function,
+        iterators,
+    } = state.kind()
+    else {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "map 的状态不对",
+        });
+    };
+    // SAFETY: iterators 是本迭代器持有的 list。
+    let list = unsafe { &*iterators.as_ptr().cast::<crate::ListObject>() };
+    if list.is_empty() {
+        // `map(f)` 不合法（至少两个实参）⇒ 这里只是防御；空表 ⇒ 立刻耗尽。
+        return Ok(None);
+    }
+    let mut row: Vec<NonNull<Header>> = Vec::with_capacity(list.len());
+    for index in 0..list.len() {
+        let inner = list.item(index).expect("下标在范围内");
+        match advance_iterator(instance, inner, opcode)? {
+            Some(item) => row.push(item),
+            None => {
+                for item in row {
+                    release(instance, item);
+                }
+                return Ok(None);
+            }
+        }
+    }
+    match call_value(instance, function, &row, &[]) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => Err(error),
+    }
+}
+
+/// 内建 **`filter`** 的推进分支（`P3-41` round 41：从"急求值成列表"改正为惰性）。
+///
+/// `predicate` 为 `None` ⇒ 按**真值**筛（参照语义 ✓）；否则「谓词为真就让出、为假继续取」✓。
+fn advance_filter(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    // SAFETY: 类型身份刚确认。
+    let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
+    let crate::builtin_objects::ItStateKind::Filter { predicate, inner } = state.kind() else {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "filter 的状态不对",
+        });
+    };
+    loop {
+        let Some(item) = advance_iterator(instance, inner, opcode)? else {
+            return Ok(None);
+        };
+        let verdict = if predicate == instance.singletons().none() {
+            item
+        } else {
+            match call_value(instance, predicate, &[item], &[]) {
+                Ok(value) => {
+                    release(instance, item);
+                    value
+                }
+                Err(error) => {
+                    release(instance, item);
+                    return Err(error);
+                }
+            }
+        };
+        let truthy = match truthiness(instance, verdict, opcode) {
+            Ok(value) => value,
+            Err(error) => {
+                release(instance, verdict);
+                return Err(error);
+            }
+        };
+        release(instance, verdict);
+        if truthy {
+            return Ok(Some(item));
+        }
+        release(instance, item);
+    }
 }
 
 /// `zip_longest` 的推进分支（从 `advance_iterator` 原样搬来）。

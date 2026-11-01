@@ -170,6 +170,22 @@ pub enum ItStateKind {
         /// 各内层迭代器（一个 `list`，**本对象持有一份引用**；每个元素本身也是迭代器引用）。
         iterators: NonNull<Header>,
     },
+    /// **内建 `map(function, *iterables)`**（`P3-41` round 41：由**急求值**改正为惰性 ✓）。
+    ///
+    /// 语义同 `zip`（各 inner 各取一项，任一耗尽就收摊）＋ 每行交 `function(*row)` ✓。
+    Map {
+        /// 映射函数（**本对象持有一份引用**）。
+        function: NonNull<Header>,
+        /// 各内层迭代器（一个 `list`，**本对象持有一份引用**）。
+        iterators: NonNull<Header>,
+    },
+    /// **内建 `filter(function, iterable)`**（同轮改正为惰性 ✓）；`predicate` 是 `None` ⇒ 按真值筛。
+    Filter {
+        /// 谓词（**本对象持有一份引用**；可能是 `None`）。
+        predicate: NonNull<Header>,
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+    },
     /// `itertools.pairwise(iterable)`：两两成对（`(0,1)`、`(1,2)`…），`previous` 是上一项。
     Pairwise {
         /// 内层迭代器（**本对象持有一份引用**）。
@@ -300,6 +316,17 @@ pub(crate) unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*
             visit(fillvalue.as_ptr());
         }
         ItStateKind::Zip { iterators } => visit(iterators.as_ptr()),
+        ItStateKind::Map {
+            function,
+            iterators,
+        } => {
+            visit(function.as_ptr());
+            visit(iterators.as_ptr());
+        }
+        ItStateKind::Filter { predicate, inner } => {
+            visit(predicate.as_ptr());
+            visit(inner.as_ptr());
+        }
         ItStateKind::Compress { data, selectors } => {
             visit(data.as_ptr());
             visit(selectors.as_ptr());
@@ -406,6 +433,21 @@ pub(crate) unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
         ItStateKind::Zip { iterators } => {
             // SAFETY: 该引用由本对象持有（列表里的迭代器引用由列表自己管）。
             unsafe { instance.release_object(iterators.as_ptr()) };
+        }
+        ItStateKind::Map {
+            function,
+            iterators,
+        } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(function.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(iterators.as_ptr()) };
+        }
+        ItStateKind::Filter { predicate, inner } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(predicate.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(inner.as_ptr()) };
         }
         ItStateKind::Compress { data, selectors } => {
             // SAFETY: 两份引用都由本对象持有。

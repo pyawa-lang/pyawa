@@ -374,6 +374,54 @@ impl Instance {
         .cast::<Header>()
     }
 
+    /// 造一个内建 **`map`** 迭代器（`P3-41` round 41；**新引用**；两个入参都**借用**）。
+    ///
+    /// `iterators` 是一个 `list`，元素都是迭代器（模块面先用 `iter_object` 造好 ✓）。
+    pub fn new_map_iterator(
+        &self,
+        function: NonNull<Header>,
+        iterators: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(function.as_ptr());
+            self.incref_object(iterators.as_ptr());
+        }
+        let ty = self.type_named("map").expect("引导期已登记 map 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Map {
+                function,
+                iterators,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个内建 **`filter`** 迭代器（**新引用**；两个入参都**借用**；`predicate` 可以是 `None`）。
+    pub fn new_filter_iterator(
+        &self,
+        predicate: NonNull<Header>,
+        inner: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(predicate.as_ptr());
+            self.incref_object(inner.as_ptr());
+        }
+        let ty = self.type_named("filter").expect("引导期已登记 filter 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Filter {
+                predicate,
+                inner,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
     pub fn new_zip_longest_iterator(
         &self,
         iterators: NonNull<Header>,

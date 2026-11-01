@@ -505,6 +505,19 @@ impl Instance {
             crate::builtin_objects::ItStateObject::slots(),
         );
 
+        // **`map`**／**`filter`**（`P3-41` round 41）：**惰性迭代器类型** ✓（参照里它们就是迭代器 ✓）。
+        // 载荷与 `zip` 同构（`ItStateObject`）——`map` 是"zip 取一行再套函数"、`filter` 是单 inner ＋ 谓词 ✓。
+        let _map_type = self.alloc_type_raw(
+            "map",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots(),
+        );
+        let _filter_type = self.alloc_type_raw(
+            "filter",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots(),
+        );
+
         // **`range_iterator`** ✓（第 228 轮）：`range()` 的**常规**那一支 ✓（参照的名字 ✓）。
         let _range_iterator_type = self.alloc_type_raw(
             "range_iterator",
