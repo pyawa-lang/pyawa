@@ -648,6 +648,9 @@ fn exc_info_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let none = instance.singletons().none();
     // `new_tuple` **吃掉**每项引用 ⇒ 每项都自己 retain 一份 ✓。
+    if std::env::var_os("PYAWA_EXC_INFO_DEBUG").is_some() {
+        eprintln!("[exc-state] {:?}", instance.exception_state_sites());
+    }
     let Some(exception) = instance.current_exception() else {
         let first = instance.retain(none);
         let second = instance.retain(none);

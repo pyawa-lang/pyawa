@@ -160,6 +160,8 @@ pub struct Instance {
     modules: RefCell<Option<NonNull<Header>>>,
     /// **BC-60** ②：**本实例**的当前异常状态（正在处理的异常）——**禁止**进程级全局。
     exception_state: RefCell<Vec<NonNull<Header>>>,
+    /// 诊断（round 62，`PYAWA_EXC_INFO_DEBUG=1`）：与 `exception_state` 同形的**压入现场**表 ✓。
+    exception_state_sites: RefCell<Vec<String>>,
     /// `__build_class__`（引导期建好；见 [`Instance::build_class`]）。
     build_class: Cell<Option<NonNull<Header>>>,
     /// 最近一次抛出的异常（**本实例持有一份引用**）：`ExecError::Raised` 借它保活。

@@ -26,6 +26,7 @@ impl Instance {
             singletons: OnceCell::new(),
             current_globals: Cell::new(None),
             exception_state: RefCell::new(Vec::new()),
+            exception_state_sites: RefCell::new(Vec::new()),
             build_class: Cell::new(None),
             pending_exception: Cell::new(None),
             builtins: Cell::new(None),

@@ -74,6 +74,23 @@ impl Instance {
         format!("{name}@{pointer}")
     }
 
+    /// **当前执行现场 ＋ 行号**（round 62 诊断）：给异常栈的"压入点"用 ✓。
+    pub(crate) fn current_site_with_line(&self) -> String {
+        let Some(frame_header) = self.current_frame() else {
+            return "<无当前帧>".to_owned();
+        };
+        // SAFETY: 当前帧由执行器的守卫挂着，存活。
+        let frame = unsafe { &*frame_header.as_ptr().cast::<crate::frame::Frame>() };
+        let pointer = frame.instruction_pointer();
+        let Some(code_header) = frame.code() else {
+            return format!("<无代码对象>@{pointer}");
+        };
+        // SAFETY: code 由帧持有，存活。
+        let code = unsafe { &*code_header.as_ptr().cast::<crate::code::CodeObject>() };
+        let line = crate::frame::line_at(code, pointer).unwrap_or(0);
+        format!("{}@{} (line {line})", code.qualname(), pointer)
+    }
+
     /// 复核隔离区 ✓：毒化字节被改 ⇒ **释放后仍被写** ✓（use-after-free ✗）。
     pub(crate) fn quarantine_check(&self) {
         if !quarantine_mode() {

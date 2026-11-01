@@ -1503,6 +1503,29 @@ pub(crate) fn resume_generator_with_raise(
 /// **当前全局映射的 RAII 守卫**（第 156 轮）：`Drop` 时恢复上一格 ✓ ⇒ `execute` 里**任何**提前返回
 /// （含 `?`）都安全 ✓（生成器挂起返回时也算「本帧不活跃」✓，恢复正是对的 ✓）。
 /// **当前帧的 RAII 守卫** ✓（第 230 轮）：与全局映射那只**同款** ✓ —— 进帧时公布、出帧时还原 ✓。
+/// **异常状态的 RAII 守卫**（round 62）：进入 `execute` 记下当前深度，退出时截断回去 ✓。
+///
+/// `Drop` 覆盖**所有**退出路径（正常返回、异常逃逸、生成器挂起、以及 `?` 提前返回 ✓）。
+struct ExceptionStateGuard<'a> {
+    instance: &'a Instance,
+    depth: usize,
+}
+
+impl<'a> ExceptionStateGuard<'a> {
+    fn install(instance: &'a Instance) -> Self {
+        Self {
+            instance,
+            depth: instance.exception_depth(),
+        }
+    }
+}
+
+impl Drop for ExceptionStateGuard<'_> {
+    fn drop(&mut self) {
+        self.instance.truncate_exception_state(self.depth);
+    }
+}
+
 struct CurrentFrameGuard<'a> {
     instance: &'a Instance,
     previous: Option<NonNull<Header>>,
@@ -1620,6 +1643,11 @@ pub fn execute<'a>(
     // SAFETY: 帧由调用方持有，本函数运行期间存活 ✓。
     let frame_header: NonNull<Header> = frame.as_ptr().cast::<Header>();
     let _frame_guard = CurrentFrameGuard::install(instance, Some(frame_header));
+    // **异常状态是每帧保存／恢复的**（round 62）：本层只有实例级一张栈 ⇒ 帧退出时（含异常
+    // 逃逸／生成器挂起）截回入口深度 ✓。否则某个处理块压入的 `PUSH_EXC_INFO` 会活过帧，
+    // `sys.exc_info()` 在后续代码里看到**上一个函数**的残留异常（`import enum` 的
+    // `KeyError('keep')`、`import unittest` 的 `KeyError(512)` 就是这个 ✓）。
+    let _exception_guard = ExceptionStateGuard::install(instance);
 
     // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑——值栈与 ip 都在恢复点里。
     // 新帧的 ip 是 0，所以"一律按帧的 ip 起步"这一条对两种情况都成立。
