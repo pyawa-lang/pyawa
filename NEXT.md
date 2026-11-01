@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 55：`*args`／`**kw` 函数注解＋PEP 646 星号注解 ⇒ `test_pep646_syntax` 跑通；round 54：调用实参源码交错保序等）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 56：生成器重入守卫＋`in range` 算术判定 ⇒ 套件 26／83／287／1；round 55：`*args` 注解 ⇒ `test_pep646_syntax` 跑通）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -46,9 +46,11 @@
   `**生成器` 的 SyntaxError ✅ ⇒ `test_unpack_ex` 仅剩"运行器上下文"差异（doctest 期望
   `test.test_unpack_ex.f()`，CLI 按脚本跑给 `__main__.f()`；非语义差）。
   **round 55 已清 ②**：`*args`／`**kw` 函数注解＋PEP 646 星号注解 ✅ ⇒ `test_pep646_syntax` 跑通、套件 24 ⇒ 25。
-  **下一轮（round 56）**：① **GC×回溯环堆损坏**（`test_extcall`，正确性，压一切）② 生成器 `throw` 的
-  `StackUnderflow`（`test_genexps`）③ `test_weakref` 超时（形参所有权）④ 评估"以导入名跑 doctest"的
-  套件 runner（只影响显示名，不急）。**round 51 已清 ②**：`compile(..., "single")`
+  **round 56 已清 ②**：生成器**重入守卫**（`ValueError: generator already executing`）＋ `in range(...)`
+  的**算术成员判定** ⇒ `test_genexps` 从**崩溃**变正常跑完、套件 25 ⇒ 26。
+  **下一轮（round 57）**：① **GC×回溯环堆损坏**（`test_extcall`，正确性，压一切）② `test_genexps` 剩余
+  （4 条语法错报文＋genexp 元组复用优化）③ `test_weakref` 超时（形参所有权）④ 评估"以导入名跑
+  doctest"的套件 runner（只影响显示名，不急）。**round 51 已清 ②**：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

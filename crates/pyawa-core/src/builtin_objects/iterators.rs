@@ -18,6 +18,10 @@ py_object! {
         finished: Cell<bool>,
         /// **已经开始过**（`send` 的"刚创建"判定：刚创建的生成器只接受 `send(None)`）。
         started: Cell<bool>,
+        /// **正在执行**（round 56）：重入（生成器体里调 `next(自己)`）参照报
+        /// `ValueError: generator already executing` ✓；先前**不查** ✗ ⇒ 递归恢复同一帧 ⇒
+        /// 帧操作 `StackUnderflow`（`test_genexps` 的 `g = (next(me) for i in range(10))` ✓）。
+        running: Cell<bool>,
     }
 }
 
@@ -601,6 +605,16 @@ impl GeneratorObject {
     /// 置"已经启动过"。
     pub fn mark_started(&self) {
         self.started.set(true);
+    }
+
+    /// 是否**正在执行**（重入守卫）。
+    pub fn running(&self) -> bool {
+        self.running.get()
+    }
+
+    /// 置／清"正在执行"。
+    pub fn set_running(&self, value: bool) {
+        self.running.set(value);
     }
 }
 

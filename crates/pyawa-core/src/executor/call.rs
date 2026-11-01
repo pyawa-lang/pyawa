@@ -702,6 +702,7 @@ pub(crate) fn call_callable(
             frame.as_ptr().cast::<Header>(),
             Cell::new(false),
             Cell::new(false),
+            Cell::new(false),
         ));
         return Ok(generator.into_raw().cast::<Header>());
     }

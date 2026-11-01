@@ -1356,6 +1356,18 @@ pub(crate) fn resume_generator(
 ) -> Result<GeneratorOutcome, ExecError> {
     // SAFETY: 调用方保证 generator 是本实例里存活的生成器。
     let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
+    // **重入守卫** ✓（round 56）：生成器体里再驱动自己 ⇒ 参照 `ValueError: <种类> already executing`；
+    // 先前不查 ✗ ⇒ 递归恢复同一帧 ⇒ `帧操作失败：StackUnderflow`（`test_genexps` ✓）。
+    if object.running() {
+        let word = instance.type_name(unsafe { generator.as_ref() }.ty());
+        return Err(crate::executor::runtime::raise_builtin(
+            instance,
+            "ValueError",
+            &format!("{word} already executing"),
+        ));
+    }
+    object.set_running(true);
+    let outcome = (|| -> Result<GeneratorOutcome, ExecError> {
     let frame_header = object.frame();
     let generator_frame = Owned::new(
         // SAFETY: frame_header 由生成器持有，这里新增一份引用交给守卫。
@@ -1429,6 +1441,9 @@ pub(crate) fn resume_generator(
             Err(error)
         }
     }
+    })();
+    object.set_running(false);
+    outcome
 }
 
 /// 异步生成器耗尽时抛的东西（`async for` 的结束信号）。

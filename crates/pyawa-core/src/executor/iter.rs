@@ -13,6 +13,7 @@ use crate::builtin_objects::FloatObject;
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::IteratorObject;
+use crate::builtin_objects::RangeObject;
 use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
 use crate::builtin_objects::SetObject;
@@ -500,6 +501,36 @@ pub(crate) fn contains(
             "TypeError",
             &format!("'in <string>' requires string as left operand, not {name}"),
         ));
+    }
+    // **`range` 的成员判定** ✓（round 56）：参照的 `in range(...)` 是**算术**判定，不是容器迭代
+    // —— `1.0 in range(3)` ⇒ True、`'a' in range(3)` ⇒ False、`range(3) in range(3)` ⇒ False ✓。
+    // 先前没有这一档 ✗ ⇒ 落进"不是容器"的 TypeError ✗（`test_genexps` 的
+    // `... if j in range(n)` ✓）。
+    if Some(container_type) == instance.type_named("range") {
+        // SAFETY: 类型身份已确认，载荷布局是 `RangeObject`。
+        let range = unsafe { &*container.as_ptr().cast::<RangeObject>() };
+        // 只认整数（含 `bool`／`int` 子类）与**整值浮点**（参照对 `1.0` 也判 True ✓）。
+        let value: Option<i64> = instance.int_value(item).or_else(|| {
+            instance.float_value(item).and_then(|number| {
+                let min = i64::MIN as f64;
+                let max = i64::MAX as f64;
+                if number.is_finite() && number.fract() == 0.0 && number >= min && number <= max {
+                    Some(number as i64)
+                } else {
+                    None
+                }
+            })
+        });
+        let Some(value) = value else {
+            return Ok(false);
+        };
+        let (start, stop, step) = (range.start(), range.stop(), range.step());
+        let contained = if step > 0 {
+            value >= start && value < stop && (value - start) % step == 0
+        } else {
+            value <= start && value > stop && (start - value) % (-step) == 0
+        };
+        return Ok(contained);
     }
     // `bytes`：**子串**查找（实测 `b'ab' in b'abc'`）；左操作数不是 bytes 时报实测的消息。
     // **整数那一档**（第 284 轮按参照实测补 ✓）：`98 in b"b"` ⇒ `True` ✓、
