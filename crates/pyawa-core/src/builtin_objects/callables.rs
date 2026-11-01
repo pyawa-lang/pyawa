@@ -323,6 +323,14 @@ pub unsafe fn builtin_function_getattr(
 ) -> Option<NonNull<Header>> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<BuiltinFunctionObject>() };
+    // **`__module__`**（round 69）：参照的 `builtin_function_or_method` 有它（`len.__module__`
+    // ⇒ `'builtins'` ✓）。本层没记每个原生函数的来源模块 ⇒ 统一报 `builtins` ✓ ——
+    // 这让 `inspect.getmodule`／`doctest.DocTestSuite` 不再在 `_from_module` 里抛
+    // `ValueError: object must be a class or function` ✗（`test_collections`／`test_itertools`／
+    // `test_metaclass` 的 `load_tests` 都卡在这里 ✓；跳过这些内建函数的递归即可 ✓）。
+    if name == "__module__" {
+        return Some(instance.new_str("builtins"));
+    }
     let text = match name {
         "__name__" | "__qualname__" => object.name(),
         "__doc__" => "",

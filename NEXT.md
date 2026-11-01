@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 68：`__init_subclass__` 的 `super()` 用类自己的 MRO ⇒ **跑通 34 ⇒ 35**；round 67：`float.as_integer_ratio` 精确化＋大整数 math ⇒ 跑通 33 ⇒ 34）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 69：`compile()` 收 `__index__`＋原生函数 `__module__` ⇒ **跑通 35 ⇒ 37**；round 68：`__init_subclass__` 的 `super()` ⇒ 跑通 34 ⇒ 35）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -79,10 +79,13 @@
   （跑通 **33 ⇒ 34**）；另修 `test_pow` 的 50000 位模幂慢路（`u128` 小模数快路，3~13 s ⇒ 0.0 s）。
   **round 68 已清 ①**：零参 `super()` 对 `__init_subclass__` 用「类自己的 MRO」（只放开这一格，
   `typing` 等导入全绿 ✓）⇒ `test_subclassinit` **OK**（跑通 **34 ⇒ 35**）。
-  **下一轮（round 69）**：① `test_genexps` 剩 2 条（元组 freelist 复用／内建 `__next__.__doc__`）
-  ② `test_builtin` 的编译器 panic（`defs.rs:957 自由变量…`，最小前缀 2840 行；逐语句删减定位）
-  ③ `test_calendar` 的 malloc 堆损坏（`PYAWA_DANGLING=1` 下 `header.rs:135 对已释放对象 incref`）
-  ④ 形参所有权（`test_weakref` 超时扳机）／其它"只差一两条"文件／`P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
+  **round 69 完成**：`compile()` 的 flags/optimize 收 `__index__`＋原生函数 `__module__` ⇒ `test_call`、
+  `test_itertools` **转 OK**（跑通 **35 ⇒ 37**）；但 `test_collections` 的千字段 `namedtuple` 用例 >90 s
+  ⇒ 套件**超时 1 ⇒ 2** ✗（见下一轮第一顺位）；套件 **37／82／276／2**。
+  **下一轮（round 70）**：① **千参函数编译／调用绑定性能**（`test_collections.test_large_size` 的
+  namedtuple：找 O(n²) 点，把超时消掉）/ `test_metaclass` 的无参 `DocTestSuite()`（`sys._getframemodulename` 返 None）
+  ② `test_genexps` 剩 2 条 ③ `test_builtin` 编译器 panic／`test_calendar` 的 UAF ④ 形参所有权
+  （`test_weakref` 超时扳机）／`P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

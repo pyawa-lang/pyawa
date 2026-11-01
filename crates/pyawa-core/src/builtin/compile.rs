@@ -423,9 +423,13 @@ pub fn compile_native(
     // flags：只接 0（`PyCF_ONLY_AST` 等如实未实现）。
     let flags = match values[3] {
         None => 0i64,
-        Some(value) => instance.int_of(value).and_then(|integer| integer.to_i64()).ok_or_else(|| {
-            instance.raise_builtin_error("TypeError", "compile() arg 4（flags）要整数")
-        })?,
+        // **`__index__` 也要认**（round 69，参照走 `PyNumber_Index` ✓）：`test_call` 的
+        // `test_fastcall_clearing_dict` 传 `IntWithDict`（`__index__` 返回 0）✓。
+        Some(value) => instance
+            .index_value(value)?
+            .ok_or_else(|| {
+                instance.raise_builtin_error("TypeError", "compile() arg 4（flags）要整数")
+            })?,
     };
     // **`flags` 的已知位**（`P3-42`）：
     // * 参照内部位：`PyCF_DONT_IMPLY_DEDENT`(0x200)／`PyCF_ALLOW_INCOMPLETE_INPUT`(0x4000)
@@ -485,7 +489,8 @@ pub fn compile_native(
     // optimize：接受 `-1`（默认）／0..2；本层**没有优化器** ⇒ 暂不参与发射 ✓（不影响产物语义）。
     let optimize = match values[5] {
         None => -1i64,
-        Some(value) => instance.int_of(value).and_then(|integer| integer.to_i64()).ok_or_else(|| {
+        // 参照走 `PyNumber_Index` ✓（`IntWithDict.__index__` 返回 0 那类 ✓，round 69）。
+        Some(value) => instance.index_value(value)?.ok_or_else(|| {
             instance.raise_builtin_error("TypeError", "compile() arg 6（optimize）要整数")
         })?,
     };
