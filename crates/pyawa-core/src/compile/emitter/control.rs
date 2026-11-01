@@ -144,14 +144,25 @@ impl Emitter {
         // `break` 的调用方已 `loops.pop()` 弹掉**内层**帧 ✓ ⇒ 此刻若有循环帧，它就是**外层** ✓；
         // 外层那个迭代器从未被弹 ✓ ⇒ 跳到它的 `continue_target`（`for`＝`FOR_ITER`、`while`＝条件起点 ✓）
         // 时栈契约正好对得上 ✓（跳到块尾会 `StackUnderflow` ✗ —— 第 264 轮实测 ✓）。
-        if let Some(outer) = self.loops.last().cloned() {
-            self.emit_directed_jump(
-                    position,
-                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
-                    outer.continue_target,
-                    true,
-                );
-            return Ok(false);
+        // **嵌套在另一层 `with` 体里 ⇒ 不能跳回外层的循环续点** ✗（round 45 修）：
+        // 本层 `with` 的退出调用**已经发过** ✓，但外层 `with` 的退出调用还在**后面** ✓ ——
+        // 此刻跳循环续点会**跳过外层退出调用** ⇒ 外层的 (上下文, `__exit__`) 两格留在栈上 ✗
+        // （实测 `for …: with A(): with B(): pass` 的循环第二轮 `FOR_ITER` 取到 `A` 实例、
+        // 报"这个对象既不是内建迭代器" ⇒ `test_frame` 状态 5 ✓）。
+        // 正确去向＝**外层块尾**（`block_end_labels.last()`，正好是外层 `with` 体的出口，
+        // 即外层退出调用之前 ✓）⇒ 交给下面的兜底分支 ✓。
+        // 注意：只对**正常 `with` 出口**（`containing_depth == None`）收紧；`break`／`continue`
+        // 的重放路径（`Some`）它们的 `with` 退出调用已在出口臂里发过 ✓，这里的循环／收尾规则照旧 ✓。
+        if self.with_depth == 0 || containing_depth.is_some() {
+            if let Some(outer) = self.loops.last().cloned() {
+                self.emit_directed_jump(
+                        position,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        outer.continue_target,
+                        true,
+                    );
+                return Ok(false);
+            }
         }
         // **作用域收尾只对"尾块"发** ✓（task-17 ✓）：`if/else` 的**非尾**分支体里最后一条是
         // `with` 时（`emit_block(else_body, branch_tail=false)` ⇒ 这里的 `block_tail` 是假 ✗），
@@ -162,7 +173,8 @@ impl Emitter {
         // **`break` 的退出路径例外** ✓：它重放的 `rest` 在语义上接回**作用域层**继续走
         // （`containing_depth = Some(1)`；嵌套的 depth > 1 已在上面提前返回）⇒ 收尾照发 ✓
         // —— 否则 `for …: break` 这类会退化成"跳块尾"，栈契约与参照都不对 ✗。
-        if (self.block_tail || containing_depth.is_some())
+        if (self.with_depth == 0 || containing_depth.is_some())
+            && (self.block_tail || containing_depth.is_some())
             && self.emit_scope_tail(self.last_span)
         {
             return Ok(true);

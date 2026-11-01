@@ -39,6 +39,9 @@ impl Emitter {
                     for _ in frame.handler_depth..self.handler_depth {
                         self.emit_at(*position, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
                     }
+                    // **先退出循环体内的各层 `with`** ✓（round 45；它们的两格在迭代器**之上**，
+                    // 不先退就 `POP_TOP` 弹错对象 ✗）。循环体外的 `with` 不动 ✓。
+                    emit_enclosing_with_exits(self, frame.with_levels, *position);
                     // **块结构模型**：`break` ＝ `POP_TOP`（`for`：弹迭代器）／`NOP`（`while`）
                     // ＋ **就地复制"循环之后的语句"** ＋ 作用域收尾 ⇒ 退出路径终止，不回循环尾
                     if frame.is_for {
@@ -103,6 +106,8 @@ impl Emitter {
                     for _ in frame.handler_depth..self.handler_depth {
                         self.emit_at(*position, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
                     }
+                    // **退出循环体内的各层 `with`** ✓（round 45；`continue` 也离开它们）。
+                    emit_enclosing_with_exits(self, frame.with_levels, *position);
                     self.emit_directed_jump(
                         *position,
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
@@ -438,6 +443,21 @@ impl Emitter {
 ///
 /// 用途：`try: return … finally: <必然 return 的 finally>` 里，外层那条 `return` 的取值与
 /// `RETURN_VALUE` 是**死代码** ✓（参照也不发 ✓；task-24）。
+/// 退出**循环体内**的各层 `with`（`break`／`continue` 的出口，round 45）：
+/// 从最内层往外发退出调用（每层按 item 逆序）——层数从 `frame.with_levels` 起（循环体外的
+/// `with` 不归本循环退 ✗，`with cm: for …: break` 里那层必须留着 ✓）。
+fn emit_enclosing_with_exits(this: &mut Emitter, floor: usize, position: Span) {
+    let total = this.with_exit_stack.len();
+    for level in (floor..total).rev() {
+        let spans = this.with_exit_stack[level].clone();
+        for span in spans.iter().rev() {
+            let none_index = this.intern_constant(Constant::None);
+            this.emit_with_exit_call(*span, none_index);
+        }
+    }
+    let _ = position;
+}
+
 fn block_terminates(statements: &[Statement]) -> bool {
     match statements.last() {
         Some(Statement::Return(..)) | Some(Statement::Raise { .. }) => true,

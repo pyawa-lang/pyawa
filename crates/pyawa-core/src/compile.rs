@@ -1881,6 +1881,9 @@ struct LoopFrame {
     /// `POP_TOP; JUMP_FORWARD` 到 if 之后 ✓；先前一律发作用域收尾 ⇒ **函数提前 return** ✗／
     /// 模块后半段静默不执行 ✗ —— 真 `enum.py` 的 `_find_new_` 就是这么返回 None 的 ✓）。
     block_depth: usize,
+    /// **进入本循环时 `with_exit_stack` 的层数**（round 45 ✓）：`break`／`continue` 只该退出
+    /// **循环体内**那几层 `with` ✓（`with cm: for …: break` 里外层那层**不能**退 ✗）。
+    with_levels: usize,
 }
 
 /// 增强赋值的**目标**（三种形态各自一套栈序，实测见 [`Statement::AugAssign`]）。

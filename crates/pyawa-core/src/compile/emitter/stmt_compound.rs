@@ -909,6 +909,7 @@ impl Emitter {
                     is_for: true,
                     rest: rest.to_vec(),
                     block_depth: self.block_depth,
+                    with_levels: self.with_exit_stack.len(),
                 });
                 self.in_loop_body = true;
                 self.emit_block(body, false)?;
@@ -982,6 +983,7 @@ impl Emitter {
                         is_for: false,
                         rest: rest.to_vec(),
                         block_depth: self.block_depth,
+                    with_levels: self.with_exit_stack.len(),
                     });
                     self.in_loop_body = true;
                     self.emit_block(body, false)?;
@@ -1003,6 +1005,7 @@ impl Emitter {
                     is_for: false,
                     rest: rest.to_vec(),
                     block_depth: self.block_depth,
+                    with_levels: self.with_exit_stack.len(),
                 });
                 self.in_loop_body = true;
                 self.emit_block(body, false)?;
