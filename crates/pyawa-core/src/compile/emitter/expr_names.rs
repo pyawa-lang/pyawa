@@ -271,6 +271,7 @@ impl Emitter {
             Expression::Call {
                 function,
                 arguments,
+                positional_order,
                 star_arguments,
                 keywords,
                 dict_arguments,
@@ -314,7 +315,20 @@ impl Emitter {
                 //   `LOAD x; BUILD_TUPLE 1` ✓）⇒ 这里先跳过，交给下面那一格发 ✓。
                 let ex_shape = !star_arguments.is_empty() || !dict_arguments.is_empty();
                 let tuple_slot = ex_shape && star_arguments.is_empty();
-                if !tuple_slot {
+                // **普通实参出现在某个 `*` 之后**（round 54）：这时**不能**按 `arguments`
+                // 顺序提前压栈（那列已把 `*` 摘掉、丢了源码交错 ✗）——交给下面 ex 分支按
+                // `positional_order` 统一发 ✓。
+                let plain_after_star = {
+                    let mut seen_star = false;
+                    positional_order.iter().any(|part| match part {
+                        crate::compile::PositionalArgument::Star(_) => {
+                            seen_star = true;
+                            false
+                        }
+                        crate::compile::PositionalArgument::Plain(_) => seen_star,
+                    })
+                };
+                if !tuple_slot && !plain_after_star {
                     for argument in arguments {
                         self.emit_expression(argument)?;
                     }
@@ -346,7 +360,59 @@ impl Emitter {
                     //   `BUILD_LIST 0; LOAD a; LIST_EXTEND 1; LOAD b; LIST_EXTEND 1;
                     //    CALL_INTRINSIC_1 6`；有前置位置实参时把 `BUILD_LIST` 的个数换成它们 ✓。
                     // 先前这一支直接报"多个 `*` 实参尚未接线" ✗（`functools` 那一族 **11** 个模块卡它 ✓）。
-                    if star_arguments.len() > 1 {
+                    // **普通位置实参出现在某个 `*` 之后**（round 54）：必须按**源码交错**展开
+                    // （`f(x, *a, c, *b, y)` ⇒ `x`; `BUILD_LIST 1`; `a`; `LIST_EXTEND 1`; `c`;
+                    // `LIST_APPEND 1`; `b`; `LIST_EXTEND 1`; `y`; `LIST_APPEND 1`; 再转元组 ✓
+                    // —— 与参照逐字节同形 ✓）。先前一律"前导普通实参 ＋ 所有 `*`"⇒
+                    // `print(*[1], *[2], 3)` 得 `3 1 2` ✗（`test_unpack_ex` 的 doctest ✓）。
+                    if plain_after_star {
+                        let leading_plain = positional_order
+                            .iter()
+                            .take_while(|part| {
+                                matches!(part, crate::compile::PositionalArgument::Plain(_))
+                            })
+                            .count();
+                        // 前面已压过的普通实参（调用入口统一压的）先收进列表 ✓。
+                        for part in positional_order.iter().take(leading_plain) {
+                            if let crate::compile::PositionalArgument::Plain(expression) = part {
+                                self.emit_expression(expression)?;
+                            }
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_LIST").expect("BUILD_LIST 在表里"),
+                            u8::try_from(leading_plain).map_err(|_| {
+                                CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                            })?,
+                        );
+                        for part in positional_order.iter().skip(leading_plain) {
+                            match part {
+                                crate::compile::PositionalArgument::Plain(expression) => {
+                                    self.emit_expression(expression)?;
+                                    self.emit_at(
+                                        *span,
+                                        opcode::opcode("LIST_APPEND").expect("LIST_APPEND 在表里"),
+                                        1,
+                                    );
+                                }
+                                crate::compile::PositionalArgument::Star(expression) => {
+                                    self.emit_expression(expression)?;
+                                    self.emit_at(
+                                        *span,
+                                        opcode::opcode("LIST_EXTEND")
+                                            .expect("LIST_EXTEND 在表里"),
+                                        1,
+                                    );
+                                }
+                            }
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("CALL_INTRINSIC_1")
+                                .expect("CALL_INTRINSIC_1 在表里"),
+                            6,
+                        );
+                    } else if star_arguments.len() > 1 {
                         let head = u8::try_from(arguments.len()).map_err(|_| {
                             CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
                         })?;

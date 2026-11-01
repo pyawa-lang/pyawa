@@ -332,9 +332,11 @@ pub fn compile_interactive(
         if let Statement::Expression(value, span) = statement {
             let display = Expression::Name(INTERACTIVE_DISPLAY_HOOK.to_owned(), *span);
             let original = core::mem::replace(value, Expression::Constant(Constant::None, *span));
+            let order = vec![PositionalArgument::Plain(original.clone())];
             *value = Expression::Call {
                 function: Box::new(display),
                 arguments: vec![original],
+                positional_order: order,
                 star_arguments: Vec::new(),
                 keywords: Vec::new(),
                 dict_arguments: Vec::new(),
@@ -1268,6 +1270,15 @@ enum MapItem {
     Unpack(Expression),
 }
 
+/// 调用实参的一项（**保序**；round 54 引入，见 [`Expression::Call`] 的 `positional_order`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PositionalArgument {
+    /// 普通位置实参。
+    Plain(Expression),
+    /// `*可迭代` 实参。
+    Star(Expression),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expression {
     Int(i64, Span),
@@ -1409,8 +1420,13 @@ enum Expression {
     /// `span` 是**整段调用**（`CALL`／`CALL_KW` 用）。
     Call {
         function: Box<Expression>,
-        /// 位置实参（在 `*` 之前）。
+        /// 位置实参（把 `*` 项摘掉后的列表；供符号分析／类型检查按"只关心表达式"遍历 ✓）。
         arguments: Vec<Expression>,
+        /// **实参在源码里的真实交错顺序**（round 54）：`print(*[1], *[2], 3)` 的 `3` 在
+        /// 两个星号实参**之后** —— 只看 `arguments`（[3]）＋ `star_arguments`（[[1],[2]]）
+        /// 会把顺序拼成 `3 1 2` ✗。发射器按这一列还原"前导普通实参 ＋ 逐个 `*`／普通"的
+        /// 参照形状（`BUILD_LIST n; … LIST_EXTEND 1; … LIST_APPEND 1; …` ✓）。
+        positional_order: Vec<PositionalArgument>,
         /// `*expr`（本层只接线一个）。
         star_arguments: Vec<Expression>,
         /// `名字=值`。

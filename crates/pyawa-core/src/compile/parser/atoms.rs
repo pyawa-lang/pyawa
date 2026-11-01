@@ -399,6 +399,7 @@ pub(crate) fn parse_call_suffix(
     let open_paren_span = lexed.spans[cursor];
     let mut cursor = cursor + 1;
     let mut arguments = Vec::new();
+    let mut positional_order: Vec<crate::compile::PositionalArgument> = Vec::new();
     let mut star_arguments: Vec<Expression> = Vec::new();
     let mut keywords: Vec<(String, Expression)> = Vec::new();
     let mut dict_arguments: Vec<Expression> = Vec::new();
@@ -423,6 +424,7 @@ pub(crate) fn parse_call_suffix(
             }
             cursor += 1;
             let (value, next) = parse_expression(lexed, cursor)?;
+            positional_order.push(crate::compile::PositionalArgument::Star(value.clone()));
             star_arguments.push(value);
             cursor = next;
             match lexed.lexemes.get(cursor) {
@@ -444,6 +446,12 @@ pub(crate) fn parse_call_suffix(
             let (value, next) = parse_expression(lexed, cursor)?;
             dict_arguments.push(value);
             cursor = next;
+            // **`f(**x for x in …)` ⇒ 参照的 `SyntaxError: invalid syntax`** ✓（round 54）：
+            // 生成器表达式不能直接当 `**` 实参 ⇒ CPython 在 `**x` 处报"invalid syntax" ✓
+            // （`test_unpack_ex` 的 doctest 逐字比较报文 ✓）。
+            if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                return Err(CompileError::Syntax("invalid syntax".to_owned()));
+            }
             match lexed.lexemes.get(cursor) {
                 Some(Lexeme::Comma) => cursor += 1,
                 Some(Lexeme::RightParen) => {}
@@ -515,15 +523,18 @@ pub(crate) fn parse_call_suffix(
                     conditions,
                 }];
                 generators.extend(extra);
-                arguments.push(Expression::Comprehension {
+                let comprehension = Expression::Comprehension {
                     kind: ComprehensionKind::Generator,
                     element: Box::new(argument),
                     value: None,
                     generators,
                     span,
-                });
+                };
+                positional_order.push(crate::compile::PositionalArgument::Plain(comprehension.clone()));
+                arguments.push(comprehension);
                 cursor = after;
             } else {
+                positional_order.push(crate::compile::PositionalArgument::Plain(argument.clone()));
                 arguments.push(argument);
                 cursor = next;
             }
@@ -549,6 +560,7 @@ pub(crate) fn parse_call_suffix(
         Expression::Call {
             function: Box::new(function),
             arguments,
+            positional_order,
             star_arguments,
             keywords,
             dict_arguments,

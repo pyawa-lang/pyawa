@@ -1315,6 +1315,43 @@ impl Instance {
                 "__getitem__",
                 crate::builtin::dict::dict_getitem_native as crate::NativeFn,
             ),
+            // **内建类型的 `__iter__` 属性面** ✓（round 54；见 `builtin_iter_dunder_native`）：
+            // `d.__iter__()` 一类显式调用要能取到（`test_unpack_ex` 的 `CrazyDict` 依赖它 ✓）。
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("list").expect("list 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("str").expect("str 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("bytes").expect("bytes 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("set").expect("set 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("range").expect("range 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
             (
                 self.type_named("dict").expect("dict 已登记"),
                 "__setitem__",

@@ -139,6 +139,26 @@ pub fn object_getattribute_native(
     };
     crate::executor::attribute::attribute_read(instance, object, &text)
 }
+/// **内建类型的 `__iter__` 属性面** ✓（round 54）：参照里 `d.__iter__()`／`s.__iter__()`
+/// 都可显式取用（`dict`／`list`／`tuple`／`str`／`bytes`／`set`／`range` …）。本层先前只在
+/// **迭代协议**里内建处理 ⇒ 显式 `d.__iter__()` 报
+/// `AttributeError: 'dict' object has no attribute '__iter__'` ✗ ——
+/// `test_unpack_ex` 的 `CrazyDict.__iter__` 里 `self.d.__iter__()` 正是它 ✓。
+pub(crate) fn builtin_iter_dunder_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound.or_else(|| args.first().copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__iter__' of 'object' needs an argument",
+        ));
+    };
+    instance.iter_object(this)
+}
+
 /// **`object.__new__(cls, *args)`** ✓（第 193 轮）：参照里它是**独立的内建** ✓（不是 `type.__new__` ✓）。
 ///
 /// 走**类自己的 `new` 槽** ✓（`attribute_new` 等 ✓ ⇒ **一处真相** ✓）；`args` 按参照的规矩处理 ✓
