@@ -396,9 +396,33 @@ fn index_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let only = one_argument(instance, args)?;
-    if instance.int_value(*only).is_some() {
-        // `int`／`bool` 的整数载荷直接给一份新引用（`bool` 也走这里：`index(True) == 1`）
-        return Ok(instance.new_int(instance.int_value(*only).unwrap_or_default()));
+    if let Some(value) = instance.int_of(*only) {
+        // **任意精度**（round 67）：`bool` ⇒ int 1；大整数原值交回 ✓（先前只认 `i64` ✗ ⇒
+        // `random.randrange(-10**300, 10**300)` 报 `'int' object cannot be interpreted as an integer` ✗）。
+        if value.to_i64().is_some() && instance.type_name(instance.type_of(*only)) == "bool" {
+            return Ok(instance.new_int(value.to_i64().unwrap_or_default()));
+        }
+        return Ok(instance.retain(*only));
+    }
+    // **`__index__` 协议**（round 67）：参照的 `operator.index` 认它 ✓；
+    // 返回非 `int` ⇒ `TypeError: __index__ returned non-int (type X)` ✓。
+    if let Some(method) =
+        pyawa_core::executor::attribute::attribute_optional(instance, *only, "__index__")
+            .ok()
+            .flatten()
+    {
+        let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+        instance.release(method);
+        let result = outcome?;
+        if instance.int_of(result).is_none() {
+            let kind = instance.type_name(instance.type_of(result)).to_owned();
+            instance.release(result);
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("__index__ returned non-int (type {kind})"),
+            ));
+        }
+        return Ok(result);
     }
     let name = instance.type_name(instance.type_of(*only));
     Err(instance.raise_builtin_error(

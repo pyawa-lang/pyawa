@@ -396,9 +396,22 @@ pub(crate) fn int_bit_length_native(
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bound_int(instance, bound)?;
-    let bits = if value == 0 { 0 } else { 64 - value.unsigned_abs().leading_zeros() as i64 };
-    Ok(instance.new_int(bits))
+    // **任意精度整数**（round 67）：先前用 `bound_int`（只认 `i64`）✗ ⇒ `(10**300).bit_length()`
+    // 报 `descriptor needs an int` ✗（`random.randrange` 的大区间正是这条 ✓）。
+    let Some(owner) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'bit_length' of 'int' object needs an argument",
+        ));
+    };
+    let Some(value) = instance.int_of(owner) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'bit_length' for 'int' objects doesn't apply to a foreign object",
+        ));
+    };
+    let bits = value.to_bigint().bit_length();
+    Ok(instance.new_int(bits as i64))
 }
 
 

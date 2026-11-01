@@ -608,14 +608,16 @@ impl BigInt {
         self
     }
 
-    fn bit_length(&self) -> u64 {
+    /// **二进制位数**（`int.bit_length()` 的任意精度版 ✓，round 67 起公开）：`0` ⇒ `0` ✓。
+    pub fn bit_length(&self) -> u64 {
         match self.limbs.last() {
             None => 0,
             Some(top) => (self.limbs.len() as u64 - 1) * 32 + u64::from(32 - top.leading_zeros()),
         }
     }
 
-    fn bit(&self, index: u64) -> bool {
+    /// 取第 `index` 位（round 67 起公开：模幂快路按位扫指数 ✓）。
+    pub fn bit(&self, index: u64) -> bool {
         let limb = (index / 32) as usize;
         let offset = (index % 32) as u32;
         self.limbs.get(limb).is_some_and(|value| (value >> offset) & 1 == 1)

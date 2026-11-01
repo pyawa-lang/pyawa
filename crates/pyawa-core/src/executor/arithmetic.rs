@@ -42,8 +42,20 @@ pub fn arithmetic_public(
     // 定义 `__or__`／`__and__`／`__xor__` 一族 ⇒ 参照先查 `type(left).__or__` ✓、命中就以 Python
     // 语义调用 ✓；先前这里按**载荷**（int）直接走原生运算 ✗ ⇒ `Flags.X | Flags.Y` 得到**普通 int**
     // （缺 `.value`／`._name_`）✗ ⇒ `IntFlag` 组合值全错 ✓。
-    if let Some(result) = binary_override(instance, left, right, symbol, opcode)? {
+    let (overridden, had_override) = binary_override(instance, left, right, symbol, opcode)?;
+    if let Some(result) = overridden {
         return Ok(result);
+    }
+    if had_override {
+        // **双方都返回 `NotImplemented`** ⇒ 参照报 `unsupported operand type(s) for <op>: 'A' and 'B'` ✓
+        //（round 67：`DummyIntegral.__truediv__` 返回 `NotImplemented`、本层先前悄悄退回原生 int 除法 ✗
+        // ⇒ `test_numeric_tower.test_fractions` 的 `assertRaises(TypeError)` 红 ✓）。
+        let left_name = instance.type_name(instance.type_of(left)).to_owned();
+        let right_name = instance.type_name(instance.type_of(right)).to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("unsupported operand type(s) for {symbol}: '{left_name}' and '{right_name}'"),
+        ));
     }
 
     // **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测第一个撞上的是
@@ -359,18 +371,22 @@ fn binary_override(
     right: NonNull<Header>,
     symbol: &str,
     opcode: u8,
-) -> Result<Option<NonNull<Header>>, ExecError> {
+) -> Result<(Option<NonNull<Header>>, bool), ExecError> {
     let Some((dunder, reflected)) = binary_dunder(symbol) else {
-        return Ok(None);
+        return Ok((None, false));
     };
+    let mut had_override = false;
     for (name, swapped) in [(dunder, false), (reflected, true)] {
         let (receiver, other) = if swapped { (right, left) } else { (left, right) };
-        let Some(result) = call_user_dunder(instance, receiver, other, name, opcode)? else {
-            continue;
-        };
-        return Ok(Some(result));
+        match call_user_dunder(instance, receiver, other, name, opcode)? {
+            // **没有该方法** ⇒ 继续找反射那一侧 ✓。
+            None => continue,
+            // **方法在、但返回 `NotImplemented`** ⇒ 记下"有覆写"✓（决定后面报不报 TypeError）。
+            Some(None) => had_override = true,
+            Some(Some(result)) => return Ok((Some(result), true)),
+        }
     }
-    Ok(None)
+    Ok((None, had_override))
 }
 
 /// 若 `receiver` 的类型（沿 MRO）里有一个**用户类**定义的 `name` ⇒ 调用它并把结果交回 ✓；
@@ -381,7 +397,7 @@ fn call_user_dunder(
     other: NonNull<Header>,
     name: &str,
     opcode: u8,
-) -> Result<Option<NonNull<Header>>, ExecError> {
+) -> Result<Option<Option<NonNull<Header>>>, ExecError> {
     let receiver_type = instance.type_of(receiver);
     let Some((owner, _)) = instance.type_lookup_owner(receiver_type, name) else {
         return Ok(None);
@@ -406,9 +422,9 @@ fn call_user_dunder(
     )?;
     if result == instance.not_implemented() {
         unsafe { instance.release_object(result.as_ptr()) };
-        return Ok(None);
+        return Ok(Some(None));
     }
-    Ok(Some(result))
+    Ok(Some(Some(result)))
 }
 
 // ===================== **复数塔**（task-30／P3-34） =====================

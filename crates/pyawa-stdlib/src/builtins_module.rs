@@ -1929,6 +1929,23 @@ fn bigint_modpow(base: &BigInt, exponent: &BigInt, modulus: &BigInt) -> BigInt {
     if modulus.cmp(&one) == core::cmp::Ordering::Equal {
         return BigInt::from_i64(0);
     }
+    // **小模数快路**（round 67）：模数装得下 `u64` 时用 `u128` 逐位乘加 ✓ —— 先前
+    // 每步都建 `BigInt`（`mul` ＋ `mod`）✗ ⇒ `pow(a, 2**50000, 小素数)` **3~13 s** ✗
+    //（`test_pow.test_big_exp` 的 50000 位指数随机测试因此从"快"变"超时"✓）。
+    // `m ≤ u64::MAX` ⇒ `(m-1)^2 < 2^128` ⇒ `u128` 乘法安全 ✓。
+    if let Some(m) = modulus.to_u64() {
+        let m = m as u128;
+        let mut result: u128 = 1 % m;
+        let mut factor = bigint_mod(base, modulus).to_u64().unwrap_or(0) as u128 % m;
+        let bits = exponent.bit_length();
+        for index in 0..bits {
+            if exponent.bit(index) {
+                result = result * factor % m;
+            }
+            factor = factor * factor % m;
+        }
+        return BigInt::from_u64(result as u64);
+    }
     let mut result = BigInt::from_i64(1);
     let mut factor = bigint_mod(base, modulus);
     let mut remaining = exponent.clone();

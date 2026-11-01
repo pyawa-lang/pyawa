@@ -88,23 +88,56 @@ pub(crate) fn float_as_integer_ratio_native(
         return Err(instance.raise_builtin_error("TypeError", "as_integer_ratio 只接浮点"));
     };
     if value.is_nan() {
-        return Err(instance.raise_builtin_error("ValueError", "cannot convert NaN to integer ratio"));
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "cannot convert NaN to integer ratio",
+        ));
     }
     if value.is_infinite() {
-        return Err(instance.raise_builtin_error("OverflowError", "cannot convert Infinity to integer ratio"));
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "cannot convert Infinity to integer ratio",
+        ));
     }
-    let mut numerator = value;
-    let mut denominator = 1.0f64;
-    // 最多 1100 次（`f64` 的最小次正规约 2^-1074 ✓）⇒ 有界 ✓
-    while numerator.fract() != 0.0 && denominator < 1e300 {
-        numerator *= 2.0;
-        denominator *= 2.0;
+    // **精确整数比（任意精度）** ✓（round 67）：先前用 `f64` 乘 2 再 `as i64` ✗ ⇒
+    // 大指数／次正规浮点会**饱和成 `i64::MAX`** ✗（实测 `1e-300.as_integer_ratio()` 给
+    // 分母 `9223372036854775807` ✗；`_pydecimal.Decimal.from_float` 因此算错哈希 ⇒
+    // `test_numeric_tower.test_binary_floats` 红 ✓）。
+    // 做法：拆 `f64` 的位（尾数整数 ＋ 2 的指数），约掉尾数的 2 因子，再用 `BigInt` 拼 ✓。
+    let bits = value.to_bits();
+    let sign = (bits >> 63) & 1 == 1;
+    let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1u64 << 52) - 1);
+    let (mut mantissa, mut exponent) = if exponent_bits == 0 {
+        // 次正规：0.fraction × 2^-1022 ⇒ fraction × 2^-1074
+        (fraction, -1074i32)
+    } else {
+        (fraction | (1u64 << 52), exponent_bits - 1075)
+    };
+    if mantissa == 0 {
+        let zero = instance.new_int(0);
+        let one = instance.new_int(1);
+        return Ok(instance.new_tuple(vec![zero, one]));
     }
-    let pair = vec![
-        instance.new_int(numerator as i64),
-        instance.new_int(denominator as i64),
-    ];
-    Ok(instance.new_tuple(pair))
+    while mantissa & 1 == 0 {
+        mantissa >>= 1;
+        exponent += 1;
+    }
+    let mut numerator = crate::bigint::BigInt::from_u64(mantissa);
+    let mut denominator = crate::bigint::BigInt::from_u64(1);
+    if exponent >= 0 {
+        numerator = numerator.mul(&crate::bigint::BigInt::from_u64(2).pow_u32(exponent as u32));
+    } else {
+        denominator = denominator.mul(&crate::bigint::BigInt::from_u64(2).pow_u32((-exponent) as u32));
+    }
+    if sign {
+        numerator = numerator.neg();
+    }
+    let numerator = instance
+        .new_int_value(crate::bigint::IntValue::from_big(numerator));
+    let denominator = instance
+        .new_int_value(crate::bigint::IntValue::from_big(denominator));
+    Ok(instance.new_tuple(vec![numerator, denominator]))
 }
 
 /// **`float.fromhex(str)` 的类型级入口**（第 406 轮 ✓）：`_pylong.py:260` 导入期就用
@@ -276,13 +309,10 @@ pub unsafe fn float_new(
                     "TypeError",
                     "float() argument must be a string or a real number, not 'complex'",
                 ));
-            } else if let Some(method) = instance
-                .type_lookup(instance.type_of(*only), "__float__")
-                .or_else(|| {
-                    crate::executor::attribute::attribute_optional(instance, *only, "__float__")
-                        .ok()
-                        .flatten()
-                })
+            } else if let Some(method) =
+                crate::executor::attribute::attribute_optional(instance, *only, "__float__")
+                    .ok()
+                    .flatten()
             {
                 // **`float(obj)` 走 `__float__`** ✓（round 66）：`numbers.Rational.__float__` 之类
                 // 是纯 Python 方法（`fractions.Fraction` 继承它 ✓）；先前只认内建数字类型 ✗。
