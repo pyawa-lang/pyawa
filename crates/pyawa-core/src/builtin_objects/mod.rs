@@ -21,6 +21,7 @@ pub(crate) mod formatting;
 mod memoryview;
 mod complex;
 
+pub(crate) use self::exceptions::add_exception_note;
 pub use self::scalars::*;
 pub use self::range_slice::*;
 pub use self::containers::*;

@@ -517,14 +517,29 @@ pub fn generic_init_subclass_native(
         }
     }
     if params.is_empty() {
-        // **参照口径** ✓（`Lib/typing.py:1174` 的 `_generic_init_subclass`）：没有类型参数时
-        // **`Protocol`**（按类名 ✓）与 **`TypedDict`**（按元类名 ✓）**不报** ✗ —— 它们的
-        // `__init_subclass__` 自己会接着做 ✓（实测 `class Protocol(Generic, metaclass=_ProtocolMeta)`
-        // 在参照里正常建类 ✓；先前一律报 ⇒ `import typing` 卡在这里 ✗）。
+        // **参照口径** ✓（`Lib/typing.py:1174` 的 `_generic_init_subclass`）：
+        // `error = (Generic in cls.__bases__ and cls.__name__ != 'Protocol'
+        //           and type(cls) != _TypedDictMeta)` —— 只有**直接基类**里出现**裸 `Generic`**
+        // 才报 ✗；`Protocol` 自己与 `TypedDict` 元类、以及**只经 `Protocol` 间接继承**的类
+        // （`class SupportsInt(Protocol)`）都不报 ✓（round 65：先前"params 空就报" ⇒
+        // `import typing` 在 `SupportsInt` 处红 ✗）。
         // SAFETY: `cls` 是类型对象（`__init_subclass__` 的绑定契约 ✓）。
         let class_name = unsafe { cls.cast::<TypeObject>().as_ref() }.name().to_owned();
         let metaclass_name = instance.type_name(unsafe { cls.as_ref() }.ty());
-        if class_name != "Protocol" && metaclass_name != "_TypedDictMeta" {
+        // 直接基类里有**裸 `Generic`** 吗？（按引导期注册的类型身份比 ✓）
+        let generic = instance.type_named("Generic");
+        let bases = instance.tuple_items(
+            instance
+                .attribute_optional_of(cls, "__bases__")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| instance.new_tuple(Vec::new())),
+        )
+        .unwrap_or_default();
+        let plain_generic = generic
+            .map(|generic| bases.iter().any(|base| *base == generic.cast::<Header>()))
+            .unwrap_or(false);
+        if plain_generic && class_name != "Protocol" && metaclass_name != "_TypedDictMeta" {
             return Err(instance.raise_builtin_error(
                 "TypeError",
                 "Cannot inherit from plain Generic",

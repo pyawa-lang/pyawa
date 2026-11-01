@@ -937,7 +937,22 @@ pub fn build_class_from_parts_with_keywords(
                     instance.release(setter);
                     match outcome {
                         Ok(result) => instance.release(result),
-                        Err(error) => return Err(error),
+                        Err(error) => {
+                            // **PEP 678 自动 note**（round 65，参照 `type_new_set_attrs` 口径）：
+                            // `Error calling __set_name__ on 'Descriptor' instance 'attr' in 'C'` ✓
+                            //（`test_subclassinit.test_set_name_error` 读 `__notes__` ✓）。
+                            if let crate::executor::ExecError::Raised { exception } = &error {
+                                let describing = instance.type_name(instance.type_of(value)).to_owned();
+                                let attribute = instance.text_value(key).unwrap_or_default();
+                                let note = format!(
+                                    "Error calling __set_name__ on '{describing}' instance '{attribute}' in '{name}'"
+                                );
+                                crate::builtin_objects::add_exception_note(
+                                    instance, *exception, &note,
+                                );
+                            }
+                            return Err(error);
+                        }
                     }
                 }
                 Ok(None) => {}

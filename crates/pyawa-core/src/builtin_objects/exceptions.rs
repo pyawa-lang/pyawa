@@ -361,6 +361,29 @@ pub unsafe fn exception_getattr(
             ));
             Some(bound.into_raw().cast::<Header>())
         }
+        "add_note" => {
+            // **PEP 678 的 `BaseException.add_note(note)`**（round 65）：`__notes__` 存在实例字典里 ✓
+            // （`test_subclassinit` 的 `__set_name__` 失败路径要读它 ✓）。
+            // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+            let owner = unsafe { NonNull::new_unchecked(ptr) };
+            let method_type = instance
+                .type_named("builtin_function_or_method")
+                .expect("引导期已登记");
+            let native = instance.alloc(BuiltinFunctionObject::new(
+                method_type,
+                "add_note",
+                Cell::new(add_note_native),
+            ));
+            let native_raw = native.into_raw().cast::<Header>();
+            // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+            unsafe { instance.incref_object(ptr) };
+            let bound = instance.alloc(MethodObject::new(
+                instance.type_named("method").expect("method 已登记"),
+                native_raw,
+                owner,
+            ));
+            Some(bound.into_raw().cast::<Header>())
+        }
         // **有就给、没有给 `None`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `raise` 时挂上去 ✓
         //（`Instance::new_traceback` ✓）；未抛过 ⇒ `None` ✓。
         "__traceback__" => {
@@ -439,6 +462,90 @@ unsafe fn exception_setstate_native(
 /// **如实偏差** ✗：本层的 traceback 对象是 `BC-60` 的"最小起步"（`tb_frame` ＋ 占位的
 /// `tb_next`／`tb_lineno`／`tb_lasti` ✓）⇒ 这里只做**类型校验 ＋ 挂载**，不重建链 ✓
 /// （与 `DIV-6` 的既有口径一致 ✓；测试里只靠"设／读回"这一档 ✓）。
+/// **给异常追加一条 note**（PEP 678）：`__notes__` 是实例字典里的 `list` ✓。
+///
+/// 返回 `false` ⇒ `__notes__` 现值不是 list（参照会覆盖成新 list？这里保守放弃 ✓）。
+pub(crate) fn add_exception_note(
+    instance: &Instance,
+    exception: NonNull<Header>,
+    note: &str,
+) -> bool {
+    let Some(memory) = crate::executor::protocol::mounted_instance_dict(instance, exception)
+    else {
+        return false;
+    };
+    let existing = instance.dict_get(memory, "__notes__");
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    if let Some(existing) = existing {
+        let Some(values) = instance.list_items(existing) else {
+            return false;
+        };
+        for item in values {
+            // SAFETY: item 由 list 持有。
+            unsafe { instance.incref_object(item.as_ptr()) };
+            items.push(item);
+        }
+    }
+    let text = instance.new_str(note);
+    items.push(text);
+    let list = instance.new_list(items);
+    let _ = instance.set_attribute_value(exception, "__notes__", list);
+    // SAFETY: list 的那份引用交给实例字典（set_attribute_value 已 retain ✓）⇒ 这里归还新建那份 ✓。
+    unsafe { instance.release_object(list.as_ptr()) };
+    true
+}
+
+/// **`BaseException.add_note(note)`**（round 65）：参数必须是 `str` ✓（参照：
+/// `add_note() argument must be str, not int` ✓）。
+unsafe fn add_note_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'add_note' needs an argument",
+        ));
+    };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "add_note() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "add_note() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let note = args[0];
+    // SAFETY: note 是存活实参。
+    let ty = unsafe { note.as_ref() }.ty();
+    let is_str = ty == instance.singletons().str_type()
+        || instance.is_subtype(ty, instance.singletons().str_type());
+    if !is_str {
+        let type_name = instance.type_name(ty).to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("add_note() argument must be str, not {type_name}"),
+        ));
+    }
+    let Some(text) = instance.text_of(note).map(str::to_owned) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "add_note() argument must be str, not str",
+        ));
+    };
+    add_exception_note(instance, this, &text);
+    Ok(instance.new_none())
+}
+
 unsafe fn with_traceback_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
