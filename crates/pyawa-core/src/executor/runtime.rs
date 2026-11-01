@@ -497,6 +497,7 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
     // `Err(Raised)` 那一份由派发器接手（`push` 进值栈）或由调用方消费。
     // SAFETY: exception 由调用方保证存活。
     unsafe { instance.incref_object(exception.as_ptr()) };
+    attach_traceback(instance, exception);
     if let Some(previous) = instance.set_pending_exception(Some(exception)) {
         release(instance, previous);
     }
@@ -539,6 +540,19 @@ pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
     } else if let Err(ExecError::Raised { exception }) = outcome {
         // SAFETY: 错误里那份引用在这里消费。
         unsafe { instance.release_object(exception.as_ptr()) };
+    }
+}
+
+/// **给异常挂上当前帧的 traceback**（round 49）：`Lib/doctest.py:1407` 的
+/// `exc.__traceback__.tb_next` 钉住 —— 先前只有 `RAISE_VARARGS` 的显式 `raise` 才挂 ✗，而
+/// **直接构造 `Err(Raised)`** 的路径（`compile()` 的 SyntaxError、生成器 `throw` 的首抛先）全都没挂
+/// ⇒ doctest 一比较回溯就是 `'NoneType' object has no attribute 'tb_next'` ✗。
+/// **尽力而为**（没有当前帧、或异常没有实例字典 ⇒ 如实不挂 ✓）。
+pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) {
+    if let Some(frame) = instance.current_frame() {
+        let traceback = instance.new_traceback(frame);
+        let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
+        release(instance, traceback);
     }
 }
 

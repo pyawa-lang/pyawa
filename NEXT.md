@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 48：`test_bool` **全绿**、官方套件跑通 23→24）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 49：doctest 导入前置面 ⇒ 4 个 doctest 文件推进到真实用例；round 48：`test_bool` 全绿）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -24,8 +24,13 @@
   **round 48 已清**：`test_bool` **全绿（OK）** —— `int.__new__`／`bool.__new__` 显式登记
   （`type.__new__` 的 new 槽桥接收口）＋ 核心侧 `DeprecationWarning` 通道（`~bool`，走
   `sys.modules['warnings'].warn`，惰性不主动 import）；官方套件跑通 **23 → 24**。
-  下一轮候选：`test_weakref`（形参所有权）／`KeyError` 上下文污染（上限榜 8 文件签名）／
-  `P3-35` 的 `\N{…}`（可用 `gen_unicode` 同款探测生成 Unicode 名字表）／`P3-29`／`P3-37` 剩余面。
+  **round 49 起手**：doctest 的导入前置面（`sys.gettrace`／`sys.stdin`／`sys.displayhook`／
+  `settrace`／`setprofile`、隐式异常 `__traceback__`（含 `compile()` 的 SyntaxError）、
+  `backslashreplace` 四档编码器）⇒ `test_extcall`／`test_genexps`／`test_unpack_ex`／
+  `test_pep646_syntax` 从**导入即死**推进到真正的 doctest 用例。**下一轮（round 50）**：
+  `DICT_MERGE` 两件事（`**映射` 走映射协议；同名键 TypeError 带被调函数 qualname）＋
+  `test_genexps` 生成器 `throw` 的 `StackUnderflow` ＋ `test_pep646_syntax` 断言差异；
+  之后：`test_weakref`（形参所有权）／`KeyError` 上下文污染／`P3-35` 的 `\N{…}`／`P3-29`／`P3-37`。
   **round 44 已清 ②**：`test_userstring` **38 failures／4 errors ⇒ OK（skipped=2）** ✓ —— 根因
   `==`／`!=` 没走 `__eq__`／`__ne__`（P3-42 核心格）＋ `str` 一族口径（fillchar／replace count／zfill
   符号／expandtabs 换行列／rpartition 空分隔符／搜索族 arity 报文／下标错型与大整数饱和／切片饱和

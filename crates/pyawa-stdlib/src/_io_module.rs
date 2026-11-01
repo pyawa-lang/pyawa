@@ -344,6 +344,96 @@ fn stderr_writeln(
 ///
 /// **逐对象**挂方法 ✓：`stdout` 与 `stderr` 是**同一种类型**（类型只登记一次 ✓），但**句柄不同**
 /// ⇒ 方法必须按对象分 ✓ —— 塞进共享类型字典会把两个句柄混成一个 ✗。
+/// **最小 `sys.stdin`**（round 49）：`Lib/pdb.py:954` 一类代码会读写 `sys.stdin`（`doctest` 的
+/// `pdb.set_trace` 补丁路径触到它 ✓）。本层**没有**真实标准输入读取能力（`CM-26` 方向）⇒
+/// 如实给"**恒 EOF**"的文本流：`read()`／`readline()` ⇒ `''`、`readlines()` ⇒ `[]`、
+/// `isatty()` ⇒ `False`；属性面照 `sys.stdout` 的同款最小面 ✓（不伪造交互能力 ✗）。
+pub fn make_stdin_stream(instance: &Instance) -> NonNull<Header> {
+    let stream_type = match instance.type_named(TEXT_WRAPPER) {
+        Some(existing) => existing,
+        None => instance.new_attribute_type(TEXT_WRAPPER),
+    };
+    let attributes = instance.new_dict();
+    for (name, handler) in [
+        ("read", stdin_read as NativeFn),
+        ("readline", stdin_read as NativeFn),
+        ("readlines", stdin_readlines as NativeFn),
+        ("flush", stream_flush as NativeFn),
+        ("close", stdin_none as NativeFn),
+        ("isatty", stdin_false as NativeFn),
+        ("readable", stdin_true as NativeFn),
+        ("writable", stdin_false as NativeFn),
+        ("seekable", stdin_false as NativeFn),
+    ] {
+        let native = crate::builtins_module::make_native(instance, name, handler);
+        instance.dict_set(attributes, name, native);
+        instance.release(native);
+    }
+    let closed = instance.new_bool(false);
+    instance.dict_set(attributes, "closed", closed);
+    instance.release(closed);
+    for (name, value) in [
+        ("encoding", STREAM_ENCODING_NAME),
+        ("errors", "surrogateescape"),
+        ("name", "<stdin>"),
+        ("mode", "r"),
+    ] {
+        let text = instance.new_str(value);
+        instance.dict_set(attributes, name, text);
+        instance.release(text);
+    }
+    let object = instance.alloc(AttributeObject::new(
+        stream_type,
+        RefCell::new(Some(attributes)),
+    ));
+    object.into_raw().cast::<Header>()
+}
+
+fn stdin_read(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_str(""))
+}
+
+fn stdin_readlines(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_list(Vec::new()))
+}
+
+fn stdin_none(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.singletons().none())
+}
+
+fn stdin_false(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.retain(instance.singletons().boolean(false)))
+}
+
+fn stdin_true(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.retain(instance.singletons().boolean(true)))
+}
+
 pub fn make_stream(instance: &Instance, handle: u64) -> NonNull<Header> {
     // **类型只登记一次**：`stdout` 与 `stderr` 是同一种文本流 ✓。重复 `new_attribute_type`
     // 用同名会写坏类型注册表 ✗（第 94 轮实测：子进程退出时 `tcache_thread_shutdown():

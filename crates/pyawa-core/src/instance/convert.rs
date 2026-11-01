@@ -410,6 +410,8 @@ fn encode_utf8_builtin(
                 }
                 "ignore" => {}
                 "replace" => out.push(b'?'),
+                // **`backslashreplace`** ✓（round 49）：代理码点写成 `\uD800` 形式（参照 ✓）。
+                "backslashreplace" => out.extend(character_literal(code).bytes()),
                 "strict" => return Err(surrogate_encode_error(instance, &points, position, None)),
                 "surrogateescape" => {
                     return Err(surrogate_encode_error(
@@ -450,6 +452,9 @@ fn encode_ascii_builtin(
         match errors {
             "ignore" => {}
             "replace" => out.push(b'?'),
+            // **`backslashreplace`** ✓（round 49）：不可编码字符 ⇒ `\xNN`／`\uNNNN`／`\UNNNNNNNN`
+            // 文本形式（小写十六进制，照参照 ✓）。`Lib/doctest.py` 的 `ascii()` 一族走它 ✓。
+            "backslashreplace" => out.extend(character_literal(code).bytes()),
             // `surrogateescape` 对**不可逃逸**的字符（含 U+D800..DC7F／DD00..DFFF 与普通
             // 不可编码字符）照参照回本编解码器的 strict 文案 ✓（只有 UTF-8 才说 surrogates not allowed）。
             "strict" | "surrogatepass" | "surrogateescape" => {
@@ -486,6 +491,8 @@ fn encode_latin1_builtin(
         match errors {
             "ignore" => {}
             "replace" => out.push(b'?'),
+            // **`backslashreplace`** ✓（round 49，同 ascii 口径）。
+            "backslashreplace" => out.extend(character_literal(code).bytes()),
             "strict" | "surrogatepass" | "surrogateescape" => {
                 return Err(instance.raise_builtin_error(
                     "UnicodeEncodeError",
@@ -521,6 +528,8 @@ fn encode_cp437_builtin(
         match errors {
             "ignore" => {}
             "replace" => out.push(b'?'),
+            // **`backslashreplace`** ✓（round 49，同 ascii 口径）。
+            "backslashreplace" => out.extend(character_literal(code).bytes()),
             "strict" | "surrogatepass" | "surrogateescape" => {
                 return Err(instance.raise_builtin_error(
                     "UnicodeEncodeError",

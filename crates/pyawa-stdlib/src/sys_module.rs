@@ -410,6 +410,55 @@ fn getrecursionlimit_native(
 
 /// **`sys.setrecursionlimit(n)`** ✓（task-20 第 3 轮 ✓）：**只降不升** ✓（夹到 `MAX_CALL_DEPTH` ✓，
 /// 理由见那一处：本层 Python 调用吃原生栈 ✗）。回 `None` ✓。
+/// `sys.displayhook(value)`：`None` 不打印；否则把 `repr(value)` ＋ `'\n'` 写进标准输出，
+/// 并把 `builtins._` 置成该值（参照口径 ✓）。写端直接走 `_io` 的 `write_bytes`
+/// （**不**经 `sys.stdout` 的属性通道 —— 那条路在本层绕一圈反而易踩悬垂，round 49 实测 SIGBUS ✗）。
+fn displayhook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Ok(instance.singletons().none());
+    };
+    if value == instance.singletons().none() {
+        return Ok(instance.singletons().none());
+    }
+    // `builtins._ = value`（借用语义由 dict_set 自己 retain ✓）。
+    if let Some(builtins) = instance.builtins() {
+        instance.dict_set(builtins, "_", value);
+    }
+    let mut line = instance.object_repr(value)?;
+    line.push('\n');
+    let _ = crate::_io_module::write_bytes(
+        instance,
+        crate::_io_module::STDOUT_HANDLE,
+        line.as_bytes(),
+    );
+    Ok(instance.singletons().none())
+}
+
+/// `sys.gettrace()`／`sys.getprofile()` ⇒ `None`（本层没有调试通道，如实 ✓）。
+fn trace_get_none_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.singletons().none())
+}
+
+/// `sys.settrace(f)`／`sys.setprofile(f)` ⇒ 接受并忽略（返回 `None`）；本层无调试通道 ✓。
+fn trace_set_ignore_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.singletons().none())
+}
+
 fn setrecursionlimit_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -795,6 +844,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "stdout", stdout);
     let stderr = crate::_io_module::make_stream(instance, crate::_io_module::STDERR_HANDLE);
     instance.dict_set(namespace, "stderr", stderr);
+    // **`sys.stdin`**（round 49）：最小"恒 EOF"文本流（见 `make_stdin_stream` 的如实口径 ✓）。
+    let stdin = crate::_io_module::make_stdin_stream(instance);
+    instance.dict_set(namespace, "stdin", stdin);
 
     // **`excepthook`／`__excepthook__`** ✓（第 724 轮）：`Lib/threading.py` 的
     // `_make_invoke_excepthook()` 读 `_sys.excepthook` ✓ —— 缺它 `import threading` 走到
@@ -836,6 +888,26 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     //（参照同义 ✓）；进程级退出码由组合根在**未捕获**时解释 ✓（`ExitDisposition` 一处真相 ✓）。
     let exit = make_native(instance, "exit", exit_native);
     instance.dict_set(namespace, "exit", exit);
+    // **`sys.gettrace()`／`settrace()`／`getprofile()`／`setprofile()`** ✓（round 49）：
+    // `Lib/doctest.py:1551` 的 `save_trace = sys.gettrace()` ⇒ 缺它时**所有 doctest 文件**一进门就
+    // `AttributeError` 中止 ✗（`test_extcall`／`test_genexps`／`test_unpack_ex`／`test_pep646_syntax`
+    // 的**唯一**错误就是它 ✓）。本层**没有**调试通道 ⇒ 取值恒 `None`、设值**接受并忽略** ✓
+    //（如实口径：真跟踪钩子未接线，行为面等于"没有 trace 函数" ✓）。
+    let gettrace = make_native(instance, "gettrace", trace_get_none_native);
+    instance.dict_set(namespace, "gettrace", gettrace);
+    let settrace = make_native(instance, "settrace", trace_set_ignore_native);
+    instance.dict_set(namespace, "settrace", settrace);
+    let getprofile = make_native(instance, "getprofile", trace_get_none_native);
+    instance.dict_set(namespace, "getprofile", getprofile);
+    let setprofile = make_native(instance, "setprofile", trace_set_ignore_native);
+    instance.dict_set(namespace, "setprofile", setprofile);
+    // **`sys.displayhook`／`sys.__displayhook__`** ✓（round 49）：`Lib/doctest.py:1563` 保存并换成
+    // `sys.__displayhook__` ⇒ 缺一即中止 ✗（4 个 doctest 文件的第二道门 ✓）。最小口径：
+    // 值不是 `None` ⇒ 把 `repr(值)` 写进 `sys.stdout` 并置 `builtins._`；`None` ⇒ 不打印 ✓。
+    let displayhook = make_native(instance, "displayhook", displayhook_native);
+    instance.dict_set(namespace, "displayhook", displayhook);
+    let builtin_displayhook = make_native(instance, "__displayhook__", displayhook_native);
+    instance.dict_set(namespace, "__displayhook__", builtin_displayhook);
     // **`sys.getsizeof`**（P3-38 S3e-3，task-67）：`test_marshal` 等导入期/用例会读它 ✓。
     let getsizeof = make_native(instance, "getsizeof", getsizeof_native);
     instance.dict_set(namespace, "getsizeof", getsizeof);

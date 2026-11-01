@@ -126,6 +126,8 @@ fn syntax_error(
         let _ = instance.set_attribute_value(exception, name, value);
         instance.release(value);
     }
+    // **`compile()` 的 SyntaxError 也要挂回溯** ✓（round 49；见 `attach_traceback` 的注释）。
+    crate::executor::runtime::attach_traceback(instance, exception);
     ExecError::Raised { exception }
 }
 
