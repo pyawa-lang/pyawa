@@ -174,8 +174,13 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 release(instance, keyword_source);
 
                 let result =
-                    call_callable(instance, callable, bound_self, args, kwargs, opcode_number)?;
-                frame.get().push(result)?;
+                    call_callable(instance, callable, bound_self, args, kwargs, opcode_number);
+                // **`bound_self` 是借用**（`call_callable` 契约）：本函数持有它那一份 ⇒ 调用完要还 ✓
+                // （`P3-41` round 43：先前漏还 ⇒ `f(*args)`／装饰器形态每次漏一份 receiver ✓）。
+                if let Some(self_object) = bound_self {
+                    release(instance, self_object);
+                }
+                frame.get().push(result?)?;
             }
         _ => unreachable!("step_calls_call_function_ex 只接收 CALL_FUNCTION_EX"),
     }
@@ -807,6 +812,15 @@ fn step_calls_call<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: 
                     opcode_number,
                 );
                 release(instance, callable);
+                // **`bound_self` 是借用**（`call_callable` 的契约：调用方持有）⇒ 这一格由
+                // 帧值栈 push 时 retain 过，调用完必须还 ✓（`P3-41` round 43 修 ✗：先前漏还
+                // ⇒ `a.m()` 每调一次 `a` 的 refcount +1，`test_weakref` 的 70000 个键值全留在堆上 ✓）。
+                if let Some(self_object) = bound_self {
+                    release(instance, self_object);
+                }
+                // **返回值是"新引用"** ✓：`Frame::push` 是"接管"语义 ⇒ 直接交，不能再经
+                // `push(instance, …)`（那会 `own()` 再 retain 一次 ⇒ **每调用漏一份返回值引用** ✗；
+                // `P3-41` round 43 实测：`f(a)` 返回 `a` 时 `a` 的 refcount 每次 +1 ✓）。
                 frame.get().push(result?)?;
             }
         _ => unreachable!("step_calls_call 只接收 CALL | CALL_KW"),

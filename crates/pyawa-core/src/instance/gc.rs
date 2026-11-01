@@ -139,20 +139,41 @@ impl Instance {
         let ty = unsafe { ptr.as_ref() }.ty();
 
         // ① 终结器（`__del__`）：置 FINALIZING 防止重入；可以复活（把计数改回 > 0）。
+        // **口径照本层 `OM-20`**：复活的对象清掉 FINALIZING ⇒ 之后再次死亡时**还能**再终结一次
+        // （`object_model` 的 `resurrection_aborts_the_release` 等用例钉住这条；参照的 `tp_finalize`
+        // 是"至多一次" ⇒ 这是本层**已登记**的偏差，别在这里改成 once-only ✗）。
         if let Some(finalize) = unsafe { ty.as_ref() }.slots.finalize {
             let header = unsafe { ptr.as_ref() };
             if !header.has_flag(flags::FINALIZING) {
                 header.set_flag(flags::FINALIZING);
+                // **终结窗口里临时自持一份**（CPython `PyObject_CallFinalizerFromDealloc` 同款；
+                // `P3-41` round 43 修 ✗✗）：`__del__` 的帧会持有 `self` 形参（本轮把形参所有权
+                // 交还帧 ⇒ 帧收尾会 decref 它）⇒ 之前计数会**在终结器返回前回到 0** ⇒ 内层
+                // `release_object` 重入 `release_one` ⇒ 当场 `clear`＋释放正在终结的对象 ⇒
+                // 外层复活判断读到悬垂指针／用例里 `__del__` 被反复调用（实测 `test_dict` 的
+                // `test_clear_reentrant_delete` 无限打 `del-key/keyerror`）。
+                // 自持一份后，终结器里的 decref 最低也停在 1 ✓；返回后**直接减计数**（不走释放流程）
+                // 再看是否真复活 ✓。
                 // SAFETY: ptr 是本实例的存活对象，计数已归零且仍在待处理栈上。
+                unsafe { self.incref_object(ptr.as_ptr()) };
+                // SAFETY: 同上。
                 unsafe { finalize(ptr.as_ptr(), self) };
                 let header = unsafe { ptr.as_ref() };
-                if header.refcount() != 0 {
+                let remaining = header.decref();
+                if remaining != 0 {
                     // 复活：清除 FINALIZING 并**放弃释放**（OM-20）。
                     header.clear_flag(flags::FINALIZING);
                     return;
                 }
             }
         }
+
+        // **先摘出 GC 链表再清引用**（`P3-41` round 43 修 ✗✗）：`clear` 会释放持有的引用，
+        // 里面可能跑 `__del__`（`test_dict.test_store_evilattr` 的 `__del__` 里就 `gc.collect()`）⇒
+        // 若对象仍挂在回收链表上、且计数已是 0 ⇒ 回收器把它当"不可达"再 `clear` 一次 ⇒
+        // 同一个 `Frame` 的 `code: RefCell` 二次借用（实测 `RefCell already borrowed` 的 panic／
+        // release 下直接段错误 ✓）。CPython 的 `tp_dealloc` 同样先 `PyObject_GC_UnTrack` ✓。
+        self.unlink(ptr);
 
         // ② 清空持有的引用：释放它们（可能再入待处理栈）。
         if let Some(clear) = unsafe { ty.as_ref() }.slots.clear {
@@ -168,7 +189,6 @@ impl Instance {
         // ③ 释放内存。
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
         let size = unsafe { ty.as_ref() }.instance_size;
-        self.unlink(ptr);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
         // **实验（第 238 轮）**：暂不真释放 ✓ ⇒ 崩溃消失即证明"释放后仍被用／写" ✗。
         if quarantine_mode() {

@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 42：`dict` 惰性哈希索引 ⇒ `test_dict` 超时解除）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 43：四类引用计数泄漏 ＋ 终结器语义修正；形参所有权试后撤回）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -16,9 +16,13 @@
   `title`／`swapcase`／`subscript`／`slice`／`strip(None)`／`splitlines(keepends)`／`split`／`rsplit` 的
   `UserString` 实参形态／`find/index` 的 `__index__` 实参与 `UserString` 实参／一处 `RecursionError`。
   **另外 6 个 hang 的剩余账**：`test_dict` 已由 round 42 的 dict 哈希索引解除（超时⇒3.59 s）；
-  **只剩 `test_weakref`**——round 42 用 `PYAWA_GC_LOG=1/2`（默认零输出）量出：`freed≈0`、
-  `live` 涨到 66.7 万、单次回收 372 ms（`O(live)`），与 dict 无关 ⇒ **下一轮查 GC 收不掉环**
-  （`find_unreachable` 的 external 计数／weakref 强引用副作用／异常对象留存）；
+  **只剩 `test_weakref`**——round 42 量出 GC `freed≈0`／`live` 66.7 万；round 43 用**对拍
+  refcount 增量**定位到四类"每次操作漏一份引用"并修掉（名字加载／`CALL` 的 `bound_self`／返回值
+  `push` 多 retain／`__call__` 转发），但**位置形参仍漏 1 份/调用**（`f(a)` ⇒ +100）：它是
+  `test_weakref` 剩余超时的主因；**下一轮**＝"帧拥有形参槽"的所有权审计（round 43 试过 ⇒ refcount
+  全归零，但 `__del__`＋`gc.collect()`＋属性写暴露潜伏 UAF：test_dict/test_weakref SIGABRT/SEGV、
+  gdb `release_object ← instance_attribute_set` ⇒ 已撤回；需同时审计属性写／终结器／异常回溯三条
+  重入路径，再动 `frame_clear`）。
   另一格：`d.values()`/`d.items()` 是列表快照（不是视图对象）⇒ 迭代中改字典不报错。
   然后（按用户取活顺序）：**`P3-42` 剩余两格**——(a) 特殊方法派发缺口（`==`/`!=` 不走 `__eq__`、
   `__add__` 等不派发）；(b) `unittest` contextmanager 里 `KeyError` 污染断言异常 `__context__`。

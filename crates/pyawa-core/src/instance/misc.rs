@@ -122,6 +122,48 @@ impl Instance {
                 .collect();
             eprintln!("[gc-types] {}", summary.join(" "));
         }
+        // `PYAWA_GC_LOG=3`：给几种"疑似泄漏"的对象**反查持有者链**（最多 5 跳；一次性诊断 ✓）。
+        if crate::diag::flag("PYAWA_GC_LOG") && std::env::var("PYAWA_GC_LOG").as_deref() == Ok("3") {
+            let headers = self.gc_headers();
+            let mut referrers: std::collections::HashMap<usize, Vec<NonNull<Header>>> =
+                std::collections::HashMap::new();
+            for header in &headers {
+                for child in self.children_of(*header) {
+                    referrers.entry(child as usize).or_default().push(*header);
+                }
+            }
+            for kind in ["AttributeError", "DummyKey", "DummyValue", "weakref", "dict"] {
+                let Some(start) = headers.iter().find(|header| {
+                    // SAFETY: 链上对象都存活。
+                    let ty = unsafe { header.as_ref() }.ty();
+                    unsafe { ty.as_ref() }.name() == kind
+                }) else {
+                    continue;
+                };
+                let mut cursor = *start;
+                let mut chain: Vec<String> = Vec::new();
+                for _ in 0..5 {
+                    let header = unsafe { cursor.as_ref() };
+                    let ty = header.ty();
+                    chain.push(format!(
+                        "{}(rc={})",
+                        unsafe { ty.as_ref() }.name(),
+                        header.refcount()
+                    ));
+                    let Some(parents) = referrers.get(&(cursor.as_ptr() as usize)) else {
+                        break;
+                    };
+                    let Some(parent) = parents
+                        .iter()
+                        .find(|parent| parent.as_ptr() as usize != cursor.as_ptr() as usize)
+                    else {
+                        break;
+                    };
+                    cursor = *parent;
+                }
+                eprintln!("[gc-hold] {} => {}", kind, chain.join(" <- "));
+            }
+        }
         if crate::diag::flag("PYAWA_GC_LOG") {
             eprintln!(
                 "[gc] index={} live={} live_after={} freed={} ms={}",

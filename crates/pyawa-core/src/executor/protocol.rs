@@ -82,8 +82,13 @@ pub(crate) fn lookup_in_mapping(
         .iter()
         .position(|(existing, _)| str_matches_public(instance, *existing, name))?;
     let (_, value) = dict.entry(position)?;
-    // SAFETY: value 由字典持有，存活；调用方要自己那份。
-    unsafe { instance.incref_object(value.as_ptr()) };
+    // **借用**：value 由字典持有 ✓（`P3-41` round 43 修 ✗）：先前这里 **incref** 而
+    // 调用点一律 `push(instance, frame, value)`（`push` 自己会 `own()` 再加一份 ✓）⇒
+    // **每次名字加载漏一份引用** ⇒ 对象永不释放（实测 `c = a` 循环 100 次 ⇒ `a` 的 refcount +100；
+    // `test_weakref` 因此把 70000 个 `DummyKey`／`DummyValue` 全留在堆上、GC 日志 `freed≈0`、
+    // `live` 涨到 66.7 万 ⇒ 单次 `gc.collect` 372 ms ⇒ 整文件超时 ✗）。
+    // 改成借用后：调用点 `push` 照旧（它自己 retain ✓）、需要自己那份的地方显式 `incref` ✓
+    //（`LOAD_ASSERTION_ERROR` 那格本来就是这么写的 ✓）。
     Some(value)
 }
 

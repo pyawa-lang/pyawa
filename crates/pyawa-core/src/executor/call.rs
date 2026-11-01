@@ -228,6 +228,11 @@ pub(crate) fn call_callable(
             // 时 `args＝()` ✗）。
             let mut call_args = args;
             if let Some(forwarded) = bound_self {
+                // **借用要变成实参表那份**（`P3-41` round 43 修 ✗）：`call_args` 是**转移**语义 ⇒
+                // 直接塞借用指针会让被调方释放掉调用方那份 ⇒ 双重释放（实测 `import unittest` 崩：
+                // `malloc(): unaligned tcache chunk detected`）。先 incref，调用方之后再还自己那份 ✓。
+                // SAFETY: forwarded 由调用方保证存活。
+                unsafe { instance.incref_object(forwarded.as_ptr()) };
                 call_args.insert(0, forwarded);
             }
             return call_callable(instance, function, Some(this), call_args, kwargs, opcode);
