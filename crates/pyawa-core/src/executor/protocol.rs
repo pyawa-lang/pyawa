@@ -642,6 +642,17 @@ fn overrides_compare(instance: &Instance, object: NonNull<Header>, name: &str) -
         .any(|name| instance.type_named(name) == Some(owner))
 }
 
+/// 这个值**自己**覆写了 `__eq__`（不是 `object` 的默认实现）吗？（round 66：容器去重要按参照的
+/// **完整相等协议**走用户 `__eq__` ✓ —— 只在覆写时才走可失败路径 ✓，纯内建值仍走快路 ✓）。
+pub(crate) fn has_custom_eq(instance: &Instance, value: NonNull<Header>) -> bool {
+    let object_eq = instance
+        .type_named("object")
+        .and_then(|object| instance.type_lookup(object, "__eq__"));
+    instance
+        .type_lookup(instance.type_of(value), "__eq__")
+        .is_some_and(|found| Some(found) != object_eq)
+}
+
 pub(crate) fn equality_public(
     instance: &Instance,
     left: NonNull<Header>,

@@ -19,6 +19,16 @@ pub unsafe fn float_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
+    // **数值属性**（round 66）：`float.real`（自身）与 `float.imag`（恒 `0.0`）✓ ——
+    // `decimal.py` 的 `_convert_for_comparison` 会读 `other.imag` ✓（`test_numeric_tower` 实测 ✓）。
+    if name == "real" {
+        // SAFETY: ptr 是本类型的存活对象。
+        unsafe { instance.incref_object(ptr) };
+        return Some(unsafe { NonNull::new_unchecked(ptr) });
+    }
+    if name == "imag" {
+        return Some(instance.new_float(0.0));
+    }
     let handler: NativeFn = match name {
         "is_integer" => float_is_integer_native,
         "as_integer_ratio" => float_as_integer_ratio_native,
@@ -266,6 +276,29 @@ pub unsafe fn float_new(
                     "TypeError",
                     "float() argument must be a string or a real number, not 'complex'",
                 ));
+            } else if let Some(method) = instance
+                .type_lookup(instance.type_of(*only), "__float__")
+                .or_else(|| {
+                    crate::executor::attribute::attribute_optional(instance, *only, "__float__")
+                        .ok()
+                        .flatten()
+                })
+            {
+                // **`float(obj)` 走 `__float__`** ✓（round 66）：`numbers.Rational.__float__` 之类
+                // 是纯 Python 方法（`fractions.Fraction` 继承它 ✓）；先前只认内建数字类型 ✗。
+                let outcome = crate::executor::call::call_value(instance, method, &[], &[]);
+                unsafe { instance.release_object(method.as_ptr()) };
+                let result = outcome?;
+                let Some(number) = instance.float_value(result) else {
+                    let kind = instance.type_name(instance.type_of(result)).to_owned();
+                    unsafe { instance.release_object(result.as_ptr()) };
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("__float__ returned non-float (type {kind})"),
+                    ));
+                };
+                unsafe { instance.release_object(result.as_ptr()) };
+                number
             } else {
                 return Err(crate::ExecError::Unsupported {
                     opcode: 0,

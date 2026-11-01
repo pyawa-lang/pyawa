@@ -4,6 +4,22 @@
 
 use super::*;
 
+/// **容器去重的相等判断**（round 66）：用户 `__eq__` 覆写 ⇒ 走**可失败**的完整协议 ✓
+/// （参照的 `set`／`dict` 去重会调用户 `__eq__` ✓）；否则走内建快路 ✓。
+fn container_equal(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+) -> Result<bool, ExecError> {
+    if crate::executor::protocol::has_custom_eq(instance, left)
+        || crate::executor::protocol::has_custom_eq(instance, right)
+    {
+        return crate::executor::protocol::equality_public(instance, left, right);
+    }
+    Ok(values_equal(instance, left, right))
+}
+
+
 /// **"对象根本不是可迭代"** 的那条错误（`iter_value` 生成的 `TypeError: 'X' object is not
 /// iterable`）⇒ 返回类型名 ✓（round 62：`LIST_EXTEND`／`UNPACK_*` 在参照里对同一件事有不同的
 /// 报文：`Value after * must be an iterable, not X`／`cannot unpack non-iterable X object`；
@@ -82,11 +98,20 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                                 RefCell::new(Vec::new()),
                             ));
                             for item in items {
-                                let duplicate = set
-                                    .get()
-                                    .items()
-                                    .iter()
-                                    .any(|existing| values_equal(instance, *existing, item));
+                                let mut duplicate = false;
+                                for existing in set.get().items().iter().copied() {
+                                    match container_equal(instance, existing, item) {
+                                        Ok(true) => {
+                                            duplicate = true;
+                                            break;
+                                        }
+                                        Ok(false) => {}
+                                        Err(error) => {
+                                            release(instance, item);
+                                            return Err(error);
+                                        }
+                                    }
+                                }
                                 if duplicate {
                                     release(instance, item);
                                 } else {

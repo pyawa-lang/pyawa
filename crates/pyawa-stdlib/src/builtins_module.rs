@@ -1274,8 +1274,11 @@ fn abs_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "abs", args, 1)?;
     let value = args[0];
-    if let Some(integer) = instance.int_value(value) {
-        return Ok(instance.new_int(integer.abs()));
+    // **任意精度整数** ✓（round 66）：先前只认装得下 `i64` 的（`int_value`）✗ ⇒
+    // `abs(2**300)` 报 `bad operand type for abs(): 'int'` ✗（`test_numeric_tower` 实测 ✓）。
+    if let Some(integer) = instance.int_of(value) {
+        let wide = integer.to_bigint().abs();
+        return Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(wide)));
     }
     if let Some(number) = instance.float_value(value) {
         return Ok(instance.new_float(number.abs()));
