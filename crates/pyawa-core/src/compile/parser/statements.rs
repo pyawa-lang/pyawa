@@ -2728,8 +2728,23 @@ fn parse_statement_star(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<
                 let first_span = star_span.to(first.span());
                 let mut targets: Vec<(Expression, bool)> = vec![(first, true)];
                 let mut last_span = first_span;
+                let before_tail = *cursor;
                 parse_tuple_target_tail(lexed, cursor, &mut targets, &mut last_span)?;
+                let had_comma = *cursor > before_tail;
+                if tokens.get(*cursor) == Some(&Lexeme::Assign) && !had_comma {
+                    // 参照：`*a = range(10)` ⇒ `starred assignment target must be in a list
+                    // or tuple` ✓（round 62）。
+                    return Err(CompileError::Syntax(
+                        "starred assignment target must be in a list or tuple".to_owned(),
+                    ));
+                }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                    if !had_comma {
+                        // 参照：裸 `*a`（语句／右值）⇒ `can't use starred expression here` ✓。
+                        return Err(CompileError::Syntax(
+                            "can't use starred expression here".to_owned(),
+                        ));
+                    }
                     // **`*a,`／`*a, b` 是合法的元组表达式语句**（task-47 ✓；参照
                     // `python3 -c "*a,"` 合法）⇒ 退回表达式通道按元组显示收 ✓。
                     let (expression, next) = parse_expression_list(lexed, statement_start)?;

@@ -232,7 +232,11 @@ fn step_calls_dict_merge<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                         .position(|(candidate, _)| values_equal(instance, *candidate, key));
                     if let Some(position) = existing {
                         if is_merge {
-                            let key_text = instance.object_repr(key).unwrap_or_else(|_| "?".to_owned());
+                            // 参照用 `%U`（`str(键)`）再套单引号 ⇒ `'a'`／`'1'`／`'('x',)'` ✓
+                            // （round 62：先前用 `repr` 且**不加引号** ⇒ 非 str 键少一对引号 ✗）。
+                            let key_text = instance
+                                .object_str_native(key)
+                                .unwrap_or_else(|_| "?".to_owned());
                             // SAFETY: 键值都是本函数持有的新引用。
                             unsafe {
                                 instance.release_object(key.as_ptr());
@@ -243,7 +247,7 @@ fn step_calls_dict_merge<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                             return Err(instance.raise_builtin_error(
                                 "TypeError",
                                 &format!(
-                                    "{callee} got multiple values for keyword argument {key_text}"
+                                    "{callee} got multiple values for keyword argument '{key_text}'"
                                 ),
                             ));
                         }

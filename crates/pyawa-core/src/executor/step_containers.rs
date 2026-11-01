@@ -4,6 +4,32 @@
 
 use super::*;
 
+/// **"对象根本不是可迭代"** 的那条错误（`iter_value` 生成的 `TypeError: 'X' object is not
+/// iterable`）⇒ 返回类型名 ✓（round 62：`LIST_EXTEND`／`UNPACK_*` 在参照里对同一件事有不同的
+/// 报文：`Value after * must be an iterable, not X`／`cannot unpack non-iterable X object`；
+/// 用户 `__iter__` 自己抛的错**不**算（原样传播 ✓））。
+fn not_iterable_type_name(
+    instance: &Instance,
+    source: NonNull<Header>,
+    error: &ExecError,
+) -> Option<String> {
+    let ExecError::Raised { exception } = error else {
+        return None;
+    };
+    let type_error = instance.type_named("TypeError")?;
+    if !instance.is_subtype(instance.type_of(*exception), type_error) {
+        return None;
+    }
+    let message = instance.exception_message_of(*exception)?;
+    let name = instance.type_name(instance.type_of(source)).to_owned();
+    if message == format!("'{name}' object is not iterable") {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+
 pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
     match name {
                 "BUILD_TUPLE" | "BUILD_LIST" | "BUILD_SET" => {
@@ -179,9 +205,23 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         let tn = unsafe { (&*raw.as_ptr()).ty().as_ref() }.name().to_owned();
                         eprintln!("[unpack_site] opcode={opcode_number} raw_type={tn} site={}", instance.current_site());
                     }
-                    let items = sequence_items(instance, raw, opcode_number);
+                    let items = match sequence_items(instance, raw, opcode_number) {
+                        Ok(items) => items,
+                        Err(error) => {
+                            // **解包对"不是可迭代"用另一句** ✓（round 62）：
+                            // `cannot unpack non-iterable int object`（参照原文 ✓）。
+                            let converted = not_iterable_type_name(instance, raw, &error).map(
+                                |type_name| {
+                                    let message =
+                                        format!("cannot unpack non-iterable {type_name} object");
+                                    instance.raise_builtin_error("TypeError", &message)
+                                },
+                            );
+                            release(instance, raw);
+                            return Err(converted.unwrap_or(error));
+                        }
+                    };
                     release(instance, raw);
-                    let items = items?;
 
                     if name == "UNPACK_SEQUENCE" {
                         if items.len() != oparg {
@@ -347,9 +387,26 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     // 实测（`[*a, *b]`）：容器在 PEEK(oparg + 1)、源是 TOS ⇒ 弹出源之后容器在 PEEK(oparg)
                     let source = frame.get().pop()?;
                     let container = frame.get().peek_from_top(oparg)?;
-                    let items = sequence_items(instance, source, opcode_number);
+                    let items = match sequence_items(instance, source, opcode_number) {
+                        Ok(items) => items,
+                        Err(error) => {
+                            // **`LIST_EXTEND` 的"不是可迭代"有参照专用报文** ✓（round 62）：
+                            // `Value after * must be an iterable, not int`（`[*7]`／`f(1, *7)`
+                            // 都是它 ✓）；用户 `__iter__` 抛的错原样传播 ✓。
+                            let converted = if name == "LIST_EXTEND" {
+                                not_iterable_type_name(instance, source, &error).map(|type_name| {
+                                    let message =
+                                        format!("Value after * must be an iterable, not {type_name}");
+                                    instance.raise_builtin_error("TypeError", &message)
+                                })
+                            } else {
+                                None
+                            };
+                            release(instance, source);
+                            return Err(converted.unwrap_or(error));
+                        }
+                    };
                     release(instance, source);
-                    let items = items?;
 
                     // SAFETY: container 在帧的值栈上，存活。
                     let ty = unsafe { container.as_ref() }.ty();

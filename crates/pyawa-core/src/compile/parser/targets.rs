@@ -38,7 +38,9 @@ pub(crate) fn parse_tuple_target_tail(
             *last_span = lexed.spans[*cursor - 1];
             break;
         }
-        // `*目标`（星号只允许一个 ✓，在发射期核）
+        // `*目标`（**星号只允许一个** ✓，round 62：参照报
+        // `SyntaxError: multiple starred expressions in assignment` ✓；先前在发射期才核 ✗
+        // ⇒ `test_unpack_ex` 的 doctest 报文对不上 ✓）。
         let starred = tokens.get(*cursor) == Some(&Lexeme::Star);
         if starred {
             *cursor += 1;
@@ -46,6 +48,11 @@ pub(crate) fn parse_tuple_target_tail(
         let (item, next) = parse_expression(lexed, *cursor)?;
         *cursor = next;
         *last_span = item.span();
+        if starred && targets.iter().any(|(_, already)| *already) {
+            return Err(CompileError::Syntax(
+                "multiple starred expressions in assignment".to_owned(),
+            ));
+        }
         targets.push((item, starred));
     }
     Ok(())
@@ -416,6 +423,17 @@ pub(crate) fn parse_for_target_group(
     if lexed.lexemes.get(at) != Some(&closing) {
         return Err(CompileError::Syntax(
             "`for` 的括号目标没有收尾".to_owned(),
+        ));
+    }
+    // **星号只允许一个** ✓（round 62；参照 `multiple starred expressions in assignment` ✓）。
+    if items
+        .iter()
+        .filter(|item| matches!(item, ForTarget::Starred(..)))
+        .count()
+        > 1
+    {
+        return Err(CompileError::Syntax(
+            "multiple starred expressions in assignment".to_owned(),
         ));
     }
     let span = open_span.to(lexed.spans[at]);

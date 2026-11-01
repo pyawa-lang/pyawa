@@ -34,7 +34,7 @@ pub(crate) fn parse_value_expression(lexed: &Lexed, cursor: usize) -> Result<(Ex
     if lexed.lexemes.get(next) != Some(&Lexeme::Comma) {
         if matches!(first, Expression::Starred(..)) {
             return Err(CompileError::Syntax(
-                "starred expression must be in a list, tuple or set".to_owned(),
+                "can't use starred expression here".to_owned(),
             ));
         }
         return Ok((first, next));
@@ -274,6 +274,13 @@ pub(crate) fn parse_expression_list(
     //（参照 `dis`：`LOAD a; BUILD_LIST 0; LIST_EXTEND 1; CALL_INTRINSIC_1 6` ✓）。
     let (first, mut cursor) = parse_star_or_expression(lexed, cursor)?;
     if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+        // **单个 `*x`（没有逗号）不是合法表达式** ✓（round 62；参照原文
+        // `can't use starred expression here` —— `x = *a`／`return *a` 都是它 ✓）。
+        if matches!(first, Expression::Starred(..)) {
+            return Err(CompileError::Syntax(
+                "can't use starred expression here".to_owned(),
+            ));
+        }
         return Ok((first, cursor));
     }
     let mut items = vec![first];

@@ -729,8 +729,9 @@ impl Emitter {
             self.emit_indexed(span, "UNPACK_SEQUENCE", targets.len());
         } else {
             if starred.len() != 1 {
-                return Err(CompileError::Unsupported(
-                    "`for`／`with` 目标里只允许一个 `*`（如实报未接线 ✓）".to_owned(),
+                // 参照原文（round 62）：多个星号目标 ⇒ SyntaxError ✓。
+                return Err(CompileError::Syntax(
+                    "multiple starred expressions in assignment".to_owned(),
                 ));
             }
             let before = starred[0];
@@ -777,8 +778,9 @@ impl Emitter {
                 self.emit_indexed(target_span, "UNPACK_SEQUENCE", count);
             } else {
                 if starred.len() != 1 {
-                    return Err(CompileError::Unsupported(
-                        "元组解包只允许一个 `*` 目标（如实报未接线 ✓）".to_owned(),
+                    // 参照原文（round 62）：多个星号目标 ⇒ SyntaxError ✓。
+                    return Err(CompileError::Syntax(
+                        "multiple starred expressions in assignment".to_owned(),
                     ));
                 }
                 let before = starred[0];
@@ -901,7 +903,7 @@ impl Emitter {
                     self.emit_indexed(target_span, "STORE_ATTR", index);
                 }
                 // **再一层括号／方括号元组**（第 405 轮）：那一层的 `*` 拆成星标记后递归 ✓
-                Expression::TupleLiteral(items, group_span) | Expression::List(items, group_span) => {
+                Expression::List(items, group_span) => {
                     let inner: Vec<(Expression, bool)> = items
                         .iter()
                         .map(|item| match item {
@@ -910,6 +912,32 @@ impl Emitter {
                         })
                         .collect();
                     self.emit_unpack_assign(&inner, *group_span, true)?;
+                }
+                Expression::TupleLiteral(items, group_span) => {
+                    // **`(*x)` 这种"括号里只有一个星号项"不是合法目标** ✓（round 62；参照原文
+                    // `cannot use starred expression here`）。注意：**方括号那一支不算** ✓
+                    // —— `[*a] = …`／`[*[*a]] = …` 是合法目标（`test_unpack_ex` 实测 ✓）。
+                    // **如实说** ✗：AST 丢了"括号里有没有尾随逗号"的信息 ⇒ `(*a,) = …`（参照合法）
+                    // 这里也会报错；用例集里没有这种形态，随后补（记在台账 ✓）。
+                    if items.len() == 1 && matches!(items[0], Expression::Starred(..)) {
+                        return Err(CompileError::Syntax(
+                            "cannot use starred expression here".to_owned(),
+                        ));
+                    }
+                    let inner: Vec<(Expression, bool)> = items
+                        .iter()
+                        .map(|item| match item {
+                            Expression::Starred(inner, _) => ((**inner).clone(), true),
+                            other => (other.clone(), false),
+                        })
+                        .collect();
+                    self.emit_unpack_assign(&inner, *group_span, true)?;
+                }
+                // **嵌套位置的星号项**（round 62）：参照报 `cannot use starred expression here` ✓。
+                Expression::Starred(..) => {
+                    return Err(CompileError::Syntax(
+                        "cannot use starred expression here".to_owned(),
+                    ))
                 }
                 _ => {
                     return Err(CompileError::Unsupported(

@@ -255,6 +255,13 @@ pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         //（`await self.asend(None)` ⇒ 正是这个形状 ✓）。
         Some(Lexeme::Name(name)) if name == "await" => parse_atom(lexed, cursor + 1)?,
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
+        // **裸星号表达式**（round 62）：参照报 `can't use starred expression here` ✓
+        // （例如 `x = *a`；允许星号的上下文——调用实参、显示、下标——都在更外层先收掉了 ✓）。
+        Some(Lexeme::Star) => {
+            return Err(CompileError::Syntax(
+                "can't use starred expression here".to_owned(),
+            ))
+        }
         other => {
             let span = lexed.spans[cursor];
             return Err(CompileError::Syntax(format!(
