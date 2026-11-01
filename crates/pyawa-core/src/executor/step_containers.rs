@@ -4,20 +4,39 @@
 
 use super::*;
 
-/// **容器去重的相等判断**（round 66）：用户 `__eq__` 覆写 ⇒ 走**可失败**的完整协议 ✓
-/// （参照的 `set`／`dict` 去重会调用户 `__eq__` ✓）；否则走内建快路 ✓。
-fn container_equal(
+/// **字典键查找（带用户 `__eq__`）**（round 70）：与 `MAP_ADD` 的去重同口径 ——
+/// 键哈希走 `values::key_hash`（与 `hash()`／用户 `__hash__` 同值 ✓），命中候选后
+/// **用户 `__eq__` 优先** ✓（`{'halibut': 1, HalibutProxy(): 2}` ⇒ 1 项 ✓）。
+fn map_lookup_with_protocol(
     instance: &Instance,
-    left: NonNull<Header>,
-    right: NonNull<Header>,
-) -> Result<bool, ExecError> {
-    if crate::executor::protocol::has_custom_eq(instance, left)
-        || crate::executor::protocol::has_custom_eq(instance, right)
-    {
-        return crate::executor::protocol::equality_public(instance, left, right);
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+) -> Result<Option<usize>, ExecError> {
+    let Some(hash) = crate::executor::values::key_hash(instance, key) else {
+        return Ok(None);
+    };
+    // SAFETY: 调用方保证 container 是存活的 dict（类型在上面刚核过）。
+    let dict = unsafe { &*container.as_ptr().cast::<DictObject>() };
+    dict.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
+    for position in dict.candidates(hash) {
+        let Some((existing, _)) = dict.entry(position) else {
+            continue;
+        };
+        let same = if crate::executor::protocol::has_custom_eq(instance, existing)
+            || crate::executor::protocol::has_custom_eq(instance, key)
+        {
+            crate::executor::protocol::equality_public(instance, existing, key)?
+        } else {
+            values_equal(instance, existing, key)
+        };
+        if same {
+            return Ok(Some(position));
+        }
     }
-    Ok(values_equal(instance, left, right))
+    Ok(None)
 }
+
+
 
 
 /// **"对象根本不是可迭代"** 的那条错误（`iter_value` 生成的 `TypeError: 'X' object is not
@@ -92,33 +111,18 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                             ListObject::new(builtin_type(instance, "list"), RefCell::new(items)),
                         )?,
                         _ => {
-                            // set：按**值相等**查重，保留**先出现**的那个（与参照实现一致）
+                            // set：按**值相等**查重，保留**先出现**的那个（与参照实现一致）。
+                            // **哈希索引**（round 70）：逐项线性扫 ⇒ O(n²) ✗（15 万项集合让
+                            // `test_collections.test_large_size` 超时）⇒ 走 `set_insert` ✓。
                             let set = instance.alloc(SetObject::new(
                                 builtin_type(instance, "set"),
                                 RefCell::new(Vec::new()),
                             ));
+                            let set_header = set.into_raw().cast::<Header>();
                             for item in items {
-                                let mut duplicate = false;
-                                for existing in set.get().items().iter().copied() {
-                                    match container_equal(instance, existing, item) {
-                                        Ok(true) => {
-                                            duplicate = true;
-                                            break;
-                                        }
-                                        Ok(false) => {}
-                                        Err(error) => {
-                                            release(instance, item);
-                                            return Err(error);
-                                        }
-                                    }
-                                }
-                                if duplicate {
-                                    release(instance, item);
-                                } else {
-                                    set.get().insert_raw(item);
-                                }
+                                crate::builtin::set::set_insert(instance, set_header, item)?;
                             }
-                            frame.get().push(set.into_raw().cast::<Header>())?;
+                            frame.get().push(set_header)?;
                         }
                     }
                 }
@@ -161,25 +165,36 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         builtin_type(instance, "dict"),
                         RefCell::new(Vec::new()),
                     ));
+                    let dict_header = dict.into_raw().cast::<Header>();
                     for pair in items.chunks(2) {
                         let (key, value) = (pair[0], pair[1]);
-                        // 键按**值相等**查重：命中则**保留先出现的键**、替换值
-                        let position = dict
-                            .get()
-                            .entries()
-                            .iter()
-                            .position(|(existing, _)| values_equal(instance, *existing, key));
-                        match position {
-                            Some(slot) => {
-                                if let Some(old) = dict.get().replace_value(slot, value) {
-                                    release(instance, old);
-                                }
-                                release(instance, key);
+                        // **哈希索引 ＋ 用户 `__eq__`**（round 70，参照的 `BUILD_MAP` 就是
+                        // `PyDict_SetItem` ⇒ 去重 ✓）：先前线性扫 ⇒ O(n²) ✗ 且不看用户 `__eq__` ✗
+                        // （`{'halibut': 1, HalibutProxy(): 2}` 实测 2 项 ✗）。
+                        if let Some(slot) = map_lookup_with_protocol(instance, dict_header, key)? {
+                            // SAFETY: 刚由 alloc 得到、仍存活。
+                            let object = unsafe { &*dict_header.as_ptr().cast::<DictObject>() };
+                            if let Some(old) = object.replace_value(slot, value) {
+                                release(instance, old);
                             }
-                            None => dict.get().insert_raw(key, value),
+                            release(instance, key);
+                        } else {
+                            let Some(hash) = crate::executor::values::key_hash(instance, key) else {
+                                let kind = instance.type_name(instance.type_of(key)).to_owned();
+                                release(instance, key);
+                                release(instance, value);
+                                release(instance, dict_header);
+                                return Err(instance.raise_builtin_error(
+                                    "TypeError",
+                                    &format!("unhashable type: '{kind}'"),
+                                ));
+                            };
+                            // SAFETY: 同上。
+                            let object = unsafe { &*dict_header.as_ptr().cast::<DictObject>() };
+                            object.insert_hashed(key, value, hash);
                         }
                     }
-                    frame.get().push(dict.into_raw().cast::<Header>())?;
+                    frame.get().push(dict_header)?;
                 }
                 "BUILD_STRING" => {
                     let mut parts = Vec::with_capacity(oparg);
@@ -320,17 +335,8 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         // SAFETY: 类型身份已确认。
                         unsafe { &*container.as_ptr().cast::<ListObject>() }.append(value);
                     } else if name == "SET_ADD" && ty == builtin_type(instance, "set") {
-                        // SAFETY: 同上。
-                        let set = unsafe { &*container.as_ptr().cast::<SetObject>() };
-                        let duplicate = set
-                            .items()
-                            .iter()
-                            .any(|existing| values_equal(instance, *existing, value));
-                        if duplicate {
-                            release(instance, value);
-                        } else {
-                            set.insert_raw(value);
-                        }
+                        // **哈希索引插入**（round 70）：`set_insert` 自己查重 ✓。
+                        crate::builtin::set::set_insert(instance, container, value)?;
                     } else {
                         release(instance, value);
                         // **诊断**：把真实栈形状带进报错（此前只报"位置或类型不符"，看不出取错了哪一格）
@@ -392,20 +398,31 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                             ),
                         });
                     }
-                    // SAFETY: 类型身份已确认。
-                    let dict = unsafe { &*container.as_ptr().cast::<DictObject>() };
-                    let position = dict
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| values_equal(instance, *existing, key));
-                    match position {
-                        Some(slot) => {
-                            if let Some(old) = dict.replace_value(slot, value) {
-                                release(instance, old);
-                            }
-                            release(instance, key);
+                    // **哈希索引**（round 70）：先前每项都**线性扫**全部条目 ✗ ⇒
+                    // `{名字: 值 for …}` 的建表是 O(n²) ✗（实测 8000 项 2.57 s，
+                    // `collections.namedtuple` 的千字段类因此超时）。改走与 `dict_set` 同一套
+                    // 惰性哈希索引 ✓：命中替换值（保插入序 ✓）、未命中按哈希插入并**增量维护索引** ✓。
+                    if let Some(position) = map_lookup_with_protocol(instance, container, key)? {
+                        // SAFETY: 容器类型刚核过是 dict ✓。
+                        let dict = unsafe { &*container.as_ptr().cast::<DictObject>() };
+                        if let Some(old) = dict.replace_value(position, value) {
+                            release(instance, old);
                         }
-                        None => dict.insert_raw(key, value),
+                        release(instance, key);
+                    } else {
+                        let Some(hash) = crate::executor::values::key_hash(instance, key) else {
+                            // **不可哈希键** ⇒ 参照的 `TypeError: unhashable type: 'list'` ✓。
+                            let kind = instance.type_name(instance.type_of(key)).to_owned();
+                            release(instance, key);
+                            release(instance, value);
+                            return Err(instance.raise_builtin_error(
+                                "TypeError",
+                                &format!("unhashable type: '{kind}'"),
+                            ));
+                        };
+                        // SAFETY: 同上。
+                        let dict = unsafe { &*container.as_ptr().cast::<DictObject>() };
+                        dict.insert_hashed(key, value, hash);
                     }
                 }
                 "LIST_EXTEND" | "SET_UPDATE" => {
@@ -439,18 +456,9 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         // SAFETY: 类型身份已确认。
                         unsafe { &*container.as_ptr().cast::<ListObject>() }.extend(items);
                     } else if name == "SET_UPDATE" && ty == builtin_type(instance, "set") {
-                        // SAFETY: 同上。
-                        let set = unsafe { &*container.as_ptr().cast::<SetObject>() };
                         for item in items {
-                            let duplicate = set
-                                .items()
-                                .iter()
-                                .any(|existing| values_equal(instance, *existing, item));
-                            if duplicate {
-                                release(instance, item);
-                            } else {
-                                set.insert_raw(item);
-                            }
+                            // **哈希索引**（round 70）：同 `BUILD_SET` ✓。
+                            crate::builtin::set::set_insert(instance, container, item)?;
                         }
                     } else {
                         for item in items {

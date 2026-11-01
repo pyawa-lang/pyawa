@@ -1039,6 +1039,8 @@ impl Emitter {
             exception_entries: Vec::new(),
             comprehension_locals: Vec::new(),
             pending_cleanups: Vec::new(),
+
+            local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
             pending_fused_load: None,
             handler_segments: Vec::new(),
             clause_condition_tail: Span::synthetic(),
@@ -1926,6 +1928,8 @@ impl Emitter {
             with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
             mode: self.mode,
             tier: self.tier,
@@ -2154,6 +2158,8 @@ impl Emitter {
             with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
             mode: self.mode,
             tier: self.tier,

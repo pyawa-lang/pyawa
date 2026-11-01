@@ -184,6 +184,11 @@ py_object! {
     /// 集合的文档契约是"无序"，故这一条属于**实现观测面**，落地 `MS-19` 时要如实登记。
     pub struct SetObject {
         items: RefCell<Vec<NonNull<Header>>>,
+        {
+            /// **查找索引**（round 70，与 `DictObject.index` 同一套）：元素哈希 → 下标；
+            /// `None` ⇒ 还没建／已作废 ✓（插入顺序仍是 `items` 一处真相 ✓）。
+            index: RefCell<Option<std::collections::HashMap<u64, Vec<usize>>>>,
+        }
     }
 }
 
@@ -399,9 +404,49 @@ impl SetObject {
         self.items.borrow().clone()
     }
 
-    /// 追加一个**新引用**（不去重；调用方负责先查重）。
+    /// 追加一个**新引用**（不去重；调用方负责先查重）。**作废查找索引** ✓。
     pub fn insert_raw(&self, value: NonNull<Header>) {
+        *self.index.borrow_mut() = None;
         self.items.borrow_mut().push(value);
+    }
+
+    /// **建／用查找索引**（round 70）：`hash_of` 给元素的哈希（不可哈希给 `None` ⇒ 跳过）。
+    pub fn ensure_index(&self, hash_of: impl Fn(NonNull<Header>) -> Option<u64>) {
+        if self.index.borrow().is_some() {
+            return;
+        }
+        let mut built: std::collections::HashMap<u64, Vec<usize>> = std::collections::HashMap::new();
+        {
+            let items = self.items.borrow();
+            for (position, item) in items.iter().enumerate() {
+                if let Some(hash) = hash_of(*item) {
+                    built.entry(hash).or_default().push(position);
+                }
+            }
+        }
+        *self.index.borrow_mut() = Some(built);
+    }
+
+    /// 同一哈希的候选下标（**借用后复制**，与 `DictObject::candidates` 同口径 ✓）。
+    pub fn candidates(&self, hash: u64) -> Vec<usize> {
+        self.index
+            .borrow()
+            .as_ref()
+            .and_then(|map| map.get(&hash).cloned())
+            .unwrap_or_default()
+    }
+
+    /// **按哈希插入**（增量维护索引 ✓；调用方已确认不重复 ✓）——**接管** `value` 那份引用 ✓。
+    pub fn insert_hashed(&self, value: NonNull<Header>, hash: u64) {
+        let position = {
+            let mut items = self.items.borrow_mut();
+            items.push(value);
+            items.len() - 1
+        };
+        let mut index = self.index.borrow_mut();
+        if let Some(map) = index.as_mut() {
+            map.entry(hash).or_default().push(position);
+        }
     }
 
     /// 删除第 `index` 项，返回被删的那份引用（调用方负责释放）。

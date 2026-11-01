@@ -546,6 +546,8 @@ fn compile_class_scope(
     let mut emitter = Emitter {
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
         mode,
         tier,
@@ -827,6 +829,8 @@ fn compile_scope(
     let mut emitter = Emitter {
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
         mode,
         tier,

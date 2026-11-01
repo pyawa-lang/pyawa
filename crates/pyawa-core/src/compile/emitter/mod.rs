@@ -129,6 +129,12 @@ pub(super) struct Emitter {
     pub(super) pending_cleanups: Vec<PendingCleanup>,
     /// 最近一条 `STORE_FAST_LOAD_FAST` 已经把哪个槽的值压回了栈顶（`None` 表示没有）：
     /// **紧接着的那一次**对该槽的读取不再单独发 `LOAD_FAST_BORROW`（实测的融合选择）。
+    /// **名字 ⇒ 局部槽的缓存**（round 70，性能）：千参函数的发射里每个 `LOAD_FAST` 先前都在
+    /// `varnames` 上**线性扫一遍** ✗ ⇒ `collections.namedtuple` 的 150k 字段生成类 O(n²)。
+    /// **失效规则**：`varnames` 只追加时已有下标稳定 ✓；但 `symbols.rs` 收尾会把 `varnames`
+    /// **整体换掉**（`= kept` ⇒ 下标会移 ✗）⇒ 那里必须 `clear()` ✓（第一版没清 ⇒ 报
+    /// ``lambda` 的形参表里出现 Some(LeftBrace)`：f-string 的 `{arg_list}` 被编成**别的局部槽** ✗）。
+    pub(super) local_slots: std::cell::RefCell<std::collections::HashMap<String, usize>>,
     pub(super) pending_fused_load: Option<usize>,
     /// 处理块段的字节区间 ＋ 有没有 `as 名字`（目标＝清理块／名字清理，收尾时补）。
     pub(super) handler_segments: Vec<(usize, usize, bool)>,

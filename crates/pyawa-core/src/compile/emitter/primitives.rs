@@ -336,7 +336,16 @@ impl Emitter {
         if self.deref_slot(name).is_some() {
             return None;
         }
-        self.unit.varnames.iter().position(|item| item == name)
+        // **缓存**（round 70）：`varnames` 只追加时已有名字的下标稳定 ✓（整体换掉时会
+        // `clear()`，见 `local_slots` 字段注释 ✓）。
+        if let Some(slot) = self.local_slots.borrow().get(name) {
+            return Some(*slot);
+        }
+        let found = self.unit.varnames.iter().position(|item| item == name)?;
+        self.local_slots
+            .borrow_mut()
+            .insert(name.to_owned(), found);
+        Some(found)
     }
 
     pub(crate) fn cell_slot(&self, name: &str) -> Option<usize> {
@@ -369,7 +378,13 @@ impl Emitter {
         if let Some(slot) = self.deref_slot(name) {
             return slot;
         }
+        if let Some(slot) = self.local_slots.borrow().get(name) {
+            return *slot;
+        }
         if let Some(index) = self.unit.varnames.iter().position(|item| item == name) {
+            self.local_slots
+                .borrow_mut()
+                .insert(name.to_owned(), index);
             return index;
         }
         // **cell 名不进 `varnames`**（它在 localsplus 里排在 varnames 之后）⇒ 返回 cell 索引，

@@ -726,6 +726,10 @@ pub unsafe fn str_getattr(
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
+        // **`str.__hash__`**（round 70）：`class Name(str): def __hash__(self): return
+        // str.__hash__(self)`（`test_extcall` 的 doctest ✓，也遍及 `Lib/`）—— 先前 str 没有
+        // 这个属性 ✗ ⇒ 用户 `__hash__` 抛 AttributeError ⇒ 字典键判成"不可哈希" ✗。
+        "__hash__" => str_hash_native,
         "upper" => str_upper_native,
         // **`str.format`**（第 722 轮 ✓）：`Lib/base64.py:246` **导入期**就调它 ✗ ⇒
         // 先前 `'str' object has no attribute 'format'` 压住 `base64` ⇒ email 一族 ✓。
@@ -995,4 +999,43 @@ impl StrObject {
         // SAFETY: 由调用方保证（OM-5 保证头部就在对象地址上）。
         unsafe { core::mem::drop(Box::from_raw(ptr.cast::<StrObject>())) }
     }
+}
+
+/// **`str.__hash__()`**（round 70）：与 `hash()` 同值 ✓（同一套 SipHash-1-3 零密钥 ✓）。
+pub(crate) fn str_hash_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **两种派发形态**：绑到实例（`s.__hash__()`）／类型级未绑定（`str.__hash__(s)`，
+    // `test_extcall` 的 `Name.__hash__` 就是后者 ✓）。
+    let owner = match (bound, args.first().copied()) {
+        // `str.__hash__(s)`：属性通道把 `str` **类型对象**当成了 `self` ⇒ 改认第一个实参 ✓。
+        (Some(owner), Some(first)) if instance.is_type_object(owner) => first,
+        (Some(owner), _) => owner,
+        (None, Some(first)) => first,
+        (None, None) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "descriptor '__hash__' of 'str' object needs an argument",
+            ))
+        }
+    };
+    // **`str` 子类也算**（`class Name(str)` 正是 `test_extcall` 的形态 ✓）——`text_of` 只认
+    // **恰好** `str` ✗ ⇒ 走 WTF-8 字节视图 ✓。
+    if !instance.is_str_object(owner) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__hash__' for 'str' objects doesn't apply to a foreign object",
+        ));
+    }
+    let Some(bytes) = instance.str_wtf8_bytes(owner) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__hash__' for 'str' objects doesn't apply to a foreign object",
+        ));
+    };
+    let text = String::from_utf8_lossy(bytes);
+    Ok(instance.new_int(crate::executor::values::hash_text(&text) as i64))
 }

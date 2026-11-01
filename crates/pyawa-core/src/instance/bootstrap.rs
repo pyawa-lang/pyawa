@@ -1184,6 +1184,15 @@ impl Instance {
                 "__format__",
                 crate::builtin_objects::native_format_str as crate::NativeFn,
             ),
+            // **`str.__hash__`**（round 70）：`class Name(str): def __hash__(self):
+            // return str.__hash__(self)`（`test_extcall` 的 doctest ✓，`Lib/` 亦常见）——
+            // 先前 str 类型上没有它 ✗ ⇒ 在**类型对象**上取属性落到 `object.__hash__`（身份）✗
+            // 或报错 ⇒ `Name` 被当成"不可哈希" ✗。与 `hash()` 同值 ✓。
+            (
+                str_type,
+                "__hash__",
+                crate::builtin_objects::str_hash_native as crate::NativeFn,
+            ),
             // **`object.__hash__`**（第 309 轮）：本层先前没有它 ⇒ `C.__hash__`／`ref.__hash__`
             // 这类"在**类型对象**上取 dunder"的属性访问当场报
             // `AttributeError: 'type' object has no attribute '__hash__'`（`Lib/weakref.py:89` 的

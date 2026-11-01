@@ -557,6 +557,8 @@ pub(super) fn analyze_cells(
             .map(|(_, local)| local.clone())
             .collect();
         emitter.unit.varnames = kept;
+        // **缓存失效**（round 70）：`varnames` 整体换掉 ⇒ 旧下标全作废 ✓。
+        emitter.local_slots.borrow_mut().clear();
         emitter.unit.nlocals = emitter.unit.varnames.len();
         emitter.unit.cellvars = cells;
     }
@@ -564,49 +566,61 @@ pub(super) fn analyze_cells(
 
 /// 走一个**表达式**，收集其中的 `Name`（`lambda` 只收它**体外**所需的名字：体内引用减去自己的形参）。
 /// 给 lambda 的闭包分析用（第 297 轮）。
+/// 走一个**表达式**，收集其中的 `Name`（`lambda` 只收它**体外**所需的名字：体内引用减去自己的形参）。
+/// 给 lambda 的闭包分析用（第 297 轮）。**去重保持首次出现序** ✓（round 70：内部改成先去重
+/// 开销也是线性的 —— `HashSet` 一次建 ✓）。
 pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec<String>) {
-    let push = |name: &String, out: &mut Vec<String>| {
-        if !out.iter().any(|item| item == name) {
-            out.push(name.clone());
+    let mut raw = Vec::new();
+    collect_names_in_expression_raw(expression, &mut raw);
+    let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
+    for name in raw {
+        if seen.insert(name.clone()) {
+            out.push(name);
         }
-    };
+    }
+}
+
+fn collect_names_in_expression_raw(expression: &Expression, out: &mut Vec<String>) {
+    // **不去重**（round 70 性能）：调用方统一去重 ✓ —— 150k 形参的 lambda 体里
+    // 逐名 `out.iter().any` 是 O(n²) ✗（`collections.namedtuple` 的 150k 字段生成类）。
+    let push = |name: &String, out: &mut Vec<String>| out.push(name.clone());
     match expression {
         Expression::Name(name, _) => push(name, out),
         Expression::Walrus { target, value, .. } => {
             // 值先、目标后（实测 `if (o := f()) is None:` 的 `co_names` 是 `('f','o','x')` ✓）
-            collect_names_in_expression(value, out);
+            collect_names_in_expression_raw(value, out);
             push(target, out);
         }
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
         | Expression::TupleLiteral(items, _) => {
             for item in items {
-                collect_names_in_expression(item, out);
+                collect_names_in_expression_raw(item, out);
             }
         }
         Expression::Map(items, _) => {
             for item in items {
                 match item {
                     MapItem::Pair(key, value) => {
-                        collect_names_in_expression(key, out);
-                        collect_names_in_expression(value, out);
+                        collect_names_in_expression_raw(key, out);
+                        collect_names_in_expression_raw(value, out);
                     }
-                    MapItem::Unpack(value) => collect_names_in_expression(value, out),
+                    MapItem::Unpack(value) => collect_names_in_expression_raw(value, out),
                 }
             }
         }
         Expression::Attribute(target, _, _)
         | Expression::Not(target, _)
-        | Expression::Unary(_, target, _) => collect_names_in_expression(target, out),
+        | Expression::Unary(_, target, _) => collect_names_in_expression_raw(target, out),
         Expression::Binary(_, left, right, _)
         | Expression::Compare(left, _, right, _)
         | Expression::Subscript(left, right, _) => {
-            collect_names_in_expression(left, out);
-            collect_names_in_expression(right, out);
+            collect_names_in_expression_raw(left, out);
+            collect_names_in_expression_raw(right, out);
         }
         Expression::BoolOp { values, .. } | Expression::ChainedCompare { operands: values, .. } => {
             for value in values {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
         }
         Expression::Conditional {
@@ -615,18 +629,18 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             else_value,
             ..
         } => {
-            collect_names_in_expression(condition, out);
-            collect_names_in_expression(then_value, out);
-            collect_names_in_expression(else_value, out);
+            collect_names_in_expression_raw(condition, out);
+            collect_names_in_expression_raw(then_value, out);
+            collect_names_in_expression_raw(else_value, out);
         }
         Expression::FString { parts, .. } => {
             for part in parts {
                 if let FStringPart::Formatted { expression, spec, .. } = part {
-                    collect_names_in_expression(expression, out);
+                    collect_names_in_expression_raw(expression, out);
                     if let Some(spec) = spec {
                         for item in spec {
                             if let FStringPart::Formatted { expression, .. } = item {
-                                collect_names_in_expression(expression, out);
+                                collect_names_in_expression_raw(expression, out);
                             }
                         }
                     }
@@ -662,15 +676,15 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             dict_arguments,
             ..
         } => {
-            collect_names_in_expression(function, out);
+            collect_names_in_expression_raw(function, out);
             for argument in arguments.iter().chain(star_arguments) {
-                collect_names_in_expression(argument, out);
+                collect_names_in_expression_raw(argument, out);
             }
             for (_, value) in keywords {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
             for value in dict_arguments {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
         }
         Expression::Comprehension {
@@ -679,15 +693,15 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             generators,
             ..
         } => {
-            collect_names_in_expression(element, out);
+            collect_names_in_expression_raw(element, out);
             if let Some(value) = value {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
             // 生成器的**目标名**是推导式自己的局部，不算需求 ⇒ 只走可迭代对象与过滤条件 ✓
             for generator in generators {
-                collect_names_in_expression(&generator.iterable, out);
+                collect_names_in_expression_raw(&generator.iterable, out);
                 for condition in &generator.conditions {
-                    collect_names_in_expression(condition, out);
+                    collect_names_in_expression_raw(condition, out);
                 }
             }
         }
@@ -698,17 +712,17 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             ..
         } => {
             for part in [lower, upper, step].into_iter().flatten() {
-                collect_names_in_expression(part, out);
+                collect_names_in_expression_raw(part, out);
             }
         }
         // **`BC-63`**：两个操作数都在本层求值 ⇒ 照常收
         Expression::NullCoalesce(left, right, _) => {
-            collect_names_in_expression(left, out);
-            collect_names_in_expression(right, out);
+            collect_names_in_expression_raw(left, out);
+            collect_names_in_expression_raw(right, out);
         }
         Expression::SafeChain { receiver, rest, .. } => {
-            collect_names_in_expression(receiver, out);
-            collect_names_in_expression(rest, out);
+            collect_names_in_expression_raw(receiver, out);
+            collect_names_in_expression_raw(rest, out);
         }
         Expression::ChainSubject(_) => {}
         _ => {}

@@ -59,6 +59,9 @@ pub unsafe fn set_getattr(
 }
 
 /// 集合里有没有与 `item` 相等的元素 ✓（引擎统一比较口径 ✓）。
+///
+/// **哈希索引**（round 70）：可哈希元素走惰性索引 ✓（`{名字 for …}` 建 15 万项集合先前
+/// 逐项线性扫 ⇒ O(n²) ✗，`test_collections.test_large_size` 因此超时 ✗）；不可哈希退回线性 ✓。
 pub(crate) fn set_contains(
     instance: &Instance,
     set: NonNull<Header>,
@@ -66,7 +69,71 @@ pub(crate) fn set_contains(
 ) -> Option<usize> {
     // SAFETY: 调用方保证 set 是本实例的 `set`。
     let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+    if let Some(hash) = crate::executor::values::key_hash(instance, item) {
+        object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
+        for position in object.candidates(hash) {
+            if let Some(existing) = object.item(position) {
+                if crate::executor::values::values_equal_public(instance, existing, item) {
+                    return Some(position);
+                }
+            }
+        }
+        return None;
+    }
     object.position_of(|candidate| crate::executor::values::values_equal_public(instance, candidate, item))
+}
+
+/// **往集合里加一项**（round 70）：已存在 ⇒ 归还这份引用并给 `Ok(false)` ✓；
+/// 不存在 ⇒ **转移**这份引用并给 `Ok(true)` ✓。可哈希走索引 ✓、不可哈希退回线性 ✓；
+/// **用户 `__eq__` 仍生效** ✓（`test_numeric_tower.test_hash_normalization` 的 HalibutProxy ✓）。
+pub(crate) fn set_insert(
+    instance: &Instance,
+    set: NonNull<Header>,
+    item: NonNull<Header>,
+) -> Result<bool, crate::ExecError> {
+    // SAFETY: 调用方保证 set 是本实例的 `set`。
+    let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+    let same = |candidate: NonNull<Header>| -> Result<bool, crate::ExecError> {
+        if crate::executor::protocol::has_custom_eq(instance, candidate)
+            || crate::executor::protocol::has_custom_eq(instance, item)
+        {
+            return crate::executor::protocol::equality_public(instance, candidate, item);
+        }
+        Ok(crate::executor::values::values_equal_public(instance, candidate, item))
+    };
+    if let Some(hash) = crate::executor::values::key_hash(instance, item) {
+        object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
+        for position in object.candidates(hash) {
+            if let Some(existing) = object.item(position) {
+                match same(existing) {
+                    Ok(true) => {
+                        // SAFETY: 这份引用由调用方交来（转移语义），这里不存 ⇒ 归还 ✓。
+                        unsafe { instance.release_object(item.as_ptr()) };
+                        return Ok(false);
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        // SAFETY: 同上。
+                        unsafe { instance.release_object(item.as_ptr()) };
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        object.insert_hashed(item, hash);
+        return Ok(true);
+    }
+    for position in 0..object.len() {
+        if let Some(existing) = object.item(position) {
+            if same(existing)? {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(item.as_ptr()) };
+                return Ok(false);
+            }
+        }
+    }
+    object.insert_raw(item);
+    Ok(true)
 }
 
 pub(crate) fn set_add_native(
@@ -82,10 +149,9 @@ pub(crate) fn set_add_native(
             "add() takes exactly one argument (0 given)",
         ));
     };
-    if set_contains(instance, set, *item).is_none() {
-        instance.retain(*item);
-        instance.set_insert_raw(set, *item);
-    }
+    // **哈希索引插入**（round 70）：`set_insert` 自己查重 ✓（转移语义 ⇒ 先 retain ✓）。
+    let owned = instance.retain(*item);
+    set_insert(instance, set, owned)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -265,18 +331,15 @@ pub unsafe fn set_new(
             unsafe { instance.release_object(iterator.as_ptr()) };
         }
     }
-    // **去重靠 `set_contains` ＋ `set_insert_raw`** ✓（与 `set.add` **同一处** ✓）。
+    // **去重靠 `set_insert`** ✓（与 `set.add` **同一处** ✓；哈希索引增量维护 ✓ ——
+    // 先前用 `set_insert_raw`（作废索引）⇒ 每次插入后重建 O(n) ⇒ O(n²) ✗）。
     for item in items {
-        if set_contains(instance, empty, item).is_some() {
-            if !borrowed {
-                unsafe { instance.release_object(item.as_ptr()) };
-            }
-            continue;
-        }
-        if borrowed {
-            instance.retain(item);
-        }
-        instance.set_insert_raw(empty, item);
+        let owned = if borrowed {
+            instance.retain(item)
+        } else {
+            item
+        };
+        set_insert(instance, empty, owned)?;
     }
     Ok(empty)
 }

@@ -219,17 +219,86 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
 
 /// **`str` 文本的哈希**（FNV-1a 64；与 [`key_hash`] 用同一个 ⇒ 调用方可直接按 `&str` 查字典 ✓）。
 pub(crate) fn hash_text(text: &str) -> u64 {
-    hash_bytes(text.as_bytes())
+    // **CPython 口径**（round 70）：与 `hash()`／用户 `__hash__` 必须**同值** ✓ —— 先前这里是
+    // FNV ✗ ⇒ `{'halibut', HalibutProxy()}`（`HalibutProxy.__hash__` 返回 `hash('halibut')` ✓）
+    // 两边桶不同 ⇒ 去重失败 ✗（`test_numeric_tower.test_hash_normalization` ✓）。
+    if text.is_empty() {
+        return 0;
+    }
+    let mut largest = 0u32;
+    for character in text.chars() {
+        largest = largest.max(character as u32);
+    }
+    let bytes: Vec<u8> = if largest <= 0xFF {
+        text.chars().map(|character| character as u8).collect()
+    } else if largest <= 0xFFFF {
+        text.encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect()
+    } else {
+        text.chars()
+            .flat_map(|character| (character as u32).to_le_bytes())
+            .collect()
+    };
+    hash_bytes(&bytes)
 }
 
-/// 字节序列的 FNV-1a 64。
+/// 字节序列的哈希（SipHash-1-3 零密钥，与 `hash()` **同值** ✓；空串 ⇒ 0）。
 pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    if bytes.is_empty() {
+        return 0;
     }
-    hash
+    let mut value = siphash13_zero(bytes) as i64;
+    if value == -1 {
+        value = -2;
+    }
+    value as u64
+}
+
+/// `SipHash-1-3`（**零密钥**；CPython 的 `_Py_HashBytes` 同算法）。
+fn siphash13_zero(data: &[u8]) -> u64 {
+    fn round(state: &mut [u64; 4]) {
+        state[0] = state[0].wrapping_add(state[1]);
+        state[1] = state[1].rotate_left(13);
+        state[1] ^= state[0];
+        state[0] = state[0].rotate_left(32);
+        state[2] = state[2].wrapping_add(state[3]);
+        state[3] = state[3].rotate_left(16);
+        state[3] ^= state[2];
+        state[0] = state[0].wrapping_add(state[3]);
+        state[3] = state[3].rotate_left(21);
+        state[3] ^= state[0];
+        state[2] = state[2].wrapping_add(state[1]);
+        state[1] = state[1].rotate_left(17);
+        state[1] ^= state[2];
+        state[2] = state[2].rotate_left(32);
+    }
+    let mut state = [
+        0x736f_6d65_7073_6575u64,
+        0x646f_7261_6e64_6f6d,
+        0x6c79_6765_6e65_7261,
+        0x7465_6462_7974_6573,
+    ];
+    let mut chunks = data.chunks_exact(8);
+    for chunk in &mut chunks {
+        let block = u64::from_le_bytes(chunk.try_into().expect("8 字节块"));
+        state[3] ^= block;
+        round(&mut state);
+        state[0] ^= block;
+    }
+    let remainder = chunks.remainder();
+    let mut tail = ((data.len() as u64) & 0xFF) << 56;
+    for (index, byte) in remainder.iter().enumerate() {
+        tail |= u64::from(*byte) << (8 * index);
+    }
+    state[3] ^= tail;
+    round(&mut state);
+    state[0] ^= tail;
+    state[2] ^= 0xFF;
+    for _ in 0..3 {
+        round(&mut state);
+    }
+    state[0] ^ state[1] ^ state[2] ^ state[3]
 }
 
 /// 整数键的哈希（`bytes` 哈希同族；`dict_set_int` 一类直接用它 ✓）。
@@ -311,7 +380,47 @@ pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u
     }) {
         return None;
     }
-    // 其余按**身份**（与 `values_equal` 的"其余按身份"一致 ✓；用户类自定义 `__eq__` 的缺口另记 ✓）。
+    // **用户 `__hash__`**（round 70）：参照的容器哈希就是 `hash(对象)` ✓ —— 先前"其余按身份" ✗
+    // ⇒ `{'halibut', HalibutProxy()}`（`HalibutProxy.__hash__` 返回 `hash('halibut')` ✓）里两项
+    // 桶不同 ⇒ 去重失败 ✗（`test_numeric_tower.test_hash_normalization` 实测 2 != 1 ✓）。
+    // 口径：类型字典里**自己**有 `__hash__`（不是 `object` 的那份）⇒ 调它，取整数结果；
+    // 返回 `None` 表示不可哈希 ⇒ `None` ✓。结果用**原始位模式**（不 mix）—— 与本函数对
+    // `str`／`int` 的口径必须**一致**：`hash('halibut')` 走本文件的 `hash_text` ⇒ 同一条路径 ✓。
+    let object_hash = instance
+        .type_named("object")
+        .and_then(|object_type| instance.type_lookup(object_type, "__hash__"));
+    let own_hash = instance.type_lookup(ty, "__hash__");
+    if let Some(hasher) = own_hash.filter(|found| Some(*found) != object_hash) {
+        // SAFETY: ty 由注册表持有。
+        let ty_object = unsafe { ty.as_ref() };
+        if ty_object.name() == "type" {
+            // 类型对象的 `__hash__` 是**元类**的 —— 交给身份兜底（与既有行为一致 ✓）。
+        } else {
+            // SAFETY: hasher 由类型字典持有。
+            unsafe { instance.incref_object(hasher.as_ptr()) };
+            let outcome = crate::executor::call::call_callable(
+                instance,
+                hasher,
+                Some(object),
+                Vec::new(),
+                Vec::new(),
+                0,
+            );
+            // SAFETY: 上面新增的那份引用由本函数归还。
+            unsafe { instance.release_object(hasher.as_ptr()) };
+            let returned = outcome.ok()?;
+            let hash = instance
+                .int_of(returned)
+                .and_then(|value| value.to_i64());
+            // SAFETY: 返回值是新引用，这里消费。
+            unsafe { instance.release_object(returned.as_ptr()) };
+            if let Some(hash) = hash {
+                return Some(hash as u64);
+            }
+            return None;
+        }
+    }
+    // 其余按**身份**（与 `values_equal` 的"其余按身份"一致 ✓）。
     Some(mix64(object.as_ptr() as usize as u64))
 }
 

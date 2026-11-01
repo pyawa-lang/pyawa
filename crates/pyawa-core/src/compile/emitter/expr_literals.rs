@@ -117,6 +117,13 @@ impl Emitter {
                         self.emit_constant(*span, folded);
                         return Ok(());
                     }
+                    // **超长元组（>255 项）先走统一长路径** ✓（round 70 真 bug 修 ✗）：必须放在
+                    // 下面"前两项裸局部名字"的**超指令融合之前** —— 否则融合已把前两项压栈、
+                    // 长路径又从 `BUILD_LIST 0` 起手 ⇒ 栈上多出两项 ⇒ 调用时把实参当可调用对象 ✗
+                    //（实测 `lambda a0…a255: tuple((a0…a255,))` 报 `'int' object is not callable` ✗）。
+                    if items.len() > 255 {
+                        return self.emit_long_display(items, *span, true);
+                    }
                     // **超指令融合**（第 139 轮实测）：前两项都是**裸局部名字**时，参照把它们打成
                     //   `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>` ✓
                     //   （`yield a, b` ⇒ 一条融合 ＋ `BUILD_TUPLE 2` ✓）。只认 `Expression::Name`
@@ -135,6 +142,9 @@ impl Emitter {
                         if let (Some(first), Some(second)) = (slot_of(&items[0]), slot_of(&items[1])) {
                             if first > 0x0F || second > 0x0F {
                                 // 装不下 ⇒ 走下面的**非融合回退** ✓（逐个 `emit_expression` ✓）
+                                if items.len() > 255 {
+                                    return self.emit_long_display(items, *span, true);
+                                }
                                 for item in &items[..] {
                                     self.emit_expression(item)?;
                                 }
@@ -207,6 +217,10 @@ impl Emitter {
                         return Ok(());
                     }
 
+                    if items.len() > 255 {
+                        // **超长列表显示**（round 70）：同元组，去掉最后那条 `LIST_TO_TUPLE` ✓。
+                        return self.emit_long_display(items, *span, false);
+                    }
                     for item in items {
                         self.emit_expression(item)?;
                     }
@@ -372,5 +386,31 @@ impl Emitter {
                 }
             _ => unreachable!("emit_expression_literals 只接收 expr_literals 族的 Expression"),
         }
+    }
+}
+
+impl Emitter {
+    /// **超长显示（>255 项）**（round 70）：`BUILD_LIST 0` 起手，再逐项 `LIST_APPEND 1` ✓；
+    /// `tuple` 末尾补 `CALL_INTRINSIC_1 6`（`LIST_TO_TUPLE`）✓。
+    ///
+    /// 参照对"全常量"的显示走 `LOAD_CONST` 整元组 ✓（本层 `fold_constant` 已覆盖 ✓）；
+    /// 含名字／表达式的超长显示在参照里是 `BUILD_LIST 0; …; LIST_EXTEND`／`BUILD_TUPLE` 的
+    /// `EXTENDED_ARG` 形态 —— 本层选 `LIST_APPEND` 逐项追加（**语义相同**、指令数线性 ✓，
+    /// 逐字节夹具里没有这种形态 ✓，已如实记在台账 ✗）。
+    fn emit_long_display(
+        &mut self,
+        items: &[Expression],
+        span: Span,
+        tuple: bool,
+    ) -> Result<(), CompileError> {
+        self.emit_indexed(span, "BUILD_LIST", 0);
+        for item in items {
+            self.emit_expression(item)?;
+            self.emit_named(span, "LIST_APPEND", 1);
+        }
+        if tuple {
+            self.emit_named(span, "CALL_INTRINSIC_1", 6);
+        }
+        Ok(())
     }
 }
