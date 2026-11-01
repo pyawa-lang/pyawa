@@ -81,8 +81,17 @@ pub(crate) fn parse_parameter_annotation(
     allow_star: bool,
 ) -> Result<(AnnotationSource, usize), CompileError> {
     if allow_star && lexed.lexemes.get(cursor) == Some(&Lexeme::Star) {
+        // **保留星号** ✓（round 55）：PEP 646 的 `*args: *b` 语义是"把 `b` 恰好解包一项"，
+        // 值本身（例：`B`）不是注解 ✗ —— 必须把 `Starred` 留给发射器（详见
+        // `annotate_unit` 的 `Expression::Starred` 那一臂 ✓）。先前在这里**扔掉**星号 ✗
+        // ⇒ `__annotations__['args']` 给 `B` ✗（`test_pep646_syntax` 逐字比 `StarredB` ✓）。
+        let star_span = lexed.spans[cursor];
         let (expression, after) = parse_expression(lexed, cursor + 1)?;
-        return Ok((AnnotationSource::Expression(expression), after));
+        let span = star_span.to(expression.span());
+        return Ok((
+            AnnotationSource::Expression(Expression::Starred(Box::new(expression), span)),
+            after,
+        ));
     }
     if let Ok((label, after)) = parse_type_at(lexed, cursor) {
         // 类型语法之后必须**紧跟**合法终止符（`=`／`,`／`)`／`:`／行尾；返回注解则是 `:`），

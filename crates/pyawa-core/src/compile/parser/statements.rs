@@ -814,6 +814,8 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                 let mut kwonly: Vec<Parameter> = Vec::new();
                 let mut varargs: Option<String> = None;
                 let mut varkw: Option<String> = None;
+                let mut varargs_annotation: Option<(AnnotationSource, Option<Span>)> = None;
+                let mut varkw_annotation: Option<(AnnotationSource, Option<Span>)> = None;
                 // 裸 `*`（或 `*args`）之后就是**仅关键字**形参
                 let mut after_star = false;
                 let mut expect_parameter = true;
@@ -837,10 +839,22 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                                 //  只留名字 ✓；函数 `__annotations__` 那面另记 ✓）。
                                 if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                                     // task-42：形参注解可以是任意表达式（类型标签优先，判不出就
-                                    // 走表达式通道）——`*args: int` 的注解本层只解析掉、不登记 ✓。
-                                    let (_, next) =
+                                    // 走表达式通道）。**round 55**：`*args: 注解` 不再丢弃 ✓
+                                    // —— 记进 `varargs_annotation`，注解单元里按 `'args'` 键入
+                                    // `__annotations__` ✓（先前缺这一项 ⇒ doctest 对不上 ✓）。
+                                    let begin = lexed.spans[*cursor + 1];
+                                    let (label, next) =
                                         parse_parameter_annotation(lexed, *cursor + 1, true)?;
+                                    varargs_annotation =
+                                        Some((label, Some(begin.to(lexed.spans[next - 1]))));
                                     *cursor = next;
+                                    // **星号注解不能带默认值** ✓（round 55；参照：
+                                    // `def f5(*args: *b = (1,))` ⇒ `SyntaxError: invalid syntax` ✓）。
+                                    if tokens.get(*cursor) == Some(&Lexeme::Assign) {
+                                        return Err(CompileError::Syntax(
+                                            "invalid syntax".to_owned(),
+                                        ));
+                                    }
                                 }
                             }
                             after_star = true;
@@ -865,10 +879,13 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                                 Some(Lexeme::Name(name)) => {
                                     varkw = Some(name.clone());
                                     *cursor += 1;
-                                    // **`**kw: 注解`**（同上 ✓）
+                                    // **`**kw: 注解`**（同上 ✓；round 55 起**登记** ✓）
                                     if tokens.get(*cursor) == Some(&Lexeme::Colon) {
-                                        let (_, next) =
+                                        let begin = lexed.spans[*cursor + 1];
+                                        let (label, next) =
                                             parse_parameter_annotation(lexed, *cursor + 1, false)?;
+                                        varkw_annotation =
+                                            Some((label, Some(begin.to(lexed.spans[next - 1]))));
                                         *cursor = next;
                                     }
                                 }
@@ -988,6 +1005,8 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                     returns_span,
                     varargs,
                     varkw,
+                    varargs_annotation,
+                    varkw_annotation,
                     body,
                     type_params,
                 });

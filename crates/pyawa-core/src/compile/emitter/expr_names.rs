@@ -185,7 +185,7 @@ impl Emitter {
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", lambda_freevars.len());
                 }
-                self.emit_function_object(nested, parameters, kwonly, None, None, &[], *span)?;
+                self.emit_function_object(nested, parameters, kwonly, None, None, None, None, &[], *span)?;
                 if !lambda_freevars.is_empty() {
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
                 }

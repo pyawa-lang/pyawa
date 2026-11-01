@@ -2340,6 +2340,11 @@ enum Statement {
         varargs: Option<String>,
         /// `**kw` 的名字（`None` ⇒ 没有）。
         varkw: Option<String>,
+        /// **`*args` 上的注解**（round 55）：`Option<(注解来源, 注解跨度)>`。
+        /// 先前解析后**丢弃** ✗ ⇒ `f.__annotations__` 缺 `'args'` 项 ✗（`test_pep646_syntax` ✓）。
+        varargs_annotation: Option<(AnnotationSource, Option<Span>)>,
+        /// **`**kw` 上的注解**（同上 ✓）。
+        varkw_annotation: Option<(AnnotationSource, Option<Span>)>,
         /// 返回注解（两种来源，同 [`Parameter::annotation`]）。
         returns: Option<AnnotationSource>,
         /// 返回注解在源码里的跨度（`__annotate__` 单元的 `LOAD_GLOBAL` 取它，实测）。

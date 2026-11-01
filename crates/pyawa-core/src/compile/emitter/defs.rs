@@ -382,6 +382,8 @@ impl Emitter {
         kwonly: &[Parameter],
         returns: Option<&AnnotationSource>,
         returns_span: Option<Span>,
+        varargs_annotation: Option<&(AnnotationSource, Option<Span>)>,
+        varkw_annotation: Option<&(AnnotationSource, Option<Span>)>,
         // **`__annotate__` 单元的自由变量**（task-24 泛型函数外壳 ✓）：类型参数名 ✓（普通函数空表 ✓）。
         annotate_freevars: &[String],
         span: Span,
@@ -440,7 +442,9 @@ impl Emitter {
             .iter()
             .chain(kwonly.iter())
             .any(|parameter| parameter.annotation.is_some())
-            || returns.is_some();
+            || returns.is_some()
+            || varargs_annotation.is_some()
+            || varkw_annotation.is_some();
         if annotated {
             // **`__annotate__` 单元的 qualname** ✓（参照实测）：模块级 ⇒ `__annotate__` ✓；
             // **类体里定义**的方法 ⇒ `<类 qualname>.__annotate__` ✓（**不是** `.<locals>.` 那一段 ✗
@@ -467,6 +471,8 @@ impl Emitter {
                 &annotate_qualname,
                 parameters,
                 kwonly,
+                varargs_annotation,
+                varkw_annotation,
                 returns,
                 returns_span,
                 annotate_freevars,
@@ -767,6 +773,8 @@ impl Emitter {
         kwonly: &[Parameter],
         varargs: &Option<String>,
         varkw: &Option<String>,
+        varargs_annotation: &Option<(AnnotationSource, Option<Span>)>,
+        varkw_annotation: &Option<(AnnotationSource, Option<Span>)>,
         returns: &Option<AnnotationSource>,
         returns_span: &Option<Span>,
         body: &[Statement],
@@ -784,6 +792,8 @@ impl Emitter {
                         kwonly,
                         varargs,
                         varkw,
+                        varargs_annotation,
+                        varkw_annotation,
                         returns,
                         returns_span,
                         body,
@@ -949,7 +959,17 @@ impl Emitter {
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
                 }
-                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, &annotate_freevars, *span)?;
+                self.emit_function_object(
+                    nested,
+                    parameters,
+                    kwonly,
+                    returns.as_ref(),
+                    *returns_span,
+                    varargs_annotation.as_ref(),
+                    varkw_annotation.as_ref(),
+                    &annotate_freevars,
+                    *span,
+                )?;
                 if !closure_freevars.is_empty() {
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
                 }
@@ -1642,6 +1662,8 @@ impl Emitter {
         kwonly: &[Parameter],
         varargs: &Option<String>,
         varkw: &Option<String>,
+        varargs_annotation: &Option<(AnnotationSource, Option<Span>)>,
+        varkw_annotation: &Option<(AnnotationSource, Option<Span>)>,
         returns: &Option<AnnotationSource>,
         returns_span: &Option<Span>,
         body: &[Statement],
@@ -1692,7 +1714,9 @@ impl Emitter {
             .iter()
             .chain(kwonly.iter())
             .any(|parameter| parameter.annotation.is_some())
-            || returns.is_some();
+            || returns.is_some()
+            || varargs_annotation.is_some()
+            || varkw_annotation.is_some();
         // **内层函数**：先探针一遍 ⇒ 体内引用类型参数 ⇒ 成为内层的自由变量（⇒ 类型参数成 cell ✓）
         let mut nested = compile_scope(
             name,
@@ -1818,6 +1842,8 @@ impl Emitter {
                 &annotate_qualname,
                 parameters,
                 kwonly,
+                varargs_annotation.as_ref(),
+                varkw_annotation.as_ref(),
                 returns.as_ref(),
                 *returns_span,
                 &annotate_freevars,
@@ -1882,6 +1908,8 @@ impl Emitter {
         qualname: &str,
         parameters: &[Parameter],
         kwonly: &[Parameter],
+        varargs_annotation: Option<&(AnnotationSource, Option<Span>)>,
+        varkw_annotation: Option<&(AnnotationSource, Option<Span>)>,
         returns: Option<&AnnotationSource>,
         returns_span: Option<Span>,
         // **自由变量**（task-24 泛型函数 ✓）：注解里引用的类型参数名 ✓（声明序 ✓）。普通函数空表 ✓。
@@ -2004,8 +2032,58 @@ impl Emitter {
         emitter.emit_named(span, "RAISE_VARARGS", 1);
         emitter.mark_label(end);
         let mut count = 0usize;
-        // 注解字典按**声明次序**：位置参数 → 仅关键字 → `'return'`（实测）
-        for parameter in parameters.iter().chain(kwonly.iter()) {
+        // 注解字典按**声明次序**：位置参数 → `*args` → 仅关键字 → `**kw` → `'return'`
+        // （round 55 实测：`def g(a:int,*args:str,b:float,**kw:bool)->None` ⇒
+        //  `{'a','args','b','kw','return'}` ✓，`*args`／`**kw` 排在它们各自的位置 ✓）。
+        let emit_named_annotation =
+            |emitter: &mut Emitter, name: &str, annotation: &AnnotationSource, annotation_span: Option<Span>| -> Result<(), CompileError> {
+                let key = emitter.intern_constant(Constant::Str(name.to_owned()));
+                emitter.emit_indexed(span, "LOAD_CONST", key);
+                let at = annotation_span.unwrap_or(span);
+                match annotation {
+                    // **PEP 646 的星号注解**（`def f(*args: *b)`，round 55）：参照把注解值按
+                    // **恰好解包一项**算 —— `*b` 求值成元组再 `UNPACK_SEQUENCE 1`（元素本身才是
+                    // `__annotations__['args']` ✓）；零项／多项分别报
+                    // `ValueError: not enough values to unpack (expected 1, got 0)`／
+                    // `too many values to unpack (expected 1)` ✓（`test_pep646_syntax` 逐字比 ✓）。
+                    AnnotationSource::Expression(Expression::Starred(inner, _)) => {
+                        emitter.emit_at(
+                            at,
+                            opcode::opcode("BUILD_LIST").expect("BUILD_LIST 在表里"),
+                            0,
+                        );
+                        emitter.emit_expression(inner)?;
+                        emitter.emit_at(
+                            at,
+                            opcode::opcode("LIST_EXTEND").expect("LIST_EXTEND 在表里"),
+                            1,
+                        );
+                        emitter.emit_at(
+                            at,
+                            opcode::opcode("CALL_INTRINSIC_1").expect("CALL_INTRINSIC_1 在表里"),
+                            6,
+                        );
+                        emitter.emit_named(at, "UNPACK_SEQUENCE", 1);
+                    }
+                    AnnotationSource::Expression(expression) => emitter.emit_expression(expression)?,
+                    AnnotationSource::Type(label) => {
+                        emitter.emit_annotation_expression(label, at, classdict_slot)
+                    }
+                }
+                Ok(())
+            };
+        for parameter in parameters.iter() {
+            let Some(annotation) = parameter.annotation.as_ref() else {
+                continue;
+            };
+            emit_named_annotation(&mut emitter, &parameter.name, annotation, parameter.annotation_span)?;
+            count += 1;
+        }
+        if let Some((annotation, annotation_span)) = varargs_annotation {
+            emit_named_annotation(&mut emitter, "args", annotation, *annotation_span)?;
+            count += 1;
+        }
+        for parameter in kwonly.iter() {
             let Some(annotation) = parameter.annotation.as_ref() else {
                 continue;
             };
@@ -2023,6 +2101,10 @@ impl Emitter {
                     emitter.emit_annotation_expression(label, annotation_span, classdict_slot)
                 }
             }
+            count += 1;
+        }
+        if let Some((annotation, annotation_span)) = varkw_annotation {
+            emit_named_annotation(&mut emitter, "kw", annotation, *annotation_span)?;
             count += 1;
         }
         if let Some(annotation) = returns {
