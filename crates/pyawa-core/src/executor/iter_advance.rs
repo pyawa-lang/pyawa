@@ -120,6 +120,25 @@ pub(crate) fn advance_iterator(
     }
     // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
     let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+    // **字典迭代中改键 ⇒ `RuntimeError`**（`P3-41` round 42；参照口径）——
+    // 先前不检测 ⇒ `for i in d: d[i+1] = 1` 的循环**永不结束**（`test_dict.test_mutating_iteration`）。
+    // 文案两档照参照：长度变了 ⇒ `changed size`；只变键集 ⇒ `changed keys` ✓。
+    if ty == builtin_type(instance, "dict_keyiterator") {
+        // SAFETY: 类型身份刚确认。
+        let dict = unsafe { &*object.target().as_ptr().cast::<crate::builtin_objects::DictObject>() };
+        let changed = match object.check_dict_version(instance) {
+            Err(()) => true,
+            Ok(_) => false,
+        };
+        if changed {
+            let message = if object.guard_len() != dict.len() {
+                "dictionary changed size during iteration"
+            } else {
+                "dictionary keys changed during iteration"
+            };
+            return Err(instance.raise_builtin_error("RuntimeError", message));
+        }
+    }
     let target = object.target();
     let index = object.index();
     let length = iterable_length(instance, target, opcode)?;

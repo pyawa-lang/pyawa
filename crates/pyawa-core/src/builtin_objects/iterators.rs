@@ -46,6 +46,16 @@ py_object! {
         target: NonNull<Header>,
         /// 游标（下一个要取的下标）。
         index: Cell<usize>,
+        {
+            /// **字典迭代的键集版本守卫**（`P3-41` round 42）：首次推进时记下 `dict.version`，
+            /// 之后每次推进比对 ⇒ 迭代中改键就报 `RuntimeError: dictionary changed size during
+            /// iteration` ✓（参照口径；先前**不检测** ⇒ `for i in d: d[i+1]=1` 永远不结束 ✗）。
+            guard: Cell<u64>,
+            /// 首个推进时的**长度**（区分"改大小"与"改键集"两档文案 ✓）。
+            guard_len: Cell<usize>,
+            /// 守卫是否已武装（`Cell<bool>` 的默认值是 `false` ✓）。
+            armed: Cell<bool>,
+        }
     }
 }
 
@@ -707,6 +717,35 @@ impl IteratorObject {
     /// 推进游标。
     pub fn advance(&self) {
         self.index.set(self.index.get() + 1);
+    }
+
+    /// **字典迭代的版本守卫**：第一次推进时记下 `(版本, 长度)`；之后版本变 ⇒ 给
+    /// `RuntimeError` 的**两档文案**（照参照：长度也变 ⇒ `changed size`；只变键集 ⇒ `changed keys` ✓）。
+    /// 非字典迭代器的 `target` 不是 `dict` ⇒ 调用方不调它 ✓。
+    pub fn check_dict_version(
+        &self,
+        instance: &Instance,
+    ) -> Result<Option<&'static str>, ()> {
+        // SAFETY: target 由本对象持有，存活；调用方只在 `dict_keyiterator` 上调。
+        let dict = unsafe { &*self.target.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+        let version = dict.version();
+        let length = dict.len();
+        if self.armed.get() {
+            if self.guard.get() != version {
+                return Err(());
+            }
+            return Ok(None);
+        }
+        self.guard.set(version);
+        self.guard_len.set(length);
+        self.armed.set(true);
+        let _ = instance;
+        Ok(None)
+    }
+
+    /// 守卫武装时记下的长度（给"两档文案"用 ✓）。
+    pub fn guard_len(&self) -> usize {
+        self.guard_len.get()
     }
 }
 

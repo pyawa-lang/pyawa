@@ -4,7 +4,7 @@
 //! * 仍在原处的被引用项：`builtin_type`、`exception_type`、`index_payload`、`is_type_object`、`new_exception_with_args`、`normalize_index`、`push`、`raise`、`raise_builtin`、`release`、`sequence_items`、`slice_bounds`、`slice_positions`、`values_equal` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, exception_type, index_payload, new_exception_with_args, normalize_index, raise, raise_builtin, release, sequence_items, slice_bounds, slice_positions, values_equal};
+use crate::executor::{builtin_type, exception_type, index_payload, new_exception_with_args, normalize_index, raise, raise_builtin, release, sequence_items, slice_bounds, slice_positions};
 use crate::builtin_objects::{BytearrayObject, BytesObject};
 use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
@@ -169,12 +169,9 @@ pub(crate) fn subscript_get(
         crate::builtin::dict::reject_unhashable_key(instance, key)?;
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息
-        let position = match object
-            .entries()
-            .iter()
-            .position(|(existing, _)| values_equal(instance, *existing, key))
-        {
+        // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息。
+        // **按哈希索引查**（`P3-41` round 42）：先前每次线性扫 ⇒ 大表 O(n²)。
+        let position = match instance.dict_lookup_key(container, key) {
             Some(position) => position,
             None => {
                 // SAFETY: key 是帧值栈上的存活对象。
@@ -379,10 +376,8 @@ pub(crate) fn subscript_set(
         }
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        let position = object
-            .entries()
-            .iter()
-            .position(|(existing, _)| values_equal(instance, *existing, key));
+        // **按哈希索引查**（`P3-41` round 42）：造表（`d[k] = v`）不能是 O(n²)。
+        let position = instance.dict_lookup_key(container, key);
         match position {
             Some(slot) => {
                 if let Some(old) = object.replace_value(slot, value) {
@@ -392,12 +387,19 @@ pub(crate) fn subscript_set(
             }
             None => {
                 // **契约**：`subscript_set` **借用键**、**接管值**。
-                // `insert_raw` 是"转移"语义（收下传进去的那份引用），所以这里必须先为字典
+                // `insert_raw`／`insert_hashed` 是"转移"语义（收下传进去的那份引用），所以这里必须先为字典
                 // 新增一份键——否则调用方随后释放自己的键，字典里就留下一个**悬垂键指针**
                 // （症状：键对象被释放后地址被别的字符串复用，查键会"命中"不相干的键）。
                 // SAFETY: key 由调用方保证存活。
                 unsafe { instance.incref_object(key.as_ptr()) };
-                object.insert_raw(key, value);
+                // **带哈希插入**（`P3-41` round 42）：`insert_raw` 会作废查找索引 ⇒ 造表时每次
+                // 重扫全表 ⇒ O(n²)。能算哈希就增量维护索引 ✓。
+                match crate::executor::values::key_hash(instance, key) {
+                    Some(hash) => {
+                        object.insert_hashed(key, value, hash);
+                    }
+                    None => object.insert_raw(key, value),
+                }
             }
         }
         return Ok(());
@@ -510,11 +512,8 @@ pub fn subscript_del(
     if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        let position = match object
-            .entries()
-            .iter()
-            .position(|(existing, _)| values_equal(instance, *existing, key))
-        {
+        // **按哈希索引查**（`P3-41` round 42）。
+        let position = match instance.dict_lookup_key(container, key) {
             Some(position) => position,
             None => {
                 // SAFETY: key 是帧值栈上的存活对象。

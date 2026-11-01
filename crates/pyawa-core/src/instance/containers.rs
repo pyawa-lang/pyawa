@@ -246,40 +246,33 @@ impl Instance {
                 panic!("[欠计数] dict_set(`{key}`) 接管的值**计数已是 0** ✗ ⇒ 调用方交的是**借来的**引用 ✓");
             }
         }
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        // 查重用一个**临时键**（借用视图）：查完立刻归还，字典自己另存一份
-        let probe = self.new_str(key);
-        let position = dict
-            .entries()
-            .iter()
-            .position(|(existing, _)| crate::executor::values::values_equal_public(self, *existing, probe));
-        // SAFETY: probe 是新引用，比较完即归还。
-        unsafe { self.release_object(probe.as_ptr()) };
-        if let Some(position) = position {
-            if let Some((old_key, old_value)) = dict.remove(position) {
-            // **同值重存 ＋ 计数只有 1** ✗（第 275 轮）：`dict_set` 会**先释放旧值** ✓ ⇒ 若新旧是**同一个**
-            // 对象、且它的计数已只剩 1 ✓ ⇒ 这一释放**当场把它打死** ✗ ⇒ 字典随即存进**悬垂指针** ✓。
-            // ⇒ 报出**键名** ✓（调用方该在存之前 `retain` ✓）。
+        // **按哈希索引查**（`P3-41` round 42）：`hash_text(key)` 与 `key_hash` 同族 ⇒ 命中直接
+        // `replace_value`（**保住插入顺序** ✓，参照也如此；先前 remove 再 insert 会把键挪到末尾 ✗）。
+        let hash = crate::executor::values::hash_text(key);
+        if let Some(position) = self.dict_lookup_hashed(mapping, hash, |existing| {
+            self.text_of(existing) == Some(key)
+        }) {
+            // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            let old_value = dict.replace_value(position, value).expect("position 刚由索引给出");
+            // **同值重存 ＋ 计数只有 1** ✗（第 275 轮）：替换前要判"新值是不是就是旧值" ✓。
             if dangling_mode() && old_value.as_ptr() == value.as_ptr() {
                 let header = unsafe { value.as_ref() };
                 if !header.is_immortal() && header.refcount() <= 1 {
                     panic!("[同值重存] dict_set(`{key}`) 的旧值与新值同一个对象、计数只有 {} ✗ ⇒ 替换时会被打死 ✓", header.refcount());
                 }
             }
-                // SAFETY: 旧键值由字典持有。
-                // **先查活表** ✓（第 274 轮诊断）：把**键名**带进哨兵 ⇒ 一眼看出是哪个条目 ✓。
-                if dangling_mode() {
-                    self.assert_live(old_key, &format!("dict_set 旧键（新键 `{key}`）"));
-                    self.assert_live(old_value, &format!("dict_set 旧值（新键 `{key}`）"));
-                }
-                unsafe {
-                    self.release_object(old_key.as_ptr());
-                    self.release_object(old_value.as_ptr());
-                }
+            if dangling_mode() {
+                self.assert_live(old_value, &format!("dict_set 旧值（新键 `{key}`）"));
             }
+            // SAFETY: 旧值由字典持有，替换后交回本函数。
+            unsafe { self.release_object(old_value.as_ptr()) };
+            return;
         }
         let stored_key = self.new_str(key);
-        dict.insert_raw(stored_key, value);
+        // SAFETY: 调用方保证 mapping 存活。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        dict.insert_hashed(stored_key, value, hash);
     }
 
     /// 往 `dict` 里按**整数**键写一个值（**接管** `value`；`errorcode` 这类用）。
@@ -287,40 +280,76 @@ impl Instance {
         self.zombie_probe(mapping);
         // **借用口径同 [`Self::dict_set`]** ✓（第 275 轮 ✓）。
         unsafe { self.incref_object(value.as_ptr()) };
-        // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let hash = crate::executor::values::hash_i64(key);
+        // 先造一个探针键：命中时它只用于比较（比较完归还）；未命中时**直接当存储键**（省一次分配 ✓）。
         let probe = self.new_int(key);
-        let position = dict
-            .entries()
-            .iter()
-            .position(|(existing, _)| crate::executor::values::values_equal_public(self, *existing, probe));
-        // SAFETY: probe 是新引用，比较完就归还。
-        unsafe { self.release_object(probe.as_ptr()) };
-        if let Some(position) = position {
-            if let Some((old_key, old_value)) = dict.remove(position) {
-                // SAFETY: 旧键值由字典持有。
-                unsafe {
-                    self.release_object(old_key.as_ptr());
-                    self.release_object(old_value.as_ptr());
+        if let Some(position) = self.dict_lookup_hashed(mapping, hash, |existing| {
+            crate::executor::values_equal_public(self, existing, probe)
+        }) {
+            // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            // SAFETY: probe 是新引用，比较完即归还。
+            unsafe { self.release_object(probe.as_ptr()) };
+            if let Some(old_value) = dict.replace_value(position, value) {
+                // SAFETY: 旧值由字典持有。
+                unsafe { self.release_object(old_value.as_ptr()) };
+            }
+            return;
+        }
+        // SAFETY: 调用方保证 mapping 存活。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        dict.insert_hashed(probe, value, hash);
+    }
+
+    /// **按"已算好的哈希 ＋ 匹配谓词"查字典**（`P3-41` round 42 的内部口）：命中给条目下标 ✓。
+    ///
+    /// 索引惰性建（第一问时 O(n)，之后 O(1)；改键的操作会作废它 ✓）。
+    fn dict_lookup_hashed(
+        &self,
+        mapping: NonNull<Header>,
+        hash: u64,
+        matches: impl Fn(NonNull<Header>) -> bool,
+    ) -> Option<usize> {
+        // SAFETY: 调用方保证 mapping 存活。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        dict.ensure_index(|candidate| crate::executor::values::key_hash(self, candidate));
+        for position in dict.candidates(hash) {
+            if let Some((existing, _)) = dict.entry(position) {
+                if matches(existing) {
+                    return Some(position);
                 }
             }
         }
-        let stored_key = self.new_int(key);
-        dict.insert_raw(stored_key, value);
+        None
+    }
+
+    /// **按键对象查字典**（`values_equal` 口径 ✓；不可哈希的键退回线性扫 ✓）。
+    pub fn dict_lookup_key(
+        &self,
+        mapping: NonNull<Header>,
+        key: NonNull<Header>,
+    ) -> Option<usize> {
+        if let Some(hash) = crate::executor::values::key_hash(self, key) {
+            return self.dict_lookup_hashed(mapping, hash, |existing| {
+                crate::executor::values_equal_public(self, existing, key)
+            });
+        }
+        // 不可哈希／没覆盖的键 ⇒ 线性兜底（正常路径：设置键时已被拒 ✓）。
+        // SAFETY: 调用方保证 mapping 存活。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        dict.entries()
+            .iter()
+            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, key))
     }
 
     /// 按**字符串**键读 `dict`（**借用**；不存在给 `None`）。
     pub fn dict_get(&self, mapping: NonNull<Header>, key: &str) -> Option<NonNull<Header>> {
+        let position = self.dict_lookup_hashed(mapping, crate::executor::values::hash_text(key), |existing| {
+            self.text_of(existing) == Some(key)
+        })?;
         // SAFETY: 调用方保证 mapping 存活。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        let probe = self.new_str(key);
-        let found = dict
-            .entries()
-            .iter()
-            .position(|(existing, _)| crate::executor::values::values_equal_public(self, *existing, probe));
-        // SAFETY: probe 是新引用，比较完就归还。
-        unsafe { self.release_object(probe.as_ptr()) };
-        found.and_then(|position| dict.entry(position).map(|(_, value)| value))
+        dict.entry(position).map(|(_, value)| value)
     }
 
     /// **`DESIGN.md` §9 第 20 条**：注入平台相关**只读常量**（`errno` 一类）。

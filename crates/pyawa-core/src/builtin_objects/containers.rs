@@ -209,10 +209,19 @@ py_object! {
 py_object! {
     /// `dict` 的实例。
     ///
-    /// *临时*：关联表 ＋ 线性查找（查找走"值相等"而不是 `__hash__`／`__eq__` 槽位——
-    /// 那两个槽位随类型系统接线）。**插入顺序**与参照实现一致。
+    /// **插入顺序**与参照实现一致（`entries` 是唯一真相）；`index` 是**惰性构造的查找索引**
+    /// （键哈希 → 条目下标），由 [`Instance::dict_lookup_key`] 维护/使用（`P3-41` round 42 修
+    /// `test_dict` 的 O(n²)）。任何改键的操作（`insert_raw`／`remove`／`insert`）都会**作废**它；
+    /// 改值（`set_value_at`／`replace_value`）不影响 ✓。
     pub struct DictObject {
         entries: RefCell<Vec<(NonNull<Header>, NonNull<Header>)>>,
+        {
+            /// 查找索引；`None` ⇒ 还没建／已作废。
+            index: RefCell<Option<std::collections::HashMap<u64, Vec<usize>>>>,
+            /// **键集版本号**（`P3-41` round 42）：改键（插入／删除）时 +1 ⇒ 迭代器据此报
+            /// `RuntimeError: dictionary changed size during iteration` ✓（只改值不算 ✓，照参照）。
+            version: Cell<u64>,
+        }
     }
 }
 
@@ -419,8 +428,75 @@ impl DictObject {
         Some(core::mem::replace(&mut entry.1, value))
     }
 
+    /// **键集版本号**（迭代器用它检测"迭代中改字典" ✓）。
+    pub fn version(&self) -> u64 {
+        self.version.get()
+    }
+
+    /// 记一次**键集变化**（插入／删除；改值不算 ✓）。
+    fn bump_version(&self) {
+        self.version.set(self.version.get().wrapping_add(1));
+    }
+
+    /// **作废查找索引**（改键的操作用；下一轮查找再惰性重建 ✓）。
+    fn invalidate_index(&self) {
+        *self.index.borrow_mut() = None;
+    }
+
+    /// **确保查找索引已建**（`P3-41` round 42）：`hash_of` 由 `Instance` 给（core 里唯一的
+    /// 哈希口径 `values::key_hash` ✓ —— 与 `values_equal` 同源）。
+    pub fn ensure_index(&self, hash_of: impl Fn(NonNull<Header>) -> Option<u64>) {
+        if self.index.borrow().is_some() {
+            return;
+        }
+        let built = {
+            let entries = self.entries.borrow();
+            let mut map: std::collections::HashMap<u64, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (position, (key, _)) in entries.iter().enumerate() {
+                if let Some(hash) = hash_of(*key) {
+                    map.entry(hash).or_default().push(position);
+                }
+            }
+            map
+        };
+        *self.index.borrow_mut() = Some(built);
+    }
+
+    /// 某个哈希桶里的候选条目下标（**拷贝**；桶通常只有一条 ✓）。
+    pub fn candidates(&self, hash: u64) -> Vec<usize> {
+        self.index
+            .borrow()
+            .as_ref()
+            .and_then(|map| map.get(&hash).cloned())
+            .unwrap_or_default()
+    }
+
+    /// **带哈希插入**（调用方已算好键哈希；索引存在时**增量更新** ✓ —— 这样"边插边查"的
+    /// 造表过程也是 O(1)／次，而不是每次作废重建 ✓）。
+    pub fn insert_hashed(
+        &self,
+        key: NonNull<Header>,
+        value: NonNull<Header>,
+        hash: u64,
+    ) -> usize {
+        self.bump_version();
+        let position = {
+            let mut entries = self.entries.borrow_mut();
+            let position = entries.len();
+            entries.push((key, value));
+            position
+        };
+        if let Some(index) = self.index.borrow_mut().as_mut() {
+            index.entry(hash).or_default().push(position);
+        }
+        position
+    }
+
     /// **摘掉某一项**（第 147 轮，`dict.pop` 用 ✓）：键与值**各一份引用转交**调用方 ✓。
     pub fn remove_at(&self, index: usize) -> Option<(NonNull<Header>, NonNull<Header>)> {
+        self.bump_version();
+        self.invalidate_index();
         let mut entries = self.entries.borrow_mut();
         if index >= entries.len() {
             return None;
@@ -477,7 +553,11 @@ impl DictObject {
     }
 
     /// 追加一个**新引用**的键值对（不查重；调用方先用"值相等"查过）。
+    ///
+    /// **作废查找索引**（改键了 ✓）；走 [`Self::insert_hashed`] 的调用方可以保住索引 ✓。
     pub fn insert_raw(&self, key: NonNull<Header>, value: NonNull<Header>) {
+        self.bump_version();
+        self.invalidate_index();
         self.entries.borrow_mut().push((key, value));
     }
 
@@ -495,6 +575,8 @@ impl DictObject {
 
     /// 删除第 `index` 项，返回 `(键, 值)`（调用方负责释放这两份引用）。
     pub fn remove(&self, index: usize) -> Option<(NonNull<Header>, NonNull<Header>)> {
+        self.bump_version();
+        self.invalidate_index();
         let mut entries = self.entries.borrow_mut();
         if index >= entries.len() {
             return None;
@@ -508,6 +590,7 @@ impl DictObject {
         key: NonNull<Header>,
         value: NonNull<Header>,
     ) -> Option<NonNull<Header>> {
+        self.invalidate_index();
         let mut entries = self.entries.borrow_mut();
         if let Some(slot) = entries
             .iter_mut()
@@ -516,6 +599,7 @@ impl DictObject {
         {
             return Some(core::mem::replace(slot, value));
         }
+        self.bump_version();
         entries.push((key, value));
         None
     }

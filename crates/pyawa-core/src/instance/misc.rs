@@ -97,8 +97,41 @@ impl Instance {
         }
         self.gc_running.set(true);
         self.gc_collections.set(self.gc_collections.get() + 1);
+        let started = std::time::Instant::now();
+        let live_before = self.live_objects();
         let freed = self.collect_inner();
         self.gc_running.set(false);
+        // **诊断**（`PYAWA_GC_LOG=1` 才打）：回收前后存活数 ＋ 耗时（默认零输出 ✓）。
+        // `PYAWA_GC_LOG=2` 另打**类型直方图 top 8**（查"GC 收不掉谁"用 ✓）。
+        if crate::diag::flag("PYAWA_GC_LOG") && std::env::var("PYAWA_GC_LOG").as_deref() == Ok("2") {
+            let headers = self.gc_headers();
+            let mut counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for header in &headers {
+                // SAFETY: 链上的对象都存活。
+                let ty = unsafe { header.as_ref() }.ty();
+                let name = unsafe { ty.as_ref() }.name().to_owned();
+                *counts.entry(name).or_insert(0) += 1;
+            }
+            let mut top: Vec<(String, usize)> = counts.into_iter().collect();
+            top.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+            let summary: Vec<String> = top
+                .iter()
+                .take(8)
+                .map(|(name, count)| format!("{name}={count}"))
+                .collect();
+            eprintln!("[gc-types] {}", summary.join(" "));
+        }
+        if crate::diag::flag("PYAWA_GC_LOG") {
+            eprintln!(
+                "[gc] index={} live={} live_after={} freed={} ms={}",
+                self.gc_collections.get(),
+                live_before,
+                self.live_objects(),
+                freed,
+                started.elapsed().as_millis()
+            );
+        }
         freed
     }
 

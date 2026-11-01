@@ -146,19 +146,17 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         if a.len() != b.len() {
             return false;
         }
-        let right_entries = b.entries();
+        // **按哈希索引查**（`P3-41` round 42）：先前对每个键**线性扫右表** ⇒ `d == d2`
+        // 是 O(n²)（`test_dict.test_copy_fuzz` 的 10 万项两个 O(n²) 之一 ✓）。
+        let right_mapping = right;
         for (key, value) in a.entries() {
-            let mut matched = false;
-            for (other_key, other_value) in &right_entries {
-                if values_equal(instance, key, *other_key) {
-                    if !values_equal(instance, value, *other_value) {
-                        return false;
-                    }
-                    matched = true;
-                    break;
-                }
-            }
-            if !matched {
+            let Some(position) = instance.dict_lookup_key(right_mapping, key) else {
+                return false;
+            };
+            let Some((_, other_value)) = b.entry(position) else {
+                return false;
+            };
+            if !values_equal(instance, value, other_value) {
                 return false;
             }
         }
@@ -210,6 +208,90 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     }
 
     false
+}
+
+/// **`str` 文本的哈希**（FNV-1a 64；与 [`key_hash`] 用同一个 ⇒ 调用方可直接按 `&str` 查字典 ✓）。
+pub(crate) fn hash_text(text: &str) -> u64 {
+    hash_bytes(text.as_bytes())
+}
+
+/// 字节序列的 FNV-1a 64。
+pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// 整数键的哈希（`bytes` 哈希同族；`dict_set_int` 一类直接用它 ✓）。
+pub(crate) fn hash_i64(value: i64) -> u64 {
+    mix64(value as u64)
+}
+
+fn mix64(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+/// **字典键的哈希**（`P3-41` round 42）：与 [`values_equal`] **同源口径** ——
+/// `values_equal(a, b) ⇒ key_hash(a) == key_hash(b)`（反过来不要求：桶内冲突由 `values_equal` 消解 ✓）。
+///
+/// 覆盖：`None`／数值（`bool`／`int`／`float` 同值同哈希，含 `True == 1` ✓）／`str`（含子类）／
+/// `bytes`（含子类）／`tuple`（递归）／`weakref`（按**目标**哈希，与 round 40 的相等口径一致 ✓）；
+/// `list`／`dict`／`set`／`bytearray` **不可哈希** ⇒ `None`（调用方退回线性扫；设置键时已由
+/// `reject_unhashable_key` 拒掉 ✓）；其余按**身份**哈希（与 `values_equal` 的"其余按身份"一致 ✓）。
+pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u64> {
+    let ty = instance.type_of(object);
+    if ty == instance.singletons().none_type() {
+        return Some(mix64(0x4e4f_4e45));
+    }
+    if let Some(number) = numeric_payload(instance, object) {
+        // `NaN != NaN`（连自己也不等 ✓）⇒ 哈希按**身份**，保证"同一个 NaN 键"还能按身份查到 ✓。
+        if number.is_nan() {
+            return Some(mix64(0x4e41_4e00 ^ object.as_ptr() as usize as u64));
+        }
+        // `-0.0 == 0.0` ⇒ 同哈希 ✓。
+        if number == 0.0 {
+            return Some(0);
+        }
+        if number.fract() == 0.0 && number.abs() < 9.223_372_036_854_776e18 {
+            return Some(hash_i64(number as i64));
+        }
+        return Some(mix64(number.to_bits()));
+    }
+    if let Some(text) = instance.text_of(object) {
+        return Some(hash_text(text));
+    }
+    if let Some(bytes) = instance.bytes_value(object) {
+        return Some(hash_bytes(bytes));
+    }
+    if let Some(items) = instance.tuple_items(object) {
+        let mut hash = mix64(0x7475_706c_6500_0000);
+        for item in items {
+            let lane = key_hash(instance, item)?;
+            hash = mix64(hash ^ lane);
+        }
+        return Some(hash);
+    }
+    if let Some(target) = crate::builtin_objects::weakref_target(instance, object) {
+        return key_hash(instance, target);
+    }
+    // 不可哈希的容器（参照 `dict` 也拒它们当键）⇒ `None`（线性兜底；正常路径到不了 ✓）。
+    let unhashable = ["list", "dict", "set", "bytearray"];
+    if unhashable.iter().any(|name| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    }) {
+        return None;
+    }
+    // 其余按**身份**（与 `values_equal` 的"其余按身份"一致 ✓；用户类自定义 `__eq__` 的缺口另记 ✓）。
+    Some(mix64(object.as_ptr() as usize as u64))
 }
 
 /// 一个对象是不是本层接线的迭代器。
