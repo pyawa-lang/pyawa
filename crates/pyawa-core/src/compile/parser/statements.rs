@@ -1765,11 +1765,21 @@ fn try_parse_chained_target(
     cursor: usize,
 ) -> Option<(Expression, usize)> {
     let tokens = &lexed.lexemes;
-    let (first, after_first) = parse_expression(lexed, cursor).ok()?;
+    // **以 `*` 打头的元组目标** ✓（round 52）：`a, *b, c = *d, e = range(5)` 的第二个目标
+    // `*d, e` 是"以星号打头的元组"——先前 `parse_expression` 不认裸 `*` ✗ ⇒ 链式目标只认到第一个
+    // ⇒ 后在第二个 `=` 上报"语句结尾多出了 Some(Assign)" ✗（`test_unpack_ex` 的 doctest 钉住 ✓）。
+    let (first, after_first, first_starred) =
+        if tokens.get(cursor) == Some(&Lexeme::Star) {
+            let (expression, after) = parse_expression(lexed, cursor + 1).ok()?;
+            (expression, after, true)
+        } else {
+            let (expression, after) = parse_expression(lexed, cursor).ok()?;
+            (expression, after, false)
+        };
     let mut at = after_first;
     let first_span = first.span();
     let target = if tokens.get(at) == Some(&Lexeme::Comma) {
-        let mut items: Vec<(Expression, bool)> = vec![(first, false)];
+        let mut items: Vec<(Expression, bool)> = vec![(first, first_starred)];
         let mut last_span = first_span;
         parse_tuple_target_tail(lexed, &mut at, &mut items, &mut last_span).ok()?;
         let mut expressions: Vec<Expression> = Vec::with_capacity(items.len());
@@ -1783,6 +1793,10 @@ fn try_parse_chained_target(
         }
         Expression::TupleLiteral(expressions, first_span.to(last_span))
     } else {
+        // 单个 `*x` 不是合法目标（`*x = 1` 参照报 SyntaxError）⇒ 不认 ✓。
+        if first_starred {
+            return None;
+        }
         first
     };
     // 只认**赋值目标**形状 ✓（右值后面跟 `=` 的怪句要落回原来的报错 ✓）。

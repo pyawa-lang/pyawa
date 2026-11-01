@@ -193,18 +193,23 @@ fn step_calls_dict_merge<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                 let entries = match mapping_entries(instance, source) {
                     Ok(entries) => entries,
                     Err(ExecError::Unsupported { .. }) => {
-                        // **不是映射** ⇒ 参照的 TypeError（带被调对象与实参类型名 ✓）。
+                        // **不是映射** ⇒ 参照的 TypeError：`DICT_MERGE`（调用实参）带被调对象与
+                        // 类型名（`__main__.f() argument after ** must be a mapping, not int` ✓）；
+                        // `DICT_UPDATE`（dict 显示 `{**x}`）是另一句 `'int' object is not a mapping` ✓
+                        // （`test_unpack_ex` 的 doctest 逐字比较 ✓，round 52 实测）。
                         let source_type_name =
                             instance.type_name(unsafe { source.as_ref() }.ty()).to_owned();
                         // SAFETY: source 是新引用。
                         unsafe { instance.release_object(source.as_ptr()) };
-                        let callee = callee.unwrap_or_else(|| "?".to_owned());
-                        return Err(instance.raise_builtin_error(
-                            "TypeError",
-                            &format!(
+                        let message = if is_merge {
+                            let callee = callee.unwrap_or_else(|| "?".to_owned());
+                            format!(
                                 "{callee} argument after ** must be a mapping, not {source_type_name}"
-                            ),
-                        ));
+                            )
+                        } else {
+                            format!("'{source_type_name}' object is not a mapping")
+                        };
+                        return Err(instance.raise_builtin_error("TypeError", &message));
                     }
                     Err(error) => {
                         // SAFETY: source 是新引用。

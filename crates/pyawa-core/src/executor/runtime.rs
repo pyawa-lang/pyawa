@@ -549,6 +549,11 @@ pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
 /// ⇒ doctest 一比较回溯就是 `'NoneType' object has no attribute 'tb_next'` ✗。
 /// **尽力而为**（没有当前帧、或异常没有实例字典 ⇒ 如实不挂 ✓）。
 pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) {
+    // 诊断开关（临时）：`PYAWA_NO_TRACEBACK_ATTACH=1` 关掉回溯挂载，用来隔离
+    // "异常↔回溯↔帧"环与 GC 回收的交互（round 52 排查 `test_extcall` 的堆损坏 ✓）。
+    if crate::diag::flag("PYAWA_NO_TRACEBACK_ATTACH") {
+        return;
+    }
     if let Some(frame) = instance.current_frame() {
         let traceback = instance.new_traceback(frame);
         let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
