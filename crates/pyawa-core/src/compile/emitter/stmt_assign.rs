@@ -241,7 +241,15 @@ impl Emitter {
                 // 非逐字节相同 ✗：夹具里还没有这个形态 ✓，真撞上再合 ✓）。
                 let matching_tuple = match value {
                     Expression::TupleLiteral(items, _) => {
-                        chain.is_empty() && items.len() == targets.len() && targets.len() <= 3
+                        // **值里带 `*` 不走等长窥孔** ✗（round 53 真 bug）：`*a, b, c = x, y, *z`
+                        // 的元组显示项数是 **3**、目标也是 3 ⇒ 先前误判成"等长" ⇒ 按项逐个 `SWAP`
+                        // ⇒ 星号项把栈形状搅乱 ⇒ **赋值静默不生效** ✗（`test_unpack_ex` 的
+                        // `*a, b, c = a, b, *c` 实测：三个变量纹丝不动 ✓）。带 `*` 的元组显示
+                        // 求值后长度**不固定** ⇒ 必须走普通路径（构建值 ＋ `UNPACK_EX`）✓。
+                        chain.is_empty()
+                            && items.len() == targets.len()
+                            && targets.len() <= 3
+                            && !items.iter().any(|item| matches!(item, Expression::Starred(..)))
                     }
                     _ => false,
                 };

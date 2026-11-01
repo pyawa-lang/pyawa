@@ -129,6 +129,22 @@ impl Instance {
         self.gc_frozen.borrow_mut().clear();
 
         for header in &unreachable {
+            // **诊断（round 53）**：`PYAWA_GC_AUDIT=1` 时，若"已 clear 完"的对象计数仍非 0
+            // （正常应恰为 0：环内引用已互相释放；非 0 ⇒ 有**环外仍可达**的引用 ⇒ 一旦释放就是
+            // 先用后放 ✗）⇒ 打印现场并**跳过释放**（宁可泄漏，先把崩溃变成可观察的诊断 ✓）。
+            if crate::diag::flag("PYAWA_GC_AUDIT") {
+                let remaining = unsafe { header.as_ref() }.refcount();
+                if remaining != 0 {
+                    // SAFETY: header 尚未释放（本循环里我们会跳过它）。
+                    let ty = unsafe { header.as_ref() }.ty();
+                    let name = unsafe { &*ty.as_ref() }.name();
+                    eprintln!(
+                        "[gc-audit] 不可达对象计数={remaining} 类型={name} 地址={:#x}",
+                        header.as_ptr() as usize
+                    );
+                    continue;
+                }
+            }
             self.free_garbage(*header);
         }
         unreachable.len()

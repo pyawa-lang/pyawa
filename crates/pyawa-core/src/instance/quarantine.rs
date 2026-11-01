@@ -104,17 +104,22 @@ impl Instance {
         // **释放探针**（第 112 轮，`PYAWA_FREE_DEBUG=1`）：每次真正摘除一个对象都报
         // **地址 ＋ 类型 ＋ Python 现场 ＋ Rust 回溯** ✓ —— 用来分辨"同一条指令放了两次" ✗
         // 还是"重绑放一次、调用收尾又放一次" ✗（上限榜那一族的内存缺陷 ✓，见第 107～111 轮台账 ✓）。
-        if flag("PYAWA_FREE_DEBUG") {
+        let code_probe = flag("PYAWA_FREE_DEBUG_CODE");
+        if flag("PYAWA_FREE_DEBUG") || code_probe {
             // SAFETY: header 由调用方保证存活（正要摘除）。
             let name = unsafe { header.as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             let name = unsafe { name.as_ref() }.name().to_owned();
-            eprintln!(
-                "[free 探针] {:#x} 类型={name} 现场={}\n{}",
-                header.as_ptr() as usize,
-                self.current_site(),
-                std::backtrace::Backtrace::force_capture()
-            );
+            // `PYAWA_FREE_DEBUG_CODE=1`：**只记 code 对象**的释放（round 53 排查 `test_extcall`
+            // 的 code 双重释放；全量探针太慢 ✓）。
+            if !code_probe || name == "code" {
+                eprintln!(
+                    "[free 探针] {:#x} 类型={name} 现场={}\n{}",
+                    header.as_ptr() as usize,
+                    self.current_site(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
         }
         if self.zombie_trace.get() {
             // SAFETY: header 由调用方保证存活（正要摘除）。

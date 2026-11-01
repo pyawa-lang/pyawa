@@ -549,16 +549,31 @@ pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
 /// ⇒ doctest 一比较回溯就是 `'NoneType' object has no attribute 'tb_next'` ✗。
 /// **尽力而为**（没有当前帧、或异常没有实例字典 ⇒ 如实不挂 ✓）。
 pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) {
-    // 诊断开关（临时）：`PYAWA_NO_TRACEBACK_ATTACH=1` 关掉回溯挂载，用来隔离
-    // "异常↔回溯↔帧"环与 GC 回收的交互（round 52 排查 `test_extcall` 的堆损坏 ✓）。
     if crate::diag::flag("PYAWA_NO_TRACEBACK_ATTACH") {
         return;
     }
-    if let Some(frame) = instance.current_frame() {
-        let traceback = instance.new_traceback(frame);
-        let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
-        release(instance, traceback);
+    let Some(frame) = instance.current_frame() else {
+        return;
+    };
+    // **把旧回溯接到新回溯的 `tb_next` 上**（round 53，照参照的重抛语义 ✓）：先前直接
+    // `set_attribute_value` **替换** ✗ ⇒ 旧回溯（连同它持有的帧链）在**正在抛出新异常的路径里**
+    // 就被释放 ⇒ 那条链上的帧/代码对象与调用栈/GC 相互踩踏 ⇒ `test_extcall` 稳定堆损坏
+    // （`PYAWA_NO_TRACEBACK_ATTACH=1` 或"只挂第一次"都不崩，round 52/53 实测 ✓）。
+    // 现在旧回溯由新回溯的 `tb_next` **继续持有** ⇒ 替换/释放都安全 ✓，`tb_next` 也终于成链 ✓。
+    let previous = instance
+        .attribute_optional_of(exception, "__traceback__")
+        .ok()
+        .flatten()
+        .filter(|value| *value != instance.singletons().none());
+    let traceback = instance.new_traceback(frame);
+    if let Some(previous) = previous {
+        let _ = instance.set_attribute_value(traceback, "tb_next", previous);
+        // SAFETY: previous 是 `attribute_optional_of` 交出的新引用。
+        unsafe { instance.release_object(previous.as_ptr()) };
     }
+    // **尽力而为**（异常实例若没有实例字典，如实不挂 ✓）。
+    let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
+    release(instance, traceback);
 }
 
 /// 抛一个内建异常（带消息）。

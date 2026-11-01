@@ -781,6 +781,14 @@ fn parse_atom_leftbrace(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                 if lexed.lexemes.get(cursor) == Some(&Lexeme::DoubleStar) {
                     let (value, next) = parse_expression(lexed, cursor + 1)?;
                     cursor = next;
+                    // **字典推导式里不许 `**`** ✓（round 53；参照原文 `dict unpacking cannot be
+                    // used in dict comprehension`）：`{**{} for a in [1]}` ⇒ SyntaxError，先前
+                    // 落到"字典字面量里出现 Some(For)" ✗（`test_unpack_ex` 的 doctest 逐字比报文 ✓）。
+                    if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                        return Err(CompileError::Syntax(
+                            "dict unpacking cannot be used in dict comprehension".to_owned(),
+                        ));
+                    }
                     pairs.push(MapItem::Unpack(value));
                     match lexed.lexemes.get(cursor) {
                         Some(Lexeme::Comma) => {
@@ -802,6 +810,7 @@ fn parse_atom_leftbrace(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                 cursor = next;
                 // **集合推导式**：`{<元素> for <目标> in <可迭代> [if <条件>]*}`
                 if { reject_async_comprehension(lexed, cursor)?; matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) } {
+reject_comprehension_unpacking(&key)?;
                     let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
                     if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
                         return Err(CompileError::Syntax(
@@ -968,6 +977,7 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                 // 合法（官方 `test_named_expressions.py:747`）；`parse_condition` 认识裸海象 ✓。
                 if let Ok((element, after_element)) = parse_condition(lexed, cursor) {
                     if { reject_async_comprehension(lexed, after_element)?; matches!(lexed.lexemes.get(after_element), Some(Lexeme::For)) } {
+                        reject_comprehension_unpacking(&element)?;
                         let (target, after_target) =
                             parse_comprehension_target(lexed, after_element + 1)?;
                         if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
@@ -1105,6 +1115,18 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
     Ok((term, cursor))
 }
 
+/// **推导式元素里不许 `*` 解包** ✓（round 53；参照原文 `iterable unpacking cannot be used in
+/// comprehension`）：`[*x for x in y]`／`{*x for x in y}`／`(*x for x in y)` 都是 **SyntaxError**
+/// —— 本层先前把 `*x` 收成 `Starred` 元素后**照常发射** ⇒ 语义错（还静默生成结果 ✗）。
+fn reject_comprehension_unpacking(element: &Expression) -> Result<(), CompileError> {
+    if matches!(element, Expression::Starred(..)) {
+        return Err(CompileError::Syntax(
+            "iterable unpacking cannot be used in comprehension".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// **`async` 推导式**（`[i async for i in aiter]` ✓ 合法 Python）⇒ 本层**如实报未接线** ✓。
 ///
 /// 为什么要这一步 ✗：`async` 是硬关键字但本层词法器给的是 `Name("async")` ⇒ 列表／集合／字典／
@@ -1145,6 +1167,7 @@ fn parse_atom_leftbracket(lexed: &Lexed, cursor: usize) -> Result<(Expression, u
                 // **清单推导式**（3.12+ 内联；实测骨架见发射臂）：`[<元素> for <目标> in <可迭代>
                 // [if <条件>]*]`。多重 `for` 的融合指令选择属优化器细节 ⇒ 暂如实报未接线
                 if { reject_async_comprehension(lexed, cursor)?; matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) } {
+reject_comprehension_unpacking(&first)?;
                     let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
                     // **看 `after_target`，不是 `cursor + 2`** ✗（第 281 轮真 bug 修 ✓）：
                     // 先前这里写死"目标只有一个词元" ✗ ⇒ `[a for a, b in …]`（元组目标 ✓）
