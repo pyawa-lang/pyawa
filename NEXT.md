@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 57：`**` 通用映射路径 UAF 修 ⇒ `test_extcall` 不再崩；round 56：生成器重入守卫／`in range`）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 58：`iterable_items` 改 `Result` ⇒ 迭代协议异常原样传播；round 57：`**` 通用映射路径 UAF 修）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -50,10 +50,11 @@
   的**算术成员判定** ⇒ `test_genexps` 从**崩溃**变正常跑完、套件 25 ⇒ 26。
   **round 57 已清 ①**：`**` 通用映射路径的 **UAF**（`mapping_entries` 成功路径多放一次键引用
   ⇒ 死指针进字典 ⇒ 堆损坏；`test_extcall` 的「GC 堆损坏」根因就是它）⇒ 最小复现 3000 轮必崩 ⇒ 正常跑完。
-  **下一轮（round 58）**：① `iterable_items` **吞异常**（新发现真 bug：`list(g)`／`sum(g)`／`*g`
-  里生成器抛的异常被吞成空 ⇒ 参照原样传播；`test_extcall` 的 `myerror` 用例 ✓）② `*` 实参的
-  `__iter__` 抛错要原样传播（`BrokenIterable1` ✓）③ `test_genexps` 剩余（4 条报文＋元组复用）
-  ④ `test_weakref` 超时；⑤ 运行器上下文（导入名 vs `__main__`，参考实现直接跑同样失败）。**round 51 已清 ②**：`compile(..., "single")`
+  **round 58 已清 ①＋②**：`iterable_items` 改 `Result`（迭代协议异常原样传播、区分「不是可迭代」
+  与「协议抛错」）＋ `*` 实参同一条路 ✓ ⇒ `iteration_error_shapes.rs` 8 形态对拍全绿。
+  **下一轮（round 59）**：① `test_genexps` 剩余（4 条语法错报文＋元组复用优化）② `test_weakref`
+  超时（形参所有权）③ 运行器上下文（导入名 vs `__main__`；可评估让套件 runner 以导入名加载）
+  ④ 回 `NEXT.md` 队列：`P3-42` 的 `KeyError` 族／`P3-35` 剩余形态／`P3-29`／`P3-37`。**round 51 已清 ②**：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

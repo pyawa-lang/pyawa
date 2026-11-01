@@ -346,14 +346,15 @@ pub(crate) fn list_extend_native(
             "extend() takes exactly one argument (0 given)",
         ));
     };
-    let items = match instance.iterable_items(*iterable) {
+    let items = match instance.iterable_items(*iterable)? {
         Some(items) => items,
         None => {
             return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
         }
     };
+    // `iterable_items` 交的是**新引用** ⇒ `list_append` 直接**接手**（先前多 retain 一次 ✗
+    // ⇒ 每项漏一份、`list.extend` 循环把计数顶穿 ✓；round 58 统一口径 ✓）。
     for item in items {
-        instance.retain(item);
         instance.list_append(list, item);
     }
     Ok(instance.retain(instance.singletons().none()))

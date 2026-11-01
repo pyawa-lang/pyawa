@@ -203,7 +203,7 @@ pub(crate) fn dict_update_sequence(
     mapping: NonNull<Header>,
     source: NonNull<Header>,
 ) -> Result<(), crate::ExecError> {
-    let Some(items) = instance.iterable_items(source) else {
+    let Some(items) = instance.iterable_items(source)? else {
         let name = instance.type_name(instance.type_of(source));
         return Err(instance.raise_builtin_error(
             "TypeError",
@@ -211,7 +211,7 @@ pub(crate) fn dict_update_sequence(
         ));
     };
     for (index, pair) in items.iter().enumerate() {
-        let Some(parts) = instance.iterable_items(*pair) else {
+        let Some(parts) = instance.iterable_items(*pair)? else {
             // 参照这条**不带类型名**（实测 `d.update([1])` ⇒ `object is not iterable` ✓）。
             // 失败前把本函数手上的引用（本项起余下的项）归还 ✓。
             for leftover in &items[index..] {
@@ -580,7 +580,7 @@ pub fn dict_init_native(
                 dict_put_owned(instance, target, key, value);
             }
         } else {
-            let Some(items) = instance.iterable_items(source) else {
+            let Some(items) = instance.iterable_items(source)? else {
                 let name = instance.type_name(instance.type_of(source));
                 return Err(instance.raise_builtin_error(
                     "TypeError",
@@ -588,7 +588,7 @@ pub fn dict_init_native(
                 ));
             };
             for pair in items {
-                let Some(parts) = instance.iterable_items(pair) else {
+                let Some(parts) = instance.iterable_items(pair)? else {
                     return Err(instance.raise_builtin_error(
                         "TypeError",
                         "cannot convert dictionary update sequence element to a sequence",

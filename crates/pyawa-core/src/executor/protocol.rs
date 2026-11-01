@@ -502,8 +502,7 @@ fn inplace_dict_merge(
     }
     // ② 映射协议：`keys()` 存在就按它逐键取值（`iterable_items` 给**新引用** ⇒ 用完逐个归还 ✓）。
     if let Some(keys) = call_object_method(instance, right, "keys", &[])? {
-        let key_items = instance.iterable_items(keys);
-        let Some(key_items) = key_items else {
+        let Some(key_items) = instance.iterable_items(keys)? else {
             let right_name = instance.type_name(instance.type_of(right));
             let keys_name = instance.type_name(instance.type_of(keys));
             // SAFETY: keys 是本函数刚拿到的新引用。

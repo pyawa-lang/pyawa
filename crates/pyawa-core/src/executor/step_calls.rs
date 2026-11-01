@@ -314,45 +314,17 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         unsafe { instance.incref_object(value.as_ptr()) };
                         args.push(value);
                     }
-                } else if let Some(items) = instance.iterable_items(argument_source) {
-                    args.reserve(items.len());
-                    for item in items {
-                        instance.retain(item);
-                        args.push(item);
-                    }
                 } else {
-                    // **通用迭代协议**（round 50）：`iterable_items` 只认内建容器 ⇒ 自定义可迭代
-                    // （`__iter__`）也要按参照摊开 ✓；真不可迭代才报类型错（带被调对象名 ✓）。
-                    match instance.iter_object(argument_source) {
-                        Ok(iterator) => {
-                            loop {
-                                match instance.advance_iterator(iterator) {
-                                Ok(Some(item)) => args.push(item),
-                                Ok(None) => break,
-                                Err(error) => {
-                                    // SAFETY: 三份引用都归本函数。
-                                    unsafe {
-                                        instance.release_object(iterator.as_ptr());
-                                        instance.release_object(callable.as_ptr());
-                                        instance.release_object(argument_source.as_ptr());
-                                        instance.release_object(keyword_source.as_ptr());
-                                    }
-                                    if let Some(bound) = bound_self {
-                                        release(instance, bound);
-                                    }
-                                    for item in args {
-                                        release(instance, item);
-                                    }
-                                    return Err(error);
-                                }
-                            }
-                            }
-                            // SAFETY: 迭代器是 `iter_object` 交出的新引用。
-                            unsafe { instance.release_object(iterator.as_ptr()) };
-                        }
-                        Err(_) => {
-                            let argument_type_name =
-                                instance.type_name(argument_type).to_owned();
+                    // **通用摊开**（round 58 重写）：`iterable_items` 现在**把异常原样上抛** ✓，
+                    // 不再是"吞掉异常当提前结束"✗。三种结果：
+                    // `Ok(Some(items))` ⇒ 直接收下这批**新引用** ✓；
+                    // `Ok(None)` ⇒ 根本不是可迭代 ⇒ 参照的 `argument after * must be an iterable`
+                    // （带被调对象名 ✓）；`Err(error)` ⇒ 用户 `__iter__`／生成器里抛的错**原样传播** ✓
+                    // （`test_extcall` 的 `g(*(broken() for …))`／`g(*BrokenIterable1())` ⇒ `myerror` ✓）。
+                    match instance.iterable_items(argument_source) {
+                        Ok(Some(items)) => args = items,
+                        Ok(None) => {
+                            let argument_type_name = instance.type_name(argument_type).to_owned();
                             release(instance, callable);
                             release(instance, argument_source);
                             release(instance, keyword_source);
@@ -369,6 +341,18 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                                     "{callee} argument after * must be an iterable, not {argument_type_name}"
                                 ),
                             ));
+                        }
+                        Err(error) => {
+                            release(instance, callable);
+                            release(instance, argument_source);
+                            release(instance, keyword_source);
+                            if let Some(bound) = bound_self {
+                                release(instance, bound);
+                            }
+                            for item in args {
+                                release(instance, item);
+                            }
+                            return Err(error);
                         }
                     }
                 }

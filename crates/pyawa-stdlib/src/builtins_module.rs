@@ -2097,7 +2097,7 @@ fn list_native(
     need_args(instance, "list", args, 0)?;
     let items = match args.first() {
         Some(iterable) => instance
-            .iterable_items(*iterable)
+            .iterable_items(*iterable)?
             .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
         None => Vec::new(),
     };
@@ -2114,7 +2114,7 @@ fn tuple_native(
     need_args(instance, "tuple", args, 0)?;
     let items = match args.first() {
         Some(iterable) => instance
-            .iterable_items(*iterable)
+            .iterable_items(*iterable)?
             .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
         None => Vec::new(),
     };
@@ -2131,7 +2131,7 @@ fn set_native(
     need_args(instance, "set", args, 0)?;
     let items = match args.first() {
         Some(iterable) => instance
-            .iterable_items(*iterable)
+            .iterable_items(*iterable)?
             .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
         None => Vec::new(),
     };
@@ -2574,7 +2574,7 @@ fn candidate_items(
         return Err(instance.raise_builtin_error("TypeError", &message));
     }
     if args.len() == 1 {
-        return match instance.iterable_items(args[0]) {
+        return match instance.iterable_items(args[0])? {
             Some(items) => Ok(items),
             None => {
                 let message = format!("'{}' object is not iterable", type_name(instance, args[0]));
@@ -2702,7 +2702,7 @@ fn sorted_native(
         Some(value) => instance.bool_value(value).unwrap_or(false),
         None => false,
     };
-    let items = match instance.iterable_items(args[0]) {
+    let items = match instance.iterable_items(args[0])? {
         Some(items) => items,
         None => {
             let message = format!("'{}' object is not iterable", type_name(instance, args[0]));
@@ -2758,7 +2758,7 @@ fn sorted_native(
 
 /// 取一个可迭代对象摊成一批**新引用**；不是可迭代的就报实测那条 `TypeError`。
 fn items_of(instance: &Instance, object: NonNull<Header>) -> Result<Vec<NonNull<Header>>, ExecError> {
-    match instance.iterable_items(object) {
+    match instance.iterable_items(object)? {
         Some(items) => Ok(items),
         None => {
             let message = format!("'{}' object is not iterable", type_name(instance, object));

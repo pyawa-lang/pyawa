@@ -861,7 +861,7 @@ pub(crate) fn text_prefixes(
     };
     let is_tuple = instance.type_name(unsafe { first.as_ref() }.ty()) == "tuple";
     if is_tuple {
-        let Some(items) = instance.iterable_items(*first) else {
+        let Some(items) = instance.iterable_items(*first)? else {
             let type_name = instance.type_name(instance.type_of(*first));
             return Err(instance.raise_builtin_error(
                 "TypeError",
@@ -869,15 +869,24 @@ pub(crate) fn text_prefixes(
             ));
         };
         let mut out = Vec::with_capacity(items.len());
-        for item in items {
-            let Some(text) = instance.text_of(item) else {
-                let type_name = instance.type_name(instance.type_of(item));
+        for item in &items {
+            let Some(text) = instance.text_of(*item) else {
+                // 失败前把本函数手上的这批**新引用**归还 ✓（round 58：`iterable_items` 给的是自有引用）。
+                for leftover in &items {
+                    // SAFETY: 这些引用由 `iterable_items` 给出。
+                    unsafe { instance.release_object(leftover.as_ptr()) };
+                }
+                let type_name = instance.type_name(instance.type_of(*item));
                 return Err(instance.raise_builtin_error(
                     "TypeError",
                     &format!("{name} first arg must be str or a tuple of str, not {type_name}"),
                 ));
             };
             out.push(text.to_owned());
+        }
+        for item in &items {
+            // SAFETY: 同上（成功路径：这批引用用完就归还 ✓）。
+            unsafe { instance.release_object(item.as_ptr()) };
         }
         return Ok(out);
     }

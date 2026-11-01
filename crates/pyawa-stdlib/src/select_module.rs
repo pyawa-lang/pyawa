@@ -197,7 +197,7 @@ fn collect_fds(
     instance: &Instance,
     value: NonNull<Header>,
 ) -> Result<Vec<(i64, NonNull<Header>)>, pyawa_core::ExecError> {
-    let Some(items) = instance.iterable_items(value) else {
+    let Some(items) = instance.iterable_items(value)? else {
         return Err(instance.raise_builtin_error("TypeError", "arguments 1-3 must be sequences"));
     };
     let mut entries: Vec<(i64, NonNull<Header>)> = Vec::with_capacity(items.len());

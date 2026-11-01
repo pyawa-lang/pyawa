@@ -10,7 +10,15 @@ impl Instance {
     /// 认：`list`／`tuple`／`str`（逐字符）／`dict`（逐**键**）／`set`。
     /// 不认识就给 `None`——**不猜**：调用方据此报参照实现那条
     /// `TypeError: 'int' object is not iterable`（实测）。
-    pub fn iterable_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+    ///
+    /// **返回 `Result`**（round 58）：迭代过程中抛的异常必须**原样传给调用方** ✓ ——
+    /// 先前 `Err(_) => break` 把 `(broken() for …)` 这类生成器里抛的错**吞成"提前结束"** ✗
+    /// ⇒ `list(g)`／`sum(g)`／`f(*g)` 静默少元素甚至反手报"缺位置实参"✗（`test_extcall` 的
+    /// `TypeError: myerror` 用例 ✓）。`Ok(None)` 仍表示"根本不是可迭代"。
+    pub fn iterable_items(
+        &self,
+        object: NonNull<Header>,
+    ) -> Result<Option<Vec<NonNull<Header>>>, ExecError> {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         let owned = |value: NonNull<Header>| {
@@ -21,33 +29,35 @@ impl Instance {
         if self.type_named("list") == Some(ty) {
             // SAFETY: 类型身份已确认。
             let list = unsafe { &*object.as_ptr().cast::<ListObject>() };
-            return Some(list.items().into_iter().map(owned).collect());
+            return Ok(Some(list.items().into_iter().map(owned).collect()));
         }
         if self.type_named("tuple") == Some(ty) {
             // SAFETY: 同上。
             let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
-            return Some(tuple.items().iter().copied().map(owned).collect());
+            return Ok(Some(tuple.items().iter().copied().map(owned).collect()));
         }
         if ty == self.singletons().str_type() {
             // P3-38 S2c：按**码点**取元素（含孤立代理也各给一个单字符对象 ✓；不再经 `value()` ⇒ 不 panic ✓）
-            let points = self.str_code_point_vec(object)?;
-            return Some(
+            let Some(points) = self.str_code_point_vec(object) else {
+                return Ok(None);
+            };
+            return Ok(Some(
                 points
                     .into_iter()
                     .map(|point| self.new_str_code_point(point))
                     .collect(),
-            );
+            ));
         }
-        if ty == self.type_named("dict")? {
+        if Some(ty) == self.type_named("dict") {
             // SAFETY: 同上。
             let dict = unsafe { &*object.as_ptr().cast::<DictObject>() };
-            return Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect());
+            return Ok(Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect()));
         }
         // **`frozenset` 与 `set` 同载荷** ✓（第 236 轮）⇒ 迭代这条也一并认 ✓。
-        if ty == self.type_named("set")? || Some(ty) == self.type_named("frozenset") {
+        if Some(ty) == self.type_named("set") || Some(ty) == self.type_named("frozenset") {
             // SAFETY: 同上。
             let set = unsafe { &*object.as_ptr().cast::<SetObject>() };
-            return Some(set.items().into_iter().map(owned).collect());
+            return Ok(Some(set.items().into_iter().map(owned).collect()));
         }
         // **迭代器对象**（第 137 轮）：`list(itertools.repeat(5, 3))`／`list(x for x in y)` 这类
         // 都要能消费 ✓ ⇒ 复用执行器那份 `advance`（内建迭代器 ＋ `__next__` 协议 ✓ **一处真相** ✓）；
@@ -56,20 +66,50 @@ impl Instance {
         // 包括由类型 **`getattr` 槽**动态给 `__iter__` 的 `range` ✓；先前直接拿
         // `runtime::advance(self, object)` ✗（只认内建迭代器 ✓）⇒ `sum(range(4))` 报
         // `TypeError: 'range' object is not iterable` ✗（本轮 `range_builtin` 对拍实测 ✓）。
-        if let Ok(iterator) = crate::executor::iter_value(self, object) {
-            let mut items = Vec::new();
-            loop {
-                match crate::executor::runtime::advance(self, iterator) {
-                    Ok(Some(item)) => items.push(item),
-                    Ok(None) => break,
-                    Err(_) => break,
+        // **区分「不是可迭代」与「迭代协议自己抛错」** ✓（round 58）：
+        // `iter_value` 对**两种**情况都回 `Err(Raised TypeError)` —— 直接拿它当"不可迭代"会把用户
+        // `__iter__` 里抛的错吞成 "argument after * must be an iterable" ✗（`test_extcall` 的
+        // `g(*BrokenIterable1())` ⇒ 应原样传 `myerror` ✓）。这里先看**协议是否存在**：
+        // 有 `__iter__`（含类型 `getattr` 槽给的）或旧式 `__getitem__` ⇒ 异常原样上抛 ✓；
+        // 都没有 ⇒ `Ok(None)`（调用方报参照那条 "not iterable" ✓）。
+        let iterator = match crate::executor::iter_value(self, object) {
+            Ok(iterator) => iterator,
+            Err(error) => {
+                let has_iter = crate::executor::attribute::attribute_lookup_special(
+                    self,
+                    object,
+                    "__iter__",
+                )
+                .is_ok();
+                let has_getitem =
+                    crate::executor::attribute_lookup(self, object, "__getitem__").is_ok();
+                if has_iter || has_getitem {
+                    return Err(error);
+                }
+                return Ok(None);
+            }
+        };
+        let mut items = Vec::new();
+        loop {
+            match crate::executor::runtime::advance(self, iterator) {
+                Ok(Some(item)) => items.push(item),
+                Ok(None) => break,
+                Err(error) => {
+                    // 出错 ⇒ 迭代器与**已收的项**都归还，异常原样上抛 ✓（round 58）。
+                    // SAFETY: 这些引用都归本函数。
+                    unsafe {
+                        self.release_object(iterator.as_ptr());
+                        for item in &items {
+                            self.release_object(item.as_ptr());
+                        }
+                    }
+                    return Err(error);
                 }
             }
-            // SAFETY: iterator 是本函数刚拿到的**新引用** ✓。
-            unsafe { self.release_object(iterator.as_ptr()) };
-            return Some(items);
         }
-        None
+        // SAFETY: iterator 是本函数刚拿到的**新引用** ✓。
+        unsafe { self.release_object(iterator.as_ptr()) };
+        Ok(Some(items))
     }
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。

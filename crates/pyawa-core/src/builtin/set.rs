@@ -144,15 +144,18 @@ pub(crate) fn set_update_native(
             "update() takes exactly one argument (0 given)",
         ));
     };
-    let items = match instance.iterable_items(*iterable) {
+    let items = match instance.iterable_items(*iterable)? {
         Some(items) => items,
         None => {
             return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
         }
     };
+    // `iterable_items` 交的是**新引用** ⇒ 重复项归还、新项由 `set_insert_raw` 接手 ✓
+    //（先前重复项既不放、新项又多 retain 一次 ✗ ⇒ 两处泄漏；round 58 统一口径 ✓）。
     for item in items {
-        if set_contains(instance, set, item).is_none() {
-            instance.retain(item);
+        if set_contains(instance, set, item).is_some() {
+            instance.release(item);
+        } else {
             instance.set_insert_raw(set, item);
         }
     }
@@ -191,7 +194,7 @@ pub(crate) fn set_issuperset_native(
             "issuperset() takes exactly one argument (0 given)",
         ));
     };
-    let Some(items) = instance.iterable_items(*other) else {
+    let Some(items) = instance.iterable_items(*other)? else {
         return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
     };
     let superset = items
