@@ -170,7 +170,10 @@ pub(crate) fn slice_bounds(
     let (lower, upper) = if step > 0 { (0, length) } else { (-1, length - 1) };
     let adjust = |value: i64| {
         if value < 0 {
-            let shifted = value + length;
+            // **饱和加法**（`P3-42` round 44）：`value` 可能是 `bound` 饱和出来的 `i64::MIN`
+            // （`'abc'[-sys.maxsize - 1::-1]` 一类）⇒ 直接 `+ length` 会**回绕成巨大正数**
+            // ⇒ 负步长分支给出 `usize` 越界 panic ✗。饱和后夹到 `lower`（`-1`）✓。
+            let shifted = value.saturating_add(length);
             if shifted < lower {
                 lower
             } else {
@@ -205,20 +208,54 @@ pub(crate) fn slice_bounds(
     Ok((start, stop, step))
 }
 
+/// **标量下标**（容器读）：整数（含**超出 `i64` 的大整数**，按方向饱和后由 `normalize_index`
+/// 给 `IndexError` ✓）或 `__index__` 对象 ✓；否则按**该容器口径**报参照同形的 `TypeError`。
+///
+/// `kind`：`"string"`／`"byte"` 两种参照文案带引号且**无** "or slices"；其余（`list`／`tuple`／
+/// `bytearray`）带 "or slices" ✓（本机 3.14.4 逐条实测）。
+pub(crate) fn scalar_index(
+    instance: &Instance,
+    raw: NonNull<Header>,
+    kind: &str,
+) -> Result<i64, ExecError> {
+    if let Some(number) = instance.int_of(raw) {
+        return Ok(number.to_i64().unwrap_or_else(|| {
+            if number.to_bigint().signum() < 0 {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }));
+    }
+    if let Ok(Some(value)) = instance.index_value(raw) {
+        return Ok(value);
+    }
+    let type_name = instance.type_name(instance.type_of(raw));
+    let message = match kind {
+        "string" => format!("string indices must be integers, not '{type_name}'"),
+        "byte" => format!("byte indices must be integers, not '{type_name}'"),
+        other => format!("{other} indices must be integers or slices, not {type_name}"),
+    };
+    Err(instance.raise_builtin_error("TypeError", &message))
+}
+
 /// 切片要取的那些下标（有序；长度天然不超过序列长度）。
 pub(crate) fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
     let mut out = Vec::new();
+    // **饱和加法**（`P3-42` round 44）：`step` 可以是 `sys.maxsize` 量级（`s[1:None:sys.maxsize]`）⇒
+    // `at += step` 会**回绕成负值** ⇒ 循环不终止／把负下标 `as usize` 成 2^63 ⇒ 越界 panic ✗。
+    // 饱和后 `at` 单调越过 `stop` ⇒ 正常收摊 ✓。
     if step > 0 {
         let mut at = start;
         while at < stop {
             out.push(at as usize);
-            at += step;
+            at = at.saturating_add(step);
         }
     } else {
         let mut at = start;
         while at > stop {
             out.push(at as usize);
-            at += step;
+            at = at.saturating_add(step);
         }
     }
     out

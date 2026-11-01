@@ -32,6 +32,8 @@ pub use builtin_objects::{
 };
 pub use builtin::function::function_descriptor_get;
 pub use builtin_objects::weakref_dunder_new;
+/// **Unicode 大小写映射**（`tools/gen_unicode.py` 生成；`P3-42` round 44）。
+pub mod unicode_case;
 pub use builtin_objects::weakref_target;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;

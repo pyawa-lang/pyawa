@@ -4,7 +4,7 @@
 //! * 仍在原处的被引用项：`builtin_type`、`exception_type`、`index_payload`、`is_type_object`、`new_exception_with_args`、`normalize_index`、`push`、`raise`、`raise_builtin`、`release`、`sequence_items`、`slice_bounds`、`slice_positions`、`values_equal` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, exception_type, index_payload, new_exception_with_args, normalize_index, raise, raise_builtin, release, sequence_items, slice_bounds, slice_positions};
+use crate::executor::{builtin_type, exception_type, index_payload, new_exception_with_args, normalize_index, raise, raise_builtin, release, scalar_index, sequence_items, slice_bounds, slice_positions};
 use crate::builtin_objects::{BytearrayObject, BytesObject};
 use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
@@ -141,7 +141,7 @@ pub(crate) fn subscript_get(
     if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
-        let index = index_payload(instance, key, opcode)?;
+        let index = scalar_index(instance, key, "tuple")?;
         let position = match normalize_index(index, object.len()) {
             Some(position) => position,
             None => return Err(raise_builtin(instance, "IndexError", "tuple index out of range")),
@@ -154,7 +154,7 @@ pub(crate) fn subscript_get(
     if instance.is_subtype(container_type, builtin_type(instance, "list")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = index_payload(instance, key, opcode)?;
+        let index = scalar_index(instance, key, "list")?;
         let position = match normalize_index(index, object.len()) {
             Some(position) => position,
             None => return Err(raise_builtin(instance, "IndexError", "list index out of range")),
@@ -200,7 +200,7 @@ pub(crate) fn subscript_get(
         let points = instance
             .str_code_point_vec(container)
             .expect("类型刚确认是 str");
-        let index = index_payload(instance, key, opcode)?;
+        let index = scalar_index(instance, key, "string")?;
         let position = match normalize_index(index, points.len()) {
             Some(position) => position,
             None => {
@@ -213,7 +213,7 @@ pub(crate) fn subscript_get(
     if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
         // SAFETY: 类型身份已确认。
         let value = unsafe { &*container.as_ptr().cast::<BytesObject>() }.value().to_vec();
-        let index = index_payload(instance, key, opcode)?;
+        let index = scalar_index(instance, key, "byte")?;
         let position = match normalize_index(index, value.len()) {
             Some(position) => position,
             None => return Err(raise_builtin(instance, "IndexError", "index out of range")),

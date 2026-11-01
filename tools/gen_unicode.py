@@ -385,6 +385,49 @@ def render_fixture(
     return "\n".join(lines)
 
 
+CASE_OUT = ROOT / "crates/pyawa-core/src/unicode_case.rs"
+
+
+def collect_title_overrides() -> list[tuple[int, str]]:
+    """参照实现里 **title 映射 ≠ upper 映射** 的码点（`str.capitalize()`／`str.title()` 用 title ✓）。
+
+    `P3-42` round 44：`'ῼ'.capitalize()` 参照给 `'ῼ'`（title 映射不变），而 Rust 的
+    `to_uppercase` 给 `'ΩΙ'` ✗ —— 这类"title 与 upper 不同"的码点共 **135** 个（含 23 个多字符），
+    表必须由**探测**导出（`CM-22`：禁止手写）✓。
+    """
+    overrides: list[tuple[int, str]] = []
+    for code_point in range(MAX_CODE_POINT + 1):
+        character = chr(code_point)
+        title = character.title()
+        if title != character.upper():
+            overrides.append((code_point, title))
+    return overrides
+
+
+def render_case_table(overrides: list[tuple[int, str]]) -> str:
+    lines: list[str] = []
+    lines.append("//! **Unicode 大小写映射表**（生成产物；`CM-13`／`CM-22`／`CM-24`）。")
+    lines.append("//!")
+    lines.append("//! 由 `tools/gen_unicode.py` **探测参照实现**导出——**禁止手写**。")
+    lines.append("//!")
+    lines.append(f"//! 本文件由脚本生成于参照实现 `unicodedata.unidata_version == {unicodedata.unidata_version}`。")
+    lines.append("")
+    lines.append("/// 参照实现的 `unicodedata.unidata_version`（`CM-13`：**必须**报同一字符串）。")
+    lines.append(f'pub const UNIDATA_VERSION: &str = "{unicodedata.unidata_version}";')
+    lines.append("")
+    lines.append("/// **title 映射 ≠ upper 映射**的码点（升序）：`(码点, title 展开的码点序列)`。")
+    lines.append("///")
+    lines.append("/// `str.capitalize()`／`str.title()` 对**词首**字符用 title 映射（参照口径 ✓）；")
+    lines.append("/// 其余码点回退 Rust 的 `to_uppercase`（与参照的 upper 映射一致 ✓）。")
+    lines.append("pub const TITLE_CASE_OVERRIDES: &[(u32, &[u32])] = &[")
+    for code_point, title in overrides:
+        points = ", ".join(f"0x{ord(character):X}" for character in title)
+        lines.append(f"    (0x{code_point:X}, &[{points}]),")
+    lines.append("];")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     global samples_ranges_category
     tables = {
@@ -405,11 +448,16 @@ def main() -> None:
         assert len(entries) < 100_000, f"{key} 的项数 {len(entries)} 明显不对（哨兵）"
     TABLE_OUT.write_text(render_table(tables, sparse))
     FIXTURE.write_text(render_fixture(samples, sparse))
+    case_overrides = collect_title_overrides()
+    CASE_OUT.write_text(render_case_table(case_overrides))
     print(
         f"已写入 {TABLE_OUT.relative_to(ROOT)}（"
         + "／".join(f"{key} {len(value)} 段" for key, value in tables.items())
         + "／" + "／".join(f"{key} {len(value)} 项" for key, value in sparse.items())
         + f"；unidata_version = {unicodedata.unidata_version}）"
+    )
+    print(
+        f"已写入 {CASE_OUT.relative_to(ROOT)}（title 覆盖 {len(case_overrides)} 项）"
     )
     print(
         f"已写入 {FIXTURE.relative_to(ROOT)}（抽样 "

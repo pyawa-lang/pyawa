@@ -591,6 +591,138 @@ pub(crate) fn inplace_arithmetic(
 }
 
 
+/// **类型的"自有" dunder**（`__eq__`／`__ne__`）：只有**不是 `object` 默认实现**才算 ✓。
+///
+/// `object.__eq__`／`__ne__` 在本层是挂上去的原生实现（转调 `values_equal`）⇒ 若无条件按
+/// dunder 派发就会**无限递归** ⇒ 必须先看 owner ✓。
+fn type_has_own_dunder(instance: &Instance, object: NonNull<Header>, name: &str) -> bool {
+    let ty = instance.type_of(object);
+    match instance.type_lookup_owner(ty, name) {
+        Some((owner, _)) => Some(owner) != instance.type_named("object"),
+        None => false,
+    }
+}
+
+/// 调一次比较 dunder（`__eq__`／`__ne__`）：没有、或返回 `NotImplemented` ⇒ `None` ✓（交给下一跳）。
+fn call_compare_dunder(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    other: NonNull<Header>,
+) -> Result<Option<bool>, ExecError> {
+    if !type_has_own_dunder(instance, object, name) {
+        return Ok(None);
+    }
+    let Some(result) = call_object_method(instance, object, name, &[other])? else {
+        return Ok(None);
+    };
+    if result == instance.not_implemented() {
+        release(instance, result);
+        return Ok(None);
+    }
+    let truth = instance.truthiness_of(result);
+    release(instance, result);
+    Ok(Some(truth?))
+}
+
+/// **`==` 的完整语义**（`P3-42` 特殊方法派发，round 44）：用户类先问 `__eq__`；容器**逐元素**
+/// 递归（元素上的 `__eq__` 同样生效 ✓）；最后退回结构相等（`values_equal`）。
+///
+/// 为什么必须有这一层：先前 `==` 一直是"纯结构" ⇒ `UserString('ab') == 'ab'` 为 **False** ✗
+/// （参照 True ✓）⇒ `test_userstring` 一行断言全红、`unittest.assertEqual` 也跟着失真 ✓。
+fn overrides_compare(instance: &Instance, object: NonNull<Header>, name: &str) -> bool {
+    let ty = instance.type_of(object);
+    let owner = match instance.type_lookup_owner(ty, name) {
+        Some((owner, _)) if Some(owner) != instance.type_named("object") => owner,
+        _ => return false,
+    };
+    // 内建容器自己的 `__eq__`（`dict_eq_native` 等）走我们自己的容器递归路 ✓；**用户子类覆写**
+    // 才优先（`class D(dict): def __eq__…` ✓）。
+    !["list", "tuple", "dict", "set", "frozenset", "str", "bytes", "bytearray"]
+        .iter()
+        .any(|name| instance.type_named(name) == Some(owner))
+}
+
+pub(crate) fn equality_public(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+) -> Result<bool, ExecError> {
+    if left == right {
+        return Ok(true);
+    }
+    let left_ty = instance.type_of(left);
+    let right_ty = instance.type_of(right);
+    let subtype = |ty: NonNull<TypeObject>, name: &str| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    let overridden = overrides_compare(instance, left, "__eq__")
+        || overrides_compare(instance, right, "__eq__");
+    // **容器递归**（用户子类覆写 `__eq__` 时让覆写优先 ✓）。
+    if !overridden {
+        if subtype(left_ty, "list") && subtype(right_ty, "list") {
+            let (a, b) = (
+                instance.list_items(left).unwrap_or_default(),
+                instance.list_items(right).unwrap_or_default(),
+            );
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            for (first, second) in a.iter().zip(b.iter()) {
+                if !equality_public(instance, *first, *second)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        if subtype(left_ty, "tuple") && subtype(right_ty, "tuple") {
+            let (a, b) = (
+                instance.tuple_items(left).unwrap_or_default(),
+                instance.tuple_items(right).unwrap_or_default(),
+            );
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            for (first, second) in a.iter().zip(b.iter()) {
+                if !equality_public(instance, *first, *second)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        // **`dict`**：键用结构查（用户键的 `__eq__` 属 P3-42 后续格），**值**递归（`__eq__` 生效 ✓）。
+        if subtype(left_ty, "dict") && subtype(right_ty, "dict") {
+            let a = instance.dict_entries(left).unwrap_or_default();
+            let b = instance.dict_entries(right).unwrap_or_default();
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            for (key, value) in a {
+                let Some(position) = instance.dict_lookup_key(right, key) else {
+                    return Ok(false);
+                };
+                let Some((_, other_value)) = b.get(position).copied() else {
+                    return Ok(false);
+                };
+                if !equality_public(instance, value, other_value)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+    }
+    // 用户类的 `__eq__`（两侧都问；`NotImplemented` 交给下一跳 ✓）。
+    if let Some(verdict) = call_compare_dunder(instance, left, "__eq__", right)? {
+        return Ok(verdict);
+    }
+    if let Some(verdict) = call_compare_dunder(instance, right, "__eq__", left)? {
+        return Ok(verdict);
+    }
+    Ok(values_equal_public(instance, left, right))
+}
+
 pub fn compare_public(
     instance: &Instance,
     left: NonNull<Header>,
@@ -598,10 +730,18 @@ pub fn compare_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<bool, ExecError> {
-    // 相等／不等：走与 `==` 同一套（整数／浮点／字符串按值，其余按身份）
+    // 相等／不等：**完整协议**（`__eq__`／`__ne__` 派发 ＋ 容器逐元素 ＋ 结构兜底 ✓，round 44）。
     match symbol {
-        "==" => return Ok(values_equal_public(instance, left, right)),
-        "!=" => return Ok(!values_equal_public(instance, left, right)),
+        "==" => return equality_public(instance, left, right),
+        "!=" => {
+            if let Some(verdict) = call_compare_dunder(instance, left, "__ne__", right)? {
+                return Ok(verdict);
+            }
+            if let Some(verdict) = call_compare_dunder(instance, right, "__ne__", left)? {
+                return Ok(verdict);
+            }
+            return Ok(!equality_public(instance, left, right)?);
+        }
         _ => {}
     }
     // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族、bytes 一族）

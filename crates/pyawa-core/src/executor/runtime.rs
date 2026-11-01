@@ -67,6 +67,47 @@ pub(crate) fn str_matches_public(instance: &Instance, raw: NonNull<Header>, expe
 /// - 错误消息照实测：`not enough arguments for format string`／
 ///   `not all arguments converted during string formatting`／
 ///   `%d format: a real number is required, not str` ✓。
+/// `%*`／`%.*` 的**实参取宽**（`P3-42` round 44）：取下一个位置实参（tuple 形态）或单个右操作数，
+/// 必须是整数（参照 `TypeError: * wants int` ✓）。
+fn format_star_argument(
+    instance: &Instance,
+    items: &Option<Vec<NonNull<Header>>>,
+    right: NonNull<Header>,
+    argument_index: &mut usize,
+) -> Result<i64, ExecError> {
+    let value = match items {
+        Some(items) => *items.get(*argument_index).ok_or_else(|| {
+            instance.raise_builtin_error("TypeError", "not enough arguments for format string")
+        })?,
+        None => {
+            if *argument_index > 0 {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "not enough arguments for format string",
+                ));
+            }
+            right
+        }
+    };
+    *argument_index += 1;
+    match instance.int_of(value) {
+        // **超出 C `ssize_t` 的星号实参** ⇒ 参照给 `OverflowError`（不是饱和 ✗）：
+        // `'%*s' % (sys.maxsize + 1, '')` ✓（`test_formatting` 钉住）。
+        Some(number) => match number.to_i64() {
+            Some(fits) => Ok(fits),
+            None => {
+                let type_name = if number.to_bigint().signum() < 0 { "negative" } else { "positive" };
+                let _ = type_name;
+                Err(instance.raise_builtin_error(
+                    "OverflowError",
+                    "Python int too large to convert to C ssize_t",
+                ))
+            }
+        },
+        None => Err(instance.raise_builtin_error("TypeError", "* wants int")),
+    }
+}
+
 pub(crate) fn percent_format(
     instance: &Instance,
     template: &str,
@@ -115,16 +156,30 @@ pub(crate) fn percent_format(
             cursor += 1;
             continue;
         }
-        // `%(名字)`
+        // `%(名字)`：**括号要配平** ✓（`P3-42` round 44）：参照支持
+        // `'%((foo))s' % {'(foo)': 'bar'}` ✓ —— 先前在**第一个** `)` 就停 ⇒ 键取成 `'(foo'` ✗。
         let mut key: Option<String> = None;
         if characters[cursor] == '(' {
             cursor += 1;
+            let mut depth = 1usize;
             let mut name = String::new();
-            while cursor < characters.len() && characters[cursor] != ')' {
-                name.push(characters[cursor]);
+            while cursor < characters.len() {
+                let character = characters[cursor];
+                if character == '(' {
+                    depth += 1;
+                    name.push(character);
+                } else if character == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    name.push(character);
+                } else {
+                    name.push(character);
+                }
                 cursor += 1;
             }
-            if cursor >= characters.len() {
+            if cursor >= characters.len() || depth != 0 {
                 return Err(instance.raise_builtin_error("ValueError", "incomplete format key"));
             }
             cursor += 1;
@@ -144,30 +199,50 @@ pub(crate) fn percent_format(
             }
             cursor += 1;
         }
-        // 宽度
-        if cursor < characters.len() && characters[cursor] == '*' {
-            return Err(instance.raise_builtin_error(
-                "NotImplementedError",
-                "`%*` 的宽度取自实参尚未接线（宽度写死在格式串里可以）",
-            ));
-        }
+        // 宽度（`*` ⇒ 从实参取；负数 ⇒ 左对齐 ＋ 绝对值 ✓，照参照）
         let mut width: Option<usize> = None;
-        while cursor < characters.len() && characters[cursor].is_ascii_digit() {
-            let digit = characters[cursor] as usize - '0' as usize;
-            width = Some(width.unwrap_or(0) * 10 + digit);
+        if cursor < characters.len() && characters[cursor] == '*' {
+            let number = format_star_argument(instance, &items, right, &mut argument_index)?;
+            if number < 0 {
+                left_align = true;
+                width = Some(number.unsigned_abs() as usize);
+            } else {
+                width = Some(number as usize);
+            }
             cursor += 1;
+        } else {
+            while cursor < characters.len() && characters[cursor].is_ascii_digit() {
+                let digit = characters[cursor] as usize - '0' as usize;
+                let next = width.unwrap_or(0).saturating_mul(10).saturating_add(digit);
+                // **宽度上限** ✓：参照对离谱宽度给 `ValueError: width too big`
+                // （`'%%%df' % (2**64)` 那条 ✓）；`INT_MAX` 以内才收。
+                if next > i32::MAX as usize {
+                    return Err(instance.raise_builtin_error("ValueError", "width too big"));
+                }
+                width = Some(next);
+                cursor += 1;
+            }
         }
-        // 精度
+        // 精度（`.*` 同样取实参；负数按 0 ✓）
         let mut precision: Option<usize> = None;
         if cursor < characters.len() && characters[cursor] == '.' {
             cursor += 1;
-            let mut value = 0usize;
-            while cursor < characters.len() && characters[cursor].is_ascii_digit() {
-                let digit = characters[cursor] as usize - '0' as usize;
-                value = value * 10 + digit;
+            if cursor < characters.len() && characters[cursor] == '*' {
+                let number = format_star_argument(instance, &items, right, &mut argument_index)?;
+                precision = Some(if number < 0 { 0 } else { number as usize });
                 cursor += 1;
+            } else {
+                let mut value = 0u64;
+                while cursor < characters.len() && characters[cursor].is_ascii_digit() {
+                    let digit = characters[cursor] as u64 - '0' as u64;
+                    value = value.saturating_mul(10).saturating_add(digit);
+                    if value > i32::MAX as u64 {
+                        return Err(instance.raise_builtin_error("ValueError", "precision too big"));
+                    }
+                    cursor += 1;
+                }
+                precision = Some(value as usize);
             }
-            precision = Some(value);
         }
         // 长度修饰符（参照忽略）
         while cursor < characters.len() && matches!(characters[cursor], 'h' | 'l' | 'L') {
@@ -351,6 +426,21 @@ pub(crate) fn percent_format(
             pad_number(&mut out, &sign, "", &digits, width, left_align, zero && !left_align);
         } else {
             pad_text(&mut out, &body, width, left_align);
+        }
+    }
+    // **模板里一个转换都没有、却给了实参** ⇒ 照参照报错 ✓（`'abc' % X()`／`'abc' % (1, 2)`）。
+    // 先前只在**用过转换**后才查 ✓ ⇒ `'abc'.__mod__(X())` 静默返回 `'abc'` ✗（`test_formatting` ✓）。
+    if argument_index == 0 {
+        let supplied = match &items {
+            Some(items) => !items.is_empty(),
+            // 单个实参（含 dict）都算"给了" ✓；右操作数是空 tuple 时才不算 ✓。
+            None => true,
+        };
+        if supplied {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "not all arguments converted during string formatting",
+            ));
         }
     }
     // 位置实参没被用完 ⇒ 照参照报错 ✓（`'%s' % (1, 2)`）

@@ -445,9 +445,21 @@ pub unsafe fn slice_new(
         if Some(instance.type_of(*argument)) == instance.type_named("NoneType") {
             return Ok(None);
         }
-        match instance.int_of(*argument).and_then(|value| value.to_i64()) {
-            Some(value) => Ok(Some(value)),
-            None => Err(instance.raise_builtin_error(
+        // **超出 `i64` 的整数按方向饱和**（`P3-42` round 44）：`'abc'[sys.maxsize + 1:]` ⇒ `''` ✓
+        // （参照接受任意精度下标；本层 `SliceObject` 用 `i64` ⇒ 饱和到 ±max 后由 `slice_bounds`
+        // 夹到 `len`，结果逐例相同 ✓）。先前落到 TypeError ✗。
+        if let Some(value) = instance.int_of(*argument) {
+            return Ok(Some(value.to_i64().unwrap_or_else(|| {
+                if value.to_bigint().signum() < 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            })));
+        }
+        match instance.index_value(*argument) {
+            Ok(Some(value)) => Ok(Some(value)),
+            _ => Err(instance.raise_builtin_error(
                 "TypeError",
                 // 实测：`b'abc'[slice("a")]` ⇒ 这条
                 "slice indices must be integers or None or have an __index__ method",

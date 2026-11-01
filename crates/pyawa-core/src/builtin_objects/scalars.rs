@@ -730,6 +730,8 @@ pub unsafe fn str_getattr(
         // **`str.format`**（第 722 轮 ✓）：`Lib/base64.py:246` **导入期**就调它 ✗ ⇒
         // 先前 `'str' object has no attribute 'format'` 压住 `base64` ⇒ email 一族 ✓。
         "format" => str_format_native,
+        // `str % x` 的**按名取用**形态（`'abc'.__mod__(x)` ✓；`test_formatting` 的模式 ✓）。
+        "__mod__" => crate::builtin::str::str_mod_native,
         "__contains__" => container_contains_native,
         "lower" => str_lower_native,
         "strip" => str_strip_native,
@@ -822,17 +824,25 @@ pub(crate) fn text_argument(
     what: &str,
 ) -> Result<String, crate::ExecError> {
     let Some(value) = args.get(index) else {
+        // 参照口径（本机 3.14.4 实测）：`find expected at least 1 argument, got 0` ✓
+        //（复数：`replace expected at least 2 arguments, got 1` ✓）。
+        let needed = index + 1;
+        let noun = if needed == 1 { "argument" } else { "arguments" };
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("{what}() takes at least {} argument", index + 1),
+            &format!("{what} expected at least {needed} {noun}, got {index}"),
         ));
     };
     match instance.text_of(*value) {
         Some(text) => Ok(text.to_owned()),
-        None => Err(instance.raise_builtin_error(
-            "TypeError",
-            &format!("{what}(): expected str"),
-        )),
+        None => {
+            // 参照口径：`find() argument 1 must be str, not int` ✓。
+            let type_name = instance.type_name(instance.type_of(*value));
+            Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{what}() argument {} must be str, not {type_name}", index + 1),
+            ))
+        }
     }
 }
 
@@ -846,27 +856,37 @@ pub(crate) fn text_prefixes(
     let Some(first) = args.first() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("{name}() takes at least 1 argument"),
+            &format!("{name} expected at least 1 argument, got 0"),
         ));
     };
     let is_tuple = instance.type_name(unsafe { first.as_ref() }.ty()) == "tuple";
     if is_tuple {
         let Some(items) = instance.iterable_items(*first) else {
-            return Err(instance.raise_builtin_error("TypeError", &format!("{name}(): expected str")));
+            let type_name = instance.type_name(instance.type_of(*first));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{name} first arg must be str or a tuple of str, not {type_name}"),
+            ));
         };
         let mut out = Vec::with_capacity(items.len());
         for item in items {
             let Some(text) = instance.text_of(item) else {
-                return Err(
-                    instance.raise_builtin_error("TypeError", &format!("{name}(): expected str"))
-                );
+                let type_name = instance.type_name(instance.type_of(item));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("{name} first arg must be str or a tuple of str, not {type_name}"),
+                ));
             };
             out.push(text.to_owned());
         }
         return Ok(out);
     }
     let Some(text) = instance.text_of(*first) else {
-        return Err(instance.raise_builtin_error("TypeError", &format!("{name}(): expected str")));
+        let type_name = instance.type_name(instance.type_of(*first));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name} first arg must be str or a tuple of str, not {type_name}"),
+        ));
     };
     Ok(vec![text.to_owned()])
 }

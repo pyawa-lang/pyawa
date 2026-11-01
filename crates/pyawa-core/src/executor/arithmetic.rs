@@ -28,6 +28,16 @@ pub fn arithmetic_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`str % value` 优先于反射 `__rmod__`** ✓（`P3-42` round 44 修 ✗）：参照里 `'%s' % obj`
+    // 由 **str 自己的 `__mod__`** 处理（它接受任意右操作数）⇒ **不会**再问 `obj.__rmod__` ✓。
+    // 先前先跑 `binary_override` ⇒ `UserString.__rmod__` → `str(template) % self` → 再次反射 ⇒
+    // **无限递归**（`test_userstring.test_rmod` 的 `fmt2 % str3` ✓）。只有**恰是 `str`** 走
+    // 这条快路（`str` 子类覆写 `__mod__` 时仍按用户覆写 ✓）。
+    if symbol == "%" && instance.type_of(left) == instance.singletons().str_type() {
+        if let Some(template) = instance.text_value(left) {
+            return percent_format(instance, &template, right, opcode);
+        }
+    }
     // **用户类覆写优先** ✓（第 411 轮，task-22 ✓）：`int` 子类（真 `enum.py` 的 `IntFlag`）在类体里
     // 定义 `__or__`／`__and__`／`__xor__` 一族 ⇒ 参照先查 `type(left).__or__` ✓、命中就以 Python
     // 语义调用 ✓；先前这里按**载荷**（int）直接走原生运算 ✗ ⇒ `Flags.X | Flags.Y` 得到**普通 int**
