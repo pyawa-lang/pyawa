@@ -64,6 +64,52 @@ pub unsafe fn generator_getattr(
             _ => {}
         }
     }
+    // **生成器的 getset 属性面**（round 60）：参照的 `gi_frame`／`gi_running`／`gi_code`／
+    // `gi_suspended`／`gi_yieldfrom` 是类型上的 getset 描述符 ⇒ `dir(g)` 里也看得到 ✓。
+    // 本层没有 getset 描述符 ⇒ 在**属性通道**里直接给值 ✓（`dir` 另行补名，见 `dir_new`）。
+    if is_generator {
+        // SAFETY: ptr 由槽位契约保证存活。
+        let object = unsafe { &*ptr.cast::<GeneratorObject>() };
+        match name {
+            "gi_running" => {
+                let raw = instance.singletons().boolean(object.running());
+                return Some(instance.retain(raw));
+            }
+            "gi_frame" => {
+                if object.finished() {
+                    return Some(instance.retain(instance.singletons().none()));
+                }
+                let frame = object.frame();
+                // SAFETY: 帧由生成器持有，这里新增一份交给调用方。
+                unsafe { instance.incref_object(frame.as_ptr()) };
+                return Some(frame);
+            }
+            "gi_code" => {
+                let frame = object.frame();
+                // SAFETY: 帧由生成器持有，存活。
+                let code = unsafe { &*frame.as_ptr().cast::<crate::Frame>() }.code();
+                return match code {
+                    Some(code) => {
+                        // SAFETY: code 由帧持有，这里新增一份交给调用方。
+                        unsafe { instance.incref_object(code.as_ptr()) };
+                        Some(code)
+                    }
+                    None => Some(instance.retain(instance.singletons().none())),
+                };
+            }
+            "gi_suspended" => {
+                // 挂起 = "已经开始且还没跑完"（与参照实测口径一致 ✓）。
+                let suspended = object.started() && !object.finished();
+                let raw = instance.singletons().boolean(suspended);
+                return Some(instance.retain(raw));
+            }
+            "gi_yieldfrom" => {
+                // `yield from` 的当前委托对象：本层没有单独记录 ⇒ 如实给 `None` ✓。
+                return Some(instance.retain(instance.singletons().none()));
+            }
+            _ => {}
+        }
+    }
     let handler: NativeFn = match name {
         "send" => generator_send_native,
         "__next__" if is_generator => generator_next_native,

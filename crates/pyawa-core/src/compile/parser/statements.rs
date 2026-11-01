@@ -1470,6 +1470,12 @@ fn parse_statement_return(lexed: &Lexed, cursor: &mut usize, in_function: bool, 
                     parse_expression_list(lexed, *cursor)?
                 };
                 *cursor = next;
+                // **裸生成器表达式不能直接当 return 值** ✓（round 60；参照：
+                // `return i*i for i in range(n)` ⇒ `SyntaxError: invalid syntax` ——
+                // 参照要求加括号 ✓；`test_genexps` 逐字比报文 ✓）。
+                if matches!(tokens.get(*cursor), Some(Lexeme::For)) {
+                    return Err(CompileError::Syntax("invalid syntax".to_owned()));
+                }
                 // 实测：整条 `return …` 的位置从 `return` 起到表达式末尾
                 let span = keyword_span.to(value.span());
                 statements.push(Statement::Return(value, span));
@@ -2489,6 +2495,32 @@ fn parse_statement_left_paren(lexed: &Lexed, cursor: &mut usize, statements: &mu
                 match parse_paren_target(lexed, cursor, first, start_span)? {
                     // **单层分组目标**：`(a) = x` ⇒ 普通赋值 ✓（参照不退化成解包 ✓）
                     ParenTarget::Single(target) => {
+                        // **生成器表达式不能当赋值／增强赋值目标** ✓（round 60；参照原文：
+                        // `(y for y in (1,2)) = 10` ⇒ `cannot assign to generator expression`；
+                        // `… += 10` ⇒ `'generator expression' is an illegal expression for
+                        // augmented assignment`；`test_genexps` 逐字比报文 ✓）。
+                        if matches!(
+                            &target,
+                            Expression::Comprehension {
+                                kind: crate::compile::ComprehensionKind::Generator,
+                                ..
+                            }
+                        ) {
+                            match tokens.get(*cursor) {
+                                Some(Lexeme::Assign) => {
+                                    return Err(CompileError::Syntax(
+                                        "cannot assign to generator expression".to_owned(),
+                                    ))
+                                }
+                                Some(Lexeme::AugAssign(_)) => {
+                                    return Err(CompileError::Syntax(
+                                        "'generator expression' is an illegal expression for augmented assignment"
+                                            .to_owned(),
+                                    ))
+                                }
+                                _ => {}
+                            }
+                        }
                         // **`(目标) += 值`**（task-42 ✓）：`(o.a) += 1`／`(a[0]) += 1` 的括号只是
                         // 分组（官方 `test_compile.py:1273` 的跨行 `(o.\na) += (v)` 正是它 ✗ ——
                         // 先前只认 `=` ⇒ 在 `+=` 上报"语句结尾多出了 Some(AugAssign)"）。

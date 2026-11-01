@@ -472,6 +472,14 @@ pub(crate) fn parse_call_suffix(
             let name = name.clone();
             cursor += 2;
             let (value, next) = parse_expression(lexed, cursor)?;
+            // **关键字实参的值不能是裸生成器表达式** ✓（round 60；参照原文：
+            // `dict(a = i for i in range(10))` ⇒ `SyntaxError: invalid syntax. Maybe you
+            // meant '==' or ':=' instead of '='?`；`test_genexps` 逐字比报文 ✓）。
+            if matches!(lexed.lexemes.get(next), Some(Lexeme::For)) {
+                return Err(CompileError::Syntax(
+                    "invalid syntax. Maybe you meant '==' or ':=' instead of '='?".to_owned(),
+                ));
+            }
             keywords.push((name, value));
             cursor = next;
         } else {
