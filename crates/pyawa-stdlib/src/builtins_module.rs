@@ -724,8 +724,20 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
     // `_weakref.ref.__hash__` 就是 `hash(目标)`（目标不可哈希 ⇒ 同一 TypeError ✓）。
     // 没有它 ⇒ 同一目标的两个 `ref` 哈希不同 ⇒ `WeakSet` 的 set 去重不成立 ⇒ `_abc_cache`
     // 一次 `isinstance` 长一条 ⇒ 成员查询线性增长（`test_userstring` 的 O(n²) 源头之一）。
-    if let Some(target) = pyawa_core::weakref_target(instance, object) {
-        return hash_object(instance, target);
+    // **真弱引用**（round 59）：算过就缓存（目标死后仍能删键 ✓）；活着就按目标算并缓存；
+    // 已死且没缓存 ⇒ 参照原话 `TypeError: weak object has gone away` ✓。
+    if let Some(state) = pyawa_core::weakref_hash_state(instance, object) {
+        if let Some(cached) = state {
+            return Ok(cached);
+        }
+        return match pyawa_core::weakref_state(instance, object).flatten() {
+            Some(target) => {
+                let value = hash_object(instance, target)?;
+                pyawa_core::weakref_store_hash(instance, object, value);
+                Ok(value)
+            }
+            None => Err(instance.raise_builtin_error("TypeError", "weak object has gone away")),
+        };
     }
     // 参照明确不可哈希的内建（参照置 `__hash__ = None`）⇒ 与参照同文案。
     let name = type_name(instance, object);

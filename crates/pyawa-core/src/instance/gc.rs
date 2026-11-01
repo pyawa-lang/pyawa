@@ -184,6 +184,12 @@ impl Instance {
             }
         }
 
+        // **弱引用失效**（round 59；参照的顺序：终结器之后、真正清引用之前 ✓）：
+        // ① 指向本对象的弱引用全部置死并**立即**调回调（复活路径已在上面的 `return` 里让开 ✓）；
+        // ② 本对象若是弱引用本体，从目标的登记表里摘掉自己 ✓。
+        self.invalidate_weakrefs(ptr);
+        self.forget_weakref_object(ptr);
+
         // **先摘出 GC 链表再清引用**（`P3-41` round 43 修 ✗✗）：`clear` 会释放持有的引用，
         // 里面可能跑 `__del__`（`test_dict.test_store_evilattr` 的 `__del__` 里就 `gc.collect()`）⇒
         // 若对象仍挂在回收链表上、且计数已是 0 ⇒ 回收器把它当"不可达"再 `clear` 一次 ⇒
@@ -218,6 +224,11 @@ impl Instance {
     /// **OM-27** ④：释放一个不可达对象（`clear` 已经跑过，这里不再调终结器）。
     pub(crate) fn free_garbage(&self, header: NonNull<Header>) {
         let ty = unsafe { header.as_ref() }.ty();
+        // **弱引用失效**（round 59，GC 路径）：回调**排队**，等整个回收循环结束再调 ✓
+        // （避免在 clear／free 的借用窗口里跑任意 Python 代码 ✗）。
+        let callbacks = self.take_weakref_callbacks(header);
+        self.queue_weakref_callbacks(callbacks);
+        self.forget_weakref_object(header);
         // **OM-14**：正常路径下 clear 阶段已经把这一格交出去了；万一还在，这里补一次释放
         if let Some(mapping) = unsafe { header.as_ref() }.take_instance_dict() {
             // SAFETY: 这份引用由该对象持有（或曾经持有）。

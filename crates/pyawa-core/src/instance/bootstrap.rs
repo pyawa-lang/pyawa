@@ -14,6 +14,8 @@ impl Instance {
             watch: Cell::new(0),
             freed_sites: RefCell::new(std::collections::HashMap::new()),
             zombie_trace: Cell::new(flag("PYAWA_ZOMBIE_TRACE")),
+            weakrefs: RefCell::new(std::collections::HashMap::new()),
+            pending_weakref_callbacks: RefCell::new(Vec::new()),
             quarantine: RefCell::new(Vec::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),

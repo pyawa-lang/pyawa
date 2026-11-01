@@ -41,6 +41,7 @@ mod alloc;
 mod containers;
 mod state;
 mod capability_table;
+mod weakrefs;
 mod wait;
 
 use crate::bigint::IntValue;
@@ -121,6 +122,12 @@ pub struct Instance {
     freed_sites: RefCell<std::collections::HashMap<usize, (String, String)>>,
     /// 是否开启（`PYAWA_ZOMBIE_TRACE=1` ✓；关着零开销 ✓）。
     zombie_trace: Cell<bool>,
+    /// **弱引用登记**（round 59）：目标地址 ⇒ 指向它的弱引用对象（**不持有引用** ✓）。
+    /// 目标释放时逐个置死并调用回调 ✓（`invalidate_weakrefs`）；弱引用对象自己释放时摘除 ✓。
+    weakrefs: RefCell<std::collections::HashMap<usize, Vec<NonNull<Header>>>>,
+    /// **GC 回收路径延后执行的弱引用回调**（round 59）：`free_garbage` 阶段只登记，
+    /// 等整个回收循环结束后统一调（那时 `gc_running` 已复位 ✓）。
+    pending_weakref_callbacks: RefCell<Vec<(NonNull<Header>, NonNull<Header>)>>,
     /// **毒化隔离区** ✓（第 272 轮诊断；只在 `PYAWA_QUARANTINE=1` 时填 ✓）：
     /// `(头部地址, 载荷字节数, 类型名, 释放现场)` ✓ —— 第 297 轮补的第四格是**释放点**
     /// （`<帧 qualname>@<指令指针>`）：事后"多放一份"报出来时，两头都要有。

@@ -58,10 +58,22 @@ impl Instance {
             return;
         }
         {
-            panic!(
-                "[悬垂] {site} 要碰 {:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓",
-                address
-            );
+            // 诊断增强（round 59）：开了 `PYAWA_ZOMBIE_TRACE=1` 时附上**最早那次释放**的
+            // 类型与现场（"谁把它放掉的" ✓）。
+            let recorded = self
+                .freed_sites
+                .borrow()
+                .get(&address)
+                .cloned();
+            match recorded {
+                Some((name, freed_at)) => panic!(
+                    "[悬垂] {site} 要碰 {address:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓\
+                     （原类型 {name}；释放于 {freed_at}）"
+                ),
+                None => panic!(
+                    "[悬垂] {site} 要碰 {address:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓"
+                ),
+            }
         }
     }
 }

@@ -179,7 +179,14 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
                 &*right.as_ptr().cast::<WeakRefObject>(),
             )
         };
-        return values_equal(instance, a.target(), b.target());
+        // **真弱引用**（round 59）：两边都活着 ⇒ 比**目标**；任一边已死 ⇒ 只有"同一个弱引用对象"
+        // 才相等（身份；上面 `left == right` 已先判过 ⇒ 这里一律不等 ✓，与参照一致 ✓）。
+        return match (a.target(), b.target()) {
+            (Some(left_target), Some(right_target)) => {
+                values_equal(instance, left_target, right_target)
+            }
+            _ => false,
+        };
     }
     // **`set`／`frozenset`**：同族（含跨 `set`／`frozenset`——Python 允许，`{1} == frozenset({1})`
     // 为真）时"长度相等 ＋ 左的每一项在右里找得到"（双向包含由长度 ＋ 单向包含推出）。
@@ -278,8 +285,22 @@ pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u
         }
         return Some(hash);
     }
-    if let Some(target) = crate::builtin_objects::weakref_target(instance, object) {
-        return key_hash(instance, target);
+    // **弱引用**（round 59）：有缓存 ⇒ 用缓存（目标死后仍能删键 ✓）；活着 ⇒ 按目标算并缓存；
+    // 已死且没缓存 ⇒ 按身份（它没进过任何字典 ⇒ 一致 ✓）。
+    if let Some(state) = crate::builtin_objects::weakref_key_hash_state(instance, object) {
+        if let Some(cached) = state {
+            // 缓存的是**原始 u64**（不再二次 mix ✓ —— 否则"索引建立时按缓存算、查找时按目标算"
+            // 两套口径不一致 ⇒ 临时弱引用键永远查不到 ✗）。
+            return Some(cached);
+        }
+        match crate::builtin_objects::weakref_state(instance, object).flatten() {
+            Some(target) => {
+                let hash = key_hash(instance, target)?;
+                crate::builtin_objects::weakref_store_key_hash(instance, object, hash);
+                return Some(hash);
+            }
+            None => return Some(mix64(object.as_ptr() as usize as u64)),
+        }
     }
     // 不可哈希的容器（参照 `dict` 也拒它们当键）⇒ `None`（线性兜底；正常路径到不了 ✓）。
     let unhashable = ["list", "dict", "set", "bytearray"];

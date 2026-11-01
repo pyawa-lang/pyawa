@@ -324,6 +324,32 @@ impl Instance {
     }
 
     /// **按键对象查字典**（`values_equal` 口径 ✓；不可哈希的键退回线性扫 ✓）。
+    /// **按对象键删一项**（round 59，给 `_remove_dead_weakref` 用）：找到就删并归还键值引用 ✓。
+    /// 返回是否删掉 ✓。
+    pub fn dict_remove_key(&self, mapping: NonNull<Header>, key: NonNull<Header>) -> bool {
+        let Some(entries) = self.dict_entries(mapping) else {
+            return false;
+        };
+        let position = entries.iter().position(|(candidate, _)| {
+            crate::executor::values::values_equal_public(self, *candidate, key)
+        });
+        let Some(position) = position else {
+            return false;
+        };
+        // SAFETY: `mapping` 由调用方保证是本实例的 dict（`dict_entries` 刚确认过 ✓）。
+        let Some((old_key, old_value)) =
+            (unsafe { &*mapping.as_ptr().cast::<DictObject>() }).remove(position)
+        else {
+            return false;
+        };
+        // SAFETY: 这两份引用由字典交出。
+        unsafe {
+            self.release_object(old_key.as_ptr());
+            self.release_object(old_value.as_ptr());
+        }
+        true
+    }
+
     pub fn dict_lookup_key(
         &self,
         mapping: NonNull<Header>,

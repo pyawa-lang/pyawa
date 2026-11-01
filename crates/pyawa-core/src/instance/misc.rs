@@ -101,6 +101,8 @@ impl Instance {
         let live_before = self.live_objects();
         let freed = self.collect_inner();
         self.gc_running.set(false);
+        // 弱引用回调在回收循环**之后**统一调（round 59 ✓；回调里可安全跑 Python ✓）。
+        self.drain_weakref_callbacks();
         // **诊断**（`PYAWA_GC_LOG=1` 才打）：回收前后存活数 ＋ 耗时（默认零输出 ✓）。
         // `PYAWA_GC_LOG=2` 另打**类型直方图 top 8**（查"GC 收不掉谁"用 ✓）。
         if crate::diag::flag("PYAWA_GC_LOG") && std::env::var("PYAWA_GC_LOG").as_deref() == Ok("2") {

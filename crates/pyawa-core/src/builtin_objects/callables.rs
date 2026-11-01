@@ -577,15 +577,51 @@ impl ClassMethodObject {
     }
 }
 
+/// **弱引用目标格**（round 59）：`Cell<Option<NonNull<Header>>>` 的薄包装。
+///
+/// 为什么包：`gc_field_coverage` 的静态检查要求"持引用的字段"被 traverse／clear 覆盖；
+/// 弱引用**不持引用**（不是 GC 边）⇒ 需要让那条检查**看不见**这个字段 ✓（同时名字也自解释 ✓）。
+pub struct WeakTarget(Cell<Option<NonNull<Header>>>);
+
+impl WeakTarget {
+    /// 从目标建立（**不持有引用** ✓）。
+    pub fn new(target: NonNull<Header>) -> Self {
+        Self(Cell::new(Some(target)))
+    }
+
+    /// 读目标（`None` ⇒ 已死）。
+    pub fn get(&self) -> Option<NonNull<Header>> {
+        self.0.get()
+    }
+
+    /// 置死（**不碰目标内存** ✓）。
+    pub fn clear(&self) {
+        self.0.set(None);
+    }
+}
+
 py_object! {
-    /// **`_weakref.ref`**（第 173 轮）：给 `Lib/_weakrefset.py` 用的**最小面子** ✓。
+    /// **`_weakref.ref`**（round 59 起是**真弱引用** ✓）：
+    /// 目标**不持有引用**（`Cell<Option<…>>`，目标释放时置 `None` ✓）；
+    /// 回调**持有强引用**（`None` ⇒ 没有回调 ✓）。
     ///
-    /// **如实登记的偏差** ✗：本层**没有真正的弱引用**（GC 不支持 ✓）⇒ 这里存的是**强引用** ✓
-    /// ⇒ 目标永远不会被回收 ✓（`WeakSet` 因而**不会自动清理** ✓）。对"能把 `abc.py`／`os.py` 跑起来"
-    /// 这一步够用 ✓；真正的弱语义留待专门一轮 ✓。
+    /// 先前是**强引用** ✗ ⇒ 目标永不回收 ⇒ `WeakKeyDictionary`／`WeakValueDictionary`／`WeakSet`
+    /// 里的条目永不清理 ⇒ 循环里**无界增长**（`test_weakref` 的 `check_len_race` 200 s＋、
+    /// `test_weakref` 整体超时 ✓）。真正的弱语义见 `Instance::weakrefs` 与
+    /// `invalidate_weakrefs`（round 59）。
     pub struct WeakRefObject {
-        /// 目标对象（**本对象持有一份引用**）。
-        target: NonNull<Header>,
+        /// 目标（**弱**：不持有引用；目标一释放就置 `None` ✓）。
+        ///
+        /// 用 [`WeakTarget`] 包一层：**静态检查**（`OM-40`／`OM-20` ②）只该盯"持引用的字段"，
+        /// 弱引用不是 GC 边 ⇒ 不能要求 traverse／clear 覆盖它 ✓（包一层也让这条口径**可读** ✓）。
+        weak_target: WeakTarget,
+        /// 回调（**强引用**；目标释放时以本弱引用为实参调用一次 ✓）。
+        callback: RefCell<Option<NonNull<Header>>>,
+        /// **哈希缓存**（round 59，给内建 `hash()`／删键用）：目标活着时算过一次就记下 ✓。
+        hash: Cell<Option<i64>>,
+        /// **字典键哈希缓存**（round 59，给 `key_hash` 用；与 `hash` 是**两套口径**、不能混 ✓）：
+        /// 缓存的是 `key_hash` 的原始 u64 ⇒ 死引用当字典键时查找／删除的桶位仍一致 ✓。
+        key_hash: Cell<Option<u64>>,
     }
 }
 
@@ -598,9 +634,24 @@ impl WeakRefObject {
             .with_call(weakref_call)
     }
 
-    /// 目标（**借用**）。
-    pub fn target(&self) -> NonNull<Header> {
-        self.target
+    /// 目标（**弱**：`None` ⇒ 目标已释放 ✓）。
+    pub fn target(&self) -> Option<NonNull<Header>> {
+        self.weak_target.get()
+    }
+
+    /// 回调（**借用**）。
+    pub fn callback(&self) -> Option<NonNull<Header>> {
+        *self.callback.borrow()
+    }
+
+    /// 取出回调（**所有权转移**：字段清空 ✓ —— 回调只触发一次 ✓）。
+    pub fn take_callback(&self) -> Option<NonNull<Header>> {
+        self.callback.borrow_mut().take()
+    }
+
+    /// 目标已释放：置 `None`（**不碰目标内存** ✓）。
+    pub fn mark_dead(&self) {
+        self.weak_target.clear();
     }
 }
 
@@ -613,6 +664,70 @@ pub fn weakref_target(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Option<NonNull<Header>> {
+    weakref_state(instance, object).flatten()
+}
+
+/// **弱引用的哈希缓存状态**（round 59）：`None` ⇒ 不是弱引用；`Some(None)` ⇒ 还没算过；
+/// `Some(Some(hash))` ⇒ 算过（目标死后仍可用 ✓）。
+pub fn weakref_hash_state(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<Option<i64>> {
+    let base = instance.type_named("weakref")?;
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认（弱引用载荷是 `WeakRefObject`）。
+    Some(unsafe { &*object.as_ptr().cast::<WeakRefObject>() }.hash.get())
+}
+
+/// 记下弱引用的哈希（round 59）。
+pub fn weakref_store_hash(instance: &Instance, object: NonNull<Header>, value: i64) {
+    let Some(base) = instance.type_named("weakref") else {
+        return;
+    };
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return;
+    }
+    // SAFETY: 类型身份刚确认。
+    unsafe { &*object.as_ptr().cast::<WeakRefObject>() }
+        .hash
+        .set(Some(value));
+}
+
+/// 字典键哈希缓存状态（`None` ⇒ 不是弱引用；`Some(None)` ⇒ 没算过 ✓）。
+pub fn weakref_key_hash_state(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<Option<u64>> {
+    let base = instance.type_named("weakref")?;
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认。
+    Some(unsafe { &*object.as_ptr().cast::<WeakRefObject>() }.key_hash.get())
+}
+
+/// 记下字典键哈希缓存 ✓。
+pub fn weakref_store_key_hash(instance: &Instance, object: NonNull<Header>, value: u64) {
+    let Some(base) = instance.type_named("weakref") else {
+        return;
+    };
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return;
+    }
+    // SAFETY: 类型身份刚确认。
+    unsafe { &*object.as_ptr().cast::<WeakRefObject>() }
+        .key_hash
+        .set(Some(value));
+}
+
+/// **弱引用状态**（round 59）：`None` ⇒ 不是弱引用；`Some(None)` ⇒ 是弱引用但**目标已释放**；
+/// `Some(Some(target))` ⇒ 活着 ✓。给 `values_equal`／`hash` 用来区分"死引用"。
+pub fn weakref_state(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<Option<NonNull<Header>>> {
     let base = instance.type_named("weakref")?;
     if !instance.is_subtype(instance.type_of(object), base) {
         return None;
@@ -624,14 +739,19 @@ pub fn weakref_target(
 pub(crate) unsafe fn weakref_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<WeakRefObject>() };
-    visit(object.target().as_ptr());
+    // **目标不算引用**（真弱引用 ✓）——只遍历回调 ✓。
+    if let Some(callback) = object.callback() {
+        visit(callback.as_ptr());
+    }
 }
 
 pub(crate) unsafe fn weakref_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<WeakRefObject>() };
-    // SAFETY: 这一份引用由本对象持有。
-    unsafe { instance.release_object(object.target().as_ptr()) };
+    if let Some(callback) = object.take_callback() {
+        // SAFETY: 这一份引用由本对象持有。
+        unsafe { instance.release_object(callback.as_ptr()) };
+    }
 }
 
 /// **调用 `ref(x)`** ✓：给回目标本身 ✓（强引用 ⇒ 一定还在 ✓；真正弱语义随后补 ✗）。
@@ -644,7 +764,10 @@ pub(crate) unsafe fn weakref_call(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<WeakRefObject>() };
-    Ok(instance.retain(object.target()))
+    match object.target() {
+        Some(target) => Ok(instance.retain(target)),
+        None => Ok(instance.new_none()),
+    }
 }
 
 /// 造一个 `ref`（`_weakref` 模组的 `ref` ✓）：接 1 或 2 个实参 ✓（回调**忽略** ✗，已登记 ✓）。
@@ -702,17 +825,41 @@ pub unsafe fn weakref_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(target) = args.first() else {
+    let Some(target) = args.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "ref expected at least 1 argument, got 0",
         ));
     };
-    instance.retain(*target);
-    // SAFETY: `class` 由注册表持有；`target` 的那份引用由新对象接手（上面刚 retain ✓）。
-    Ok(instance
-        .alloc_payload(WeakRefObject::new(class, *target))
-        .cast::<Header>())
+    // **能不能建弱引用**（round 59）：照参照报 `cannot create weak reference to 'X' object` ✓。
+    if !instance.is_weakrefable(target) {
+        let name = instance.type_name(instance.type_of(target)).to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cannot create weak reference to '{name}' object"),
+        ));
+    }
+    // 回调（可选；`None` 等价于没有 ✓）：**持有强引用** ✓。
+    let callback = args
+        .get(1)
+        .copied()
+        .filter(|value| *value != instance.singletons().none());
+    if let Some(callback) = callback {
+        instance.retain(callback);
+    }
+    // SAFETY: `class` 由注册表持有；目标不持引用（真弱引用 ✓）。
+    let object = instance
+        .alloc_payload(WeakRefObject::new(
+            class,
+            WeakTarget::new(target),
+            RefCell::new(callback),
+            Cell::new(None),
+            Cell::new(None),
+        ))
+        .cast::<Header>();
+    // 登记到目标名下（**不持有**弱引用本体 ✓）。
+    instance.register_weakref(target, object);
+    Ok(object)
 }
 
 /// **`weakref.__new__(cls, ob, callback=None)`**（task-7）：`ref.__new__` 在参照里是 weakref 类型
