@@ -1344,11 +1344,21 @@ impl Instance {
             // ⇒ `email.utils` 这一串压在下面 ✓）。类型级静态用法（无接收者 ✓），与 `maketrans` 同路 ✓。
             (
                 self.type_named("int").expect("int 已登记"),
+                "__new__",
+                crate::builtin::int::int_dunder_new_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("int").expect("int 已登记"),
                 "from_bytes",
                 crate::builtin::int::int_from_bytes_native as crate::NativeFn,
             ),
             // **`bool.from_bytes`** ✓（round 47）：参照返回 **`bool` 单例**（`int.from_bytes` 的
             // int 结果再取真值）—— `test_bool.test_from_bytes` 用 `assertIs` 钉住 ✓。
+            (
+                self.type_named("bool").expect("bool 已登记"),
+                "__new__",
+                crate::builtin_objects::bool_dunder_new_native as crate::NativeFn,
+            ),
             (
                 self.type_named("bool").expect("bool 已登记"),
                 "from_bytes",

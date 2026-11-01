@@ -503,6 +503,45 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
     ExecError::Raised { exception }
 }
 
+/// **发一条 `DeprecationWarning`**（round 48）：从核心侧**惰性**走 Python 的 `warnings.warn` ✓ ——
+/// `Lib/warnings.py` 在 `_warnings` 缺席时回退到纯 Python `_py_warnings` ✓，所以只要 `warnings`
+/// 已在 `sys.modules` 里、且有 `warn`，就能被 `catch_warnings(record=True)` 记到 ✓。
+///
+/// 边界（如实 ✓）：① `warnings` **还没被 import** 时静默跳过（参照会惰性 import；本层从 Rust 侧
+/// 主动触发 import 会与循环导入打架 ✗，留后续轮）；② `warn` 自己抛的异常也**吞掉**（参照里
+/// `simplefilter("error")` 会把警告变异常，本层未接线 —— 留后续轮）。
+pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
+    let Some(modules) = instance.modules() else {
+        return;
+    };
+    let Some(warnings) = instance.dict_get(modules, "warnings") else {
+        return;
+    };
+    let Ok(Some(warn)) = crate::executor::attribute::attribute_optional(instance, warnings, "warn")
+    else {
+        return;
+    };
+    let text = instance.new_str(message);
+    let category = instance.type_value(
+        instance
+            .type_named("DeprecationWarning")
+            .expect("DeprecationWarning 已登记"),
+    );
+    let outcome = crate::executor::call::call_value(instance, warn, &[text, category], &[]);
+    // SAFETY: 这些都是本函数持有的新引用。
+    unsafe {
+        instance.release_object(warn.as_ptr());
+        instance.release_object(text.as_ptr());
+        instance.release_object(category.as_ptr());
+    }
+    if let Ok(result) = outcome {
+        release(instance, result);
+    } else if let Err(ExecError::Raised { exception }) = outcome {
+        // SAFETY: 错误里那份引用在这里消费。
+        unsafe { instance.release_object(exception.as_ptr()) };
+    }
+}
+
 /// 抛一个内建异常（带消息）。
 pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> ExecError {
     let exception = new_exception(instance, exception_type(instance, name), message);

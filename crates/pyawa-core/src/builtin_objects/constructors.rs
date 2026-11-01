@@ -114,6 +114,24 @@ pub unsafe fn bool_new(
 }
 
 
+/// **`bool.__new__`** 的显式入口 ✓（round 48）：与 `int.__new__` 同一条调用形状（第一个实参是
+/// 类型 ⇒ 它就是 `cls`）—— 必须**显式登记在 `bool` 类型上** ✗，否则属性通道沿 MRO 落到 `int.__new__`
+/// ⇒ `bool.__new__(bool, 0)` 被 int 的"不安全"守卫拦下 ✗（round 48 实测 ✓）。
+pub unsafe fn bool_dunder_new_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let bool_type = instance.type_named("bool").expect("bool 已登记");
+    let (class, rest) = match args.first().copied() {
+        Some(first) if instance.is_type_object(first) => (first.cast::<crate::TypeObject>(), &args[1..]),
+        _ => (bool_type, args),
+    };
+    // SAFETY: `bool_new` 的契约（建单例或取真值）与参数由本函数保证。
+    unsafe { bool_new(class, rest, instance) }
+}
+
 /// `dict()`：空字典。
 pub unsafe fn dict_new(
     class: NonNull<crate::TypeObject>,

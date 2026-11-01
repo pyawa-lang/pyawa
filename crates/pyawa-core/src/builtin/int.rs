@@ -251,6 +251,26 @@ pub(crate) fn bool_from_bytes_native(
     Ok(instance.retain(instance.singletons().boolean(truth)))
 }
 
+/// **`int.__new__`** 的显式入口 ✓（round 48）：参照的 `int.__new__` 是 **int 自己的 `tp_new`** ✓，
+/// 所以 `int.__new__(bool, 0)` ⇒ `TypeError: int.__new__(bool) is not safe, use bool.__new__()` ✓。
+/// 本层先前**没有**在 `int` 类型上登记 `__new__` ⇒ 属性通道落到元类型的默认实现 ✗
+/// （`test_bool.test_subclass` 的第二条断言）。这里按参照的调用形状收：
+/// 第一个实参是类型 ⇒ 它就是 `cls`；否则 `cls` 取 `int` ✓。
+pub(crate) fn int_dunder_new_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let int_type = instance.type_named("int").expect("int 已登记");
+    let (class, rest) = match args.first().copied() {
+        Some(first) if instance.is_type_object(first) => (first.cast::<crate::TypeObject>(), &args[1..]),
+        _ => (int_type, args),
+    };
+    // SAFETY: class 由注册表或调用方保证存活。
+    unsafe { int_new(class, rest, instance) }
+}
+
 pub(crate) fn int_from_bytes_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,

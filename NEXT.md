@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 47：`bool`／`int` 面收口 ⇒ `test_bool` 2F、官方套件跑通 22→23）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 48：`test_bool` **全绿**、官方套件跑通 23→24）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -21,10 +21,11 @@
   修掉 `test_bool` 的 **Rust 栈溢出 abort**（abort ⇒ 6F／2E 跑完）；该文件剩余 8 格已列档：
   `bool` 不可继承、`int`／`bool` 的 `.real`／`.imag`、一元／位运算的 bool→int 结果类型、
   `bool.from_bytes` 单例、`bool(**kw)` TypeError、`BytesIO.getbuffer`（pickle）——**round 47 已收**
-  ⇒ `test_bool` 只剩 2F：`~bool` 的 DeprecationWarning 通道（要接 `_warnings` 真通道）＋
-  `int.__new__(bool, 0)`（`int.__new__` 属性通道仍落到 metatype 默认；`test_subclass` 第 2 条）。
-  下一轮候选：`test_weakref`（形参所有权）／`KeyError` 上下文污染／`P3-35` 5 形态（`\N{…}` 15 文件可按
-  `gen_unicode` 生成名字表）／`test_bool` 最后 2F。
+  **round 48 已清**：`test_bool` **全绿（OK）** —— `int.__new__`／`bool.__new__` 显式登记
+  （`type.__new__` 的 new 槽桥接收口）＋ 核心侧 `DeprecationWarning` 通道（`~bool`，走
+  `sys.modules['warnings'].warn`，惰性不主动 import）；官方套件跑通 **23 → 24**。
+  下一轮候选：`test_weakref`（形参所有权）／`KeyError` 上下文污染（上限榜 8 文件签名）／
+  `P3-35` 的 `\N{…}`（可用 `gen_unicode` 同款探测生成 Unicode 名字表）／`P3-29`／`P3-37` 剩余面。
   **round 44 已清 ②**：`test_userstring` **38 failures／4 errors ⇒ OK（skipped=2）** ✓ —— 根因
   `==`／`!=` 没走 `__eq__`／`__ne__`（P3-42 核心格）＋ `str` 一族口径（fillchar／replace count／zfill
   符号／expandtabs 换行列／rpartition 空分隔符／搜索族 arity 报文／下标错型与大整数饱和／切片饱和

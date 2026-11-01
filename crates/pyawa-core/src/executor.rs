@@ -511,6 +511,20 @@ pub fn unary_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`~bool` 的弃用告警** ✓（round 48；参照 3.14 实测文案 + `DeprecationWarning`，
+    // `test_bool.test_math` 的 `assertWarns` 钉住）：结果仍是"底层 int 的按位取反"（`~False` ⇒ -1 ✓），
+    // 只是先发一条警告。`~int` 不告警 ✓。
+    if symbol == "~"
+        && instance.type_of(operand) == instance.singletons().bool_type()
+    {
+        crate::executor::runtime::warn_deprecation(
+            instance,
+            "Bitwise inversion '~' on bool is deprecated and will be removed in Python 3.16. \
+             This returns the bitwise inversion of the underlying int object and is usually not what \
+             you expect from negating a bool. Use the 'not' operator for boolean negation or \
+             ~int(x) if you really want the bitwise inversion of the underlying int.",
+        );
+    }
     if let Some(value) = instance.int_of(operand) {
         // `-`／`+`／`abs`／`~` 全走任意精度（`TS-45`）
         let wide = value.to_bigint();
