@@ -15,6 +15,12 @@ pub unsafe fn bool_repr(ptr: *mut Header, _instance: &Instance) -> Result<String
     Ok(if object.value { "True" } else { "False" }.to_owned())
 }
 
+/// `ellipsis` 的 `repr`／`str`：`Ellipsis` ✓（round 51；`repr(...)` 先前落到默认的
+/// `<ellipsis object at 0x…>` ✗ —— `test_pep646_syntax` 的 doctest 逐字比较它 ✓）。
+pub unsafe fn ellipsis_repr(_ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
+    Ok("Ellipsis".to_owned())
+}
+
 /// `NoneType` 的 `repr`：`None`。
 pub unsafe fn none_repr(_ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
     Ok("None".to_owned())

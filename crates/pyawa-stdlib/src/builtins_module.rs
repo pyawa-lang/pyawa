@@ -89,6 +89,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("ord", ord_native as pyawa_core::NativeFn),
         // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
         ("print", print_native as pyawa_core::NativeFn),
+        // **交互模式的显示钩子**（round 51）：`compile(..., "single")` 生成的代码按这个名字调用
+        // （见 `pyawa_core::compile::INTERACTIVE_DISPLAY_HOOK`）；语义与 `sys.displayhook` 同一份 ✓。
+        (
+            "__pyawa_displayhook__",
+            crate::sys_module::displayhook_native as pyawa_core::NativeFn,
+        ),
         // **`open`** ✓（task-18 ✓）：**一处真相**是 `_io` 那个 [`crate::io_module::open_native`] ✓
         // —— 这里只把**同一个实现**接到 `builtins` 上 ✓（不另写一份 ✓）。
         ("open", crate::io_module::open_native as pyawa_core::NativeFn),
@@ -402,7 +408,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
 ///
 /// 目的地是**组合根装好的那个 `sys.stdout` 对象**（内建名字空间里的 `__stdout__` ✓）——
 /// 字节经 `_io` 的文本层走 `fs` 域的 `write` 槽 ✓（`CM-26`：**不设临时 sink** ✓）。
-fn print_native(
+pub(crate) fn print_native(
     instance: &Instance,
     _self_object: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
@@ -412,8 +418,19 @@ fn print_native(
         opcode: 0,
         what: "`print` 需要内建名字空间（组合根装配）",
     })?;
-    let default_stdout = instance
-        .dict_get(builtins, "__stdout__")
+    // **`sys.stdout` 每次调用都现取** ✓（round 51）：参照的 `print` 读的是**当前的** `sys.stdout`
+    // —— `Lib/doctest.py` 会把 `sys.stdout` 换成一个 `StringIO` 来捕获输出 ✓。先前一律走
+    // `builtins.__stdout__` 的静态快路 ✗ ⇒ doctest 的每个表达式都"Got nothing" ✗。
+    let canonical_stdout = instance.dict_get(builtins, "__stdout__");
+    // **取 `sys` 模块的 `stdout` 属性**：模块对象是 `AttributeObject`（不是 `dict`）⇒ 必须走
+    // **属性通道** ✓；先前误用 `dict_get`（把模块对象当字典强转）⇒ SIGBUS ✗（round 51 实测）。
+    let sys_module = instance
+        .modules()
+        .and_then(|modules| instance.dict_get(modules, "sys"));
+    let current_stdout = sys_module
+        .and_then(|module| instance.attribute_optional_of(module, "stdout").ok().flatten());
+    let default_stdout = current_stdout
+        .or(canonical_stdout)
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`sys.stdout` 尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
@@ -474,7 +491,9 @@ fn print_native(
         Some(value) if value == none => Some(default_stdout),
         Some(value) => Some(value),
     };
-    let is_default_stdout = target == Some(default_stdout);
+    // **快路只对"规范的 `__stdout__`"开** ✓：`sys.stdout` 被换掉（doctest／unittest 的重定向）⇒
+    // 走属性通道调那个对象的 `write` ✓（否则捕获不到 ✗）。
+    let is_default_stdout = target == canonical_stdout;
 
     if is_default_stdout {
         let mut bytes: Vec<u8> = Vec::new();

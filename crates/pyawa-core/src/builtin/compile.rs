@@ -496,13 +496,26 @@ pub fn compile_native(
     } else {
         source
     };
-    let unit = crate::compile::compile(
-        &wrapped,
-        &filename,
-        crate::compile::Mode::PurePython,
-        crate::compile::CheckTier::Shallow,
-        optimization,
-    )
+    // **`single` 模式**：顶层表达式语句要经 `sys.displayhook` 显示（参照的交互模式 ✓）——
+    // 走 `compile_interactive`（round 51）；先前按 exec 处理 ✗ ⇒ doctest 的每个表达式都
+    // "Got nothing" ✗（`test_unpack_ex`／`test_pep646_syntax` 的 1F 就是这条）。
+    let unit = if mode == "single" {
+        crate::compile::compile_interactive(
+            &wrapped,
+            &filename,
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            optimization,
+        )
+    } else {
+        crate::compile::compile(
+            &wrapped,
+            &filename,
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            optimization,
+        )
+    }
     .map_err(|error| syntax_error(instance, &filename, &wrapped, &compile_error_text(&error)))?;
     let template = crate::compile::instantiate(instance, &unit);
     Ok(code_with_filename(instance, &template, &filename))

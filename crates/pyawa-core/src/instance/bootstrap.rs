@@ -239,7 +239,10 @@ impl Instance {
         let ellipsis_type = self.alloc_type_raw(
             "ellipsis",
             core::mem::size_of::<NoneObject>(),
-            Slots::new(NoneObject::dealloc),
+            Slots::new(NoneObject::dealloc)
+                // **`repr(...)` ⇒ `Ellipsis`** ✓（round 51；参照 ✓）。
+                .with_repr(crate::builtin_objects::ellipsis_repr)
+                .with_str(crate::builtin_objects::ellipsis_repr),
         );
         assert!(
             self.register_bases(ellipsis_type, vec![object_type]).is_some(),

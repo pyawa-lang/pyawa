@@ -410,10 +410,11 @@ fn getrecursionlimit_native(
 
 /// **`sys.setrecursionlimit(n)`** ✓（task-20 第 3 轮 ✓）：**只降不升** ✓（夹到 `MAX_CALL_DEPTH` ✓，
 /// 理由见那一处：本层 Python 调用吃原生栈 ✗）。回 `None` ✓。
-/// `sys.displayhook(value)`：`None` 不打印；否则把 `repr(value)` ＋ `'\n'` 写进标准输出，
-/// 并把 `builtins._` 置成该值（参照口径 ✓）。写端直接走 `_io` 的 `write_bytes`
-/// （**不**经 `sys.stdout` 的属性通道 —— 那条路在本层绕一圈反而易踩悬垂，round 49 实测 SIGBUS ✗）。
-fn displayhook_native(
+/// `sys.displayhook(value)`：`None` 不打印；否则把 `repr(value)` 打印出来，并把 `builtins._`
+/// 置成该值（参照口径 ✓）。**经内建 `print`** ⇒ 与 `print` 同一条 `sys.stdout` 现取路径 ✓
+/// （doctest 把 `sys.stdout` 换成 `StringIO` 来捕获输出 ✓；round 51 修 ✗：先前直写 `fs` ⇒
+/// 捕获不到 ⇒ 每个示例都 "Got nothing" ✗）。
+pub(crate) fn displayhook_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
@@ -426,16 +427,31 @@ fn displayhook_native(
         return Ok(instance.singletons().none());
     }
     // `builtins._ = value`（借用语义由 dict_set 自己 retain ✓）。
-    if let Some(builtins) = instance.builtins() {
-        instance.dict_set(builtins, "_", value);
+    let builtins = instance.builtins().ok_or(ExecError::Unsupported {
+        opcode: 0,
+        what: "`displayhook` 需要内建名字空间",
+    })?;
+    instance.dict_set(builtins, "_", value);
+    let rendered = instance.object_repr(value)?;
+    let text = instance.new_str(&rendered);
+    let print = instance.dict_get(builtins, "print");
+    let outcome = match print {
+        Some(_print) => crate::builtins_module::print_native(
+            instance,
+            None,
+            &[text],
+            &[],
+        ),
+        None => Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "`displayhook` 需要内建 `print`",
+        }),
+    };
+    // SAFETY: text 是本函数持有的新引用。
+    instance.release(text);
+    if let Ok(result) = outcome {
+        instance.release(result);
     }
-    let mut line = instance.object_repr(value)?;
-    line.push('\n');
-    let _ = crate::_io_module::write_bytes(
-        instance,
-        crate::_io_module::STDOUT_HANDLE,
-        line.as_bytes(),
-    );
     Ok(instance.singletons().none())
 }
 

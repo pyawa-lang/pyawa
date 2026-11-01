@@ -308,6 +308,65 @@ impl Span {
     }
 }
 
+/// **`compile(source, filename, "single")` 的交互式编译**（round 51）：与 [`compile`] 同一条路，
+/// 只是把**顶层表达式语句**包成一次显示钩子调用 —— 参照的交互模式会把每个表达式的值经
+/// `sys.displayhook` 打出来 ✓（`doctest` 的每个示例表达式都靠它 ✓）。
+///
+/// 显示钩子用**内建名字** [`INTERACTIVE_DISPLAY_HOOK`]（stdlib 的 `builtins` 里登记，见
+/// `crates/pyawa-stdlib`）—— 这样生成的模块级代码**不需要**先 `import sys` ✓。
+pub const INTERACTIVE_DISPLAY_HOOK: &str = "__pyawa_displayhook__";
+
+/// 见 [`INTERACTIVE_DISPLAY_HOOK`]；`mode`／`tier`／`optimization` 的契约同 [`compile`]。
+pub fn compile_interactive(
+    source: &str,
+    filename: &str,
+    mode: Mode,
+    tier: CheckTier,
+    optimization: u8,
+) -> Result<CompiledUnit, CompileError> {
+    let _ = optimization;
+    let lexed = lex(source, mode)?;
+    let mut statements = parse_module(&lexed)?;
+    let synthetic = Span::synthetic();
+    for statement in statements.iter_mut() {
+        if let Statement::Expression(value, span) = statement {
+            let display = Expression::Name(INTERACTIVE_DISPLAY_HOOK.to_owned(), *span);
+            let original = core::mem::replace(value, Expression::Constant(Constant::None, *span));
+            *value = Expression::Call {
+                function: Box::new(display),
+                arguments: vec![original],
+                star_arguments: Vec::new(),
+                keywords: Vec::new(),
+                dict_arguments: Vec::new(),
+                callee_span: *span,
+                span: *span,
+            };
+            let _ = synthetic;
+        }
+    }
+    if mode == Mode::Extension {
+        typecheck::check(&statements, filename)?;
+    }
+    let unit = compile_scope(
+        "<module>",
+        "<module>",
+        &[],
+        &[],
+        None,
+        None,
+        None,
+        mode,
+        tier,
+        &statements,
+        ScopeKind::Module,
+        false,
+        &[],
+        Span::synthetic(),
+    )?;
+    verify::check(&unit)?;
+    Ok(unit)
+}
+
 /// 编译一段源码（`BC-16`：纯函数——同样的入参给同样的产物）。
 ///
 /// `mode`（`BC-14`）、`tier`（`TS-31`）与 `optimization`（`IM-19`）都是**显式编译输入**，
