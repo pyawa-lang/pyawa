@@ -959,17 +959,25 @@ pub(crate) fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
 // ---- `BC-56` 的消息：**逐条实测**（禁止手写近似文本，见 tests/calls.rs 的记录）----
 
 /// 取一个 `str` 对象的文本（关键字实参的名字要用它）。
-fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<String, ExecError> {
-    // SAFETY: raw 是存活对象。
-    let ty = unsafe { raw.as_ref() }.ty();
-    if ty != instance.singletons().str_type() {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "关键字实参的名字必须是 str",
+///
+/// **失败 ⇒ 参照的 `TypeError: keywords must be strings`** ✓（round 50）：先前报
+/// `Unsupported`（状态 5，整个文件中止 ✗）—— `f(**{1: 2})` 与
+/// `f(**<keys() 含非 str 的映射>)` 都是这条 ✓（`test_extcall` 的 doctest 钉住）。
+fn str_text(instance: &Instance, raw: NonNull<Header>, _opcode: u8) -> Result<String, ExecError> {
+    if let Some(text) = instance.text_of(raw) {
+        return Ok(text.to_owned());
+    }
+    // **`str` 子类**（round 50）：`text_of` 只认"恰是 `str`" ✗ —— 参照的关键字名**接受子类** ✓
+    // （`class S(str)` 作 `**{S("a"): 1}` 的键 ✓）。载荷同构 ⇒ 直接取 WTF-8 文本 ✓。
+    if instance.is_str_object(raw) {
+        // SAFETY: 刚确认是 `str` 族（载荷同布局）。
+        let bytes = unsafe { &*raw.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        return Ok(match core::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => crate::wtf8::to_string_lossy(bytes),
         });
     }
-    // SAFETY: 类型身份已确认。P3-38 S2c：安全口径（WTF-8 ⇒ 有损文本，不 panic ✓）
-    Ok(instance.text_value(raw).unwrap_or_default())
+    Err(instance.raise_builtin_error("TypeError", "keywords must be strings"))
 }
 
 /// 取函数对象的位置默认值（**借用**，需要时自行 incref）。

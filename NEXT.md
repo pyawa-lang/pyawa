@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 49：doctest 导入前置面 ⇒ 4 个 doctest 文件推进到真实用例；round 48：`test_bool` 全绿）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 50：`DICT_MERGE`／`CALL_FUNCTION_EX` 协议面；round 49：doctest 导入前置面）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -30,7 +30,14 @@
   `test_pep646_syntax` 从**导入即死**推进到真正的 doctest 用例。**下一轮（round 50）**：
   `DICT_MERGE` 两件事（`**映射` 走映射协议；同名键 TypeError 带被调函数 qualname）＋
   `test_genexps` 生成器 `throw` 的 `StackUnderflow` ＋ `test_pep646_syntax` 断言差异；
-  之后：`test_weakref`（形参所有权）／`KeyError` 上下文污染／`P3-35` 的 `\N{…}`／`P3-29`／`P3-37`。
+  **round 50 已清**：`DICT_MERGE`（映射协议＋同名键报文的被调对象限定名）与 `CALL_FUNCTION_EX`
+  （任意可迭代 `*`、`keywords must be strings`、`str` 子类关键字名）⇒ `test_unpack_ex`／
+  `test_pep646_syntax` 跑完但各 1F（**"Got nothing"＝`compile(..., "single")` 的交互式 repr 未接线**）；
+  `test_extcall` 跑完 doctest 后**在 GC 回收时堆损坏**（`PYAWA_NO_GC=1` 下能跑完 ⇒ 疑似 round 49
+  的"异常↔回溯↔帧"环；`test_extcall` 即最小复现）——**下一轮（round 51）优先级**：① GC 双重释放
+  （正确性 bug，压一切）② `single` 模式交互 repr（一次可翻 `test_unpack_ex`／`test_pep646_syntax` 两文件）
+  ③ `test_genexps` 生成器 `throw` 的 `StackUnderflow`。之后：`test_weakref`（形参所有权）／
+  `KeyError` 上下文污染／`P3-35` 的 `\N{…}`／`P3-29`／`P3-37`。
   **round 44 已清 ②**：`test_userstring` **38 failures／4 errors ⇒ OK（skipped=2）** ✓ —— 根因
   `==`／`!=` 没走 `__eq__`／`__ne__`（P3-42 核心格）＋ `str` 一族口径（fillchar／replace count／zfill
   符号／expandtabs 换行列／rpartition 空分隔符／搜索族 arity 报文／下标错型与大整数饱和／切片饱和

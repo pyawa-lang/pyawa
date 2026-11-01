@@ -20,72 +20,253 @@ pub(super) fn step_calls<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
     }
 }
 
+/// **`DICT_MERGE`／`DICT_UPDATE` 的源映射条目**（round 50）：`dict` 走快路；其余按**映射协议**
+/// （`keys()` ＋ `__getitem__`）取 ✓。每项都是**新引用**（键值各一份）。
+fn mapping_entries(
+    instance: &Instance,
+    source: NonNull<Header>,
+) -> Result<Vec<(NonNull<Header>, NonNull<Header>)>, ExecError> {
+    let source_type = unsafe { source.as_ref() }.ty();
+    if source_type == builtin_type(instance, "dict") {
+        // SAFETY: 类型身份已确认。
+        let dict = unsafe { &*source.as_ptr().cast::<DictObject>() };
+        let mut entries = Vec::new();
+        for (key, value) in dict.entries() {
+            // SAFETY: 键值由源字典持有，这里各新增一份交给调用方。
+            unsafe {
+                instance.incref_object(key.as_ptr());
+                instance.incref_object(value.as_ptr());
+            }
+            entries.push((key, value));
+        }
+        return Ok(entries);
+    }
+    let Some(keys_method) = attribute_optional(instance, source, "keys")? else {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "不是映射（没有 keys）",
+        });
+    };
+    let keys = crate::executor::call::call_value(instance, keys_method, &[], &[]);
+    // SAFETY: keys_method 是新引用。
+    unsafe { instance.release_object(keys_method.as_ptr()) };
+    let keys = keys?;
+    let iterator = match instance.iter_object(keys) {
+        Ok(iterator) => iterator,
+        Err(error) => {
+            // SAFETY: keys 是本函数持有的新引用。
+            unsafe { instance.release_object(keys.as_ptr()) };
+            return Err(error);
+        }
+    };
+    // SAFETY: keys 的引用由迭代器接手（`iter_object` 的契约是新增一份、keys 仍归本函数）。
+    unsafe { instance.release_object(keys.as_ptr()) };
+    let getitem = match attribute_optional(instance, source, "__getitem__")? {
+        Some(method) => method,
+        None => {
+            // SAFETY: iterator 是本函数持有的新引用。
+            unsafe { instance.release_object(iterator.as_ptr()) };
+            return Err(ExecError::Unsupported {
+                opcode: 0,
+                what: "不是映射（没有 __getitem__）",
+            });
+        }
+    };
+    let mut entries = Vec::new();
+    loop {
+        let next = instance.advance_iterator(iterator);
+        let key = match next {
+            Ok(Some(key)) => key,
+            Ok(None) => break,
+            Err(error) => {
+                // SAFETY: 两份引用都归本函数。
+                unsafe {
+                    instance.release_object(getitem.as_ptr());
+                    instance.release_object(iterator.as_ptr());
+                }
+                return Err(error);
+            }
+        };
+        let value = crate::executor::call::call_value(instance, getitem, &[key], &[]);
+        // SAFETY: key 是新引用。
+        unsafe { instance.release_object(key.as_ptr()) };
+        match value {
+            Ok(value) => entries.push((key, value)),
+            Err(error) => {
+                // SAFETY: 同上。
+                unsafe {
+                    instance.release_object(getitem.as_ptr());
+                    instance.release_object(iterator.as_ptr());
+                }
+                return Err(error);
+            }
+        }
+    }
+    // SAFETY: 两份引用都归本函数。
+    unsafe {
+        instance.release_object(getitem.as_ptr());
+        instance.release_object(iterator.as_ptr());
+    }
+    Ok(entries)
+}
+
+/// **被调对象的显示名**（round 50，`DICT_MERGE` 的参照报文要用）：
+/// 函数／绑定方法／内建函数 ⇒ `模块.限定名()`（`builtins` 省前缀）；类型 ⇒ `名字()`；
+/// 其余可调用实例 ⇒ 它的 `repr`（**不带** `()` —— 与参照实测一致 ✓）。
+fn callee_display(instance: &Instance, callable: NonNull<Header>) -> Option<String> {
+    if instance.is_type_object(callable) {
+        // SAFETY: 刚判过是类型对象。
+        let name = unsafe { &*callable.as_ptr().cast::<crate::TypeObject>() }.name().to_owned();
+        return Some(format!("{name}()"));
+    }
+    let callable_type = unsafe { callable.as_ref() }.ty();
+    let function_type = builtin_type(instance, "function");
+    let method_type = instance.type_named("method");
+    let builtin_type_obj = instance.type_named("builtin_function_or_method");
+    let underlying = if callable_type == function_type {
+        Some(callable)
+    } else if Some(callable_type) == method_type {
+        // SAFETY: 类型身份刚确认。
+        Some(unsafe { &*callable.as_ptr().cast::<MethodObject>() }.function())
+    } else if Some(callable_type) == builtin_type_obj {
+        Some(callable)
+    } else {
+        None
+    };
+    if let Some(underlying) = underlying {
+        let attribute = |name: &str| -> Option<String> {
+            attribute_optional(instance, underlying, name)
+                .ok()
+                .flatten()
+                .and_then(|value| {
+                    let text = instance.text_of(value).map(|text| text.to_owned());
+                    // SAFETY: 刚取到的新引用。
+                    unsafe { instance.release_object(value.as_ptr()) };
+                    text
+                })
+        };
+        let qualname = attribute("__qualname__").or_else(|| attribute("__name__"));
+        if let Some(qualname) = qualname {
+            let module = attribute("__module__");
+            return Some(match module {
+                Some(module) if module != "builtins" && !module.is_empty() => {
+                    format!("{module}.{qualname}()")
+                }
+                _ => format!("{qualname}()"),
+            });
+        }
+    }
+    instance.object_repr(callable).ok()
+}
+
 /// `DICT_MERGE | DICT_UPDATE` 的分派臂（从 `step_calls` 原样搬来）。
 fn step_calls_dict_merge<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
     match name {
             "DICT_MERGE" | "DICT_UPDATE" => {
-                // 实测净 −1：把 TOS 那个字典并进 TOS1，然后弹掉 TOS。
-                // `DICT_UPDATE` 覆盖同名键；`DICT_MERGE` 遇到同名键要报错——那条消息在参照实现里
-                // 带着**函数的 qualname**（实测：`__main__.demo() got multiple values for keyword
-                // argument 'a'`），而此刻调用者还在栈下好几层，本层取不到，所以如实报未接线。
+                // 实测净 −1：把 TOS 那个映射并进 TOS1，然后弹掉 TOS。
+                // `DICT_UPDATE` 覆盖同名键；`DICT_MERGE` 遇到同名键要报错 —— 那条消息在参照实现里
+                // 带着**被调对象的限定名**（`__main__.f() got multiple values for keyword argument 'a'`
+                // ✓）。被调对象在栈下 4 格（`[可调用, self|NULL, 实参, 目标 dict, 源映射]`）⇒
+                // round 50 从这里取名字；先前如实报未接线 ✗。
+                let is_merge = name == "DICT_MERGE";
+                // 取被调对象的显示名（在弹栈**之前**取，源映射仍在 TOS ✓）。
+                let callee = {
+                    let snapshot = frame.get().stack_snapshot();
+                    if snapshot.len() >= 5 {
+                        let callable = snapshot[snapshot.len() - 5];
+                        callee_display(instance, callable)
+                    } else {
+                        None
+                    }
+                };
                 let source = frame.get().pop()?;
                 let destination = frame.get().peek()?;
-                // SAFETY: 两个都在帧值栈上，存活。
-                let source_type = unsafe { source.as_ref() }.ty();
-                let destination_type = unsafe { destination.as_ref() }.ty();
-                if source_type != builtin_type(instance, "dict")
-                    || destination_type != builtin_type(instance, "dict")
-                {
-                    release(instance, source);
+                // SAFETY: destination 在帧值栈上，存活。
+                if unsafe { destination.as_ref() }.ty() != builtin_type(instance, "dict") {
+                    // SAFETY: source 是新引用。
+                    unsafe { instance.release_object(source.as_ptr()) };
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "DICT_MERGE／DICT_UPDATE 只接线了 dict（映射协议随后补）",
+                        what: "DICT_MERGE／DICT_UPDATE 的目标必须是 dict（编译器保证）",
                     });
                 }
-                // SAFETY: 类型身份已确认。
-                let source_entries = unsafe { &*source.as_ptr().cast::<DictObject>() }.entries();
-                // SAFETY: 同上。
-                let destination_dict = unsafe { &*destination.as_ptr().cast::<DictObject>() };
-                let is_merge = name == "DICT_MERGE";
-                for (key, value) in source_entries {
-                    let position = destination_dict
+                let entries = match mapping_entries(instance, source) {
+                    Ok(entries) => entries,
+                    Err(ExecError::Unsupported { .. }) => {
+                        // **不是映射** ⇒ 参照的 TypeError（带被调对象与实参类型名 ✓）。
+                        let source_type_name =
+                            instance.type_name(unsafe { source.as_ref() }.ty()).to_owned();
+                        // SAFETY: source 是新引用。
+                        unsafe { instance.release_object(source.as_ptr()) };
+                        let callee = callee.unwrap_or_else(|| "?".to_owned());
+                        return Err(instance.raise_builtin_error(
+                            "TypeError",
+                            &format!(
+                                "{callee} argument after ** must be a mapping, not {source_type_name}"
+                            ),
+                        ));
+                    }
+                    Err(error) => {
+                        // SAFETY: source 是新引用。
+                        unsafe { instance.release_object(source.as_ptr()) };
+                        return Err(error);
+                    }
+                };
+                for (key, value) in entries {
+                    // SAFETY: destination 在帧值栈上，存活；键值由本函数持有。
+                    let destination_dict = unsafe { &*destination.as_ptr().cast::<DictObject>() };
+                    let existing = destination_dict
                         .entries()
                         .iter()
-                        .position(|(existing, _)| values_equal(instance, *existing, key));
-                    if let Some(existing_position) = position {
+                        .position(|(candidate, _)| values_equal(instance, *candidate, key));
+                    if let Some(position) = existing {
                         if is_merge {
-                            release(instance, source);
-                            return Err(ExecError::Unsupported {
-                                opcode: opcode_number,
-                                what: "DICT_MERGE 的同名键错误要函数的 qualname（参照实现的消息带它）",
-                            });
+                            let key_text = instance.object_repr(key).unwrap_or_else(|_| "?".to_owned());
+                            // SAFETY: 键值都是本函数持有的新引用。
+                            unsafe {
+                                instance.release_object(key.as_ptr());
+                                instance.release_object(value.as_ptr());
+                                instance.release_object(source.as_ptr());
+                            }
+                            let callee = callee.clone().unwrap_or_else(|| "?".to_owned());
+                            return Err(instance.raise_builtin_error(
+                                "TypeError",
+                                &format!(
+                                    "{callee} got multiple values for keyword argument {key_text}"
+                                ),
+                            ));
                         }
                         let (old_key, old_value) = destination_dict
-                            .remove(existing_position)
+                            .remove(position)
                             .expect("刚查到的位置");
                         release(instance, old_key);
                         release(instance, old_value);
                     }
-                    // SAFETY: 键值由源字典持有，这里各新增一份引用交给目标字典。
-                    unsafe {
-                        instance.incref_object(key.as_ptr());
-                        instance.incref_object(value.as_ptr());
-                    }
                     destination_dict.insert_raw(key, value);
                 }
-                release(instance, source);
+                // SAFETY: source 是本函数持有的新引用。
+                unsafe { instance.release_object(source.as_ptr()) };
             }
         _ => unreachable!("step_calls_dict_merge 只接收 DICT_MERGE | DICT_UPDATE"),
     }
     Ok(Step::Continue)
 }
 
-/// `CALL_FUNCTION_EX` 的分派臂（从 `step_calls` 原样搬来）。
 fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
     match name {
             "CALL_FUNCTION_EX" => {
                 // 实测净 −3；栈自下而上是 `[可调用, self|NULL, 实参 tuple, 关键字 dict|NULL]`
                 // （`f(*a)` 的发射里第二个 `PUSH_NULL` 就是"没有关键字"那一格）。
+                // **被调对象的显示名**（round 50）：`argument after * must be an iterable` 的参照
+                // 报文要带它（`__main__.f() argument after * must be an iterable, not int` ✓）。
+                let callee = {
+                    let snapshot = frame.get().stack_snapshot();
+                    if snapshot.len() >= 4 {
+                        callee_display(instance, snapshot[snapshot.len() - 4])
+                    } else {
+                        None
+                    }
+                };
                 let keyword_source = frame.get().pop()?;
                 let argument_source = frame.get().pop()?;
                 let self_or_null = frame.get().pop()?;
@@ -129,16 +310,56 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         args.push(item);
                     }
                 } else {
-                    release(instance, callable);
-                    release(instance, argument_source);
-                    release(instance, keyword_source);
-                    if let Some(bound) = bound_self {
-                        release(instance, bound);
+                    // **通用迭代协议**（round 50）：`iterable_items` 只认内建容器 ⇒ 自定义可迭代
+                    // （`__iter__`）也要按参照摊开 ✓；真不可迭代才报类型错（带被调对象名 ✓）。
+                    match instance.iter_object(argument_source) {
+                        Ok(iterator) => {
+                            loop {
+                                match instance.advance_iterator(iterator) {
+                                Ok(Some(item)) => args.push(item),
+                                Ok(None) => break,
+                                Err(error) => {
+                                    // SAFETY: 三份引用都归本函数。
+                                    unsafe {
+                                        instance.release_object(iterator.as_ptr());
+                                        instance.release_object(callable.as_ptr());
+                                        instance.release_object(argument_source.as_ptr());
+                                        instance.release_object(keyword_source.as_ptr());
+                                    }
+                                    if let Some(bound) = bound_self {
+                                        release(instance, bound);
+                                    }
+                                    for item in args {
+                                        release(instance, item);
+                                    }
+                                    return Err(error);
+                                }
+                            }
+                            }
+                            // SAFETY: 迭代器是 `iter_object` 交出的新引用。
+                            unsafe { instance.release_object(iterator.as_ptr()) };
+                        }
+                        Err(_) => {
+                            let argument_type_name =
+                                instance.type_name(argument_type).to_owned();
+                            release(instance, callable);
+                            release(instance, argument_source);
+                            release(instance, keyword_source);
+                            if let Some(bound) = bound_self {
+                                release(instance, bound);
+                            }
+                            for item in args {
+                                release(instance, item);
+                            }
+                            let callee = callee.unwrap_or_else(|| "?".to_owned());
+                            return Err(instance.raise_builtin_error(
+                                "TypeError",
+                                &format!(
+                                    "{callee} argument after * must be an iterable, not {argument_type_name}"
+                                ),
+                            ));
+                        }
                     }
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "argument after * must be an iterable",
-                    });
                 }
                 release(instance, argument_source);
 
