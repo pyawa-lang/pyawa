@@ -234,12 +234,28 @@ pub(crate) fn super_lookup(
     // 若也改走自己的 MRO，会命中 `generic_init_subclass_native` 的简化条件（`params.is_empty()` 一律报
     // `Cannot inherit from plain Generic`）⇒ `import typing` 当场红 ✗ —— 那一格（`builtin/typing.rs`）
     // 不在本任务写域，待它按参照的 `Generic in cls.__bases__`／`__orig_bases__` 口径对齐后再放开。
-    let this_type = if name == "__new__" && instance.is_type_object(this) {
+    // **`__self__` 是类对象时用它的 `tp_mro`** ✓（round 65，参照 `super_getattro`：
+    // `PyType_Check(obj) ⇒ ((PyTypeObject *)obj)->tp_mro`）。先前只对 `__new__` 放开 ✗；
+    // 隐式 classmethod（`__init_subclass__` 一族，`cls` 就是**正在创建的类**）也走这条 ⇒
+    // 零参 `super()` 必须看**那个类自己的 MRO**（`class A(Left, Middle, Right)` 的菱形链
+    // 才会从 `Middle` 走到 `Right` ✓；否则只看 `Middle.mro()`＝`[Middle, object]` ⇒ 跳过 `Right` ✗，
+    // `test_subclassinit.test_init_subclass_diamond` 实测 `['middle']` ✗）。
+    let stop = thisclass.cast::<TypeObject>();
+    // **`__self__` 是类对象时用它的 `tp_mro`** ✓（参照 `super_getattro`：`PyType_Check(obj) ⇒
+    // ((PyTypeObject *)obj)->tp_mro`）—— 本层**只对 `__new__` 放开** ✗（round 65 试过全面放开，
+    // ⇒ 隐式 classmethod 的零参 `super()` 改走"类自己的 MRO"后 `import typing` 红：
+    // `Protocol.__init_subclass__` 链与 `generic_init_subclass_native` 的简化判断互相踩 ✗。
+    // 已回退；菱形 `__init_subclass__` 的次序（`test_subclassinit.test_init_subclass_diamond`）
+    // 留作 typing 那格按参照对齐后再修 ✓）。
+    let this_type = if (name == "__new__" || name == "__init_subclass__")
+        && instance.is_type_object(this)
+    {
+        // **`__init_subclass__` 也是隐式 classmethod**（round 68 试）：`cls` 就是**正在创建的类** ⇒
+        // 零参 `super()` 必须看**那个类自己的 MRO** ✓（`test_subclassinit.test_init_subclass_diamond` ✓）。
         this.cast::<TypeObject>()
     } else {
         instance.type_of(this)
     };
-    let stop = thisclass.cast::<TypeObject>();
     // SAFETY: this_type 由注册表持有。
     let mro = unsafe { this_type.as_ref() }.mro();
     // **定义类不在被查的 MRO 里** ✓ ⇒ **整条 MRO 都算数** ✓（第 234 轮实测的形态 ✓）：
