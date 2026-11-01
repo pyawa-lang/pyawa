@@ -142,9 +142,15 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
 }
 
 /// 判定真假——*临时*只覆盖单例表里的类型（`OM-11` 的 `__bool__` 槽位接线后改走协议）。
-pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<bool, ExecError> {
+pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, _opcode: u8) -> Result<bool, ExecError> {
     // SAFETY: raw 是帧值栈上的存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
+    // **类型对象恒为真** ✓（参照：`bool(type)` 走 `type.__bool__` → 真；先前按"实例协议"去取
+    // `__bool__` ⇒ 取到**类型字典里的原生实现**、却没有 self ⇒ `Unsupported`（`test_bool.test_types`
+    // 遍历 `bool(t)` 时撞上 complex/float 一族 ✓）。
+    if instance.is_type_object(raw) {
+        return Ok(true);
+    }
     let singletons = instance.singletons();
     if ty == singletons.none_type() {
         return Ok(false);
@@ -236,22 +242,57 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) 
     // 两者都没有 ⇒ **默认为真** ✓（照参照 ✓，不是报错 ✗ —— 先前这里直接 `Unsupported` ✗）。
     if let Some(method) = crate::executor::attribute_optional(instance, raw, "__bool__")? {
         let result = call_value(instance, method, &[], &[])?;
-        let truth = truthiness(instance, result, opcode)?;
-        release(instance, result);
         release(instance, method);
-        return Ok(truth);
+        // **`__bool__` 必须返回 `bool`** ✓（参照实测：`self`／`"Yes"`／`1` 都报 `TypeError`，
+        // 文案 `__bool__ should return bool, returned <类型名>`）。先前对返回值**再取一次真值** ✗
+        // ⇒ `__bool__` 返回 `self` 时**无限递归** ⇒ Rust 栈溢出 abort ✗（`test_bool` 实测 ✓）。
+        let result_type = unsafe { result.as_ref() }.ty();
+        if result_type == instance.singletons().bool_type() {
+            // SAFETY: 类型身份已确认。
+            let truth = unsafe { &*result.as_ptr().cast::<crate::builtin_objects::BoolObject>() }.value;
+            release(instance, result);
+            return Ok(truth);
+        }
+        let type_name = instance.type_name(result_type).to_owned();
+        release(instance, result);
+        return Err(raise_builtin(
+            instance,
+            "TypeError",
+            &format!("__bool__ should return bool, returned {type_name}"),
+        ));
     }
     if let Some(method) = crate::executor::attribute_optional(instance, raw, "__len__")? {
         let result = call_value(instance, method, &[], &[])?;
-        // `__len__` 返回的是**整数** ✓（不是容器 ✓）⇒ 按整数判零 ✓（`length_of` 对它给 `None` ✗，
-        // 先前拿 `None` 兜成"真" ⇒ `bool(WithLen(0))` 错成 `True` ✗，探针当场抓到 ✓）。
-        let truth = instance
-            .int_of(result)
-            .map(|value| !value.is_zero())
-            .unwrap_or(true);
-        release(instance, result);
         release(instance, method);
-        return Ok(truth);
+        // **`__len__` 的返回值**：整数（含大整数 ⇒ `OverflowError`）且 `>= 0`（否则 `ValueError`）✓
+        // —— 参照实测：`-1` ⇒ `ValueError: __len__() should return >= 0`；`"x"` ⇒
+        // `TypeError: 'str' object cannot be interpreted as an integer` ✓。
+        let Some(number) = instance.int_of(result) else {
+            let type_name = instance.type_name(unsafe { result.as_ref() }.ty()).to_owned();
+            release(instance, result);
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("'{type_name}' object cannot be interpreted as an integer"),
+            ));
+        };
+        let Some(length) = number.to_i64() else {
+            release(instance, result);
+            return Err(raise_builtin(
+                instance,
+                "OverflowError",
+                "cannot fit 'int' into an index-sized integer",
+            ));
+        };
+        release(instance, result);
+        if length < 0 {
+            return Err(raise_builtin(
+                instance,
+                "ValueError",
+                "__len__() should return >= 0",
+            ));
+        }
+        return Ok(length != 0);
     }
     Ok(true)
 }

@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 45：嵌套 `with` 退出路径修复 ⇒ `test_frame` 状态 5 解除，官方套件「未实现」90→83）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 46：真值协议修正 ⇒ `test_bool` 的 Rust abort 消除；round 45：嵌套 `with` ⇒ test_frame 状态 5 解除）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -17,6 +17,10 @@
   修好后 test_frame **跑到完**（17F／19E／12 skip，剩余是 FrameLocalsProxy 语义缺口）、官方套件
   「未实现」90 → **83**。下一轮候选：FrameLocalsProxy 语义缺口（17F/19E，可试清一批）／
   `test_weakref`（形参所有权）／NEXT 队列的 `KeyError` 上下文污染与 `P3-35` 5 形态。
+  **round 46 起手 ④**：真值协议（`__bool__` 必须恰返回 `bool`、`__len__` 整数且 `>=0`、类型对象恒真）
+  修掉 `test_bool` 的 **Rust 栈溢出 abort**（abort ⇒ 6F／2E 跑完）；该文件剩余 8 格已列档：
+  `bool` 不可继承、`int`／`bool` 的 `.real`／`.imag`、一元／位运算的 bool→int 结果类型、
+  `bool.from_bytes` 单例、`bool(**kw)` TypeError、`BytesIO.getbuffer`（pickle）——下一轮可试收。
   **round 44 已清 ②**：`test_userstring` **38 failures／4 errors ⇒ OK（skipped=2）** ✓ —— 根因
   `==`／`!=` 没走 `__eq__`／`__ne__`（P3-42 核心格）＋ `str` 一族口径（fillchar／replace count／zfill
   符号／expandtabs 换行列／rpartition 空分隔符／搜索族 arity 报文／下标错型与大整数饱和／切片饱和
