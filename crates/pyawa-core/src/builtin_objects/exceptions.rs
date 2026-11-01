@@ -197,6 +197,45 @@ impl ExceptionObject {
         self.suppress_context.set(value);
     }
 
+    /// **设 `__cause__`／`__context__`／`__suppress_context__`（带载荷形状核验的公开入口）** ✓
+    /// （round 64）：执行器要给"PEP 479 包装出的 `RuntimeError`"挂 cause／context，而那些字段住在
+    /// **`ExceptionObject` 载荷**里（`getattr` 也只读载荷 ✓）⇒ 直接写实例字典**读不到** ✗。
+    ///
+    /// 返回 `false` ⇒ 目标不是本载荷形状（调用方自行回退到实例字典路 ✓）。
+    pub fn set_cause_context_suppress(
+        instance: &Instance,
+        exception: NonNull<Header>,
+        cause: Option<NonNull<Header>>,
+        context: Option<NonNull<Header>>,
+        suppress: bool,
+    ) -> bool {
+        // SAFETY: 调用方保证 exception 存活；先核形状再读载荷 ✓。
+        let ty = unsafe { exception.as_ref() }.ty();
+        let type_object = unsafe { ty.as_ref() };
+        if let Some(base) = instance.type_named("BaseException") {
+            if !instance.is_subtype(ty, base) {
+                return false;
+            }
+        }
+        if type_object.instance_size() != core::mem::size_of::<ExceptionObject>() {
+            return false;
+        }
+        // SAFETY: 上面刚核过类型与载荷大小 ✓。
+        let payload = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
+        // 带引用转移：cause/context 各是一份**新引用**，由载荷接手 ✓；旧值由调用方逻辑归还——
+        // 这里简化成"直接顶掉并归还旧值"（一次性设置，没有并发读者 ✓）。
+        if let Some(old) = payload.set_cause(cause) {
+            // SAFETY: 旧值由载荷持有。
+            unsafe { instance.release_object(old.as_ptr()) };
+        }
+        if let Some(old) = payload.set_context(context) {
+            // SAFETY: 同上。
+            unsafe { instance.release_object(old.as_ptr()) };
+        }
+        payload.set_suppress_context(suppress);
+        true
+    }
+
     /// 消息文本：第一个实参是 `str` 时取它的内容（`str(e)` 的最小形态）。
     ///
     /// 需要实例是为了找 `str` 类型——载荷里不存实例指针（`OM-40`：载荷只放裸引用）。

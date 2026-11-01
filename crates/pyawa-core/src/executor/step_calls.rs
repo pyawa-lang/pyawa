@@ -643,12 +643,31 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                             .type_named("StopIteration")
                             .expect("StopIteration 在异常层次里");
                         if instance.is_subtype(ty, stop_iteration) {
-                            release(instance, frame.get().pop()?);
+                            let original = frame.get().pop()?;
                             let exception = new_exception(
                                 instance,
                                 exception_type(instance, "RuntimeError"),
                                 "generator raised StopIteration",
                             );
+                            // **PEP 479 的包装要带走 cause／context** ✓（round 64）：参照的
+                            // `RuntimeError` 把原 `StopIteration` 作为 `__cause__` 与
+                            // `__context__`，并把 `__suppress_context__` 置真
+                            //（`test_generator_stop.test_stopiteration_wrapping_context` ✓）。
+                            // 这两个字段住在 `ExceptionObject` **载荷**里（getattr 也只读载荷 ✓）。
+                            // 原异常要给**两份**引用（cause 与 context 各一份 ✓）+ 本函数自己那份
+                            // = **3 份** ⇒ 先各加一份（两次 ✓）再在下面还自己那份 ✓。
+                            unsafe {
+                                instance.incref_object(original.as_ptr());
+                                instance.incref_object(original.as_ptr());
+                            }
+                            let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
+                                instance,
+                                exception,
+                                Some(original),
+                                Some(original),
+                                true,
+                            );
+                            release(instance, original);
                             frame.get().push(exception)?;
                         }
                         // 不是 `StopIteration` 就原样留着（净 0）

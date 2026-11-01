@@ -168,6 +168,58 @@ pub(crate) fn call_object_method(
 ///
 /// **`bound_self` 的所有权契约**：它是**借用**——调用方持有那份引用，本函数不释放它。
 /// 需要长期持有（进实参表、进生成的实例）的路径各自 `incref`。
+/// **抽象类实例化拦截**（round 64）：`__abstractmethods__` 非空 ⇒ 参照的
+/// `Can't instantiate abstract class … without an implementation for abstract method(s) '…'` ✓。
+///
+/// 参照在 `object.__new__` 里查类型标志；本层没有那个标志 ⇒ 直接在**类属性**
+/// `__abstractmethods__` 上查（`ABCMeta` 在每个类创建时都算好、含继承来的抽象方法 ✓）。
+/// 名字按**字典序**排（参照实测 `'a', 'b'` 有序 ✓）。
+fn reject_abstract_instantiation(
+    instance: &Instance,
+    class: NonNull<crate::TypeObject>,
+    class_name: &str,
+) -> Result<(), ExecError> {
+    let Some(value) = instance
+        .attribute_optional_of(class.cast::<Header>(), "__abstractmethods__")
+        .ok()
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let items = match instance.iterable_items(value) {
+        Ok(items) => items,
+        Err(error) => {
+            // SAFETY: value 是本函数持有的新引用。
+            unsafe { instance.release_object(value.as_ptr()) };
+            return Err(error);
+        }
+    };
+    let mut names: Vec<String> = items
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|item| instance.text_of(*item).map(str::to_owned))
+        .collect();
+    // SAFETY: value 那份引用用完归还。
+    unsafe { instance.release_object(value.as_ptr()) };
+    if names.is_empty() {
+        return Ok(());
+    }
+    names.sort();
+    let quoted: Vec<String> = names.iter().map(|name| format!("'{name}'")).collect();
+    let list = if quoted.len() == 1 {
+        quoted[0].clone()
+    } else {
+        let head = quoted[..quoted.len() - 1].join(", ");
+        let last = quoted.last().cloned().unwrap_or_default();
+        format!("{head}, {last}")
+    };
+    let noun = if names.len() == 1 { "method" } else { "methods" };
+    let message = format!(
+        "Can't instantiate abstract class {class_name} without an implementation for abstract {noun} {list}"
+    );
+    Err(raise_builtin(instance, "TypeError", &message))
+}
+
 pub(crate) fn call_callable(
     instance: &Instance,
     callable: NonNull<Header>,
@@ -423,6 +475,19 @@ pub(crate) fn call_callable(
                 call_callable(instance, constructor, None, call_args, constructor_kwargs, opcode)?;
             // SAFETY: created 是新引用，存活。
             let is_instance = instance.is_subtype(unsafe { created.as_ref() }.ty(), class);
+            if is_instance {
+                if let Err(error) = reject_abstract_instantiation(instance, class, &class_name) {
+                    release(instance, created);
+                    for argument in args.iter().copied() {
+                        release(instance, argument);
+                    }
+                    for (key, value) in kwargs.iter().copied() {
+                        release(instance, key);
+                        release(instance, value);
+                    }
+                    return Err(error);
+                }
+            }
             let initializer = if is_instance {
                 instance.type_lookup(class, "__init__")
             } else {
@@ -458,6 +523,19 @@ pub(crate) fn call_callable(
             // 没有覆写 ⇒ 上面槽已给出实例 ✓
             created_from_slot.expect("槽路径已给出实例")
         };
+
+        // **抽象类拦截**（round 64）：参照在 `object.__new__` 里就报 ✓。
+        if let Err(error) = reject_abstract_instantiation(instance, class, &class_name) {
+            release(instance, created);
+            for argument in args.iter().copied() {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs.iter().copied() {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(error);
+        }
 
         // `__init__`（`OM-14`：子类覆写要生效）。找到就"实例在先、实参在后"地调它。
         // **默认的 `object.__init__` 不算"有 `__init__`"**（第 310 轮）：它是本轮才挂上去的

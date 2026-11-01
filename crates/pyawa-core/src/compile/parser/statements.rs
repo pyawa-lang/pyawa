@@ -2135,6 +2135,26 @@ fn parse_statement_name_target(lexed: &Lexed, cursor: &mut usize, depth: usize, 
     let tokens = &lexed.lexemes;
     match tokens.get(*cursor) {
         Some(Lexeme::Name(target)) => {
+            // **硬关键字在语句开头**（round 64）：它们可以**当表达式语句**（`not x`／`lambda: 1`／
+            // `None` 都是合法语句 ✓），但**不能当赋值目标**（`exec("and = 42")` ⇒ SyntaxError ✓）。
+            // ⇒ 先试表达式语句；解析不动（或后面跟 `=` 一类）就报语法错 ✓。
+            if is_hard_keyword(target) {
+                if let Ok((expression, next)) = parse_expression_list(lexed, *cursor) {
+                    if !matches!(
+                        tokens.get(next),
+                        Some(Lexeme::Assign)
+                            | Some(Lexeme::AugAssign(_))
+                            | Some(Lexeme::Colon)
+                    ) {
+                        *cursor = next;
+                        let span = expression.span();
+                        statements.push(Statement::Expression(expression, span));
+                        expect_statement_end(lexed, cursor)?;
+                        return Ok(StatementFlow::Continue);
+                    }
+                }
+                return Err(CompileError::Syntax("invalid syntax".to_owned()));
+            }
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
                 let statement_start = *cursor;

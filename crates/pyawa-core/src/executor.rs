@@ -1448,9 +1448,28 @@ pub(crate) fn resume_generator(
                 if instance.is_subtype(ty, stop_iteration) && (is_coroutine || iterable_coroutine) {
                     let word = if is_coroutine { "coroutine" } else { "generator" };
                     let message = format!("{word} raised StopIteration");
-                    // SAFETY: 错误里那份引用在此消费。
+                    // **PEP 479**：包装出的 `RuntimeError` 要带走 cause／context（round 64 ✓）。
+                    let wrapper = crate::builtin_objects::exception_instance(
+                        instance,
+                        "RuntimeError",
+                        vec![instance.new_str(&message)],
+                    );
+                    // 原异常要给**两份**引用（cause 与 context 各一份 ✓）+ 错误自己那份
+                    // = **3 份** ⇒ 先各加一份（两次 ✓），下面再还错误自己那份 ✓。
+                    unsafe {
+                        instance.incref_object(exception.as_ptr());
+                        instance.incref_object(exception.as_ptr());
+                    }
+                    let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
+                        instance,
+                        wrapper,
+                        Some(*exception),
+                        Some(*exception),
+                        true,
+                    );
+                    // SAFETY: 原异常那份引用由错误里持有，这里消费 ✓。
                     unsafe { instance.release_object(exception.as_ptr()) };
-                    return Err(raise_builtin(instance, "RuntimeError", &message));
+                    return Err(ExecError::Raised { exception: wrapper });
                 }
             }
             Err(error)

@@ -254,7 +254,13 @@ pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         // 只吃**原子**那一半 ✓ ⇒ 后面的 `.meth(...)`／下标由**后缀层**接着处理 ✓
         //（`await self.asend(None)` ⇒ 正是这个形状 ✓）。
         Some(Lexeme::Name(name)) if name == "await" => parse_atom(lexed, cursor + 1)?,
-        Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
+        Some(Lexeme::Name(name)) => {
+            // **硬关键字不能当名字**（round 64；`test_keyword` 钉住 ✓）。
+            if is_hard_keyword(name) {
+                return Err(CompileError::Syntax("invalid syntax".to_owned()));
+            }
+            (Expression::Name(name.clone(), span), cursor + 1)
+        }
         // **裸星号表达式**（round 62）：参照报 `can't use starred expression here` ✓
         // （例如 `x = *a`；允许星号的上下文——调用实参、显示、下标——都在更外层先收掉了 ✓）。
         Some(Lexeme::Star) => {
