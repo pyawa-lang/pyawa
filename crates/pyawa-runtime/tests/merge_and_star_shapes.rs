@@ -100,3 +100,26 @@ const EXPECTED: &str = "merge-dict OK (None, (), {'x': 1, 'y': 2})\nmerge-mappin
 fn merge_and_star_argument_protocols_match_the_reference() {
     assert_eq!(run("merge", SCRIPT), EXPECTED);
 }
+
+/// **`**` 的通用映射路径不许把「键」的引用放两次**（round 57 真 bug 修 ✓）。
+///
+/// `mapping_entries` 的通用路径（非 `dict` 的映射：`keys()` ＋ `__getitem__`）先前在成功时
+/// **无条件 `release_object(key)`** ✗ ⇒ 条目里存的是**已释放的键** ⇒ 目标字典持有死指针 ⇒
+/// 字典释放时再放一次 ⇒ **堆损坏／UAF**（`test_extcall` 的间歇崩溃、最小复现即本脚本的循环）。
+/// 回归口径：500 轮后结果正确、进程正常退出（先前 release 下必崩／报 `malloc` 错 ✓）。
+#[test]
+fn dict_subclass_star_call_does_not_corrupt_heap() {
+    let script = r#"class MyDict(dict):
+    pass
+
+def s1(**kwargs):
+    return kwargs
+
+seen = None
+for _ in range(500):
+    md = MyDict({'a': 1, 'b': 2})
+    seen = s1(**md)
+print("done", seen, {'a': 1, 'b': 2} == seen)
+"#;
+    assert_eq!(run("mapping-uaf", script), "done {'a': 1, 'b': 2} True\n");
+}

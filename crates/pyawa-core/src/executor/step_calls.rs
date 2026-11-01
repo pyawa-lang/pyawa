@@ -88,11 +88,17 @@ fn mapping_entries(
             }
         };
         let value = crate::executor::call::call_value(instance, getitem, &[key], &[]);
-        // SAFETY: key 是新引用。
-        unsafe { instance.release_object(key.as_ptr()) };
+        // **成功时 `key` 的引用随条目一起转交** ✓（round 57 真 bug ✗）：先前无条件
+        // `release_object(key)` ✗ ⇒ `entries` 里存的是**已释放的键**（引用计数归零）⇒ 之后
+        // `insert_raw` 把死指针放进目标字典 ⇒ 字典释放时再放一次 ⇒ **堆损坏／UAF** ✓
+        // （最小复现：`class MyDict(dict): pass; def s1(**kw): return kw` 循环
+        //  `md = MyDict({'a':1,'b':2}); s1(**md)` ⇒ `test_extcall` 的间歇崩溃正是它 ✓）。
+        // 只有出错路径才需要归还这份键 ✓。
         match value {
             Ok(value) => entries.push((key, value)),
             Err(error) => {
+                // SAFETY: key 是新引用（成功路径已转交，这里只处理失败 ✓）。
+                unsafe { instance.release_object(key.as_ptr()) };
                 // SAFETY: 同上。
                 unsafe {
                     instance.release_object(getitem.as_ptr());
