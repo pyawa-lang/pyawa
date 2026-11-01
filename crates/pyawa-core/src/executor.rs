@@ -1089,15 +1089,30 @@ pub(crate) fn bind_arguments(
                 release(instance, value);
             }
         };
+        let extra_count = extra.len();
         release_all(extra);
         for slot in locals.iter_mut().filter_map(Option::take) {
             release(instance, slot);
         }
+        // **多给的位置实参 ＋ 已给的仅关键字实参**（round 63）：参照报文尾巴两者都报 ✓。
+        let keyword_only_given = kwargs
+            .iter()
+            .filter(|(name, _)| {
+                match str_text(instance, *name, opcode) {
+                    Ok(text) => (0..kwonly)
+                        .any(|offset| code.varname(argcount + offset) == Some(text.as_str())),
+                    Err(_) => false,
+                }
+            })
+            .count();
         let message = message_too_many(
             code.name(),
             argcount,
             argcount - defaults.len(),
-            given + 1,
+            // **多出来的位置实参有几个就报几个** ✓（round 63 真 bug 修 ✗：先前写死 `given + 1`
+            // ⇒ `f(1, 2, 3)` 报 "but 1 was given" ✗；`test_extcall` 实测 ✓）。
+            given + extra_count,
+            keyword_only_given,
         );
         return Err(raise_builtin(instance, "TypeError", &message));
     }

@@ -785,6 +785,13 @@ impl Emitter {
                 }
                 let before = starred[0];
                 let after = targets.len() - before - 1;
+                // 参照上限（round 63）：星号**前**的表达式数 > 255 ⇒
+                // `SyntaxError: too many expressions in star-unpacking assignment`（test_unpack_ex ✓）。
+                if before > 255 {
+                    return Err(CompileError::Syntax(
+                        "too many expressions in star-unpacking assignment".to_owned(),
+                    ));
+                }
                 let argument = (before | (after << 8)) as u16;
                 if argument > 255 {
                     self.emit_named(target_span, "EXTENDED_ARG", (argument >> 8) as u8);

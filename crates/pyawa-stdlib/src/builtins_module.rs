@@ -1640,8 +1640,15 @@ fn id_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // 参照：`id(1, x=1)` ⇒ `TypeError: id() takes no keyword arguments` ✓（round 63）。
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "id() takes no keyword arguments",
+        ));
+    }
     need_args(instance, "id", args, 1)?;
     Ok(instance.new_int(args[0].as_ptr() as usize as i64))
 }

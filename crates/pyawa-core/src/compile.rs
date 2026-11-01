@@ -327,25 +327,7 @@ pub fn compile_interactive(
     let _ = optimization;
     let lexed = lex(source, mode)?;
     let mut statements = parse_module(&lexed)?;
-    let synthetic = Span::synthetic();
-    for statement in statements.iter_mut() {
-        if let Statement::Expression(value, span) = statement {
-            let display = Expression::Name(INTERACTIVE_DISPLAY_HOOK.to_owned(), *span);
-            let original = core::mem::replace(value, Expression::Constant(Constant::None, *span));
-            let order = vec![PositionalArgument::Plain(original.clone())];
-            *value = Expression::Call {
-                function: Box::new(display),
-                arguments: vec![original],
-                positional_order: order,
-                star_arguments: Vec::new(),
-                keywords: Vec::new(),
-                dict_arguments: Vec::new(),
-                callee_span: *span,
-                span: *span,
-            };
-            let _ = synthetic;
-        }
-    }
+    wrap_interactive_expressions(&mut statements);
     if mode == Mode::Extension {
         typecheck::check(&statements, filename)?;
     }
@@ -367,6 +349,76 @@ pub fn compile_interactive(
     )?;
     verify::check(&unit)?;
     Ok(unit)
+}
+
+/// **交互式显示**：把**模块级代码对象里**的表达式语句包成显示钩子调用 ✓（round 63）。
+///
+/// 参照的交互编译器把 `INTRINSIC_PRINT` 加在**模块层代码**的每条表达式语句上——**包括
+/// `if`／`for`／`while`／`try`／`with` 的体**（`dis` 实测 ✓）；**不进** `def`／`class` 体
+/// （那是独立代码对象，参照也不加 ✓）。先前只包**顶层**一条 ✗ ⇒ doctest 里 `try: …; True`
+/// 这类例子显示不出值（`test_extcall` 的 `silence = id(1, *{}); True` ⇒ "Got nothing" ✓）。
+fn wrap_interactive_expressions(statements: &mut [Statement]) {
+    for statement in statements.iter_mut() {
+        match statement {
+            Statement::Expression(value, span) => {
+                let display = Expression::Name(INTERACTIVE_DISPLAY_HOOK.to_owned(), *span);
+                let original =
+                    core::mem::replace(value, Expression::Constant(Constant::None, *span));
+                let order = vec![PositionalArgument::Plain(original.clone())];
+                *value = Expression::Call {
+                    function: Box::new(display),
+                    arguments: vec![original],
+                    positional_order: order,
+                    star_arguments: Vec::new(),
+                    keywords: Vec::new(),
+                    dict_arguments: Vec::new(),
+                    callee_span: *span,
+                    span: *span,
+                };
+            }
+            // 递归进**同一代码对象**的复合语句体（`def`／`class` 体是独立代码对象 ⇒ 跳过 ✓）。
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                wrap_interactive_expressions(then_body);
+                wrap_interactive_expressions(else_body);
+            }
+            Statement::For {
+                body, else_body, ..
+            }
+            | Statement::While {
+                body, else_body, ..
+            } => {
+                wrap_interactive_expressions(body);
+                wrap_interactive_expressions(else_body);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                wrap_interactive_expressions(body);
+                for handler in handlers.iter_mut() {
+                    wrap_interactive_expressions(&mut handler.body);
+                }
+                wrap_interactive_expressions(else_body);
+                wrap_interactive_expressions(finally_body);
+            }
+            Statement::With { body, .. } => {
+                wrap_interactive_expressions(body);
+            }
+            Statement::Match { cases, .. } => {
+                for case in cases.iter_mut() {
+                    wrap_interactive_expressions(&mut case.body);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// 编译一段源码（`BC-16`：纯函数——同样的入参给同样的产物）。

@@ -43,6 +43,32 @@ RELEASE_BIN = WORKSPACE / "target/release/pyawa"
 OUT = WORKSPACE / "target/libtests_survey.tsv"
 
 
+def run_named(binary: pathlib.Path, path: pathlib.Path, timeout: float):
+    """**以导入名再跑一次**（官方 regrtest 的派发形状；`tools/libtests_named_runner.py` ✓）。
+
+    直接跑脚本时模块名是 `__main__`；官方套件的 doctest 期望文本带**模块限定名**
+    （`test.test_extcall.f()` 一类）⇒ 会出现"上下文差异"的假失败 ✗。这里复核一次：
+    通过就升级为 `ok`（理由写明"named-import harness" ✓ —— 口径更接近官方跑法 ✓）。
+    """
+    runner = WORKSPACE / "tools/libtests_named_runner.py"
+    env = dict(os.environ)
+    parent = str(path.parent.parent)
+    env["PYTHONPATH"] = parent + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            proc = subprocess.run(
+                [str(binary), str(runner), str(path), "test." + path.stem],
+                cwd=td,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        return proc.returncode == 0
+
+
 def run_one(binary: pathlib.Path, path: pathlib.Path, timeout: float):
     # `test_*.py` 需要 `import test.support` ⇒ 把 **test/ 的父目录**放进 PYTHONPATH
     # （否则会误报 ModuleNotFoundError: No module named 'test.support' —— 首版踩过 ✓）。
@@ -74,6 +100,9 @@ def run_one(binary: pathlib.Path, path: pathlib.Path, timeout: float):
             kind = "runtime"
         else:
             kind = "ok"
+        # **上下文复核**（round 63）：直接跑失败、但按导入名跑通过 ⇒ 记为 ok（官方跑法 ✓）。
+        if kind in ("runtime", "unimplemented") and run_named(binary, path, timeout):
+            return path.name, "ok", "OK (named-import harness)"
         return path.name, kind, msg[:200]
 
 

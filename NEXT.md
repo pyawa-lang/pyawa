@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 62：星号／解包／重复关键字报文一组；round 61：异常状态每帧保存／恢复）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 63：交互式显示递归＋实参报文更正＋**套件调查按导入名复核 ⇒ 跑通 26 ⇒ 30**；round 62：星号报文一组）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -64,9 +64,12 @@
   **round 62 进展**：星号目标语法错报文一组＋`LIST_EXTEND`／解包／重复关键字报文 ✓（`test_unpack_ex` 导入名
   上下文 12 ⇒ 5；`test_extcall` 剩实参个数措辞）；`type.__call__` 的两条 `__init__` 转交路径修成**转移语义**，
   但 `unittest.main()` 冒烟还有 UAF ⇒ 形参所有权仍按「形参槽自有／借用标记」重修。
-  **下一轮（round 63）**：① 形参所有权（自有／借用标记；workspace＋`unittest.main()`＋`test_weakref` 全过才上）
-  ② `test_extcall`／`test_unpack_ex` 剩余报文（实参个数表、>255 星号的 `too many expressions ...`）
-  ③ `test_genexps` 剩 2 条 ④ `P3-35`／`P3-29`／`P3-37`。**round 51 已清 ②**：`compile(..., "single")`
+  **round 63 已清 ②**：`test_extcall`／`test_unpack_ex` **按导入名跑通** ✅；同时新增官方派发口径的
+  `tools/libtests_named_runner.py` 并在 `libtests_survey.py` 里做上下文复核 ⇒ 官方套件
+  **26／84／286／1 ⇒ 30／84／282／1**（`test_datetime`／`test_extcall`／`test_getopt`／`test_unpack_ex`）。
+  **下一轮（round 64）**：① 形参所有权（自有／借用标记；workspace＋`unittest.main()`＋`test_weakref` 全过才上）
+  ② `test_genexps` 剩 2 条（元组复用／内建方法 `__doc__`）③ `P3-35` 剩余形态（`\N{…}`／`except*`／
+  `import *`／async 推导式／PEP 695）④ `P3-29`／`P3-37` 剩余面。**round 51 已清 ②**：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

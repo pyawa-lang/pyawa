@@ -1127,7 +1127,15 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
             }
             let close = lexed.spans[cursor];
             let expression = if items.len() == 1 && !saw_comma {
-                items.pop().expect("刚判过长度")
+                let item = items.pop().expect("刚判过长度");
+                // **`(*x)`（括号里单个星号、没有逗号）不是合法表达式** ✓（round 63；参照原文
+                // `cannot use starred expression here`）；`(*x,)` 有逗号 ⇒ 元组显示 ✓ 合法。
+                if matches!(item, Expression::Starred(..)) {
+                    return Err(CompileError::Syntax(
+                        "cannot use starred expression here".to_owned(),
+                    ));
+                }
+                item
             } else {
                 Expression::TupleLiteral(items, open.to(close))
             };
