@@ -72,11 +72,65 @@ pub(crate) fn reject_unhashable_key(
 }
 
 /// **按值找键的下标** ✓（引擎统一比较口径 ✓）。
+/// **带用户 `__eq__` 的键查找**（round 71，可失败）：`d[k] = v`／`MAP_ADD` 一族共用 ✓。
+/// 与 [`dict_position`] 的差别只有"用户 `__eq__` 抛错要**原样上抛**" ✓（其余同口径 ✓）。
+pub(crate) fn dict_position_with_protocol(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    key: NonNull<Header>,
+) -> Result<Option<usize>, crate::ExecError> {
+    let Some(hash) = crate::executor::values::key_hash(instance, key) else {
+        return Ok(dict_position(instance, mapping, key));
+    };
+    // SAFETY: 调用方保证 mapping 是存活的 dict。
+    let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
+    for position in object.candidates(hash) {
+        let Some((candidate, _)) = object.entry(position) else {
+            continue;
+        };
+        let same = if crate::executor::protocol::has_custom_eq(instance, candidate)
+            || crate::executor::protocol::has_custom_eq(instance, key)
+        {
+            crate::executor::protocol::equality_public(instance, candidate, key)?
+        } else {
+            crate::executor::values::values_equal_public(instance, candidate, key)
+        };
+        if same {
+            return Ok(Some(position));
+        }
+    }
+    Ok(None)
+}
+
 pub(crate) fn dict_position(
     instance: &Instance,
     mapping: NonNull<Header>,
     key: NonNull<Header>,
 ) -> Option<usize> {
+    // **哈希索引 ＋ 用户 `__eq__`**（round 71）：先前**线性扫** ✗ ⇒ `dict(可迭代)`／
+    // `dict.__init__`／`update`／下标写都 O(n²)（8000 项 2.6 s；`namedtuple._asdict()` 的
+    // 15 万字段因此拖死 `test_collections.test_large_size` ✗）。可哈希走索引 ✓、不可哈希退回线性 ✓。
+    let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    if let Some(hash) = crate::executor::values::key_hash(instance, key) {
+        object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
+        for position in object.candidates(hash) {
+            let Some((candidate, _)) = object.entry(position) else {
+                continue;
+            };
+            let same = if crate::executor::protocol::has_custom_eq(instance, candidate)
+                || crate::executor::protocol::has_custom_eq(instance, key)
+            {
+                crate::executor::protocol::equality_public(instance, candidate, key).unwrap_or(false)
+            } else {
+                crate::executor::values::values_equal_public(instance, candidate, key)
+            };
+            if same {
+                return Some(position);
+            }
+        }
+        return None;
+    }
     let entries = instance.dict_entries(mapping)?;
     entries
         .iter()
@@ -162,7 +216,15 @@ fn dict_put_owned(
             // SAFETY: key 由调用方转交。
             unsafe { instance.release_object(key.as_ptr()) };
         }
-        None => instance.dict_insert_raw(mapping, key, value),
+        None => {
+            // **增量维护哈希索引**（round 71）：`insert_raw` 会作废索引 ⇒ 下一次查找又 O(n) ✗。
+            match crate::executor::values::key_hash(instance, key) {
+                Some(hash) => {
+                    object.insert_hashed(key, value, hash);
+                }
+                None => instance.dict_insert_raw(mapping, key, value),
+            }
+        }
     }
 }
 

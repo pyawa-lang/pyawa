@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 70：**性能族**（字典/集合哈希索引＋超长字面量＋槽缓存）⇒ `namedtuple` 千字段 6.9 s⇒0.75 s；round 69：`compile()` 收 `__index__`＋原生函数 `__module__` ⇒ 跑通 35 ⇒ 37）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 71：千参函数编译链路去 O(n²)（64k 形参 4.25 s⇒0.20 s）＋`dict_position` 哈希/协议；round 70：字典/集合哈希索引＋超长字面量 ⇒ `namedtuple` 千字段 6.9 s⇒0.75 s）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -84,10 +84,12 @@
   ⇒ 套件**超时 1 ⇒ 2** ✗（见下一轮第一顺位）；套件 **37／82／276／2**。
   **round 70 完成**：字典／集合哈希索引＋超长字面量＋槽／名字收集去 O(n²) ⇒ `namedtuple` 千字段
   6.9 s⇒0.75 s；`test_extcall` 的 `str.__hash__` 也修回 ✓；套件 37／82／276／2（跑通不变）。
-  **下一轮（round 71）**：① `test_collections` 剩余的失败／慢点（`dict(可迭代)`／`STORE_SUBSCR` 的
-  `__eq__` 协议等 ⇒ 目标消掉超时）② `test_metaclass` 无参 `DocTestSuite()`（`sys._getframemodulename` 返 None）
-  ③ `test_genexps` 剩 2 条 ④ `test_builtin` 编译器 panic／`test_calendar` 的 UAF ⑤ 形参所有权
-  （`test_weakref` 超时扳机）／`P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
+  **round 71 完成**：千参编译链路去 O(n²)＋字典哈希/协议 ⇒ 64k 形参 lambda 4.25 s⇒0.20 s、`dict(可迭代)`
+  2.7 s⇒0.03 s；套件 37／82／276／2 持平。
+  **下一轮（round 72）**：① `test_collections.test_large_size` 剩余：`random.randrange/choice` 的
+  `getrandbits` 状态读写成本（1.5M 次 ⇒ 38 s）＋ `b == tuple(range(n))` 的**元组子类比较**缺口
+  ② `test_metaclass` 无参 `DocTestSuite()` ③ `test_genexps` 剩 2 条 ④ `test_builtin` 编译器 panic／
+  `test_calendar` UAF ⑤ 形参所有权（`test_weakref` 超时扳机）／`P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

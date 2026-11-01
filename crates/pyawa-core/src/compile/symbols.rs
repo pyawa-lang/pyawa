@@ -324,6 +324,7 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
             | Statement::Assert { .. } => {}
         }
     }
+
 }
 
 /// **收集局部名**（函数作用域）：赋名的目标按源码顺序进 `varnames`。
@@ -557,8 +558,9 @@ pub(super) fn analyze_cells(
             .map(|(_, local)| local.clone())
             .collect();
         emitter.unit.varnames = kept;
-        // **缓存失效**（round 70）：`varnames` 整体换掉 ⇒ 旧下标全作废 ✓。
-        emitter.local_slots.borrow_mut().clear();
+        // **缓存失效 ＋ 重建**（round 70／71）：`varnames` 整体换掉 ⇒ 旧下标全作废 ✓ ⇒
+        // 立刻按新表重建（否则每个名字第一次查都线性扫 ⇒ 千参函数 O(n²) ✗）。
+        emitter.rebuild_local_slot_cache();
         emitter.unit.nlocals = emitter.unit.varnames.len();
         emitter.unit.cellvars = cells;
     }
@@ -1747,13 +1749,9 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             if emitter.comprehension_locals.iter().any(|item| item == name) {
                 return;
             }
-            if emitter.kind == ScopeKind::Function
-                && emitter.unit.varnames.iter().any(|item| item == name)
-            {
+            if emitter.kind == ScopeKind::Function && emitter.plain_local_slot(name).is_some() {
                 return;
             }
-            // **cell／自由变量同样不进 `co_names`**（实测 `nonlocal x` 的内层 `co_names=()` ✓
-            // —— `x` 只该在 `co_freevars` 里；这条以前只挡了 `varnames`，自由变量会漏过去 ✗）
             if emitter.deref_slot(name).is_some() {
                 return;
             }

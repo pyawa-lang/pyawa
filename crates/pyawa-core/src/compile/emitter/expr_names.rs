@@ -150,12 +150,23 @@ impl Emitter {
                 // 用在这里会找不到 ✗ —— 第 297 轮踩过）
                 let mut inner_names: Vec<String> = Vec::new();
                 collect_names_in_lambda_body(body, &mut inner_names);
+                // **形参名集合先建好**（round 71，性能）：先前对**每个体内名字**线性扫形参表 ✗
+                // ⇒ 千参 lambda 的 O(n²)（64k 形参时 4 s ✗，`namedtuple` 的生成 `__new__` 正是
+                // 这种形态 ⇒ `test_collections.test_large_size` 超时）。
+                let mut parameter_names: std::collections::HashSet<&str> =
+                    std::collections::HashSet::with_capacity(parameters.len() + kwonly.len() + 2);
+                for item in parameters.iter().chain(kwonly.iter()) {
+                    parameter_names.insert(item.name.as_str());
+                }
+                if let Some(name) = varargs.as_deref() {
+                    parameter_names.insert(name);
+                }
+                if let Some(name) = varkw.as_deref() {
+                    parameter_names.insert(name);
+                }
                 let mut lambda_freevars: Vec<String> = Vec::new();
                 for name in inner_names {
-                    let is_parameter = parameters.iter().any(|item| item.name == name)
-                        || kwonly.iter().any(|item| item.name == name)
-                        || varargs.as_deref() == Some(name.as_str())
-                        || varkw.as_deref() == Some(name.as_str());
+                    let is_parameter = parameter_names.contains(name.as_str());
                     if !is_parameter && self.deref_slot(&name).is_some() && !lambda_freevars.contains(&name) {
                         lambda_freevars.push(name);
                     }
@@ -240,7 +251,7 @@ impl Emitter {
                     self.emit_indexed(*span, "LOAD_DEREF", slot);
                     return Ok(());
                 }
-                if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
+                if self.kind == ScopeKind::Function && self.plain_local_slot(name).is_some()
                 {
                     let slot = self.slot_of(name);
                     self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);

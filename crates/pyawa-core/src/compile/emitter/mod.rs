@@ -135,6 +135,8 @@ pub(super) struct Emitter {
     /// **整体换掉**（`= kept` ⇒ 下标会移 ✗）⇒ 那里必须 `clear()` ✓（第一版没清 ⇒ 报
     /// ``lambda` 的形参表里出现 Some(LeftBrace)`：f-string 的 `{arg_list}` 被编成**别的局部槽** ✗）。
     pub(super) local_slots: std::cell::RefCell<std::collections::HashMap<String, usize>>,
+    /// **名字 ⇒ `co_names` 下标**（round 71，性能）：`intern_name` 先前线性扫 ✗（千参函数 O(n²)）。
+    pub(super) name_indices: std::cell::RefCell<std::collections::HashMap<String, usize>>,
     pub(super) pending_fused_load: Option<usize>,
     /// 处理块段的字节区间 ＋ 有没有 `as 名字`（目标＝清理块／名字清理，收尾时补）。
     pub(super) handler_segments: Vec<(usize, usize, bool)>,

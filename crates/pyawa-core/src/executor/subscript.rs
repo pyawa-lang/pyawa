@@ -376,8 +376,17 @@ pub(crate) fn subscript_set(
         }
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        // **按哈希索引查**（`P3-41` round 42）：造表（`d[k] = v`）不能是 O(n²)。
-        let position = instance.dict_lookup_key(container, key);
+        // **按哈希索引查 ＋ 用户 `__eq__`**（round 71）：同键判定走完整协议 ✓
+        //（`d['halibut']=1; d[Proxy()]=2` 之类用户 `__eq__` 的键才与参照一致 ✓）。
+        let position = match crate::builtin::dict::dict_position_with_protocol(
+            instance, container, key,
+        ) {
+            Ok(position) => position,
+            Err(error) => {
+                release(instance, value);
+                return Err(error);
+            }
+        };
         match position {
             Some(slot) => {
                 if let Some(old) = object.replace_value(slot, value) {

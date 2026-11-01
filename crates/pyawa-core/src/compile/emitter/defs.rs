@@ -855,7 +855,7 @@ impl Emitter {
                     }
                     // **内层向外索取的名字**（含隔着若干层的需求 ✓）
                     for wanted in nested.demanded.clone() {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &wanted)
+                        let from_here = self.plain_local_slot(&wanted).is_some()
                             || self.unit.cellvars.iter().any(|cell| cell == &wanted)
                             || self.unit.freevars.iter().any(|free| free == &wanted);
                         if from_here && !closure_freevars.iter().any(|item| item == &wanted) {
@@ -863,7 +863,7 @@ impl Emitter {
                         }
                     }
                     for referenced in global_load_names(&nested) {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                        let from_here = self.plain_local_slot(&referenced).is_some()
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
                             || self.unit.freevars.iter().any(|free| free == &referenced);
                         if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
@@ -1041,6 +1041,7 @@ impl Emitter {
             pending_cleanups: Vec::new(),
 
             local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+            name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
             pending_fused_load: None,
             handler_segments: Vec::new(),
             clause_condition_tail: Span::synthetic(),
@@ -1930,6 +1931,7 @@ impl Emitter {
         pending_cleanups: Vec::new(),
 
         local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
             mode: self.mode,
             tier: self.tier,
@@ -2160,6 +2162,7 @@ impl Emitter {
         pending_cleanups: Vec::new(),
 
         local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
             mode: self.mode,
             tier: self.tier,

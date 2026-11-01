@@ -568,7 +568,7 @@ impl Emitter {
                             self.emit_indexed_none("STORE_GLOBAL", index);
                             self.emit_indexed_none("DELETE_GLOBAL", index);
                         } else if self.kind == ScopeKind::Function
-                            && self.unit.varnames.iter().any(|item| item == &name)
+                            && self.plain_local_slot(&name).is_some()
                         {
                             let slot = self.slot_of(&name);
                             self.emit_indexed_none("STORE_FAST", slot);
@@ -792,8 +792,8 @@ impl Emitter {
                         tuple_targets.as_slice()
                     {
                         if self.kind == ScopeKind::Function
-                            && self.unit.varnames.iter().any(|item| item == first)
-                            && self.unit.varnames.iter().any(|item| item == second)
+                            && self.plain_local_slot(first).is_some()
+                            && self.plain_local_slot(second).is_some()
                             // **cell／free 目标同元组解包那条** ✗（槽里是 cell 对象 ✓ ⇒ 不能 `STORE_FAST`）。
                             && self.deref_slot(first).is_none()
                             && self.deref_slot(second).is_none()

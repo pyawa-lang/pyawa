@@ -548,6 +548,7 @@ fn compile_class_scope(
         pending_cleanups: Vec::new(),
 
         local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
         mode,
         tier,
@@ -831,6 +832,7 @@ fn compile_scope(
         pending_cleanups: Vec::new(),
 
         local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
         mode,
         tier,
@@ -948,6 +950,9 @@ fn compile_scope(
     if kind == ScopeKind::Function {
         collect_scope_locals(&mut emitter, statements);
         analyze_cells(&mut emitter, statements, qualname, mode, tier);
+        // **槽缓存定稿后重建**（round 71）：`analyze_cells` 只在**有 cell** 时才重排 `varnames`；
+        // 无 cell 时缓存仍是空的 ⇒ 之后每个名字第一次查都线性扫（千参函数 O(n²) ✗）。
+        emitter.rebuild_local_slot_cache();
     }
     if !freevars.is_empty() {
         // **合成指令没有位点**（实测：参照给 `COPY_FREE_VARS`／`MAKE_CELL` 的是全 `None` ✓，
@@ -1026,10 +1031,12 @@ fn compile_scope(
     }
     // **源码序预登记**（名字），见 `pre_intern` 的说明
     pre_intern(&mut emitter, body);
+
     // 作用域体按**统一语句块**发射（块尾标签、死代码、"`try` 之后停止"都在 `emit_block` 里）
     // **尾块 ＝ true**（第 279 轮）：作用域体落下去就走到末尾 ⇒ 末尾那条 `if` 的每个分支
     // 都要补隐式 `return` ✓；类体那条走 `kind` 自己的判据（类体没有隐式 `return` ✓）⇒ 传 `false` ✓。
     emitter.emit_block(body, true)?;
+
     // 收尾顺序照实测：
     //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
     //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）

@@ -276,11 +276,18 @@ impl Emitter {
     }
 
     pub(crate) fn intern_name(&mut self, name: &str) -> usize {
+        // **缓存**（round 71）：名字表只追加 ✓（千参函数里逐个线性扫是 O(n²) ✗）。
+        if let Some(index) = self.name_indices.borrow().get(name) {
+            return *index;
+        }
         if let Some(index) = self.unit.names.iter().position(|item| item == name) {
+            self.name_indices.borrow_mut().insert(name.to_owned(), index);
             return index;
         }
+        let index = self.unit.names.len();
         self.unit.names.push(name.to_owned());
-        self.unit.names.len() - 1
+        self.name_indices.borrow_mut().insert(name.to_owned(), index);
+        index
     }
 
     /// 局部槽位（没有就按首次出现顺序追加——形参已经在前面）。
@@ -394,9 +401,22 @@ impl Emitter {
             // 有**形参 cell**时会整体多算一格 ✗ ⇒ 与 `cell_slot` 的口径不一致 ✓）。
             return self.unit.varnames.len() + self.appended_cells_before(cell);
         }
+        let slot = self.unit.varnames.len();
         self.unit.varnames.push(name.to_owned());
         self.unit.nlocals = self.unit.varnames.len();
-        self.unit.varnames.len() - 1
+        // **新追加的局部也进缓存**（round 71）：否则"每个名字第一次查"仍要线性扫 ✗。
+        self.local_slots.borrow_mut().insert(name.to_owned(), slot);
+        slot
+    }
+
+    /// **重建局部槽缓存**（round 71）：`varnames` 定稿（含 `analyze_cells` 的过滤）后一次性灌入 ✓
+    /// —— 否则"每个名字第一次查"都线性扫 `varnames`（150k 形参 ⇒ O(n²) ✗）。
+    pub(crate) fn rebuild_local_slot_cache(&self) {
+        let mut cache = self.local_slots.borrow_mut();
+        cache.clear();
+        for (slot, name) in self.unit.varnames.iter().enumerate() {
+            cache.entry(name.clone()).or_insert(slot);
+        }
     }
 
     /// 本作用域里这个名字是不是**局部／cell／自由变量**（外壳的"外层闭包"判据 ✓）。

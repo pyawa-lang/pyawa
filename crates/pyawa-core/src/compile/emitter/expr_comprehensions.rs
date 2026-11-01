@@ -114,7 +114,7 @@ impl Emitter {
                         .into_iter()
                         .chain(unit.demanded.clone())
                     {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                        let from_here = self.plain_local_slot(&referenced).is_some()
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
                             || self.unit.freevars.iter().any(|free| free == &referenced);
                         if from_here && !closure_freevars.iter().any(|item| item == &referenced) {

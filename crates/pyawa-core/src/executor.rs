@@ -1134,6 +1134,27 @@ pub(crate) fn bind_arguments(
     }
 
     // ③ 关键字实参
+    // **形参名 ⇒ 槽位的快查表**（round 71，性能）：先前每个关键字实参都线性扫 `varnames` ✗
+    // ⇒ `_replace(**{150k 个字段})` 之流是 O(n²) ✗（`test_collections.test_large_size` 的超时源）。
+    // 只在大参数量时建表 ✓（普通调用仍走线性小表 ✓）。
+    let slot_index: Option<std::collections::HashMap<&str, usize>> =
+        if kwargs.len() > 8 || argcount + kwonly > 64 {
+            let mut map = std::collections::HashMap::with_capacity(argcount + kwonly);
+            for slot in 0..argcount {
+                if let Some(name) = code.varname(slot) {
+                    map.entry(name).or_insert(slot);
+                }
+            }
+            for offset in 0..kwonly {
+                if let Some(name) = code.varname(argcount + offset) {
+                    map.entry(name).or_insert(argcount + offset);
+                }
+            }
+            Some(map)
+        } else {
+            None
+        };
+    // **位置实参被跳过的起手**：位置匹配要跳过仅位置形参之后的……（原逻辑不变 ✓）
     let mut collected: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
     for (name, value) in kwargs {
         let text = match str_text(instance, name, opcode) {
@@ -1148,10 +1169,19 @@ pub(crate) fn bind_arguments(
             }
         };
 
-        let positional_hit = (0..argcount).find(|slot| code.varname(*slot) == Some(text.as_str()));
-        let keyword_hit = (0..kwonly)
-            .find(|offset| code.varname(argcount + offset) == Some(text.as_str()))
-            .map(|offset| argcount + offset);
+        let (positional_hit, keyword_hit) = match slot_index.as_ref() {
+            Some(index) => match index.get(text.as_str()) {
+                Some(slot) if *slot < argcount => (Some(*slot), None),
+                Some(slot) => (None, Some(*slot)),
+                None => (None, None),
+            },
+            None => (
+                (0..argcount).find(|slot| code.varname(*slot) == Some(text.as_str())),
+                (0..kwonly)
+                    .find(|offset| code.varname(argcount + offset) == Some(text.as_str()))
+                    .map(|offset| argcount + offset),
+            ),
+        };
 
         let outcome = if let Some(slot) = positional_hit {
             if slot < code.posonlyargcount() {
