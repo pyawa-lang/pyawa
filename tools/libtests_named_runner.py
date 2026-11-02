@@ -38,7 +38,12 @@ def main() -> int:
         except BaseException:
             return 1
         return 0
-    # 没有入口：**不**改判（返回 2 让调查器保持原来的分类 ✓）。
+    # **没有 `load_tests`／`test_main`**：按 `unittest` 的默认发现规则跑模块内 `TestCase`
+    # （官方 regrtest 对普通 `test_*.py` 就是这么派发的 ✓）——没有测试类才返回 2（**不**改判 ✓）。
+    suite = loader.loadTestsFromModule(module)
+    if suite.countTestCases() > 0:
+        result = unittest.TextTestRunner(stream=open("/dev/null", "w"), verbosity=0).run(suite)
+        return 0 if result.wasSuccessful() else 1
     return 2
 
 

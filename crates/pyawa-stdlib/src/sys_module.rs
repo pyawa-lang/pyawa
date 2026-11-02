@@ -1002,6 +1002,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 构建串：必须含 `pyawa`
     let version = instance.new_str(&version_string());
     instance.dict_set(namespace, "version", version);
+    // **`float_repr_style`**（round 74）：本层 `repr(float)` 是"最短往返"（Rust 的 `{:?}`）
+    // ⇒ 与参照 3.14 一样报 `'short'` ✓ —— `test_statistics` 在**导入期**读它 ✗（先前缺 ⇒
+    // `AttributeError: 'module' object has no attribute 'float_repr_style'` ✗）。
+    let float_repr_style = instance.new_str("short");
+    instance.dict_set(namespace, "float_repr_style", float_repr_style);
     // **`copyright`**（M5 体量实测的窄修 ✓）：`Lib/site.py:467-469` 的 `setcopyright()` 直接取
     // `sys.copyright` ⇒ 缺这个属性时 `import site` 在**模块级**就
     // `AttributeError: 'module' object has no attribute 'copyright'` ✗（实测 ✓，P3-28 ② 的前置）。

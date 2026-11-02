@@ -18,7 +18,7 @@ pub const NAME: &str = "builtins";
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "getattr", "hasattr", "hash",
-    "exec", "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "exec", "filter", "globals", "hex", "locals", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type", "vars",
@@ -66,6 +66,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
+        ("locals", pyawa_core::locals_native as pyawa_core::NativeFn),
         ("eval", eval_native as pyawa_core::NativeFn),
         ("exec", exec_native as pyawa_core::NativeFn),
         // **`compile()`**（task-43）：core 的实现（`pyawa_core::compile_native`）——这里只注册 ✓。

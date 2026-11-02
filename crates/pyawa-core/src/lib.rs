@@ -9,6 +9,7 @@
 
 // **`dict.fromkeys`** ✓（第 184 轮）：实现在 core（要看容器内部 ✓）⇒ 从根**再导出** ✓ ——
 // `builtin_objects` 是**私有模块** ✗，stdlib 直接调不到 ✓（与 `weakref_new` 同一个教训 ✓）。
+pub use builtin::context::locals_native;
 pub use builtin::dict::dict_fromkeys_native;
 pub use builtin::object::object_init_native;
 // **`builtins.compile()`**（task-43）：stdlib 的 `compile` 注册与 `exec`/`eval` 的 code 对象分支用它。

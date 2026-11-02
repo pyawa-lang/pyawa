@@ -10,6 +10,7 @@ use crate::executor::ExecError;
 use core::ptr::NonNull;
 use crate::header::Header;
 use crate::instance::Instance;
+use crate::frame::Frame;
 use crate::builtin_objects::copy_context_value;
 
 
@@ -358,4 +359,49 @@ pub(crate) unsafe fn context_run_native(
         call_args.push(*argument);
     }
     crate::executor::call::call_callable(instance, *callable, None, call_args, kwargs.to_vec(), 0)
+}
+
+/// **`locals()`**（round 74）：返回**当前帧**的局部名快照字典 ✓（参照：模块层 `locals() is globals()`，
+/// 函数层是"形参＋局部"的映射视图；本层给**快照 dict** —— 文档化的**如实偏差** ✗：对返回值的修改
+/// 不会写回帧，参照的写回语义随后补 ✓）。
+///
+/// 动因：`test_threading_local`／`Lib/pdb.py` 一族直接用 `locals()`；先前内建表里**没有**它 ✗
+/// ⇒ `NameError: name 'locals' is not defined` ✗。
+pub fn locals_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(frame_header) = instance.current_frame() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "locals() 需要正在执行的帧",
+        ));
+    };
+    // SAFETY: 当前帧由实例在 execute 期间持有，存活 ✓。
+    let frame = unsafe { &*frame_header.as_ptr().cast::<Frame>() };
+    // **模块层**：`locals() is globals()` ✓（命名空间就是全局映射 ✓）。
+    if frame.globals().is_none() {
+        if let Some(namespace) = frame.namespace() {
+            return Ok(instance.retain(namespace));
+        }
+    }
+    let mapping = instance.new_dict();
+    let Some(code_header) = frame.code() else {
+        return Ok(mapping);
+    };
+    // SAFETY: 帧持有一份 code 引用（BC-42），帧存活期间有效 ✓。
+    let code = unsafe { &*code_header.as_ptr().cast::<crate::code::CodeObject>() };
+    for slot in 0..frame.local_count() {
+        let Some(name) = code.varname(slot) else {
+            continue;
+        };
+        let Ok(Some(value)) = frame.local(slot) else {
+            continue;
+        };
+        // `dict_set` 自己会 retain 值 ✓，键由这里造 ✓。
+        instance.dict_set(mapping, name, value);
+    }
+    Ok(mapping)
 }

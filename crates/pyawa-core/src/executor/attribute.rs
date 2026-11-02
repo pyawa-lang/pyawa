@@ -708,12 +708,17 @@ fn attribute_lookup_specials(
             .collect();
         return Ok(Attribute::Owned(instance.new_tuple(items))).map(Some);
     }
-    // **`__class__`**（第 332 轮）：参照里**类型对象**的 `__class__` 是 `type` ✓
-    // （`enum.py` 的 `_find_new_` 读它 ✓ ⇒ 那一族 118 个模块卡在这 ✗）。
+    // **`__class__`**（第 332 轮；round 74 真 bug 修 ✗）：类型对象的 `__class__` 是它的
+    // **元类型** ✓（`class Meta(type)` 的 `C.__class__ is Meta` ✓ —— 先前一律给 `type` ✗ ⇒
+    // 自定义元类的类全都答错；`test_metaclass` 的 doctest `C.__class__ is M` 实测 False ✗）。
+    // 普通类（元类型恰是 `type`）结果与旧行为相同 ✓（`enum.py` 的 `_find_new_` 照旧 ✓）。
     if name == "__class__" && instance.is_type_object(object) {
-        if let Some(ty) = instance.type_named("type") {
-            return Ok(Attribute::Owned(ty.cast::<Header>())).map(Some);
-        }
+        // SAFETY: object 是存活对象，元类型由注册表持有 ✓。
+        let metaclass = unsafe { object.as_ref() }.ty().cast::<Header>();
+        // `Owned` 契约是新引用 ⇒ 自己那份 retain ✓。
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(metaclass.as_ptr()) };
+        return Ok(Attribute::Owned(metaclass)).map(Some);
     }
     // **实例的 `__class__`** ✓（第 722 轮）：参照里 `obj.__class__` 就是 `type(obj)` ✓ ——
     // `Lib/email/policy.py` 的 `default = EmailPolicy()` 一族在**导入期**就读它 ✗
