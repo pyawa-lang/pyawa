@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 80：`attribute_optional` 清 pending 槽；派发路径异常泄漏真 bug 已定位复现但修法触发 conformance 堆损坏 ⇒ 撤回；round 79：实例化实参泄漏＋POP_EXCEPT 清槽）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 81：ABI 错误边界 `discard_raised`（SystemExit 例外保留）；`dispatch_raise` 真修复的双放对象已查明＝异常实参一枚 `str`；round 80：`attribute_optional` 清 pending 槽）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,18 +90,16 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 80 完成**：`attribute_optional` 吞 `AttributeError` 时清 `pending_exception` 槽（同 round 77 口径）；
-  **`dispatch_raise` 的异常引用泄漏真 bug 已定位并实测复现**（`def raiser(): big=[3000 对象]; raise` ＋
-  try/except 后 3000 对象全活；诊断：异常 rc=1、无任何 GC 引用者／帧值栈／pending／异常栈 ⇒ `Err(Raised)`
-  所有权没被消费；`dispatch_raise` 用 `push()` 加一份又不还）。**修法未落地**：`release` 或接管式
-  `frame.push` 两种变体都让探针全释放，但 conformance 出现 `tcache_thread_shutdown(): unaligned tcache
-  chunk detected`（`libtest_hashlib_missing` SIGABRT）⇒ 另有调用点多放一份 ⇒ 已撤回（直接跑该探针不崩，
-  只在 conformance 包装路径崩）。
-  **下一轮（round 81）**：① **找多放一份的调用点**（审计 raise → Err(Raised) → ? 传播 → dispatch_raise，
-  以及 frame_clear／异常状态守卫／POP_EXCEPT 三处重入）⇒ 落 dispatch_raise 真修复（探针已证明能把被捕获
-  异常＋整帧全释放）⇒ 解 `test_weakref` 超时（唯一超时）② `test_statistics` named-import + doctest
-  收集路径 segfault ③ `test_metaclass` 剩余差异（函数当元类＋`type.__prepare__()`）④ `test_genexps`
-  剩 2 条 ⑤ `test_builtin` 编译器 panic／`test_calendar` UAF／`test_collections` 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
+  **round 81 完成**：ABI 错误边界 `discard_raised`（`pa_exec_string` 一族取完消息后还 `Err(Raised)` 那份＋
+  摘 `pending_exception` 同款；`SystemExit` 保留 ⇒ `cli` 17 项仍过 ✓）——嵌入宿主不再漏「异常＋回溯＋整帧」；
+  `dispatch_raise` 真修复的**双放对象已查明**：本地用 conformance 的 `pyawa_side_runner` 稳定复现 SIGABRT，
+  `PYAWA_ZOMBIE_TRACE` 显示被双放的是**异常实参一枚 `str`**（首次释放于 `<module>@50`），`DANGLING` 栈为
+  POP_EXCEPT → 异常析构 → … → `list_clear` ⇒ 异常引用计数没错、载荷里的实参被提前多放一次。
+  **下一轮（round 82）**：① **按指针记账**（对异常实参记 incref/decref 次数与站点）钉住 `RAISE_VARARGS`／
+  `exception_new` 之间多放的那一份 ⇒ 落 `dispatch_raise` 消费语义真修复 ⇒ 解 `test_weakref` 超时（唯一超时）
+  ② `test_statistics` named-import + doctest 收集路径 segfault ③ `test_metaclass` 剩余差异（函数当元类＋
+  `type.__prepare__()`）④ `test_genexps` 剩 2 条 ⑤ `test_builtin` 编译器 panic／`test_calendar` UAF／
+  `test_collections` 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

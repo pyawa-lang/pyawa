@@ -845,10 +845,22 @@ pub unsafe extern "C" fn pa_exec_string(
         // 先把（状态码, 诊断文本）定成不借本状态的值，再收掉帧与 code 的借用
         let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
             Ok(_) => (status::PA_OK, None),
-            Err(ExecError::Raised { exception }) => (
-                status::PA_ERR_RUNTIME,
-                Some(exception_message(&state.instance, exception)),
-            ),
+            Err(ExecError::Raised { exception }) => {
+                let message = Some(exception_message(&state.instance, exception));
+                // **归还异常引用**（round 81）：见 `pyawa_core::discard_raised` 的注释 ✓。
+                // **`SystemExit` 不能丢** ✗：宿主之后按它决定进程退出码／stderr 文本
+                //（`uncaught_system_exit` 读 `pending_exception` ✓）。
+                // SAFETY: exception 是存活对象；类型查表都在本实例内 ✓。
+                let raised_type = unsafe { exception.as_ref() }.ty();
+                let is_system_exit = state
+                    .instance
+                    .type_named("SystemExit")
+                    .is_some_and(|base| state.instance.is_subtype(raised_type, base));
+                if !is_system_exit {
+                    pyawa_core::discard_raised(&state.instance, exception);
+                }
+                (status::PA_ERR_RUNTIME, message)
+            }
             Err(ExecError::Interrupted) => (status::PA_ERR_INTERRUPT, None),
             Err(error) => (exec_error_status(&error), Some(exec_error_text(&error))),
         };
@@ -973,10 +985,22 @@ pub unsafe extern "C" fn pa_exec_bytecode(
             .alloc(Frame::for_code_with_namespace(frame_type, &code, namespace));
         let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
             Ok(_) => (status::PA_OK, None),
-            Err(ExecError::Raised { exception }) => (
-                status::PA_ERR_RUNTIME,
-                Some(exception_message(&state.instance, exception)),
-            ),
+            Err(ExecError::Raised { exception }) => {
+                let message = Some(exception_message(&state.instance, exception));
+                // **归还异常引用**（round 81）：见 `pyawa_core::discard_raised` 的注释 ✓。
+                // **`SystemExit` 不能丢** ✗：宿主之后按它决定进程退出码／stderr 文本
+                //（`uncaught_system_exit` 读 `pending_exception` ✓）。
+                // SAFETY: exception 是存活对象；类型查表都在本实例内 ✓。
+                let raised_type = unsafe { exception.as_ref() }.ty();
+                let is_system_exit = state
+                    .instance
+                    .type_named("SystemExit")
+                    .is_some_and(|base| state.instance.is_subtype(raised_type, base));
+                if !is_system_exit {
+                    pyawa_core::discard_raised(&state.instance, exception);
+                }
+                (status::PA_ERR_RUNTIME, message)
+            }
             Err(ExecError::Interrupted) => (status::PA_ERR_INTERRUPT, None),
             Err(error) => (exec_error_status(&error), Some(exec_error_text(&error))),
         };
