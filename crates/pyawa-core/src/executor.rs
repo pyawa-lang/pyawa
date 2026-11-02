@@ -408,6 +408,25 @@ pub(crate) fn super_lookup(
                 return Ok(Some(Attribute::Value(found)));
             }
         }
+        // **`super().__prepare__`**（round 84）：`type.__prepare__` 是本层在属性通道里
+        // **特殊名分支**实现的（不在 `type` 的类型字典里 ✓）⇒ `super` 沿 MRO 查字典永远找不到它 ✗
+        // ⇒ 元类方法里的 `super().__prepare__(*args, **kwds)` 报 `AttributeError` ✗
+        //（`test_metaclass` 的 doctest 钉住 ✓）。这里补一格：走到内建 `type` 条目时交回
+        // **默认实现**（参数忽略、给空 dict ✓）。
+        if name == "__prepare__" && unsafe { entry.as_ref() }.name() == "type" {
+            let method_type = instance
+                .type_named("builtin_function_or_method")
+                .expect("builtin_function_or_method 在引导期已登记");
+            let native = instance
+                .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    method_type,
+                    "__prepare__",
+                    core::cell::Cell::new(crate::executor::attribute::type_prepare_native),
+                ))
+                .into_raw()
+                .cast::<Header>();
+            return Ok(Some(Attribute::Value(native)));
+        }
         if entry == stop {
             after = true;
         }

@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 83 撤回轮：位置实参泄漏量化 +100/100 次；两种所有权方案 + 生成器形参补丁均回退（conformance 堆损坏／ok 38⇒37 未定位）；round 82：函数当元类＋`type.__prepare__()`）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 84：`super().__prepare__` 兜底＋实参所有权试点三变体全部回退（conformance 堆损坏，关键事实见台账）；round 83 撤回轮；round 82：函数当元类＋`type.__prepare__()`）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,7 +90,13 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 83 撤回轮（事实已改变计划）**：普通调用的位置实参泄漏**量化**（`f(x)`×100 ⇒ refcount +100，
+  **round 84 完成**：`super().__prepare__` 兜底（元类方法里的 super 路径拿到默认实现）⇒ `test_metaclass`
+  剩 3 条示例；实参所有权试点三变体（全部函数／只裸函数／再排除默认值与 `*args`／`**kwargs`）探针都能把
+  `f(x)` refcount 增量打到 0，但 conformance 全部触发堆损坏 ⇒ **全回退**（事实：不是「Python 分支漏还」
+  这么简单，`bind_arguments` 默认值／`*args`／cell 初始化／异常清理对同一批指针各有假定）。
+  **最后一轮（round 85）**：收尾 —— ① 套件/闸门定稿＋`NEXT.md` 交接 ② 若有时间：`test_metaclass` 剩
+  `Meta.mro`／`test_statistics` 收集路径 segfault／`test_genexps` 剩 2 条 ③ 把「实参所有权不能只改
+  Python 分支」与三种已证伪变体写进后续计划，明确先按指针记账＋逐调用点断言再动。
   参照 0 —— `test_weakref` 百万级活对象的根因）；帧持有形参 / 借用语义＋各还各的两方案都在 conformance
   触发 `tcache` 堆损坏 ⇒ 回退；生成器形参归属补丁探针有效（refcount 增量 0）但套件 `ok 38 ⇒ 37`
   （连跑两次、未定位具体文件）⇒ 一并回退，工作区无所有权改动。

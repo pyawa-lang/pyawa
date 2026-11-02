@@ -16,7 +16,7 @@ use core::ptr::NonNull;
 /// `type.__subclasses__()` ✓（第 722 轮）：**直接**子类列表 ✓（按"基类里有它"反查注册表 ✓）——
 /// `Lib/_py_abc.py:132` 的 ABC 递归子类检查要它 ✓。
 /// `type.__prepare__(*args, **kwds)`：默认元类给空 `dict` ✓（参数忽略 ✓）。
-fn type_prepare_native(
+pub(crate) fn type_prepare_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
