@@ -806,7 +806,12 @@ pub fn build_class_from_parts_with_keywords(
         }
     };
 
-    if instance.register_bases(ty, pruned).is_none() {
+    // **`__bases__` 要保留"显式给出的冗余基类"**（round 76 真 bug 修 ✗）：先前把"被更派生基类
+    // 覆盖的基类"（典型：`class C(B, object)` 里的 `object`）**从类型基类里剔掉** ✗ ——
+    // 布局／元类型那一半确实该用剔除后的表 ✓，但**类型自己的 `__bases__`／MRO 序列**照参照要保留
+    // 显式基类 ✓（参照：`class C(B, object)` ⇒ `C.__bases__ == (B, object)` ✓；
+    // `test_metaclass` 的 doctest 钉住 ✓）。C3 合并本来就会去重 ⇒ MRO 不受影响 ✓。
+    if instance.register_bases(ty, base_types).is_none() {
         return Err(raise_builtin(
             instance,
             "TypeError",

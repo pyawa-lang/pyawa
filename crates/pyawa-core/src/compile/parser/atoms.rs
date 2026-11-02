@@ -493,6 +493,14 @@ pub(crate) fn parse_call_suffix(
                     "invalid syntax. Maybe you meant '==' or ':=' instead of '='?".to_owned(),
                 ));
             }
+            // **重复关键字实参 ⇒ SyntaxError**（round 76）：参照 `f(a=1, a=2)` 报
+            // `SyntaxError: keyword argument repeated: a` ✓；本层先前静默收下后一个 ✗
+            // （`test_metaclass` 的 doctest `class C(metaclass=type, metaclass=type)` 钉住 ✓）。
+            if keywords.iter().any(|(existing, _)| *existing == name) {
+                return Err(CompileError::Syntax(format!(
+                    "keyword argument repeated: {name}"
+                )));
+            }
             keywords.push((name, value));
             cursor = next;
         } else {

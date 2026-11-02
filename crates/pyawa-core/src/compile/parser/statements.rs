@@ -727,6 +727,17 @@ fn parse_statement_class(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fun
                                     // 由运行期**原样转交**给元类的 `__new__`／`__init__` ✓
                                     //（参照口径 ✓；`Lib/enum.py:1400` 的 `class Flag(Enum, boundary=STRICT)`
                                     // 与 `Lib/typing.py` 的 `_root=` 都靠它 ✓）。
+                                    // **重复类关键字 ⇒ SyntaxError**（round 76）：参照报
+                                    // `keyword argument repeated: metaclass` ✓（`test_metaclass` 的 doctest ✓）。
+                                    if !key.is_empty()
+                                        && class_keywords
+                                            .iter()
+                                            .any(|(existing, _)| !existing.is_empty() && *existing == key)
+                                    {
+                                        return Err(CompileError::Syntax(format!(
+                                            "keyword argument repeated: {key}"
+                                        )));
+                                    }
                                     class_keywords.push((key, value));
                                     continue;
                                 }
