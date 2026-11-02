@@ -338,6 +338,20 @@ pub(crate) fn attribute_lookup(
     // 那个元组属性不同 ✓）。`Lib/email/_policybase.py:113` 的 `base.mro()` 与 `Lib/abc.py`
     // 一族都要它 ✗ ⇒ 先前 `'ABCMeta' object has no attribute 'mro'` 把 email 一族压在下面 ✓。
     if name == "mro" && instance.is_type_object(object) {
+        // **元类自己覆写了 `mro` 就用它** ✓（round 85）：参照的 `C.mro()` 走 `type(C).__mro__`
+        // 里查到的 `mro` 描述符 ⇒ 自定义元类（`class Meta(type): def mro(cls): …`）的覆写生效 ✓
+        //（`test_metaclass` 的 `WeirdClass` doctest 钉住：`Meta.mro` 返回 `(cls, Base, object)` ⇒
+        // `WeirdClass.value` 沿 Base 取到 ✓）。先找元类字典里的**自定义**实现（`type` 自己那份是本层
+        // 特殊名实现的、不在字典里 ✓）。
+        let metaclass = instance.type_of(object);
+        if let Some((owner, custom)) = instance.type_lookup_owner(metaclass, "mro") {
+            if owner == metaclass {
+                return Ok(Attribute::Method {
+                    function: custom,
+                    this: object,
+                });
+            }
+        }
         let method_type = instance
             .type_named("builtin_function_or_method")
             .expect("builtin_function_or_method 在引导期已登记");

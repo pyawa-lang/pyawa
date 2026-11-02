@@ -898,7 +898,62 @@ pub fn build_class_from_parts_with_keywords(
     // 布局／元类型那一半确实该用剔除后的表 ✓，但**类型自己的 `__bases__`／MRO 序列**照参照要保留
     // 显式基类 ✓（参照：`class C(B, object)` ⇒ `C.__bases__ == (B, object)` ✓；
     // `test_metaclass` 的 doctest 钉住 ✓）。C3 合并本来就会去重 ⇒ MRO 不受影响 ✓。
-    if instance.register_bases(ty, base_types).is_none() {
+    // **元类覆写了 `mro`**（round 85，参照口径）：`type.__new__` 用 `metaclass.mro(cls)` 的结果当 MRO ✓
+    //（`test_metaclass` 的 `class Meta(type): def mro(cls): return (cls, Base, object)` ⇒
+    // `WeirdClass.value` 走 Base ✓）。默认 `type.mro` 是本层特殊名实现（不在字典里）⇒ 这里只认
+    // **元类自己字典里**的覆写 ✓；没有就走 C3（`register_bases`）✓。
+    let chosen_metaclass = requested_metaclass.unwrap_or(effective_metaclass);
+    let custom_mro = if chosen_metaclass != instance.metatype() {
+        instance
+            .type_lookup_owner(chosen_metaclass, "mro")
+            .filter(|(owner, _)| *owner == chosen_metaclass)
+            .map(|(_, found)| found)
+    } else {
+        None
+    };
+    let mut registered = false;
+    if let Some(found) = custom_mro {
+        let ty_header = ty.cast::<Header>();
+        // SAFETY: found 由元类字典持有；ty 是本函数刚造出的类对象；`bound_self` 是借用 ✓。
+        unsafe { instance.incref_object(found.as_ptr()) };
+        let outcome = crate::executor::call::call_callable(
+            instance,
+            found,
+            Some(ty_header),
+            Vec::new(),
+            Vec::new(),
+            0,
+        );
+        instance.release(found);
+        let result = outcome?;
+        let items = instance
+            .tuple_items(result)
+            .ok_or_else(|| raise_builtin(instance, "TypeError", "mro() 要回一个 tuple"))?;
+        let mut custom_order: Vec<NonNull<TypeObject>> = Vec::with_capacity(items.len());
+        for item in &items {
+            let Some(entry) = instance.as_type(*item) else {
+                instance.release(result);
+                return Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    "mro() 的条目必须是类型",
+                ));
+            };
+            custom_order.push(entry);
+        }
+        instance.release(result);
+        if custom_order.first().copied() != Some(ty.cast::<TypeObject>()) {
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "mro() 的第一项必须是类自己",
+            ));
+        }
+        // SAFETY: ty 由注册表持有（`new_type` 已登记）。
+        unsafe { ty.as_ref() }.set_bases(base_types.clone(), custom_order);
+        registered = true;
+    }
+    if !registered && instance.register_bases(ty, base_types).is_none() {
         return Err(raise_builtin(
             instance,
             "TypeError",

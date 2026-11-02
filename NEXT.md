@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 84：`super().__prepare__` 兜底＋实参所有权试点三变体全部回退（conformance 堆损坏，关键事实见台账）；round 83 撤回轮；round 82：函数当元类＋`type.__prepare__()`）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 85 最后一轮：`test_metaclass` 转绿（自定义元类 `mro` 覆写接线）⇒ 套件 38⇒39；round 84：`super().__prepare__` 兜底＋实参所有权试点全回退；round 82：函数当元类＋`type.__prepare__()`）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,23 +90,15 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 84 完成**：`super().__prepare__` 兜底（元类方法里的 super 路径拿到默认实现）⇒ `test_metaclass`
-  剩 3 条示例；实参所有权试点三变体（全部函数／只裸函数／再排除默认值与 `*args`／`**kwargs`）探针都能把
-  `f(x)` refcount 增量打到 0，但 conformance 全部触发堆损坏 ⇒ **全回退**（事实：不是「Python 分支漏还」
-  这么简单，`bind_arguments` 默认值／`*args`／cell 初始化／异常清理对同一批指针各有假定）。
-  **最后一轮（round 85）**：收尾 —— ① 套件/闸门定稿＋`NEXT.md` 交接 ② 若有时间：`test_metaclass` 剩
-  `Meta.mro`／`test_statistics` 收集路径 segfault／`test_genexps` 剩 2 条 ③ 把「实参所有权不能只改
-  Python 分支」与三种已证伪变体写进后续计划，明确先按指针记账＋逐调用点断言再动。
-  参照 0 —— `test_weakref` 百万级活对象的根因）；帧持有形参 / 借用语义＋各还各的两方案都在 conformance
-  触发 `tcache` 堆损坏 ⇒ 回退；生成器形参归属补丁探针有效（refcount 增量 0）但套件 `ok 38 ⇒ 37`
-  （连跑两次、未定位具体文件）⇒ 一并回退，工作区无所有权改动。
-  **下一轮（round 84）**：① 给 `call_callable` 加**仅 debug 的所有权断言**（按指针记预期引用增量）把
-  「借用 vs 转移」调用点列全 ② 按字节码 `CALL`/`CALL_KW`/`CALL_FUNCTION_EX` → `call_value` → 内部直接
-  `call_callable` 三批迁移（每批跑 `ownership_shapes`＋conformance＋`PYAWA_DANGLING`，可单独回退）
-  ③ 迁移完再接生成器／协程形参归属（探针已验证有效）④ 最后做 `dispatch_raise` 消费语义 ⇒ 解
-  `test_weakref` 超时（唯一超时）⑤ `test_metaclass` 剩 2 类（`super().__prepare__`／`Meta.mro`）
-  ⑥ `test_statistics` 收集路径 segfault／`test_genexps` 剩 2 条／`test_builtin` 编译器 panic／
-  `test_calendar` UAF／`test_collections` 26F/50E ⑦ `P3-35`／`P3-29`／`P3-37`。
+  **round 85（最后一轮）完成**：自定义元类的 `mro` 覆写接线（建类时用 `metaclass.mro(cls)` 的结果当 MRO；
+  `C.mro()` 优先元类自定义实现）⇒ `test_metaclass` **整份 doctest 全过**（named-import 官方跑法 exit 0）
+  ⇒ 套件 **38／84／274／1 ⇒ 39／84／273／1**（跑通 38⇒39 ✓；唯一超时 `test_weakref`）。
+  **交接（下一段工作的起点）**：① `test_weakref` 超时——根因＝普通调用的位置实参泄漏（`f(x)`×100 ⇒
+  refcount +100）；**三种「只改 Python 分支」的变体实测都会触发 conformance 堆损坏**（见 round 83/84 台账）
+  ⇒ 必须先做「按指针记账＋逐调用点断言」，再按 `CALL/CALL_KW/CALL_FUNCTION_EX` → `call_value` → 内部直接
+  `call_callable` 分批迁移；生成器／协程形参归属补丁探针已验证有效（refcount 增量 0）② `test_statistics`
+  named-import + doctest 收集路径 segfault；`test_genexps` 剩 2 条；`test_calendar` UAF；`test_collections`
+  26F/50E ③ `P3-42` KeyError 族与特殊方法派发、`P3-35` 剩余 5 形态、`P3-29`／`P3-37` 剩余面（`gc.get_objects` 等）。
 
 ## 本战役的关键口径（新会话必读）
 
