@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 72：多字节 `EXTENDED_ARG`＋`type_lookup` 哈希 ⇒ `test_collections` 超时解除（59.5 s）；但 `test_userstring` 101 s 临界被判 timeout；round 71：千参编译去 O(n²)）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 73：`isinstance` ABC 快速通道 ⇒ `isinstance(x, Sequence)` 45 µs⇒6.7 µs、`test_userstring` 101 s⇒80 s；套件 **37／82／277／1**（超时只剩 `test_weakref`）；round 72：多字节 `EXTENDED_ARG`＋`type_lookup` 哈希）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -88,10 +88,11 @@
   2.7 s⇒0.03 s；套件 37／82／276／2 持平。
   **round 72 完成**：多字节 `EXTENDED_ARG`＋`type_lookup` 哈希 ⇒ `test_collections` 整份 59.5 s 跑完
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
-  **下一轮（round 73）**：① **`test_userstring` 回归定位**（101 s vs round 44 的 42 s；`test_count/find/`
-  `index/rfind/rindex/periodic` 逐个对照，压 `UserString` 的 `==`／属性读每操作开销）② `test_weakref`
-  超时（形参所有权）③ `test_metaclass` 无参 `DocTestSuite()` ④ `test_genexps` 剩 2 条 ⑤ `test_builtin`
-  编译器 panic／`test_calendar` UAF／`P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
+  **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
+  **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
+  **下一轮（round 74）**：① **`test_weakref` 超时**（形参所有权；当前唯一超时，最高顺位）
+  ② `test_metaclass` 无参 `DocTestSuite()`（`sys._getframemodulename` 返 None）③ `test_genexps` 剩 2 条
+  ④ `test_builtin` 编译器 panic／`test_calendar` UAF ⑤ `test_collections` 的 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

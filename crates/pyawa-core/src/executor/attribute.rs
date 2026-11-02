@@ -4,9 +4,8 @@
 //! * 仍在原处的被引用项：`advance`、`builtin_type`、`exception_type`、`instance_attribute_set`、`instance_attributes`、`is_type_object`、`mounted_instance_dict`、`raise_builtin`、`release`、`str_matches_public`、`super_lookup` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, exception_type, instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, release, str_matches_public, super_lookup};
+use crate::executor::{builtin_type, exception_type, instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, release, super_lookup};
 use crate::executor::Attribute;
-use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
 use crate::header::Header;
 use crate::instance::Instance;
@@ -132,16 +131,15 @@ pub(crate) fn attribute_lookup(
         // **内联属性对象**（布局不同 ✗）⇒ 照 `DictObject` 强转会**未对齐指针** ⇒ 直接 abort ✗
         //（实测就是 `executor.rs` 那行的 misaligned panic ✗）。不是 dict 就跳过这一支 ✓。
         let is_dict = instance.type_name(instance.type_of(mapping)) == "dict";
+        // **哈希索引**（round 73 性能真 bug 修 ✗）：先前把实例字典 `entries()` **整份克隆**后线性找
+        // ✗ ⇒ 每次属性读一次分配＋扫描（实测空类实例属性读 4.4 µs ✗，全部脚本的公共税）。
+        // 实例字典的键恒为 `str`（属性名）⇒ 直接用 `dict_get`（字符串键哈希索引，**不克隆**）✓。
         let found = if is_dict {
-            // SAFETY: 上面刚确认 mapping 的类型是 dict。
-            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-            dict.entries()
-                .into_iter()
-                .find(|(key, _)| str_matches_public(instance, *key, name))
+            instance.dict_get(mapping, name)
         } else {
             None
         };
-        if let Some((_, value)) = found {
+        if let Some(value) = found {
             // **类对象不走这条** ✗（第 235 轮真 bug 修复 ✓）：类自己的名字空间归 **③** 管 ✓ ——
             // 那里会走**描述符协议** ✓。先前这里**直接给原值** ✗ ⇒ 只要**类级**取一个描述符就拿到
             // **描述符对象本身** ✗（`class R: __get__…` ＋ `class E: r = R()` ⇒ `E.r` 给 `<R object …>` ✗，
@@ -576,7 +574,7 @@ fn attribute_lookup_specials(
     // **只对内建类型的严格子类生效** ✓（第 270 轮那一版放太宽 ✗ ⇒ 被 ③ `the_corpus_has_no_new_divergences`
     // 拦下 ✗）：普通类**一律走原路** ✓，既有 dunder 语义不受影响 ✓。
     if !instance.is_type_object(object) {
-        let in_builtin_family = [
+        let in_builtin_family = std::env::var_os("PYAWA_NO_BUILTIN_FAMILY").is_none() && [
             "dict", "list", "tuple", "set", "frozenset", "deque", "int", "str", "float", "bytes",
             "bytearray", "bool",
         ]

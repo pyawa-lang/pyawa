@@ -125,6 +125,15 @@ pub struct Instance {
     /// **弱引用登记**（round 59）：目标地址 ⇒ 指向它的弱引用对象（**不持有引用** ✓）。
     /// 目标释放时逐个置死并调用回调 ✓（`invalidate_weakrefs`）；弱引用对象自己释放时摘除 ✓。
     weakrefs: RefCell<std::collections::HashMap<usize, Vec<NonNull<Header>>>>,
+    /// **`isinstance` 的 ABC 快存**（round 73）：`(类, 实例类型, _abc_invalidation_counter)` ⇒ 结果 ✓。
+    ///
+    /// 为什么 ✗：`collections.abc` 的 `__instancecheck__` 是纯 Python（两个 `WeakSet` 查缓存 ＋
+    /// `__subclasshook__`），本层每次调用要 ~45 µs（`ref()` 9 µs＋两次集合查），而 `Lib/` 里
+    /// `isinstance(x, Sequence)` 一族遍地都是（`UserString` 的每个方法都带一个）；实测
+    /// `test_userstring` 因此从 round 44 的 42 s 涨到 ~90 s（survey 120 s 阈值上临界漂移 ✗）。
+    /// **失效**：ABC 的注册表变更会令 `ABCMeta._abc_invalidation_counter` ＋1，键里带上它就天然失效 ✓；
+    /// 只对**元类恰是 `ABCMeta`** 的类启用 ✓（用户自定义元类的 `__instancecheck__` 可能有副作用 ⇒ 不缓存 ✗）。
+    isinstance_cache: RefCell<std::collections::HashMap<(usize, usize, u64), bool>>,
     /// **GC 回收路径延后执行的弱引用回调**（round 59）：`free_garbage` 阶段只登记，
     /// 等整个回收循环结束后统一调（那时 `gc_running` 已复位 ✓）。
     pending_weakref_callbacks: RefCell<Vec<(NonNull<Header>, NonNull<Header>)>>,
@@ -239,3 +248,19 @@ mod drop;
 mod quote;
 
 pub(crate) use quote::{quote_bytes, quote_wtf8};
+
+impl Instance {
+    /// **`isinstance` 的 ABC 快存：读**（round 73）——键含 ABC 失效计数 ✓。
+    pub fn isinstance_cache_get(&self, key: (usize, usize, u64)) -> Option<bool> {
+        self.isinstance_cache.borrow().get(&key).copied()
+    }
+
+    /// **`isinstance` 的 ABC 快存：写**（round 73）；超过 8192 条就整体清掉 ✓（防无界增长）。
+    pub fn isinstance_cache_put(&self, key: (usize, usize, u64), value: bool) {
+        let mut cache = self.isinstance_cache.borrow_mut();
+        if cache.len() > 8192 {
+            cache.clear();
+        }
+        cache.insert(key, value);
+    }
+}

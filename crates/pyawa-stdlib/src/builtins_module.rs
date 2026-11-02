@@ -1510,6 +1510,56 @@ fn callable_native(
 ///
 /// 实测：`isinstance(1, 5)` ⇒
 /// `isinstance() arg 2 must be a type, a tuple of types, or a union`。
+/// **`isinstance` 的 ABC 快速通道**（round 73）：`collections.abc` 的 `__instancecheck__` 是纯
+/// Python（两个 `WeakSet` 查缓存 ＋ `__subclasshook__`），本层每次 ~45 µs ⇒ 用"ABC 失效计数"做键
+/// 缓存结果 ✓。只对**元类恰是 `ABCMeta`** 的类启用 ✓（自定义元类的 `__instancecheck__` 可能有
+/// 副作用 ⇒ 不缓存 ✗）。
+fn isinstance_abc_fast(
+    instance: &Instance,
+    subject: NonNull<Header>,
+    class: NonNull<Header>,
+) -> Result<Option<bool>, ExecError> {
+    let Some(cls) = instance.as_type(class) else {
+        return Ok(None);
+    };
+    let Some(abcmeta) = instance.type_named("ABCMeta") else {
+        return Ok(None);
+    };
+    if instance.type_of(class) != abcmeta {
+        return Ok(None);
+    }
+    // `ABCMeta._abc_invalidation_counter`（类属性，经元类查到）——register 时 ＋1 ✓。
+    let Some(counter_object) = instance.attribute_optional_of(class, "_abc_invalidation_counter")?
+    else {
+        return Ok(None);
+    };
+    let counter = instance
+        .int_of(counter_object)
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0) as u64;
+    instance.release(counter_object);
+    let subject_type = instance.type_of(subject);
+    let key = (cls.as_ptr() as usize, subject_type.as_ptr() as usize, counter);
+    if let Some(cached) = instance.isinstance_cache_get(key) {
+        return Ok(Some(cached));
+    }
+    // 未命中 ⇒ 走 Python 的 `__instancecheck__`（带回值）✓。
+    let Some(method) = instance.attribute_optional_of(class, "__instancecheck__")? else {
+        return Ok(None);
+    };
+    instance.retain(subject);
+    let outcome = pyawa_core::executor::call_value(instance, method, &[subject], &[]);
+    instance.release(method);
+    let returned = match outcome {
+        Ok(value) => value,
+        Err(error) => return Err(error),
+    };
+    let matched = pyawa_core::executor::truthiness_public(instance, returned, 0)?;
+    instance.release(returned);
+    instance.isinstance_cache_put(key, matched);
+    Ok(Some(matched))
+}
+
 fn isinstance_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1518,6 +1568,9 @@ fn isinstance_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "isinstance", args, 2)?;
     let subject = args[0];
+    if let Some(matched) = isinstance_abc_fast(instance, subject, args[1])? {
+        return Ok(instance.new_bool(matched));
+    }
     let matches = type_matches(instance, subject, args[1], "isinstance")?;
     Ok(instance.new_bool(matches))
 }
