@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 82：函数当元类＋`type.__prepare__()` ⇒ `test_metaclass` doctest 差异 6+⇒2 类；round 81：ABI `discard_raised`；round 80：`attribute_optional` 清 pending 槽）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 83 撤回轮：位置实参泄漏量化 +100/100 次；两种所有权方案 + 生成器形参补丁均回退（conformance 堆损坏／ok 38⇒37 未定位）；round 82：函数当元类＋`type.__prepare__()`）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,67 +90,17 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 82 完成**：函数当元类（`metaclass=` 是普通可调用对象 ⇒ 照参照不建类型：`meta.__prepare__`
-  → 跑类体 → `meta(name, bases, ns, **kwds)` 返回值当类，`type(C) is dict` ✓）＋ `type.__prepare__()`
-  （默认元类给空 dict）⇒ `test_metaclass` 的 doctest 差异 6+ 条 ⇒ 2 类（`super().__prepare__` 的 super
-  属性通道／`Meta.mro` 覆写；文件仍未翻）；套件 38／84／274／1 持平。round 81 的实参双放记账：三次 decref
-  站点 = `_missing_hash@55`（call_callable 还实参）→ `exception_clear`（异常 args）→ `frame_clear`（回溯帧
-  局部），第三次打到 0 属正常 ⇒ 双放点在**列表载荷**（`list_clear`）一侧，需按「列表项」记账继续钉。
-  **下一轮（round 83）**：① **按列表项记账**钉住 `list_clear` 双放 ⇒ 落 `dispatch_raise` 消费语义真修复
-  ⇒ 解 `test_weakref` 超时（唯一超时）② `test_metaclass` 剩余 2 类（`super().__prepare__`／`Meta.mro`）
-  ③ `test_statistics` named-import + doctest 收集路径 segfault ④ `test_genexps` 剩 2 条 ⑤ `test_builtin`
-  编译器 panic／`test_calendar` UAF／`test_collections` 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
-  交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
-  （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
-  `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。
-  **下一轮（round 52）优先级**：① **GC 双重释放**（`test_extcall`，正确性 bug，压一切）② 星号目标的
-  链式赋值（可翻 `test_unpack_ex`）③ `*args` 注解（可翻 `test_pep646_syntax`）④ 生成器 `throw` 的
-  `StackUnderflow`（`test_genexps`）。之后：`test_weakref`（形参所有权）／`KeyError` 上下文污染／
-  `P3-35` 的 `\N{…}`／`P3-29`／`P3-37`。
-  **round 44 已清 ②**：`test_userstring` **38 failures／4 errors ⇒ OK（skipped=2）** ✓ —— 根因
-  `==`／`!=` 没走 `__eq__`／`__ne__`（P3-42 核心格）＋ `str` 一族口径（fillchar／replace count／zfill
-  符号／expandtabs 换行列／rpartition 空分隔符／搜索族 arity 报文／下标错型与大整数饱和／切片饱和
-  算术／`%` 星号宽度与嵌套键／`str.__mod__`／生成的 title 映射表）；官方套件跑通 **21 → 22**。
-  **另外 6 个 hang 的剩余账**：`test_dict` 已由 round 42 的 dict 哈希索引解除（超时⇒3.59 s）；
-  **只剩 `test_weakref`**——round 43 用**对拍 refcount 增量**定位到四类"每次操作漏一份引用"并
-  修掉（名字加载／`CALL` 的 `bound_self`／返回值 `push` 多 retain／`__call__` 转发），但**位置形参
-  仍漏 1 份/调用**（`f(a)` ⇒ +100）：它是 `test_weakref` 剩余超时的主因；**下一轮（round 45）**＝
-  "帧拥有形参槽"的所有权审计（round 43 试过 ⇒ refcount 全归零，但 `__del__`＋`gc.collect()`＋属性写
-  暴露潜伏 UAF：test_dict/test_weakref SIGABRT/SEGV、gdb `release_object ← instance_attribute_set`
-  ⇒ 已撤回；需同时审计属性写／终结器／异常回溯三条重入路径，再动 `frame_clear`）。
-  另一格：`d.values()`/`d.items()` 是列表快照（不是视图对象）⇒ 迭代中改字典不报错。
-  然后（按用户取活顺序）：**`P3-42` 剩余两格**——(a) 特殊方法派发缺口（`==`/`!=` 不走 `__eq__`、
-  `__add__` 等不派发）；(b) `unittest` contextmanager 里 `KeyError` 污染断言异常 `__context__`。
-  然后 **`P3-35` 剩余 5 形态**：`\N{…}`／`except*`／`import *`／async 推导式／PEP 695 `*Ts`。**`P3-35` 剩余 5 形态（未清，见 round 36 台账）**：`\N{…}` 15（要 Unicode 名字表
-  生成进 core）／`except*` 7（PEP 654）／`import *` 4（模块帧失败导入静默成 None 的 import 机制缺口，
-  证据在台账）／async 推导式 4／PEP 695 `*Ts` 2。**`P3-42` 剩余两格（未清）**：
-  `KeyError` 族 12 行 = (a) **特殊方法派发缺口**（`==`/`!=` 不走 `__eq__`、`__add__` 等不派发，
-  `executor/values.rs::values_equal` ＋ `protocol::compare_public`）＋ (b) `unittest` 的 contextmanager
-  生成器里 `KeyError` 在测试体执行期间仍处"正在处理"⇒ 断言异常的 `__context__` 被污染；
-  以及 `time.struct_time` 不是 `tuple` 子类（`test_structseq.test_tuple`）。
-- **未修 bug＋判据**（如实，非 M6 gate）：
-  - **官方套件（release）**：跑通 **20/397＝5.0%**（可编译 397/397、未实现 100／运行期错 269／超时 8）；语料 `MS-14` 407/407 **未动** ✓。
-  - **真 hang（1）**：`test_tempfile` —— `map()` 急求值（`type_runtime.rs:485`）消费无限 `_RandomNameSequence`
-    （`Lib/tempfile.py:373`）⇒ 无限循环＋无界内存；复现 `target/recon/hang2/repro_tempfile_min.py`。
-    修法方向：`map`／`filter`／`zip` 改正惰性迭代器（未修 ✓）。
-  - **慢（不是 hang，已实测）**：`test_dict`／`test_weakref`＝dict 线性扫描 O(n²)（`dict.rs:75`）；
-    `test_long`／`test_peepholer`＝`unittest.subTest` 机器开销＋对象不释放；`test_userstring`≈15 min
-    （次因 `startswith/endswith` **忽略 `start`／`end`**）。复现脚本：`target/recon/hang1/`、`hang2/`。
-  - **`P3-42` 剩余（如实）**：`KeyError` 族 12 行（两层根因见上）；`time.struct_time` 非 tuple 子类；
-    `str.startswith/endswith` 的 `start`/`end` 仍不收；`IntLike`（`int.__index__`）实参族。
-  - **`P3-39` 剩余（如实）**：`StringIO` 的 `newline` 换行翻译、`__getstate__`／`__setstate__`／pickle。
-  - **`P3-40` 剩余（如实）**：`os.close` 已关 fd 仍静默（参照 `EBADF`）、`get/set_inheritable`、
-    `os.chmod`／`os.scandir`（顺带暴露的新层缺口）。
-  - **`P3-35` 剩余**：`\N{…}` 15／`except*` 7／`import *` 4／async 推导式 4／PEP 695 `*Ts` 2（下标删除已落地 round 36）。
-  - **`P3-29` 剩余（如实）**：IPv6／AF_UNIX 地址线、真超时语义（`settimeout` 只记值）、
-    `_socket.poll`／`select` 的 socket 分流、`sendto`／`recvfrom`／`getsockopt`、`getaddrinfo` 一族（A2）。
-  - **`P3-37` 剩余（如实）**：`pyexpat` 的**解析本体**（整块 expat C 扩展：XML/DTD/实体/命名空间/错误码语义）未移植；
-    形状面已落（round 38），`test_pyexpat` 仍到不了断言层。
-  - 其余旧账：`zipimport`／`urllib.request` 等缺模块、3 个编译器 cell/free 表 panic 用例、
-    `FAILED(errors=1)` 泛化、"`tb_next` 链"、fs/io 其余（标准流 `dup`／`sys.prefix`）、`P3-38` 的 4 条有损输出通道边界。
-- **闸门命令**：`tools/slowcheck.sh --release`（十项 ≈15–20 min；round 32–35 均全绿）＋
-  `python3 tools/libtests_survey.py --release`（≈2.5 min）＋ `python3 tools/lib_import_ratio.py`（≈5–10 min）＋
-  `python3 tests/ci/check.py`（14/14）。
+  **round 83 撤回轮（事实已改变计划）**：普通调用的位置实参泄漏**量化**（`f(x)`×100 ⇒ refcount +100，
+  参照 0 —— `test_weakref` 百万级活对象的根因）；帧持有形参 / 借用语义＋各还各的两方案都在 conformance
+  触发 `tcache` 堆损坏 ⇒ 回退；生成器形参归属补丁探针有效（refcount 增量 0）但套件 `ok 38 ⇒ 37`
+  （连跑两次、未定位具体文件）⇒ 一并回退，工作区无所有权改动。
+  **下一轮（round 84）**：① 给 `call_callable` 加**仅 debug 的所有权断言**（按指针记预期引用增量）把
+  「借用 vs 转移」调用点列全 ② 按字节码 `CALL`/`CALL_KW`/`CALL_FUNCTION_EX` → `call_value` → 内部直接
+  `call_callable` 三批迁移（每批跑 `ownership_shapes`＋conformance＋`PYAWA_DANGLING`，可单独回退）
+  ③ 迁移完再接生成器／协程形参归属（探针已验证有效）④ 最后做 `dispatch_raise` 消费语义 ⇒ 解
+  `test_weakref` 超时（唯一超时）⑤ `test_metaclass` 剩 2 类（`super().__prepare__`／`Meta.mro`）
+  ⑥ `test_statistics` 收集路径 segfault／`test_genexps` 剩 2 条／`test_builtin` 编译器 panic／
+  `test_calendar` UAF／`test_collections` 26F/50E ⑦ `P3-35`／`P3-29`／`P3-37`。
 
 ## 本战役的关键口径（新会话必读）
 
