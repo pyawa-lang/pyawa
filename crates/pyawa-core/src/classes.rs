@@ -58,6 +58,10 @@ pub unsafe fn build_class_native(
 
     // **要接的自定义元类** ✓（第 218 轮）：`class X(metaclass=M)` ✓。
     let mut requested_metaclass: Option<NonNull<TypeObject>> = None;
+    // **函数当元类**（round 82，参照实测：`class C(metaclass=meta)` 里 `meta` 是普通可调用对象时，
+    // 参照**不建类型**，而是 `meta(name, bases, namespace, **kwds)`，把**返回值**当类 ✓
+    // —— `test_metaclass` 的 doctest 钉住 `type(C) is dict` ✓）。
+    let mut callable_metaclass: Option<NonNull<Header>> = None;
     // **转交给元类的类关键字** ✓（第 292 轮）：除 `metaclass=` 之外**原样**留着 ✓（键对象照用 ✓，
     // `call_value` 会自己 retain ✓）。`Lib/enum.py:1400` 的 `boundary=STRICT` 就是它 ✓。
     let mut forwarded_keywords: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
@@ -90,6 +94,11 @@ pub unsafe fn build_class_native(
                 // 本层**暂时**只做"元类型对"这一步 ✓ —— `M.__new__`／`__init__`／`__prepare__`
                 // 尚未被调用 ✗（`ABC` 一族的注册表要等那一步 ✓）。
                 if !instance.is_type_object(wanted) {
+                    // **可调用对象可以当元类** ✓（参照口径，见上）——不可调用才报原来的 TypeError ✓。
+                    if instance.is_callable(wanted) {
+                        callable_metaclass = Some(wanted);
+                        continue;
+                    }
                     return Err(raise_builtin(instance, "TypeError", "metaclass must be a type"));
                 }
                 requested_metaclass = Some(wanted.cast::<TypeObject>());
@@ -143,6 +152,42 @@ pub unsafe fn build_class_native(
                 "__prepare__",
             )? {
                 custom_prepare = Some((metaclass, method));
+            }
+        }
+    }
+    // **函数当元类的 `__prepare__`**：函数对象上挂了就调它（参照口径 ✓）。
+    if callable_metaclass.is_some() {
+        if let Some(meta) = callable_metaclass {
+            if let Some(method) = crate::executor::attribute::attribute_optional(instance, meta, "__prepare__")? {
+                let name_value = instance.new_str(&name);
+                let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+                for base in &bases {
+                    // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
+                    unsafe { instance.incref_object(base.as_ptr()) };
+                    base_values.push(*base);
+                }
+                let bases_value = instance.new_tuple(base_values);
+                let args: Vec<NonNull<Header>> = vec![name_value, bases_value];
+                let outcome = crate::executor::call::call_value(
+                    instance,
+                    method,
+                    &args,
+                    &forwarded_keywords,
+                );
+                for argument in args {
+                    instance.release(argument);
+                }
+                instance.release(method);
+                let namespace = outcome?;
+                crate::executor::run_class_body(instance, body, namespace)?;
+                return finish_callable_metaclass(
+                    instance,
+                    meta,
+                    &name,
+                    &bases,
+                    namespace,
+                    &forwarded_keywords,
+                );
             }
         }
     }
@@ -218,6 +263,18 @@ pub unsafe fn build_class_native(
     // **PEP 560：基类先解析** ✓（task-24 尾件 ✓）：自定义元类与建类核心都收**解析后**的基类 ✓
     // （参照实测 `class SupportsAbs[T](Protocol)` 的 `_ProtocolMeta.__new__` 只收到 `(Protocol,)` ✓，
     // 没有 `Generic[T]` 别名 ✓）；`__orig_bases__` 仍记**原始**表 ✓。
+    // **函数当元类**：不建类型，调 `meta(name, bases, namespace, **kwds)` 把返回值当类 ✓
+    // （`__prepare__` 已在上面的分支里处理过并提前返回 ✓）。
+    if let Some(meta) = callable_metaclass {
+        return finish_callable_metaclass(
+            instance,
+            meta,
+            &name,
+            &bases,
+            namespace,
+            &forwarded_keywords,
+        );
+    }
     let (resolved_bases, used_mro_entries) = resolve_bases(instance, &bases)?;
     if used_mro_entries {
         let original: Vec<NonNull<Header>> = bases
@@ -596,6 +653,36 @@ pub fn resolve_bases(
         instance.release(outcome);
     }
     Ok((resolved_bases, used_mro_entries))
+}
+
+/// **函数当元类**的收尾（round 82）：`meta(name, bases, namespace, **kwds)`，返回值即"类" ✓
+/// （参照不建类型；`test_metaclass` 的 doctest 钉住 `type(C) is dict` ✓）。
+fn finish_callable_metaclass(
+    instance: &Instance,
+    meta: NonNull<Header>,
+    name: &str,
+    bases: &[NonNull<Header>],
+    namespace: NonNull<Header>,
+    keywords: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let name_value = instance.new_str(name);
+    let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+    for base in bases {
+        // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
+        unsafe { instance.incref_object(base.as_ptr()) };
+        base_values.push(*base);
+    }
+    let bases_value = instance.new_tuple(base_values);
+    let result = crate::executor::call::call_value(
+        instance,
+        meta,
+        &[name_value, bases_value, namespace],
+        keywords,
+    );
+    instance.release(name_value);
+    instance.release(bases_value);
+    instance.release(namespace);
+    result
 }
 
 /// **不带类关键字**的那条旧口径（stdlib 装配用它 ✓ —— 那些都是内建类型的类体 ✓，没有类关键字 ✓）。

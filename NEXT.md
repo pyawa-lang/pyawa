@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 81：ABI 错误边界 `discard_raised`（SystemExit 例外保留）；`dispatch_raise` 真修复的双放对象已查明＝异常实参一枚 `str`；round 80：`attribute_optional` 清 pending 槽）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 82：函数当元类＋`type.__prepare__()` ⇒ `test_metaclass` doctest 差异 6+⇒2 类；round 81：ABI `discard_raised`；round 80：`attribute_optional` 清 pending 槽）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,16 +90,16 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 81 完成**：ABI 错误边界 `discard_raised`（`pa_exec_string` 一族取完消息后还 `Err(Raised)` 那份＋
-  摘 `pending_exception` 同款；`SystemExit` 保留 ⇒ `cli` 17 项仍过 ✓）——嵌入宿主不再漏「异常＋回溯＋整帧」；
-  `dispatch_raise` 真修复的**双放对象已查明**：本地用 conformance 的 `pyawa_side_runner` 稳定复现 SIGABRT，
-  `PYAWA_ZOMBIE_TRACE` 显示被双放的是**异常实参一枚 `str`**（首次释放于 `<module>@50`），`DANGLING` 栈为
-  POP_EXCEPT → 异常析构 → … → `list_clear` ⇒ 异常引用计数没错、载荷里的实参被提前多放一次。
-  **下一轮（round 82）**：① **按指针记账**（对异常实参记 incref/decref 次数与站点）钉住 `RAISE_VARARGS`／
-  `exception_new` 之间多放的那一份 ⇒ 落 `dispatch_raise` 消费语义真修复 ⇒ 解 `test_weakref` 超时（唯一超时）
-  ② `test_statistics` named-import + doctest 收集路径 segfault ③ `test_metaclass` 剩余差异（函数当元类＋
-  `type.__prepare__()`）④ `test_genexps` 剩 2 条 ⑤ `test_builtin` 编译器 panic／`test_calendar` UAF／
-  `test_collections` 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
+  **round 82 完成**：函数当元类（`metaclass=` 是普通可调用对象 ⇒ 照参照不建类型：`meta.__prepare__`
+  → 跑类体 → `meta(name, bases, ns, **kwds)` 返回值当类，`type(C) is dict` ✓）＋ `type.__prepare__()`
+  （默认元类给空 dict）⇒ `test_metaclass` 的 doctest 差异 6+ 条 ⇒ 2 类（`super().__prepare__` 的 super
+  属性通道／`Meta.mro` 覆写；文件仍未翻）；套件 38／84／274／1 持平。round 81 的实参双放记账：三次 decref
+  站点 = `_missing_hash@55`（call_callable 还实参）→ `exception_clear`（异常 args）→ `frame_clear`（回溯帧
+  局部），第三次打到 0 属正常 ⇒ 双放点在**列表载荷**（`list_clear`）一侧，需按「列表项」记账继续钉。
+  **下一轮（round 83）**：① **按列表项记账**钉住 `list_clear` 双放 ⇒ 落 `dispatch_raise` 消费语义真修复
+  ⇒ 解 `test_weakref` 超时（唯一超时）② `test_metaclass` 剩余 2 类（`super().__prepare__`／`Meta.mro`）
+  ③ `test_statistics` named-import + doctest 收集路径 segfault ④ `test_genexps` 剩 2 条 ⑤ `test_builtin`
+  编译器 panic／`test_calendar` UAF／`test_collections` 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。

@@ -15,6 +15,16 @@ use core::ptr::NonNull;
 
 /// `type.__subclasses__()` ✓（第 722 轮）：**直接**子类列表 ✓（按"基类里有它"反查注册表 ✓）——
 /// `Lib/_py_abc.py:132` 的 ABC 递归子类检查要它 ✓。
+/// `type.__prepare__(*args, **kwds)`：默认元类给空 `dict` ✓（参数忽略 ✓）。
+fn type_prepare_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_dict())
+}
+
 fn type_subclasses_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -297,6 +307,31 @@ pub(crate) fn attribute_lookup(
             }
         }
         return Ok(Attribute::Value(found));
+    }
+
+    // **`type.__prepare__()`**（round 82）：参照里默认元类也有 `__prepare__` ——
+    // `type.__prepare__()` 给空 `dict` ✓（`test_metaclass` 的 doctest 钉住；元类里
+    // `super().__prepare__(*args, **kwds)` 也走它 ✓）。参数一律忽略 ✓（参照同款 ✓）。
+    if name == "__prepare__" && instance.is_type_object(object) {
+        let method_type = instance
+            .type_named("builtin_function_or_method")
+            .expect("builtin_function_or_method 在引导期已登记");
+        let native = instance
+            .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                method_type,
+                "__prepare__",
+                core::cell::Cell::new(type_prepare_native),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
+        unsafe { instance.incref_object(object.as_ptr()) };
+        let bound = instance.alloc(MethodObject::new(
+            instance.type_named("method").expect("method 已登记"),
+            native,
+            object,
+        ));
+        return Ok(Attribute::Owned(bound.into_raw().cast::<Header>()));
     }
 
     // **`type.mro()`** ✓（第 722 轮）：参照里类对象有 `mro()`（返回**列表** ✓ —— 与 `__mro__`
