@@ -101,12 +101,20 @@ impl Emitter {
     /// 只用于"实参就是下标本身"的指令 ✓（`LOAD_GLOBAL`／`LOAD_ATTR` 那种带标志位的另行处理 ✗）。
     pub(crate) fn emit_indexed(&mut self, span: Span, name: &str, index: usize) {
         let opcode = opcode::opcode(name).expect("指令在表里");
-        if index > 255 {
-            self.emit_at(
-                span,
-                opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里"),
-                (index >> 8) as u8,
-            );
+        // **多字节 `EXTENDED_ARG`**（round 72 真 bug 修 ✗）：先前只发**一个** `EXTENDED_ARG` ✗
+        // ⇒ 下标 ≥ 65536（`(index >> 8) as u8` 截断成 0）会指回**第 0 项**：实测
+        // 65536 形参的 lambda 里 `LOAD_FAST` 最后一个形参变成 `_cls`（`b[-1]` 是类对象 ✗，
+        // `test_collections.test_large_size` 的 `b == tuple(...)` 断言）。解码器本来就按
+        // **累加多字节**处理 ✓（`decode.rs` 的 `checked_mul(256)`）。
+        let extended = opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里");
+        let mut high_bytes: Vec<u8> = Vec::new();
+        let mut high = index >> 8;
+        while high > 0 {
+            high_bytes.push((high & 0xFF) as u8);
+            high >>= 8;
+        }
+        for byte in high_bytes.iter().rev() {
+            self.emit_at(span, extended, *byte);
         }
         self.emit_at(span, opcode, (index & 0xFF) as u8);
     }
@@ -136,11 +144,15 @@ impl Emitter {
     /// 同 [`Self::emit_indexed`]，但记**无位点**（合成指令那条路 ✓）。
     pub(crate) fn emit_indexed_none(&mut self, name: &str, index: usize) {
         let opcode = opcode::opcode(name).expect("指令在表里");
-        if index > 255 {
-            self.emit_none(
-                opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里"),
-                (index >> 8) as u8,
-            );
+        let extended = opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里");
+        let mut high_bytes: Vec<u8> = Vec::new();
+        let mut high = index >> 8;
+        while high > 0 {
+            high_bytes.push((high & 0xFF) as u8);
+            high >>= 8;
+        }
+        for byte in high_bytes.iter().rev() {
+            self.emit_none(extended, *byte);
         }
         self.emit_none(opcode, (index & 0xFF) as u8);
     }

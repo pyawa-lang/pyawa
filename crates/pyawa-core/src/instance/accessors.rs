@@ -51,13 +51,11 @@ impl Instance {
             // SAFETY: 同上。
             let mapping = unsafe { entry.as_ref() }.dict();
             let Some(mapping) = mapping else { continue };
-            // SAFETY: mapping 由类型对象持有。
-            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-            let found = dict
-                .entries()
-                .into_iter()
-                .find(|(key, _)| str_matches(self, *key, name));
-            if let Some((_, value)) = found {
+            // **走哈希索引**（round 72 真性能 bug 修 ✗）：先前把类型字典**摊成 `entries()` 线性找** ✗
+            // ⇒ 类属性越多每次查越慢（150k 字段的 `namedtuple` 每个 `getattr` 都扫全表 ⇒
+            // `test_collections.test_large_size` 的 getattr 循环要 >200 s ✗）。`dict_get` 是
+            // **按字符串键的哈希索引** ✓（非字符串键本来就匹配不上旧口径的 `str_matches` ⇒ 语义不变 ✓）。
+            if let Some(value) = self.dict_get(mapping, name) {
                 return Some((entry, value));
             }
         }
