@@ -4,7 +4,7 @@
 //! * 仍在原处的被引用项：`attribute_lookup`、`bind_arguments`、`builtin_type`、`execute`、`function_closure`、`function_defaults`、`is_type_object`、`own_code`、`push`、`raise_builtin`、`release`、`value_into_raw` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{attribute_lookup, bind_arguments, builtin_type, execute, function_closure, function_defaults, own_code, raise_builtin, release, value_into_raw};
+use crate::executor::{attribute::attribute_lookup_swallowing, attribute_lookup, bind_arguments, builtin_type, execute, function_closure, function_defaults, own_code, raise_builtin, release, value_into_raw};
 use crate::executor::Attribute;
 use crate::builtin_objects::BuiltinFunctionObject;
 use core::cell::Cell;
@@ -267,7 +267,7 @@ pub(crate) fn call_callable(
     // `TypeError: 'X' object is not callable` ✗；`_sre.template` 要返回的**模板可调用对象**也压在这上面 ✓）。
     // 走**同一条属性通道** ✓（`attribute_lookup` ✓，与 `TS-44` 的其它方法一致 ✓）；`this` 就是 self ✓。
     if !callable_type_ok {
-        if let Ok(found) = attribute_lookup(instance, callable, "__call__") {
+        if let Some(found) = attribute_lookup_swallowing(instance, callable, "__call__") {
             let (function, this) = match found {
                 Attribute::Method { function, this } => (function, this),
                 Attribute::Value(method) | Attribute::Owned(method) => (method, callable),
@@ -506,6 +506,14 @@ pub(crate) fn call_callable(
                     init_args.extend(args.iter().copied());
                     let result = call_callable(instance, initializer, None, init_args, kwargs, opcode)?;
                     release(instance, result);
+                    let own_finalizer = instance
+                        .type_lookup_owner(class, "__del__")
+                        .is_some_and(|(owner, _)| owner == class);
+                    if instance.type_name(instance.type_of(initializer)) == "function"
+                        && !own_finalizer
+                    {
+                        release(instance, created);
+                    }
                 }
                 None => {
                     // 没有 `__init__`：把调用方那份实参归还
@@ -566,6 +574,14 @@ pub(crate) fn call_callable(
             )?;
             // `__init__` 必须返回 None（`T`／参照实现如此）；返回值丢掉那份引用
             release(instance, result);
+            let own_finalizer = instance
+                .type_lookup_owner(class, "__del__")
+                .is_some_and(|(owner, _)| owner == class);
+            let is_function_initializer =
+                instance.type_name(instance.type_of(initializer)) == "function";
+            if is_function_initializer && !own_finalizer {
+                release(instance, created);
+            }
             // initializer 的那份引用由 `call_callable` 接手（它内部会按需释放）
         } else {
             // 没有 `__init__`，且走的是**通用分配**（`attribute_new`）时，带实参创建就是错的

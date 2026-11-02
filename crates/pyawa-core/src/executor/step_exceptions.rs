@@ -58,7 +58,21 @@ fn step_exceptions_pop_except<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                 }
                 let previous = frame.get().pop()?;
                 if let Some(current) = instance.pop_exception() {
+                    // **`pending_exception` 槽要一并摘掉**（round 79 真泄漏修 ✗）：`raise()` 会给
+                    // 实例的"最近一次抛出"槽**加一份保活**（宿主诊断用）；异常被 `except` 处理完
+                    // （`POP_EXCEPT`）后那份还留着 ⇒ 异常对象连同它的**回溯链→帧→局部变量**全都
+                    // 永久活着（实测：`def f(): big=[5000 个对象]; raise ValueError`，`try/except`
+                    // 之后这 5000 个对象仍然活着 ✗ ⇒ `test_weakref` 的 7 万条压测帧被留住、
+                    // live 涨到 265 万 ⇒ 超时 ✗）。
+                    let pointer = current.as_ptr() as usize;
                     release(instance, current);
+                    if instance.pending_exception().map(|value| value.as_ptr() as usize)
+                        == Some(pointer)
+                    {
+                        if let Some(previous) = instance.set_pending_exception(None) {
+                            release(instance, previous);
+                        }
+                    }
                 }
                 if unsafe { previous.as_ref() }.ty() == instance.singletons().none_type() {
                     release(instance, previous);

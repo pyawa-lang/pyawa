@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 77：探针式属性查表异常泄漏修掉（`attribute_lookup_swallowing`）⇒ 被吞 AttributeError 泄漏归零、test_weakref 峰值 live 265 万⇒12.6 万；round 76：`__bases__` 保留显式冗余基类＋重复关键字 `SyntaxError`）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 79：实例化实参泄漏修掉＋`POP_EXCEPT` 清 pending 槽＋`__call__` 探针；`test_weakref` 超时真正大头＝被捕获异常的**回溯链留住整帧**，已实测复现、持有者未钉住；round 77：探针式属性查表泄漏归零）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,15 +90,15 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 77 完成**：探针式属性查表异常泄漏修掉（`attribute_lookup_swallowing`：还 `Err(Raised)` 引用＋
-  摘 `pending_exception`）⇒ 被吞 AttributeError 泄漏归零、`test_weakref` 峰值 live **265 万⇒12.6 万**；
-  但 `test_weakref` 仍 >280 s：**实例化实参泄漏**（每次带 `__init__` 的实例化漏 1 格实例引用）已钉死，
-  朴素 `release(created)` 修法实测双重释放（`ownership_shapes`／`import weakref` 堆损坏）⇒ 已撤回。
-  **下一轮（round 78）**：① **形参槽所有权重构**（盘点所有 `call_callable` 调用点：转移 vs 借用；让帧持有
-  或调用点统一归还；必跑 `ownership_shapes`＋`PYAWA_DANGLING` 闸门）⇒ 解 `test_weakref` 超时（唯一超时）
-  ② `test_statistics` named-import + doctest 收集路径 segfault ③ `test_metaclass` 剩余差异（函数当元类＋
-  `type.__prepare__()`）④ `test_genexps` 剩 2 条 ⑤ `test_builtin` 编译器 panic／`test_calendar` UAF／
-  `test_collections` 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
+  **round 79 完成**：实例化实参泄漏修掉（守卫＝Python 函数形态 `__init__` ＋ 类无自有 `__del__`；
+  `ownership_shapes`／`import weakref` 全过）＋`POP_EXCEPT` 清 `pending_exception` 槽＋`__call__` 探针；
+  **`test_weakref` 超时真正大头已复现并钉到行为面**：被 `except` 捕获的异常**回溯链留住整帧**
+  （`def f(): big=[3000 对象]; raise ValueError` ＋ try/except 之后 3000 对象全活、`traceback` 每次 ＋2；
+  已排除 pending 槽；持有者未钉住）⇒ 超时仍未解。
+  **下一轮（round 80）**：① **回溯链泄漏的持有者**（登记 traceback 创建/释放＋持有者快照，工具已验证有效）
+  ⇒ 解 `test_weakref` 超时（唯一超时）② `test_statistics` named-import + doctest 收集路径 segfault
+  ③ `test_metaclass` 剩余差异（函数当元类＋`type.__prepare__()`）④ `test_genexps` 剩 2 条
+  ⑤ `test_builtin` 编译器 panic／`test_calendar` UAF／`test_collections` 26F/50E ⑥ `P3-35`／`P3-29`／`P3-37`。：`compile(..., "single")`
   交互式显示（内建 `__pyawa_displayhook__`）＋ `print`／`displayhook` 每次读**当前** `sys.stdout`
   （模块属性走属性通道，修掉 SIGBUS）＋ `repr(Ellipsis)` ⇒ `test_unpack_ex` 剩 1F（星号目标的链式赋值
   `a, *b, c = *d, e = range(5)`）、`test_pep646_syntax` 剩 1F（`*args` 的函数注解）。
