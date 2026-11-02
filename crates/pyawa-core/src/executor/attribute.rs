@@ -488,6 +488,34 @@ pub fn attribute_read(
     }
 }
 
+/// **"探针式"查属性**（round 77 真 bug 修 ✗）：找不到（任何异常）都给 `None`，**并把异常的引用还掉**。
+///
+/// 动因：本层多处 `if let Ok(found) = attribute_lookup(...)` ✗ —— `Err(Raised)` 里那份异常引用
+/// 被**直接丢弃** ⇒ 每探一次泄漏一个"异常＋回溯＋帧"（实测 `get_attribute_with_protocol` 一族的
+/// 探针是 `test_weakref` 里 live 涨到 15.7 万的主因 ✓：`check_len_race` 99 轮 × 每轮几十次探针）。
+/// `attribute_optional` 也有同款隐患（它只放了 `Err` 那份、`pending_exception` 槽那份要一并摘 ✓）。
+pub(crate) fn attribute_lookup_swallowing(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Option<Attribute> {
+    match attribute_lookup(instance, object, name) {
+        Ok(found) => Some(found),
+        Err(ExecError::Raised { exception }) => {
+            // **只核指针、不解引用**（先放引用，异常可能就此归零 ✓）。
+            let pointer = exception.as_ptr() as usize;
+            release(instance, exception);
+            if instance.pending_exception().map(|value| value.as_ptr() as usize) == Some(pointer) {
+                if let Some(previous) = instance.set_pending_exception(None) {
+                    release(instance, previous);
+                }
+            }
+            None
+        }
+        Err(_) => None,
+    }
+}
+
 /// **取属性但不报错**：找不到（`AttributeError`）给 `None`，别的异常照上抛。
 ///
 /// 给 `GET_ITER` 的 `__iter__` 探测、`advance` 的 `__next__` 探测用——那两处要区分

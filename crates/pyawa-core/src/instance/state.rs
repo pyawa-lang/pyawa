@@ -116,7 +116,11 @@ impl Instance {
         object: NonNull<Header>,
         name: &str,
     ) -> Result<Option<NonNull<Header>>, ExecError> {
-        if let Ok(found) = crate::executor::attribute_lookup(self, object, name) {
+        if let Some(found) = crate::executor::attribute::attribute_lookup_swallowing(
+            self,
+            object,
+            name,
+        ) {
             return Ok(Some(match found {
                 crate::executor::Attribute::Owned(value)
                 | crate::executor::Attribute::Value(value) => value,
@@ -136,8 +140,12 @@ impl Instance {
         if name == "__getattr__" {
             return Ok(None);
         }
-        if let Ok(crate::executor::Attribute::Method { function, this }) =
-            crate::executor::attribute_lookup(self, object, "__getattr__")
+        if let Some(crate::executor::Attribute::Method { function, this }) =
+            crate::executor::attribute::attribute_lookup_swallowing(
+                self,
+                object,
+                "__getattr__",
+            )
         {
             let name_object = self.new_str(name);
             let found = crate::executor::call::call_callable(
@@ -177,8 +185,12 @@ impl Instance {
                 "__setattr__",
             );
             if own.is_some() && own != default {
-                if let Ok(crate::executor::Attribute::Method { function, this: _ }) =
-                    crate::executor::attribute_lookup(self, object, "__setattr__")
+                if let Some(crate::executor::Attribute::Method { function, this: _ }) =
+                    crate::executor::attribute::attribute_lookup_swallowing(
+                        self,
+                        object,
+                        "__setattr__",
+                    )
                 {
                     // **引用纪律照 `instance_attribute_set` 的 `__set__` 那条** ✓（`protocol.rs:166` ✓）：
                     // 对象与值各 retain 一份交出去 ✓（绑定用的 `this` 就是我们 retain 的那一份 ✓，

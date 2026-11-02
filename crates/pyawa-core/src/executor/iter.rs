@@ -82,7 +82,13 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             // `0,1,2,…` 依次取、遇 `IndexError` 收尾 ✓（`re._compiler` 的 `_compile` 迭代
             // `SubPattern` 就靠它 ✓）。这里**先物化**成列表再交给现成的 `list_iterator` ✓
             // （对 `re` 的用法等价 ✓；**如实记**：不是惰性 ✗，超大序列会先整体取完 ✓）。
-            if let Ok(getitem) = crate::executor::attribute_lookup(instance, iterable, "__getitem__") {
+            if let Some(getitem) =
+                crate::executor::attribute::attribute_lookup_swallowing(
+                    instance,
+                    iterable,
+                    "__getitem__",
+                )
+            {
                 let mut collected: Vec<NonNull<Header>> = Vec::new();
                 let mut index = 0i64;
                 loop {
