@@ -531,7 +531,18 @@ pub fn attribute_optional(
             // SAFETY: exception 是存活对象。
             let ty = unsafe { exception.as_ref() }.ty();
             if instance.is_subtype(ty, exception_type(instance, "AttributeError")) {
+                // **`pending_exception` 槽那份一并摘掉**（round 80 真泄漏修 ✗）：`raise()` 给
+                // "最近一次抛出"槽加过一份保活；探针吞掉异常时只放 `Err` 那份 ⇒ 槽里那份把
+                // **异常＋回溯＋帧**永久钉住 ✗（`hasattr` 一族探针每探一次漏一组）。只核指针、不解引用 ✓。
+                let pointer = exception.as_ptr() as usize;
                 release(instance, exception);
+                if instance.pending_exception().map(|value| value.as_ptr() as usize)
+                    == Some(pointer)
+                {
+                    if let Some(previous) = instance.set_pending_exception(None) {
+                        release(instance, previous);
+                    }
+                }
                 Ok(None)
             } else {
                 Err(ExecError::Raised { exception })
