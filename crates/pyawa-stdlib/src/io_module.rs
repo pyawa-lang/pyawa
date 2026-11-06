@@ -338,6 +338,23 @@ fn bytesio_readlines(
     }
 }
 
+/// **bytes-like 取值**（round 95）：`bytes`／`bytearray`／`memoryview` 都收 ✓（参照的缓冲协议 ✓）。
+fn bytes_like_vec(instance: &Instance, value: NonNull<Header>) -> Option<Vec<u8>> {
+    if let Some(raw) = instance.bytes_value(value) {
+        return Some(raw.to_vec());
+    }
+    let ty = instance.type_name(instance.type_of(value));
+    if ty == "bytearray" || ty == "memoryview" {
+        // 走公开构造：`bytes(x)`（stdlib 不能碰载荷布局 ✓）。
+        let bytes_type = instance.type_named("bytes")?;
+        let converted = pyawa_core::executor::call::call_value(instance, bytes_type.cast(), &[value], &[]).ok()?;
+        let raw = instance.bytes_value(converted).map(|slice| slice.to_vec());
+        instance.release(converted);
+        return raw;
+    }
+    None
+}
+
 fn bytesio_write(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -352,7 +369,7 @@ fn bytesio_write(
     }
     let Some(data) = rest
         .first()
-        .and_then(|value| instance.bytes_value(*value).map(|raw| raw.to_vec()))
+        .and_then(|value| bytes_like_vec(instance, *value))
     else {
         return Err(instance.raise_builtin_error(
             "TypeError",
@@ -1106,6 +1123,40 @@ fn text_wrapper_init(
     Ok(instance.retain(this))
 }
 
+/// `TextIOWrapper.__getattr__(name)`（round 95）：未定义的名字委派给二进制层 ✓。
+fn text_wrapper_getattr(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 缺少 self"));
+    };
+    let Some(name) = args.first().copied().and_then(|value| instance.text_of(value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 的名字要是 str"));
+    };
+    // **只委派"流操作"那一族**（round 95 收紧 ✗）：参照的 `io.TextIOWrapper(buffer)` **没有** `mode`
+    // 属性 ✓（`open()` 才在包装后设它 ✓）⇒ 宽委派会让 `hasattr(t,"mode")` 变 True 而**偏离参照** ✗
+    //（官方夹具 `fstring_io_shapes` 逐字节钉着 `enc utf-8 has-mode False` ✗）。
+    const DELEGATED: [&str; 10] = [
+        "fileno", "isatty", "seek", "tell", "flush", "writable", "readable", "seekable", "truncate",
+        "closed",
+    ];
+    if !DELEGATED.contains(&name) {
+        return Err(instance.raise_builtin_error("AttributeError", name));
+    }
+    let Some(buffer) = instance.attribute_optional_of(this, "_buffer").ok().flatten() else {
+        return Err(instance.raise_builtin_error("AttributeError", name));
+    };
+    let found = instance.attribute_optional_of(buffer, name).ok().flatten();
+    instance.release(buffer);
+    match found {
+        Some(value) => Ok(value),
+        None => Err(instance.raise_builtin_error("AttributeError", name)),
+    }
+}
+
 /// **整段解码并缓存** ✓：第一次读时把底层 `read()` 全取来 ✓，按 `encoding` 解码 ✓（一处真相 ✓）。
 fn text_wrapper_ensure_text(instance: &Instance, this: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
     let cached = instance.attribute_optional_of(this, "_text")?;
@@ -1307,6 +1358,12 @@ fn build_text_io(instance: &Instance, namespace: NonNull<Header>) {
         ("__enter__", text_wrapper_self_ref as NativeFn),
         ("__exit__", text_wrapper_exit as NativeFn),
         ("close", text_wrapper_close as NativeFn),
+        // **委派给二进制层**（round 95）：`sys.__stdout__.fileno()` 一族（`Lib/shutil.py` 的
+        // `get_terminal_size` 在导入期就调它 ✗ ⇒ 官方 `test_shutil` 一上来就
+        // `AttributeError: '_io.TextIOWrapper' object has no attribute 'fileno'` ✗）。
+        // 用 `__getattr__` 一路委派（`fileno`／`isatty`／`flush`／`seek`／`tell` 全走二进制层 ✓），
+        // 如实记 ✗：本层没有独立的文本层文件描述符语义 ✓。
+        ("__getattr__", text_wrapper_getattr as NativeFn),
     ];
     for (name, handler) in handlers {
         let function = make_native(instance, name, *handler);
@@ -1514,7 +1571,7 @@ fn file_write(
     let position = file_int(instance, this, "_pos").max(0) as usize;
     let append = file_flag(instance, this, "_append");
     if file_flag(instance, this, "_binary") {
-        let Some(raw) = instance.bytes_value(payload) else {
+        let Some(raw) = bytes_like_vec(instance, payload) else {
             let name = instance.type_name(instance.type_of(payload));
             return Err(instance.raise_builtin_error(
                 "TypeError",

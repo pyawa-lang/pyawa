@@ -14,3 +14,6 @@ venv/
 
 # 官方测试在仓库根跑出来的临时产物（os_helper.TESTFN 一族）
 @test_*
+
+# 官方测试在仓库根跑出来的临时工作目录（test.support 的 temp_cwd 一族）
+tempcwd/
