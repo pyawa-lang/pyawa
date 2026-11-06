@@ -591,6 +591,48 @@ pub(crate) fn build_stat_result(
     Ok(result)
 }
 
+/// **`os.lstat(path)`**（round 94，真实现 ✓）：不跟随最后一段的符号链接 ✓。
+///
+/// 本层 `fs` 能力**没有** `lstat` 槽 ⇒ 用 `readlink` 探"这段是不是链接"：
+/// - `readlink` 成功 ⇒ 返回**链接本身**的 `stat_result`（`st_mode = S_IFLNK|0o777`、
+///   `st_size = 目标长度` ✓；时间戳取不到就给 0 ✓）——**断链也能 stat** ✓（这正是
+///   `os.path.lexists` 要的：官方 `test_glob.test_glob_broken_symlinks` 用断链做夹具 ✗）；
+/// - `readlink` 不是链接（`EINVAL` 等）⇒ 退回 `stat`（跟随叶子）✓。
+///
+/// 先前 `os.lstat` 直接**别名到 `stat_native`** ✗ ⇒ 断链报 `ENOENT` ⇒ `lexists` False ⇒
+/// glob 漏掉断链 ✗。
+fn lstat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
+    };
+    let path = path_argument(instance, value, "stat")?;
+    // **不要先 `resolve_path`**（round 94 真 bug 修 ✗）：那个解析会**跟随最后一段** ⇒ 断链在
+    // readlink 之前就报 `ENOENT` ✗（`os.path.lexists` 对断链要 True ✓）。两个能力各自解析：
+    // `fs_readlink` 走 `resolve_path_parent`（不动叶子 ✓）、`fs_stat` 才跟随叶子 ✓。
+    if let Ok(target) = instance.fs_readlink(&path.bytes) {
+        let info = pyawa_capabilities::fs::FileInfo {
+            size: target.len() as u64,
+            // `S_IFLNK | 0o777`（Linux 的链接权限位）✓
+            mode: 0o120777,
+            is_dir: false,
+            dev: 0,
+            ino: 0,
+        };
+        return build_stat_result(instance, info, None);
+    }
+    let info = match instance.fs_stat(&path.bytes) {
+        Ok(info) => info,
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    };
+    let times = instance.fs_stat_times(&path.bytes).ok();
+    build_stat_result(instance, info, times)
+}
+
 /// **`os.fstat(fd)`**（round 91）：`os.stat_result` 的 fd 版本 ✓（`test_bufio` 的
 /// `PyBufferSizeTest.__init__` 用 `os.fstat(f.fileno())` 钉住）。走 `fs` 能力的 `fstat` 槽
 /// （`CP-31` 的 `fd → provider 句柄` 解析在 `Instance::fs_fstat` 里 ✓）。
@@ -2100,7 +2142,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let stat_fn = crate::builtins_module::make_native(instance, "stat", stat_native as pyawa_core::NativeFn);
     instance.dict_set(namespace, "stat", stat_fn);
     // `lstat`／`fstat` 与它**同源** ✓（provider 的同一个槽 ✓）：先各自给一份 ✓。
-    let lstat_fn = crate::builtins_module::make_native(instance, "lstat", stat_native as pyawa_core::NativeFn);
+    let lstat_fn = crate::builtins_module::make_native(instance, "lstat", lstat_native as pyawa_core::NativeFn);
     instance.dict_set(namespace, "lstat", lstat_fn);
     // **`stat_result`** ✓（第 722 轮）：`Lib/shutil.py:659` 要 `os.stat_result` ✓
     //（`os.py:55` 的 `from posix import *` 靠 `__all__` 带过去 ✓）。

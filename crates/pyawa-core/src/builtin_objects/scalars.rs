@@ -226,16 +226,30 @@ pub unsafe fn bytes_new(
             let Some(name) = instance.text_value(*encoding) else {
                 return Err(instance.raise_builtin_error("TypeError", "encoding must be a string"));
             };
-            match name.to_ascii_lowercase().replace('_', "-").as_str() {
-                // 第一刀只接 UTF-8（其余编码如实 LookupError ✓）。
-                "utf-8" | "utf8" | "u8" => {
-                    Ok(build(instance.encode_with_builtin_codec(&text, "utf-8", "strict")?))
-                }
-                other => Err(instance.raise_builtin_error(
-                    "LookupError",
-                    &format!("unknown encoding: {other}"),
-                )),
-            }
+            // **全部编码走一处委派**（round 94 修 ✗）：先前只接 UTF-8 ✗ ⇒
+            // `bytes("ab", "ISO-8859-1")`／`"x".encode("latin-1")` 之后的 `bytes(str, enc)` 形态报
+            // `LookupError: unknown encoding` ✗（官方 `fnmatch._compile_pattern` 对 **bytes 模式**
+            // 正是先 `str(pat,'ISO-8859-1')` 再 `bytes(res_str,'ISO-8859-1')` ⇒ `test_glob` 的
+            // bytes 用例全断 ✗）。`encode_wtf8_with_encoding_and_errors` 内部：内置四档快路 ✓、
+            // 其余经 `_codecs.lookup` 注册表（`Lib/encodings/*` 全族 ✓）。
+            instance.encode_wtf8_with_encoding_and_errors(&text, &name, "strict")
+        }
+        [only, encoding, errors] => {
+            // **三参形态**（`bytes('x', 'ascii', 'ignore')`）：错误处理器照参照 ✓。
+            let Some(text) = instance.wtf8_of(*only).map(<[u8]>::to_vec) else {
+                let name = instance.type_name(instance.type_of(*only));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("cannot convert '{name}' object to bytes"),
+                ));
+            };
+            let Some(name) = instance.text_value(*encoding) else {
+                return Err(instance.raise_builtin_error("TypeError", "encoding must be a string"));
+            };
+            let Some(handler) = instance.text_value(*errors) else {
+                return Err(instance.raise_builtin_error("TypeError", "errors must be a string"));
+            };
+            instance.encode_wtf8_with_encoding_and_errors(&text, &name, &handler)
         }
         _ => Err(crate::ExecError::Unsupported {
             opcode: 0,
