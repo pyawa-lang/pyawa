@@ -153,7 +153,18 @@ impl Emitter {
         // 即外层退出调用之前 ✓）⇒ 交给下面的兜底分支 ✓。
         // 注意：只对**正常 `with` 出口**（`containing_depth == None`）收紧；`break`／`continue`
         // 的重放路径（`Some`）它们的 `with` 退出调用已在出口臂里发过 ✓，这里的循环／收尾规则照旧 ✓。
-        if self.with_depth == 0 || containing_depth.is_some() {
+        // **还必须"直接位于循环体内"**（round 93 真 bug 修 ✗）：`for …: try: with A(): pass` 里
+        // 本层 `with` 的正常出口**不该**跳回 `FOR_ITER` ✗ —— 循环体里 `try` 之后的语句会被整段
+        // 跳过（实测：`for i in [1]: try: with open(...): pass; except OSError: pass; print("B")`
+        // 的 `print("B")` 不执行 ✓；`os.walk` 正是这个形状 ⇒ 遍历体一个条目都不进、整棵树不 yield
+        // ⇒ `shutil.rmtree` 只对根目录调 `rmdir` 得 ENOTEMPTY ✗）。
+        // 判据：`block_depth` 恰好是"循环体那一层"（循环帧的 `block_depth` 是进入循环体**之前**
+        // 的深度 ✓）⇒ 中间夹了 `try`／`if`／`with` 任何一层块时都改走下面的**块尾兜底** ✓。
+        let directly_in_loop_body = self
+            .loops
+            .last()
+            .is_some_and(|outer| self.block_depth == outer.block_depth + 1);
+        if (self.with_depth == 0 || containing_depth.is_some()) && directly_in_loop_body {
             if let Some(outer) = self.loops.last().cloned() {
                 self.emit_directed_jump(
                         position,
