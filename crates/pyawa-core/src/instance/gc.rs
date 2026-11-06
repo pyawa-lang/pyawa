@@ -163,19 +163,33 @@ impl Instance {
             if !header.has_flag(flags::FINALIZING) {
                 header.set_flag(flags::FINALIZING);
                 // **终结窗口里临时自持一份**（CPython `PyObject_CallFinalizerFromDealloc` 同款；
-                // `P3-41` round 43 修 ✗✗）：`__del__` 的帧会持有 `self` 形参（本轮把形参所有权
-                // 交还帧 ⇒ 帧收尾会 decref 它）⇒ 之前计数会**在终结器返回前回到 0** ⇒ 内层
-                // `release_object` 重入 `release_one` ⇒ 当场 `clear`＋释放正在终结的对象 ⇒
-                // 外层复活判断读到悬垂指针／用例里 `__del__` 被反复调用（实测 `test_dict` 的
-                // `test_clear_reentrant_delete` 无限打 `del-key/keyerror`）。
-                // 自持一份后，终结器里的 decref 最低也停在 1 ✓；返回后**直接减计数**（不走释放流程）
-                // 再看是否真复活 ✓。
+                // `P3-41` round 43 修 ✗✗）：`__del__` 的帧会持有 `self` 形参（当时口径：形参所有权
+                // **不在帧**）⇒ 之前计数会**在终结器返回前回到 0** ⇒ 内层 `release_object` 重入
+                // `release_one` ⇒ 当场 `clear`＋释放正在终结的对象 ⇒ 外层复活判断读到悬垂指针／
+                // 用例里 `__del__` 被反复调用（实测 `test_dict` 的 `test_clear_reentrant_delete`
+                // 无限打 `del-key/keyerror`）。自持一份后，终结器里的 decref 最低也停在 1 ✓；
+                // 返回后**直接减计数**（不走释放流程）再看是否真复活 ✓。
+                // **诊断**（round 90，门控 `PYAWA_DEL_TRACE=1`）：终结前后打印计数与引用类型，
+                // 用于"帧所有权统一"实验期间定位复活判定（那次实验已撤回，见 round 90 台账 ✓）。
+                let trace = crate::diag::flag("PYAWA_DEL_TRACE");
+                if trace {
+                    // SAFETY: ptr 是存活对象；类型对象由注册表持有 ✓。
+                    let ty_name = unsafe { (*ptr.as_ptr()).ty().as_ref().name() };
+                    eprintln!(
+                        "[del] 终结前 ptr={:p} rc={} ty={ty_name}",
+                        ptr.as_ptr(),
+                        header.refcount()
+                    );
+                }
                 // SAFETY: ptr 是本实例的存活对象，计数已归零且仍在待处理栈上。
                 unsafe { self.incref_object(ptr.as_ptr()) };
                 // SAFETY: 同上。
                 unsafe { finalize(ptr.as_ptr(), self) };
                 let header = unsafe { ptr.as_ref() };
                 let remaining = header.decref();
+                if trace {
+                    eprintln!("[del] 终结后 rc={remaining}");
+                }
                 if remaining != 0 {
                     // 复活：清除 FINALIZING 并**放弃释放**（OM-20）。
                     header.clear_flag(flags::FINALIZING);

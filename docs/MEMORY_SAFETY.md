@@ -28,6 +28,13 @@
 ## 3. 当前清单（按根因族，证据在 round 台账）
 
 ### A 族：调用/返回的所有权模型不统一（最核心，是 `test_weakref` 超时的根因）
+
+> **round 90 新事实（改变顺序）**：把 `frame_clear` 改成「拥有并释放形参槽」后，实参泄漏 **+100 ⇒ 0**、
+> conformance 双模式全绿，但 **`__del__` 帧的释放晚于 `python_level_finalize` 返回** ⇒ 复活判定被
+> 延迟 decref 误判 ⇒ `__del__` 无限重复（最小脚本 6.5M 次后超时）⇒ **实验撤回**。
+> **新顺序**：① 先查清 `__del__` 帧为何被多持一份、释放被推迟（候选：`f_back`／`pending_exception`／
+> `traceback.tb_frame`／异常状态栈）→ ② 再统一形参所有权 → ③ 最后删补偿性释放（`call.rs` 的
+> `__init__` 两处）。诊断开关：`PYAWA_DEL_TRACE=1`（终结前后计数／类型）。
 - 位置实参泄漏：`f(x)`×100 ⇒ refcount **+100**（参照 0）；
 - `dispatch_raise` 的异常引用**双放**（conformance 的 `pyawa_side_runner` 可稳定复现 `tcache` SIGABRT；
   `PYAWA_ZOMBIE_TRACE` 显示被双放的是一枚 `str`）；

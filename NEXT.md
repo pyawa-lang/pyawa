@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,15 +90,17 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 89 完成**：修 `itertools.groupby` 的**键双持有真双放**（`groups` 里的 `(key, 元素表)` 与
-  `current` 比较缓存把**同一份引用**存两处 ⇒ 换组/收尾 `release(previous)` 提前打掉 `groups` 的键引用，
-  结果元组释放时再放一次）⇒ **悬垂全量 memory 1 ⇒ 0，硬门①首次达成** ✅；如实记：本层 `groupby` 仍是
-  急求值 ⇒ `test_issue30347_2` 仍以状态 5 结束（不再是内存安全事件）。套件 **43／85／268／1 全部持平**。
-  **下一轮**：① 内存安全 A 族第 1 批：先落「按指针记账＋逐调用点断言」脚手架（只测量不改语义），再
-  `CALL/CALL_KW/CALL_FUNCTION_EX` → `call_value` → 内部 `call_callable` 分批迁移（三种「只改 Python 分支」
-  变体已证伪）② 惰性 `itertools.groupby`（两级迭代器共享组状态；语义缺口非内存安全）③ `test_weakref`
-  超时（A 族根因）④ `test_calendar` UAF／`test_statistics` 收集路径 segfault ⑤ `test_genexps` 剩 2 条／
-  `test_deque` 协议面／`test_collections` 26F/50E ⑥ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
+  **round 90 撤回轮**：试「`frame_clear` 拥有形参」统一所有权 ⇒ 实参泄漏 **+100⇒0**、生成器形参 0、
+  conformance 双模式全绿、`test_weakref` 导入（DANGLING 下）不再堆损坏；但 `finalize_shapes`
+  `a_rebound_instance_calls_dunder_del` 挂起：`PYAWA_DEL_TRACE` 显示 **`__del__` 帧的 `frame_clear`
+  发生在 `python_level_finalize` 返回之后** ⇒ 终结器用「返回后计数」判复活 ⇒ 把**延迟 decref**
+  误判成复活 ⇒ 清 `FINALIZING` ⇒ 延迟 decref 归零后再次终结 ⇒ 无限循环（最小脚本 6.5M 次后超时）。
+  **新事实（改变 A 族顺序）**：① 先查清 `__del__` 帧被谁多持一份／为何释放被推迟（候选 `f_back`／
+  `pending_exception`／`traceback.tb_frame`／异常状态栈）② 再统一形参所有权 ③ 最后删 `call.rs` 的
+  两处补偿性释放。实验已撤回（行为同 round 89 ✓），保留 `PYAWA_DEL_TRACE=1` 诊断。
+  **下一轮**：① 钉「`__del__` 帧延迟释放」的持有者（挂 `watch_address` 回溯）② `test_weakref`
+  性能面（`len_race` 单跑 12 s vs 参照 <0.1 s，疑 GC/weakref 路径慢）③ `test_genexps` 剩 2 条／
+  `test_deque` 协议面／`test_collections` 26F/50E ④ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
 
 ## 内存安全专项（口径与路线）
 
