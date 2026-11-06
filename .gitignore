@@ -11,3 +11,6 @@ __pycache__/
 # Python 虚拟环境（协作者自用）
 .venv/
 venv/
+
+# 官方测试在仓库根跑出来的临时产物（os_helper.TESTFN 一族）
+@test_*
