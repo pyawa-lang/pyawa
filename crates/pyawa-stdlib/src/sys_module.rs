@@ -866,6 +866,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **`sys.stdin`**（round 49）：最小"恒 EOF"文本流（见 `make_stdin_stream` 的如实口径 ✓）。
     let stdin = crate::_io_module::make_stdin_stream(instance);
     instance.dict_set(namespace, "stdin", stdin);
+    // **`sys.__stdout__`／`__stderr__`／`__stdin__`**（round 95）：参照里是"**原始**标准流"对象 ✓
+    // （本层没有重定向器 ⇒ 与 `stdout`／`stderr`／`stdin` 同一对象 ✓，如实登记偏差 ✓）。
+    // 缺它们时 `Lib/shutil.py` 的 `get_terminal_size` 回退路径在**导入期**就读 `sys.__stdout__` ✗
+    // ⇒ 官方 `test_shutil` 一上来 `AttributeError: 'module' object has no attribute '__stdout__'` ✗。
+    instance.dict_set(namespace, "__stdout__", stdout);
+    instance.dict_set(namespace, "__stderr__", stderr);
+    instance.dict_set(namespace, "__stdin__", stdin);
 
     // **`excepthook`／`__excepthook__`** ✓（第 724 轮）：`Lib/threading.py` 的
     // `_make_invoke_excepthook()` 读 `_sys.excepthook` ✓ —— 缺它 `import threading` 走到

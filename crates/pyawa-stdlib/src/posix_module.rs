@@ -98,6 +98,37 @@ fn exit_native(
 /// `'//a/../..'` ⇒ `'//'` ✓、`'x/../../y'` ⇒ `'../y'` ✓。
 ///
 /// **如实说** ✗：只接 `str` ✓。
+/// **`normpath` 的字节版**（round 95）：与上面 `str` 版同一口径（`splitroot` ＋ 逐段折叠 ✓）。
+fn normpath_bytes(path: &[u8]) -> Vec<u8> {
+    if path.is_empty() {
+        return b".".to_vec();
+    }
+    let (initial_slashes, rest): (&[u8], &[u8]) = if !path.starts_with(b"/") {
+        (b"", path)
+    } else if path.get(1) != Some(&b'/') || path.get(2) == Some(&b'/') {
+        (b"/", &path[1..])
+    } else {
+        (b"//", &path[2..])
+    };
+    let mut folded: Vec<&[u8]> = Vec::new();
+    for component in rest.split(|byte| *byte == b'/') {
+        if component.is_empty() || component == b"." {
+            continue;
+        }
+        let keep = component != b".."
+            || (initial_slashes.is_empty() && folded.is_empty())
+            || folded.last().copied() == Some(b"..");
+        if keep {
+            folded.push(component);
+        } else if !folded.is_empty() {
+            folded.pop();
+        }
+    }
+    let mut out = initial_slashes.to_vec();
+    out.extend(folded.join(&b'/'));
+    out
+}
+
 fn path_normpath_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -107,10 +138,18 @@ fn path_normpath_native(
     let Some(value) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "_path_normpath() 要 1 个实参"));
     };
+    // **`bytes` 形态也收**（round 95）：`Lib/posixpath.py` 的 `abspath` 对 bytes 路径直接调
+    // `_path_normpath(p)` ✓ —— 先前只认 str ⇒ 官方 `test_tempfile` 的
+    // `TestMkdtemp.test_basic_with_bytes_names` 报 `TypeError: _path_normpath() 的参数要是 str` ✗。
+    if let Some(raw) = instance.bytes_value(value) {
+        let raw = raw.to_vec();
+        let folded = normpath_bytes(&raw);
+        return Ok(instance.new_bytes(&folded));
+    }
     let Some(path) = instance.text_of(value) else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "_path_normpath() 的参数要是 str（**bytes 随后补** ✗）",
+            "_path_normpath() 的参数要是 str 或 bytes",
         ));
     };
     if path.is_empty() {
@@ -558,11 +597,36 @@ pub(crate) fn build_stat_result(
         ("st_size", info.size as i64),
         ("st_dev", info.dev as i64),
         ("st_ino", info.ino as i64),
+        // **补齐参照 `stat_result` 的必有名**（round 95）：`shutil.gettarinfo` 读
+        // `st_uid`／`st_gid`／`st_nlink`／`st_mtime` ✗ —— 缺名 ⇒ 官方 `test_shutil` 的归档用例
+        // 当场 `AttributeError: 'os.stat_result' object has no attribute 'st_uid'` ✗。
+        // 值如实：`nlink` 本层能力面取不到 ⇒ 1（普通文件/目录的常见真值 ✓）；`uid`/`gid` 取不到 ⇒ 0
+        // （**如实偏差** ✗：`CP-23` 的属主面未接线 ✓）。
+        ("st_nlink", 1),
+        ("st_uid", 0),
+        ("st_gid", 0),
     ] {
         let object = instance.new_int(number);
         let outcome = instance.set_attribute_value(result, field, object);
         instance.release(object);
         let _ = outcome;
+    }
+    if times.is_none() {
+        // 取不到时间戳时也把**必有名**补成 0 ✓（参照 `stat_result` 六项时间戳恒在 ✓；不补会让
+        // `getattr(st, 'st_mtime', 0)` 之外的直接读法 `AttributeError` ✗）。
+        for field in [
+            "st_atime",
+            "st_mtime",
+            "st_ctime",
+            "st_atime_ns",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        ] {
+            let object = instance.new_int(0);
+            let outcome = instance.set_attribute_value(result, field, object);
+            instance.release(object);
+            let _ = outcome;
+        }
     }
     if let Some(times) = times {
         // `st_*time`：**浮点秒**（参照实测就是 `ns / 1e9` 同一个浮点值）。
@@ -2271,6 +2335,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("putenv"),
         instance.new_str("isatty"),
         instance.new_str("scandir"),
+        instance.new_str("DirEntry"),
+        instance.new_str("ScandirIterator"),
         instance.new_str("unsetenv"),
         instance.new_str("readlink"),
         instance.new_str("listdir"),
@@ -2306,6 +2372,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("WSTOPSIG"),
         instance.new_str("WNOHANG"),
     ]);
+    // **`os.DirEntry`／`os.ScandirIterator` 类型对象**（round 95）：`Lib/filecmp.py` 用
+    // `isinstance(entry, os.DirEntry)`（`os.DirEntry` 必须是**模块属性** ✓）；参照的 `os.__all__`
+    // 也含这两个名字 ✓。类型在首次 `scandir` 时建（这里先建好并导出 ✓）。
+    let dir_entry_type = scandir_type(instance, "os.DirEntry");
+    instance.dict_set(namespace, "DirEntry", dir_entry_type.cast::<Header>());
+    let scandir_iterator_type = scandir_type(instance, "os.ScandirIterator");
+    instance.dict_set(namespace, "ScandirIterator", scandir_iterator_type.cast::<Header>());
     instance.dict_set(namespace, "__all__", exports);
     // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定
     // `supports_follow_symlinks` 一族 ✓）。**如实说** ✗：本层还没实现那些可选能力 ✓ ⇒ 给**空表** ✓

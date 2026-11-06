@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 94：`bytes(str,enc)` 全编码（`fnmatch` bytes 模式）＋`os.lstat` 真实现（断链／`lexists`）⇒ `test_glob`、`test_fnmatch` 转绿，套件 45⇒47；round 93：编译器真 bug（`for: try: with:` 的正常出口跳回循环续点）＋`os.scandir`/`DirEntry`/`PathLike` ⇒ `test_mimetypes` 转绿、套件 44⇒45、`os.walk`/`shutil.rmtree` 转通；round 92：补 `gc.get_debug/set_debug/get_count`、`os.putenv/unsetenv/isatty`、`set.intersection` 一族 ⇒ 面向 `test_gc`/`test_mimetypes`/`test__colorize` 的首因，套件 44／85／267／1 ⇒ 44／86／266／1（无翻页）；round 91：`test_bufio` 转绿——`os.fstat`／`os.chdir`／`int.__index__`／`os.write` 缓冲协议＋`bytearray` 缓冲快路（`_pyio` 100 KB 0.27 s⇒毫秒）⇒ 套件 43⇒44；round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 95：`del obj.attr` 的 `__delattr__` 分派（`unittest.mock` 收尾）⇒ `test__colorize` 转绿，套件 47⇒48；顺带 `sys.__stdout__`／标准流 `fileno`／`os.DirEntry` 导出／`stat_result` 必有名／`_io` 缓冲协议／`bytes` normpath；round 94：`bytes(str,enc)` 全编码（`fnmatch` bytes 模式）＋`os.lstat` 真实现（断链／`lexists`）⇒ `test_glob`、`test_fnmatch` 转绿，套件 45⇒47；round 93：编译器真 bug（`for: try: with:` 的正常出口跳回循环续点）＋`os.scandir`/`DirEntry`/`PathLike` ⇒ `test_mimetypes` 转绿、套件 44⇒45、`os.walk`/`shutil.rmtree` 转通；round 92：补 `gc.get_debug/set_debug/get_count`、`os.putenv/unsetenv/isatty`、`set.intersection` 一族 ⇒ 面向 `test_gc`/`test_mimetypes`/`test__colorize` 的首因，套件 44／85／267／1 ⇒ 44／86／266／1（无翻页）；round 91：`test_bufio` 转绿——`os.fstat`／`os.chdir`／`int.__index__`／`os.write` 缓冲协议＋`bytearray` 缓冲快路（`_pyio` 100 KB 0.27 s⇒毫秒）⇒ 套件 43⇒44；round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,17 +90,19 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 94 完成**：**`bytes(str, encoding)` 只接 UTF-8 的真缺口**（`scalars.rs` 的 `bytes_new` 两参
-  形态；`fnmatch._compile_pattern` 对 bytes 模式先 `str(pat,'ISO-8859-1')` 再 `bytes(res_str,'ISO-8859-1')`
-  ⇒ 后者 `LookupError`，`test_glob` bytes 用例大半断✓）—— 两参／三参都改走
-  `encode_wtf8_with_encoding_and_errors`（内置四档＋`_codecs` 注册表）＋ **`os.lstat` 真实现**
-  （先前别名到 `stat` ⇒ 断链 `ENOENT` ⇒ `lexists` False ⇒ glob 漏断链；现在 `readlink`（不跟随叶子）
-  成功即返回 `S_IFLNK` 的 stat_result，否则退回 stat；另修"先 `resolve_path` 再 readlink"的二级真 bug）
-  ⇒ **`test_glob`（24E⇒OK）与 `test_fnmatch` 转绿**，套件 **45⇒47**。`test_tempfile` 2F/58E⇒2F/57E 继续收敛。
-  **下一轮**：① `test_tempfile`（2F/57E）／`test_filecmp`（16E）／`test_shutil`（`'module' object has no
-  attribute …`）继续收敛 ② `unittest.mock` 的 dunder 面（`test__colorize` 末条）③ 内存安全 A 族
-  「`__del__` 帧延迟释放」持有者 ④ `test_genexps` 剩 2 条／`test_deque` 协议面／`test_collections`
-  26F/50E ⑤ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
+  **round 95 完成**：**`del obj.attr` 必须按类型 `__delattr__` 分派**（真缺口）—— 先前直接删实例字典 ✗ ⇒
+  `unittest.mock` 的 `MagicMock.__delattr__` 不被调 ⇒ `_mock_set_magics` 的 `delattr(self, entry)` 报
+  `AttributeError: 'MagicMock' object has no attribute '__lt__'` ✗。现在：用户 `__delattr__` 优先 ✓、
+  `object` 默认实现走**另一条**底层删除路（`instance_attribute_delete_default`，防递归 ✓），并给
+  `object` 类型字典补 `__delattr__`（`super().__delattr__` 的落点）。顺带：`sys.__stdout__` 一族、
+  标准流 `fileno()`／`isatty()`（绑定方法）、`os.DirEntry`／`os.ScandirIterator` 模块属性导出、`stat_result`
+  必有名（`st_nlink=1`/`st_uid=0`/`st_gid=0`＋时间戳补 0）、`_io` write 收缓冲协议、`posix._path_normpath`
+  收 bytes、`TextIOWrapper.__getattr__` 白名单委派（收紧，保 `hasattr(t,'mode')==False` 夹具 ✓）。
+  ⇒ **`test__colorize` 转绿**（套件 **47⇒48**）；`test_filecmp` 16E⇒14F/2E、`test_tempfile` 57E⇒52E、
+  `test_shutil` 从导入即错到跑完 218 测试（均未翻）。
+  **下一轮**：① `test_filecmp`（14F/2E）／`test_tempfile`（2F/52E）／`test_shutil`（3F/87E）继续收敛
+  ② 内存安全 A 族「`__del__` 帧延迟释放」持有者 ③ `test_genexps` 剩 2 条／`test_deque` 协议面／
+  `test_collections` 26F/50E ④ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
 
 ## 内存安全专项（口径与路线）
 

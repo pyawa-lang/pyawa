@@ -120,6 +120,29 @@ pub fn object_setattr_native(
     crate::executor::attribute::attribute_write(instance, object, &text, *value)?;
     Ok(instance.retain(instance.singletons().none()))
 }
+/// `object.__delattr__(self, name)`（round 95）：走 `instance_attribute_delete` ✓。
+///
+/// 动因：`unittest.mock` 的 `NonCallableMock.__delattr__` 在"非魔法名"分支里 `super().__delattr__(name)`
+/// ✗ ⇒ `object` 类型字典里没有 `__delattr__` 就 `AttributeError: 'super' object has no attribute '__delattr__'` ✗
+/// （官方 `test__colorize` 的 mock 收尾 ✓）。注意 `instance_attribute_delete` 里"用户 `__delattr__` 优先"
+/// 的判据会**跳过 `object` 的默认实现**（防递归 ✓）⇒ 本函数直接进入删实例字典那条路 ✓。
+pub fn object_delattr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(object), Some(name)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__delattr__ expected 2 arguments"));
+    };
+    let Some(text) = instance.text_of(*name).map(|text| text.to_owned()) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    crate::executor::protocol::instance_attribute_delete_default(instance, object, &text)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// `object.__getattribute__(self, name)`：走 `attribute_read`。
 pub fn object_getattribute_native(
     instance: &Instance,

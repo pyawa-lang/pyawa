@@ -314,6 +314,27 @@ pub fn instance_attribute_delete(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<(), ExecError> {
+    instance_attribute_delete_inner(instance, object, name, false)
+}
+
+/// [`instance_attribute_delete`] 的**跳过"用户 `__delattr__` 优先"**版本（round 95）：
+/// `object.__delattr__` 的默认实现要走到"删实例字典"这条底层路 ✓ —— 它本身已经处在
+/// `__delattr__` 分派**之内** ✗，再问一次用户钩子就会**无限递归** ✗
+/// （实测 `class A: def __delattr__(...): object.__delattr__(self, name)` ⇒ RecursionError ✗）。
+pub(crate) fn instance_attribute_delete_default(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<(), ExecError> {
+    instance_attribute_delete_inner(instance, object, name, true)
+}
+
+fn instance_attribute_delete_inner(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    skip_user_hook: bool,
+) -> Result<(), ExecError> {
     let missing = || {
         // SAFETY: object 是存活对象。
         let type_name = unsafe { object.as_ref().ty().as_ref() }.name();
@@ -323,6 +344,33 @@ pub fn instance_attribute_delete(
             &format!("'{type_name}' object has no attribute '{name}'"),
         )
     };
+    // **用户 `__delattr__` 优先**（round 95）：参照里 `del obj.attr` = `type(obj).__delattr__(obj, name)` ✓
+    // —— 先前直接删实例字典 ✗ ⇒ `unittest.mock` 的 `MagicMock.__delattr__`（清理 `_mock_children` 等）
+    // 根本不被调 ⇒ `_mock_set_magics` 的 `delattr(self, entry)` 抛 `AttributeError: 'MagicMock' object
+    // has no attribute '__lt__'` ✗（官方 `test__colorize` 末条 ✓）。
+    // 守卫：`__delattr__` 自身不再递归 ✓；**`object` 的默认实现**不在这里调（它就是"删实例字典"，即本函数下文 ✓）。
+    if !skip_user_hook && name != "__delattr__" {
+        // SAFETY: object 是存活对象。
+        let object_type = unsafe { object.as_ref() }.ty();
+        let object_default = instance.type_named("object");
+        if let Some((owner, hook)) = instance.type_lookup_owner(object_type, "__delattr__") {
+            let is_object_default = object_default.is_some_and(|default| default == owner);
+            if !is_object_default {
+                let name_object = instance.new_str(name);
+                let returned = call_callable(
+                    instance,
+                    hook,
+                    Some(object),
+                    vec![name_object],
+                    Vec::new(),
+                    0,
+                );
+                instance.release(name_object);
+                release(instance, returned?);
+                return Ok(());
+            }
+        }
+    }
     // **数据描述符 `__delete__`** ✓（第 192 轮）：类型 MRO 上若有 `__delete__` ⇒ 调它 ✓（优先于实例字典 ✓）。
     {
         // SAFETY: object 是存活对象。

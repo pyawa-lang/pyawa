@@ -1254,6 +1254,13 @@ impl Instance {
                 "__getattribute__",
                 crate::builtin::object::object_getattribute_native as crate::NativeFn,
             ),
+            // **`object.__delattr__`**（round 95）：`super().__delattr__(name)` 的落点 ✓
+            // （`unittest.mock` 的 `NonCallableMock.__delattr__` 非魔法名分支要用 ✓）。
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__delattr__",
+                crate::builtin::object::object_delattr_native as crate::NativeFn,
+            ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__init__",
