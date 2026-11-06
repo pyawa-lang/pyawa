@@ -314,6 +314,27 @@ pub unsafe fn exception_getattr(
             None => instance.new_none(),
         }),
         "__suppress_context__" => Some(instance.new_bool(object.suppress_context())),
+        // **`SystemExit.code`**（round 88）：参照里是 `args[0]`（无实参 ⇒ `None`）✓；
+        // 其它异常没有这个属性 ⇒ 交回调用方继续走类型字典／报 AttributeError ✓
+        // （实测 `except SystemExit as e: e.code` 先前报 `'SystemExit' object has no attribute 'code'` ✗）。
+        "code" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            let ty = unsafe { (*ptr).ty() };
+            let is_system_exit = instance
+                .type_named("SystemExit")
+                .is_some_and(|system_exit| instance.is_subtype(ty, system_exit));
+            if !is_system_exit {
+                return None;
+            }
+            Some(match object.args().first() {
+                Some(value) => {
+                    // SAFETY: 值由本对象持有，这里新增一份交给调用方 ✓。
+                    unsafe { instance.incref_object(value.as_ptr()) };
+                    *value
+                }
+                None => instance.new_none(),
+            })
+        }
         // **`with_traceback(tb, /)`**（task-24 扩）：参照里它是 `BaseException` 的方法 ✓
         //（`Lib/unittest/case.py:279` 的 `exc_value.with_traceback(None)` 正靠它 ✓）。
         // 与 `dict_getattr` 同一做法：把原生函数**绑到本实例**上交出去 ✓（调用时 `bound` 就是 self ✓）。

@@ -608,6 +608,31 @@ impl BigInt {
         self
     }
 
+    /// **从"低位在前的 64 位字"直接造**（round 88，`getrandbits` 大 `k` 用 ✓）：**O(n)** ✓。
+    ///
+    /// 为什么需要：先前 `getrandbits(2**31)` 在 stdlib 里逐字 `shl(64)` ＋ `bit_or` ⇒ 每个字
+    /// 都要拷贝整条 `limbs` ⇒ **O(n²)** —— 2G 位＝3350 万字 ⇒ 实测直接卡死（`test_random` 超时 ✗）。
+    /// 这里把 `u64` 摊成两个 `u32` 肢（小端），最高字按 `bits` 截断再规范化 ✓。
+    pub fn from_words_le(words: &[u64], bits: usize) -> Self {
+        let mut limbs: Vec<u32> = Vec::with_capacity(words.len() * 2);
+        for word in words {
+            limbs.push(*word as u32);
+            limbs.push((*word >> 32) as u32);
+        }
+        // **先截断到 `bits` 需要的肢数、再遮最高肢**（顺序反了会多留一整肢 ⇒ `getrandbits` 返回
+        // 比 `k` 位更长的数 ⇒ `random._randbelow` 的拒绝采样几乎永不命中 ⇒ 卡死 ✗；round 88 实测
+        // `randrange(2**140)` 一次要几秒到几十秒 ✓）。
+        let needed = bits.div_ceil(32);
+        limbs.truncate(needed);
+        let remainder = bits % 32;
+        if remainder != 0 {
+            if let Some(last) = limbs.last_mut() {
+                *last &= (1u32 << remainder) - 1;
+            }
+        }
+        Self { negative: false, limbs }.normalized()
+    }
+
     /// **二进制位数**（`int.bit_length()` 的任意精度版 ✓，round 67 起公开）：`0` ⇒ `0` ✓。
     pub fn bit_length(&self) -> u64 {
         match self.limbs.last() {

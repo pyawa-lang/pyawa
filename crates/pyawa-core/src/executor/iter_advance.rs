@@ -765,28 +765,42 @@ fn advance_filter(
         let Some(item) = advance_iterator(instance, inner, opcode)? else {
             return Ok(None);
         };
-        let verdict = if predicate == instance.singletons().none() {
-            item
-        } else {
-            match call_value(instance, predicate, &[item], &[]) {
-                Ok(value) => {
-                    release(instance, item);
-                    value
-                }
+        // **真值判定与"让出那份引用"是两件事**（round 88 真 bug 修 ✗）：先前 `predicate is None`
+        // 分支把 `item` 当 `verdict` 一起 `release`，再 `return Ok(Some(item))` ✗ ⇒ **返回的是
+        // 已经释放的指针** ⇒ 调用方（`str.join`／`list` 等）拿它再放一次就是双放／堆损坏 ✗
+        // （实测最小复现：`prog = '%(p)s' % dict(p="p"); ' '.join(filter(None, [prog]));
+        // prog.removeprefix(...)` 在 `PYAWA_QUARANTINE=1` 下报"incref 撞上已释放对象（str）" ✗；
+        // 这也让 `test_platform`／`test_random`／`test_urlparse`／`test_webbrowser` 在
+        // `PYAWA_DANGLING=1` 下报内存安全类失败 ✓）。
+        // 正确口径：**判真值期间 `item` 一直归本函数** ✓；`truthy` 才把那份引用**交出去**，
+        // 否则归还 ✓。有 predicate 时 predicate 的返回值另算一份（`call_value` 会 incref 实参 ✓）。
+        let truthy = if predicate == instance.singletons().none() {
+            match truthiness(instance, item, opcode) {
+                Ok(value) => value,
                 Err(error) => {
                     release(instance, item);
                     return Err(error);
                 }
             }
+        } else {
+            let verdict = match call_value(instance, predicate, &[item], &[]) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, item);
+                    return Err(error);
+                }
+            };
+            let truthy = match truthiness(instance, verdict, opcode) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, verdict);
+                    release(instance, item);
+                    return Err(error);
+                }
+            };
+            release(instance, verdict);
+            truthy
         };
-        let truthy = match truthiness(instance, verdict, opcode) {
-            Ok(value) => value,
-            Err(error) => {
-                release(instance, verdict);
-                return Err(error);
-            }
-        };
-        release(instance, verdict);
         if truthy {
             return Ok(Some(item));
         }
