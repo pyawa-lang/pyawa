@@ -11,7 +11,7 @@ use core::ptr::NonNull;
 use pyawa_capabilities::fs::open_flag;
 use pyawa_core::{AttributeObject, Header, Instance};
 
-use crate::io_module::{fs_error, fs_error_with_display};
+use crate::io_module::{fs_error_with_display};
 
 
 /// **机器错误 ⇒ `OSError` 子类**（`CM-19`／`CM-20`：按 **errno 名**查表 ✓）。
@@ -443,10 +443,57 @@ fn write_native(
     };
     let handle = instance.int_value(handle_value).unwrap_or(-1) as u64;
     // **安全访问器** ✓（本 crate **禁 `unsafe`** ✓ ⇒ 设计规矩 ✓）。
-    let Some(data) = instance.bytes_value(data_value) else {
+    // **`memoryview` 也收**（round 91）：`Lib/_pyio.py` 的 `BufferedWriter` 在 `flush` 里
+    // 把缓冲当 **`memoryview`** 传给 raw 的 `write` ⇒ 先前只认 `bytes` ⇒
+    // `test_bufio` 的 `PyBufferSizeTest` 两条 `TypeError: write() 的数据要是 bytes` ✗。
+    // 取法：走 `memoryview` 自己的 `tobytes` 方法（与用户语义同一处真相 ✓），取回 bytes 后即还。
+    let owned: Option<Vec<u8>> = if let Some(data) = instance.bytes_value(data_value) {
+        Some(data.to_vec())
+    } else if instance.type_name(instance.type_of(data_value)) == "bytearray" {
+        // `_pyio` 的缓冲在 flush 时可能是 `bytearray`／`memoryview` ✓（参照的 `os.write` 收任意缓冲协议 ✓）。
+        let bytes_type = instance.type_named("bytes").expect("bytes 已登记");
+        match pyawa_core::executor::call::call_value(
+            instance,
+            bytes_type.cast(),
+            &[data_value],
+            &[],
+        ) {
+            Ok(converted) => {
+                let value = instance.bytes_value(converted).map(|slice| slice.to_vec());
+                instance.release(converted);
+                value
+            }
+            Err(_) => None,
+        }
+    } else if instance.type_name(instance.type_of(data_value)) == "memoryview" {
+        // 走 memoryview 自己的 `tobytes`（用户语义一处真相 ✓；先取属性再 `call_value`，
+        // 与 `attribute_optional_of` 的**新引用**契约一致 ✓）。
+        match instance
+            .attribute_optional_of(data_value, "tobytes")
+            .ok()
+            .flatten()
+        {
+            Some(method) => {
+                let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+                instance.release(method);
+                match outcome {
+                    Ok(result) => {
+                        let value = instance.bytes_value(result).map(|slice| slice.to_vec());
+                        instance.release(result);
+                        value
+                    }
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let Some(data) = owned else {
         return Err(instance.raise_builtin_error("TypeError", "write() 的数据要是 bytes"));
     };
-    match instance.fs_write(handle, data) {
+    match instance.fs_write(handle, &data) {
         Ok(written) => Ok(instance.new_int(written as i64)),
         Err(_) => Err(instance.raise_builtin_error("OSError", "write：写不了")),
     }
@@ -479,24 +526,12 @@ fn stat_result_type(instance: &Instance) -> NonNull<pyawa_core::TypeObject> {
 ///
 /// **如实说** ✗：`st_uid` 一族仍未接；`st_dev`／`st_ino` 仍来自 `FileInfo` 的既有值（provider 目前给
 /// 0，属 `CP-23` 的保留面，不在本格）。
-fn stat_native(
+/// 组装一个 `os.stat_result`（`stat`／`fstat` 共用 ✓，round 91 抽出）。
+fn build_stat_result(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    info: pyawa_capabilities::fs::FileInfo,
+    times: Option<pyawa_capabilities::fs::FileTimes>,
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    let Some(value) = args.first().copied() else {
-        return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
-    };
-    let path = path_argument(instance, value, "stat")?;
-    let info = match instance.fs_stat(&path.bytes) {
-        Ok(info) => info,
-        Err(error) => {
-            return Err(fs_error_with_display(instance, error, &path.display));
-        }
-    };
-    // **时间戳是追加槽**：取不到（旧宿主／槽未实现）就不补名 —— 不能把"读不到"编成 0 ✗。
-    let times = instance.fs_stat_times(&path.bytes).ok();
     // **先分配结果对象，再往它自己的实例属性上写**（task-19 的共享类型 bug 修 ✗）。
     let result_type = stat_result_type(instance);
     let result = instance
@@ -541,6 +576,74 @@ fn stat_native(
         }
     }
     Ok(result)
+}
+
+/// **`os.fstat(fd)`**（round 91）：`os.stat_result` 的 fd 版本 ✓（`test_bufio` 的
+/// `PyBufferSizeTest.__init__` 用 `os.fstat(f.fileno())` 钉住）。走 `fs` 能力的 `fstat` 槽
+/// （`CP-31` 的 `fd → provider 句柄` 解析在 `Instance::fs_fstat` 里 ✓）。
+fn fstat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fstat() takes no keyword arguments",
+        ));
+    }
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fstat() takes exactly one argument (0 given)",
+        ));
+    };
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("fstat() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let Some(fd) = instance.int_value(value) else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("an integer is required (got type {name})"),
+        ));
+    };
+    if fd < 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "file descriptor cannot be a negative integer",
+        ));
+    }
+    let info = match instance.fs_fstat(fd as u64) {
+        Ok(info) => info,
+        Err(error) => return Err(fs_error_with_display(instance, error, "")),
+    };
+    build_stat_result(instance, info, None)
+}
+
+fn stat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
+    };
+    let path = path_argument(instance, value, "stat")?;
+    let info = match instance.fs_stat(&path.bytes) {
+        Ok(info) => info,
+        Err(error) => {
+            return Err(fs_error_with_display(instance, error, &path.display));
+        }
+    };
+    // **时间戳是追加槽**：取不到（旧宿主／槽未实现）就不补名 —— 不能把"读不到"编成 0 ✗。
+    let times = instance.fs_stat_times(&path.bytes).ok();
+    build_stat_result(instance, info, times)
 }
 
 /// **`os.terminal_size` 的每实例唯一类型对象**（task-8）：与 [`stat_result_type`] 同一口径
@@ -723,6 +826,50 @@ fn get_terminal_size_native(
     ))
 }
 
+/// **`posix.chdir(path)`**（round 91）：改**实例** cwd（`CP-22`）✓ —— 之后相对路径解析
+/// （`fs_open`／`fs_stat` 一族都走 `Instance::resolve_path` ✓）以新 cwd 为起点 ✓。
+///
+/// 实现：路径经 `path_argument`（str／bytes／PathLike）⇒ `resolve_path`（guest 绝对、夹根 ✓）⇒
+/// `fs_stat` 确认是目录（否则 `NotADirectoryError`）⇒ `set_path_cwd` ✓。
+/// **不碰宿主进程 cwd** ✓（`CX-3`：实例状态，禁止进程级副作用 ✓）。
+fn chdir_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("posix.chdir() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.chdir() takes no keyword arguments",
+        ));
+    }
+    let path = path_argument(instance, args[0], "chdir")?;
+    let resolved = match instance.resolve_path(&path.bytes) {
+        Ok(resolved) => resolved,
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    };
+    match instance.fs_stat(&resolved) {
+        Ok(info) => {
+            if !info.is_dir {
+                return Err(instance.raise_builtin_error(
+                    "NotADirectoryError",
+                    &format!("[Errno 20] Not a directory: {}", path.display),
+                ));
+            }
+        }
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    }
+    instance.set_path_cwd(&resolved);
+    Ok(instance.new_none())
+}
+
 /// **`posix.getcwd()`** ✓（task-10）：`sysconfig` 一族的**第一道 import 闸** ✓ —— 它不是直接调
 /// `os.getcwd()`，而是 `Lib/posixpath.py` 的 `realpath` 对**绝对路径**也会调 `os.getcwd()`
 /// （`posixpath.py:381`／`426`；`sysconfig/__init__.py:219` 的 `_safe_realpath(sys.executable)` 经它 ✓）。
@@ -750,34 +897,10 @@ fn getcwd_native(
             "posix.getcwd() takes no keyword arguments",
         ));
     }
-    match current_dir_bytes() {
-        // **PEP 383**：`getcwd()` = `fsdecode(getcwdb())` —— 原始字节按
-        // utf-8＋surrogateescape 解成 WTF-8 str（含代理的目录名 ⇒ `'\udcff'` 一类）✓。
-        Ok(bytes) => decode_path_text(instance, &bytes),
-        Err(error) => Err(fs_error(
-            instance,
-            pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
-            "",
-        )),
-    }
-}
-
-/// **当前工作目录的原始字节**（P3-38 S3b-3）：`getcwdb` 的真值、`getcwd` 的输入。
-///
-/// `std::env::current_dir()` 给的 `PathBuf` 在 Unix 上可经 `OsStrExt` **原样取字节**
-/// （安全视图；`T-CX-4` 的禁面是 `std::fs`／`std::net`／`libc`／`cfg(target_os)`，不含
-/// `std::os::unix::ffi`——既有 `std::env` 先例同口径）。非 Unix 目标回退 lossy（如实偏差）。
-fn current_dir_bytes() -> Result<Vec<u8>, std::io::Error> {
-    let path = std::env::current_dir()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        Ok(path.as_os_str().as_bytes().to_vec())
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(path.to_string_lossy().as_bytes().to_vec())
-    }
+    // **读实例 cwd**（round 91，`CP-22`）：`os.chdir` 之后 `os.getcwd()` 必须跟着变 ✓ ——
+    // 先前读的是**宿主进程** cwd ✗（`chdir` 接线后两者会分叉 ✗）。初值是首次解析时从宿主 cwd 取 ✓。
+    let bytes = instance.path_cwd();
+    decode_path_text(instance, &bytes)
 }
 
 /// **`posix.getcwdb()`** ✓（task-10；P3-38 S3b-3 修字节口径）：返回 **`bytes`**（原始字节 ✓）。
@@ -799,14 +922,8 @@ fn getcwdb_native(
             "posix.getcwdb() takes no keyword arguments",
         ));
     }
-    match current_dir_bytes() {
-        Ok(bytes) => Ok(instance.new_bytes(&bytes)),
-        Err(error) => Err(fs_error(
-            instance,
-            pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
-            "",
-        )),
-    }
+    let bytes = instance.path_cwd();
+    Ok(instance.new_bytes(&bytes))
 }
 
 /// **`posix.readlink(path, *, dir_fd=None)`** ✓（task-10）：真值走 **`fs` 能力域**的 `readlink` 槽 ✓
@@ -1525,6 +1642,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // **task-10**：`sysconfig` 族的 import 闸（`getcwd` 经 `posixpath.realpath` 隐式要 ✓）＋
         // `test.support` 链的模块级 `SAVEDCWD = os.getcwd()` ✓；`readlink` 同理（`realpath` ✓）。
         ("getcwd", getcwd_native as pyawa_core::NativeFn),
+        // **`os.chdir`**（round 91）：实例 cwd（`CP-22`）；`test.support` 的 `os_helper` 一族要靠它 ✓。
+        ("chdir", chdir_native as pyawa_core::NativeFn),
+        // **`os.fstat`**（round 91）：fd 版 stat_result（`test_bufio` 钉住 ✓）。
+        ("fstat", fstat_native as pyawa_core::NativeFn),
         ("getcwdb", getcwdb_native as pyawa_core::NativeFn),
         ("readlink", readlink_native as pyawa_core::NativeFn),
         // **P3-38 S3b-2**：路径面（真文件、含非 UTF-8 文件名）✓
@@ -1594,6 +1715,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("getpid"),
         instance.new_str("getcwd"),
         instance.new_str("getcwdb"),
+        instance.new_str("chdir"),
+        instance.new_str("fstat"),
         instance.new_str("readlink"),
         instance.new_str("listdir"),
         instance.new_str("rename"),

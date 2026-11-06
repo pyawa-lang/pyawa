@@ -123,6 +123,12 @@ pub unsafe fn int_getattr(
         _ => {}
     }
     let handler: NativeFn = match name {
+        // **`int.__index__`／`__int__`**（round 91）：`Lib/_pyio.py` 的 `read(size)`／`seek(pos)`
+        // 直接取 `size.__index__`（**不走 `operator.index`**）✗ ⇒ int 实例没这个属性就
+        // `TypeError: -1 is not an integer` ✗（`test_bufio` 的 `_pyio` 两条踩到 ✓）。
+        // 返回**绑定方法**（不是值本身 ✗ —— 否则 `x.__index__()` 报 `'int' object is not callable` ✓）；
+        // 参照语义：`int.__index__()` 返回自身；`bool.__index__()` 返回 **int** ✓。
+        "__index__" | "__int__" => int_index_native,
         "to_bytes" => int_to_bytes_native,
         "bit_length" => int_bit_length_native,
         // **第 352 轮补**：`int.bit_count` ✓（`Lib/` 与测试里常用 ✓）。
@@ -221,6 +227,23 @@ pub(crate) fn int_to_bytes_native(
 ///
 /// 这是**类型级**用法（`int.from_bytes` ⇒ 没有接收者 ✓），注册走 `set_type_attribute` ✓
 /// —— 与 `str.maketrans` 同一条路 ✓（见 `instance.rs` 那张类型属性表 ✓）。
+/// `int.__index__()`／`int.__int__()`（round 91）：`int` 返回自身 ✓（`bool` 返回 **int** ✓）。
+pub(crate) fn int_index_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(value) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__index__() 缺少 self"));
+    };
+    if instance.type_of(value) == instance.singletons().bool_type() {
+        let raw = i64::from(unsafe { &*value.as_ptr().cast::<crate::builtin_objects::BoolObject>() }.value);
+        return Ok(instance.new_int(raw));
+    }
+    Ok(instance.retain(value))
+}
+
 /// `int.conjugate()` ✓（round 47）：返回本体（`bool` ⇒ **int** 本体，参照 ✓）。
 pub(crate) fn int_conjugate_native(
     instance: &Instance,

@@ -180,6 +180,9 @@ impl Instance {
                         ptr.as_ptr(),
                         header.refcount()
                     );
+                    if ty_name == "A" {
+                        self.watch_address(ptr);
+                    }
                 }
                 // SAFETY: ptr 是本实例的存活对象，计数已归零且仍在待处理栈上。
                 unsafe { self.incref_object(ptr.as_ptr()) };

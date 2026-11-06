@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 91：`test_bufio` 转绿——`os.fstat`／`os.chdir`／`int.__index__`／`os.write` 缓冲协议＋`bytearray` 缓冲快路（`_pyio` 100 KB 0.27 s⇒毫秒）⇒ 套件 43⇒44；round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,17 +90,16 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 90 撤回轮**：试「`frame_clear` 拥有形参」统一所有权 ⇒ 实参泄漏 **+100⇒0**、生成器形参 0、
-  conformance 双模式全绿、`test_weakref` 导入（DANGLING 下）不再堆损坏；但 `finalize_shapes`
-  `a_rebound_instance_calls_dunder_del` 挂起：`PYAWA_DEL_TRACE` 显示 **`__del__` 帧的 `frame_clear`
-  发生在 `python_level_finalize` 返回之后** ⇒ 终结器用「返回后计数」判复活 ⇒ 把**延迟 decref**
-  误判成复活 ⇒ 清 `FINALIZING` ⇒ 延迟 decref 归零后再次终结 ⇒ 无限循环（最小脚本 6.5M 次后超时）。
-  **新事实（改变 A 族顺序）**：① 先查清 `__del__` 帧被谁多持一份／为何释放被推迟（候选 `f_back`／
-  `pending_exception`／`traceback.tb_frame`／异常状态栈）② 再统一形参所有权 ③ 最后删 `call.rs` 的
-  两处补偿性释放。实验已撤回（行为同 round 89 ✓），保留 `PYAWA_DEL_TRACE=1` 诊断。
-  **下一轮**：① 钉「`__del__` 帧延迟释放」的持有者（挂 `watch_address` 回溯）② `test_weakref`
-  性能面（`len_race` 单跑 12 s vs 参照 <0.1 s，疑 GC/weakref 路径慢）③ `test_genexps` 剩 2 条／
-  `test_deque` 协议面／`test_collections` 26F/50E ④ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
+  **round 91 完成**：**`test_bufio` 转绿**（套件跑通 43⇒44）——`os.fstat`（新增 `Instance::fs_fstat`，
+  `stat_result` 组装抽 `build_stat_result` 一处真相）＋`os.chdir`（实例 cwd，`getcwd`/`getcwdb` 改读实例
+  cwd；`posix.__all__` 补名）＋`int.__index__`/`__int__`（绑定方法；`_pyio` 的 `read(size)` 直接取
+  `size.__index__`）＋`os.write` 收 `bytearray`/`memoryview`＋**`bytearray.extend`/`+=` 缓冲协议快路**
+  （`_pyio.BufferedWriter.write` 100 KB 0.27 s⇒毫秒级 ⇒ `test_bufio` 4 用例 >200 s ⇒ **5.7 s OK**）。
+  `test_unicode_file` 仍有 2E（`unicodedata.normalize` 数据面＋`os.chmod`）；`test_httpservers` 81E
+  （线程／socket 能力域）。
+  **下一轮**：① 内存安全 A 族「`__del__` 帧延迟释放」持有者（`watch_address` 回溯）② `test_genexps`
+  剩 2 条（tuple id 复用＋`__next__.__doc__`）③ `test_deque` 协议面／`test_collections` 26F/50E
+  ④ `os.chmod`／`unicodedata.normalize` 等数据面／能力域缺口 ⑤ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
 
 ## 内存安全专项（口径与路线）
 

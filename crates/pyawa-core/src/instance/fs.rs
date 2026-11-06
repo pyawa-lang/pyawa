@@ -118,6 +118,37 @@ impl Instance {
         }
     }
 
+    /// **经 `fs` 域按 `fd` 取元信息**（`fstat(file)`；`CP-31` 的 `fd → provider 句柄` 解析在这里 ✓）。
+    ///
+    /// 动因（round 91）：`os.fstat` 未接线 ⇒ 官方 `test_bufio` 的 `PyBufferSizeTest.__init__`
+    /// 直接 `AttributeError: 'module' object has no attribute 'fstat'` ✗（该文件只剩这 2 个错误 ✓）。
+    /// 标准流 `0/1/2` 不占能力表槽位 ⇒ `fs_provider_handle` 直接当下标用 ✓（`_io` 的既有约定 ✓）。
+    pub fn fs_fstat(&self, fd: u64) -> Result<pyawa_capabilities::fs::FileInfo, CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let fstat = table.fstat.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.fs_provider_handle(fd)?;
+        let mut info = pyawa_capabilities::fs::FileInfo {
+            size: 0,
+            mode: 0,
+            is_dir: false,
+            dev: 0,
+            ino: 0,
+        };
+        let mut errno = 0i32;
+        match fstat(
+            table.state,
+            pyawa_capabilities::fs::Handle(handle),
+            &mut info,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(info),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     /// **经 `fs` 域取文件时间戳**（`stat_times(name)`；`CP-30` 的**追加槽**，`AB-41` 次版本 2）。
     ///
     /// 名字先经 VM 解析器（与 [`Instance::fs_stat`] 同一条口径）；槽缺失（1.1 的旧宿主）或

@@ -665,6 +665,32 @@ pub(crate) fn bytearray_extend_native(
         return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 拿到了别的类型" });
     };
     let value = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 要一个实参" })?;
+    // **缓冲协议快路**（round 91，性能修 ✗）：`Lib/_pyio.py` 的 `BufferedWriter.write` 是
+    // `self._write_buf.extend(memoryview(b))` ✓ —— 先前走 `sequence_items` 的**通用迭代**
+    // （逐元素走 Python 协议）⇒ 100 KB 要 0.27 s ✗（`test_bufio` 因此 >200 s、超出调查器超时 ✓）。
+    // 参照语义：`bytearray.extend` 接受任意缓冲协议 ✓；这里对 `bytes`／`bytearray`／`memoryview`
+    // 走**整段拷贝** ✓，其余仍旧走通用迭代 ✓。
+    let fast: Option<Vec<u8>> = if let Some(raw) = instance.bytes_value(value) {
+        Some(raw.to_vec())
+    } else if let Some(other) = bytearray_of(instance, value) {
+        Some(unsafe { other.as_ref() }.value().to_vec())
+    } else if instance.type_name(instance.type_of(value)) == "memoryview" {
+        match crate::builtin_objects::memoryview_fields(instance, value) {
+            Some((source, _format, _itemsize, offset, nbytes)) => {
+                crate::builtin_objects::memoryview_source_bytes(instance, source).map(|bytes| {
+                    let end = (offset + nbytes).min(bytes.len());
+                    bytes[offset.min(end)..end].to_vec()
+                })
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    if let Some(bytes) = fast {
+        unsafe { data.as_ref() }.value().extend(bytes);
+        return Ok(instance.retain(instance.singletons().none()));
+    }
     let items = crate::executor::sequence_items(instance, value, 0)?;
     let mut bytes = Vec::with_capacity(items.len());
     for item in items {

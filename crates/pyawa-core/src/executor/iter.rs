@@ -790,7 +790,7 @@ pub fn concat_public(
     let is_byte_like = |object: NonNull<Header>| {
         matches!(
             instance.type_name(instance.type_of(object)).as_str(),
-            "bytes" | "bytearray"
+            "bytes" | "bytearray" | "memoryview"
         )
     };
     if (instance.type_name(left_type) == "bytearray"
@@ -800,10 +800,24 @@ pub fn concat_public(
     {
         let mut joined: Vec<u8> = Vec::new();
         for side in [left, right] {
-            if instance.type_name(instance.type_of(side)) == "bytearray" {
+            let side_type = instance.type_name(instance.type_of(side));
+            if side_type == "bytearray" {
                 // SAFETY: 类型身份已确认，载荷就是 `BytearrayObject`。
                 let data = unsafe { &*side.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() };
                 joined.extend(data.value().iter().copied());
+            } else if side_type == "memoryview" {
+                // **`bytearray += memoryview`**（round 91，性能修 ✗）：`Lib/_pyio.py` 的
+                // `BufferedWriter.write` 是 `self._write_buf += memoryview(b)` ✓ —— 先前这一档
+                // 落进通用迭代（逐个元素走 Python 协议）⇒ 100 KB 要 0.27 s ✗（`test_bufio`
+                // 因此 >200 s、超出调查器 120 s 超时 ✓）。这里按 `tobytes` 同一口径**整段拷贝** ✓。
+                if let Some((source, _format, _itemsize, offset, nbytes)) =
+                    crate::builtin_objects::memoryview_fields(instance, side)
+                {
+                    if let Some(bytes) = crate::builtin_objects::memoryview_source_bytes(instance, source) {
+                        let end = (offset + nbytes).min(bytes.len());
+                        joined.extend_from_slice(&bytes[offset.min(end)..end]);
+                    }
+                }
             } else {
                 // SAFETY: 同上（另一侧是 `bytes`）。
                 let data = unsafe { &*side.as_ptr().cast::<crate::builtin_objects::BytesObject>() };
