@@ -45,12 +45,8 @@ pub unsafe fn deque_new(
     }
     let deque = instance.alloc(DequeObject::new(class, RefCell::new(Vec::new()), Cell::new(maxlen)));
     if let Some(iterable) = iterable {
-        // **摊开可迭代对象**（`collect_iterable` 是既有的公开入口 ✓ —— 一处真相 ✓）
-        for value in instance.collect_iterable(iterable)? {
-            // SAFETY: value 由调用方那份引用持有，这里新增一份交给 deque ✓。
-            unsafe { instance.incref_object(value.as_ptr()) };
-            deque.get().push_back(instance, value);
-        }
+        // **摊开可迭代对象**（round 86：走迭代器协议 ✓，见 `deque_extend_from_iterable`）
+        deque_extend_from_iterable(instance, deque.get(), iterable, false)?;
     }
     Ok(deque.into_raw().cast::<Header>())
 }
@@ -180,6 +176,39 @@ pub(crate) unsafe fn deque_popleft_native(
     unsafe { instance.release_object(value.as_ptr()) };
     Ok(value)
 }
+/// **把任意可迭代对象摊进 deque**（round 86）：走**迭代器协议** ✓（`iter_object` ＋
+/// `advance_iterator`；`advance` 交的是**新引用** ⇒ `push_*` 直接接手 ✓）。先前走
+/// `collect_iterable` ✗ ⇒ 只认 list／tuple／set／frozenset ⇒ `deque(deque(...))`／
+/// `d.extend(生成器)` 报"bytes(<可迭代>)：只接线了 …"（张冠李戴的消息）✗。
+fn deque_extend_from_iterable(
+    instance: &Instance,
+    object: &DequeObject,
+    iterable: NonNull<Header>,
+    front: bool,
+) -> Result<(), ExecError> {
+    let iterator = instance.iter_object(iterable)?;
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(value)) => {
+                if front {
+                    object.push_front(instance, value);
+                } else {
+                    object.push_back(instance, value);
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                // SAFETY: iterator 是 `iter_object` 交出的新引用。
+                unsafe { instance.release_object(iterator.as_ptr()) };
+                return Err(error);
+            }
+        }
+    }
+    // SAFETY: 同上。
+    unsafe { instance.release_object(iterator.as_ptr()) };
+    Ok(())
+}
+
 /// 把一份实参（可迭代）摊进 deque 的某一端 ✓。
 pub(crate) unsafe fn deque_extend_common(
     instance: &Instance,
@@ -191,15 +220,7 @@ pub(crate) unsafe fn deque_extend_common(
     let Some(iterable) = args.first() else {
         return Err(instance.raise_builtin_error("TypeError", "extend expected 1 argument"));
     };
-    for value in instance.collect_iterable(*iterable)? {
-        // SAFETY: value 由调用方那份引用持有 ✓。
-        unsafe { instance.incref_object(value.as_ptr()) };
-        if front {
-            object.push_front(instance, value);
-        } else {
-            object.push_back(instance, value);
-        }
-    }
+    deque_extend_from_iterable(instance, object, *iterable, front)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 /// `deque.extend(iterable)` ✓。

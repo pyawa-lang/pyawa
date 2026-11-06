@@ -111,6 +111,26 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     };
     let is_list = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "list");
     let is_tuple = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "tuple");
+    // **`deque` 按值比**（round 86）：参照的 `deque.__eq__` 逐项比 ✓；同一对象已在函数开头
+    // 用身份短路 ✓（`test_contains.test_nonreflexive` 的 `nan`／`NEVER_EQ` 依赖它 ✓）。
+    if subtype_of(left_type, "deque") && subtype_of(right_type, "deque") {
+        // SAFETY: 类型身份已确认，两侧载荷同为 `DequeObject` ✓。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<crate::builtin_objects::DequeObject>(),
+                &*right.as_ptr().cast::<crate::builtin_objects::DequeObject>(),
+            )
+        };
+        if a.len() != b.len() {
+            return false;
+        }
+        let left_items = a.items();
+        let right_items = b.items();
+        return left_items
+            .iter()
+            .zip(right_items.iter())
+            .all(|(left, right)| values_equal(instance, *left, *right));
+    }
     if is_list(left_type) && is_list(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe { (&*left.as_ptr().cast::<ListObject>(), &*right.as_ptr().cast::<ListObject>()) };

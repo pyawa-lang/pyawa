@@ -369,6 +369,8 @@ impl SetObject {
     /// **转交**出去 ✓），没找到给 `None` ✓。本层 `set` 按**插入顺序**存 ✓（`SetObject` 的
     /// 既有口径 ✓），相等性由调用方按 `values_equal` 判定后传入**下标** ✓。
     pub fn remove_at(&self, index: usize) -> Option<NonNull<Header>> {
+        // **作废查找索引**（round 86 真 bug 修 ✗）：见上面 `remove` 的同一注释 ✓。
+        *self.index.borrow_mut() = None;
         let mut items = self.items.borrow_mut();
         if index >= items.len() {
             return None;
@@ -450,7 +452,12 @@ impl SetObject {
     }
 
     /// 删除第 `index` 项，返回被删的那份引用（调用方负责释放）。
+    /// **作废查找索引**（round 86 真 bug 修 ✗）：删除会让后面元素下标前移 ⇒ 索引里的旧下标错位 ✓；
+    /// 先前 `discard`／`pop`／`remove` 都不作废 ⇒ **删过元素后 `in` 会漏判**（实测
+    /// `test_baseexception` 里 `exc_set.discard(...)` 之后 `assertIn('BaseExceptionGroup', …)` 失败 ✗，
+    /// 而 `repr` 里明明有它 ✓）。`DictObject::remove_at` 一直有这一步 ✓，此处补齐 ✓。
     pub fn remove(&self, index: usize) -> Option<NonNull<Header>> {
+        *self.index.borrow_mut() = None;
         let mut items = self.items.borrow_mut();
         if index >= items.len() {
             return None;

@@ -52,6 +52,33 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
         unsafe { instance.incref_object(iterable.as_ptr()) };
         return Ok(iterable);
     }
+    // **`deque` 的迭代**（round 86，参照 `collections.deque`）：直接按 `items` 物化成一个 `list`
+    // 再交给现成的 `list_iterator` ✓（**如实记**：不是参照的 `_deque_iterator`，是**快照** ✓ ——
+    // 迭代中修改 deque 的语义与参照可能不同 ✗；`test_contains`／`in` 这类只读用法完全等价 ✓）。
+    if instance
+        .type_named("deque")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
+        // SAFETY: iterable 由调用方保证存活、类型刚确认是 deque 族（载荷同构 ✓）。
+        let deque = unsafe { &*iterable.as_ptr().cast::<crate::builtin_objects::DequeObject>() };
+        let items: Vec<NonNull<Header>> = deque
+            .items()
+            .into_iter()
+            .map(|item| instance.retain(item))
+            .collect();
+        let snapshot = instance.new_list(items);
+        let iterator_type = iterator_type_for(instance, snapshot)?;
+        // 迭代器要自己那份 list 引用 ✓（本函数不消耗快照 ✓）。
+        // SAFETY: snapshot 是本函数的新引用，存活。
+        unsafe { instance.incref_object(snapshot.as_ptr()) };
+        let iterator = instance.alloc(IteratorObject::new(
+            iterator_type,
+            snapshot,
+            Cell::new(0),
+        ));
+        instance.release(snapshot);
+        return Ok(iterator.into_raw().cast::<Header>());
+    }
     if let Ok(iterator_type) = iterator_type_for(instance, iterable) {
         // 迭代器对象要**自己那一份**引用（本函数不消耗入参）
         // SAFETY: iterable 由调用方保证存活。
@@ -640,6 +667,17 @@ pub(crate) fn contains(
     // `argument of type '_Environ' is not a container or iterable` ✗ ⇒ 这一条压着
     // `xml.sax`（5 个 ✓）＋ `xml.dom.pulldom` ✓（`tools/next_work.py` 的队列 ✓）。
     if let Some(found) = instance.type_lookup(container_type, "__contains__") {
+        // **`__contains__ = None` 会阻断迭代回退** ✓（参照口径；`test_contains.test_block_fallback`
+        // 钉住）：此时报"不是容器"的 TypeError ✓，**不**再按 `__iter__` 回退 ✓。
+        if found == instance.singletons().none() {
+            // SAFETY: container 是存活对象。
+            let name = unsafe { container_type.as_ref() }.name();
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("argument of type '{name}' is not a container or iterable"),
+            ));
+        }
         // 实参按"借用视图"交给 `call_callable`（它自己会 retain ✓）。`bound=Some(container)` 已把
         // `self` 补进实参表 ✗ ⇒ 这里**只**交 `item`（先前多交一个 `container` ⇒ 实测
         // `TypeError: __contains__() takes 2 positional arguments but 3 were given` ✗）。
@@ -655,6 +693,31 @@ pub(crate) fn contains(
         let truth = crate::executor::truthiness(instance, returned, opcode)?;
         crate::executor::release(instance, returned);
         return Ok(truth);
+    }
+    // **迭代回退**（round 86，参照 `in` 的第二条通道）：没有 `__contains__` 的对象按 `__iter__`／
+    // 旧式 `__getitem__`／内建可迭代（`deque` 等）逐个比较 ✓（`test_contains` 的 `seq`／`deque` 钉住）。
+    // 拿不到迭代器（既不是容器也不能迭代）⇒ 仍报原来那句 TypeError ✓。
+    if let Ok(iterator) = iter_value(instance, container) {
+        let mut found = false;
+        loop {
+            match crate::executor::advance_iterator(instance, iterator, opcode) {
+                Ok(Some(value)) => {
+                    if values_equal(instance, value, item) {
+                        crate::executor::release(instance, value);
+                        found = true;
+                        break;
+                    }
+                    crate::executor::release(instance, value);
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    crate::executor::release(instance, iterator);
+                    return Err(error);
+                }
+            }
+        }
+        crate::executor::release(instance, iterator);
+        return Ok(found);
     }
     // SAFETY: container 是存活对象。
     let _ = opcode;
