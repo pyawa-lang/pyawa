@@ -53,6 +53,7 @@
 |---|---|---|---|---|---|
 | round 88 首测（修 `filter` 前） | **5**（`test_itertools`／`test_platform`／`test_random`／`test_urlparse`／`test_webbrowser`） | 3 | 35 | 271 | 83 |
 | round 88 修 `filter`＋`getrandbits` 后 | **1**（只剩 `test_itertools.test_issue30347_2` 的 groupby 可重入 ✗） | 3 | 35 | 273 | 85 |
+| round 89 修 `groupby` 键双持有后 | **0** ✅（硬门①首次达成） | 3 | 35 | 273 | 86 |
 
 > memory 类判定与"清零"口径见 §1／§2；**只统计签名命中，不把语义失败算进来**。
 

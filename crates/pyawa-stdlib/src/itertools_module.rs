@@ -447,7 +447,14 @@ fn groupby_native(
             // key 只是拿来比较的 ⇒ 这一份还掉（组里存的是上一份 ✓）
             instance.release(key);
         } else {
-            if let Some(previous) = current.replace(key) {
+            // **`key` 有两处要持有**（round 89 真 bug 修 ✗）：`groups` 里那个二元组负责最终结果 ✓，
+            // `current` 只是"上一组键"的比较缓存 ✓ ⇒ 必须**两份引用**。先前把**同一份**同时放进
+            // `groups` 与 `current` ✗ ⇒ 替换/收尾时 `release(previous)` 把 `groups` 里那个键的引用
+            // 提前打掉 ⇒ 之后构造结果元组／释放元组时就是**双放** ✗（悬垂全量实测：`test_itertools`
+            // 的 `test_issue30347_2` 报 `[悬垂] release_object … 已释放过（原类型 K；释放于 run@38）` ✓）。
+            // 修法：`current` 单独 retain 一份 ✓。
+            let owned = instance.retain(key);
+            if let Some(previous) = current.replace(owned) {
                 instance.release(previous);
             }
             groups.push((key, vec![item]));

@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,17 +90,15 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 88 完成**：**内存安全专项启动**——[`docs/MEMORY_SAFETY.md`](docs/MEMORY_SAFETY.md)（口径／三条硬门／
-  A-B-C 三族／按轮次路线）＋ `tools/memdangle_survey.py`（硬门①可执行基线：`PYAWA_DANGLING=1` 全量）；
-  修 **`filter` 迭代器真 UAF**（让出元素先 release 再返回 ⇒ 返回已释放指针；`advance_filter`）⇒ 悬垂全量
-  memory **5⇒1**（`test_platform`／`test_random`／`test_urlparse`／`test_webbrowser` 清掉，只剩
-  `test_itertools` groupby 可重入）；补 `SystemExit.code`；`getrandbits(k)` 大 `k` O(n²)⇒O(n) ⇒
-  `test_random` 从超时回到 10.7 s 跑完；套件 **43／83／270／1 ⇒ 43／85／268／1**（超时回 1 ✓）。
-  **下一轮**：① `test_itertools.test_issue30347_2`（groupby 可重入：`__eq__` 里 `next(g)` ⇒ 当前键/组状态
-  被重入步骤提前释放）② 内存安全 A 族第 1 批：先落「按指针记账＋逐调用点断言」脚手架，再
-  `CALL/CALL_KW/CALL_FUNCTION_EX` → `call_value` → 内部 `call_callable` 分批迁移（三种「只改 Python
-  分支」变体已证伪）③ `test_weakref` 超时（A 族根因）④ `test_genexps` 剩 2 条／`test_deque` 协议面／
-  `test_collections` 26F/50E ⑤ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
+  **round 89 完成**：修 `itertools.groupby` 的**键双持有真双放**（`groups` 里的 `(key, 元素表)` 与
+  `current` 比较缓存把**同一份引用**存两处 ⇒ 换组/收尾 `release(previous)` 提前打掉 `groups` 的键引用，
+  结果元组释放时再放一次）⇒ **悬垂全量 memory 1 ⇒ 0，硬门①首次达成** ✅；如实记：本层 `groupby` 仍是
+  急求值 ⇒ `test_issue30347_2` 仍以状态 5 结束（不再是内存安全事件）。套件 **43／85／268／1 全部持平**。
+  **下一轮**：① 内存安全 A 族第 1 批：先落「按指针记账＋逐调用点断言」脚手架（只测量不改语义），再
+  `CALL/CALL_KW/CALL_FUNCTION_EX` → `call_value` → 内部 `call_callable` 分批迁移（三种「只改 Python 分支」
+  变体已证伪）② 惰性 `itertools.groupby`（两级迭代器共享组状态；语义缺口非内存安全）③ `test_weakref`
+  超时（A 族根因）④ `test_calendar` UAF／`test_statistics` 收集路径 segfault ⑤ `test_genexps` 剩 2 条／
+  `test_deque` 协议面／`test_collections` 26F/50E ⑥ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
 
 ## 内存安全专项（口径与路线）
 
