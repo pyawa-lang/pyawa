@@ -185,8 +185,13 @@ py_object! {
     pub struct SetObject {
         items: RefCell<Vec<NonNull<Header>>>,
         {
-            /// **查找索引**（round 70，与 `DictObject.index` 同一套）：元素哈希 → 下标；
+            /// **查找索引**（round 70；round 88 改为**地址表**）：元素哈希 → **元素地址**（`usize`）；
             /// `None` ⇒ 还没建／已作废 ✓（插入顺序仍是 `items` 一处真相 ✓）。
+            /// 为什么存地址不存下标 ✗：`discard`／`pop` 会让后面元素**下标整体前移** ⇒ 索引要重建／
+            /// 每次 O(n)（`test_collections` 的 `set` 删除后 `in` 交替 ⇒ O(n²) 超时 ✗）；存地址后
+            /// **删除只需从桶里摘掉那一个地址** ✓、下标无关 ✓。
+            /// 用 `usize` 而非 `NonNull` 存 ✓：索引里的条目是**非持有引用**（`items` 才是所有权所在 ✓）
+            /// ⇒ 不应被 `traverse` 当成子引用计数（`OM-40` 的 GC 字段覆盖检查也会误报 ✗）。
             index: RefCell<Option<std::collections::HashMap<u64, Vec<usize>>>>,
         }
     }
@@ -417,38 +422,63 @@ impl SetObject {
         if self.index.borrow().is_some() {
             return;
         }
-        let mut built: std::collections::HashMap<u64, Vec<usize>> = std::collections::HashMap::new();
+        let mut built: std::collections::HashMap<u64, Vec<usize>> =
+            std::collections::HashMap::new();
         {
             let items = self.items.borrow();
-            for (position, item) in items.iter().enumerate() {
+            for item in items.iter() {
                 if let Some(hash) = hash_of(*item) {
-                    built.entry(hash).or_default().push(position);
+                    built.entry(hash).or_default().push(item.as_ptr() as usize);
                 }
             }
         }
         *self.index.borrow_mut() = Some(built);
     }
 
-    /// 同一哈希的候选下标（**借用后复制**，与 `DictObject::candidates` 同口径 ✓）。
-    pub fn candidates(&self, hash: u64) -> Vec<usize> {
+    /// 同一哈希的候选**元素指针**（**借用后复制**，与 `DictObject::candidates` 同口径 ✓）。
+    pub fn candidates(&self, hash: u64) -> Vec<NonNull<Header>> {
         self.index
             .borrow()
             .as_ref()
             .and_then(|map| map.get(&hash).cloned())
             .unwrap_or_default()
+            .into_iter()
+            .filter_map(|address| NonNull::new(address as *mut Header))
+            .collect()
     }
 
     /// **按哈希插入**（增量维护索引 ✓；调用方已确认不重复 ✓）——**接管** `value` 那份引用 ✓。
     pub fn insert_hashed(&self, value: NonNull<Header>, hash: u64) {
-        let position = {
+        {
             let mut items = self.items.borrow_mut();
             items.push(value);
-            items.len() - 1
-        };
+        }
         let mut index = self.index.borrow_mut();
         if let Some(map) = index.as_mut() {
-            map.entry(hash).or_default().push(position);
+            map.entry(hash).or_default().push(value.as_ptr() as usize);
         }
+    }
+
+    /// **按指针从索引里摘掉并删除元素**（round 88）：返回被删的那份引用（调用方负责释放）✓。
+    /// 桶里只摘**那一个指针** ✓，其余元素与顺序不受影响 ✓（这也是 `discard` 的 O(1) 索引维护路径 ✓）。
+    pub fn remove_ptr(&self, item: NonNull<Header>, hash: u64) -> Option<NonNull<Header>> {
+        {
+            let mut index = self.index.borrow_mut();
+            if let Some(map) = index.as_mut() {
+                if let Some(bucket) = map.get_mut(&hash) {
+                    let address = item.as_ptr() as usize;
+                    if let Some(position) = bucket.iter().position(|entry| *entry == address) {
+                        bucket.remove(position);
+                    }
+                    if bucket.is_empty() {
+                        map.remove(&hash);
+                    }
+                }
+            }
+        }
+        let mut items = self.items.borrow_mut();
+        let position = items.iter().position(|entry| *entry == item)?;
+        Some(items.remove(position))
     }
 
     /// 删除第 `index` 项，返回被删的那份引用（调用方负责释放）。

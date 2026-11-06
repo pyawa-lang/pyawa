@@ -68,6 +68,16 @@ fn shutdown_native(
 }
 
 /// 造一个原生可调用对象（**新引用**；与 `weakref_module`／`builtins_module` 同一做法）。
+/// `_thread._count()`：本层没有真线程 ⇒ 恒 `0` ✓（`test.support.threading_helper` 要它 ✓）。
+fn thread_count_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    Ok(instance.new_int(0))
+}
+
 fn make_native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<Header> {
     let ty = instance
         .type_named("builtin_function_or_method")
@@ -134,6 +144,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.retain(handle.cast());
         instance.dict_set(namespace, "_ThreadHandle", handle.cast());
     }
+    // **`_count()`**（round 87）：`test.support.threading_helper` 在**模块级**就调它（`requires_working_threading`）
+    // ✓ —— 本层没有真线程 ⇒ 恒 `0` ✓（如实 ✓；与 `threading._dangling` 一起用于"线程数没变"的断言 ✓）。
+    let count = make_native(instance, "_count", thread_count_native);
+    instance.dict_set(namespace, "_count", count);
     // **`_is_main_interpreter()`** ✓：本层恒为"主解释器" ✓（如实 ✓ —— 只有这一个 ✓）。
     let is_main = make_native(
         instance,

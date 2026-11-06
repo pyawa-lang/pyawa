@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 86：set 删除后索引失效真 bug＋`in` 迭代回退＋deque 迭代/相等/extend ⇒ 套件 39⇒41（`test_baseexception`／`test_contains` 转绿）；round 85：`test_metaclass` 转绿 ⇒ 38⇒39；round 84：`super().__prepare__` 兜底＋实参所有权试点全回退）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 87：`float.conjugate`＋`divmod` 浮点/协议回退＋`LOAD_GLOBAL.__missing__` 回退 ⇒ 套件 41⇒43（`test_abstract_numbers`／`test_dynamic` 转绿）；round 86：set 删除后索引失效＋`in` 迭代回退＋deque 迭代/相等/extend ⇒ 39⇒41；round 85：`test_metaclass` 转绿 ⇒ 38⇒39）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,16 +90,15 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 86（恢复轮次后第 1 轮）完成**：`SetObject::remove`／`remove_at` 删后**作废哈希索引**（真 bug：
-  `discard`／`pop`／`remove` 之后 `in` 会漏判）⇒ `test_baseexception` 转绿；`in` 的**迭代回退**（无
-  `__contains__` 时按 `__iter__`／旧式 `__getitem__`／内建可迭代逐个比，`__contains__ = None` 阻断回退）
-  ＋ `deque` 迭代（物化快照）／相等／构造与 extend 走迭代器协议 ⇒ `test_contains` 转绿；套件
-  **39／84／273／1 ⇒ 41／84／272／1**（跑通 39⇒41 ✓；唯一超时仍 `test_weakref`）。
+  **round 87 完成**：`float.conjugate()` ＋ `divmod` 浮点面/协议回退（自定义对象回退成 `(a // b, a % b)`）
+  ⇒ `test_abstract_numbers` 转绿；`LOAD_GLOBAL` 的 `__missing__` 回退（dict 子类全局映射未命中先调它）
+  ⇒ `test_dynamic` 转绿；连带修 set 索引改地址表（删除不作废、`set_clear` 清索引）＋ `__missing__`
+  只对非纯 dict 生效（性能）⇒ `test_collections` 110 s⇒65 s、`test_userstring` 回 80 s（OK）。套件
+  **41／83／272／1 ⇒ 43／83／270／1**（跑通 41⇒43 ✓；唯一超时仍 `test_weakref`）。
   **下一轮**：① `test_weakref` 超时（按台账计划：先「按指针记账＋逐调用点断言」脚手架，再分批迁移实参
-  所有权；三种「只改 Python 分支」变体已证伪）② `test_deque` 的 deque 协议面（下标读/写/删、`len`、
-  `__reversed__`、copy 语义）③ `test_genexps` 剩 2 条／`test_statistics` 收集路径 segfault／
-  `test_calendar` UAF／`test_collections` 26F/50E ④ `P3-42` KeyError 族与特殊方法派发、`P3-35` 剩余 5 形态、
-  `P3-29`／`P3-37` 剩余面。
+  所有权；三种「只改 Python 分支」变体已证伪）② `test_genexps` 剩 2 条（tuple id 复用＋`__next__.__doc__`）
+  ③ `test_deque` 的 deque 协议面 ④ `test_statistics` 收集路径 segfault／`test_calendar` UAF／
+  `test_collections` 26F/50E ⑤ `P3-42` KeyError 族与特殊方法派发、`P3-35` 剩余 5 形态、`P3-29`／`P3-37`。
 
 ## 本战役的关键口径（新会话必读）
 

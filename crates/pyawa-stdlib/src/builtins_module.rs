@@ -2067,12 +2067,72 @@ fn divmod_native(
             &format!("unsupported operand type(s) for divmod(): '{left}' and '{right}'"),
         ));
     }
-    let left = instance
-        .int_value(args[0])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "divmod() 目前只接整数（浮点面随后补）"))?;
-    let right = instance
-        .int_value(args[1])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "divmod() 目前只接整数（浮点面随后补）"))?;
+    // **浮点面**（round 87）：`divmod(7.3, 2)` ⇒ `(3.0, 1.3000…)` ✓（参照：商向下取整为 float ✓、
+    // 余数与被除数同号规则按 CPython 的 `fmod` ＋ 修正 ✓）。`test_abstract_numbers` 的 `MyReal`
+    // 用 `float()` 参与 ✓。
+    let float_operand = |value: NonNull<Header>| {
+        instance
+            .float_value(value)
+            .or_else(|| instance.int_value(value).map(|int| int as f64))
+    };
+    if instance.float_value(args[0]).is_some() || instance.float_value(args[1]).is_some() {
+        let (Some(left), Some(right)) = (float_operand(args[0]), float_operand(args[1])) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "divmod() 的实参必须是数值",
+            ));
+        };
+        if right == 0.0 {
+            return Err(instance.raise_builtin_error(
+                "ZeroDivisionError",
+                "float divmod()",
+            ));
+        }
+        // CPython 口径（floatobject.c 的 `float_divmod`）：先 `fmod` 再按符号修正 ✓。
+        let mut modulo = left % right;
+        let mut quotient = (left - modulo) / right;
+        if modulo != 0.0 && (right < 0.0) != (modulo < 0.0) {
+            modulo += right;
+            quotient -= 1.0;
+        }
+        let quotient = if quotient != 0.0 {
+            let floored = quotient.floor();
+            if (right < 0.0) != (floored < 0.0) {
+                floored + 1.0
+            } else {
+                floored
+            }
+        } else {
+            quotient
+        };
+        let pair = instance.new_tuple(vec![
+            instance.new_float(quotient),
+            instance.new_float(modulo),
+        ]);
+        return Ok(pair);
+    }
+    let left = instance.int_value(args[0]);
+    let right = instance.int_value(args[1]);
+    // **非整数 ⇒ 按 `//` 与 `%` 的协议回退**（round 87）：参照的 `divmod(a, b)` 对自定义对象就是
+    // `(a // b, a % b)` ✓（`test_abstract_numbers` 的 `MyReal` 只实现 `__floordiv__`／`__mod__` ✓）。
+    let (Some(left), Some(right)) = (left, right) else {
+        let quotient = pyawa_core::executor::arithmetic::arithmetic_public(
+            instance,
+            args[0],
+            args[1],
+            "//",
+            0,
+        )?;
+        let remainder = pyawa_core::executor::arithmetic::arithmetic_public(
+            instance,
+            args[0],
+            args[1],
+            "%",
+            0,
+        )?;
+        let pair = instance.new_tuple(vec![quotient, remainder]);
+        return Ok(pair);
+    };
     if right == 0 {
         return Err(instance.raise_builtin_error("ZeroDivisionError", "integer division or modulo by zero"));
     }

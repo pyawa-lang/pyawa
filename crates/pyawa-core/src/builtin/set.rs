@@ -66,21 +66,21 @@ pub(crate) fn set_contains(
     instance: &Instance,
     set: NonNull<Header>,
     item: NonNull<Header>,
-) -> Option<usize> {
+) -> Option<NonNull<Header>> {
     // SAFETY: 调用方保证 set 是本实例的 `set`。
     let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
     if let Some(hash) = crate::executor::values::key_hash(instance, item) {
         object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
-        for position in object.candidates(hash) {
-            if let Some(existing) = object.item(position) {
-                if crate::executor::values::values_equal_public(instance, existing, item) {
-                    return Some(position);
-                }
+        for existing in object.candidates(hash) {
+            if crate::executor::values::values_equal_public(instance, existing, item) {
+                return Some(existing);
             }
         }
         return None;
     }
-    object.position_of(|candidate| crate::executor::values::values_equal_public(instance, candidate, item))
+    object
+        .position_of(|candidate| crate::executor::values::values_equal_public(instance, candidate, item))
+        .and_then(|position| object.item(position))
 }
 
 /// **往集合里加一项**（round 70）：已存在 ⇒ 归还这份引用并给 `Ok(false)` ✓；
@@ -103,20 +103,18 @@ pub(crate) fn set_insert(
     };
     if let Some(hash) = crate::executor::values::key_hash(instance, item) {
         object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
-        for position in object.candidates(hash) {
-            if let Some(existing) = object.item(position) {
-                match same(existing) {
-                    Ok(true) => {
-                        // SAFETY: 这份引用由调用方交来（转移语义），这里不存 ⇒ 归还 ✓。
-                        unsafe { instance.release_object(item.as_ptr()) };
-                        return Ok(false);
-                    }
-                    Ok(false) => {}
-                    Err(error) => {
-                        // SAFETY: 同上。
-                        unsafe { instance.release_object(item.as_ptr()) };
-                        return Err(error);
-                    }
+        for existing in object.candidates(hash) {
+            match same(existing) {
+                Ok(true) => {
+                    // SAFETY: 这份引用由调用方交来（转移语义），这里不存 ⇒ 归还 ✓。
+                    unsafe { instance.release_object(item.as_ptr()) };
+                    return Ok(false);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    // SAFETY: 同上。
+                    unsafe { instance.release_object(item.as_ptr()) };
+                    return Err(error);
                 }
             }
         }
@@ -168,10 +166,19 @@ pub(crate) fn set_discard_native(
             "discard() takes exactly one argument (0 given)",
         ));
     };
-    if let Some(index) = set_contains(instance, set, *item) {
+    if let Some(existing) = set_contains(instance, set, *item) {
         // SAFETY: 上面刚确认是本实例的 set。
         let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
-        if let Some(removed) = object.remove_at(index) {
+        // **指针索引删除**（round 88）：只摘那一个指针 ✓（下标不参与 ✓）；可哈希时 O(桶长) ✓。
+        let removed = match crate::executor::values::key_hash(instance, existing) {
+            Some(hash) => object.remove_ptr(existing, hash),
+            // 不可哈希（线性兜底命中的）⇒ 只能按指针线性找 ✓。
+            None => {
+                let position = object.position_of(|candidate| candidate == existing);
+                position.and_then(|position| object.remove_at(position))
+            }
+        };
+        if let Some(removed) = removed {
             // 被移除的那份引用由本对象持有 ⇒ 归还引擎 ✓
             unsafe { instance.release_object(removed.as_ptr()) };
         }
@@ -282,6 +289,9 @@ pub(crate) unsafe fn set_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut H
 pub(crate) unsafe fn set_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<SetObject>() };
+    // **索引先作废**（round 88）：索引里是元素的**地址**（非持有引用）⇒ 元素释放后必须一起清 ✓
+    // （否则 `clear` 之后的下一次查询会拿旧地址强转 ⇒ 悬垂读 ✗）。
+    *object.index.borrow_mut() = None;
     // **同 `list_clear`** ✗（第 206 轮修复 ✓）。
     for value in core::mem::take(&mut *object.items.borrow_mut()) {
         // SAFETY: 该引用由本对象持有。

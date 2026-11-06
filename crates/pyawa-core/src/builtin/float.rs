@@ -29,9 +29,12 @@ pub unsafe fn float_getattr(
     if name == "imag" {
         return Some(instance.new_float(0.0));
     }
+    // **`float.conjugate()`**（round 87）：`numbers.Real` 的抽象接口要求它 ✓ ——
+    // `test_abstract_numbers` 的 `float(7.3).conjugate() == 7.3` 钉住 ✓（参照里实数返回自身 ✓）。
     let handler: NativeFn = match name {
         "is_integer" => float_is_integer_native,
         "as_integer_ratio" => float_as_integer_ratio_native,
+        "conjugate" => float_conjugate_native,
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
@@ -52,6 +55,19 @@ pub unsafe fn float_getattr(
         owner,
     ));
     Some(bound.into_raw().cast::<Header>())
+}
+
+/// `float.conjugate()`（round 87）：实数返回自身 ✓（`numbers.Real` 的抽象接口要它 ✓）。
+pub(crate) fn float_conjugate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(value) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "conjugate() 缺少 self"));
+    };
+    Ok(instance.retain(value))
 }
 
 /// `float.is_integer()` ✓（第 352 轮）：有限且小数部分为 0 ⇒ `True` ✓（`inf`／`nan` ⇒ `False` ✓）。

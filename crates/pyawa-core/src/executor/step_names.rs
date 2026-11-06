@@ -103,15 +103,45 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     //   `TypeError: 'NULL' object is not callable` ✓（实测：**函数里调用任何内建都崩** ✗，
                     //   而 `return 5` 之类的非调用语句都好 ✓ ⇒ 夹具只比编译 ✗、语料又没覆盖 ⇒ 一直没暴露 ✗）。
                     // 顺序：**全局 → 内建**（`LOAD_GLOBAL` 不看局部）
-                    let found = frame
-                        .get()
-                        .effective_globals()
-                        .and_then(|mapping| lookup_in_mapping(instance, mapping, &name))
-                        .or_else(|| {
-                            instance
-                                .builtins()
-                                .and_then(|builtins| lookup_in_mapping(instance, builtins, &name))
-                        });
+                    let mut found = None;
+                    if let Some(mapping) = frame.get().effective_globals() {
+                        found = lookup_in_mapping(instance, mapping, &name);
+                        // **全局映射的 `__missing__` 回退**（round 87，参照口径）：`eval(code, MyGlobals())`
+                        // 里 `MyGlobals(dict)` 定义 `__missing__` ⇒ `LOAD_GLOBAL` 未命中时参照会调它 ✓
+                        //（`test_dynamic.test_load_global_specialization_failure_keeps_oparg` 钉住 ✓）。
+                        // 先前直接落到 builtins ⇒ `NameError` ✗。
+                        if found.is_none() {
+                            // **只对"非纯 dict"的全局映射查 `__missing__`**（round 88 性能修 ✗）：
+                            // 纯 `dict` 没有 `__missing__` ✓ ⇒ 先前每次**内建名加载**都要走一趟属性通道
+                            // （含异常吞掉）⇒ 全脚本变慢（实测 `test_collections` 60 s ⇒ 110 s ✗）。
+                            // 类型不是 `dict` 才走这条路（`eval(code, MyGlobals())` 的子类 ✓）。
+                            let mapping_type = instance.type_of(mapping);
+                            let plain_dict = instance
+                                .type_named("dict")
+                                .is_some_and(|dict| dict == mapping_type);
+                            if !plain_dict {
+                                if let Some(hook) = instance.type_lookup(mapping_type, "__missing__") {
+                                    let key = instance.new_str(&name);
+                                    // 未绑定函数：`self` 是全局映射本身 ✓（借用 ⇒ 调用方持有 ✓）。
+                                    let outcome = crate::executor::call::call_callable(
+                                        instance,
+                                        hook,
+                                        Some(mapping),
+                                        vec![key],
+                                        Vec::new(),
+                                        0,
+                                    );
+                                    instance.release(key);
+                                    found = Some(outcome?);
+                                }
+                            }
+                        }
+                    }
+                    if found.is_none() {
+                        found = instance
+                            .builtins()
+                            .and_then(|builtins| lookup_in_mapping(instance, builtins, &name));
+                    }
                     match found {
                         Some(value) => {
                             push(instance, frame.get(), value)?;
