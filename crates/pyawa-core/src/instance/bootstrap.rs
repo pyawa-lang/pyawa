@@ -35,6 +35,7 @@ impl Instance {
             int_max_str_digits: Cell::new(INT_MAX_STR_DIGITS_DEFAULT),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
+            gc_debug: Cell::new(0),
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),
             call_depth: Cell::new(0),

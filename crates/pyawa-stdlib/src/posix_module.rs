@@ -11,6 +11,7 @@ use core::ptr::NonNull;
 use pyawa_capabilities::fs::open_flag;
 use pyawa_core::{AttributeObject, Header, Instance};
 
+use std::io::IsTerminal;
 use crate::io_module::{fs_error_with_display};
 
 
@@ -824,6 +825,105 @@ fn get_terminal_size_native(
         "OSError",
         "[Errno 25] Inappropriate ioctl for device",
     ))
+}
+
+/// **`posix.isatty(fd)`**（round 92）：标准流 0／1／2 走宿主 `IsTerminal` ✓；能力表里的
+/// fd（文件／管道／socket）一律 `False` ✓（参照里它们也几乎不会是 tty ✓）。
+///
+/// 动因：`Lib/_colorize.py` 的 `can_colorize()` 与 `test.support` 用 `os.isatty` ✓ —— 官方
+/// `test__colorize` 直接 `mock.patch("os.isatty")` ✓，先前的 `os` 模块没有这个属性 ⇒
+/// `AttributeError: <module …> does not have the attribute 'isatty'` ✗。
+fn isatty_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(fd) = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_value(value))
+    else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "isatty() takes exactly one argument",
+        ));
+    };
+    let answer = match fd {
+        0 => std::io::stdin().is_terminal(),
+        1 => std::io::stdout().is_terminal(),
+        2 => std::io::stderr().is_terminal(),
+        _ => false,
+    };
+    Ok(instance.new_bool(answer))
+}
+
+/// **`posix.putenv(key, value)`**（round 92）：真改进程环境（`os.environ` 的写路径 ✓）。
+///
+/// 动因：`Lib/os.py` 的 `_Environ.__setitem__` 直接调**模块级** `putenv` / `unsetenv`
+/// （它们来自 `from posix import *` ✓）—— 先前 posix 没有这两个名字 ⇒
+/// `NameError: name 'putenv' is not defined` ✗（官方 `test__colorize` / `test_mimetypes` 的
+/// 环境变量夹具当场踩到 ✓；`test.support` 大量用 `os.environ` 做夹具 ✓）。
+/// `std::env` 不在 `T-CX-4` 的禁面里（同 `getcwd` 的 `std::env::current_dir` 先例 ✓）。
+fn putenv_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (Some(key), Some(value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "putenv() takes exactly 2 arguments",
+        ));
+    };
+    let (Some(key), Some(value)) = (env_text(instance, key), env_text(instance, value)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "str expected, not bytes-like",
+        ));
+    };
+    if key.contains('=') || key.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "illegal environment variable name",
+        ));
+    }
+    pyawa_core::host_env::set_var(&key, &value);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`posix.unsetenv(key)`**（round 92）：从进程环境删一个名字（不存在 ⇒ 静默成功 ✓）。
+fn unsetenv_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "unsetenv() takes exactly 1 argument",
+        ));
+    };
+    let Some(key) = env_text(instance, key) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "str expected, not bytes-like",
+        ));
+    };
+    pyawa_core::host_env::remove_var(&key);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// 取环境变量名／值的文本（`str` 或 `bytes`；取不到给 `None`）。
+fn env_text(instance: &Instance, value: NonNull<Header>) -> Option<String> {
+    if let Some(text) = instance.text_of(value) {
+        return Some(text.to_owned());
+    }
+    instance
+        .bytes_value(value)
+        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
 }
 
 /// **`posix.chdir(path)`**（round 91）：改**实例** cwd（`CP-22`）✓ —— 之后相对路径解析
@@ -1646,6 +1746,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("chdir", chdir_native as pyawa_core::NativeFn),
         // **`os.fstat`**（round 91）：fd 版 stat_result（`test_bufio` 钉住 ✓）。
         ("fstat", fstat_native as pyawa_core::NativeFn),
+        // **`os.environ` 的写路径**（round 92）：`Lib/os.py` 的 `_Environ` 直接调它们 ✓。
+        ("putenv", putenv_native as pyawa_core::NativeFn),
+        // **`os.isatty`**（round 92）：`_colorize`／`test.support` 要 ✓。
+        ("isatty", isatty_native as pyawa_core::NativeFn),
+        ("unsetenv", unsetenv_native as pyawa_core::NativeFn),
         ("getcwdb", getcwdb_native as pyawa_core::NativeFn),
         ("readlink", readlink_native as pyawa_core::NativeFn),
         // **P3-38 S3b-2**：路径面（真文件、含非 UTF-8 文件名）✓
@@ -1717,6 +1822,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("getcwdb"),
         instance.new_str("chdir"),
         instance.new_str("fstat"),
+        instance.new_str("putenv"),
+        instance.new_str("isatty"),
+        instance.new_str("unsetenv"),
         instance.new_str("readlink"),
         instance.new_str("listdir"),
         instance.new_str("rename"),

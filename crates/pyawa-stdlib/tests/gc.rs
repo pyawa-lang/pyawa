@@ -242,10 +242,7 @@ fn unimplemented_faces_say_so_and_get_freeze_count_is_zero() {
         "is_finalized",
         "freeze",
         "unfreeze",
-        "get_count",
         "get_stats",
-        "get_debug",
-        "set_debug",
     ] {
         let handler = native(&instance, namespace, name);
         let argument = instance.new_int(0);
@@ -256,6 +253,24 @@ fn unimplemented_faces_say_so_and_get_freeze_count_is_zero() {
             "`gc.{name}` 要如实 NotImplementedError 并挂账：{text}"
         );
     }
+    // **round 92 起真实现**：`get_debug`／`set_debug`／`get_count`（官方 `test_gc` 的
+    // `setUpModule` 第一句就是 `gc.get_debug()`）—— 语义：调试位**忠实保存/回报**（本层没有
+    // 调试通道 ⇒ 只有可观测的读回 ✓）；`get_count` 是单代回收 ⇒ `(分配数, 0, 0)` ✓。
+    let get_debug = native(&instance, namespace, "get_debug");
+    let before = call(&instance, get_debug, &[], &[]).expect("get_debug()");
+    assert_eq!(int_of(&instance, before), 0, "默认调试位 0");
+    let set_debug = native(&instance, namespace, "set_debug");
+    let flags = instance.new_int(38); // DEBUG_LEAK
+    call(&instance, set_debug, &[flags], &[]).expect("set_debug(38)");
+    let after = call(&instance, get_debug, &[], &[]).expect("get_debug() after set");
+    assert_eq!(int_of(&instance, after), 38, "set_debug 之后要读回同一组位");
+    let get_count = native(&instance, namespace, "get_count");
+    let count = call(&instance, get_count, &[], &[]).expect("get_count()");
+    let items = instance.tuple_items(count).expect("get_count 返回 tuple");
+    assert_eq!(items.len(), 3, "get_count 是 3 元组");
+    assert!(int_of(&instance, items[0]) >= 0, "第 1 格是自上次回收的分配数");
+    assert_eq!(int_of(&instance, items[1]), 0, "单代回收 ⇒ 第 2 格 0");
+    assert_eq!(int_of(&instance, items[2]), 0, "单代回收 ⇒ 第 3 格 0");
     // `get_freeze_count()`：没有 freeze 机制 ⇒ 如实 0（这是真值，不是占位）
     let handler = native(&instance, namespace, "get_freeze_count");
     let value = call(&instance, handler, &[], &[]).expect("get_freeze_count()");

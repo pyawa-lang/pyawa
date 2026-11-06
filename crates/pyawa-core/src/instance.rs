@@ -211,6 +211,11 @@ pub struct Instance {
     gc_threshold: Cell<(usize, usize, usize)>,
     /// 自上次回收以来的分配计数。
     gc_alloc_count: Cell<usize>,
+    /// **`gc.get_debug()`／`gc.set_debug()` 的落点**（round 92）：按实例存（`CX-3` 禁止进程级全局 ✓）。
+    ///
+    /// 本层没有调试通道（`PYAWA_GC_LOG` 一类是宿主侧诊断）⇒ 这里只**忠实保存/回报**用户设的位，
+    /// 不声称有 `DEBUG_SAVEALL` 等语义 ✓（参照里设了不生效也只是"没有可观测行为" ✓）。
+    gc_debug: Cell<u64>,
     /// **下一次自动回收的分配计数水位**（`P3-41` 慢因修复）：
     /// 单代标记-清除的每次代价是 **O(存活对象数)** ⇒ 固定阈值（2000）会让"存活对象多"的
     /// 工作负载退化成 **O(n²)**（`test_frame` 的 15 万层嵌套 ≈ 26.9 s，实测见 round 39 台账）。

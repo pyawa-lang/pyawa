@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 91：`test_bufio` 转绿——`os.fstat`／`os.chdir`／`int.__index__`／`os.write` 缓冲协议＋`bytearray` 缓冲快路（`_pyio` 100 KB 0.27 s⇒毫秒）⇒ 套件 43⇒44；round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 92：补 `gc.get_debug/set_debug/get_count`、`os.putenv/unsetenv/isatty`、`set.intersection` 一族 ⇒ 面向 `test_gc`/`test_mimetypes`/`test__colorize` 的首因，套件 44／85／267／1 ⇒ 44／86／266／1（无翻页）；round 91：`test_bufio` 转绿——`os.fstat`／`os.chdir`／`int.__index__`／`os.write` 缓冲协议＋`bytearray` 缓冲快路（`_pyio` 100 KB 0.27 s⇒毫秒）⇒ 套件 43⇒44；round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,16 +90,16 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 91 完成**：**`test_bufio` 转绿**（套件跑通 43⇒44）——`os.fstat`（新增 `Instance::fs_fstat`，
-  `stat_result` 组装抽 `build_stat_result` 一处真相）＋`os.chdir`（实例 cwd，`getcwd`/`getcwdb` 改读实例
-  cwd；`posix.__all__` 补名）＋`int.__index__`/`__int__`（绑定方法；`_pyio` 的 `read(size)` 直接取
-  `size.__index__`）＋`os.write` 收 `bytearray`/`memoryview`＋**`bytearray.extend`/`+=` 缓冲协议快路**
-  （`_pyio.BufferedWriter.write` 100 KB 0.27 s⇒毫秒级 ⇒ `test_bufio` 4 用例 >200 s ⇒ **5.7 s OK**）。
-  `test_unicode_file` 仍有 2E（`unicodedata.normalize` 数据面＋`os.chmod`）；`test_httpservers` 81E
-  （线程／socket 能力域）。
-  **下一轮**：① 内存安全 A 族「`__del__` 帧延迟释放」持有者（`watch_address` 回溯）② `test_genexps`
-  剩 2 条（tuple id 复用＋`__next__.__doc__`）③ `test_deque` 协议面／`test_collections` 26F/50E
-  ④ `os.chmod`／`unicodedata.normalize` 等数据面／能力域缺口 ⑤ `P3-42`／`P3-35`／`P3-29`／`P3-37`。
+  **round 92 完成（无翻页，如实记）**：补 `gc.get_debug()`／`set_debug()`（按实例调试位，忠实保存/回报）／
+  `get_count()`（单代 ⇒ `(分配数,0,0)`；连带更新 `crates/pyawa-stdlib/tests/gc.rs` 夹具与断言）＋
+  `os.putenv`／`unsetenv`（核心 `host_env` 封装；`Lib/os.py` 的 `_Environ` 直接调模块级名）＋
+  `os.isatty`（标准流 `IsTerminal`；能力表 fd 恒 False）＋`set.intersection/difference/issubset/isdisjoint`。
+  结果：`test_mimetypes` 2E⇒1E（剩 `os.scandir`）、`test__colorize` 3E⇒1E（剩 `MagicMock` dunder 面）、
+  `test_gc` 从 setUpModule ERROR 变为跑完（1F/若干 E，`get_objects` 等仍缺）；套件 **44／86／266／1**。
+  **下一轮**：① `os.scandir`（`shutil.rmtree`／`glob`／`tempfile` 一族；`test_mimetypes` 末条即它）
+  ② `unittest.mock` 的 dunder 面（`_mock_set_magics` 缺 `__lt__` 一类）③ 内存安全 A 族「`__del__` 帧延迟
+  释放」持有者 ④ `test_genexps` 剩 2 条／`test_deque` 协议面／`test_collections` 26F/50E ⑤ `P3-42`／
+  `P3-35`／`P3-29`／`P3-37`。
 
 ## 内存安全专项（口径与路线）
 

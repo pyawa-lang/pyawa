@@ -63,6 +63,22 @@ impl Instance {
 }
 
 impl Instance {
+    /// **`gc.get_debug()`**（round 92）：返回 `set_debug` 设的位（默认 0 ✓）。
+    pub fn gc_debug(&self) -> u64 {
+        self.gc_debug.get()
+    }
+
+    /// **`gc.set_debug(flags)`**（round 92）：忠实保存（本层没有调试通道 ⇒ 只有可观测的读回 ✓）。
+    pub fn set_gc_debug(&self, flags: u64) {
+        self.gc_debug.set(flags);
+    }
+
+    /// **`gc.get_count()`**（round 92）：`(自上次回收以来的分配数, 0, 0)` —— 本层是**单代**回收
+    /// （「无分代计数器」是已登记的偏差 ✗）⇒ 第 2／3 格恒 0 ✓（如实登记，不编假值 ✓）。
+    pub fn gc_get_count(&self) -> (usize, usize, usize) {
+        (self.gc_alloc_count.get(), 0, 0)
+    }
+
     /// [`Instance::collect`] 的主体；进入前 `gc_running` 已置位。
     pub(crate) fn collect_inner(&self) -> usize {
         let unreachable = self.find_unreachable();

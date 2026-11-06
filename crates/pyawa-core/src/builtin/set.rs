@@ -35,6 +35,13 @@ pub unsafe fn set_getattr(
         // 就 `algorithms_available.union(...)`；round 20 为了先让 hashlib 导入在 stdlib 里
         // 临时挂了这一格，现按"一处真相"收进 core ✓）。
         "union" => set_union_native,
+        // **`intersection`／`issubset`／`isdisjoint`／`difference`**（round 92）：`unittest.mock`
+        // 的 `_mock_set_magics` 用 `set.intersection` ✗ ⇒ 官方 `test__colorize` 的
+        // `mock.patch` 收尾报 `'set' object has no attribute 'intersection'` ✗。
+        "intersection" => set_intersection_native,
+        "difference" => set_difference_native,
+        "issubset" => set_issubset_native,
+        "isdisjoint" => set_isdisjoint_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -502,4 +509,195 @@ pub(crate) fn set_union_native(
     } else {
         Ok(instance.new_set(accumulated))
     }
+}
+
+/// 取"接收者"与其余实参的集合视图（`intersection`／`difference`／`issubset`／`isdisjoint` 共用）：
+/// 返回 `(接收者元素借用表, 方法名)`；实参不可迭代 ⇒ 参照文案的 `TypeError` ✓。
+fn set_method_receiver(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    name: &str,
+) -> Result<(NonNull<Header>, Vec<NonNull<Header>>), ExecError> {
+    let (this, rest) = match bound {
+        Some(this) => (this, args.to_vec()),
+        None => match args.split_first() {
+            Some((this, rest)) => (*this, rest.to_vec()),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("unbound method set.{name}() needs an argument"),
+                ))
+            }
+        },
+    };
+    Ok((this, rest))
+}
+
+/// **通用迭代取元素**（借用视图转成**新引用**表；调用方负责逐个归还 ✓）。
+fn collect_iterable_owned(
+    instance: &Instance,
+    argument: NonNull<Header>,
+) -> Result<Vec<NonNull<Header>>, ExecError> {
+    let iterator = match instance.iter_object(argument) {
+        Ok(iterator) => iterator,
+        Err(ExecError::Unsupported { .. }) | Err(ExecError::Raised { .. }) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!(
+                    "'{}' object is not iterable",
+                    instance.type_name(instance.type_of(argument))
+                ),
+            ))
+        }
+        Err(error) => return Err(error),
+    };
+    let mut collected: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(item)) => collected.push(item),
+            Ok(None) => break,
+            Err(error) => {
+                for item in collected {
+                    instance.release(item);
+                }
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(collected)
+}
+
+/// `set.intersection(other, …)`（round 92）：按 `values_equal` 判等；结果顺序按接收者 ✓。
+pub(crate) fn set_intersection_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set.intersection() takes no keyword arguments",
+        ));
+    }
+    let (this, rest) = set_method_receiver(instance, bound, args, "intersection")?;
+    if rest.is_empty() {
+        // 参照：没有实参 ⇒ 一份拷贝 ✓。
+        return Ok(instance.new_set(instance.set_items(this).unwrap_or_default()));
+    }
+    let mut others: Vec<Vec<NonNull<Header>>> = Vec::new();
+    for argument in &rest {
+        others.push(collect_iterable_owned(instance, *argument)?);
+    }
+    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| {
+        items.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, wanted)
+        })
+    };
+    let mut kept: Vec<NonNull<Header>> = Vec::new();
+    for item in instance.set_items(this).unwrap_or_default() {
+        if others.iter().all(|other| contains(other, item)) {
+            instance.retain(item);
+            kept.push(item);
+        }
+    }
+    for other in &others {
+        for item in other {
+            instance.release(*item);
+        }
+    }
+    Ok(instance.new_set(kept))
+}
+
+/// `set.difference(other, …)`（round 92）：接收者里不在任何实参里的元素 ✓（顺序按接收者 ✓）。
+pub(crate) fn set_difference_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set.difference() takes no keyword arguments",
+        ));
+    }
+    let (this, rest) = set_method_receiver(instance, bound, args, "difference")?;
+    let mut others: Vec<Vec<NonNull<Header>>> = Vec::new();
+    for argument in &rest {
+        others.push(collect_iterable_owned(instance, *argument)?);
+    }
+    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| {
+        items.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, wanted)
+        })
+    };
+    let mut kept: Vec<NonNull<Header>> = Vec::new();
+    for item in instance.set_items(this).unwrap_or_default() {
+        if !others.iter().any(|other| contains(other, item)) {
+            instance.retain(item);
+            kept.push(item);
+        }
+    }
+    for other in &others {
+        for item in other {
+            instance.release(*item);
+        }
+    }
+    Ok(instance.new_set(kept))
+}
+
+/// `set.issubset(other)`（round 92）：接收者的每个元素都在实参里 ✓（实参必须是单个可迭代 ✓）。
+pub(crate) fn set_issubset_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = set_method_receiver(instance, bound, args, "issubset")?;
+    let Some(argument) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "issubset() takes exactly one argument (0 given)",
+        ));
+    };
+    let other = collect_iterable_owned(instance, argument)?;
+    let missing = instance.set_items(this).unwrap_or_default().iter().any(|item| {
+        !other.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, *item)
+        })
+    });
+    for item in other {
+        instance.release(item);
+    }
+    Ok(instance.new_bool(!missing))
+}
+
+/// `set.isdisjoint(other)`（round 92）：接收者与实参没有公共元素 ✓。
+pub(crate) fn set_isdisjoint_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = set_method_receiver(instance, bound, args, "isdisjoint")?;
+    let Some(argument) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "isdisjoint() takes exactly one argument (0 given)",
+        ));
+    };
+    let other = collect_iterable_owned(instance, argument)?;
+    let shared = instance.set_items(this).unwrap_or_default().iter().any(|item| {
+        other.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, *item)
+        })
+    });
+    for item in other {
+        instance.release(item);
+    }
+    Ok(instance.new_bool(!shared))
 }

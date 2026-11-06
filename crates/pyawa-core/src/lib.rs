@@ -59,6 +59,7 @@ pub use builtin::function::function_globals_native;
 mod diag;
 pub mod argdecode;
 pub mod bigint;
+pub mod host_env;
 /// **WTF-8 编解码**（P3-38 S1）：允许孤立代理的 UTF-8 超集；供 `str` 存储迁移（S2）复用。
 pub mod wtf8;
 mod builtin;

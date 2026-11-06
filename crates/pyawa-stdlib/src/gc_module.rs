@@ -337,10 +337,55 @@ unimplemented_native!(is_tracked_native, "is_tracked", "本层没有逐对象追
 unimplemented_native!(is_finalized_native, "is_finalized", "本层没有逐对象终结状态访问器");
 unimplemented_native!(freeze_native, "freeze", "本层没有冻结区");
 unimplemented_native!(unfreeze_native, "unfreeze", "本层没有冻结区");
-unimplemented_native!(get_count_native, "get_count", "本层是单代回收，没有分代计数器");
+// **`gc.get_count()`**（round 92，真实现 ✓）：本层是**单代**回收 ⇒ `(自上次回收以来的分配数, 0, 0)`
+// ✓（与 `get_threshold` 的既有口径一致：分代计数是已登记的偏差 ✗，这里如实给 0 而不编假值 ✓）。
+fn get_count_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (young, middle, old) = instance.gc_get_count();
+    Ok(instance.new_tuple(vec![
+        instance.new_int(young as i64),
+        instance.new_int(middle as i64),
+        instance.new_int(old as i64),
+    ]))
+}
 unimplemented_native!(get_stats_native, "get_stats", "本层是单代回收，没有分代统计");
-unimplemented_native!(get_debug_native, "get_debug", "本层没有调试通道");
-unimplemented_native!(set_debug_native, "set_debug", "本层没有调试通道");
+// **`gc.get_debug`／`gc.set_debug`**（round 92，真实现 ✓）：官方 `test_gc` 的 `setUpModule`
+// 第一句就是 `gc.get_debug()`（先前 `NotImplementedError` ⇒ setUpModule 直接 ERROR ✗）。
+// 本层没有调试通道 ⇒ 只忠实保存/回报位 ✓（`DEBUG_*` 常量已在命名空间里 ✓）。
+fn get_debug_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_int(instance.gc_debug() as i64))
+}
+
+fn set_debug_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set_debug() missing required argument 'flags' (pos 1)",
+        ));
+    };
+    let Some(flags) = instance.int_of(value).and_then(|value| value.to_i64()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "an integer is required",
+        ));
+    };
+    instance.set_gc_debug(flags as u64);
+    Ok(instance.retain(instance.singletons().none()))
+}
 
 /// 建 `gc` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
