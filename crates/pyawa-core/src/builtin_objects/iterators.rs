@@ -824,6 +824,14 @@ pub unsafe fn iterator_getattr(
             let handler: crate::NativeFn = iterator_reduce_native;
             Some(bind_iterator_method(instance, ptr, "__reduce__", handler))
         }
+        // **`__reduce_ex__` 也走同一处** ✓（round 119）：pickle 优先调 `__reduce_ex__(proto)` ✓；
+        // 先前只在 `__reduce__` 上给 ⇒ 惰性建的 `dict_itemiterator`／`dict_valueiterator` 落回
+        // 默认"按类型构造" ⇒ `TypeError: cannot create '…' instances` ✗
+        //（`test_itemiterator_pickling`／`test_valuesiterator_pickling` ✓）。
+        "__reduce_ex__" => {
+            let handler: crate::NativeFn = iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, "__reduce_ex__", handler))
+        }
         "__setstate__" => {
             let handler: crate::NativeFn = iterator_setstate_native;
             Some(bind_iterator_method(instance, ptr, "__setstate__", handler))
@@ -959,7 +967,30 @@ fn iterator_reduce_native(
             instance.new_tuple(vec![empty]),
         ]));
     }
-    let target = instance.retain(object.target());
+    // **dict 的 items()／values() 迭代器在参照里被 pickle 成"列表快照"** ✓（round 119）：
+    // 实测 `iter(d.items()).__reduce_ex__(4)` ⇒ `(<built-in function iter>, ([('a', 1), …],))`，
+    // 反序列化得到 **list_iterator** ✓（视图本身**不可** pickle ✓，直接交视图会 `PicklingError` ✗）。
+    let target = if type_name == "dict_itemiterator" {
+        let entries = instance
+            .dict_entries(object.target())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, value)| {
+                instance.new_tuple(vec![instance.retain(key), instance.retain(value)])
+            })
+            .collect();
+        instance.new_list(entries)
+    } else if type_name == "dict_valueiterator" {
+        let values = instance
+            .dict_entries(object.target())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, value)| instance.retain(value))
+            .collect();
+        instance.new_list(values)
+    } else {
+        instance.retain(object.target())
+    };
     let args = instance.new_tuple(vec![target]);
     let state = if reverse {
         object.index().saturating_sub(1) as i64

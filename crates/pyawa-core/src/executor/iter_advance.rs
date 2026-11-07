@@ -130,7 +130,14 @@ pub(crate) fn advance_iterator(
     // **字典迭代中改键 ⇒ `RuntimeError`**（`P3-41` round 42；参照口径）——
     // 先前不检测 ⇒ `for i in d: d[i+1] = 1` 的循环**永不结束**（`test_dict.test_mutating_iteration`）。
     // 文案两档照参照：长度变了 ⇒ `changed size`；只变键集 ⇒ `changed keys` ✓。
-    if ty == builtin_type(instance, "dict_keyiterator") {
+    // **`items()`／`values()` 的迭代器同样要检测**（round 119）：参照里对 dict 的
+    // key／value／item 三种迭代器都报 `RuntimeError: dictionary changed size during iteration` ✓
+    //（`test_dict.test_mutating_iteration_delete_over_items`／`..._values` ✓）。
+    // 用 `type_named` 比较（这几个类型是**按需建**的：惰性建之前不存在 ✓）。
+    let dict_iterator = Some(ty) == instance.type_named("dict_keyiterator")
+        || Some(ty) == instance.type_named("dict_valueiterator")
+        || Some(ty) == instance.type_named("dict_itemiterator");
+    if dict_iterator {
         // SAFETY: 类型身份刚确认。
         let dict = unsafe { &*object.target().as_ptr().cast::<crate::builtin_objects::DictObject>() };
         let changed = match object.check_dict_version(instance) {
@@ -157,7 +164,27 @@ pub(crate) fn advance_iterator(
         object.mark_exhausted();
         return Ok(None);
     }
-    let item = iterable_item(instance, target, index, opcode)?;
+    // **dict 的 items()／values() 迭代器**（round 119）：快照式视图迭代器换成"引用字典"的
+    // 真迭代器后 ✓，这里按类型取 值／(键, 值) ✓（变异由上面的版本守卫报 ✓）。
+    let item = if Some(ty) == instance.type_named("dict_valueiterator")
+        || Some(ty) == instance.type_named("dict_itemiterator")
+    {
+        // **按下标直取**（round 119 性能修正）：先前 `dict_entries` 整份克隆 ✗ ⇒ 大表迭代
+        // O(n²) ✗（`test_userstring` 因此超时 ✓）。`DictObject::entry(index)` 是借用 ✓。
+        // SAFETY: 类型身份刚确认 ⇒ 目标就是 DictObject ✓。
+        let dict = unsafe { &*target.as_ptr().cast::<DictObject>() };
+        let Some((key, value)) = dict.entry(index) else {
+            object.mark_exhausted();
+            return Ok(None);
+        };
+        if Some(ty) == instance.type_named("dict_valueiterator") {
+            instance.retain(value)
+        } else {
+            instance.new_tuple(vec![instance.retain(key), instance.retain(value)])
+        }
+    } else {
+        iterable_item(instance, target, index, opcode)?
+    };
     object.advance();
     Ok(Some(item))
 }

@@ -155,9 +155,26 @@ pub(crate) fn dict_update_native(
     // **关键字实参也算** ✓（task-25 ① ✓）：`vars(self).update(name=name, value=value, group=group)` ✓
     //（`Lib/importlib/metadata/__init__.py:171` ✓）。
     let mut pairs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
+    // **源 dict 迭代中改键 ⇒ RuntimeError**（round 119）：参照 `d.update(other)` 内部按迭代器
+    // 搬 `other`，键的 `__eq__` 若把 `other` 改掉 ⇒ `RuntimeError: dictionary changed size
+    // during iteration` ✓（`test_merge_and_mutate` ✓）。这里记一份版本号并逐对比对 ✓；
+    // 快照里的键值先各 retain 一份（防源被清空后悬垂 ✓）。
+    let mut source_guard: Option<(NonNull<Header>, u64)> = None;
     if let Some(other) = args.first() {
         if let Some(entries) = instance.dict_entries(*other) {
-            pairs.extend(entries);
+            // SAFETY: other 是存活对象。
+            source_guard = Some((
+                *other,
+                unsafe { &*other.as_ptr().cast::<DictObject>() }.version(),
+            ));
+            for (key, value) in entries {
+                // SAFETY: 键值由源 dict 持有，这里各添一份。
+                unsafe {
+                    instance.incref_object(key.as_ptr());
+                    instance.incref_object(value.as_ptr());
+                }
+                pairs.push((key, value));
+            }
         } else if let Some(keys) = mapping_keys(instance, *other)? {
             // **映射协议** ✓（第 411 轮，task-22 B5-② ✓）：参照的 `dict.update(m)` 接受任何
             // **有 `keys()` 的映射** ✓（真 `enum.py` 的 `__members__` 在参照里是 `mappingproxy` ✓——
@@ -173,21 +190,49 @@ pub(crate) fn dict_update_native(
             dict_update_sequence(instance, mapping, *other)?;
         }
     }
-    pairs.extend(kwargs.iter().copied());
-    for (key, value) in pairs {
+    // 关键字实参是**借用** ⇒ 各 retain 一份，与上面各分支统一成"本函数持有" ✓。
+    for (key, value) in kwargs.iter().copied() {
+        // SAFETY: 关键字实参由调用方保证存活。
+        unsafe {
+            instance.incref_object(key.as_ptr());
+            instance.incref_object(value.as_ptr());
+        }
+        pairs.push((key, value));
+    }
+    for (position, (key, value)) in pairs.iter().copied().enumerate() {
+        if let Some((source, version)) = source_guard {
+            // SAFETY: source 是存活对象（调用方借用）。
+            let current = unsafe { &*source.as_ptr().cast::<DictObject>() }.version();
+            if current != version {
+                // 失败前把余下的键值引用归还 ✓。
+                for (left_key, left_value) in &pairs[position..] {
+                    // SAFETY: 这些引用由本函数持有。
+                    unsafe {
+                        instance.release_object(left_key.as_ptr());
+                        instance.release_object(left_value.as_ptr());
+                    }
+                }
+                return Err(instance.raise_builtin_error(
+                    "RuntimeError",
+                    "dictionary changed size during iteration",
+                ));
+            }
+        }
         match dict_position(instance, mapping, key) {
             Some(index) => {
                 // SAFETY: 上面刚确认是本实例的 dict。
                 let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-                instance.retain(value);
-                if let Some(old) = object.set_value_at(index, value) {
-                    // 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓
+                // 值那份引用**转交**字典 ✓；键已在字典里 ⇒ 手上这份 key 归还引擎 ✓。
+                let replaced = object.set_value_at(index, value);
+                // SAFETY: key 是 pairs 持有的那份；value 已转交。
+                unsafe { instance.release_object(key.as_ptr()) };
+                if let Some(old) = replaced {
+                    // SAFETY: 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓。
                     unsafe { instance.release_object(old.as_ptr()) };
                 }
             }
             None => {
-                instance.retain(key);
-                instance.retain(value);
+                // 键值两份引用都由本函数持有 ⇒ `insert_raw` 直接接管 ✓。
                 instance.dict_insert_raw(mapping, key, value);
             }
         }

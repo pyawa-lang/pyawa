@@ -127,6 +127,12 @@ fn view_type(instance: &Instance, kind: u8) -> Option<NonNull<TypeObject>> {
         instance.dict_set(namespace, name, function);
         instance.release(function);
     }
+    // 视图类型也要能在 `builtins` 下按名字找到（pickle／`type(x).__name__` 之外的查找 ✓）。
+    if let Some(builtins) = instance.builtins() {
+        instance.retain(ty.cast::<Header>());
+        instance.dict_set(builtins, name, ty.cast::<Header>());
+        instance.release(ty.cast::<Header>());
+    }
     Some(ty)
 }
 
@@ -199,14 +205,57 @@ fn view_iter_native(
     // SAFETY: 同上。
     let object = unsafe { &*view.as_ptr().cast::<DictViewObject>() };
     if object.kind() == 0 {
-        // 键：直接用字典键迭代器 ✓（活体 ✓）。
+        // 键：直接用字典键迭代器 ✓（活体 ✓，带变异守卫 ✓）。
         return instance.iter_object(object.mapping());
     }
-    let elements = view_elements(instance, view)?;
-    let snapshot = instance.new_list(elements);
-    let iterator = instance.iter_object(snapshot);
-    instance.release(snapshot);
-    iterator
+    // **items()／values() 也交"引用字典"的真迭代器**（round 119）：先前是**快照列表**迭代器 ✗
+    // ⇒ 迭代中改键**不报** `RuntimeError` ✗（`test_dict.test_mutating_iteration_delete_over_items`
+    // ／`..._values` ✓）。字典迭代的版本守卫在 `executor/iter_advance.rs` ✓。
+    let iterator_name = if object.kind() == 1 {
+        "dict_itemiterator"
+    } else {
+        "dict_valueiterator"
+    };
+    let Some(iterator_type) = view_iterator_type(instance, iterator_name) else {
+        return Err(instance.raise_builtin_error("RuntimeError", "dict 视图迭代器类型建不出来"));
+    };
+    // 迭代器要自己那份字典引用 ✓。
+    // SAFETY: mapping 由视图持有，存活。
+    unsafe { instance.incref_object(object.mapping().as_ptr()) };
+    Ok(instance
+        .alloc(crate::builtin_objects::IteratorObject::new(
+            iterator_type,
+            object.mapping(),
+            Cell::new(0),
+        ))
+        .into_raw()
+        .cast::<Header>())
+}
+
+/// **`dict_items`／`dict_values` 的迭代器类型**（按需建 ✓，与视图类型同款手法 ✓）。
+fn view_iterator_type(instance: &Instance, name: &'static str) -> Option<NonNull<TypeObject>> {
+    if let Some(existing) = instance.type_named(name) {
+        return Some(existing);
+    }
+    let ty = instance.alloc_type_raw(
+        name,
+        core::mem::size_of::<crate::builtin_objects::IteratorObject>(),
+        // **`getattr` 槽要一起给** ✓：`__next__`／`__iter__`／`__reduce__` 全在 `iterator_getattr` ✓
+        //（`IteratorObject::slots()` 本身只给 dealloc／traverse／clear ✗）。
+        crate::builtin_objects::IteratorObject::slots()
+            .with_getattr(crate::builtin_objects::iterator_getattr),
+    );
+    if let Some(object_type) = instance.type_named("object") {
+        let _ = instance.register_bases(ty, vec![object_type]);
+    }
+    // **进 `builtins` 名字空间** ✓：pickle 的 `save_reduce` 要按 `builtins.<类型名>` 找回类型 ✓
+    //（`test_itemiterator_pickling`／`test_valuesiterator_pickling` ✓）。
+    if let Some(builtins) = instance.builtins() {
+        instance.retain(ty.cast::<Header>());
+        instance.dict_set(builtins, name, ty.cast::<Header>());
+        instance.release(ty.cast::<Header>());
+    }
+    Some(ty)
 }
 
 fn view_contains_native(
