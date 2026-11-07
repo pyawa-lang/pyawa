@@ -1098,12 +1098,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "byteorder", byteorder);
 
     // `implementation`：点号可访问的命名空间（`CX-13` 的载体）。
-    // 用核心**安全**的公开面搭：`new_attribute_type` ＋ `set_type_attribute`（不碰 unsafe）。
-    let namespace_type = instance.new_attribute_type("sys.implementation");
+    // **是真 `types.SimpleNamespace` 的实例**（round 113）：`Lib/types.py:20` 的
+    // `SimpleNamespace = type(sys.implementation)` 要它 ✓ —— 先前造成一个**类型对象** ✗ ⇒
+    // `types.SimpleNamespace(a=1)` 报 `sys.implementation() takes no arguments` ✗。
     let name = instance.new_str(IMPLEMENTATION_NAME);
-    instance.set_type_attribute(namespace_type, "name", name);
     let tag = instance.new_str(&cache_tag());
-    instance.set_type_attribute(namespace_type, "cache_tag", tag);
     let (impl_major, impl_minor, impl_micro, impl_level, impl_serial) = IMPLEMENTATION_VERSION;
     let impl_version = instance.new_tuple(vec![
         instance.new_int(i64::from(impl_major)),
@@ -1112,18 +1111,32 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str(impl_level),
         instance.new_int(i64::from(impl_serial)),
     ]);
-    instance.set_type_attribute(namespace_type, "version", impl_version);
     // **`_multiarch`** ✓（task-9）：`sysconfig._get_sysconfigdata_name()` 拼 sysconfigdata 名字要用它
     //（`Lib/sysconfig/__init__.py:394-399`）；值是**构建目标事实**，见 [`multiarch`]。
     let multiarch = instance.new_str(multiarch());
-    instance.set_type_attribute(namespace_type, "_multiarch", multiarch);
-    let implementation =
-        instance.alloc(AttributeObject::new(namespace_type, core::cell::RefCell::new(None)));
+    let isolated = instance.new_bool(true);
+    let implementation = pyawa_core::make_simple_namespace(
+        instance,
+        &[
+            ("name", name),
+            ("cache_tag", tag),
+            ("version", impl_version),
+            ("_multiarch", multiarch),
+            ("supports_isolated_interpreters", isolated),
+        ],
+    )
+    .expect("SimpleNamespace 类型可建");
+    instance.release(name);
+    instance.release(tag);
+    instance.release(impl_version);
+    instance.release(multiarch);
+    instance.release(isolated);
     instance.dict_set(
         namespace,
         "implementation",
-        implementation.into_raw().cast::<Header>(),
+        implementation,
     );
+    instance.release(implementation);
 
     // **`sys._jit`**（round 16）：模块对象式的三个查询口（见 `jit_query` 的如实说明）。
     // 建法与 `install` 里那些 Rust 侧模块同一手法：`module` 类型 ＋ 挂一个命名空间 dict。

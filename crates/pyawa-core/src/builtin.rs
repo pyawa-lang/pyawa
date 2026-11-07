@@ -9,6 +9,7 @@ pub(crate) mod dict;
 pub(crate) mod defaultdict;
 pub(crate) mod deque;
 pub(crate) mod list;
+pub(crate) mod namespace;
 pub(crate) mod object;
 pub mod context;
 pub(crate) mod generator;

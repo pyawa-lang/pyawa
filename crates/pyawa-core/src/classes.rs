@@ -847,6 +847,10 @@ pub fn build_class_from_parts_with_keywords(
             // ⇒ 强调会读到别人的字段（实测 `null pointer dereference` abort ✗）。
             // 动因：`Lib/importlib/_bootstrap.py` 的 `_WeakValueDictionary` 嵌套 `KeyedRef` ✓。
             "weakref",
+            // **`types.SimpleNamespace`**（round 113）：`class AdvancedNamespace(types.SimpleNamespace)`
+            // 必须沿用 `AttributeObject` 布局与 `namespace_new`／`repr` 槽 ✓（否则子类落通用布局 ✗ ⇒
+            // `AdvancedNamespace(...)` 收不到关键字、repr 变成 `<AdvancedNamespace object …>` ✗）。
+            "SimpleNamespace",
         ]
             .iter()
             .find_map(|name| {

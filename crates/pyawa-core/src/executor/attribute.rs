@@ -210,9 +210,43 @@ pub(crate) fn attribute_lookup(
                 let from_object = instance
                     .type_lookup_owner(lookup, name)
                     .is_some_and(|(owner, _)| Some(owner) == instance.type_named("object"));
-                if registered && from_object {
+                // **不再要求 `registered`**（round 113）：用户子类（`class dict2(dict)`）也要与
+                // "声明 repr 槽的基类"共用同一个 `__repr__` 对象 ✓（`registered` 对用户类名
+                // 的登记口径不稳 ⇒ 先前直接退回 object 的包装器 ⇒ `dict2.__repr__ is dict.__repr__`
+                // 为假 ✗ ⇒ `pprint._dispatch` 查不到 `_pprint_dict` ⇒ 子类 dict 不换行 ✗）。
+                let _ = registered;
+                if from_object {
+                    // **子类的 `type.__repr__` 要与"声明 repr 槽的那个基类"是同一个对象** ✓
+                    // （round 113）：参照 `class D(dict): pass` ⇒ `D.__repr__ is dict.__repr__` ✓
+                    // ⇒ `pprint._dispatch` 按 `type(obj).__repr__` 查表才命中 `_pprint_dict` ✓。
+                    // 先前对**每个**子类各造一份包装器 ✗ ⇒ dict 子类的 pformat 不被换行 ✗
+                    //（`test_pprint.test_basic_line_wrap` 的 `dict2` 档 ✓）。这里沿 MRO 找
+                    // **第一个带自定义 repr 槽**的类型当包装器归属 ✓；都没有就用自己 ✓。
+                    // **"声明 repr 槽"的那个基类**：子类继承的槽指针与基类**相同** ⇒ 跳过
+                    //（比较函数指针 ✓：`dict2` 的 repr 槽就是从 `dict` 拷来的 ✓）。
+                    let mro = unsafe { lookup.as_ref() }.mro();
+                    let mut owner = lookup;
+                    for (position, candidate) in mro.iter().enumerate() {
+                        // SAFETY: candidate 由注册表持有。
+                        let repr_slot = unsafe { candidate.as_ref() }.slots().repr;
+                        if repr_slot.is_none() {
+                            continue;
+                        }
+                        // 函数指针比较按地址（同一 crate 内继承拷贝的地址相同 ✓；用 `usize`
+                        // 规避 "function pointer comparisons" 的 lint ✓）。
+                        let repr_address = repr_slot.map(|function| function as usize);
+                        let inherited = mro.get(position + 1).is_some_and(|next| {
+                            // SAFETY: next 由注册表持有。
+                            unsafe { next.as_ref() }.slots().repr.map(|function| function as usize)
+                                == repr_address
+                        });
+                        if !inherited {
+                            owner = *candidate;
+                            break;
+                        }
+                    }
                     let wrapper = instance.type_dunder_wrapper(
-                        lookup,
+                        owner,
                         "__repr__",
                         crate::builtin::object::object_repr_native as crate::NativeFn,
                     );
@@ -890,6 +924,14 @@ fn attribute_lookup_specials(
             // SAFETY: mapping 是存活对象，这里新增一份交给调用方。
             unsafe { instance.incref_object(mapping.as_ptr()) };
             return Ok(Attribute::Owned(mapping)).map(Some);
+        }
+        // **内联属性对象**（`AttributeObject` 载荷：`types.SimpleNamespace`／用户类实例 ✓）：
+        // `__dict__` 就是那份属性字典本身 ✓（round 113：`pprint._pprint_simplenamespace` 用
+        // `object.__dict__.items()` 取字段 ✗ ⇒ 先前给空 ⇒ `namespace()` ✗）。
+        if let Some(attributes) = instance_attributes(instance, object) {
+            // SAFETY: attributes 是存活对象，这里新增一份交给调用方。
+            unsafe { instance.incref_object(attributes.as_ptr()) };
+            return Ok(Attribute::Owned(attributes)).map(Some);
         }
     }
 
