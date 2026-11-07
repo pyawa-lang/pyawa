@@ -388,7 +388,14 @@ impl Instance {
     ) -> Option<usize> {
         if let Some(hash) = crate::executor::values::key_hash(self, key) {
             return self.dict_lookup_hashed(mapping, hash, |existing| {
-                crate::executor::values_equal_public(self, existing, key)
+                // **键查找按 `==` 语义**（round 116 真 bug 修 ✗）：先前只比"结构相等" ✗ ⇒
+                // 只覆写 `__hash__`／`__eq__` 的用户键（`test_dict.test_str_nonstr` 的 `Key3` ✓）
+                // 明明哈希相同却查不到 ✗。先走结构快路（内建标量／字符串 ✓），不中再走**完整
+                // `==` 协议**（用户 `__eq__`／反射 ✓）；异常按"不相等"处理（查找面不抛 ✓）。
+                if crate::executor::values_equal_public(self, existing, key) {
+                    return true;
+                }
+                crate::executor::protocol::equality_public(self, existing, key).unwrap_or(false)
             });
         }
         // 不可哈希／没覆盖的键 ⇒ 线性兜底（正常路径：设置键时已被拒 ✓）。

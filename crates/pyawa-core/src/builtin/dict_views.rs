@@ -102,6 +102,11 @@ fn view_type(instance: &Instance, kind: u8) -> Option<NonNull<TypeObject>> {
         ("__contains__", view_contains_native),
         ("__repr__", view_repr_native_for_python),
         ("__eq__", view_eq_native),
+        ("__lt__", view_lt_native),
+        ("__le__", view_le_native),
+        ("__gt__", view_gt_native),
+        ("__ge__", view_ge_native),
+        ("__reversed__", view_reversed_native),
     ];
     if kind != 2 {
         // **集合式运算**（`dict_values` 不做 ✓，与参照一致）。
@@ -437,6 +442,87 @@ fn view_eq_native(
     instance.release(left);
     instance.release(right);
     equal.map(|value| instance.new_bool(value))
+}
+
+/// **视图的集合式大小比较**（`< <= > >=` ✓；`test_keys_contained` ✓）。
+fn view_compare(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    symbol: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(view) = receiver(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "比较需要 dict 视图"));
+    };
+    let Some(other) = args.last().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "比较需要 1 个实参"));
+    };
+    let left = view_set(instance, view)?;
+    let right = operand_to_set(instance, other)?;
+    let verdict = crate::executor::compare_public(instance, left, right, symbol, 0);
+    instance.release(left);
+    instance.release(right);
+    verdict.map(|value| instance.new_bool(value))
+}
+
+fn view_lt_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    view_compare(instance, bound, args, "<")
+}
+fn view_le_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    view_compare(instance, bound, args, "<=")
+}
+fn view_gt_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    view_compare(instance, bound, args, ">")
+}
+fn view_ge_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    view_compare(instance, bound, args, ">=")
+}
+
+/// **`reversed(view)`**（round 116）：交 `list_reverseiterator`（快照列表 ✓）。
+fn view_reversed_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(view) = receiver(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "reversed() 需要 dict 视图"));
+    };
+    let elements = view_elements(instance, view)?;
+    let snapshot = instance.new_list(elements);
+    let length = instance.list_items(snapshot).map(|items| items.len()).unwrap_or(0);
+    let iterator_type = instance
+        .type_named("list_reverseiterator")
+        .expect("list_reverseiterator 已登记");
+    // 迭代器要自己那份列表引用 ✓（快照本函数持有 ✓）。
+    unsafe { instance.incref_object(snapshot.as_ptr()) };
+    let iterator = instance.alloc(crate::builtin_objects::IteratorObject::new(
+        iterator_type,
+        snapshot,
+        Cell::new(length),
+    ));
+    instance.release(snapshot);
+    Ok(iterator.into_raw().cast::<Header>())
 }
 
 /// `view.__repr__()`（Python 面）：与槽位同文本 ✓。

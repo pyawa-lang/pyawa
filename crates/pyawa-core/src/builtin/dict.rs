@@ -435,10 +435,18 @@ pub(crate) fn dict_lookup(
     key: NonNull<Header>,
 ) -> Option<NonNull<Header>> {
     if let Some(name) = instance.text_of(key) {
-        return instance.dict_get(mapping, name);
+        // **字符串快路**：只认"字典里存的也是 str" ✓；否则（存的键是用户对象／str 子类之外 ✓）
+        // 落到下面的 `==` 语义查找 ✓（round 116：`test_str_nonstr` 的 `Key3` 键 ✓）。
+        if let Some(found) = instance.dict_get(mapping, name) {
+            return Some(found);
+        }
     }
-    // **通用键型**（`None`／tuple／用户对象…）：按值相等找位置，再取该位置的值 ✓。
+    // **通用键型**（`None`／tuple／用户对象…）：按 `==` 语义找位置，再取该位置的值 ✓
+    //（`dict_lookup_key` 已含哈希索引 ＋ 不可哈希兜底 ✓）。
     // 返回的是字典**借用**的那一份 ✓（`dict_get_native` 出去前会自己 `retain` ✓）。
+    if let Some(position) = instance.dict_lookup_key(mapping, key) {
+        return instance.dict_entries(mapping)?.get(position).map(|(_, value)| *value);
+    }
     let position = dict_position(instance, mapping, key)?;
     instance.dict_entries(mapping)?.get(position).map(|(_, value)| *value)
 }
@@ -449,6 +457,16 @@ pub(crate) fn dict_get_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let mapping = bound_dict(instance, bound)?;
+    if args.len() > 2 {
+        // 参照：`d.get(None, None, None)` ⇒ TypeError ✓（`test_get` 的 assertRaises ✓）。
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("get expected at most 2 arguments, got {}", args.len()),
+        ));
+    }
+    if !_kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "get() takes no keyword arguments"));
+    }
     let Some(key) = args.first() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
@@ -469,9 +487,16 @@ pub(crate) fn dict_get_native(
 pub(crate) fn dict_keys_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    // 参照：`d.keys(None)` ⇒ TypeError ✓（`test_keys` 的 assertRaises ✓）。
+    if !args.is_empty() || !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "keys() takes no arguments",
+        ));
+    }
     let mapping = bound_dict(instance, bound)?;
     // **真视图**（round 115）：先前交 `list` ✗ ⇒ `d.keys() | {...}` 等全部 TypeError ✗。
     crate::builtin::dict_views::make_view(instance, mapping, 0)
@@ -479,21 +504,76 @@ pub(crate) fn dict_keys_native(
 pub(crate) fn dict_values_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    // 参照：`d.keys(None)` ⇒ TypeError ✓（`test_keys` 的 assertRaises ✓）。
+    if !args.is_empty() || !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "values() takes no arguments",
+        ));
+    }
     let mapping = bound_dict(instance, bound)?;
     crate::builtin::dict_views::make_view(instance, mapping, 2)
 }
 pub(crate) fn dict_items_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    // 参照：`d.keys(None)` ⇒ TypeError ✓（`test_keys` 的 assertRaises ✓）。
+    if !args.is_empty() || !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "items() takes no arguments",
+        ));
+    }
     let mapping = bound_dict(instance, bound)?;
     crate::builtin::dict_views::make_view(instance, mapping, 1)
 }
+/// **`dict.__or__(self, other)`（PEP 584）**：两边都是 dict 族 ⇒ 新字典（右侧覆盖 ✓）；
+/// 否则 `NotImplemented` ✓（`a.__or__(None)`／`()`／`"BAD"` ✓）。
+pub(crate) fn dict_or_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(left), Some(right)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__or__ expected 2 arguments"));
+    };
+    let Some(dict_type) = instance.type_named("dict") else {
+        return Ok(instance.retain(instance.not_implemented()));
+    };
+    if !instance.is_subtype(instance.type_of(*right), dict_type) {
+        return Ok(instance.retain(instance.not_implemented()));
+    }
+    Ok(dict_merge(instance, left, *right))
+}
+
+/// **`dict.__ror__(self, other)`**：`other | d` —— 镜像 seq：右侧（self）覆盖 ✓。
+pub(crate) fn dict_ror_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(right_dict), Some(left)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__ror__ expected 2 arguments"));
+    };
+    let Some(dict_type) = instance.type_named("dict") else {
+        return Ok(instance.retain(instance.not_implemented()));
+    };
+    if !instance.is_subtype(instance.type_of(*left), dict_type) {
+        return Ok(instance.retain(instance.not_implemented()));
+    }
+    Ok(dict_merge(instance, *left, right_dict))
+}
+
 /// `dict.__getitem__(self, key)`（`obj[key]` 的同一实现 ✓）。
 pub fn dict_getitem_native(
     instance: &Instance,

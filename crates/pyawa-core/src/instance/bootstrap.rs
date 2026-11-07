@@ -1432,6 +1432,17 @@ impl Instance {
                 "__eq__",
                 crate::builtin::dict::dict_eq_native as crate::NativeFn,
             ),
+            // **`dict | dict`（PEP 584）**（round 116）：`test_merge_operator` ✓（`|=` 已有 ✓）。
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__or__",
+                crate::builtin::dict::dict_or_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__ror__",
+                crate::builtin::dict::dict_ror_native as crate::NativeFn,
+            ),
             // **`str.maketrans`／`bytes.maketrans`**（第 313 轮）：`'type' object has no attribute
             // 'maketrans'` × **67** 个模块的卡点 ✓。两个都是**静态**用法（在类型对象上取 ⇒ 无接收者 ✓）。
             (

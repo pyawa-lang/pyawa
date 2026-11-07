@@ -176,6 +176,18 @@ pub(crate) fn subscript_get(
         let position = match instance.dict_lookup_key(container, key) {
             Some(position) => position,
             None => {
+                // **`__missing__` 派发**（round 116）：`dict` 子类定义了 `__missing__` ⇒
+                // 缺键时调它 ✓（参照语义 ✓；`test_dict.test_missing` 的 `D[2] ⇒ 42` ✓）。
+                let has_missing = instance
+                    .type_lookup_owner(container_type, "__missing__")
+                    .is_some_and(|(owner, _)| Some(owner) != instance.type_named("dict"));
+                if has_missing {
+                    if let Some(found) =
+                        crate::executor::call::call_object_method(instance, container, "__missing__", &[key])?
+                    {
+                        return Ok(found);
+                    }
+                }
                 // SAFETY: key 是帧值栈上的存活对象。
                 unsafe { instance.incref_object(key.as_ptr()) };
                 let exception = new_exception_with_args(
