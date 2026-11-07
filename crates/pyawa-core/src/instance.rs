@@ -109,6 +109,10 @@ pub struct Instance {
     current_frame: core::cell::Cell<Option<NonNull<Header>>>,
     /// **`NotImplemented` 单例**（第 215 轮）。
     not_implemented_singleton: core::cell::Cell<Option<NonNull<Header>>>,
+    /// **`mappingproxy` 的来源类型**（round 114）：`MappingProxyType(OrderedDict(...))` 的
+    /// `.copy()`／`repr` 要还原**底层映射类型** ✓ ⇒ 按代理对象地址记一份来源类型 ✓
+    /// （类型对象活到实例销毁 ⇒ 不会悬垂 ✓；条目随代理存活而累积，量小如实登记）。
+    mappingproxy_sources: RefCell<std::collections::HashMap<usize, NonNull<TypeObject>>>,
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。

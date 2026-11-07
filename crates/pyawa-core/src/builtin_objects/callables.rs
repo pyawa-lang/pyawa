@@ -555,7 +555,17 @@ pub unsafe fn method_getattr(
     let object = unsafe { &*ptr.cast::<MethodObject>() };
     match name {
         "__self__" => Some(instance.retain(object.this())),
-        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        "__func__" => Some(instance.retain(object.function())),
+        // **`__wrapped__` 委托给被绑函数自己的属性**（round 114 真语义）：参照的绑定方法把
+        // 未知属性**转发给底层函数** ✓ —— `dataclasses` 生成的 `__repr__` 带 `__wrapped__`
+        //（`__create_fn__.<locals>.__repr__`）⇒ `dc.__repr__.__wrapped__` 必须给那个原函数 ✓；
+        // 先前直接给 **函数本身** ✗ ⇒ `pprint._format` 的 dataclass 包装判据
+        //（`"__create_fn__" in object.__repr__.__wrapped__.__qualname__`）为假 ⇒
+        // **dataclass 不换行** ✗（`test_pprint.test_larger_dataclass`／`test_recursive_dataclass` ✓）。
+        "__wrapped__" => match instance.attribute_optional_of(object.function(), "__wrapped__") {
+            Ok(Some(value)) => Some(value),
+            _ => None,
+        },
         // **函数面代理**（第 276 轮 ✓）：参照里绑定方法把 `__qualname__`／`__name__` 等转发给被绑函数 ✓
         //（实测 `d.__setitem__.__qualname__ == 'D.__setitem__'` ✓）。先前没有这几格 ✗ ⇒ AttributeError ✗。
         // 取法：先查**函数类型字典**里的现成条目 ✓；没有再看它是不是 Python 函数 ✓（是则用 `code()`

@@ -120,3 +120,5 @@ pub use builtin_objects::filter_new;
 pub use builtin_objects::map_new;
 
 pub use builtin::namespace::{build_simple_namespace_type, make_simple_namespace};
+
+pub use builtin::deque::install_deque_init;

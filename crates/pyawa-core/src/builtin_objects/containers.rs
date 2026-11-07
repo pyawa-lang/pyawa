@@ -736,6 +736,18 @@ impl DequeObject {
         self.maxlen.get()
     }
 
+    /// **设置 `maxlen` 并按需裁掉头部**（round 114）：`deque([1,2,3], maxlen=2)` 的关键字
+    /// 在 `__init__` 里才拿到（`NewFn` 没有关键字一路 ✗）⇒ 设完要把超出的头部丢掉 ✓。
+    pub fn set_raw_maxlen(&self, instance: &Instance, maxlen: usize) {
+        self.maxlen.set(maxlen);
+        let mut items = self.items.borrow_mut();
+        while items.len() > maxlen {
+            let dropped = items.remove(0);
+            // SAFETY: dropped 由本对象持有；这份引用交还实例 ✓。
+            unsafe { instance.release_object(dropped.as_ptr()) };
+        }
+    }
+
     /// 末尾压入（**接管**一份引用 ✓）；超过 `maxlen` 时从另一端丢一个 ✓（丢了就释放 ✓）。
     pub fn push_back(&self, instance: &Instance, value: NonNull<Header>) {
         let mut items = self.items.borrow_mut();

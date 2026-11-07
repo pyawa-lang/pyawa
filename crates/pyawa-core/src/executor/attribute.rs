@@ -248,7 +248,7 @@ pub(crate) fn attribute_lookup(
                     let wrapper = instance.type_dunder_wrapper(
                         owner,
                         "__repr__",
-                        crate::builtin::object::object_repr_native as crate::NativeFn,
+                        crate::builtin::object::object_repr_slot_native as crate::NativeFn,
                     );
                     return Ok(Attribute::Owned(wrapper));
                 }

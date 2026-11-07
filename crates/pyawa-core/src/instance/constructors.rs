@@ -641,13 +641,71 @@ pub unsafe fn mappingproxy_new(
             (key, value)
         })
         .collect();
-    Ok(instance
+    let proxy = instance
         .alloc(DictObject::new(class, core::cell::RefCell::new(entries)))
         .into_raw()
-        .cast::<Header>())
+        .cast::<Header>();
+    // **记来源类型**（round 114）：`copy()`／`repr` 要还原（`OrderedDict`／`dict`）✓。
+    let source_type = instance.type_of(source);
+    if Some(source_type) != instance.type_named("dict") {
+        instance.register_mappingproxy_source(proxy, source_type);
+    }
+    Ok(proxy)
 }
 
 impl Instance {
+    /// **记一份 `mappingproxy` 的来源类型**（round 114）。
+    pub fn register_mappingproxy_source(
+        &self,
+        proxy: NonNull<Header>,
+        source_type: NonNull<crate::TypeObject>,
+    ) {
+        self.mappingproxy_sources
+            .borrow_mut()
+            .insert(proxy.as_ptr() as usize, source_type);
+    }
+
+    /// 取 `mappingproxy` 的来源类型（没有 ⇒ `None`：来源就是普通 dict ✓）。
+    pub fn mappingproxy_source(&self, proxy: NonNull<Header>) -> Option<NonNull<crate::TypeObject>> {
+        self.mappingproxy_sources
+            .borrow()
+            .get(&(proxy.as_ptr() as usize))
+            .copied()
+    }
+
+    /// **按来源类型"复制"一份映射**（round 114）：`mappingproxy.copy()` 用 ✓ ——
+    /// 来源是 `OrderedDict` 一类 ⇒ 构造它的新实例 ✓（pprint 的 `mappingproxy(OrderedDict([...]))` ✓）；
+    /// 来源是普通 dict ⇒ 新 dict ✓。
+    pub fn mappingproxy_copy_like(&self, proxy: NonNull<Header>) -> Option<NonNull<Header>> {
+        let entries = self.dict_entries(proxy)?;
+        let dict = self.new_dict();
+        for (key, value) in entries {
+            self.dict_insert_raw(dict, self.retain(key), self.retain(value));
+        }
+        match self.mappingproxy_source(proxy) {
+            None => Some(dict),
+            Some(source_type) => {
+                // 调来源类型的构造函数（`OrderedDict(dict)` ✓）；实参所有权**转移**给调用 ✓。
+                let result = crate::executor::call::call_callable(
+                    self,
+                    source_type.cast::<Header>(),
+                    None,
+                    vec![dict],
+                    Vec::new(),
+                    0,
+                );
+                match result {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        // 构造失败 ⇒ 退普通 dict（如实降级 ✓；正常类不会到这里）。
+                        self.release(dict);
+                        None
+                    }
+                }
+            }
+        }
+    }
+
     /// **把一份 dict 包成 `mappingproxy`**（round 112；`type.__dict__` 那条读法用 ✓）：
     /// 载荷是**复制**的条目（本层如实登记为快照 ✓）。
     pub fn mappingproxy_of(&self, source: NonNull<Header>) -> Option<NonNull<Header>> {
@@ -677,7 +735,63 @@ pub unsafe fn mappingproxy_repr(
     ptr: *mut Header,
     instance: &Instance,
 ) -> Result<String, crate::ExecError> {
+    let object = NonNull::new(ptr).expect("调用方保证非空");
+    // **有来源类型**（`OrderedDict` 等）⇒ 内层照它的 repr ✓（`mappingproxy(OrderedDict([...]))` ✓）。
+    if instance.mappingproxy_source(object).is_some() {
+        if let Some(copied) = instance.mappingproxy_copy_like(object) {
+            // SAFETY: copied 是新引用。
+            let text = instance.object_repr(copied);
+            unsafe { instance.release_object(copied.as_ptr()) };
+            return Ok(format!("mappingproxy({})", text?));
+        }
+    }
     // SAFETY: 载荷与 dict 同构。
     let inner = unsafe { crate::builtin_objects::dict_repr(ptr, instance) }?;
     Ok(format!("mappingproxy({inner})"))
+}
+
+/// **`mappingproxy.copy()`**（round 114）：交**按来源类型复制**的映射 ✓（见
+/// [`Instance::mappingproxy_copy_like`]）。
+pub(crate) fn mappingproxy_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, _) = crate::builtin_objects::container_receiver(bound, args);
+    let Some(proxy) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "copy() 需要 mappingproxy"));
+    };
+    instance
+        .mappingproxy_copy_like(proxy)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "mappingproxy 的载荷不是映射"))
+}
+
+/// **`mappingproxy` 的属性面**：`copy` 走自己的实现 ✓，其余委托 `dict_getattr` ✓。
+pub unsafe fn mappingproxy_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if name == "copy" {
+        let method_type = instance
+            .type_named("builtin_function_or_method")
+            .expect("builtin_function_or_method 已登记");
+        let native = instance.alloc(BuiltinFunctionObject::new(
+            method_type,
+            "copy",
+            core::cell::Cell::new(mappingproxy_copy_native),
+        ));
+        let native_raw = native.into_raw().cast::<Header>();
+        // SAFETY: 方法对象要自己那份 self。
+        unsafe { instance.incref_object(ptr) };
+        let bound = instance.alloc(crate::MethodObject::new(
+            instance.type_named("method").expect("method 已登记"),
+            native_raw,
+            unsafe { NonNull::new_unchecked(ptr) },
+        ));
+        return Some(bound.into_raw().cast::<Header>());
+    }
+    // SAFETY: 契约同上（槽位保证 ptr 是本类型族存活对象）。
+    unsafe { crate::builtin_objects::dict_getattr(ptr, name, instance) }
 }

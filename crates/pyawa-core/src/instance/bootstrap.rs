@@ -10,6 +10,7 @@ impl Instance {
             bytes_allocated: Cell::new(0),
             current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
+            mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),
             live: RefCell::new(HashSet::new()),
             watch: Cell::new(0),
             freed_sites: RefCell::new(std::collections::HashMap::new()),
@@ -45,7 +46,17 @@ impl Instance {
             // **原生栈** ✓ —— 宿主（`pyawa` CLI）可以给执行线程开大栈并用
             // `PYAWA_RECURSION_LIMIT` 提高上限 ✓（`pprint` 一族正常嵌套就要 30+ 层 ✓）；
             // 不设该变量时仍是保守的 `MAX_CALL_DEPTH` ✓（cargo 测试的线程栈小，保持原状 ✓）。
-            recursion_limit: Cell::new(crate::instance::MAX_CALL_DEPTH),
+            // **环境覆盖**（round 114）：CLI 在自己的**大栈线程**里把默认上限提到 160 ✓
+            // （`pprint` 的 20 层嵌套在 64 下会 RecursionError ✗；深容器 `repr` 的 200 层守卫仍
+            // 会先于上限触发 ✓ —— `repr_loop_crash_shapes` 钉住 ✓）；`cargo test` 的进程内夹具
+            // 不设这个变量 ⇒ 仍用保守的 `MAX_CALL_DEPTH` ✓。
+            recursion_limit: Cell::new(
+                std::env::var("PYAWA_RECURSION_LIMIT")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .filter(|value| *value >= 1)
+                    .unwrap_or(crate::instance::MAX_CALL_DEPTH),
+            ),
             gc_threshold: Cell::new(DEFAULT_GC_THRESHOLD),
             gc_alloc_count: Cell::new(0),
             gc_next_collect: Cell::new(crate::instance::DEFAULT_GC_THRESHOLD.0),
@@ -590,7 +601,8 @@ impl Instance {
             DictObject::slots()
                 .with_new(crate::instance::constructors::mappingproxy_new)
                 .with_repr(crate::instance::constructors::mappingproxy_repr)
-                .with_getattr(crate::builtin_objects::dict_getattr),
+                // 自己的 `copy`（按来源类型）＋其余委托 dict ✓。
+                .with_getattr(crate::instance::constructors::mappingproxy_getattr),
         );
         let _ = self.register_bases(
             self.type_named("mappingproxy").expect("刚建"),
@@ -685,6 +697,7 @@ impl Instance {
             self.register_bases(deque_type, vec![deque_base]).is_some(),
             "OM-13：deque 的 MRO 应当可线性化"
         );
+
     }
 
     /// 引导第 4 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。

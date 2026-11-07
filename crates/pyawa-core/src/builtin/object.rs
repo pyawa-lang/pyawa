@@ -263,6 +263,36 @@ pub fn object_reduce_ex_native(
     Ok(instance.new_tuple(vec![ty_object, instance.new_tuple(Vec::new())]))
 }
 
+/// **直接调用"接收者类型的 repr 槽"**（round 114）：类型级 `__repr__` 包装器用它 ✓ ——
+/// 参照里 `set.__repr__(子类实例)` 调的是 **C 的 slot** ✓（**不**走子类的 `__repr__` 覆写 ✓）——
+/// 先前包装器用 [`object_repr_native`]（会走覆写通道 ✗）⇒ 子类的
+/// `def __repr__(self): return set.__repr__(self)` **自我循环** ✗（`test_pprint.test_set_reprs`：
+/// 给 `<无法取 repr>` ✗）。本函数只碰槽位 ✓，语义与 `PyObject_Repr` 的 `tp_repr` 直调一致 ✓。
+pub fn object_repr_slot_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, _) = container_receiver(bound, args);
+    let Some(object) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "__repr__ expected 1 argument"));
+    };
+    // SAFETY: receiver 是存活对象。
+    let ty = unsafe { object.as_ref() }.ty();
+    // SAFETY: ty 由注册表持有。
+    let slot = unsafe { ty.as_ref() }.slots().repr;
+    let Some(slot) = slot else {
+        // **没有 repr 槽的类型**（用户类实例等）⇒ 走 `object.__repr__` 的默认文本 ✓
+        // （`object.__repr__(C())` 参照给 `<C object at 0x…>` ✓；先前报 `type has no repr slot` ✗
+        // —— 官方语料 `type_dunder_attributes` 当场抓住 ✓）。
+        return Ok(instance.new_str(&instance.object_repr(object)?));
+    };
+    // SAFETY: 槽位契约（ptr 是本类存活实例；新引用返回值由本函数转交调用方）。
+    let text = unsafe { slot(object.as_ptr(), instance) }?;
+    Ok(instance.new_str(&text))
+}
+
 pub fn object_repr_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

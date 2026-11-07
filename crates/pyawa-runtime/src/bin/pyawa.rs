@@ -111,6 +111,13 @@ fn main() {
     // **大栈执行线程**（round 112）：本层 Python 调用是 Rust 递归 ✓ —— 主线程默认 8 MiB 栈；
     // 给执行线程开 **512 MiB** 栈以留余量 ✓（默认递归上限仍是保守的 `MAX_CALL_DEPTH=64` ✓，
     // 深容器 `repr` 仍按参照报 `RecursionError` ✓ —— 见 `repr_loop_crash_shapes` 的守卫 ✓）。
+    // **默认递归上限提到 160**（round 114）：纯 Python 库（`pprint`）的正常嵌套要几十层 ✓；
+    // 512 MiB 栈足够 160 层 Rust 递归 ✓；深容器 `repr`（200 层）仍会先触发参考口径的
+    // `RecursionError` ✓（`repr_loop_crash_shapes` 守卫 ✓）。`cargo test` 不经过这里 ⇒ 默认 64 ✓。
+    // SAFETY: 单线程启动阶段设环境变量。
+    unsafe {
+        std::env::set_var("PYAWA_RECURSION_LIMIT", "160");
+    }
     let builder = std::thread::Builder::new().stack_size(512 * 1024 * 1024);
     if let Ok(handle) = builder.spawn(real_main) {
         let _ = handle.join();

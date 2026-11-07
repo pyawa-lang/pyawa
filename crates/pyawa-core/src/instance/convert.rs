@@ -311,18 +311,18 @@ impl Instance {
         // `functools.cmp_to_key` 把方法名包成 `KeyWrapper` 再 `sorted`，先前就撞在这条上 ✗）。
         // `compare_public` 报错（两边都没有可比方法）⇒ 仍回 `None`：调用方照旧报
         // `'<' not supported between instances of …` ✓（文案不变）。
-        if crate::executor::compare_public(self, left, right, "<", 0).unwrap_or(false) {
-            return Some(core::cmp::Ordering::Less);
-        }
-        if crate::executor::compare_public(self, left, right, ">", 0).unwrap_or(false) {
-            return Some(core::cmp::Ordering::Greater);
-        }
-        // **"相等"也要给 `Some(Equal)`**（round 110 真 bug 修 ✗）：两边都 `<` 假、`>` 假时参照的
-        // `Py_LT`／`Py_GT` 都判否 ⇒ **相等** ✓；先前直接回 `None` ✗ ⇒ `list.sort(key=cmp_to_key(...))`
-        // 一旦遇到比较相等的键就报 `'<' not supported between instances of 'K' and 'K'` ✗
-        //（官方 `list_tests.test_sort` 的 `myComparison` 有 `xmod == ymod` 档 ✓）。
-        if crate::executor::compare_public(self, left, right, "==", 0).unwrap_or(false) {
-            return Some(core::cmp::Ordering::Equal);
+        // **`<` 失败才认"比不了"**（round 114）：参照排序只问 `a < b` ✓ —— 两次都 `False`
+        // **不是错误**（就是"不小于"，按相等处理 ✓）⇒ 先前再判 `==` ✗ ⇒ 没有 `__eq__` 的用户类
+        //（`pprint` 的 `_safe_key` 就是！）被判"比不了" ✗（`test_pprint` 的 `compact_width`／
+        // `set_of_sets_reprs` 报 `'<' not supported between instances of '_safe_key'` ✗）。
+        match crate::executor::compare_public(self, left, right, "<", 0) {
+            Ok(true) => return Some(core::cmp::Ordering::Less),
+            Ok(false) => match crate::executor::compare_public(self, left, right, ">", 0) {
+                Ok(true) => return Some(core::cmp::Ordering::Greater),
+                Ok(false) => return Some(core::cmp::Ordering::Equal),
+                Err(_) => {}
+            },
+            Err(_) => {}
         }
         None
     }

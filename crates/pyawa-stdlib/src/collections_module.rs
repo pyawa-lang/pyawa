@@ -127,6 +127,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `from _collections import defaultdict`（try/except ✓）要它 ✗ —— 缺了它 `Lib/typing.py`
     // 第 23 行 `from collections import defaultdict` 直接 `ImportError` ✓。类型在 core 造 ✓
     // （载荷借 `AttributeObject` ✓ —— stdlib 不碰载荷布局 ✓ `CX-22` ✓）。
+    // **`deque.__init__`**（round 114）：`maxlen` 关键字只有 `__init__` 拿得到 ✓（`NewFn` 无关键字 ✗）。
+    pyawa_core::install_deque_init(instance);
     let defaultdict_type = pyawa_core::build_defaultdict_type(instance);
     instance.dict_set(namespace, "defaultdict", defaultdict_type.cast());
     let module_name = instance.new_str(NAME);
