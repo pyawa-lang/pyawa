@@ -217,9 +217,9 @@ fn dd_get_native(
     let index = if bound.is_some() { 2usize } else { 2usize };
     let default = if bound.is_some() { args.get(1) } else { args.get(2) };
     let _ = index;
-    if let Some(found) = instance.dict_lookup_key(data, key) {
+    if let Some(position) = instance.dict_lookup_key_checked(data, key)? {
         let entries = instance.dict_entries(data).unwrap_or_default();
-        if let Some((_, value)) = entries.get(found).copied() {
+        if let Some((_, value)) = entries.get(position).copied() {
             return Ok(instance.retain(value));
         }
     }

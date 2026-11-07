@@ -406,6 +406,48 @@ impl Instance {
             .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, key))
     }
 
+    /// **可失败的 `dict_lookup_key`**（round 120）：键的 `__hash__`／`__eq__` 抛异常时**原样上抛** ✓
+    /// （参照口径：`d[x]`／`x in d` 等遇到 `BadEq`／`HashError` 就抛原异常 ✓ ——
+    /// `test_dict.test_bad_key`／`test_unhashable_key` ✓）。入口函数用它；内部索引建构仍用吞错版 ✓。
+    pub fn dict_lookup_key_checked(
+        &self,
+        mapping: NonNull<Header>,
+        key: NonNull<Header>,
+    ) -> Result<Option<usize>, crate::ExecError> {
+        match crate::executor::values::key_hash_checked(self, key)? {
+            Some(hash) => {
+                // 闭包是 `Fn`（不是 `FnMut`）⇒ 用 `RefCell` 记异常 ✓。
+                let error: core::cell::RefCell<Option<crate::ExecError>> =
+                    core::cell::RefCell::new(None);
+                let found = self.dict_lookup_hashed(mapping, hash, |existing| {
+                    match crate::executor::protocol::equality_public(self, existing, key) {
+                        Ok(same) => same,
+                        Err(raised) => {
+                            let mut slot = error.borrow_mut();
+                            if slot.is_none() {
+                                *slot = Some(raised);
+                            }
+                            false
+                        }
+                    }
+                });
+                if let Some(raised) = error.into_inner() {
+                    return Err(raised);
+                }
+                Ok(found)
+            }
+            None => {
+                // 不可哈希 ⇒ 线性兜底（设置键时已被拒 ✓）。
+                // SAFETY: 调用方保证 mapping 存活。
+                let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+                Ok(dict
+                    .entries()
+                    .iter()
+                    .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, key)))
+            }
+        }
+    }
+
     /// 按**字符串**键读 `dict`（**借用**；不存在给 `None`）。
     pub fn dict_get(&self, mapping: NonNull<Header>, key: &str) -> Option<NonNull<Header>> {
         let position = self.dict_lookup_hashed(mapping, crate::executor::values::hash_text(key), |existing| {

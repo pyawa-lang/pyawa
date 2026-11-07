@@ -710,7 +710,7 @@ pub(crate) fn contains(
         crate::builtin::dict::reject_unhashable_key(instance, item)?;
         // **哈希索引 ＋ `==` 语义**（round 116）：先前逐项"结构相等" ✗ ⇒ 用户键（覆写
         // `__hash__`／`__eq__`）查不到 ✗，且大表 O(n)。`dict_lookup_key` 已含不可哈希线性兜底 ✓。
-        return Ok(instance.dict_lookup_key(container, item).is_some());
+        return Ok(instance.dict_lookup_key_checked(container, item)?.is_some());
     }
     // **`set` 有自己的一份**（第 236 轮修 SIGSEGV）：此前这一支和 `dict` 合在一起、把 set 强转成
     // `DictObject` 再遍历 `entries()` ⇒ **类型混淆**、读越界直接崩（推导式能造集合后才被触发）

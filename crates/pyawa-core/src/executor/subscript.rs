@@ -173,7 +173,7 @@ pub(crate) fn subscript_get(
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息。
         // **按哈希索引查**（`P3-41` round 42）：先前每次线性扫 ⇒ 大表 O(n²)。
-        let position = match instance.dict_lookup_key(container, key) {
+        let position = match instance.dict_lookup_key_checked(container, key)? {
             Some(position) => position,
             None => {
                 // **`__missing__` 派发**（round 116）：`dict` 子类定义了 `__missing__` ⇒
@@ -546,7 +546,7 @@ pub fn subscript_del(
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         // **按哈希索引查**（`P3-41` round 42）。
-        let position = match instance.dict_lookup_key(container, key) {
+        let position = match instance.dict_lookup_key_checked(container, key)? {
             Some(position) => position,
             None => {
                 // SAFETY: key 是帧值栈上的存活对象。

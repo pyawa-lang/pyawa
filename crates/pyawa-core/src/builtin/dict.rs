@@ -79,7 +79,7 @@ pub(crate) fn dict_position_with_protocol(
     mapping: NonNull<Header>,
     key: NonNull<Header>,
 ) -> Result<Option<usize>, crate::ExecError> {
-    let Some(hash) = crate::executor::values::key_hash(instance, key) else {
+    let Some(hash) = crate::executor::values::key_hash_checked(instance, key)? else {
         return Ok(dict_position(instance, mapping, key));
     };
     // SAFETY: 调用方保证 mapping 是存活的 dict。
@@ -192,6 +192,13 @@ pub(crate) fn dict_update_native(
     }
     // 关键字实参是**借用** ⇒ 各 retain 一份，与上面各分支统一成"本函数持有" ✓。
     for (key, value) in kwargs.iter().copied() {
+        // **关键字名必须是 str** ✓（`d.update(**{1: 2})` 参照报 TypeError ✓）。
+        if instance.text_of(key).is_none() {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "keywords must be strings",
+            ));
+        }
         // SAFETY: 关键字实参由调用方保证存活。
         unsafe {
             instance.incref_object(key.as_ptr());
@@ -218,7 +225,9 @@ pub(crate) fn dict_update_native(
                 ));
             }
         }
-        match dict_position(instance, mapping, key) {
+        // **按键的 `==` 协议找位置**（round 120）：键 `__eq__` 抛异常要原样上抛 ✓
+        //（`test_bad_key` 的 `d.update({x2: 2})` ✓）。
+        match dict_position_with_protocol(instance, mapping, key)? {
             Some(index) => {
                 // SAFETY: 上面刚确认是本实例的 dict。
                 let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
@@ -235,6 +244,18 @@ pub(crate) fn dict_update_native(
                 // 键值两份引用都由本函数持有 ⇒ `insert_raw` 直接接管 ✓。
                 instance.dict_insert_raw(mapping, key, value);
             }
+        }
+    }
+    // **最后一对才触发变异**的形态也要报 ✓（`test_merge_and_mutate` 的 X 键在源末尾 ✓）：
+    // 逐对检查只在"下一对开始"时看得到；末尾要补一次 ✓。
+    if let Some((source, version)) = source_guard {
+        // SAFETY: source 由调用方保证存活。
+        let current = unsafe { &*source.as_ptr().cast::<DictObject>() }.version();
+        if current != version {
+            return Err(instance.raise_builtin_error(
+                "RuntimeError",
+                "dictionary changed size during iteration",
+            ));
         }
     }
     Ok(instance.retain(instance.singletons().none()))
@@ -366,7 +387,8 @@ pub(crate) fn dict_setdefault_native(
         ));
     };
     reject_unhashable_key(instance, *key)?;
-    if let Some(index) = dict_position(instance, mapping, *key) {
+    // **按键的 `==` 协议找位置**（round 120）：见 `pop` 同一口径 ✓。
+    if let Some(index) = dict_position_with_protocol(instance, mapping, *key)? {
         let entries = instance.dict_entries(mapping).unwrap_or_default();
         return Ok(instance.retain(entries[index].1));
     }
@@ -398,7 +420,12 @@ pub(crate) fn dict_pop_native(
             "pop expected at least 1 argument, got 0",
         ));
     };
-    if let Some(index) = dict_position(instance, mapping, *key) {
+    // **不可哈希的键 ⇒ TypeError**（round 120）：`test_unhashable_key` 的 `d.pop(key)` ✓；
+    // 先前直接落到 `KeyError` ✗。
+    reject_unhashable_key(instance, *key)?;
+    // **按键的 `==` 协议找位置**（round 120）：键 `__eq__` 抛异常要原样上抛 ✓
+    //（`test_bad_key` 的 `d.pop(x2)` ✓）。
+    if let Some(index) = dict_position_with_protocol(instance, mapping, *key)? {
         // SAFETY: 上面刚确认是本实例的 dict。
         let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
         if let Some((removed_key, value)) = object.remove_at(index) {
@@ -408,7 +435,17 @@ pub(crate) fn dict_pop_native(
     }
     match args.get(1) {
         Some(default) => Ok(instance.retain(*default)),
-        None => Err(instance.raise_builtin_error("KeyError", "")),
+        None => {
+            // 参照：`KeyError` 的 `args` 就是那个键（不是空消息 ✓）。
+            // SAFETY: key 是调用方保证存活的借用；异常构造添引用 ✓。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            let exception = crate::executor::new_exception_with_args(
+                instance,
+                crate::executor::exception_type(instance, "KeyError"),
+                vec![*key],
+            );
+            Err(crate::executor::raise(instance, exception))
+        }
     }
 }
 /// `copy()`（第 154 轮）：**浅拷贝** ✓（`dict_entries` 是**借用** ⇒ 每项 `retain` ✓ —— 第 145 轮的教训 ✓）。
@@ -489,22 +526,26 @@ pub(crate) fn dict_lookup(
     instance: &Instance,
     mapping: NonNull<Header>,
     key: NonNull<Header>,
-) -> Option<NonNull<Header>> {
+) -> Result<Option<NonNull<Header>>, crate::ExecError> {
     if let Some(name) = instance.text_of(key) {
         // **字符串快路**：只认"字典里存的也是 str" ✓；否则（存的键是用户对象／str 子类之外 ✓）
         // 落到下面的 `==` 语义查找 ✓（round 116：`test_str_nonstr` 的 `Key3` 键 ✓）。
         if let Some(found) = instance.dict_get(mapping, name) {
-            return Some(found);
+            return Ok(Some(found));
         }
     }
     // **通用键型**（`None`／tuple／用户对象…）：按 `==` 语义找位置，再取该位置的值 ✓
     //（`dict_lookup_key` 已含哈希索引 ＋ 不可哈希兜底 ✓）。
     // 返回的是字典**借用**的那一份 ✓（`dict_get_native` 出去前会自己 `retain` ✓）。
-    if let Some(position) = instance.dict_lookup_key(mapping, key) {
-        return instance.dict_entries(mapping)?.get(position).map(|(_, value)| *value);
+    if let Some(position) = instance.dict_lookup_key_checked(mapping, key)? {
+        return Ok(instance
+            .dict_entries(mapping)
+            .unwrap_or_default()
+            .get(position)
+            .map(|(_, value)| *value));
     }
-    let position = dict_position(instance, mapping, key)?;
-    instance.dict_entries(mapping)?.get(position).map(|(_, value)| *value)
+    Ok(dict_position(instance, mapping, key)
+        .and_then(|position| instance.dict_entries(mapping)?.get(position).map(|(_, value)| *value)))
 }
 pub(crate) fn dict_get_native(
     instance: &Instance,
@@ -530,7 +571,7 @@ pub(crate) fn dict_get_native(
         ));
     };
     reject_unhashable_key(instance, *key)?;
-    if let Some(found) = dict_lookup(instance, mapping, *key) {
+    if let Some(found) = dict_lookup(instance, mapping, *key)? {
         // **借来的引用要还一份**（第 145 轮：`dict_get`／`dict_entries` 都是**借用** ✓；
         //   不 retain ⇒ 调用方释放后 double free ✗ —— 这一族在第 131 轮的 `type()` 上已经栽过 ✓）。
         return Ok(instance.retain(found));
@@ -668,8 +709,32 @@ pub fn dict_eq_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
     };
-    let outcome = crate::executor::values::values_equal_public(instance, left, *right);
-    Ok(instance.new_bool(outcome))
+    let Some(dict_type) = instance.type_named("dict") else {
+        return Ok(instance.retain(instance.not_implemented()));
+    };
+    if !instance.is_subtype(instance.type_of(*right), dict_type) {
+        // 非 dict ⇒ NotImplemented（反射走对方的 `__eq__` ✓，与参照一致 ✓）。
+        return Ok(instance.retain(instance.not_implemented()));
+    }
+    // **键按 `==` 协议查、值递归**（round 120）：先前走 `values_equal_public` 的**纯结构**口径 ✗
+    // ⇒ 键的 `__eq__` 抛异常被吞 ✗（`test_dict.test_eq` 的 `d1 == d2` ✓）。
+    let a = instance.dict_entries(left).unwrap_or_default();
+    let b = instance.dict_entries(*right).unwrap_or_default();
+    if a.len() != b.len() {
+        return Ok(instance.new_bool(false));
+    }
+    for (key, value) in a {
+        let Some(position) = instance.dict_lookup_key_checked(*right, key)? else {
+            return Ok(instance.new_bool(false));
+        };
+        let Some((_, other_value)) = b.get(position).copied() else {
+            return Ok(instance.new_bool(false));
+        };
+        if !crate::executor::protocol::equality_public(instance, value, other_value)? {
+            return Ok(instance.new_bool(false));
+        }
+    }
+    Ok(instance.new_bool(true))
 }
 /// `dict.__setitem__(self, key, value)`（`obj[key] = v` 的同一实现 ✓）。
 pub fn dict_setitem_native(
@@ -792,6 +857,14 @@ pub fn dict_init_native(
     // 引用账照源字典那段 ✓：键、值各留一份再交给字典 ✓；`dict_put_owned` 在"键已存在"时
     // 归还多留的那份键并释放旧值 ✓。
     for (key, value) in kwargs {
+        // **关键字名必须是 str** ✓（round 120）：`dict(**{1: 2})` 参照报 TypeError ✓
+        //（`test_invalid_keyword_arguments` ✓）。
+        if instance.text_of(*key).is_none() {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "keywords must be strings",
+            ));
+        }
         instance.retain(*key);
         instance.retain(*value);
         dict_put_owned(instance, target, *key, *value);

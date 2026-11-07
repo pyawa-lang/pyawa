@@ -339,6 +339,59 @@ fn view_set(instance: &Instance, view: NonNull<Header>) -> Result<NonNull<Header
     Ok(instance.new_set(elements))
 }
 
+/// **视图比较的元素表**（**新引用**）：左＝视图元素；右＝另一视图／集合／可迭代的集合化元素 ✓。
+fn view_compare_elements(
+    instance: &Instance,
+    view: NonNull<Header>,
+    other: NonNull<Header>,
+) -> Result<(Vec<NonNull<Header>>, Vec<NonNull<Header>>), ExecError> {
+    let left = view_elements(instance, view)?;
+    let right = if instance
+        .type_named("dict_keys")
+        .is_some_and(|base| instance.is_subtype(instance.type_of(other), base))
+        || instance
+            .type_named("dict_items")
+            .is_some_and(|base| instance.is_subtype(instance.type_of(other), base))
+    {
+        view_elements(instance, other)?
+    } else {
+        let set = operand_to_set(instance, other)?;
+        let items = instance.set_items(set).unwrap_or_default();
+        let retained: Vec<NonNull<Header>> = items
+            .into_iter()
+            .map(|item| {
+                // SAFETY: item 由集合持有；这里添一份。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                item
+            })
+            .collect();
+        instance.release(set);
+        retained
+    };
+    Ok((left, right))
+}
+
+fn release_elements(instance: &Instance, items: &[NonNull<Header>]) {
+    for item in items {
+        // SAFETY: 这些引用由本模块持有。
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+}
+
+/// 元素是否在表中（**用完整 `==` 协议**：用户 `__eq__` 抛的异常原样上抛 ✓）。
+fn contains_element(
+    instance: &Instance,
+    haystack: &[NonNull<Header>],
+    needle: NonNull<Header>,
+) -> Result<bool, ExecError> {
+    for candidate in haystack {
+        if crate::executor::protocol::equality_public(instance, *candidate, needle)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn view_binary(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -485,12 +538,29 @@ fn view_eq_native(
     let Some(other) = args.last().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "== 需要 1 个实参"));
     };
-    let left = view_set(instance, view)?;
-    let right = operand_to_set(instance, other)?;
-    let equal = crate::executor::protocol::equality_public(instance, left, right);
-    instance.release(left);
-    instance.release(right);
-    equal.map(|value| instance.new_bool(value))
+    // **逐元素按完整 `==` 比较**（round 120）：先前先化 `set` 再走结构相等 ✗ ⇒ 元素
+    // `__eq__` 抛的异常被吞 ✗（`test_errors_in_view_containment_check` 的
+    // `d1.items() == d2.items()` ✓）。
+    let (left, right) = view_compare_elements(instance, view, other)?;
+    let mut outcome = Ok(left.len() == right.len());
+    if outcome.as_ref().copied().unwrap_or(false) {
+        for element in &left {
+            match contains_element(instance, &right, *element) {
+                Ok(true) => {}
+                Ok(false) => {
+                    outcome = Ok(false);
+                    break;
+                }
+                Err(error) => {
+                    outcome = Err(error);
+                    break;
+                }
+            }
+        }
+    }
+    release_elements(instance, &left);
+    release_elements(instance, &right);
+    outcome.map(|same| instance.new_bool(same))
 }
 
 /// **视图的集合式大小比较**（`< <= > >=` ✓；`test_keys_contained` ✓）。
@@ -506,12 +576,55 @@ fn view_compare(
     let Some(other) = args.last().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "比较需要 1 个实参"));
     };
-    let left = view_set(instance, view)?;
-    let right = operand_to_set(instance, other)?;
-    let verdict = crate::executor::compare_public(instance, left, right, symbol, 0);
-    instance.release(left);
-    instance.release(right);
-    verdict.map(|value| instance.new_bool(value))
+    // **子集判定逐元素按完整 `==`**（round 120）：元素 `__eq__` 抛异常原样上抛 ✓。
+    let (left, right) = view_compare_elements(instance, view, other)?;
+    let mut left_subset = true;
+    let mut right_subset = true;
+    let mut failure = None;
+    for element in &left {
+        match contains_element(instance, &right, *element) {
+            Ok(true) => {}
+            Ok(false) => {
+                left_subset = false;
+                break;
+            }
+            Err(error) => failure = Some(error),
+        }
+        if failure.is_some() {
+            break;
+        }
+    }
+    // **两侧子集都要算**（round 120）：`>`／`>=` 要右侧子集 ✓ —— 先前"左侧不是子集就跳过右侧" ✗
+    // ⇒ 右子集保持默认 true ⇒ `larger3 > smaller` 判 True ✗（`test_keys_contained` 的
+    // `assertFalse(larger3 > smaller)` ✓）。
+    if failure.is_none() {
+        for element in &right {
+            match contains_element(instance, &left, *element) {
+                Ok(true) => {}
+                Ok(false) => {
+                    right_subset = false;
+                    break;
+                }
+                Err(error) => failure = Some(error),
+            }
+            if failure.is_some() {
+                break;
+            }
+        }
+    }
+    release_elements(instance, &left);
+    release_elements(instance, &right);
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    let verdict = match symbol {
+        "<" => left_subset && !right_subset,
+        "<=" => left_subset,
+        ">" => right_subset && !left_subset,
+        ">=" => right_subset,
+        _ => false,
+    };
+    Ok(instance.new_bool(verdict))
 }
 
 fn view_lt_native(

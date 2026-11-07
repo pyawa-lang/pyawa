@@ -333,7 +333,28 @@ macro_rules! unimplemented_native {
 unimplemented_native!(get_objects_native, "get_objects", "本层没有活对象全量表可供枚举");
 unimplemented_native!(get_referrers_native, "get_referrers", "本层没有引用图可反查");
 unimplemented_native!(get_referents_native, "get_referents", "本层没有逐对象引用遍历口");
-unimplemented_native!(is_tracked_native, "is_tracked", "本层没有逐对象追踪位访问器");
+/// **`gc.is_tracked(obj)`**（round 120）：本层没有逐对象追踪位 ✗，按**参照口径的近似**给：
+/// 标量（`None`／`bool`／`int`／`float`／`str`／`bytes`／`frozenset` 等不可变原子）⇒ `False`，
+/// 其余（容器／用户实例／函数…）⇒ `True` ✓。**如实登记**：不是真实的追踪位查询 ✓。
+fn is_tracked_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "is_tracked() takes exactly one argument (0 given)",
+        ));
+    };
+    let name = instance.type_name(instance.type_of(object));
+    let atomic = matches!(
+        name.as_str(),
+        "NoneType" | "bool" | "int" | "float" | "complex" | "str" | "bytes" | "frozenset"
+    );
+    Ok(instance.new_bool(!atomic))
+}
 unimplemented_native!(is_finalized_native, "is_finalized", "本层没有逐对象终结状态访问器");
 unimplemented_native!(freeze_native, "freeze", "本层没有冻结区");
 unimplemented_native!(unfreeze_native, "unfreeze", "本层没有冻结区");

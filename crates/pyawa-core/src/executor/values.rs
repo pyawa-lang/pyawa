@@ -331,7 +331,18 @@ fn siphash13_zero(data: &[u8]) -> u64 {
 
 /// 整数键的哈希（`bytes` 哈希同族；`dict_set_int` 一类直接用它 ✓）。
 pub(crate) fn hash_i64(value: i64) -> u64 {
-    mix64(value as u64)
+    // **与参照的整数哈希同值**（round 120 真 bug 修 ✗）：先前 `mix64(n)` ✗ ⇒ 用户
+    // `__hash__` 返回 `hash('x')` 一类**原始哈希值**的键与内建数值键**桶不同** ⇒
+    // 明明 `__eq__` 会抛异常却根本没被问到 ✗（`test_dict.test_eq`／`test_bad_key` 的
+    // `d[x2]`／`x2 in d` ✓）。参照口径：小整数哈希就是它自己（`-1` 特例给 `-2`）✓；
+    // 大整数按 `2^61-1` 取模（带符号）✓。
+    const MODULUS: i128 = (1i128 << 61) - 1;
+    if value == -1 {
+        return (-2i64) as u64;
+    }
+    let magnitude = (value as i128).abs() % MODULUS;
+    let signed = if value < 0 { -magnitude } else { magnitude };
+    (signed as i64) as u64
 }
 
 fn mix64(mut value: u64) -> u64 {
@@ -349,38 +360,43 @@ fn mix64(mut value: u64) -> u64 {
 /// `bytes`（含子类）／`tuple`（递归）／`weakref`（按**目标**哈希，与 round 40 的相等口径一致 ✓）；
 /// `list`／`dict`／`set`／`bytearray` **不可哈希** ⇒ `None`（调用方退回线性扫；设置键时已由
 /// `reject_unhashable_key` 拒掉 ✓）；其余按**身份**哈希（与 `values_equal` 的"其余按身份"一致 ✓）。
-pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u64> {
+pub(crate) fn key_hash_checked(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<Option<u64>, crate::ExecError> {
     let ty = instance.type_of(object);
     if ty == instance.singletons().none_type() {
-        return Some(mix64(0x4e4f_4e45));
+        return Ok(Some(mix64(0x4e4f_4e45)));
     }
     if let Some(number) = numeric_payload(instance, object) {
         // `NaN != NaN`（连自己也不等 ✓）⇒ 哈希按**身份**，保证"同一个 NaN 键"还能按身份查到 ✓。
         if number.is_nan() {
-            return Some(mix64(0x4e41_4e00 ^ object.as_ptr() as usize as u64));
+            return Ok(Some(mix64(0x4e41_4e00 ^ object.as_ptr() as usize as u64)));
         }
         // `-0.0 == 0.0` ⇒ 同哈希 ✓。
         if number == 0.0 {
-            return Some(0);
+            return Ok(Some(0));
         }
         if number.fract() == 0.0 && number.abs() < 9.223_372_036_854_776e18 {
-            return Some(hash_i64(number as i64));
+            return Ok(Some(hash_i64(number as i64)));
         }
-        return Some(mix64(number.to_bits()));
+        return Ok(Some(mix64(number.to_bits())));
     }
     if let Some(text) = instance.text_of(object) {
-        return Some(hash_text(text));
+        return Ok(Some(hash_text(text)));
     }
     if let Some(bytes) = instance.bytes_value(object) {
-        return Some(hash_bytes(bytes));
+        return Ok(Some(hash_bytes(bytes)));
     }
     if let Some(items) = instance.tuple_items(object) {
         let mut hash = mix64(0x7475_706c_6500_0000);
         for item in items {
-            let lane = key_hash(instance, item)?;
+            let Some(lane) = key_hash_checked(instance, item)? else {
+                return Ok(None);
+            };
             hash = mix64(hash ^ lane);
         }
-        return Some(hash);
+        return Ok(Some(hash));
     }
     // **弱引用**（round 59）：有缓存 ⇒ 用缓存（目标死后仍能删键 ✓）；活着 ⇒ 按目标算并缓存；
     // 已死且没缓存 ⇒ 按身份（它没进过任何字典 ⇒ 一致 ✓）。
@@ -388,15 +404,17 @@ pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u
         if let Some(cached) = state {
             // 缓存的是**原始 u64**（不再二次 mix ✓ —— 否则"索引建立时按缓存算、查找时按目标算"
             // 两套口径不一致 ⇒ 临时弱引用键永远查不到 ✗）。
-            return Some(cached);
+            return Ok(Some(cached));
         }
         match crate::builtin_objects::weakref_state(instance, object).flatten() {
             Some(target) => {
-                let hash = key_hash(instance, target)?;
+                let Some(hash) = key_hash_checked(instance, target)? else {
+                    return Ok(None);
+                };
                 crate::builtin_objects::weakref_store_key_hash(instance, object, hash);
-                return Some(hash);
+                return Ok(Some(hash));
             }
-            None => return Some(mix64(object.as_ptr() as usize as u64)),
+            None => return Ok(Some(mix64(object.as_ptr() as usize as u64))),
         }
     }
     // 不可哈希的容器（参照 `dict` 也拒它们当键）⇒ `None`（线性兜底；正常路径到不了 ✓）。
@@ -406,7 +424,7 @@ pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u
             .type_named(name)
             .is_some_and(|base| instance.is_subtype(ty, base))
     }) {
-        return None;
+        return Ok(None);
     }
     // **用户 `__hash__`**（round 70）：参照的容器哈希就是 `hash(对象)` ✓ —— 先前"其余按身份" ✗
     // ⇒ `{'halibut', HalibutProxy()}`（`HalibutProxy.__hash__` 返回 `hash('halibut')` ✓）里两项
@@ -436,20 +454,25 @@ pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u
             );
             // SAFETY: 上面新增的那份引用由本函数归还。
             unsafe { instance.release_object(hasher.as_ptr()) };
-            let returned = outcome.ok()?;
+            let returned = outcome?;
             let hash = instance
                 .int_of(returned)
                 .and_then(|value| value.to_i64());
             // SAFETY: 返回值是新引用，这里消费。
             unsafe { instance.release_object(returned.as_ptr()) };
             if let Some(hash) = hash {
-                return Some(hash as u64);
+                return Ok(Some(hash as u64));
             }
-            return None;
+            return Ok(None);
         }
     }
     // 其余按**身份**（与 `values_equal` 的"其余按身份"一致 ✓）。
-    Some(mix64(object.as_ptr() as usize as u64))
+    Ok(Some(mix64(object.as_ptr() as usize as u64)))
+}
+
+/// 旧的 Option 口径包装（22 个既有调用点不变）；需要原样上抛 __hash__ 异常的入口用 checked。
+pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u64> {
+    key_hash_checked(instance, object).ok().flatten()
 }
 
 /// 一个对象是不是本层接线的迭代器。

@@ -858,7 +858,7 @@ pub(crate) fn equality_public(
                 return Ok(false);
             }
             for (key, value) in a {
-                let Some(position) = instance.dict_lookup_key(right, key) else {
+                let Some(position) = instance.dict_lookup_key_checked(right, key)? else {
                     return Ok(false);
                 };
                 let Some((_, other_value)) = b.get(position).copied() else {
