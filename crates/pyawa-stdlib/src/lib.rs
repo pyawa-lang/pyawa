@@ -526,19 +526,50 @@ fn loader_exec(
     instance: &pyawa_core::Instance,
     _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
     args: &[core::ptr::NonNull<pyawa_core::Header>],
-    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+    kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
 ) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
-    let Some(module) = args.first().copied() else {
+    // **`exec_module(module)` 的实参**：importlib 可能把模块按**位置**交（`exec_module(self, module)` ✓）
+    // 也可能按**关键字** `module=` 交（`_bootstrap` 的 `_load_unlocked` 两种写法都有 ✓）——
+    // 先前只认位置实参 ✗ ⇒ 拿到 `None`/错对象 ⇒ 模块体**静默不执行** ✗（round 102 实测：
+    // fresh 导入的 `xml.etree.ElementTree` 只剩 4 个 importlib 属性、`register_namespace` 全缺 ✓）。
+    let module = args
+        .first()
+        .copied()
+        .or_else(|| {
+            kwargs.iter().find_map(|(key, value)| {
+                instance
+                    .text_of(*key)
+                    .filter(|text| *text == "module")
+                    .map(|_| *value)
+            })
+        });
+    let Some(module) = module else {
         return Ok(instance.retain(instance.singletons().none()));
     };
-    if let Some(namespace) = pyawa_core::mounted_instance_dict(instance, module) {
-        if let Some(name) = instance
-            .dict_get(namespace, "__name__")
-            .and_then(|object| instance.text_of(object))
-            .map(|text| text.to_owned())
-        {
-            pyawa_core::executor::import::exec_module_into_namespace(instance, &name, namespace)?;
-        }
+    let Some(namespace) = pyawa_core::mounted_instance_dict(instance, module) else {
+        return Err(instance.raise_builtin_error(
+            "ImportError",
+            "exec_module：模块对象没有命名空间字典",
+        ));
+    };
+    let Some(name) = instance
+        .dict_get(namespace, "__name__")
+        .and_then(|object| instance.text_of(object))
+        .map(|text| text.to_owned())
+    else {
+        return Err(instance.raise_builtin_error(
+            "ImportError",
+            "exec_module：模块没有 __name__",
+        ));
+    };
+    if std::env::var_os("PYAWA_IMPORT_DEBUG").is_some() {
+        eprintln!("[loader_exec] name={name}");
+    }
+    if !pyawa_core::executor::import::exec_module_into_namespace(instance, &name, namespace)? {
+        return Err(instance.raise_builtin_error(
+            "ImportError",
+            &format!("exec_module：找不到模块 {name} 的源码"),
+        ));
     }
     Ok(instance.retain(instance.singletons().none()))
 }
@@ -556,15 +587,37 @@ fn finder_find_spec(
     else {
         return Ok(none);
     };
-    // **撤回 finder 的"父包 `__path__` 子模块定位"**（round 99 实测回归 ✗）：加上它之后 Python
-    // importlib 能 fresh 导入子模块了 ✓，但**语料**里 `test/typinganndata/partialexecution.py`
-    // 的参考行为是 `ImportError: cannot import name 'a'`（包只执行了一半）⇒ 我们却成功 ✓ ——
-    // `MS-10` 第三类**新差异** ✗。该能力与参照语义纠缠，**按事实撤回**（`importlib` 子模块 fresh
-    // 导入面仍记未接 ✗），只保留 finder 原有的**顶层定位** ✓。
-    if !pyawa_core::executor::import::can_locate_through_bridge(instance, &name) {
+    // **`path` 实参（父包的 `__path__`）**（round 102 重新接线）：Python importlib 对**子模块**会把
+    // 父包的 `__path__` 交进来 ✓ —— 有它就在里面找 ✓；没有就回退 `sys.path` 的顶层定位 ✓。
+    //
+    // round 99 曾因语料 `test.typinganndata.partialexecution` 出新差异而撤回 ✗；round 100 定位到
+    // 那是**模块 `__package__` 口径错**（包给了父包名 ✗）造成的 —— 口径已修（`import.rs`）⇒
+    // 本能力重新接线 ✓（并由 conformance 全量对拍复核 ✓）。
+    let search_paths: Option<Vec<String>> = args
+        .get(1)
+        .copied()
+        .and_then(|path| instance.list_items(path))
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|entry| instance.text_of(*entry).map(|text| text.to_owned()))
+                .collect()
+        });
+    let located = match &search_paths {
+        Some(paths) if !paths.is_empty() => {
+            pyawa_core::executor::import::locate_in_paths(instance, &name, paths)
+        }
+        _ => {
+            if pyawa_core::executor::import::can_locate_through_bridge(instance, &name) {
+                Some((false, String::new()))
+            } else {
+                None
+            }
+        }
+    };
+    let Some((is_package, package_directory)) = located else {
         return Ok(none);
-    }
-    let (is_package, package_directory) = (false, String::new());
+    };
     let Some(spec) = module_like(instance, "spec") else {
         return Ok(none);
     };

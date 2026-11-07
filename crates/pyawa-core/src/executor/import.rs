@@ -43,7 +43,39 @@ fn module_search_path(instance: &Instance, sys_module: NonNull<Header>) -> Optio
 fn locate_source(instance: &Instance, name: &str) -> Option<(String, Option<String>)> {
     let modules = instance.modules()?;
     let sys_module = instance.dict_get(modules, "sys")?;
-    for directory in module_search_path(instance, sys_module)? {
+    // **带点的名字走父包的 `__path__`**（round 102）：`importlib` 的 loader 收到的是
+    // **子模块全名**（`xml.etree`／`xml.etree.ElementTree` ✓），不能拿全名直接拼 `sys.path` ✗
+    // （那会去试 `Lib/xml.etree.py` ✓ 永远不中 ✗ ⇒ fresh 导入的模块体静默不执行 ✗）。
+    if let Some((parent, base)) = name.rsplit_once('.') {
+        if let Some(parent_module) = instance.dict_get(modules, parent) {
+            if let Some(parent_namespace) = crate::mounted_instance_dict(instance, parent_module) {
+                if let Some(path_list) = instance.dict_get(parent_namespace, "__path__") {
+                    if let Some(entries) = instance.list_items(path_list) {
+                        let directories: Vec<String> = entries
+                            .iter()
+                            .filter_map(|entry| instance.text_of(*entry).map(|text| text.to_owned()))
+                            .collect();
+                        for directory in directories {
+                            let file = format!("{directory}/{base}.py");
+                            if let Some(source) = read_file_through_fs(instance, file.as_bytes()) {
+                                return Some((source, None));
+                            }
+                            let package_directory = format!("{directory}/{base}");
+                            let init = format!("{package_directory}/__init__.py");
+                            if let Some(source) = read_file_through_fs(instance, init.as_bytes()) {
+                                return Some((source, Some(package_directory)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let search = module_search_path(instance, sys_module)?;
+    if std::env::var_os("PYAWA_IMPORT_DEBUG").is_some() {
+        eprintln!("[locate_source] name={name} paths={search:?}");
+    }
+    for directory in search {
         let file = format!("{directory}/{name}.py");
         if let Some(source) = read_file_through_fs(instance, file.as_bytes()) {
             return Some((source, None));

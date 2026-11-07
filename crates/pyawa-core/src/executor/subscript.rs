@@ -24,11 +24,12 @@ pub(crate) fn subscript_slice(
 ) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: container 是存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
-    if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
-        let value = instance
-            .bytes_value(container)
-            .map(<[u8]>::to_vec)
-            .unwrap_or_default();
+    // **`bytes`／`bytearray`（含子类）**（round 102）：先前 `bytes_value` 只认精确 `bytes` ✗
+    // ⇒ 子类切片得到**空** bytes ✗（`test_xml_etree` 的 `BadElementPath` 是 str 子类，同类问题 ✓）。
+    if instance.is_subtype(container_type, builtin_type(instance, "bytes"))
+        || instance.is_subtype(container_type, builtin_type(instance, "bytearray"))
+    {
+        let value = instance.bytes_like_value(container).unwrap_or_default();
         let (start, stop, step) = slice_bounds(instance, key, value.len())?;
         let picked: Vec<u8> = slice_positions(start, stop, step)
             .into_iter()
@@ -64,11 +65,12 @@ pub(crate) fn subscript_slice(
         }
         return Ok(instance.new_tuple(items));
     }
-    if container_type == instance.singletons().str_type() {
+    if instance.is_str_object(container) {
         // P3-38 S2a-2 批 2：`str` 按**码点**切（孤立代理各占一格 ✓；不再是 UTF-8 字节层）。
+        // **子类沿用 str 布局** ✓（round 102）：含 `BadElementPath` 这类 str 子类 ✓。
         let points = instance
             .str_code_point_vec(container)
-            .expect("类型刚确认是 str");
+            .expect("类型刚确认是 str（含子类）");
         let (start, stop, step) = slice_bounds(instance, key, points.len())?;
         let picked: Vec<u32> = slice_positions(start, stop, step)
             .into_iter()
