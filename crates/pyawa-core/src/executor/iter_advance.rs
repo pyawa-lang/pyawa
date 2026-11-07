@@ -739,10 +739,15 @@ fn advance_map(
             }
         }
     }
-    match call_value(instance, function, &row, &[]) {
-        Ok(value) => Ok(Some(value)),
-        Err(error) => Err(error),
+    // **`row` 是 `advance_iterator` 交来的新引用**（round 96 真泄漏修 ✗）：`call_value` 自己会
+    // 为实参 `incref` 一份 ✓ ⇒ 这里必须把**本函数的**那份还掉 ✗（先前直接漏还 ⇒ `map` 消费的每个
+    // 元素永不释放 ⇒ 官方 `test_genexps` 的「Verify re-use of tuples」拿不到 freelist 复用、
+    // 且 `map` 在大流上内存一路涨 ✓）。
+    let outcome = call_value(instance, function, &row, &[]);
+    for item in row {
+        release(instance, item);
     }
+    outcome.map(Some)
 }
 
 /// 内建 **`filter`** 的推进分支（`P3-41` round 41：从"急求值成列表"改正为惰性）。

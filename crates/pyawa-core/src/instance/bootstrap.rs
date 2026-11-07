@@ -36,6 +36,7 @@ impl Instance {
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
             gc_debug: Cell::new(0),
+            tuple_pool: RefCell::new(Vec::new()),
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),
             call_depth: Cell::new(0),

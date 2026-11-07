@@ -245,6 +245,10 @@ impl Instance {
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
         let size = unsafe { ty.as_ref() }.instance_size;
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
+        // **小元组进复用池**（round 96）：参照 tuple freelist ✓（`test_genexps` 的 id 复用 doctest ✓）。
+        if !quarantine_mode() && !leak_mode() && self.pool_tuple(ptr, ty) {
+            return;
+        }
         // **实验（第 238 轮）**：暂不真释放 ✓ ⇒ 崩溃消失即证明"释放后仍被用／写" ✗。
         if quarantine_mode() {
             self.quarantine_put(ptr);
@@ -271,12 +275,30 @@ impl Instance {
         let size = unsafe { ty.as_ref() }.instance_size;
         self.unlink(header);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
+        if !quarantine_mode() && !leak_mode() && self.pool_tuple(header, ty) {
+            return;
+        }
         if quarantine_mode() {
             self.quarantine_put(header);
         } else if !leak_mode() {
             // SAFETY: 该对象已由可达性分析判为不可达，且 clear 已完成。
             unsafe { dealloc(header.as_ptr()) };
         }
+    }
+
+    /// **把已释放的 `tuple` 放进复用池**（round 96；上限 20，参照 freelist 同量级 ✓）。
+    /// 返回 `true` ⇒ 调用方**不要**再调 `dealloc`（内存留在池里 ✓）。
+    fn pool_tuple(&self, ptr: NonNull<Header>, ty: NonNull<crate::TypeObject>) -> bool {
+        // SAFETY: ty 由注册表持有；ptr 是刚释放的对象（内存仍有效 ✓）。
+        if unsafe { ty.as_ref() }.name() != "tuple" {
+            return false;
+        }
+        let mut pool = self.tuple_pool.borrow_mut();
+        if pool.len() >= 20 {
+            return false;
+        }
+        pool.push(ptr);
+        true
     }
 
     /// **OM-29**／**OM-30**：求不可达的跟踪对象。

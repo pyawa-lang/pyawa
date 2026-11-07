@@ -228,6 +228,14 @@ pub struct Instance {
     gc_frozen: RefCell<HashSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
     gc_running: Cell<bool>,
+    /// **小元组复用池**（round 96）：参照的 `tuple` freelist ✓ —— 生成器表达式每轮产的
+    /// `(i, i)` 如果**立刻被丢弃**，下一轮会拿到**同一地址** ⇒ 官方 `test_genexps` 的
+    /// 「Verify re-use of tuples」doctest 要求 `max(id)-min(id)==0` ✓（先前每次新分配 ⇒ 非 0 ✗）。
+    ///
+    /// **只放已 clear 过、内存还在的 `tuple` 对象**（≤20 个，参照的 freelist 上限同量级 ✓）；
+    /// 复用时要**重新登记**（活表／GC 链／字节计数／`GC_TRACKED` ✓，见 `Instance::reuse_tuple`）。
+    /// `PYAWA_QUARANTINE`／`PYAWA_NO_GC` 的实测模式**不进池** ✓（保持诊断语义 ✓）。
+    tuple_pool: RefCell<Vec<NonNull<Header>>>,
     /// **`OM-11` 的 `repr` 递归守卫**（`CX-3`：按实例存）：正在生成 `repr` 的对象地址。
     repr_guard: RefCell<Vec<usize>>,
     /// **`CP-22`：实例 cwd**（`SPEC-capabilities.md`；`os.chdir` 的落点）。

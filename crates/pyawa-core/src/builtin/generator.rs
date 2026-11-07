@@ -121,7 +121,16 @@ pub unsafe fn generator_getattr(
         .type_named("builtin_function_or_method")
         .expect("引导期已登记");
     // 方法对象要自己持有函数与 self 各一份引用
-    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "generator", Cell::new(handler)));
+    // **方法名照参照**（round 96）：先前一律叫 `generator` ✗ ⇒ `repr`／`__name__` 与 `__doc__` 都分不开
+    // `send`／`throw`／`close`／`__next__` ✓（`test_genexps` 的 doctest 要看 `__next__.__doc__` ✓）。
+    let method_name: &'static str = match name {
+        "__next__" => "__next__",
+        "send" => "send",
+        "throw" => "throw",
+        "close" => "close",
+        _ => "generator",
+    };
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, method_name, Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: ptr 是本类型的存活对象（槽位契约）。
     unsafe { instance.incref_object(ptr) };

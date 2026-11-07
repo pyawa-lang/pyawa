@@ -268,12 +268,46 @@ impl Instance {
             // 所以这里要多给一份。
             return self.retain(self.singletons().empty_tuple());
         }
+        // **小元组复用池**（round 96）：参照的 tuple freelist ✓ —— 刚丢弃的元组地址会被下一次分配
+        // 复用（官方 `test_genexps` 的「Verify re-use of tuples」doctest 要 `max(id)-min(id)==0` ✓）。
+        if let Some(ptr) = self.tuple_pool.borrow_mut().pop() {
+            return self.reuse_tuple(ptr, items);
+        }
         let tuple_type = self
             .type_named("tuple")
             .expect("tuple 在引导期已登记");
         self.alloc(TupleObject::new(tuple_type, items))
             .into_raw()
             .cast::<Header>()
+    }
+
+    /// **复用池里的元组内存**（round 96）：把新值 `ptr::write` 回旧地址并**重新登记** ✓。
+    ///
+    /// 旧对象进池前已走完 `unlink`（活表／GC 链摘除 ✓）且字节计数已减 ⇒ 这里逐项加回 ✓。
+    pub(crate) fn reuse_tuple(
+        &self,
+        ptr: NonNull<Header>,
+        items: Vec<NonNull<Header>>,
+    ) -> NonNull<Header> {
+        let tuple_type = self.type_named("tuple").expect("tuple 在引导期已登记");
+        let value = TupleObject::new(tuple_type, items);
+        // SAFETY: ptr 来自本实例的 `release_one` 池（内存仍是那次的 `TupleObject` 布局 ✓，
+        // 旧值已 clear 且未释放 ⇒ 这里直接覆盖 ✓）。
+        unsafe { ptr.cast::<TupleObject>().write(value) };
+        let ty = tuple_type.cast::<crate::TypeObject>();
+        // SAFETY: ty 由注册表持有，存活。
+        let size = unsafe { ty.as_ref() }.instance_size;
+        // SAFETY: ptr 指向刚写入的存活对象。
+        unsafe { ptr.as_ref() }.set_flag(crate::flags::GC_TRACKED);
+        if self.zombie_trace.get() {
+            self.freed_sites
+                .borrow_mut()
+                .remove(&(ptr.as_ptr() as usize));
+        }
+        self.live.borrow_mut().insert(ptr.as_ptr() as usize);
+        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        self.link_gc(ptr);
+        ptr
     }
 
     /// **OM-15**：注册一个新类型。

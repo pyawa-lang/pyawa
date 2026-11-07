@@ -519,6 +519,26 @@ pub unsafe fn method_getattr(
         // 合成 `__name__`／`__qualname__` ✓ —— 与 `method_repr`（第 269 轮 ✓）同一口径 ✓）。
         "__qualname__" | "__name__" | "__doc__" => {
             let function = object.function();
+            // **生成器方法的 `__doc__`**（round 96）：参照的 `g.__next__.__doc__` 是
+            // `'Implement next(self).'` ✓（官方 `test_genexps` 的 doctest 钉着 ✗ —— 先前落到
+            // 内建函数的空 `__doc__` ⇒ 给 `None`/`''` 都不对 ✗）。本层生成器方法都是同一个内建
+            // 函数对象（名字 `generator` ✓、绑定实例是 generator ✓）⇒ 按这条判据给参照文案 ✓。
+            if name == "__doc__" {
+                let function_type = unsafe { function.as_ref() }.ty();
+                if Some(function_type) == instance.type_named("builtin_function_or_method") {
+                    // SAFETY: 类型身份刚确认。
+                    let builtin = unsafe { &*function.as_ptr().cast::<BuiltinFunctionObject>() };
+                    if builtin.name() == "__next__" {
+                        let this_type = unsafe { object.this().as_ref() }.ty();
+                        if instance
+                            .type_named("generator")
+                            .is_some_and(|generator| instance.is_subtype(this_type, generator))
+                        {
+                            return Some(instance.new_str("Implement next(self)."));
+                        }
+                    }
+                }
+            }
             // SAFETY: function 由方法对象持有。
             let function_type = unsafe { function.as_ref() }.ty();
             if Some(function_type) == instance.type_named("function") {
