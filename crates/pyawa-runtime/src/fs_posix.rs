@@ -76,7 +76,7 @@ impl PosixFs {
             readlink: Some(fs_readlink),
             symlink: Some(fs_symlink),
             chmod: Some(fs_chmod),
-            utime: None,
+            utime: Some(fs_utime),
             read: Some(fs_read),
             write: Some(fs_write),
             seek: Some(fs_seek),
@@ -293,6 +293,46 @@ extern "C" fn fs_stat(
             unsafe { *out = info_of(&meta) };
             CapStatus::Ok
         }
+        Err(error) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno_of(&error) };
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `utime(name, atime, mtime)`（round 107）：改宿主文件的访问／修改时间 ✓
+/// （`std::fs::File::set_times`；秒级 ✓ —— ABI 只给秒，纳秒面随后补 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_utime(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime: i64,
+    mtime: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    let to_time = |seconds: i64| -> SystemTime {
+        if seconds >= 0 {
+            UNIX_EPOCH + Duration::from_secs(seconds as u64)
+        } else {
+            UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs())
+        }
+    };
+    let times = std::fs::FileTimes::new()
+        .set_accessed(to_time(atime))
+        .set_modified(to_time(mtime));
+    match std::fs::File::open(&path).and_then(|file| file.set_times(times)) {
+        Ok(()) => CapStatus::Ok,
         Err(error) => {
             // SAFETY: 出参由调用方提供。
             unsafe { *errno_out = errno_of(&error) };
@@ -988,6 +1028,7 @@ impl RestrictedFs {
         table.open = Some(restricted_open);
         table.stat = Some(restricted_stat);
         table.chmod = Some(restricted_chmod);
+        table.utime = Some(restricted_utime);
         table.mkdir = Some(restricted_mkdir);
         table.rmdir = Some(restricted_rmdir);
         table.unlink = Some(restricted_unlink);
@@ -1087,6 +1128,27 @@ extern "C" fn restricted_stat(
     let (provider, path) = resolve_name!(state, name, len, false, false, errno_out);
     let bytes = os_bytes(&path);
     fs_stat(provider.inner_state(), bytes.as_ptr(), bytes.len(), out, errno_out)
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_utime(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime: i64,
+    mtime: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_utime(
+        provider.inner_state(),
+        bytes.as_ptr(),
+        bytes.len(),
+        atime,
+        mtime,
+        errno_out,
+    )
 }
 
 #[allow(unsafe_code)]

@@ -650,12 +650,48 @@ fn encode_text(text: &str) -> Vec<u8> {
     text.chars().map(|character| character as u8).collect()
 }
 
+/// **孤立代理的安全映射**（round 107）：正则引擎只认合法 UTF-8 的 `String` ✗，而 `str` 允许
+/// 孤立代理（WTF-8 表示 ✓）。做法：把代理码点 `U+D800..=U+DFFF` 映射到**私用平面 15 的哨兵**
+/// `U+F0000..=U+F07FF`（合法标量、与常规文本几乎不会冲突 ✓），匹配完再逆映射回 WTF-8 ✓。
+/// 长度不变（一个码点 ↔ 一个 `char` ✓）⇒ 匹配下标语义不受影响 ✓。
+fn wtf8_to_sentinel_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for point in pyawa_core::wtf8::code_points(bytes) {
+        let code = point.unwrap_or(0xFFFD);
+        if (0xD800..=0xDFFF).contains(&code) {
+            // 0xF0000 + (code - 0xD800) <= 0xF07FF 是合法标量 ✓。
+            out.push(char::from_u32(0xF0000 + (code - 0xD800)).expect("私用平面码点合法"));
+        } else {
+            out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+        }
+    }
+    out
+}
+
+/// 哨兵串 → **WTF-8 字节**（逆映射 ✓；非法序列按替换字符处理 ✓）。
+fn sentinel_string_to_wtf8(text: &str) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(text.len());
+    for character in text.chars() {
+        let code = character as u32;
+        if (0xF0000..=0xF07FF).contains(&code) {
+            let surrogate = 0xD800 + (code - 0xF0000);
+            let _ = pyawa_core::wtf8::encode_code_point(surrogate, &mut out);
+        } else {
+            let _ = pyawa_core::wtf8::encode_code_point(code, &mut out);
+        }
+    }
+    out
+}
+
 /// 按模式的 bytes 口径**造产出对象** ✓（bytes 模式 ⇒ `bytes` ✓，否则 `str` ✓）。
 fn text_object(instance: &Instance, text: &str, is_bytes: bool) -> NonNull<Header> {
     if is_bytes {
         instance.new_bytes(&encode_text(text))
     } else {
-        instance.new_str(text)
+        let bytes = sentinel_string_to_wtf8(text);
+        instance
+            .new_str_wtf8(&bytes)
+            .unwrap_or_else(|| instance.new_str(text))
     }
 }
 
@@ -678,10 +714,15 @@ fn subject_text(
     } else {
         match instance.text_of(value) {
             Some(text) => Ok((text.to_owned(), value)),
-            None => Err(instance.raise_builtin_error(
-                "TypeError",
-                "cannot use a string pattern on a bytes-like object",
-            )),
+            // **孤立代理的 str**（round 107）：按哨兵映射成合法 `String` 再匹配 ✓
+            //（`glob.escape` 等对含 \udcff 的路径要用 ✓ —— 官方 `test_unicode_file` ✓）。
+            None => match instance.wtf8_of(value) {
+                Some(bytes) => Ok((wtf8_to_sentinel_string(bytes), value)),
+                None => Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "cannot use a string pattern on a bytes-like object",
+                )),
+            },
         }
     }
 }

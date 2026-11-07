@@ -140,6 +140,29 @@ impl Instance {
         }
     }
 
+    /// **改访问／修改时间**（`utime(name, atime, mtime)`；round 107）：`fs.utime` 槽 ✓
+    /// （秒级；provider 用 `FileTimes` ✓）。名字先经 VM 解析器（与 `fs_stat` 同一口径 ✓）。
+    pub fn fs_utime(&self, path: &[u8], atime: i64, mtime: i64) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let utime = table.utime.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match utime(
+            table.state,
+            resolved.as_ptr(),
+            resolved.len(),
+            atime,
+            mtime,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     /// **经 `fs` 域按 `fd` 取元信息**（`fstat(file)`；`CP-31` 的 `fd → provider 句柄` 解析在这里 ✓）。
     ///
     /// 动因（round 91）：`os.fstat` 未接线 ⇒ 官方 `test_bufio` 的 `PyBufferSizeTest.__init__`

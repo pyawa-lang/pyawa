@@ -234,14 +234,204 @@ macro_rules! unimplemented_native {
 
 unimplemented_native!(name_native => "name", "本层没有 Unicode 名字表");
 unimplemented_native!(lookup_native => "lookup", "本层没有 Unicode 名字表");
-unimplemented_native!(
-    normalize_native => "normalize",
-    "本层没有规范化所需的数据（组合表；现有表只有分解）"
-);
-unimplemented_native!(
-    is_normalized_native => "is_normalized",
-    "本层没有规范化所需的数据（组合表；现有表只有分解）"
-);
+/// 字面量 `<tag>` 前缀（兼容分解的标记 ✓）。
+fn is_compat_decomposition(text: &str) -> bool {
+    text.starts_with('<')
+}
+
+/// **一级分解**（`compat=true` 也收带 `<tag>` 的兼容分解 ✓）；`None` ＝ 无分解 ✓。
+fn raw_decomposition(code_point: u32, compat: bool) -> Option<Vec<u32>> {
+    let text = unicode_tables::decomposition(code_point)?;
+    if text.is_empty() {
+        return None;
+    }
+    if is_compat_decomposition(text) {
+        if !compat {
+            return None;
+        }
+        // 跳过 `<tag>` 那一段（空格分隔 ✓）。
+        let rest = text.split_once(' ').map(|(_, rest)| rest).unwrap_or("");
+        return Some(parse_hex_sequence(rest));
+    }
+    Some(parse_hex_sequence(text))
+}
+
+fn parse_hex_sequence(text: &str) -> Vec<u32> {
+    text.split_whitespace()
+        .filter_map(|token| u32::from_str_radix(token, 16).ok())
+        .collect()
+}
+
+const S_BASE: u32 = 0xAC00;
+const L_BASE: u32 = 0x1100;
+const V_BASE: u32 = 0x1161;
+const T_BASE: u32 = 0x11A7;
+const L_COUNT: u32 = 19;
+const V_COUNT: u32 = 21;
+const T_COUNT: u32 = 28;
+const N_COUNT: u32 = V_COUNT * T_COUNT;
+const S_COUNT: u32 = L_COUNT * N_COUNT;
+
+/// **递归分解**（Hangul 按算法 ✓；其余查表递归 ✓；深度守卫防坏数据）。
+fn decompose_into(code_point: u32, compat: bool, out: &mut Vec<u32>, depth: usize) {
+    if depth > 32 {
+        out.push(code_point);
+        return;
+    }
+    // Hangul 音节（算法分解 ✓）。
+    if (S_BASE..S_BASE + S_COUNT).contains(&code_point) {
+        let index = code_point - S_BASE;
+        let lead = L_BASE + index / N_COUNT;
+        let vowel = V_BASE + (index % N_COUNT) / T_COUNT;
+        let trail_index = index % T_COUNT;
+        out.push(lead);
+        out.push(vowel);
+        if trail_index != 0 {
+            out.push(T_BASE + trail_index);
+        }
+        return;
+    }
+    match raw_decomposition(code_point, compat) {
+        Some(parts) => {
+            for part in parts {
+                decompose_into(part, compat, out, depth + 1);
+            }
+        }
+        None => out.push(code_point),
+    }
+}
+
+/// **规范排序**（按组合类稳定排序 ✓；标准实现：只交换 `cc(prev) > cc(curr) > 0` 的相邻对）。
+fn canonical_order(points: &mut [u32]) {
+    let combining = |code_point: u32| -> u32 { unicode_tables::combining(code_point).unwrap_or(0) };
+    let mut index = 1usize;
+    while index < points.len() {
+        let current = combining(points[index]);
+        if current != 0 {
+            let mut previous = index;
+            while previous > 0 {
+                let before = combining(points[previous - 1]);
+                if before == 0 || before <= current {
+                    break;
+                }
+                points.swap(previous - 1, previous);
+                previous -= 1;
+            }
+        }
+        index += 1;
+    }
+}
+
+/// Hangul 的算法组合（表里没有 ✓）：`L+V`、`LV+T` ✓。
+fn compose_hangul(first: u32, second: u32) -> Option<u32> {
+    if (L_BASE..L_BASE + L_COUNT).contains(&first)
+        && (V_BASE..V_BASE + V_COUNT).contains(&second)
+    {
+        return Some(S_BASE + ((first - L_BASE) * V_COUNT + (second - V_BASE)) * T_COUNT);
+    }
+    if (S_BASE..S_BASE + S_COUNT).contains(&first)
+        && (first - S_BASE) % T_COUNT == 0
+        && (T_BASE + 1..T_BASE + T_COUNT).contains(&second)
+    {
+        return Some(first + (second - T_BASE));
+    }
+    None
+}
+
+/// **规范组合**（D→C 之后那一步 ✓）。
+fn compose(points: &[u32]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::with_capacity(points.len());
+    let mut starter_position: Option<usize> = None;
+    let mut last_combining: u32 = 0;
+    for &code_point in points {
+        let combining = unicode_tables::combining(code_point).unwrap_or(0);
+        if let Some(position) = starter_position {
+            let starter = out[position];
+            // **阻塞**（标准定义 ✓）：若中间存在组合类 ≥ 当前字符的非首字符 ⇒ 不能组合。
+            let blocked = combining != 0 && last_combining != 0 && last_combining >= combining;
+            if !blocked {
+                if let Some(composed) =
+                    compose_hangul(starter, code_point).or_else(|| crate::unicode_composition::compose_pair(starter, code_point))
+                {
+                    out[position] = composed;
+                    continue;
+                }
+            }
+        }
+        if combining == 0 {
+            starter_position = Some(out.len());
+            last_combining = 0;
+        } else {
+            last_combining = combining;
+        }
+        out.push(code_point);
+    }
+    out
+}
+
+/// **`normalize(form, unistr)`** ✓（round 107）：NFC／NFD／NFKC／NFKD。
+fn normalize_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(form) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "normalize() 的第一个实参要是 str",
+        ));
+    };
+    let composed_form = match form {
+        "NFC" => true,
+        "NFD" => false,
+        "NFKC" => true,
+        "NFKD" => false,
+        other => {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!("invalid normalization form: '{other}'"),
+            ))
+        }
+    };
+    let compat = matches!(form, "NFKC" | "NFKD");
+    let Some(input) = args.get(1).copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "normalize() missing required argument 'unistr' (pos 2)",
+        ));
+    };
+    let Some(text) = instance.str_code_point_vec(input) else {
+        let name = instance.type_name(instance.type_of(input));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("normalize() argument 2 must be str, not {name}"),
+        ));
+    };
+    let mut points: Vec<u32> = Vec::with_capacity(text.len());
+    for code_point in text {
+        decompose_into(code_point, compat, &mut points, 0);
+    }
+    canonical_order(&mut points);
+    if composed_form {
+        points = compose(&points);
+    }
+    Ok(instance.new_str_code_points(&points))
+}
+
+/// **`is_normalized(form, unistr)`** ✓：比较 `normalize(form, s) == s`（一处真相 ✓）。
+fn is_normalized_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let normalized = normalize_native(instance, bound, args, &[])?;
+    let original = args.get(1).copied().unwrap_or_else(|| normalized);
+    let equal = pyawa_core::executor::values::values_equal_public(instance, normalized, original);
+    instance.release(normalized);
+    Ok(instance.new_bool(equal))
+}
 unimplemented_native!(mirrored_native => "mirrored", "本层没有镜像（mirrored）表");
 
 /// 建 `unicodedata` 模块的命名空间（**新引用** 的 `dict`）。

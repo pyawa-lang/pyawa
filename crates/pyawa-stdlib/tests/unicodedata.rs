@@ -190,11 +190,11 @@ fn unimplemented_faces_are_honest() {
     let instance = Instance::new();
     let namespace = unicodedata_module::build(&instance);
     let argument = instance.new_str("A");
+    // **`normalize`／`is_normalized` 已在 round 107 接线**（见下面的 `normalization_is_real`）⇒
+    // 诚实面只剩名字表／镜像表 ✓。
     for (function, marker) in [
         ("name", "unicodedata.name"),
         ("lookup", "unicodedata.lookup"),
-        ("normalize", "unicodedata.normalize"),
-        ("is_normalized", "unicodedata.is_normalized"),
         ("mirrored", "unicodedata.mirrored"),
     ] {
         let handler = native(&instance, namespace, function);
@@ -203,4 +203,41 @@ fn unimplemented_faces_are_honest() {
         assert!(text.starts_with("NotImplementedError: "), "{function}: {text}");
         assert!(text.contains(marker), "{function}: {text}");
     }
+}
+
+#[test]
+fn normalization_is_real() {
+    // 期望值来自本机 python3 3.14.4：NFC("e\u{301}")=="\u{e9}"、NFD("\u{e9}")=="e\u{301}"、
+    // NFKC("\u{fb01}")=="fi"、NFKD("\u{fb01}")=="fi"、Hangul 算法组/分解、is_normalized 两档。
+    let instance = Instance::new();
+    let namespace = unicodedata_module::build(&instance);
+    let normalize = native(&instance, namespace, "normalize");
+    let is_normalized = native(&instance, namespace, "is_normalized");
+    for (form, input, expected) in [
+        ("NFC", "e\u{301}", "\u{e9}"),
+        ("NFD", "\u{e9}", "e\u{301}"),
+        ("NFKC", "\u{fb01}", "fi"),
+        ("NFKD", "\u{fb01}", "fi"),
+        ("NFC", "\u{1100}\u{1161}", "\u{ac00}"),
+        ("NFD", "\u{ac00}", "\u{1100}\u{1161}"),
+        ("NFC", "\u{212a}", "K"),
+        ("NFKC", "\u{2460}", "1"),
+    ] {
+        let form_argument = instance.new_str(form);
+        let input_argument = instance.new_str(input);
+        let value = call(&instance, normalize, &[form_argument, input_argument], &[]);
+        assert_eq!(text_of(&instance, value.expect("normalize 不应失败")), expected, "{form}({input:?})");
+    }
+    for (form, input, expected) in [("NFC", "\u{e9}", true), ("NFD", "\u{e9}", false)] {
+        let form_argument = instance.new_str(form);
+        let input_argument = instance.new_str(input);
+        let value = call(&instance, is_normalized, &[form_argument, input_argument], &[]);
+        assert_eq!(instance.bool_value(value.expect("is_normalized 不应失败")), Some(expected));
+    }
+    // 非法形态 ⇒ ValueError（照参照原文）。
+    let bad_form = instance.new_str("NFX");
+    let input_argument = instance.new_str("A");
+    let error = call(&instance, normalize, &[bad_form, input_argument], &[]).expect_err("非法形态必须报");
+    let text = error_text(&instance, error);
+    assert!(text.starts_with("ValueError: invalid normalization form: 'NFX'"), "{text}");
 }

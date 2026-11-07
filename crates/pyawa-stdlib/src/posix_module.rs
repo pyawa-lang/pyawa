@@ -146,42 +146,20 @@ fn path_normpath_native(
         let folded = normpath_bytes(&raw);
         return Ok(instance.new_bytes(&folded));
     }
-    let Some(path) = instance.text_of(value) else {
+    // **`str`（含孤立代理的 WTF-8 形态）**（round 107 真 bug 修 ✗）：`text_of` 对含孤立代理的串给
+    // `None` ✗ ⇒ `os.path.abspath("…\udcff…")`／`realpath` 直接 `TypeError` ✗（官方
+    // `test_unicode_file` 的 `TESTFN_UNENCODABLE` 就含 `\udcff` ✓）。改成按 **WTF-8 字节**折叠再
+    // 还原 ✓（与 `concat` 同一手法 ✓）。
+    let Some(raw) = instance.wtf8_of(value) else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "_path_normpath() 的参数要是 str 或 bytes",
         ));
     };
-    if path.is_empty() {
-        return Ok(instance.new_str("."));
-    }
-    // `splitroot` 那三步 ✓（与 `_path_splitroot_ex` **同一口径** ✓ —— 规格同源 ✓）。
-    let (initial_slashes, rest) = if !path.starts_with('/') {
-        ("", path)
-    } else if path.as_bytes().get(1) != Some(&b'/') || path.as_bytes().get(2) == Some(&b'/') {
-        ("/", &path[1..])
-    } else {
-        ("//", &path[2..])
-    };
-    let mut folded: Vec<&str> = Vec::new();
-    for component in rest.split('/') {
-        if component.is_empty() || component == "." {
-            continue;
-        }
-        let keep = component != ".."
-            || (initial_slashes.is_empty() && folded.is_empty())
-            || folded.last() == Some(&"..");
-        if keep {
-            folded.push(component);
-        } else if !folded.is_empty() {
-            folded.pop();
-        }
-    }
-    let mut text = format!("{initial_slashes}{}", folded.join("/"));
-    if text.is_empty() {
-        text = ".".to_owned();
-    }
-    Ok(instance.new_str(&text))
+    let folded = normpath_bytes(raw);
+    return Ok(instance
+        .new_str_wtf8(&folded)
+        .expect("折叠后的 WTF-8 字节仍合法"));
 }
 
 /// **`posix._path_splitroot_ex(p)`** ✓（第 195 轮）：`Lib/posixpath.py:139` 要它 ✓
@@ -1375,6 +1353,98 @@ fn scandir_native(
     Ok(iterator)
 }
 
+/// **`posix.utime(path, times=None, *, ns=None, ...)`**（round 107）：走 `fs` 的 `utime` 槽 ✓。
+///
+/// 口径：`times` 收二元组（int／float 秒 ✓）或 `None`（＝当前时间 ✓）；`ns` 关键字收二元组
+/// （纳秒 → 秒，截断 ✓ —— ABI 只有秒级槽，如实记 ✗）。官方 `test_unicode_file` 的
+/// `os.utime(path, (0,0))`／`os.utime(path, None)` ✓。
+fn utime_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(path_value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime() missing required argument 'path'",
+        ));
+    };
+    let path = path_argument(instance, path_value, "utime")?;
+    // `ns=` 优先（参照里 ns／times 互斥 ✓，同时给 ⇒ ValueError）
+    let ns_keyword = kwargs
+        .iter()
+        .find_map(|(key, value)| (instance.text_of(*key) == Some("ns")).then_some(*value));
+    let times_keyword = kwargs
+        .iter()
+        .find_map(|(key, value)| (instance.text_of(*key) == Some("times")).then_some(*value));
+    let times_arg = args.get(1).copied().or(times_keyword);
+    if ns_keyword.is_some() && times_arg.is_some() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "utime: you may specify either 'times' or 'ns' but not both",
+        ));
+    }
+    let (atime, mtime) = if let Some(ns) = ns_keyword {
+        let (a, b) = pair_seconds(instance, ns, true)?;
+        (a, b)
+    } else if let Some(times) = times_arg {
+        if instance.type_of(times) == instance.singletons().none_type() {
+            (0i64, 0i64)
+        } else {
+            pair_seconds(instance, times, false)?
+        }
+    } else {
+        (0i64, 0i64)
+    };
+    match instance.fs_utime(&path.bytes, atime, mtime) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+    }
+}
+
+/// 从二元组取 `(atime, mtime)` 秒值（`ns=true` ⇒ 纳秒 → 秒，截断 ✓）。
+fn pair_seconds(
+    instance: &Instance,
+    value: NonNull<Header>,
+    ns: bool,
+) -> Result<(i64, i64), pyawa_core::ExecError> {
+    let Some(items) = instance.tuple_items(value) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime: 'times' must be either a tuple of two ints or None",
+        ));
+    };
+    if items.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime: 'times' must be either a tuple of two ints or None",
+        ));
+    }
+    let convert = |item: NonNull<Header>| -> Result<i64, pyawa_core::ExecError> {
+        if ns {
+            let Some(seconds) = instance.int_of(item).and_then(|value| value.to_i64()) else {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "utime: 'ns' must be a tuple of two ints",
+                ));
+            };
+            return Ok(seconds / 1_000_000_000);
+        }
+        if let Some(seconds) = instance.int_of(item).and_then(|value| value.to_i64()) {
+            return Ok(seconds);
+        }
+        if let Some(number) = instance.float_value(item) {
+            return Ok(number.trunc() as i64);
+        }
+        Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime: 'times' must be either a tuple of two ints or None",
+        ))
+    };
+    Ok((convert(items[0])?, convert(items[1])?))
+}
+
 /// **`posix.chmod(path, mode)`**（round 97）：走 `fs` 的 `chmod` 槽 ✓。
 ///
 /// 动因：官方 `test_tempfile` 的收尾用例 `os.chmod(...)` ✗（`'module' object has no attribute 'chmod'`）；
@@ -2308,6 +2378,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("scandir", scandir_native as pyawa_core::NativeFn),
         // **`os.chmod`**（round 97）：走 `fs` 的 `chmod` 槽 ✓。
         ("chmod", chmod_native as pyawa_core::NativeFn),
+        // **`os.utime`**（round 107）：走 `fs` 的 `utime` 槽 ✓。
+        ("utime", utime_native as pyawa_core::NativeFn),
         ("unsetenv", unsetenv_native as pyawa_core::NativeFn),
         ("getcwdb", getcwdb_native as pyawa_core::NativeFn),
         ("readlink", readlink_native as pyawa_core::NativeFn),
@@ -2384,6 +2456,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("isatty"),
         instance.new_str("scandir"),
         instance.new_str("chmod"),
+        instance.new_str("utime"),
         instance.new_str("DirEntry"),
         instance.new_str("ScandirIterator"),
         instance.new_str("unsetenv"),

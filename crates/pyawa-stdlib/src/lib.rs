@@ -467,6 +467,8 @@ pub mod collections_module;
 /// **`_tokenize`** ✓（task-19 ✓）：`Lib/tokenize.py` 的词法底层 ✓。
 pub mod tokenize_module;
 pub mod unicode_tables;
+/// **规范化组合表**（round 107；`tools/gen_unicode_normalization.py` 生成 ✓）。
+pub mod unicode_composition;
 /// **`_hashlib`**（round 20）：纯 Rust md5／sha1／sha256 的最小诚实面（`Lib/hashlib.py` 的底座）。
 pub mod _hashlib_module;
 /// **`unicodedata`**（round 19）：最小诚实面；数据复用 `unicode_tables`（pdb/doctest 的闸）。
