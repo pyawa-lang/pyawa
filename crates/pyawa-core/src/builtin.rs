@@ -6,6 +6,7 @@ pub(crate) mod str;
 pub(crate) mod compile;
 pub(crate) mod bytes;
 pub(crate) mod dict;
+pub(crate) mod dict_views;
 pub(crate) mod defaultdict;
 pub(crate) mod deque;
 pub(crate) mod list;

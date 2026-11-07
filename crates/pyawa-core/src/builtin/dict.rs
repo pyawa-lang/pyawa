@@ -473,15 +473,8 @@ pub(crate) fn dict_keys_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let mapping = bound_dict(instance, bound)?;
-    let entries = instance
-        .dict_entries(mapping)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
-    let keys: Vec<NonNull<Header>> = entries
-        .into_iter()
-        // `entries()` 给的是**借用** ✓，而 `new_list` 会**接管** ⇒ 每项先还一份 ✓
-        .map(|(key, _)| instance.retain(key))
-        .collect();
-    Ok(instance.new_list(keys))
+    // **真视图**（round 115）：先前交 `list` ✗ ⇒ `d.keys() | {...}` 等全部 TypeError ✗。
+    crate::builtin::dict_views::make_view(instance, mapping, 0)
 }
 pub(crate) fn dict_values_native(
     instance: &Instance,
@@ -490,14 +483,7 @@ pub(crate) fn dict_values_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let mapping = bound_dict(instance, bound)?;
-    let entries = instance
-        .dict_entries(mapping)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
-    let values: Vec<NonNull<Header>> = entries
-        .into_iter()
-        .map(|(_, value)| instance.retain(value))
-        .collect();
-    Ok(instance.new_list(values))
+    crate::builtin::dict_views::make_view(instance, mapping, 2)
 }
 pub(crate) fn dict_items_native(
     instance: &Instance,
@@ -506,14 +492,7 @@ pub(crate) fn dict_items_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let mapping = bound_dict(instance, bound)?;
-    let entries = instance
-        .dict_entries(mapping)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
-    let pairs: Vec<NonNull<Header>> = entries
-        .into_iter()
-        .map(|(key, value)| instance.new_tuple(vec![instance.retain(key), instance.retain(value)]))
-        .collect();
-    Ok(instance.new_list(pairs))
+    crate::builtin::dict_views::make_view(instance, mapping, 1)
 }
 /// `dict.__getitem__(self, key)`（`obj[key]` 的同一实现 ✓）。
 pub fn dict_getitem_native(
