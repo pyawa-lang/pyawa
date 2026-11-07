@@ -228,6 +228,14 @@ pub struct Instance {
     gc_frozen: RefCell<HashSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
     gc_running: Cell<bool>,
+    /// **类型级 dunder 的"每类型一份"包装器**（round 103）：参照里每个内建类型在**自己的类型字典**
+    /// 里有自己的 slot wrapper（`list.__repr__ is not dict.__repr__` ✓）—— 本层这些 dunder 由
+    /// `object` 的同一个 native 兜底 ✗ ⇒ 在**类型对象**上取到的都是**同一个对象** ✗ ⇒
+    /// `pprint` 的 `_dispatch[type(obj).__repr__]`（以类型属性作 dict 键）全部落到最后写入的那一项 ✗
+    /// （实测：任意 list 被当成 deque 交给 `_pprint_deque` ⇒ `'list' object has no attribute
+    /// 'maxlen'` ✗，官方 `test_pkg`／`test_rlcompleter` 的收尾都卡在这 ✓）。
+    /// 缓存键 `(类型对象地址, 名字)` ✓；值由本实例持有（随实例释放 ✓）。
+    type_dunders: RefCell<std::collections::HashMap<(usize, &'static str), NonNull<Header>>>,
     /// **小元组复用池**（round 96）：参照的 `tuple` freelist ✓ —— 生成器表达式每轮产的
     /// `(i, i)` 如果**立刻被丢弃**，下一轮会拿到**同一地址** ⇒ 官方 `test_genexps` 的
     /// 「Verify re-use of tuples」doctest 要求 `max(id)-min(id)==0` ✓（先前每次新分配 ⇒ 非 0 ✗）。

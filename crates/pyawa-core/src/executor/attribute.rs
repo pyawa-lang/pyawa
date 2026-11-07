@@ -200,6 +200,26 @@ pub(crate) fn attribute_lookup(
         Some(object_type)
     };
     if let Some(found) = lookup_type.and_then(|ty| instance.type_lookup(ty, name)) {
+        // **内建类型级 dunder 的"每类型一份"包装器**（round 103；动机见 `Instance::type_dunders`）：
+        // 只对**注册表里的内建类型**（`type_named(名字)` 能取回同一对象 ✓）且该名字**来自 `object`
+        // 的默认实现**时生效 ✓ —— 参照里 `list.__repr__`／`dict.__repr__` 各是各的 slot wrapper ✓；
+        // 用户类保持原样 ✓（`C.__repr__ is object.__repr__` 与参照一致 ✓）。
+        if instance.is_type_object(object) && name == "__repr__" {
+            if let Some(lookup) = lookup_type {
+                let registered = instance.type_named(&instance.type_name(lookup)) == Some(lookup);
+                let from_object = instance
+                    .type_lookup_owner(lookup, name)
+                    .is_some_and(|(owner, _)| Some(owner) == instance.type_named("object"));
+                if registered && from_object {
+                    let wrapper = instance.type_dunder_wrapper(
+                        lookup,
+                        "__repr__",
+                        crate::builtin::object::object_repr_native as crate::NativeFn,
+                    );
+                    return Ok(Attribute::Owned(wrapper));
+                }
+            }
+        }
         // SAFETY: found 由类型字典持有。
         let found_ty = unsafe { found.as_ref() }.ty();
         if found_ty == builtin_type(instance, "function") {

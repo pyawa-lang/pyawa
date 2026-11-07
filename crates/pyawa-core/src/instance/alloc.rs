@@ -281,6 +281,32 @@ impl Instance {
             .cast::<Header>()
     }
 
+    /// **取/造"每类型一份"的类型级 dunder 包装器**（round 103；动机见 `Instance::type_dunders`）。
+    ///
+    /// 交**新引用** ✓；同一 `(类型, 名字)` 反复取到的是**同一个对象** ✓（`pprint` 之类拿它当 dict 键 ✓）。
+    pub(crate) fn type_dunder_wrapper(
+        &self,
+        ty: NonNull<crate::TypeObject>,
+        name: &'static str,
+        handler: crate::NativeFn,
+    ) -> NonNull<Header> {
+        let key = (ty.as_ptr() as usize, name);
+        if let Some(found) = self.type_dunders.borrow().get(&key) {
+            return self.retain(*found);
+        }
+        let function_type = self
+            .type_named("builtin_function_or_method")
+            .expect("builtin_function_or_method 在引导期已登记");
+        let native = self.alloc(crate::BuiltinFunctionObject::new(
+            function_type,
+            name,
+            core::cell::Cell::new(handler),
+        ));
+        let header = native.into_raw().cast::<Header>();
+        self.type_dunders.borrow_mut().insert(key, header);
+        self.retain(header)
+    }
+
     /// **复用池里的元组内存**（round 96）：把新值 `ptr::write` 回旧地址并**重新登记** ✓。
     ///
     /// 旧对象进池前已走完 `unlink`（活表／GC 链摘除 ✓）且字节计数已减 ⇒ 这里逐项加回 ✓。

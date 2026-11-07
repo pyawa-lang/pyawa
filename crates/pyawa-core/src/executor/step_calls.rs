@@ -522,7 +522,38 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                             }
                         }
                         for name in names {
-                            let Some(value) = instance.dict_get(attributes, &name) else {
+                            // **`__all__` 里的子模块**（round 103）：参照的 `_handle_fromlist`
+                            // 在属性缺失且模块是**包**时会 `import 包.名字` ✓ —— 官方
+                            // `test_pkg.test_6`（`__all__ = ['spam','ham','eggs']` 三个子模块 ✓）靠它 ✓；
+                            // 先前直接 `AttributeError` ✗。
+                            let mut found = instance.dict_get(attributes, &name);
+                            if found.is_none() {
+                                if let Some(module_name) =
+                                    crate::executor::module_text(instance, module, "__name__")
+                                {
+                                    let is_package = instance
+                                        .attribute_optional_of(module, "__path__")
+                                        .ok()
+                                        .flatten()
+                                        .is_some();
+                                    if is_package {
+                                        if let Some(modules) = instance.modules() {
+                                            let full = format!("{module_name}.{name}");
+                                            if crate::executor::import::load_module(
+                                                instance,
+                                                modules,
+                                                &full,
+                                                opcode_number,
+                                            )
+                                            .is_ok()
+                                            {
+                                                found = instance.dict_get(attributes, &name);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let Some(value) = found else {
                                 let module_name =
                                     crate::executor::module_text(instance, module, "__name__")
                                         .unwrap_or_else(|| "?".to_owned());

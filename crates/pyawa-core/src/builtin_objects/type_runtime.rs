@@ -407,6 +407,14 @@ pub fn dir_new(
         let object = args[0];
         if instance.is_type_object(object) {
             collect_type_mro_names(instance, object.cast(), &mut names);
+        } else if instance.type_name(instance.type_of(object)) == "module" {
+            // **模块的 `dir` 只列模块字典**（round 103）：参照 `dir(sys)` 不含 `object` 那一族 dunder
+            // （`__eq__`／`__delattr__`… 全无 ✗）—— 先前把模块类型的 MRO 名也收进来 ✗ ⇒ 官方
+            // `test_pkg` 的 `dir()` 断言多出 14 个名字 ✗（"Lists differ … First differing element
+            // '__delattr__' vs '__doc__'" ✓）。
+            if let Some(mapping) = crate::mounted_instance_dict(instance, object) {
+                collect_mapping_keys(instance, mapping, &mut names);
+            }
         } else {
             let ty = instance.type_of(object);
             collect_type_mro_names(instance, ty.cast(), &mut names);

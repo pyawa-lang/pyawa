@@ -783,6 +783,16 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
             }
         }
     }
+    // **身份哈希一族**（round 103）：函数／绑定方法／类型／模块在参照里都是 **id 基**哈希 ✓
+    // （`hash(f) == hash(f)`、不同函数几乎不同 ✓）—— 先前落到"未接线"✗ ⇒ `pprint` 的
+    // `_dispatch[type(obj).__repr__]`（拿函数当 dict 键 ✓）当场 `NotImplementedError` ✗
+    //（官方 `test_pkg`／`test_rlcompleter` 的收尾 ✓）。与 `object.__hash__` 同口径 ✓。
+    if matches!(
+        name.as_str(),
+        "function" | "builtin_function_or_method" | "method" | "type" | "module"
+    ) {
+        return Ok(((object.as_ptr() as isize) >> 4) as i64);
+    }
     // 可哈希但本轮没接的内建（frozenset 等）：如实未实现，不拿身份哈希冒充。
     Err(instance.raise_builtin_error(
         "NotImplementedError",

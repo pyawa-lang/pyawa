@@ -107,6 +107,11 @@ pub fn exec_module_into_namespace(
         let path_list = instance.new_list(vec![instance.new_str(&directory)]);
         instance.dict_set(namespace, "__path__", path_list);
     }
+    // **`__doc__` 恒在**（round 103；同 `load_module` 的口径 ✓）：fresh 导入的模块也要有它 ✓。
+    if instance.dict_get(namespace, "__doc__").is_none() {
+        let module_doc = instance.new_none();
+        instance.dict_set(namespace, "__doc__", module_doc);
+    }
     let chunk = format!("{name}.py");
     let unit = match crate::compile::compile(
         &source,
@@ -357,12 +362,15 @@ pub(crate) fn load_module(
     for entry in &entries {
         // **候选**（第 135 轮）：先 `<dir>/<名字>.py` ✓，再 `<dir>/<名字>/__init__.py` ✓（包 ✓，
         // 还要给它 `__path__` ✓）。顺序与参照的 `FileFinder` 一致：**文件先、包后** ✓。
+        // **包优先于同名模块文件**（round 103 照参照实测 ✓）：同一目录里 `t4.py` 与 `t4/__init__.py`
+        // 并存时，参照 `FileFinder` 先试**包**（`import t4` ⇒ 包 ✓）；先前"文件先、包后" ✗ ⇒
+        // 官方 `test_pkg.test_4` 的 `RuntimeError: Shouldnt load t4.py` ✗。
         let candidates: [(String, Option<String>); 2] = [
-            (format!("{entry}/{base}.py"), None),
             (
                 format!("{entry}/{base}/__init__.py"),
                 Some(format!("{entry}/{base}")),
             ),
+            (format!("{entry}/{base}.py"), None),
         ];
         for (file, package_directory) in candidates {
         if crate::diag::flag("PYAWA_TRACE_IMPORT") {
@@ -399,6 +407,11 @@ pub(crate) fn load_module(
         let namespace = instance.new_dict();
         let module_name = instance.new_str(name);
         instance.dict_set(namespace, "__name__", module_name);
+        // **`__doc__` 恒在**（round 103）：参照的模块字典里总有 `__doc__`（没文档串就是 `None` ✓）——
+        // 先前只在模块有 docstring 时由代码赋值 ✗ ⇒ `dir(pkg)` 缺 `__doc__` ✗（官方 `test_pkg`
+        // 的 test_5／6／7 ✓）。
+        let module_doc = instance.new_none();
+        instance.dict_set(namespace, "__doc__", module_doc);
         // **`__file__`**（第 407 轮 ✓，task-14）：**从文件加载**的模块必须在模块 globals 里能读
         // `__file__` ✓（参照的 `SourceFileLoader.get_filename()` 给的是"**加载时用的路径**" ✓ ——
         // 即 `sys.path` 项 ＋ 相对路径，**原样、不 canonicalize** ✗）。值就取本循环刚命中的那条
@@ -484,12 +497,6 @@ pub(crate) fn load_module(
                 instance.dict_set(namespace, "__loader__", importer);
             }
         }
-        // **Python importlib 的循环导入簿记**（round 99）：3.14 的 `_find_and_load_unlocked`
-        // 会读写**父模块**的 `_uninitialized_submodules`（`Lib/importlib/_bootstrap.py` ✓）；
-        // 先前模块没有这个属性 ✗ ⇒ fresh 子模块导入走到一半
-        // `AttributeError: 'module' object has no attribute '_uninitialized_submodules'` ✗。
-        let uninitialized = instance.new_list(Vec::new());
-        instance.dict_set(namespace, "_uninitialized_submodules", uninitialized);
         let cached_value = instance.new_none();
         instance.dict_set(namespace, "__cached__", cached_value);
         // **先登记再执行**（环状导入要能看到半成品 ✓，与参照一致）
