@@ -335,6 +335,39 @@ pub unsafe fn exception_getattr(
                 None => instance.new_none(),
             })
         }
+        // **`OSError` 一族的属性面**（round 108）：`errno`／`strerror`／`filename`／`filename2` ✓
+        // —— 参照里它们就是 `args` 的前四项（`OSError(errno, strerror, filename, filename2)` ✓）；
+        // 先前完全取不到 ✗ ⇒ `except FileNotFoundError as e: e.filename` 当场 AttributeError ✗
+        //（官方 `test_unicode_file_functions`／`test_unicode_file` 一族 ✓）。
+        "errno" | "strerror" | "filename" | "filename2" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            let ty = unsafe { (*ptr).ty() };
+            let is_os_error = instance
+                .type_named("OSError")
+                .is_some_and(|os_error| instance.is_subtype(ty, os_error));
+            if !is_os_error {
+                return None;
+            }
+            let arguments = object.args();
+            let index = match name {
+                "errno" => 0,
+                "strerror" => 1,
+                "filename" => 2,
+                _ => 3,
+            };
+            // 参照口径：只有 `args.len() >= 2` 时前两项才是 errno/strerror；`filename` 同理看长度 ✓。
+            let present = match index {
+                0 | 1 => arguments.len() >= 2,
+                _ => arguments.len() > index,
+            };
+            if !present {
+                return Some(instance.new_none());
+            }
+            let value = arguments[index];
+            // SAFETY: 值由本对象持有，这里新增一份交给调用方 ✓。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            Some(value)
+        }
         // **`with_traceback(tb, /)`**（task-24 扩）：参照里它是 `BaseException` 的方法 ✓
         //（`Lib/unittest/case.py:279` 的 `exc_value.with_traceback(None)` 正靠它 ✓）。
         // 与 `dict_getattr` 同一做法：把原生函数**绑到本实例**上交出去 ✓（调用时 `bound` 就是 self ✓）。

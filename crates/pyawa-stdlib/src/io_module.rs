@@ -1230,6 +1230,103 @@ pub(crate) fn fs_error(
 }
 
 /// 同 [`fs_error`]，但 `display` **原样**拼进消息（**一处真相**：errno ⇒ 类名／文案的映射只在这里 ✓）。
+/// **从"消息用 display"还原 `filename` 对象**（round 108）：`display` 形如 `'…'`／`b'…'`
+/// （外层是 Python repr ✓，转义序列照 repr 规则 ✓）⇒ 去掉外层引号并**反转义** ✓；
+/// `b'…'` 交 `bytes`（参照对 bytes 路径给 bytes filename ✓）。
+fn filename_object(instance: &Instance, display: &str) -> (NonNull<Header>, bool) {
+    let trimmed = display.trim();
+    let (is_bytes, inner) = if let Some(rest) = trimmed.strip_prefix("b'") {
+        (true, rest.strip_suffix('\'').unwrap_or(rest))
+    } else if let Some(rest) = trimmed.strip_prefix("b\"") {
+        (true, rest.strip_suffix('"').unwrap_or(rest))
+    } else if let Some(rest) = trimmed.strip_prefix('\'') {
+        (false, rest.strip_suffix('\'').unwrap_or(rest))
+    } else if let Some(rest) = trimmed.strip_prefix('"') {
+        (false, rest.strip_suffix('"').unwrap_or(rest))
+    } else {
+        (false, trimmed)
+    };
+    let unescaped = unescape_display(inner);
+    if is_bytes {
+        (instance.new_bytes(&unescaped), true)
+    } else {
+        (
+            instance
+                .new_str_wtf8(&unescaped)
+                .unwrap_or_else(|| instance.new_str("?")),
+            false,
+        )
+    }
+}
+
+/// 反转义 Python repr 里的常见序列（`\\`／`\'`／`\"`／`\n`／`\r`／`\t`／`\xXX`／
+/// `\uXXXX`／`\UXXXXXXXX`；其余原样保留 ✓）。
+fn unescape_display(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    let hex_value = |digits: &[u8]| -> Option<u32> {
+        let mut value = 0u32;
+        for byte in digits {
+            let digit = (*byte as char).to_digit(16)?;
+            value = value * 16 + digit;
+        }
+        Some(value)
+    };
+    while index < bytes.len() {
+        if bytes[index] != b'\\' || index + 1 >= bytes.len() {
+            out.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let next = bytes[index + 1];
+        let simple = match next {
+            b'\\' => Some(b'\\'),
+            b'\'' => Some(b'\''),
+            b'"' => Some(b'"'),
+            b'n' => Some(b'\n'),
+            b'r' => Some(b'\r'),
+            b't' => Some(b'\t'),
+            b'0' => Some(0),
+            _ => None,
+        };
+        if let Some(byte) = simple {
+            out.push(byte);
+            index += 2;
+            continue;
+        }
+        let (length, code) = match next {
+            b'x' => (4, hex_value(bytes.get(index + 2..index + 4).unwrap_or(&[]))),
+            b'u' => (6, hex_value(bytes.get(index + 2..index + 6).unwrap_or(&[]))),
+            b'U' => (10, hex_value(bytes.get(index + 2..index + 10).unwrap_or(&[]))),
+            _ => (0, None),
+        };
+        if let (Some(code), true) = (code, index + length <= bytes.len()) {
+            let _ = pyawa_core::wtf8::encode_code_point(code, &mut out);
+            index += length;
+            continue;
+        }
+        // 不认识的转义 ⇒ 原样两个字符 ✓。
+        out.push(b'\\');
+        out.push(next);
+        index += 2;
+    }
+    out
+}
+
+/// 取异常类对象（**借用**；`call_value` 只借用可调用对象 ✓）。
+fn class_type_header(instance: &Instance, name: &str) -> NonNull<Header> {
+    instance
+        .type_named(name)
+        .map(|class| class.cast::<Header>())
+        .unwrap_or_else(|| {
+            instance
+                .type_named("OSError")
+                .expect("OSError 已登记")
+                .cast::<Header>()
+        })
+}
+
 pub(crate) fn fs_error_with_display(
     instance: &Instance,
     error: pyawa_core::CapabilityCallError,
@@ -1250,7 +1347,30 @@ pub(crate) fn fs_error_with_display(
                 })
                 .unwrap_or("OSError");
             let text = name.and_then(strerror).unwrap_or("unknown error");
-            instance.raise_builtin_error(class, &format!("[Errno {errno}] {text}: {display}"))
+            // **构造真 OSError 三元组**（round 108）：参照的 OSError 带 `(errno, strerror, filename)`
+            // 三个实参 ✓ ⇒ `e.errno`／`e.strerror`／**`e.filename`** 可读 ✓ —— 先前只有一条消息串 ✗
+            // ⇒ 官方 `test_unicode_file_functions` 的 `exc.filename` 全 AttributeError ✗。
+            // `display` 有时已带引号（`io` 那条约一层 `'…'`）⇒ 去掉一层再当 filename ✓。
+            // **`display` 是"消息用的转义形态"**（`repr(path)` 去掉外层引号 ✓，非可打印字符写成
+            // `\u2000` 一类 ✓）⇒ `filename` 要**还原成原名** ✓（参照的 `e.filename` 是原对象 ✓；
+            // 官方 `test_unicode_file_functions` 的 `assertEqual(exc.filename, filename)` ✓）。
+            let (filename_value, filename_is_bytes) = filename_object(instance, display);
+            let errno_value = instance.new_int(errno as i64);
+            let strerror_value = instance.new_str(text);
+            let exception = pyawa_core::call_value(
+                instance,
+                class_type_header(instance, class),
+                &[errno_value, strerror_value, filename_value],
+                &[],
+            );
+            instance.release(errno_value);
+            instance.release(strerror_value);
+            instance.release(filename_value);
+            let _ = filename_is_bytes;
+            match exception {
+                Ok(exception) => ExecError::Raised { exception },
+                Err(error) => error,
+            }
         }
         pyawa_core::CapabilityCallError::NotRegistered => {
             instance.raise_builtin_error("OSError", "`fs` 域未注册（`CP-2`）")

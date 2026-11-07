@@ -380,6 +380,30 @@ pub unsafe fn exception_str(ptr: *mut Header, instance: &Instance) -> Result<Str
         Some(key_error) => instance.is_subtype(header.ty(), key_error),
         None => false,
     };
+    // **`OSError` 一族的 `str`**（round 108）：参照格式
+    // `[Errno {errno}] {strerror}[: {filename!r}[: {filename2!r}]]` ✓ —— 先前多实参按元组 repr 打 ✗
+    // ⇒ `str(FileNotFoundError(...))` 与参照不符（`test_unicode_file_functions` 的 `%a` 格式化 ✓）。
+    let is_os_error = match instance.type_named("OSError") {
+        // SAFETY: 类型对象由注册表持有。
+        Some(os_error) => instance.is_subtype(header.ty(), os_error),
+        None => false,
+    };
+    if is_os_error && args.len() >= 2 {
+        let errno = instance.int_of(args[0]).map(|value| value.to_i64().unwrap_or(0)).unwrap_or(0);
+        let strerror = instance.object_str(args[1])?;
+        let mut rendered = format!("[Errno {errno}] {strerror}");
+        if let Some(filename) = args.get(2) {
+            if instance.type_of(*filename) != instance.singletons().none_type() {
+                rendered.push_str(&format!(": {}", instance.object_repr(*filename)?));
+            }
+        }
+        if let Some(filename2) = args.get(3) {
+            if instance.type_of(*filename2) != instance.singletons().none_type() {
+                rendered.push_str(&format!(": {}", instance.object_repr(*filename2)?));
+            }
+        }
+        return Ok(rendered);
+    }
     match args.len() {
         0 => Ok(String::new()),
         1 if key_error_style => instance.object_repr(args[0]),
