@@ -836,15 +836,26 @@ pub fn concat_public(
             .cast::<Header>());
     }
     // `bytes + bytes`（`P1-12`；实测 `b'ab' + b'cd' == b'abcd'`）
-    let (left_bytes, right_bytes) = (instance.bytes_value(left), instance.bytes_value(right));
+    // **`bytes` 子类**也收（`bytearray` 已在上一支处理 ✓）：载荷视图统一走 `bytes_like_value` ✓。
+    let (left_bytes, right_bytes) = (
+        instance.bytes_like_value(left),
+        instance.bytes_like_value(right),
+    );
     if let (Some(a), Some(b)) = (left_bytes, right_bytes) {
         let mut joined = Vec::with_capacity(a.len() + b.len());
-        joined.extend_from_slice(a);
-        joined.extend_from_slice(b);
+        joined.extend_from_slice(&a);
+        joined.extend_from_slice(&b);
         return Ok(instance.new_bytes(&joined));
     }
-    let list_type = instance.type_named("list");
-    if Some(left_type) == list_type && Some(right_type) == list_type {
+    // **序列拼接收子类**（round 104）：参照 `list.__add__` 对 **list 子类**同样成立 ✓
+    //（官方 `test_xml_dom_minicompat` 的 `NodeList + list`／`list + NodeList` ✓；结果给**普通 list** ✓
+    // —— 除非子类自己覆写了 `__add__` ✓，那条在 `binary_override` 已先走 ✓）。
+    let is_list_type = |ty: NonNull<crate::TypeObject>| {
+        instance
+            .type_named("list")
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    if is_list_type(left_type) && is_list_type(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe {
             (
@@ -869,8 +880,13 @@ pub fn concat_public(
         }
         return Ok(instance.new_list(items));
     }
-    let tuple_type = instance.type_named("tuple");
-    if Some(left_type) == tuple_type && Some(right_type) == tuple_type {
+    // 同上：**tuple 子类**也按 `tuple.__add__` 拼接 ✓（结果给普通 tuple ✓）。
+    let is_tuple_type = |ty: NonNull<crate::TypeObject>| {
+        instance
+            .type_named("tuple")
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    if is_tuple_type(left_type) && is_tuple_type(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe {
             (

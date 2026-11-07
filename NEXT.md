@@ -4,7 +4,7 @@
 > （`Lib/test` 语法错 0／可编译 397/397＝100%）；判据① 477/628＝76.0%；`Lib/` 逐字节同步 739 文件；
 > `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役（会话 11）只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
 
-- **HEAD**：`dev` 见 `git log -1`（round 103：类型级 `__repr__` 每类型包装器＋身份哈希（pprint 分派真 bug）＋包优先＋模块 `__dir__`/`__doc__`＋`import *` 的 `__all__` 子模块 ⇒ `test_pkg`、`test_difflib` 转绿，套件 56⇒58；round 102（无翻页）：importlib fresh 子模块导入面真接线（finder 父包 __path__ 定位重接＋exec_module 三处缺陷＋locate_source 带点名字）＋子类切片 ⇒ test_xml_etree 族跑完 228 测试；套件 56/85/254/2（超时 3⇒2）；round 101：冻结模块测试面（`_imp._override_frozen_modules_for_tests` 真接线）⇒ `test_frozen` 转绿＋`from pkg import 子模块` 装载回退，套件 55⇒56；round 100：比较协议三处真语义（str/bytes 子类序、bytearray 等值、`!=` 优先级＋`object.__ne__`）⇒ `test_compare` 转绿，套件 54⇒55（新增 `test_decimal` 超时 137 s ✗）；round 99：`io.BufferedReader`/`BufferedWriter` 真实现＋`pow` 浮点/负指数面 ⇒ `test_urllib_response`、`test_pow` 转绿，套件 52⇒54；round 98：`import a.b.c as x` 链式 IMPORT_FROM 真 bug＋模块 `__spec__`／`__package__`＋4 元组/变长 charmap codec ⇒ `test_charmapcodec`／`test_sundry`／`test_stat` 转绿，套件 49⇒52；round 97（无翻页）：`io.open` 的 `opener`／内建 `format`／`os.chmod`／`os.stat(fd)`／`function.__call__`／`FileIO.writelines`／`os.symlink(target_is_directory)` ⇒ `test_tempfile` 2F/52E⇒5F/48E；套件 49／86／260／2（`test_collections` 并行调查下超时、单跑 66 s）；round 96：元组 freelist 复用＋`map` 泄漏修＋`__next__.__doc__` ⇒ `test_genexps` 转绿，套件 48⇒49；round 95：`del obj.attr` 的 `__delattr__` 分派（`unittest.mock` 收尾）⇒ `test__colorize` 转绿，套件 47⇒48；顺带 `sys.__stdout__`／标准流 `fileno`／`os.DirEntry` 导出／`stat_result` 必有名／`_io` 缓冲协议／`bytes` normpath；round 94：`bytes(str,enc)` 全编码（`fnmatch` bytes 模式）＋`os.lstat` 真实现（断链／`lexists`）⇒ `test_glob`、`test_fnmatch` 转绿，套件 45⇒47；round 93：编译器真 bug（`for: try: with:` 的正常出口跳回循环续点）＋`os.scandir`/`DirEntry`/`PathLike` ⇒ `test_mimetypes` 转绿、套件 44⇒45、`os.walk`/`shutil.rmtree` 转通；round 92：补 `gc.get_debug/set_debug/get_count`、`os.putenv/unsetenv/isatty`、`set.intersection` 一族 ⇒ 面向 `test_gc`/`test_mimetypes`/`test__colorize` 的首因，套件 44／85／267／1 ⇒ 44／86／266／1（无翻页）；round 91：`test_bufio` 转绿——`os.fstat`／`os.chdir`／`int.__index__`／`os.write` 缓冲协议＋`bytearray` 缓冲快路（`_pyio` 100 KB 0.27 s⇒毫秒）⇒ 套件 43⇒44；round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
+- **HEAD**：`dev` 见 `git log -1`（round 104：`int(bytes)`＋序列拼接收子类＋`list` 族 `__reduce_ex__` 可重建形状 ⇒ `test_xml_dom_minicompat` 转绿，套件 58⇒59；round 103：类型级 `__repr__` 每类型包装器＋身份哈希（pprint 分派真 bug）＋包优先＋模块 `__dir__`/`__doc__`＋`import *` 的 `__all__` 子模块 ⇒ `test_pkg`、`test_difflib` 转绿，套件 56⇒58；round 102（无翻页）：importlib fresh 子模块导入面真接线（finder 父包 __path__ 定位重接＋exec_module 三处缺陷＋locate_source 带点名字）＋子类切片 ⇒ test_xml_etree 族跑完 228 测试；套件 56/85/254/2（超时 3⇒2）；round 101：冻结模块测试面（`_imp._override_frozen_modules_for_tests` 真接线）⇒ `test_frozen` 转绿＋`from pkg import 子模块` 装载回退，套件 55⇒56；round 100：比较协议三处真语义（str/bytes 子类序、bytearray 等值、`!=` 优先级＋`object.__ne__`）⇒ `test_compare` 转绿，套件 54⇒55（新增 `test_decimal` 超时 137 s ✗）；round 99：`io.BufferedReader`/`BufferedWriter` 真实现＋`pow` 浮点/负指数面 ⇒ `test_urllib_response`、`test_pow` 转绿，套件 52⇒54；round 98：`import a.b.c as x` 链式 IMPORT_FROM 真 bug＋模块 `__spec__`／`__package__`＋4 元组/变长 charmap codec ⇒ `test_charmapcodec`／`test_sundry`／`test_stat` 转绿，套件 49⇒52；round 97（无翻页）：`io.open` 的 `opener`／内建 `format`／`os.chmod`／`os.stat(fd)`／`function.__call__`／`FileIO.writelines`／`os.symlink(target_is_directory)` ⇒ `test_tempfile` 2F/52E⇒5F/48E；套件 49／86／260／2（`test_collections` 并行调查下超时、单跑 66 s）；round 96：元组 freelist 复用＋`map` 泄漏修＋`__next__.__doc__` ⇒ `test_genexps` 转绿，套件 48⇒49；round 95：`del obj.attr` 的 `__delattr__` 分派（`unittest.mock` 收尾）⇒ `test__colorize` 转绿，套件 47⇒48；顺带 `sys.__stdout__`／标准流 `fileno`／`os.DirEntry` 导出／`stat_result` 必有名／`_io` 缓冲协议／`bytes` normpath；round 94：`bytes(str,enc)` 全编码（`fnmatch` bytes 模式）＋`os.lstat` 真实现（断链／`lexists`）⇒ `test_glob`、`test_fnmatch` 转绿，套件 45⇒47；round 93：编译器真 bug（`for: try: with:` 的正常出口跳回循环续点）＋`os.scandir`/`DirEntry`/`PathLike` ⇒ `test_mimetypes` 转绿、套件 44⇒45、`os.walk`/`shutil.rmtree` 转通；round 92：补 `gc.get_debug/set_debug/get_count`、`os.putenv/unsetenv/isatty`、`set.intersection` 一族 ⇒ 面向 `test_gc`/`test_mimetypes`/`test__colorize` 的首因，套件 44／85／267／1 ⇒ 44／86／266／1（无翻页）；round 91：`test_bufio` 转绿——`os.fstat`／`os.chdir`／`int.__index__`／`os.write` 缓冲协议＋`bytearray` 缓冲快路（`_pyio` 100 KB 0.27 s⇒毫秒）⇒ 套件 43⇒44；round 90：**撤回轮**——「帧拥有形参」实验：实参泄漏 +100⇒0、conformance 双模式绿，但 `__del__` 帧释放晚于 `python_level_finalize` 返回 ⇒ 复活误判 ⇒ `__del__` 无限重复 ⇒ 撤回；留下新事实（A 族新顺序）＋ `PYAWA_DEL_TRACE` 诊断；round 89：修 `itertools.groupby` 键双持有真双放 ⇒ **悬垂全量 memory 1⇒0（硬门①首次达成）**，套件 43／85／268／1 持平；round 88：内存安全专项启动（`docs/MEMORY_SAFETY.md`＋`memdangle_survey`）＋修 `filter` 迭代器 UAF ⇒ 悬垂全量 memory 5⇒1＋`getrandbits` 大 `k` O(n) ⇒ 超时回 1，套件 43／85／268／1；round 87：`float.conjugate`＋`divmod`＋`LOAD_GLOBAL.__missing__` ⇒ 41⇒43；round 86：set 索引失效＋`in` 迭代回退＋deque ⇒ 39⇒41）；`main` ＝ M6 合并提交（tag `m6`）。
   **批次进度**：7 轮交付已全部落地（round 32–38）；**追加批**：round 39＝`test_frame` 慢因（GC O(n²) ⇒ 自适应水位；超时 9⇒3），
   round 40＝`test_userstring`（`str.startswith/endswith/count` 的 `start/end` ＋ `find/count` 的 `None` ＋ `split/rsplit` 的 `None`/`maxsplit`；
   **`weakref.ref` 相等/哈希按目标** ⇒ `WeakSet` 去重、`_abc_cache` 不再一次长一条）。该测试：941 failures／9 errors／>900 s ⇒ **38 failures／4 errors／42 s**（仍是 runtime、不超时）。
@@ -90,19 +90,15 @@
   （超时解除）；但 `test_userstring` 101 s 临界被判 timeout ⇒ 套件 36／82／277／2（ok −1，如实记）。
   **round 73 完成**：`isinstance` ABC 快速通道 ⇒ `test_userstring` 101 s⇒80 s（ok 恢复 ✓）；套件
   **37／82／277／1**（超时 2⇒1，只剩 `test_weakref`）。
-  **round 103 完成**：**类型级 `__repr__` 的「每类型一份」包装器**（`Instance::type_dunders`）——
-  参照里 `list.__repr__`／`dict.__repr__` 各是各的 slot wrapper，本层全落到 `object` 同一个 native
-  ⇒ `pprint` 的 `_dispatch[type(obj).__repr__]`（类型属性当 dict 键）全部命中最后一项 ⇒ 任意 list
-  被当 deque ⇒ `'list' object has no attribute 'maxlen'`（`test_pkg`／`test_rlcompleter`／`test_pprint`
-  的收尾）；＋ **`hash()` 的身份哈希一族**（function／builtin_function_or_method／method／type／module
-  —— pprint 拿函数当键）；＋ **包优先于同名模块文件**（FileFinder 实测；`test_pkg.test_4`）；
-  ＋ **模块 `__dir__` 只列模块字典／模块 `__doc__` 恒在**；＋ **`import *` 的 `__all__` 子模块**
-  （`_handle_fromlist` 语义；`test_pkg.test_6`）⇒ **`test_pkg`、`test_difflib` 转绿**（套件 56⇒58）。
-  **下一轮**：① `test_rlcompleter`（`cannot create 'method' instances` 的 create_autospec 面）
-  ② `test_xml_etree` 族／`test_xml_dom_minicompat`（`NodeList + list`／pickle／copy）③ `test_decimal`
-  137 s ④ `test_tempfile` 剩余／`test_filecmp`（14F/2E）／`test_shutil`（3F/87E）⑤ 内存安全 A 族
-  「`__del__` 帧延迟释放」持有者 ⑥ `test_deque` 协议面／`test_collections`／`P3-42`／`P3-35`／
-  `P3-29`／`P3-37`。
+  **round 104 完成**：**`int(bytes)` 的十进制形态**（`int(b'123')`；pickle 的字节整数 ✓）＋
+  **序列拼接收子类**（`concat_public` 的 `list`／`tuple`／`bytes` 的 `+` 按子类型判 ✓；结果给普通
+  容器；子类覆写 `__add__` 仍先走 ✓）＋ **`list` 族的 `__reduce_ex__` 可重建形状**（协议 4：
+  `(copyreg.__newobj__, (类,), None, 元素迭代器, None)` —— `copy.copy`／`deepcopy` 不再得空列表 ✓）
+  ⇒ **`test_xml_dom_minicompat` 转绿**（套件 **58⇒59**）。
+  **下一轮（末轮）**：① `test_rlcompleter`（`create_autospec` 的 method 实例）② `test_list`
+  （`test_constructors` 的无 `__iter__` 形态错误面）③ `test_decimal` 137 s ④ `test_tempfile` 剩余／
+  `test_filecmp`（14F/2E）／`test_shutil`（3F/87E）⑤ 内存安全 A 族「`__del__` 帧延迟释放」持有者
+  ⑥ `test_deque` 协议面／`test_collections`／`P3-42`／`P3-35`／`P3-29`／`P3-37`。
 
 ## 内存安全专项（口径与路线）
 

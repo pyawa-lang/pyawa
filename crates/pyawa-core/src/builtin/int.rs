@@ -509,7 +509,23 @@ pub unsafe fn int_new(
             if let Some(value) = dunder_int_value(instance, *only)? {
                 return Ok(make_int(class, instance, value));
             }
-            let Some(text) = instance.text_value(*only) else {
+            // **`bytes`／`bytearray` 的十进制形态**（round 104）：参照里 `int(b'123')` 合法 ✓
+            //（官方 `test_xml_dom_minicompat` 的 pickle 读 `int(b'4')` ✓）；先前只认 `str` ✗ ⇒
+            // `TypeError: int() argument must be a string, a bytes-like object or a real number,
+            // not 'bytes'` ✗（消息自相矛盾 ✓）。
+            let text_storage: String = if let Some(text) = instance.text_value(*only) {
+                text.to_owned()
+            } else if let Some(raw) = instance.bytes_like_value(*only) {
+                match String::from_utf8(raw) {
+                    Ok(text) => text,
+                    Err(_) => {
+                        return Err(instance.raise_builtin_error(
+                            "ValueError",
+                            "invalid literal for int() with base 10",
+                        ));
+                    }
+                }
+            } else {
                 let name = instance.type_name(instance.type_of(*only));
                 return Err(instance.raise_builtin_error(
                     "TypeError",
@@ -518,6 +534,7 @@ pub unsafe fn int_new(
                     ),
                 ));
             };
+            let text: &str = &text_storage;
             // **`TS-45` ①**：`str` → `int` 的位数上限（参照实测：**前导零也计入**，
             // 符号与下划线不计；`0` ＝ 不限）。消息带实际位数，照实测原文拼。
             let limit = instance.int_max_str_digits();
@@ -533,7 +550,7 @@ pub unsafe fn int_new(
                     ));
                 }
             }
-            match parse_decimal(&text) {
+            match parse_decimal(text) {
                 Decimal::Value(value) => {
                     Ok(make_int(class, instance, IntValue::from_big(value)))
                 }

@@ -92,6 +92,34 @@ pub fn object_reduce_ex_native(
     };
     // SAFETY: object 由调用方保证存活。
     let ty = unsafe { object.as_ref() }.ty();
+    // **`list` 族的"可重建"形状**（round 104）：参照协议 4 给
+    // `(copyreg.__newobj__, (类,), None, 元素迭代器, None)` ✓ —— 先前一律给 `(类型, 空参数元组)` ✗
+    // ⇒ `copy.copy(list 子类)`／`deepcopy` 得到**空列表** ✗（官方 `test_xml_dom_minicompat` 的
+    // `test_nodelist_copy`／`test_nodelist_deepcopy` ✓）。`copy._reconstruct` 按 5 元组的第 4 项
+    // 逐个 `append` ✓。
+    let list_type = instance.type_named("list");
+    if list_type.is_some_and(|base| instance.is_subtype(ty, base)) {
+        if let Ok(Some(copyreg)) =
+            crate::executor::import::import_through_bridge(instance, "copyreg")
+        {
+            if let Some(namespace) = crate::mounted_instance_dict(instance, copyreg) {
+                if let Some(newobj) = instance.dict_get(namespace, "__newobj__") {
+                    let class_value = instance.retain(ty.cast::<Header>());
+                    let args = instance.new_tuple(vec![class_value]);
+                    let state = instance.retain(instance.singletons().none());
+                    let listiter = instance.iter_object(object)?;
+                    let dictiter = instance.retain(instance.singletons().none());
+                    return Ok(instance.new_tuple(vec![
+                        instance.retain(newobj),
+                        args,
+                        state,
+                        listiter,
+                        dictiter,
+                    ]));
+                }
+            }
+        }
+    }
     // 类型对象也是对象（本层如此登记）⇒ 直接当元组第一项 ✓。
     let ty_object = ty.cast::<Header>();
     Ok(instance.new_tuple(vec![ty_object, instance.new_tuple(Vec::new())]))
