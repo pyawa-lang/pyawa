@@ -370,6 +370,40 @@ pub(crate) fn call_callable(
         // 本层 `NewFn` 契约里没有关键字一路 ⇒ 关键字会被静默丢掉 ✗（`test_bool.test_keyword_args`
         // 钉住）。先只收 `bool`（参照里 `float`／`list` 同款、`int`／`str` 是另一句 TypeError，
         // 那些留给后续轮按类型收口 —— 别在这里一刀切 ✗）。
+        // **`list(...)` 一族的关键字**（round 110）：参照 `list() takes no keyword arguments` ✓
+        //（`test_list.test_keyword_args`／`test_keywords_in_subclass` 钉住：普通子类同罪；
+        // 子类若**自己**定义了 `__init__`／`__new__`，关键字归用户代码 ⇒ 不在这一档拒绝 ✓）。
+        let list_like = instance
+            .type_named("list")
+            .is_some_and(|list_type| instance.is_subtype(class, list_type));
+        let user_constructor = instance
+            .type_lookup_owner(class, "__init__")
+            .map(|(owner, _)| {
+                Some(owner) != instance.type_named("object")
+                    && Some(owner) != instance.type_named("list")
+            })
+            .unwrap_or(false)
+            || instance
+                .type_lookup_owner(class, "__new__")
+                .map(|(owner, _)| {
+                    Some(owner) != instance.type_named("object")
+                        && Some(owner) != instance.type_named("list")
+                })
+                .unwrap_or(false);
+        if list_like && !kwargs.is_empty() && !user_constructor {
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "list() takes no keyword arguments",
+            ));
+        }
         if class_name == "bool" && !kwargs.is_empty() {
             for argument in args {
                 release(instance, argument);

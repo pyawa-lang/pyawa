@@ -733,6 +733,19 @@ impl IteratorObject {
         self.index.set(self.index.get() + 1);
     }
 
+    /// **标记已耗尽**（round 110）：`index = usize::MAX` 是哨兵 —— 参照的迭代器一旦吐过
+    /// `StopIteration` 就**永久耗尽** ✓（`list_tests.test_exhausted_iterator`：耗尽后 `append(9)`
+    /// 不能再吐 ✓；`test_tier2_invalidates_iterator` ✓）。先前只看"下标 < 当前长度" ✗
+    /// ⇒ 追加元素后又"复活" ✗。
+    pub fn mark_exhausted(&self) {
+        self.index.set(usize::MAX);
+    }
+
+    /// 是否已被标记耗尽。
+    pub fn is_exhausted(&self) -> bool {
+        self.index.get() == usize::MAX
+    }
+
     /// **字典迭代的版本守卫**：第一次推进时记下 `(版本, 长度)`；之后版本变 ⇒ 给
     /// `RuntimeError` 的**两档文案**（照参照：长度也变 ⇒ `changed size`；只变键集 ⇒ `changed keys` ✓）。
     /// 非字典迭代器的 `target` 不是 `dict` ⇒ 调用方不调它 ✓。

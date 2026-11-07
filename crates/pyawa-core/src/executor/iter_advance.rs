@@ -146,10 +146,15 @@ pub(crate) fn advance_iterator(
             return Err(instance.raise_builtin_error("RuntimeError", message));
         }
     }
+    // **耗尽哨兵**（round 110）：吐过 `StopIteration` 就永久耗尽 ✓（见 `mark_exhausted` 注释）。
+    if object.is_exhausted() {
+        return Ok(None);
+    }
     let target = object.target();
     let index = object.index();
     let length = iterable_length(instance, target, opcode)?;
     if index >= length {
+        object.mark_exhausted();
         return Ok(None);
     }
     let item = iterable_item(instance, target, index, opcode)?;

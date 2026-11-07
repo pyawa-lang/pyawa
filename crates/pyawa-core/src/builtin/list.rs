@@ -51,20 +51,94 @@ pub(crate) fn list_index_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let list = bound_list(instance, bound)?;
-    let Some(wanted) = args.first() else {
+    let Some(wanted) = args.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "index() takes at least 1 argument",
         ));
     };
-    // SAFETY: 绑定的是本类型的存活对象。
+    // **区间**（round 110）：`list.index(x, start, end)` 的 start/end 照切片归一化 ✓
+    //（负数加长度、夹到 `0..=len` ✓；`start > len` ⇒ 直接 ValueError ✓）。
+    // **活体遍历**：`__eq__` 可能把表清空／改小（`seq_tests.test_index` 的 `EvilCmp` ✓）⇒
+    // 每轮重读长度、比较期间自己持一份 ✓（先前的借用快照会悬垂 ✗）。
+    // SAFETY: 绑定的是本实例的 list。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    match object.position_where(|item| {
-        crate::executor::values::values_equal_public(instance, item, *wanted)
-    }) {
-        Some(index) => Ok(instance.new_int(index as i64)),
-        None => Err(instance.raise_builtin_error("ValueError", " is not in list")),
+    let length = object.len() as i64;
+    let (start, end) = list_range_bounds(instance, args, length, "index")?;
+    let mut position = start;
+    while position < end && position < object.len() as i64 {
+        let item = object.item(position as usize).expect("刚查过长度，下标在范围内");
+        // **富比较协议**：用户 `__eq__` 生效 ✓、异常原样传播 ✓；比较期间持一份引用 ✓。
+        unsafe { instance.incref_object(item.as_ptr()) };
+        let verdict = crate::executor::protocol::equality_public(instance, item, wanted);
+        unsafe { instance.release_object(item.as_ptr()) };
+        if verdict? {
+            return Ok(instance.new_int(position));
+        }
+        position += 1;
     }
+    Err(instance.raise_builtin_error("ValueError", " is not in list"))
+}
+
+/// `list.index(x, start, end)` 的区间归一化（round 110；与 `str.find` 家族同口径 ✓）。
+/// `list.clear()`／`copy()`／`reverse()` 的**零实参**检查（round 110）：参照对多给的实参报
+/// `TypeError: list.clear() takes no arguments (1 given)` ✓（官方 `list_tests.test_clear`／
+/// `test_copy` 的 `assertRaises(TypeError, u.clear, None)` ✓）。
+fn reject_extra_arguments(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    method: &str,
+) -> Result<(), crate::ExecError> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "list.{method}() takes no arguments ({} given)",
+            args.len()
+        ),
+    ))
+}
+
+fn list_range_bounds(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    length: i64,
+    method: &str,
+) -> Result<(i64, i64), crate::ExecError> {
+    let mut values: [Option<i64>; 2] = [None, None];
+    for (index, value) in args.iter().skip(1).take(2).enumerate() {
+        if instance.type_of(*value) == instance.singletons().none_type() {
+            continue;
+        }
+        if let Some(number) = instance.int_of(*value) {
+            let saturated = number.to_i64().unwrap_or_else(|| {
+                if number.to_bigint().signum() < 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            });
+            values[index] = Some(saturated);
+            continue;
+        }
+        let name = instance.type_name(instance.type_of(*value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{method}() 的 start／end 要整数，不是 '{name}'"),
+        ));
+    }
+    let normalize = |value: Option<i64>, default: i64| match value {
+        Some(number) => {
+            let shifted = if number < 0 { number + length } else { number };
+            shifted.clamp(0, length)
+        }
+        None => default,
+    };
+    let start = normalize(values[0], 0);
+    let end = normalize(values[1], length);
+    Ok((start, end))
 }
 /// `count(x)`：相等元素个数 ✓。
 pub(crate) fn list_count_native(
@@ -80,11 +154,22 @@ pub(crate) fn list_count_native(
             "count() takes exactly one argument",
         ));
     };
-    let items = instance.list_items(list).unwrap_or_default();
-    let count = items
-        .into_iter()
-        .filter(|item| crate::executor::values::values_equal_public(instance, *item, *wanted))
-        .count() as i64;
+    // **富比较协议**（round 110）：`count` 和 `in` 同一口径（用户 `__eq__` 生效、异常传播 ✓）；
+    // 活体遍历 ＋ 每轮重读长度（`__eq__` 改表时不悬垂 ✓）。
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    let mut count = 0i64;
+    let mut index = 0usize;
+    while index < object.len() {
+        let item = object.item(index).expect("刚查过长度，下标在范围内");
+        unsafe { instance.incref_object(item.as_ptr()) };
+        let verdict = crate::executor::protocol::equality_public(instance, item, *wanted);
+        unsafe { instance.release_object(item.as_ptr()) };
+        if verdict? {
+            count += 1;
+        }
+        index += 1;
+    }
     Ok(instance.new_int(count))
 }
 /// `reverse()`：就地反转 ✓（只动顺序，不碰引用 ✓）。
@@ -143,6 +228,9 @@ pub(crate) fn list_sort_native(
         };
         decorated.push((item, item_key));
     }
+    // **排序期间被改表**要报 `ValueError`（参照 `list modified during sort` ✓）：比较键是用户代码，
+    // 可能 `append`／`clear` 本表（`list_tests.test_sort` 的 `selfmodifyingComparison` ✓）。
+    let original_length = object.len();
     let mut failure: Option<String> = None;
     decorated.sort_by(|left, right| match instance.order_of(left.1, right.1) {
         Some(ordering) => ordering,
@@ -159,6 +247,19 @@ pub(crate) fn list_sort_native(
     });
     if reverse {
         decorated.reverse();
+    }
+    if object.len() != original_length {
+        // 清掉装饰期的两份引用，再报参照口径的 `ValueError` ✓（列表本身保持被改后的样子 ✓）。
+        for (item, item_key) in decorated {
+            unsafe {
+                instance.release_object(item.as_ptr());
+                instance.release_object(item_key.as_ptr());
+            }
+        }
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "list modified during sort",
+        ));
     }
     // 写回：**原地** ✓ —— 先逐项弹出旧引用并归还 ✓，再按新序 `append` ✓（元素那一份**转交**列表 ✓），
     // 键那一份是临时 ⇒ 还掉 ✓（两边各正好一份 ✓ ⇒ 不重不漏 ✓）。
@@ -180,9 +281,10 @@ pub(crate) fn list_sort_native(
 pub(crate) fn list_reverse_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    reject_extra_arguments(instance, args, "reverse")?;
     let list = bound_list(instance, bound)?;
     // SAFETY: 绑定的是本类型的存活对象。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
@@ -193,9 +295,10 @@ pub(crate) fn list_reverse_native(
 pub(crate) fn list_clear_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    reject_extra_arguments(instance, args, "clear")?;
     let list = bound_list(instance, bound)?;
     // SAFETY: 绑定的是本实例的 list。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
@@ -218,8 +321,21 @@ pub(crate) fn list_remove_native(
     };
     // SAFETY: 绑定的是本实例的 list。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    let index = object.position_where(|item| crate::executor::values::values_equal_public(instance, item, *target));
-    match index {
+    // **富比较协议**（round 110）：`remove` 与 `in` 同口径（用户 `__eq__` 生效 ✓、顺序短路 ✓）。
+    let mut found = None;
+    let mut index = 0usize;
+    while index < object.len() {
+        let item = object.item(index).expect("刚查过长度，下标在范围内");
+        unsafe { instance.incref_object(item.as_ptr()) };
+        let verdict = crate::executor::protocol::equality_public(instance, item, *target);
+        unsafe { instance.release_object(item.as_ptr()) };
+        if verdict? {
+            found = Some(index);
+            break;
+        }
+        index += 1;
+    }
+    match found {
         Some(at) => {
             if let Some(removed) = object.remove_at(at) {
                 unsafe { instance.release_object(removed.as_ptr()) };
@@ -240,6 +356,7 @@ pub unsafe fn list_getattr(
         // **`list` 的 dunder／`copy` 面**（round 106）：官方 `list_tests`／`seq_tests` 大量直接调用
         // `u.__getitem__`／`u.__setitem__`／`u.__delitem__`／`u.copy()`／`u.__iadd__` 一族 ✓ ——
         // 先前这些名字在实例上**取不到** ✗（`AttributeError: 'list' object has no attribute ...`）。
+        "__init__" => list_init_native,
         "__getitem__" => list_dunder_getitem,
         "__setitem__" => list_dunder_setitem,
         "__delitem__" => list_dunder_delitem,
@@ -423,22 +540,62 @@ fn list_dunder_imul(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let list = bound_list(instance, bound)?;
-    let Some(count) = args.first().copied() else {
+    let Some(count_value) = args.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "__imul__() takes exactly one argument (0 given)",
         ));
     };
-    crate::executor::protocol::inplace_arithmetic(instance, list, count, "*", 0)
+    let Some(count) = instance.index_value(count_value)? else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "can't multiply sequence by non-int of type",
+        ));
+    };
+    // **就地重复、返回同一个对象**（round 110 真 bug 修 ✗）：先前走通用 `inplace_arithmetic`
+    // ⇒ 返回新列表 ✗ ⇒ `s *= 10` 后 `id(s) != oldid` ✗（`list_tests.test_imul`／`test_repeat` ✓）。
+    // **上限守卫生效**：`sys.maxsize` 一类 ⇒ `MemoryError`（`test_list_resize_overflow` ✓）。
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    const MAX_REPEAT_ITEMS: i64 = 1 << 33;
+    if count > 0 && object.len() as i64 >= MAX_REPEAT_ITEMS / count.max(1) {
+        return Err(instance.raise_builtin_error(
+            "MemoryError",
+            "list 重复后长度过大",
+        ));
+    }
+    if count <= 0 {
+        while let Some(item) = object.pop_last() {
+            unsafe { instance.release_object(item.as_ptr()) };
+        }
+        return Ok(instance.retain(list));
+    }
+    let original: Vec<NonNull<Header>> = object
+        .items()
+        .iter()
+        .map(|item| instance.retain(*item))
+        .collect();
+    for _ in 1..count {
+        for item in &original {
+            unsafe { instance.incref_object(item.as_ptr()) };
+            object.append(*item);
+        }
+    }
+    // 自己那份临时引用归还 ✓（元素由列表各持一份 ✓）。
+    for item in original {
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+    Ok(instance.retain(list))
 }
 
 /// `list.copy()`：**浅拷贝** ✓（官方 `list_tests.test_copy` ✓）。
 fn list_copy_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    reject_extra_arguments(instance, args, "copy")?;
     let list = bound_list(instance, bound)?;
     let items: Vec<NonNull<Header>> = instance
         .list_items(list)
@@ -658,6 +815,52 @@ pub(crate) unsafe fn list_clear(ptr: *mut Header, instance: &Instance) {
     }
 }
 /// `list()`：空列表。
+/// **`list.__init__(self, iterable=(), /)`**（round 110）：**清空后重填** ✓ ——
+/// `list_tests.test_init` 钉住「Init clears previous values」「Init overwrites previous values」✓；
+/// 先前 `list` 的 `__init__` 取不到（实例上 AttributeError ✗，且 `a.__init__([4,5,6])` 不生效 ✗）。
+pub(crate) fn list_init_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // `list.__init__` 只收一个位置实参（可迭代）；关键字一律不收（参照 `list() takes no keyword
+    // arguments` ✓）。
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "list() takes no keyword arguments",
+        ));
+    }
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "list expected at most 1 argument, got {}",
+                args.len()
+            ),
+        ));
+    }
+    let list = bound_list(instance, bound)?;
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    while let Some(item) = object.pop_last() {
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+    if let Some(source) = args.first().copied() {
+        // 复用 `list_new` 的"任意可迭代"口径：先收集（各自持一份新引用），再交给列表 ✓。
+        let iterator = instance.iter_object(source)?;
+        loop {
+            match instance.advance_iterator(iterator)? {
+                Some(item) => object.append(item),
+                None => break,
+            }
+        }
+        unsafe { instance.release_object(iterator.as_ptr()) };
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 pub unsafe fn list_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
@@ -721,13 +924,24 @@ pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Result<String,
         crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
         crate::instance::ReprEntry::Entered(scope) => scope,
     };
-    let items = object.items();
+    // **活体遍历**（round 110 真 bug 修 ✗）：元素的 `__repr__` 可能**改表**（`test_list.test_repr_mutate`
+    // 的元素会 `mylist.pop()` ✓）—— 参照 `list_repr` 每轮重读 `Py_SIZE` ✓、且比较期间元素要自己持一份 ✓；
+    // 先前借 `object.items()` 快照（无引用）✗ ⇒ 元素被 pop 释放后 `element_repr` 读悬垂指针 ✗
+    //（实测 68 GB 分配失败 abort ✗）。
     let mut text = String::from("[");
-    for (index, item) in items.iter().enumerate() {
+    let mut index = 0usize;
+    while index < object.len() {
+        let item = object.item(index).expect("刚查过长度，下标在范围内");
+        // SAFETY: 元素由列表持有；`__repr__` 期间本函数自己持一份 ✓。
+        unsafe { instance.incref_object(item.as_ptr()) };
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&crate::executor::protocol::element_repr(instance, *item)?);
+        let rendered = crate::executor::protocol::element_repr(instance, item);
+        // SAFETY: 归还本函数那一份。
+        unsafe { instance.release_object(item.as_ptr()) };
+        text.push_str(&rendered?);
+        index += 1;
     }
     text.push(']');
     Ok(text)

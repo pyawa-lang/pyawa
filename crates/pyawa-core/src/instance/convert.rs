@@ -317,6 +317,13 @@ impl Instance {
         if crate::executor::compare_public(self, left, right, ">", 0).unwrap_or(false) {
             return Some(core::cmp::Ordering::Greater);
         }
+        // **"相等"也要给 `Some(Equal)`**（round 110 真 bug 修 ✗）：两边都 `<` 假、`>` 假时参照的
+        // `Py_LT`／`Py_GT` 都判否 ⇒ **相等** ✓；先前直接回 `None` ✗ ⇒ `list.sort(key=cmp_to_key(...))`
+        // 一旦遇到比较相等的键就报 `'<' not supported between instances of 'K' and 'K'` ✗
+        //（官方 `list_tests.test_sort` 的 `myComparison` 有 `xmod == ymod` 档 ✓）。
+        if crate::executor::compare_public(self, left, right, "==", 0).unwrap_or(false) {
+            return Some(core::cmp::Ordering::Equal);
+        }
         None
     }
 

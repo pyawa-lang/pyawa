@@ -639,13 +639,30 @@ pub(crate) fn contains(
         return Ok(value.windows(needle.len()).any(|window| window == needle.as_slice()));
     }
     if instance.is_subtype(container_type, builtin_type(instance, "list")) {
+        // **富比较协议**（round 110）：`in` 对序列必须逐项走 `==`（含用户 `__eq__`／反射／
+        // `NotImplemented` 回退 ✓，并按**顺序**短路 ✓，异常原样传播 ✓）—— 先前用只认内建值的
+        // `values_equal` ✗ ⇒ `ALWAYS_EQ in [1]` 判 False ✗、`StopCompares` 的异常被吞 ✗
+        //（官方 `seq_tests.test_contains_fake`／`test_contains_order` ✓）。比较次序照参照
+        // `PyObject_RichCompareBool(item, el, Py_EQ)` ⇒ **查找值在左** ✓。
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        for index in 0..object.len() {
-            let element = object.item(index).expect("下标在范围内");
-            if values_equal(instance, element, item) {
+        // **长度每轮重读**（round 110 真 bug 修 ✗）：`__eq__` 可能把被查列表改小
+        //（`list_tests.test_contains_fake` 的 `EvilCmp`／`test_equal_operator_modifying_operand` ✓）；
+        // 参照 `list_contains` 也是每轮 `PyList_GET_SIZE(a)` ✓ —— 先前先取 `0..len` 再逐项下标 ✗
+        // ⇒ 缩表后 `item()` 越界 panic ✗。
+        let mut index = 0usize;
+        while index < object.len() {
+            let element = object.item(index).expect("刚查过长度，下标在范围内");
+            // **比较期间自己持一份**（round 110 真 bug 修 ✗）：`__eq__` 可能把列表清空／改小
+            // ⇒ 借用视图立刻悬垂 ✗（先前直接比较 ⇒ `test_list` 段错误 ✗；参照 `list_contains`
+            // 先 `Py_INCREF` 再比 ✓）。
+            unsafe { instance.incref_object(element.as_ptr()) };
+            let verdict = crate::executor::protocol::equality_public(instance, element, item);
+            unsafe { instance.release_object(element.as_ptr()) };
+            if verdict? {
                 return Ok(true);
             }
+            index += 1;
         }
         return Ok(false);
     }
@@ -654,7 +671,7 @@ pub(crate) fn contains(
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
         for index in 0..object.len() {
             let element = object.item(index).expect("下标在范围内");
-            if values_equal(instance, element, item) {
+            if crate::executor::protocol::equality_public(instance, item, element)? {
                 return Ok(true);
             }
         }

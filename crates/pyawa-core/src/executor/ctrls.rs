@@ -338,6 +338,11 @@ pub(crate) fn sequence_repeat(
         return Err(instance.raise_builtin_error("OverflowError", "cannot fit 'int' into an index-sized integer"));
     };
     let count = count.max(0) as usize;
+    // **`tuple * 1` 返回同一个对象**（round 110）：参照 `tuple_repeat` 的 `count == 1` 分支是
+    // `Py_NewRef(self)` ✓ —— `seq_tests.test_repeat` 钉住 `id(s) == id(s*1)` ✓；先前一律造新元组 ✗。
+    if is_tuple_left && count == 1 {
+        return Ok(Some(instance.retain(sequence)));
+    }
     // SAFETY: sequence 是存活对象。
     let sequence_type = unsafe { sequence.as_ref() }.ty();
     if sequence_type == instance.singletons().str_type() {

@@ -777,34 +777,76 @@ pub(crate) fn equality_public(
     // **容器递归**（用户子类覆写 `__eq__` 时让覆写优先 ✓）。
     if !overridden {
         if subtype(left_ty, "list") && subtype(right_ty, "list") {
-            let (a, b) = (
-                instance.list_items(left).unwrap_or_default(),
-                instance.list_items(right).unwrap_or_default(),
-            );
-            if a.len() != b.len() {
-                return Ok(false);
-            }
-            for (first, second) in a.iter().zip(b.iter()) {
-                if !equality_public(instance, *first, *second)? {
+            // **活体双游标**（round 110 真 bug 修 ✗）：参照 `list_richcompare` 每轮重读**两侧当前长度**
+            // ✓、且比较前给两个元素各 `Py_INCREF` ✓。元素的 `__eq__` 可能把两侧列表清空
+            //（`test_list.test_equal_operator_modifying_operand` 的 X/Y/Z ✓）⇒ 清空后循环按"前缀相等"
+            // 结束给 **True** ✓；先前先取长度快照 ✗ ⇒ 清空后仍比到悬垂元素 ⇒ False／崩溃 ✗。
+            let mut index = 0usize;
+            loop {
+                let left_items = instance.list_items(left).unwrap_or_default();
+                let right_items = instance.list_items(right).unwrap_or_default();
+                if index == 0 && left_items.len() != right_items.len() {
                     return Ok(false);
                 }
+                if index >= left_items.len() || index >= right_items.len() {
+                    break;
+                }
+                let first = left_items[index];
+                let second = right_items[index];
+                // SAFETY: 两个元素由各自列表持有；比较期间本函数各持一份 ✓。
+                unsafe {
+                    instance.incref_object(first.as_ptr());
+                    instance.incref_object(second.as_ptr());
+                }
+                let verdict = equality_public(instance, first, second);
+                unsafe {
+                    instance.release_object(first.as_ptr());
+                    instance.release_object(second.as_ptr());
+                }
+                if !verdict? {
+                    return Ok(false);
+                }
+                index += 1;
             }
             return Ok(true);
         }
         if subtype(left_ty, "tuple") && subtype(right_ty, "tuple") {
-            let (a, b) = (
-                instance.tuple_items(left).unwrap_or_default(),
-                instance.tuple_items(right).unwrap_or_default(),
-            );
+            let a = instance.tuple_items(left).unwrap_or_default();
+            let b = instance.tuple_items(right).unwrap_or_default();
             if a.len() != b.len() {
                 return Ok(false);
             }
+            // 与 list 同口径：比较期间各持一份 ✓（元素的 `__eq__` 可能改外部容器 ✓）。
+            let mut retained: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(a.len());
             for (first, second) in a.iter().zip(b.iter()) {
-                if !equality_public(instance, *first, *second)? {
-                    return Ok(false);
+                // SAFETY: 两个元素由各自元组持有；比较期间本函数各持一份 ✓。
+                unsafe {
+                    instance.incref_object(first.as_ptr());
+                    instance.incref_object(second.as_ptr());
+                }
+                retained.push((*first, *second));
+            }
+            let mut answer = Ok(true);
+            for (first, second) in &retained {
+                match equality_public(instance, *first, *second) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        answer = Ok(false);
+                        break;
+                    }
+                    Err(error) => {
+                        answer = Err(error);
+                        break;
+                    }
                 }
             }
-            return Ok(true);
+            for (first, second) in retained {
+                unsafe {
+                    instance.release_object(first.as_ptr());
+                    instance.release_object(second.as_ptr());
+                }
+            }
+            return answer;
         }
         // **`dict`**：键用结构查（用户键的 `__eq__` 属 P3-42 后续格），**值**递归（`__eq__` 生效 ✓）。
         if subtype(left_ty, "dict") && subtype(right_ty, "dict") {
@@ -1134,6 +1176,28 @@ pub(crate) fn call_special_method(
     args: &[NonNull<Header>],
 ) -> Result<Option<NonNull<Header>>, ExecError> {
     if !instance.is_type_object(object) {
+        // **`staticmethod` 包裹的特殊方法**（round 110）：参照对 `__repr__ = staticmethod(f)` 的调用是
+        // **不带 self** 的 ✓（实测 `class Obj: @staticmethod def __repr__(): return 'obj'` ⇒
+        // `repr([Obj()])` 给 `[obj]` ✓）；先前当普通实例方法绑 self ✗
+        //（`Obj.__repr__() takes 0 positional arguments but 1 was given` ✗，`test_list.test_repr_mutate` ✓）。
+        let ty = instance.type_of(object);
+        if let Some(found) = instance.type_lookup(ty, name) {
+            if instance.type_name(instance.type_of(found)) == "staticmethod" {
+                // SAFETY: 类型身份刚确认 ⇒ `StaticMethodObject` 载荷；内层函数由它持有，存活。
+                let function = unsafe {
+                    &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>()
+                }
+                .function();
+                let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+                for argument in args {
+                    // SAFETY: 调用方保证实参存活；`call_callable` 自会 retain。
+                    unsafe { instance.incref_object(argument.as_ptr()) };
+                    call_args.push(*argument);
+                }
+                let result = call_callable(instance, function, None, call_args, Vec::new(), 0)?;
+                return Ok(Some(result));
+            }
+        }
         return call_object_method(instance, object, name, args);
     }
     // 类对象：只在**元类** MRO 上找 ✓（`type(obj).__mro__` ✓）。
