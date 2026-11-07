@@ -955,9 +955,43 @@ pub fn open_native(
             flags |= open_flag::CREAT | open_flag::TRUNC;
         }
     }
-    let handle = match instance.fs_open(&path.bytes, flags, 0o666) {
-        Ok(handle) => handle,
-        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    // **`opener` 关键字**（round 97）：参照 `open(file, …, opener=fn)` 里由 `fn(file, flags, mode)`
+    // 交出**打开好的 fd** ✓（`io.open` **不去 open `file` 本身** ✓）。`Lib/tempfile.py` 的
+    // `NamedTemporaryFile`／`TemporaryFile` 全靠它 ✓ —— 先前完全忽略 `opener` ✗ ⇒ 直接按路径
+    // （传进来的是**目录** ✓）打开 ⇒ `IsADirectoryError: '/tmp'` ✗（官方 `test_tempfile` 大半 ✗）。
+    let opener = kwarg_of(instance, kwargs, "opener");
+    let handle = if let Some(opener) = opener {
+        let flags_value = instance.new_int(flags as i64);
+        let mode_value = instance.new_int(0o666);
+        let outcome = pyawa_core::executor::call::call_value(
+            instance,
+            opener,
+            &[file_value, flags_value, mode_value],
+            &[],
+        );
+        instance.release(flags_value);
+        instance.release(mode_value);
+        let returned = outcome?;
+        let fd = instance.int_of(returned).and_then(|value| value.to_i64());
+        instance.release(returned);
+        let Some(fd) = fd else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "opener returned a non-integer fd",
+            ));
+        };
+        if fd < 0 {
+            return Err(instance.raise_builtin_error(
+                "OSError",
+                "opener returned a negative fd",
+            ));
+        }
+        fd as u64
+    } else {
+        match instance.fs_open(&path.bytes, flags, 0o666) {
+            Ok(handle) => handle,
+            Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+        }
     };
     let mut raw: Vec<u8> = Vec::new();
     if spec.readable {
@@ -1392,6 +1426,9 @@ fn build_file_io(instance: &Instance, namespace: NonNull<Header>) {
         ("readline", file_readline as NativeFn),
         ("readlines", file_readlines as NativeFn),
         ("write", file_write as NativeFn),
+        // **`writelines`**（round 97）：逐行调 `write` ✓（`tempfile.SpooledTemporaryFile`
+        // 转发到 `_io.FileIO` 时被 `hasattr` 检查 ✗ —— `test_tempfile` 的 IOBase 接口面 ✓）。
+        ("writelines", file_writelines as NativeFn),
         ("flush", file_flush as NativeFn),
         ("close", file_close as NativeFn),
         ("seek", file_seek as NativeFn),
@@ -1545,6 +1582,48 @@ fn file_readlines(
         }
         items.push(line);
     }
+}
+
+/// `FileIO.writelines(lines)`（round 97）：逐行交给 `file_write` ✓（缓冲／关闭检查复用 ✓）。
+fn file_writelines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    let Some(lines) = args.get(1).copied().or_else(|| args.first().copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "writelines() takes exactly one argument (0 given)",
+        ));
+    };
+    // 若 `args` 的第一项就是 self（未绑定调用）⇒ 第二个及其后是实参；正常绑定调用 `args[0]` 是 lines。
+    let lines = if bound.is_some() {
+        args.first().copied().ok_or_else(|| {
+            instance.raise_builtin_error("TypeError", "writelines() takes exactly one argument (0 given)")
+        })?
+    } else {
+        lines
+    };
+    let iterator = instance.iter_object(lines)?;
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(line)) => {
+                let outcome = file_write(instance, Some(this), &[line], &[]);
+                instance.release(line);
+                let written = outcome?;
+                instance.release(written);
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 fn file_write(

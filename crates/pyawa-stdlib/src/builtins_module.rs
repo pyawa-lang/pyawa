@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "getattr", "hasattr", "hash",
+    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "format", "getattr", "hasattr", "hash",
     "exec", "filter", "globals", "hex", "locals", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
@@ -37,6 +37,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("bool", bool_native as pyawa_core::NativeFn),
         ("dict", dict_native as pyawa_core::NativeFn),
         ("float", float_native as pyawa_core::NativeFn),
+        // **`format(value, spec)`**（round 97）：`Lib/test/test_tempfile.py` 的 `format(mode, '03o')`
+        // 直接用内建名 ✗ ⇒ 先前 `NameError: name 'format' is not defined` ✗（`test_tempfile` 的
+        // subTest 标签多处 ✓；`Lib/` 里 `format()` 用法也广 ✓）。
+        ("format", format_native as pyawa_core::NativeFn),
         ("getattr", getattr_native as pyawa_core::NativeFn),
         ("hasattr", hasattr_native as pyawa_core::NativeFn),
         ("setattr", setattr_native as pyawa_core::NativeFn),
@@ -1860,6 +1864,128 @@ fn ascii_native(
         }
     }
     Ok(instance.new_str(&out))
+}
+
+/// **`format(value, format_spec='')`**（round 97）。
+///
+/// 口径：`spec` 空 ⇒ `str(value)` ✓；否则先走对象的 `__format__` ✓；没有就用**本函数的整数格式化**
+/// （`d/o/x/X/b` ＋ 填充/对齐/宽度/正负号 ✓ —— `test_tempfile` 只要 `'03o'` ✓）。
+/// **如实记** ✗：浮点/千分位/精度等复杂格式未在本地实现（有 `__format__` 的对象走它 ✓）。
+fn format_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "format() missing required argument 'value' (pos 1)",
+        ));
+    };
+    let spec = args
+        .get(1)
+        .copied()
+        .or_else(|| {
+            kwargs.iter().find_map(|(key, value)| {
+                instance
+                    .text_of(*key)
+                    .filter(|text| *text == "format_spec")
+                    .map(|_| *value)
+            })
+        })
+        .and_then(|value| instance.text_of(value))
+        .unwrap_or("")
+        .to_owned();
+    if !spec.is_empty() {
+        if let Ok(Some(method)) = instance.attribute_optional_of(value, "__format__") {
+            let spec_value = instance.new_str(&spec);
+            let outcome = pyawa_core::executor::call::call_value(instance, method, &[spec_value], &[]);
+            instance.release(spec_value);
+            instance.release(method);
+            if let Ok(result) = outcome {
+                return Ok(result);
+            }
+        }
+        if let Some(number) = instance.int_of(value).and_then(|number| number.to_i64()) {
+            if let Some(text) = format_int_spec(&spec, number) {
+                return Ok(instance.new_str(&text));
+            }
+        }
+        // 不认识的 spec：如实退回 `str(value)`（比抛未实现更接近"可用"；复杂面另记 ✓）。
+    }
+    let str_type = instance.type_named("str").expect("str 已登记");
+    pyawa_core::executor::call::call_value(instance, str_type.cast(), &[value], &[])
+}
+
+/// **整数格式化**（`format(value, spec)` 的本地实现）：`fill/align/sign/0/width/type` ✓。
+fn format_int_spec(spec: &str, number: i64) -> Option<String> {
+    let chars: Vec<char> = spec.chars().collect();
+    let mut position = 0usize;
+    let mut fill: Option<char> = None;
+    let mut align: Option<char> = None;
+    if chars.len() >= 2 && matches!(chars[1], '<' | '>' | '^' | '=') {
+        fill = Some(chars[0]);
+        align = Some(chars[1]);
+        position = 2;
+    } else if chars.first().is_some_and(|first| matches!(first, '<' | '>' | '^' | '=')) {
+        align = Some(chars[0]);
+        position = 1;
+    }
+    let mut sign: Option<char> = None;
+    if chars.get(position).is_some_and(|c| matches!(c, '+' | '-' | ' ')) {
+        sign = Some(chars[position]);
+        position += 1;
+    }
+    let mut zero = false;
+    if chars.get(position) == Some(&'0') {
+        zero = true;
+        position += 1;
+    }
+    let mut width = 0usize;
+    while let Some(digit) = chars.get(position).and_then(|c| c.to_digit(10)) {
+        width = width * 10 + digit as usize;
+        position += 1;
+    }
+    let kind = chars.get(position).copied().unwrap_or('d');
+    if position + 1 < chars.len() {
+        return None;
+    }
+    let magnitude = number.unsigned_abs();
+    let body = match kind {
+        'd' | 'n' => magnitude.to_string(),
+        'b' => format!("{magnitude:b}"),
+        'o' => format!("{magnitude:o}"),
+        'x' => format!("{magnitude:x}"),
+        'X' => format!("{magnitude:X}"),
+        'c' => char::from_u32(magnitude as u32)?.to_string(),
+        _ => return None,
+    };
+    let prefix = if number < 0 {
+        "-".to_owned()
+    } else {
+        match sign {
+            Some('+') => "+".to_owned(),
+            Some(' ') => " ".to_owned(),
+            _ => String::new(),
+        }
+    };
+    let padding = width.saturating_sub(prefix.chars().count() + body.chars().count());
+    let fill_char = fill.unwrap_or(if zero { '0' } else { ' ' });
+    let effective_align = align.unwrap_or(if zero { '=' } else { '>' });
+    let separator: String = core::iter::repeat(fill_char).take(padding).collect();
+    Some(match effective_align {
+        '=' => format!("{prefix}{separator}{body}"),
+        '<' => format!("{prefix}{body}{separator}"),
+        '^' => {
+            let left = padding / 2;
+            let right = padding - left;
+            let left_fill: String = core::iter::repeat(fill_char).take(left).collect();
+            let right_fill: String = core::iter::repeat(fill_char).take(right).collect();
+            format!("{left_fill}{prefix}{body}{right_fill}")
+        }
+        _ => format!("{separator}{prefix}{body}"),
+    })
 }
 
 fn repr_native(

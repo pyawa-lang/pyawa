@@ -75,7 +75,7 @@ impl PosixFs {
             rename: Some(fs_rename),
             readlink: Some(fs_readlink),
             symlink: Some(fs_symlink),
-            chmod: None,
+            chmod: Some(fs_chmod),
             utime: None,
             read: Some(fs_read),
             write: Some(fs_write),
@@ -293,6 +293,34 @@ extern "C" fn fs_stat(
             unsafe { *out = info_of(&meta) };
             CapStatus::Ok
         }
+        Err(error) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno_of(&error) };
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `chmod(name, mode)`（round 97）：改宿主文件权限 ✓（`std::fs::set_permissions`，按 Unix 模式位 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_chmod(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    mode: u32,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::unix::fs::PermissionsExt;
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    match std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)) {
+        Ok(()) => CapStatus::Ok,
         Err(error) => {
             // SAFETY: 出参由调用方提供。
             unsafe { *errno_out = errno_of(&error) };
@@ -959,6 +987,7 @@ impl RestrictedFs {
         // 名字类槽位：把 VM 解析后的 guest 名字映射到根，再交给内层真实现。
         table.open = Some(restricted_open);
         table.stat = Some(restricted_stat);
+        table.chmod = Some(restricted_chmod);
         table.mkdir = Some(restricted_mkdir);
         table.rmdir = Some(restricted_rmdir);
         table.unlink = Some(restricted_unlink);
@@ -1058,6 +1087,19 @@ extern "C" fn restricted_stat(
     let (provider, path) = resolve_name!(state, name, len, false, false, errno_out);
     let bytes = os_bytes(&path);
     fs_stat(provider.inner_state(), bytes.as_ptr(), bytes.len(), out, errno_out)
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_chmod(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    mode: u32,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_chmod(provider.inner_state(), bytes.as_ptr(), bytes.len(), mode, errno_out)
 }
 
 #[allow(unsafe_code)]

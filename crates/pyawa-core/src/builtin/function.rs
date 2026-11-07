@@ -90,6 +90,68 @@ pub fn function_descriptor_get(
         .cast::<Header>())
 }
 
+/// `f.__call__(*args, **kwargs)`（round 97）：Python 函数的 `__call__` 方法-wrapper ✓。
+///
+/// 动因：参照里每个函数都有 `__call__` ✓；`Lib/unittest/mock.py` 的 `_callable(obj)` 判据是
+/// `getattr(obj, '__call__', None) is not None` ✗ ⇒ 我们的函数没有这个属性 ⇒ 被当成**不可调用**
+/// ⇒ `side_effect` 走 `next(effect)` ⇒ `TypeError/未实现`（官方 `test_tempfile` 的
+/// `test_unexpected_error` 直接状态 5 中止 ✗；`test_mock` 一族同理 ✓）。
+/// 实现：绑定一个原生转发器，内部按**转移语义**把实参交给 `call_callable` ✓。
+pub fn function_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__call__() 缺少 self"));
+    };
+    let mut owned_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        // SAFETY: 调用方保证实参存活；`call_callable` 是转移语义 ⇒ 这里各留一份。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        owned_args.push(*argument);
+    }
+    let mut owned_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
+    for (key, value) in kwargs {
+        // SAFETY: 同上。
+        unsafe {
+            instance.incref_object(key.as_ptr());
+            instance.incref_object(value.as_ptr());
+        }
+        owned_kwargs.push((*key, *value));
+    }
+    crate::executor::call::call_callable(instance, this, None, owned_args, owned_kwargs, 0)
+}
+
+/// 把一个原生转发器**绑**到 `target` 上交出去（`method` 对象；各持一份引用 ✓）。
+fn bind_native_to(
+    instance: &Instance,
+    name: &'static str,
+    handler: crate::NativeFn,
+    target: NonNull<Header>,
+) -> NonNull<Header> {
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    let native = instance.alloc(crate::BuiltinFunctionObject::new(
+        method_type,
+        name,
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self。
+    unsafe { instance.incref_object(target.as_ptr()) };
+    instance
+        .alloc(crate::MethodObject::new(
+            instance.type_named("method").expect("method 已登记"),
+            native_raw,
+            target,
+        ))
+        .into_raw()
+        .cast::<Header>()
+}
+
 /// **`function.__globals__` 的访问器形态** ✓（同 `__code__` ✓）。`__globals__` 可能为空 ⇒ 给 `None` ✓。
 pub fn function_globals_native(
     instance: &Instance,
@@ -178,6 +240,16 @@ pub unsafe fn function_getattr(
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<FunctionObject>() };
     match name {
+        // **`__call__`**（round 97）：见 `function_call_native` 的注释 ✓。
+        "__call__" => {
+            let owner = unsafe { NonNull::new_unchecked(ptr) };
+            return Some(bind_native_to(
+                instance,
+                "__call__",
+                function_call_native as crate::NativeFn,
+                owner,
+            ));
+        }
         "__name__" => {
             if let Some(override_value) = object.name_override() {
                 // SAFETY: 覆盖值由函数持有，调用方要自己那份。

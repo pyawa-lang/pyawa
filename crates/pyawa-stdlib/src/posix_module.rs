@@ -674,6 +674,15 @@ fn lstat_native(
     let Some(value) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
     };
+    // **`os.stat(fd)` 形态**（round 97，参照支持 ✓）：整数 ⇒ 直接 `fstat` ✓。先前一律当路径 ⇒
+    // `TypeError: stat: path should be string, bytes or os.PathLike, not int` ✗（`test_tempfile` ✓）。
+    if let Some(fd) = instance.int_value(value) {
+        let info = match instance.fs_fstat(fd.max(0) as u64) {
+            Ok(info) => info,
+            Err(error) => return Err(fs_error_with_display(instance, error, "")),
+        };
+        return build_stat_result(instance, info, None);
+    }
     let path = path_argument(instance, value, "stat")?;
     // **不要先 `resolve_path`**（round 94 真 bug 修 ✗）：那个解析会**跟随最后一段** ⇒ 断链在
     // readlink 之前就报 `ENOENT` ✗（`os.path.lexists` 对断链要 True ✓）。两个能力各自解析：
@@ -1366,6 +1375,35 @@ fn scandir_native(
     Ok(iterator)
 }
 
+/// **`posix.chmod(path, mode)`**（round 97）：走 `fs` 的 `chmod` 槽 ✓。
+///
+/// 动因：官方 `test_tempfile` 的收尾用例 `os.chmod(...)` ✗（`'module' object has no attribute 'chmod'`）；
+/// `shutil.copystat`／`test_shutil` 一族同样要 ✓。
+fn chmod_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (Some(path_value), Some(mode_value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "chmod() takes exactly 2 arguments",
+        ));
+    };
+    let path = path_argument(instance, path_value, "chmod")?;
+    let Some(mode) = instance.int_of(mode_value).and_then(|value| value.to_i64()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "an integer is required",
+        ));
+    };
+    match instance.fs_chmod(&path.bytes, mode as u32) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+    }
+}
+
 /// **`posix.putenv(key, value)`**（round 92）：真改进程环境（`os.environ` 的写路径 ✓）。
 ///
 /// 动因：`Lib/os.py` 的 `_Environ.__setitem__` 直接调**模块级** `putenv` / `unsetenv`
@@ -1696,18 +1734,26 @@ fn symlink_native(
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    if !kwargs.is_empty() {
-        let name = kwargs
-            .first()
-            .and_then(|(key, _)| instance.text_of(*key))
-            .unwrap_or("?")
-            .to_owned();
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            &format!("symlink() got an unexpected keyword argument '{name}'"),
-        ));
+    // **`target_is_directory` 是 Windows 语义参数**（POSIX 忽略 ✓）：参照在 POSIX 上也**接受**它 ✓
+    // ⇒ 先前一律当"意外关键字" ✗ ⇒ 官方 `test_tempfile` 的 `os_helper.symlink(...)` 夹具 32 处
+    // `TypeError: symlink() got an unexpected keyword argument 'target_is_directory'` ✗。
+    let mut name_value = args.get(1).copied();
+    for (key, value) in kwargs {
+        match instance.text_of(*key) {
+            Some("target_is_directory") | Some("dir_fd") | Some("follow_symlinks") => {}
+            _ => {
+                let name = instance.text_of(*key).unwrap_or("?").to_owned();
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("symlink() got an unexpected keyword argument '{name}'"),
+                ));
+            }
+        }
+        if instance.text_of(*key) == Some("dst") && name_value.is_none() {
+            name_value = Some(*value);
+        }
     }
-    let (Some(target_value), Some(name_value)) = (args.first().copied(), args.get(1).copied()) else {
+    let (Some(target_value), Some(name_value)) = (args.first().copied(), name_value.or_else(|| args.get(1).copied())) else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "symlink() missing required argument 'src'/'dst'",
@@ -2260,6 +2306,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("isatty", isatty_native as pyawa_core::NativeFn),
         // **`os.scandir`**（round 93）：`shutil.rmtree`／`glob`／`tempfile` 一族 ✓。
         ("scandir", scandir_native as pyawa_core::NativeFn),
+        // **`os.chmod`**（round 97）：走 `fs` 的 `chmod` 槽 ✓。
+        ("chmod", chmod_native as pyawa_core::NativeFn),
         ("unsetenv", unsetenv_native as pyawa_core::NativeFn),
         ("getcwdb", getcwdb_native as pyawa_core::NativeFn),
         ("readlink", readlink_native as pyawa_core::NativeFn),
@@ -2335,6 +2383,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("putenv"),
         instance.new_str("isatty"),
         instance.new_str("scandir"),
+        instance.new_str("chmod"),
         instance.new_str("DirEntry"),
         instance.new_str("ScandirIterator"),
         instance.new_str("unsetenv"),

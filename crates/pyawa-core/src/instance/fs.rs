@@ -118,6 +118,28 @@ impl Instance {
         }
     }
 
+    /// **改文件模式**（`chmod(name, mode)`；round 97）：`fs.chmod` 槽（`CP-23` 的属主面未接线 ✓，
+    /// 模式位 provider 支持 ✓）。名字先经 VM 解析器（与 `fs_stat` 同一口径 ✓）。
+    pub fn fs_chmod(&self, path: &[u8], mode: u32) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let chmod = table.chmod.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match chmod(
+            table.state,
+            resolved.as_ptr(),
+            resolved.len(),
+            mode,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     /// **经 `fs` 域按 `fd` 取元信息**（`fstat(file)`；`CP-31` 的 `fd → provider 句柄` 解析在这里 ✓）。
     ///
     /// 动因（round 91）：`os.fstat` 未接线 ⇒ 官方 `test_bufio` 的 `PyBufferSizeTest.__init__`
