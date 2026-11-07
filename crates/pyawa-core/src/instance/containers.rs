@@ -213,6 +213,37 @@ impl Instance {
         None
     }
 
+    /// **`bytes`／`bytearray`（含子类）的载荷**（round 100；借用 ✓）。
+    ///
+    /// 动因：比较族与等值族都只认精确 `bytes` ✗ ⇒ `bytearray(b"a") < bytearray(b"b")` 报
+    /// `TypeError`、`bytearray(b"ab") == b"ab"` 为 False ✗（参照都按**字节内容** ✓）。
+    pub fn bytes_like_value(&self, object: NonNull<Header>) -> Option<Vec<u8>> {
+        // **零分配的类型判据**（round 100 性能修 ✗）：热路径是 `==`／`<`，不能每次造 `String`
+        // （`type_name` 会 ✓）。用类型指针＋`is_subtype`（MRO 指针扫 ✓）判 `bytes`／`bytearray` 族 ✓。
+        let ty = unsafe { object.as_ref() }.ty();
+        let bytes_type = self.type_named("bytes")?;
+        let bytearray_type = self.type_named("bytearray")?;
+        let family = |candidate: NonNull<crate::TypeObject>| {
+            candidate == bytes_type
+                || candidate == bytearray_type
+                || self.is_subtype(candidate, bytes_type)
+                || self.is_subtype(candidate, bytearray_type)
+        };
+        if !family(ty) {
+            return None;
+        }
+        if ty == bytes_type || self.is_subtype(ty, bytes_type) {
+            // SAFETY: 类型身份已确认（`bytes` 与子类布局同形 ✓）。
+            return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value().to_vec());
+        }
+        // SAFETY: 类型身份已确认（`bytearray` 与子类布局同形 ✓）。
+        Some(
+            unsafe { &*object.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() }
+                .value()
+                .to_vec(),
+        )
+    }
+
     /// **往 `bytearray` 载荷里写一段**（`_struct.pack_into` 用 ✓；第 725 轮）。
     ///
     /// 返回 `false` ＝ **不是 `bytearray`** ✓ 或**越界** ✓ —— 调用方据此如实报

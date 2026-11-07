@@ -66,6 +66,14 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         // *临时*：整数与浮点比时按 f64 走（超大整数与浮点混用时会有精度话题，随协议槽位收口）
         return a == b;
     }
+    // **`bytes`／`bytearray`（含子类）按字节内容相等** ✓（round 100）：参照 `bytearray(b"ab") ==
+    // b"ab"` 为真 ✓、`bytearray(b"a") == bytearray(b"a")` 真 ✓ —— 先前只认精确 `bytes` ✗。
+    if let (Some(left_bytes), Some(right_bytes)) = (
+        instance.bytes_like_value(left),
+        instance.bytes_like_value(right),
+    ) {
+        return left_bytes == right_bytes;
+    }
     let str_type = instance.singletons().str_type();
     // SAFETY: 两个都是存活对象。
     let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };

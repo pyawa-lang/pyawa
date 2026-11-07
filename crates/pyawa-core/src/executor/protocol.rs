@@ -792,13 +792,61 @@ pub fn compare_public(
     match symbol {
         "==" => return equality_public(instance, left, right),
         "!=" => {
-            if let Some(verdict) = call_compare_dunder(instance, left, "__ne__", right)? {
-                return Ok(verdict);
+            // **快路**（round 100）：两侧都没有**自己**的 `__eq__`／`__ne__` ⇒ 直接按值相等取反 ✓
+            // （`str`／`int`／`bytes` 等内建值类型走这里 ✓ —— 它们的 `object.__eq__` 默认本来是
+            // "身份相等否则 NotImplemented" ✗，不适合直接走下面的"默认 __ne__"分派 ✓）。
+            let left_type = instance.type_of(left);
+            let right_type = instance.type_of(right);
+            // 注意：**只看两侧有没有自己的 `__ne__`** ✓ —— 有自己 `__eq__`、没有 `__ne__` 的类
+            // （`_pydecimal.Decimal` ✓）也走这条快路：语义与"默认 `__ne__` 委托 `__eq__` 再取反"
+            // 同向 ✓，但少掉两次类型字典查找（`test_decimal` 的墙钟实测：走完整协议时 147 s ✗
+            // ⇒ 快路把它拉回阈值内 ✓）。
+            let overrides_ne = |object: NonNull<Header>| {
+                type_has_own_dunder(instance, object, "__ne__")
+            };
+            if !overrides_ne(left) && !overrides_ne(right) {
+                return Ok(!equality_public(instance, left, right)?);
             }
-            if let Some(verdict) = call_compare_dunder(instance, right, "__ne__", left)? {
-                return Ok(verdict);
+            // **`!=` 的完整协议**（round 100，照参照 `do_richcompare`／`object.__ne__` 默认语义 ✓）：
+            // 1. `__ne__` **按子类优先级**问（右侧类型是左侧子类 ⇒ 反射先 ✓）；
+            // 2. 没有**自己**的 `__ne__` ⇒ `object.__ne__` 默认 = **委托给 `__eq__` 再取反** ✓
+            //    （`__eq__` 给 `NotImplemented` ⇒ `__ne__` 也 `NotImplemented` ✓）；
+            // 3. 两侧都没结论 ⇒ **身份不等**兜底 ✓（`x != x` False ✓、不同对象 True ✓；不再重跑
+            //    `__eq__` ⇒ 调用序列与参照一致 ✓，见 `test_compare` 的两条 ne 优先级测试）。
+            let right_first = right_type != left_type && instance.is_subtype(right_type, left_type);
+            let order = if right_first {
+                [(right, left), (left, right)]
+            } else {
+                [(left, right), (right, left)]
+            };
+            for (operand, other) in order {
+                // 有**自己的** `__ne__` ⇒ 调它 ✓。
+                if type_has_own_dunder(instance, operand, "__ne__") {
+                    if let Some(verdict) = call_compare_dunder(instance, operand, "__ne__", other)? {
+                        return Ok(verdict);
+                    }
+                    continue;
+                }
+                // 否则走 `object.__ne__` 默认：**只有自己有 `__eq__`** 才委托它再取反 ✓
+                // （`object.__eq__` 的默认是"身份相等否则 NotImplemented" ⇒ 不能把它当普通 eq 用 ✗）。
+                let operand_type = instance.type_of(operand);
+                let has_own_eq = instance
+                    .type_lookup_owner(operand_type, "__eq__")
+                    .is_some_and(|(owner, _)| Some(owner) != instance.type_named("object"));
+                if !has_own_eq {
+                    continue;
+                }
+                if let Some(result) = call_object_method(instance, operand, "__eq__", &[other])? {
+                    if result == instance.not_implemented() {
+                        release(instance, result);
+                        continue;
+                    }
+                    let truth = crate::executor::truthiness_public(instance, result, opcode)?;
+                    release(instance, result);
+                    return Ok(!truth);
+                }
             }
-            return Ok(!equality_public(instance, left, right)?);
+            return Ok(left != right);
         }
         _ => {}
     }
@@ -891,6 +939,34 @@ pub fn compare_public(
     // **`str` 的码点序**（Task-66 ✓）：两个恰 `str` 就走这里（含孤立代理也按码点比 ✓，
     // 不再经 `value()` ⇒ 不 panic）；合法 UTF-8 路径与旧的 `String::cmp` 结果逐例相同 ✓。
     if let Some(ordering) = instance.str_order_cmp(left, right) {
+        return Ok(match symbol {
+            "<" => ordering.is_lt(),
+            "<=" => ordering.is_le(),
+            ">" => ordering.is_gt(),
+            ">=" => ordering.is_ge(),
+            _ => false,
+        });
+    }
+    // **`str` 的子类也按码点序** ✓（round 100）：先前只认两个**恰 str** ✗ ⇒
+    // `class S(str)` 实例的 `<` 报错（`test_compare` 的 `test_str_subclass` ✓）。
+    if instance.is_str_object(left) && instance.is_str_object(right) {
+        if let (Some(a), Some(b)) = (instance.wtf8_of(left), instance.wtf8_of(right)) {
+            let ordering = a.cmp(b);
+            return Ok(match symbol {
+                "<" => ordering.is_lt(),
+                "<=" => ordering.is_le(),
+                ">" => ordering.is_gt(),
+                ">=" => ordering.is_ge(),
+                _ => false,
+            });
+        }
+    }
+    // **`bytes`／`bytearray`（含子类）按字节字典序** ✓（round 100；先前只认恰 `bytes` ✗）。
+    if let (Some(a), Some(b)) = (
+        instance.bytes_like_value(left),
+        instance.bytes_like_value(right),
+    ) {
+        let ordering = a.cmp(&b);
         return Ok(match symbol {
             "<" => ordering.is_lt(),
             "<=" => ordering.is_le(),

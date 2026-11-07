@@ -54,7 +54,14 @@ pub fn object_eq_native(
     };
     Ok(instance.new_bool(crate::executor::values::values_equal_public(instance, left, *right)))
 }
-/// `object.__ne__(self, other)`：`__eq__` 取反（参照默认语义）。
+/// `object.__ne__(self, other)`：**`==` 的结果取反** ✓（参照文档的默认语义 ✓ —— "delegates to
+/// `__eq__()` and reverses the result" ✓）。
+///
+/// 口径（round 100）：**显式属性调用**（`c.__ne__(d)`／`object.__ne__(a, b)`）走这条 ✓ ——
+/// 用完整相等协议（`equality_public`：用户 `__eq__` 派发＋容器逐元素＋结构兜底 ✓）。
+/// `x != y` **运算符**不靠这条（`compare_public` 有"子类优先级／`NotImplemented`／身份兜底"
+/// 的完整协议 ✓）；这里若返回 `NotImplemented` 会偏离参照（`object.__ne__(1, 2)` 参照给 **True**
+/// ✓ —— 语料 `type_dunder_attributes` 钉着 ✗）。
 pub fn object_ne_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -65,8 +72,10 @@ pub fn object_ne_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__ne__ expected 2 arguments"));
     };
-    Ok(instance.new_bool(!crate::executor::values::values_equal_public(instance, left, *right)))
+    let equal = crate::executor::protocol::equality_public(instance, left, *right)?;
+    Ok(instance.new_bool(!equal))
 }
+
 /// `object.__repr__(self)`：本层已有的默认 repr（`object_repr`）。
 /// `object.__reduce_ex__(protocol)` ✓（参照里它**存在** ✓：协议 0/1 走 `copyreg._reconstructor`、
 /// 协议 ≥2 走 `copyreg.__newobj__` ✓）。本层如实给一个**形状合理**的结果
