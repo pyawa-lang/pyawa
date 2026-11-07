@@ -96,13 +96,13 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
     // **特殊方法按 `type(iterable)` 的 MRO 找** ✓（类对象 ⇒ 元类 MRO ✓；第 410 轮，task-21 ✓）
     match crate::executor::attribute::attribute_lookup_special(instance, iterable, "__iter__") {
         Ok(crate::executor::Attribute::Method { function, this }) => {
-            let result = call_callable_value(instance, function, Some(this));
-            result
+            let result = call_callable_value(instance, function, Some(this))?;
+            ensure_iterator_result(instance, result)
         }
         Ok(crate::executor::Attribute::Value(method))
         | Ok(crate::executor::Attribute::Owned(method)) => {
-            let result = call_callable_value(instance, method, Some(iterable));
-            result
+            let result = call_callable_value(instance, method, Some(iterable))?;
+            ensure_iterator_result(instance, result)
         }
         Err(_) => {
             // **旧式序列协议** ✓（第 675 轮）：没有 `__iter__` 但**有 `__getitem__`** 的对象，参照按
@@ -173,6 +173,32 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             ))
         }
     }
+}
+
+/// **`__iter__` 的返回值必须真是迭代器**（round 105）：参照的 `iter()` 会校验
+/// （`TypeError: iter() returned non-iterator of type 'X'` ✓）—— 先前原样交出去 ✗ ⇒ 官方
+/// `seq_tests.IterNoNext` 的 `assertRaises(TypeError, list, IterNoNext(s))` 里，
+/// 失败发生在后续 `next()` ⇒ 变成**状态 5 未接线** ✗（`test_list.test_constructors` ✓）。
+fn ensure_iterator_result(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+) -> Result<NonNull<Header>, ExecError> {
+    let ty = unsafe { iterator.as_ref() }.ty();
+    let has_next = is_iterator_type(instance, ty)
+        || ty == builtin_type(instance, "generator")
+        || instance
+            .type_lookup(ty, "__next__")
+            .is_some();
+    if has_next {
+        return Ok(iterator);
+    }
+    let name = instance.type_name(ty);
+    instance.release(iterator);
+    Err(raise_builtin(
+        instance,
+        "TypeError",
+        &format!("iter() returned non-iterator of type '{name}'"),
+    ))
 }
 
 /// 判定真假——*临时*只覆盖单例表里的类型（`OM-11` 的 `__bool__` 槽位接线后改走协议）。

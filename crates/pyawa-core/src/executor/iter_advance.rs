@@ -25,6 +25,13 @@ pub(crate) fn advance_iterator(
         let method = match attribute_optional(instance, iterator, "__next__") {
             Ok(Some(method)) => method,
             Ok(None) => {
+                if crate::diag::flag("PYAWA_ITER_DEBUG") {
+                    let name = instance.type_name(unsafe { iterator.as_ref() }.ty());
+                    eprintln!(
+                        "[advance_iterator] 不可迭代：type={name} site={}",
+                        instance.current_site()
+                    );
+                }
                 return Err(ExecError::Unsupported {
                     opcode,
                     what: "这个对象既不是内建迭代器，也没有 `__next__`",

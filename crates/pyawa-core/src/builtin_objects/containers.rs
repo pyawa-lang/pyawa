@@ -281,6 +281,11 @@ impl ListObject {
         Some(items.remove(index))
     }
 
+    /// **摘出全部元素**（引用**转交**调用方 ✓；round 105：`list *= n` 的就地重复用 ✓）。
+    pub fn take_items(&self) -> Vec<NonNull<Header>> {
+        core::mem::take(&mut *self.items.borrow_mut())
+    }
+
     /// **就地反转**（第 147 轮，`list.reverse()` 用 ✓）——只动顺序，**不碰引用** ✓。
     pub fn reverse_items(&self) {
         self.items.borrow_mut().reverse();

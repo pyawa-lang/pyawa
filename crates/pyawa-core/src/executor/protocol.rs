@@ -628,11 +628,67 @@ pub(crate) fn inplace_arithmetic(
         if matches!(symbol, "&" | "|" | "^" | "-" | "/" | "//" | "%" | "**" | "<<" | ">>" | "@") {
             return Err(unsupported_operand(instance, left, right, &format!("{symbol}=")));
         }
-        // `*`（就地重复）：参照支持 ⇒ 本层**如实报未接线**（别拿 `TypeError` 冒充参照行为 ✗）。
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "序列的就地重复 `*=` 尚未接线",
-        });
+        // **`*=`（就地重复）**（round 105）：参照对 `list`／`bytearray` 的 `*=` 都是**就地**扩展 ✓
+        // （保持对象身份 ✓）。官方 `test_list` 的 `test_imul` 一族 ✓ —— 先前如实报未接线 ✗。
+        if symbol == "*" {
+            let count = instance.int_of(right).map(|value| value.to_i64().unwrap_or(0)).unwrap_or(0);
+            let count = count.max(0) as usize;
+            if subtype_of("list") {
+                // SAFETY: 类型身份刚确认是 list 族（载荷同构 ✓）。
+                let list = unsafe {
+                    &*left.as_ptr().cast::<crate::builtin_objects::ListObject>()
+                };
+                let original = list.take_items();
+                // **上限守卫**（round 105，照 `sequence_repeat` 的同一口径 ✓）：`lst *= sys.maxsize`
+                // 参照报 `MemoryError`／`OverflowError` ✓ —— 先前直接 `Vec::with_capacity` ⇒
+                // **容量溢出 panic** ✗（官方 `test_list.test_list_resize_overflow` ✓）。
+                if original.len().saturating_mul(count) > crate::executor::MAX_REPEAT_ITEMS {
+                    for item in original {
+                        release(instance, item);
+                    }
+                    return Err(instance.raise_builtin_error(
+                        "MemoryError",
+                        "sequence repetition too large",
+                    ));
+                }
+                let mut repeated: Vec<NonNull<Header>> =
+                    Vec::with_capacity(original.len().saturating_mul(count));
+                for _ in 0..count {
+                    for item in &original {
+                        // SAFETY: 元素由列表持有，存活；重复项各要一份。
+                        unsafe { instance.incref_object(item.as_ptr()) };
+                        repeated.push(*item);
+                    }
+                }
+                for item in original {
+                    release(instance, item);
+                }
+                list.extend(repeated);
+                return Ok(instance.retain(left));
+            }
+            // `bytearray *= n`
+            // SAFETY: 类型身份刚确认。
+            let data = unsafe {
+                &*left
+                    .as_ptr()
+                    .cast::<crate::builtin_objects::BytearrayObject>()
+            };
+            let mut value = data.value();
+            let original = value.clone();
+            if original.len().saturating_mul(count) > crate::executor::MAX_REPEAT_BYTES {
+                return Err(instance.raise_builtin_error(
+                    "MemoryError",
+                    "bytes repetition too large",
+                ));
+            }
+            value.clear();
+            for _ in 0..count {
+                value.extend_from_slice(&original);
+            }
+            drop(value);
+            return Ok(instance.retain(left));
+        }
+        return Err(unsupported_operand(instance, left, right, &format!("{symbol}=")));
     }
     arithmetic_public(instance, left, right, symbol, opcode)
 }
