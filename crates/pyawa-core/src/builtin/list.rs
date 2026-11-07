@@ -237,6 +237,18 @@ pub unsafe fn list_getattr(
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
         "append" => list_append_native,
+        // **`list` 的 dunder／`copy` 面**（round 106）：官方 `list_tests`／`seq_tests` 大量直接调用
+        // `u.__getitem__`／`u.__setitem__`／`u.__delitem__`／`u.copy()`／`u.__iadd__` 一族 ✓ ——
+        // 先前这些名字在实例上**取不到** ✗（`AttributeError: 'list' object has no attribute ...`）。
+        "__getitem__" => list_dunder_getitem,
+        "__setitem__" => list_dunder_setitem,
+        "__delitem__" => list_dunder_delitem,
+        "__iter__" => list_dunder_iter,
+        "__reversed__" => list_dunder_reversed,
+        "__add__" => list_dunder_add,
+        "__iadd__" => list_dunder_iadd,
+        "__imul__" => list_dunder_imul,
+        "copy" => list_copy_native,
         "__contains__" => container_contains_native,
         "__len__" => crate::builtin_objects::container_len_native,
         "extend" => list_extend_native,
@@ -270,6 +282,174 @@ pub unsafe fn list_getattr(
     ));
     Some(bound.into_raw().cast::<Header>())
 }
+/// `list.__getitem__(self, key)`（round 106）：整数／切片都走**一处真相**的 `subscript_get` ✓。
+fn list_dunder_getitem(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__getitem__() takes exactly one argument (0 given)",
+        ));
+    };
+    crate::executor::subscript::subscript_get(instance, list, key, 0)
+}
+
+/// `list.__setitem__(self, key, value)`。
+fn list_dunder_setitem(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let (Some(key), Some(value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__setitem__() takes exactly 2 arguments",
+        ));
+    };
+    crate::executor::subscript::subscript_set(instance, list, key, value, 0)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `list.__delitem__(self, key)`。
+fn list_dunder_delitem(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__delitem__() takes exactly one argument (0 given)",
+        ));
+    };
+    crate::executor::subscript::subscript_del(instance, list, key, 0)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `list.__iter__(self)`：交现成的迭代器 ✓。
+fn list_dunder_iter(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    instance.iter_object(list)
+}
+
+/// `list.__reversed__(self)`：**新列表**（反向快照 ✓；本层没有 lazy reverseiterator）。
+fn list_dunder_reversed(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let mut items: Vec<NonNull<Header>> = instance
+        .list_items(list)
+        .unwrap_or_default()
+        .into_iter()
+        // **借用 → 新引用**（`new_list` 吃所有权 ✓；round 106 修 ✗）。
+        .map(|item| instance.retain(item))
+        .collect();
+    items.reverse();
+    // **交迭代器**（参照的 `list_reverseiterator` 语义 ✓）：`reversed(seq)` 会直接把 `__reversed__`
+    // 的返回值当迭代器用（不再 `iter()` 一遍 ✓）⇒ 交列表会变成"状态 5：不是迭代器" ✗。
+    let snapshot = instance.new_list(items);
+    let iterator = instance.iter_object(snapshot);
+    instance.release(snapshot);
+    iterator
+}
+
+/// `list.__add__(self, other)`：与 `+` 同一处（`concat_public` ✓）。
+fn list_dunder_add(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(other) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__add__() takes exactly one argument (0 given)",
+        ));
+    };
+    crate::executor::iter::concat_public(instance, list, other, 0)
+}
+
+/// `list.__iadd__(self, other)`：**就地**扩展 ✓（保持对象身份；官方 `list_tests.test_iadd` ✓）。
+fn list_dunder_iadd(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(other) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__iadd__() takes exactly one argument (0 given)",
+        ));
+    };
+    let Some(items) = instance.list_items(other) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "can only concatenate list (not \"other\") to list",
+        ));
+    };
+    for item in items {
+        // SAFETY: 元素由另一列表持有，存活；本列表要自己那份。
+        unsafe { instance.incref_object(item.as_ptr()) };
+        instance.list_append(list, item);
+    }
+    Ok(instance.retain(list))
+}
+
+/// `list.__imul__(self, count)`：走 `*=` 的就地重复（一处真相 ✓）。
+fn list_dunder_imul(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(count) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__imul__() takes exactly one argument (0 given)",
+        ));
+    };
+    crate::executor::protocol::inplace_arithmetic(instance, list, count, "*", 0)
+}
+
+/// `list.copy()`：**浅拷贝** ✓（官方 `list_tests.test_copy` ✓）。
+fn list_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let items: Vec<NonNull<Header>> = instance
+        .list_items(list)
+        .unwrap_or_default()
+        .into_iter()
+        // **借用 → 新引用**（`new_list` 吃所有权 ✓；round 106 修 ✗）。
+        .map(|item| instance.retain(item))
+        .collect();
+    Ok(instance.new_list(items))
+}
+
 pub(crate) fn list_append_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

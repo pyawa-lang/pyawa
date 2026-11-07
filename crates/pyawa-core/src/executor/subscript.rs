@@ -4,7 +4,7 @@
 //! * 仍在原处的被引用项：`builtin_type`、`exception_type`、`index_payload`、`is_type_object`、`new_exception_with_args`、`normalize_index`、`push`、`raise`、`raise_builtin`、`release`、`sequence_items`、`slice_bounds`、`slice_positions`、`values_equal` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, exception_type, index_payload, new_exception_with_args, normalize_index, raise, raise_builtin, release, scalar_index, sequence_items, slice_bounds, slice_positions};
+use crate::executor::{builtin_type, exception_type, new_exception_with_args, normalize_index, raise, raise_builtin, release, scalar_index, sequence_items, slice_bounds, slice_positions};
 use crate::builtin_objects::{BytearrayObject, BytesObject};
 use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
@@ -344,7 +344,10 @@ pub(crate) fn subscript_set(
             return Ok(());
         }
 
-        let index = match index_payload(instance, key, opcode) {
+        // **下标走完整 `__index__` 协议**（round 106）：参照 `lst[obj]` 对实现了 `__index__`
+        // 的对象也成立 ✓ —— 先前 `index_payload` 只认整数 ✗ ⇒ `TypeError`／"未接线" ✗
+        //（官方 `test_list` 的 `_index` 一类用例 ✓）。
+        let index = match scalar_index(instance, key, "list") {
             Ok(index) => index,
             Err(error) => {
                 release(instance, value);
@@ -509,7 +512,7 @@ pub fn subscript_del(
             }
             return Ok(());
         }
-        let index = index_payload(instance, key, opcode)?;
+        let index = scalar_index(instance, key, "list")?;
         let length = object.len();
         let position = match normalize_index(index, length) {
             Some(position) => position,
@@ -572,7 +575,7 @@ pub fn subscript_del(
             }
             return Ok(());
         }
-        let index = index_payload(instance, key, opcode)?;
+        let index = scalar_index(instance, key, "bytearray")?;
         let position = match normalize_index(index, value.len()) {
             Some(position) => position,
             None => {

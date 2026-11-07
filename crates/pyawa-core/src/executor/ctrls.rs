@@ -24,20 +24,6 @@ pub(crate) fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Opti
     instance.int_of(raw)
 }
 
-/// **下标**载荷 → `i64`：非整数与**超出 `i64` 的整数**分开报（"未接线"的理由不同）。
-pub(crate) fn index_payload(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
-    let Some(value) = integer_payload(instance, raw) else {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（字符串／浮点键与 `__index__` 尚未接线；切片走专门路径）",
-        });
-    };
-    value.to_i64().ok_or(ExecError::Unsupported {
-        opcode,
-        what: "下标超出 i64 尚未接线（`TS-45` 只点名四则／整除／取模／幂）",
-    })
-}
-
 /// 数值载荷（`int`／`bool`／`float`）。
 pub(crate) fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Option<f64> {
     if let Some(value) = integer_payload(instance, raw) {
@@ -328,10 +314,14 @@ pub(crate) fn sequence_repeat(
     let is_text_right = right_type == instance.singletons().str_type();
     let is_bytes_left = Some(left_type) == instance.type_named("bytes");
     let is_bytes_right = Some(right_type) == instance.type_named("bytes");
-    let is_list_left = left_type == builtin_type(instance, "list");
-    let is_list_right = right_type == builtin_type(instance, "list");
-    let is_tuple_left = left_type == builtin_type(instance, "tuple");
-    let is_tuple_right = right_type == builtin_type(instance, "tuple");
+    // **子类也算**（round 106）：参照 `list.__mul__`／`tuple.__mul__` 对子类同样成立 ✓
+    //（官方 `test_list.test_mul` 的 `class subclass(list)` ✓）；结果给**普通** list／tuple ✓。
+    let list_base = builtin_type(instance, "list");
+    let tuple_base = builtin_type(instance, "tuple");
+    let is_list_left = instance.is_subtype(left_type, list_base);
+    let is_list_right = instance.is_subtype(right_type, list_base);
+    let is_tuple_left = instance.is_subtype(left_type, tuple_base);
+    let is_tuple_right = instance.is_subtype(right_type, tuple_base);
     let sequence_left = is_text_left || is_bytes_left || is_list_left || is_tuple_left;
     let sequence_right = is_text_right || is_bytes_right || is_list_right || is_tuple_right;
     let (sequence, count_object) = if sequence_left && !sequence_right {
@@ -379,7 +369,7 @@ pub(crate) fn sequence_repeat(
         }
         return Ok(Some(instance.new_bytes(&repeated)));
     }
-    let items: Vec<NonNull<Header>> = if sequence_type == builtin_type(instance, "list") {
+    let items: Vec<NonNull<Header>> = if instance.is_subtype(sequence_type, list_base) {
         // SAFETY: 同上。
         let object = unsafe { &*sequence.as_ptr().cast::<ListObject>() };
         (0..object.len()).filter_map(|index| object.item(index)).collect()
@@ -399,7 +389,7 @@ pub(crate) fn sequence_repeat(
             repeated.push(*item);
         }
     }
-    if sequence_type == builtin_type(instance, "list") {
+    if instance.is_subtype(sequence_type, list_base) {
         Ok(Some(instance.new_list(repeated)))
     } else {
         Ok(Some(instance.new_tuple(repeated)))

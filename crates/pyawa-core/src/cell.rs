@@ -31,12 +31,34 @@ impl CellObject {
 
     /// 取出裸引用（**借用**，不转移所有权）。
     pub fn value(&self) -> Option<NonNull<Header>> {
-        *self.value.borrow()
+        match self.value.try_borrow() {
+            Ok(value) => *value,
+            Err(_) => {
+                if std::env::var_os("PYAWA_CELL_DEBUG").is_some() {
+                    let header = self as *const Self as *const Header;
+                    // SAFETY: 诊断路径；调用方保证 cell 存活（若已释放，读类型名可能已不可信 ✓）。
+                    let kind = unsafe { (*header).ty().as_ref() }.name().to_owned();
+                    eprintln!(
+                        "[cell] value() 借用冲突 addr={:p} kind={kind}\n{}",
+                        self as *const Self,
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+                *self.value.borrow()
+            }
+        }
     }
 
     /// 写入：返回被顶下来的旧引用，**调用方负责释放**（用 [`Instance::release_object`]）。
     pub fn replace(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
-        core::mem::replace(&mut *self.value.borrow_mut(), value)
+        if std::env::var_os("PYAWA_CELL_DEBUG").is_some() {
+            eprintln!("[cell] replace 开始 addr={:p}", self as *const Self);
+        }
+        let outcome = core::mem::replace(&mut *self.value.borrow_mut(), value);
+        if std::env::var_os("PYAWA_CELL_DEBUG").is_some() {
+            eprintln!("[cell] replace 结束 addr={:p}", self as *const Self);
+        }
+        outcome
     }
 }
 
@@ -53,7 +75,13 @@ unsafe fn cell_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
 unsafe fn cell_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let cell = unsafe { &*ptr.cast::<CellObject>() };
-    if let Some(value) = cell.value.borrow_mut().take() {
+    // **先把借用放掉再减引用**（round 106 真 bug 修 ✗）：`if let Some(value) = cell.value.borrow_mut().take()`
+    // 的 `RefMut` 临时**活到整个 `if let` 体结束** ✗ ⇒ 体内 `release_object` 若触发
+    // **GC／traverse**（`cell_traverse` 会 `cell.value()`）⇒ 同一 `RefCell` **可变借用未放** ⇒
+    // `already mutably borrowed` **panic** ✗（官方 `test_listcomps.test_cell_inner_free_outer`
+    // 实测 ✓）。改成：括号里先 `take` 掉借用，再释放 ✓。
+    let taken = { cell.value.borrow_mut().take() };
+    if let Some(value) = taken {
         // SAFETY: 该引用由本 cell 持有（新引用语义），这里交还一份。
         unsafe { instance.release_object(value.as_ptr()) };
     }

@@ -129,7 +129,26 @@ impl Emitter {
                     //   （`yield a, b` ⇒ 一条融合 ＋ `BUILD_TUPLE 2` ✓）。只认 `Expression::Name`
                     //   ⇒ 不误融合（`a.b, c` 的首条是 `LOAD_FAST_BORROW a` ＋ `LOAD_ATTR` ✗ ✓）。
                     let mut start = 0;
-                    if items.len() >= 2 {
+                    // **融合读取的那份值先算进栈**（round 106 真 bug 修 ✗）：推导式里
+                    // `STORE_FAST_LOAD_FAST (j, i)` 已经把 **i** 压回栈顶 ⇒ 元组 `(i, j)` 的字面量
+                    // 快路若再发 `LOAD_FAST_BORROW_LOAD_FAST_BORROW (i, j)` ✗ ⇒ 栈上多一个 **i**
+                    //（`BUILD_TUPLE 2` 把 `i, j` 吃掉后余下的 **i** 顶到外层）⇒ `SET_ADD 3` 取到的
+                    // 容器位置错 ⇒ "容器位置／类型不符"（官方 `test_setcomps` 的
+                    // `{(i,j) for i in … for j in …}` ✓ 实测栈顶往下 `["int", …]` ✓）。
+                    if let Some(pending) = self.pending_fused_load.take() {
+                        let first_is_pending = match &items[0] {
+                            Expression::Name(name, _) => {
+                                self.plain_local_slot(name) == Some(pending)
+                            }
+                            _ => false,
+                        };
+                        if first_is_pending {
+                            start = 1;
+                        } else {
+                            self.pending_fused_load = Some(pending);
+                        }
+                    }
+                    if start == 0 && items.len() >= 2 {
                         let slot_of = |item: &Expression| match item {
                             Expression::Name(name, _) => self.plain_local_slot(name),
                             _ => None,
