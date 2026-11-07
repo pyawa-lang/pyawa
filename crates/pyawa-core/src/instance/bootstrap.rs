@@ -1551,6 +1551,18 @@ impl Instance {
             ));
             self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
         }
+        // **dict 的类级方法面**（round 118）：`dict.items(d)` 一类未绑定调用 ✓
+        //（`test_container_iterator` 的 `dict.items(container)` ✓）；适配器把 args[0] 挪成接收者 ✓。
+        if let Some(dict_type) = self.type_named("dict") {
+            for (name, handler) in crate::builtin::dict::CLASS_LEVEL_METHODS {
+                let native = self.alloc(BuiltinFunctionObject::new(
+                    builtin_function_type,
+                    name,
+                    Cell::new(*handler),
+                ));
+                self.set_type_attribute(dict_type, name, native.into_raw().cast::<Header>());
+            }
+        }
 
         // **`type.__annotations__` getset 描述符** ✓（task-20 ✓）：`annotationlib:1141` 读的就是
         // `type.__dict__["__annotations__"].__get__` ✓（类对象与模块对象两条路 ✓）。

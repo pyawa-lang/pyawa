@@ -209,7 +209,10 @@ impl Instance {
     /// stdlib 侧 `#![forbid(unsafe_code)]`（`CX-4` 的静态扫描范围 ✓）⇒ 这类"进对象"的出口
     /// 留在核心 ✓。
     pub fn text_of(&self, object: NonNull<Header>) -> Option<&str> {
-        if self.type_of(object) != self.singletons().str_type() {
+        // **`str` 的子类沿用 str 布局** ✓（round 118）：参照里 `getattr(obj, StrSub('x'))`／
+        // `d[StrSub('k')]` 都按字符串处理 ✓ —— 先前只认**精确** `str` ✗ ⇒
+        // `TypeError: attribute name must be string` ✗（`test_dict.test_instance_dict_getattr_str_subclass` ✓）。
+        if !self.is_str_object(object) {
             return None;
         }
         // SAFETY: 类型身份刚确认是 `str` ✓。

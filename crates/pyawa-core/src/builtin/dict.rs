@@ -370,9 +370,13 @@ pub(crate) fn dict_pop_native(
 pub(crate) fn dict_copy_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    if !args.is_empty() || !kwargs.is_empty() {
+        // 参照：`d.copy(1)` ⇒ TypeError ✓（`test_copy` 的 assertRaises ✓）。
+        return Err(instance.raise_builtin_error("TypeError", "copy() takes no arguments"));
+    }
     let mapping = bound_dict(instance, bound)?;
     let copy = instance.new_dict();
     for (key, value) in instance.dict_entries(mapping).unwrap_or_default() {
@@ -386,9 +390,13 @@ pub(crate) fn dict_copy_native(
 pub(crate) fn dict_clear_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    if !args.is_empty() || !kwargs.is_empty() {
+        // 参照：`d.clear(None)` ⇒ TypeError ✓（`test_clear` 的 assertRaises ✓）。
+        return Err(instance.raise_builtin_error("TypeError", "clear() takes no arguments"));
+    }
     let mapping = bound_dict(instance, bound)?;
     loop {
         // SAFETY: 绑定的是本实例的 dict。
@@ -407,9 +415,12 @@ pub(crate) fn dict_clear_native(
 pub(crate) fn dict_popitem_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    if !args.is_empty() || !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "popitem() takes no arguments"));
+    }
     let mapping = bound_dict(instance, bound)?;
     let length = instance.dict_entries(mapping).map(|e| e.len()).unwrap_or(0);
     if length == 0 {
@@ -878,3 +889,72 @@ fn mapping_keys(
     unsafe { instance.release_object(iterator.as_ptr()) };
     Ok(Some(keys))
 }
+
+/// **`d.__ior__(other)`**（round 118）：`|=` 的**属性面**（`test_merge_operator` 的
+/// `a.__ior__(None)`／`a.__ior__(())`／`a.__ior__("BAD")` ✓）；原地并入并交回自身 ✓。
+pub(crate) fn dict_ior_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let Some(mapping) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "__ior__ expected 2 arguments"));
+    };
+    let Some(other) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "__ior__ expected 2 arguments"));
+    };
+    if instance.dict_entries(other).is_some() {
+        let result = dict_update_native(instance, Some(mapping), &[other], kwargs)?;
+        instance.release(result);
+    } else if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "__ior__ takes no keyword arguments"));
+    } else {
+        // 非 dict ⇒ 按"键值对可迭代"并入 ✓（`a.__ior__("BAD")` ⇒ ValueError ✓）。
+        dict_update_sequence(instance, mapping, other)?;
+    }
+    Ok(instance.retain(mapping))
+}
+
+/// **类级访问的适配器**（round 118）：`dict.items(d)` 一类**未绑定**调用要能工作 ✓ ——
+/// 参照的 dict 方法都是 `METH` 形态，可以从类型上取 ✓（`test_container_iterator` 的
+/// `dict.items(container)` ✓）。适配器只把"未绑定形态的 args[0]"挪成接收者，逻辑全在原实现 ✓。
+macro_rules! class_level_dict_method {
+    ($name:ident, $inner:path) => {
+        fn $name(
+            instance: &Instance,
+            bound: Option<NonNull<Header>>,
+            args: &[NonNull<Header>],
+            kwargs: &[(NonNull<Header>, NonNull<Header>)],
+        ) -> Result<NonNull<Header>, crate::ExecError> {
+            let (receiver, rest) = container_receiver(bound, args);
+            $inner(instance, receiver, rest, kwargs)
+        }
+    };
+}
+class_level_dict_method!(class_get_native, dict_get_native);
+class_level_dict_method!(class_keys_native, dict_keys_native);
+class_level_dict_method!(class_values_native, dict_values_native);
+class_level_dict_method!(class_items_native, dict_items_native);
+class_level_dict_method!(class_clear_native, dict_clear_native);
+class_level_dict_method!(class_copy_native, dict_copy_native);
+class_level_dict_method!(class_pop_native, dict_pop_native);
+class_level_dict_method!(class_popitem_native, dict_popitem_native);
+class_level_dict_method!(class_setdefault_native, dict_setdefault_native);
+class_level_dict_method!(class_update_native, dict_update_native);
+
+/// 类级注册表（名字 → 适配器）：给 `instance/bootstrap.rs` 挂 dict 类型命名空间用 ✓。
+pub(crate) const CLASS_LEVEL_METHODS: &[(&str, crate::NativeFn)] = &[
+    ("get", class_get_native as crate::NativeFn),
+    ("keys", class_keys_native as crate::NativeFn),
+    ("values", class_values_native as crate::NativeFn),
+    ("items", class_items_native as crate::NativeFn),
+    ("clear", class_clear_native as crate::NativeFn),
+    ("copy", class_copy_native as crate::NativeFn),
+    ("pop", class_pop_native as crate::NativeFn),
+    ("popitem", class_popitem_native as crate::NativeFn),
+    ("setdefault", class_setdefault_native as crate::NativeFn),
+    ("update", class_update_native as crate::NativeFn),
+    ("__ior__", dict_ior_native as crate::NativeFn),
+];
