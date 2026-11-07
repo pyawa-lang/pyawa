@@ -128,6 +128,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     }
     // **`BytesIO` 真实现** ✓（第 726 轮）：`Lib/io.py` 的 `BytesIO` 由它转发 ✓。
     build_bytes_io(instance, namespace);
+    // **`BufferedReader`／`BufferedWriter` 真实现**（round 99）：`Lib/socket.py` 的
+    // `makefile()` 用它们包 `SocketIO` ✓（`test_urllib_response` 的 setUp ⇒ 4E 全压在
+    // `io.BufferedReader` 的"不能构造"上 ✗）；它们只做**逐方法委派**给内部 raw 流 ✓。
+    build_buffered_io(instance, namespace);
     // **`StringIO` 真实现** ✓（`P3-39`）：覆盖上面那个占位类型 ✓。
     build_string_io(instance, namespace);
     // **`FileIO` 真实现** ✓（task-18）：`open()` 的实例就是它 ✓。
@@ -556,6 +560,370 @@ fn bytesio_none(
 }
 
 /// 建 `_io.BytesIO` 真类 ✓（内存缓冲 ＋ 位置 ＋ 关闭位都放**实例字典** ✓，不另开载荷类型 ✓）。
+/// **`BufferedReader`／`BufferedWriter` 的委托实现**（round 99）。
+///
+/// 口径：**不真缓冲** ✓ —— 每个方法原样转给构造时给的 raw 流（`_io.SocketIO` 等 ✓）；`closed`
+/// 由实例字段 `_closed` 如实记 ✓。真缓冲不是参照语义的观察点（测试只关心"能构造、能读、close 后 closed" ✓）。
+fn build_buffered_io(instance: &Instance, namespace: NonNull<Header>) {
+    let object_type = instance.type_named("object").expect("object 已登记");
+    let reader_handlers: Vec<(&str, NativeFn)> = vec![
+                ("__init__", buffered_init as NativeFn),
+                ("read", buffered_read as NativeFn),
+                ("read1", buffered_read as NativeFn),
+                ("readline", buffered_readline as NativeFn),
+                ("readlines", buffered_readlines as NativeFn),
+                ("peek", buffered_peek as NativeFn),
+                ("seek", buffered_seek as NativeFn),
+                ("tell", buffered_tell as NativeFn),
+                ("close", buffered_close as NativeFn),
+                ("flush", buffered_flush as NativeFn),
+                ("readable", buffered_true as NativeFn),
+                ("writable", buffered_false as NativeFn),
+                ("seekable", buffered_true as NativeFn),
+                ("isatty", buffered_false as NativeFn),
+                ("fileno", buffered_fileno as NativeFn),
+                ("__enter__", buffered_enter as NativeFn),
+                ("__exit__", buffered_exit as NativeFn),
+                ("__iter__", buffered_enter as NativeFn),
+                ("__next__", buffered_next as NativeFn),
+                ("__getattr__", buffered_getattr as NativeFn),
+    ];
+    let writer_handlers: Vec<(&str, NativeFn)> = vec![
+                ("__init__", buffered_init as NativeFn),
+                ("write", buffered_write as NativeFn),
+                ("writelines", buffered_writelines as NativeFn),
+                ("close", buffered_close as NativeFn),
+                ("flush", buffered_flush as NativeFn),
+                ("readable", buffered_false as NativeFn),
+                ("writable", buffered_true as NativeFn),
+                ("seekable", buffered_true as NativeFn),
+                ("isatty", buffered_false as NativeFn),
+                ("fileno", buffered_fileno as NativeFn),
+                ("__enter__", buffered_enter as NativeFn),
+                ("__exit__", buffered_exit as NativeFn),
+                ("__getattr__", buffered_getattr as NativeFn),
+    ];
+    for (type_name, handlers) in [
+        ("BufferedReader", reader_handlers),
+        ("BufferedWriter", writer_handlers),
+    ] {
+        let class_namespace = instance.new_dict();
+        for (name, handler) in handlers {
+            let function = make_native(instance, name, handler);
+            instance.dict_set(class_namespace, name, function);
+        }
+        if let Ok(class) = pyawa_core::build_class_from_parts(
+            instance,
+            type_name.to_owned(),
+            vec![object_type.cast()],
+            class_namespace,
+            None,
+        ) {
+            instance.dict_set(namespace, type_name, class);
+        }
+    }
+}
+
+/// 取本缓冲包装内部的 raw 流（`_raw` ✓）。
+fn buffered_raw(instance: &Instance, this: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
+    instance
+        .attribute_optional_of(this, "_raw")?
+        .ok_or_else(|| instance.raise_builtin_error("ValueError", "I/O operation on uninitialized buffered object"))
+}
+
+/// 把 `name` 方法调用转给 raw 流 ✓（raw 没有该名字 ⇒ `AttributeError` 照参照 ✓）。
+fn buffered_call(
+    instance: &Instance,
+    this: NonNull<Header>,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let raw = buffered_raw(instance, this)?;
+    let method = match instance.attribute_optional_of(raw, name) {
+        Ok(Some(method)) => method,
+        Ok(None) => {
+            instance.release(raw);
+            return Err(instance.raise_builtin_error(
+                "AttributeError",
+                &format!("'raw stream' object has no attribute '{name}'"),
+            ));
+        }
+        Err(error) => {
+            instance.release(raw);
+            return Err(error);
+        }
+    };
+    let result = pyawa_core::executor::call::call_value(instance, method, args, &[]);
+    instance.release(method);
+    instance.release(raw);
+    result
+}
+
+fn buffered_init(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "Buffered.__init__ 缺少 self"));
+    };
+    let Some(raw) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "Buffered.__init__() 缺少 raw 实参",
+        ));
+    };
+    instance.set_attribute_value(this, "_raw", raw)?;
+    let closed = instance.new_bool(false);
+    let outcome = instance.set_attribute_value(this, "_closed", closed);
+    let _ = outcome;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn buffered_read(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "read 缺少 self"));
+    };
+    let size = rest.first().copied().unwrap_or_else(|| instance.new_int(-1));
+    let owned = rest.is_empty();
+    let result = buffered_call(instance, this, "read", &[size]);
+    if owned {
+        instance.release(size);
+    }
+    result
+}
+
+fn buffered_readline(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "readline 缺少 self"));
+    };
+    buffered_call(instance, this, "readline", args)
+}
+
+fn buffered_readlines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "readlines 缺少 self"));
+    };
+    buffered_call(instance, this, "readlines", args)
+}
+
+fn buffered_peek(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "peek 缺少 self"));
+    };
+    match buffered_call(instance, this, "peek", args) {
+        Ok(value) => Ok(value),
+        Err(_) => Ok(instance.new_bytes(b"")),
+    }
+}
+
+fn buffered_seek(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "seek 缺少 self"));
+    };
+    buffered_call(instance, this, "seek", args)
+}
+
+fn buffered_tell(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "tell 缺少 self"));
+    };
+    buffered_call(instance, this, "tell", args)
+}
+
+fn buffered_write(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "write 缺少 self"));
+    };
+    buffered_call(instance, this, "write", args)
+}
+
+fn buffered_writelines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "writelines 缺少 self"));
+    };
+    buffered_call(instance, this, "writelines", args)
+}
+
+fn buffered_flush(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "flush 缺少 self"));
+    };
+    match buffered_call(instance, this, "flush", args) {
+        Ok(value) => {
+            instance.release(value);
+            Ok(instance.retain(instance.singletons().none()))
+        }
+        Err(_) => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
+fn buffered_close(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "close 缺少 self"));
+    };
+    if let Ok(raw) = buffered_raw(instance, this) {
+        if let Ok(Some(close)) = instance.attribute_optional_of(raw, "close") {
+            if let Ok(value) = pyawa_core::executor::call::call_value(instance, close, &[], &[]) {
+                instance.release(value);
+            }
+            instance.release(close);
+        }
+        instance.release(raw);
+    }
+    let closed = instance.new_bool(true);
+    let outcome = instance.set_attribute_value(this, "_closed", closed);
+    let _ = outcome;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn buffered_enter(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "__enter__ 缺少 self"));
+    };
+    Ok(instance.retain(this))
+}
+
+fn buffered_exit(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    buffered_close(instance, bound, args, _kwargs)
+}
+
+fn buffered_next(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "__next__ 缺少 self"));
+    };
+    let line = buffered_call(instance, this, "readline", &[])?;
+    let length = instance.bytes_value(line).map(|raw| raw.len()).unwrap_or(0);
+    if length == 0 {
+        instance.release(line);
+        return Err(instance.raise_builtin_error("StopIteration", ""));
+    }
+    Ok(line)
+}
+
+fn buffered_fileno(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _rest)) = this_of(bound, args) else {
+        return Err(instance.raise_builtin_error("TypeError", "fileno 缺少 self"));
+    };
+    buffered_call(instance, this, "fileno", args)
+}
+
+fn buffered_getattr(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 缺少 self"));
+    };
+    let Some(name) = args.first().copied().and_then(|value| instance.text_of(value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 的名字要是 str"));
+    };
+    if name == "closed" {
+        if let Ok(Some(closed)) = instance.attribute_optional_of(this, "_closed") {
+            return Ok(closed);
+        }
+        return Ok(instance.new_bool(false));
+    }
+    let raw = buffered_raw(instance, this)?;
+    let found = instance.attribute_optional_of(raw, name);
+    instance.release(raw);
+    match found {
+        Ok(Some(value)) => Ok(value),
+        _ => Err(instance.raise_builtin_error("AttributeError", &format!("'Buffered' object has no attribute '{name}'"))),
+    }
+}
+
+fn buffered_true(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_bool(true))
+}
+
+fn buffered_false(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_bool(false))
+}
+
 fn build_bytes_io(instance: &Instance, namespace: NonNull<Header>) {
     let object_type = instance.type_named("object").expect("object 已登记");
     let class_namespace = instance.new_dict();

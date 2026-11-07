@@ -2025,12 +2025,54 @@ fn pow_native(
             "pow expected at most 3 arguments",
         ));
     }
+    // **浮点／混合面＋负指数→浮点**（round 99）：参照 `pow(2,-1)==0.5` ✓、浮点走 `f64::powf`
+    // （C `pow` 的边界语义 ✓ —— 官方 `test_pow` 的 `test_powfloat`／`test_bug705231` ✓）。
+    // 先前一律报"只接整数／负指数未接线" ✗。
+    // 数值统一取 `f64`：**浮点**走 `float_value`、**整数**走 `int_value` 的 `as f64` ✓
+    // （`pow(2.0, 0)` 的指数是**整数 0** ✓ —— 只看浮点会漏掉这类混合形态 ✗）。
+    let as_float = |value: NonNull<Header>| {
+        instance
+            .float_value(value)
+            .or_else(|| instance.int_value(value).map(|number| number as f64))
+    };
+    let float_base = as_float(args[0]);
+    let float_exponent = as_float(args[1]);
+    let is_float_input = |value: NonNull<Header>| {
+        instance.type_name(instance.type_of(value)) == "float"
+    };
+    let wants_float = float_base.is_some()
+        && float_exponent.is_some()
+        && (is_float_input(args[0]) || is_float_input(args[1]));
+    // **负指数的整数输入**（两参）⇒ 参照给浮点结果 ✓（`2**-1 == 0.5` ✓）。
+    let integer_negative = args.len() == 2
+        && instance.int_of(args[0]).is_some()
+        && instance.int_of(args[1]).map(|exponent| exponent.to_i64().unwrap_or(0) < 0).unwrap_or(false);
+    if (wants_float || integer_negative) && args.len() == 2 {
+        let base = float_base
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 的底数无法转浮点"))?;
+        let exponent = float_exponent
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 的指数无法转浮点"))?;
+        let result = base.powf(exponent);
+        if base == 0.0 && exponent < 0.0 {
+            return Err(instance.raise_builtin_error(
+                "ZeroDivisionError",
+                "0.0 cannot be raised to a negative power",
+            ));
+        }
+        return Ok(instance.new_float(result));
+    }
+    if args.len() == 3 && (wants_float || is_float_input(args[0]) || is_float_input(args[1])) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "pow() 3rd argument not allowed unless all arguments are integers",
+        ));
+    }
     let base = instance
         .int_of(args[0])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 只接整数或浮点"))?;
     let exponent = instance
         .int_of(args[1])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 只接整数或浮点"))?;
     let base = base.to_bigint();
     let exponent = exponent.to_bigint();
     // **两参**：任意精度快速幂 ✓（第 406 轮：先前是 `i64` 的 `wrapping_mul` 循环 ✗ ⇒
