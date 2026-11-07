@@ -193,7 +193,37 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                         }
                                     }
                                 }
-                                // 两条回退都没有 ⇒ 照旧报 `ImportError` ✓。
+                                // **包上缺属性 ⇒ 按 `from pkg import 子模块` 装载**（round 101）：
+                                // 参照的 `_handle_fromlist` 在属性缺失时会 `import pkg.子模块` ✓ ——
+                                // 先前只查已有属性／模块表 ✗ ⇒ `from test import test_pdb`（官方
+                                // `test_pdb.load_tests` 第一句 ✓）报 `cannot import name 'test_pdb'
+                                // from 'test'` ✗。判据：模块有 `__path__`（包 ✓）。
+                                let is_package = instance
+                                    .attribute_optional_of(module, "__path__")
+                                    .ok()
+                                    .flatten()
+                                    .is_some();
+                                if is_package {
+                                    if let Some(modules) = instance.modules() {
+                                        if let Some(module_name) =
+                                            module_text(instance, module, "__name__")
+                                        {
+                                            let full = format!("{module_name}.{name}");
+                                            if let Ok(loaded) = crate::executor::import::load_module(
+                                                instance,
+                                                modules,
+                                                &full,
+                                                opcode_number,
+                                            ) {
+                                                // `loaded` 是模块表持着的**借用** ⇒ `push` 会留一份 ✓。
+                                                frame.get().push(module)?;
+                                                push(instance, frame.get(), loaded)?;
+                                                return Ok(Step::Continue);
+                                            }
+                                        }
+                                    }
+                                }
+                                // 三条回退都没有 ⇒ 照旧报 `ImportError` ✓。
                                 // 模块名：从模块命名空间里借读 `__name__` ✓（借用 ⇒ 不还引用 ✓）
                                 let module_name = crate::executor::module_text(instance, module, "__name__")
                                     .unwrap_or_else(|| "?".to_owned());

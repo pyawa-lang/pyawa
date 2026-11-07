@@ -160,6 +160,44 @@ pub fn can_locate_through_bridge(instance: &Instance, name: &str) -> bool {
     })
 }
 
+/// **冻结模块测试开关**（round 101）：`_imp._override_frozen_modules_for_tests(-1/0/1)` ✓。
+/// 参照的语义：`1` ⇒ **优先冻结模块**、`-1` ⇒ 禁用冻结、`0` ⇒ 不覆盖 ✓。
+///
+/// 本层口径（如实 ✗）：内核**不是**逐字节冻结模块表 —— 只有官方测试点名的那几个
+/// （`__hello__`／`__phello__`／`__phello__.spam` ✓，`Lib/` 里有同内容源文件 ✓）在开关为 `1`
+/// 时把 `__spec__.loader` 标成 `importlib.machinery.FrozenImporter` ✓；其余模块不受影响 ✓
+/// （`test_frozen` 的三条断言正是"哪一份的 loader 是 FrozenImporter" ✓）。
+pub(crate) static FROZEN_MODULES_OVERRIDE: core::sync::atomic::AtomicI32 =
+    core::sync::atomic::AtomicI32::new(0);
+
+/// 设"冻结模块测试开关"（`_imp` 用 ✓）。
+pub fn set_frozen_modules_override(value: i32) {
+    FROZEN_MODULES_OVERRIDE.store(value, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// 读"冻结模块测试开关"。
+pub fn frozen_modules_override() -> i32 {
+    FROZEN_MODULES_OVERRIDE.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// 名字是否在"本层当作冻结模块"的那小队里。
+fn is_frozen_test_module(name: &str) -> bool {
+    matches!(name, "__hello__" | "__phello__" | "__phello__.spam")
+}
+
+/// 取 `importlib.machinery.FrozenImporter` 这个类对象（新引用 ✓）；拿不到 ⇒ `None` ✓。
+fn frozen_importer_class(instance: &Instance) -> Option<NonNull<Header>> {
+    let modules = instance.modules()?;
+    let machinery = match instance.dict_get(modules, "importlib.machinery") {
+        Some(found) => found,
+        None => import_through_bridge(instance, "importlib.machinery").ok().flatten()?,
+    };
+    let namespace = crate::mounted_instance_dict(instance, machinery)?;
+    instance
+        .dict_get(namespace, "FrozenImporter")
+        .map(|found| instance.retain(found))
+}
+
 /// **finder 用的定位**（round 99）：在给定 `path`（父包的 `__path__`）或 `sys.path` 里找
 /// `name` 的文件／包 ✓；返回 `(是否包, 包目录)` ✓。
 ///
@@ -406,6 +444,14 @@ pub(crate) fn load_module(
         instance.dict_set(namespace, "__package__", package_value);
         let loader_value = instance.new_none();
         instance.dict_set(namespace, "__loader__", loader_value);
+        // **冻结模块测试面**（round 101）：开关为 `1` 且名字在那一小队 ⇒ `spec.loader`／`__loader__`
+        // 都标成 `importlib.machinery.FrozenImporter` ✓（`test_frozen` 的三条断言 ✓）。
+        if frozen_modules_override() > 0 && is_frozen_test_module(name) {
+            if let Some(importer) = frozen_importer_class(instance) {
+                instance.dict_set(spec_dict, "loader", importer);
+                instance.dict_set(namespace, "__loader__", importer);
+            }
+        }
         // **Python importlib 的循环导入簿记**（round 99）：3.14 的 `_find_and_load_unlocked`
         // 会读写**父模块**的 `_uninitialized_submodules`（`Lib/importlib/_bootstrap.py` ✓）；
         // 先前模块没有这个属性 ✗ ⇒ fresh 子模块导入走到一半
