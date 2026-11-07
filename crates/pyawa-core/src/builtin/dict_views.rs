@@ -205,8 +205,24 @@ fn view_iter_native(
     // SAFETY: 同上。
     let object = unsafe { &*view.as_ptr().cast::<DictViewObject>() };
     if object.kind() == 0 {
-        // 键：直接用字典键迭代器 ✓（活体 ✓，带变异守卫 ✓）。
-        return instance.iter_object(object.mapping());
+        // **直接用字典键迭代器**（round 123 真 bug 修 ✗）：先前走 `instance.iter_object(mapping)` ✗
+        // ⇒ 会尊重映射类型的 `__iter__` 覆写 ✗ ⇒ `dict.keys(self)` 返回的视图在
+        // `__iter__ = keys` 的 dict 子类上**自我递归** ✗（`test_dict.test_dict_copy_order` 的
+        // `CustomReversedDict` ✓）。视图的键迭代照参照就是**底层 dict 的键迭代器** ✓。
+        let Some(iterator_type) = instance.type_named("dict_keyiterator") else {
+            return Err(instance.raise_builtin_error("RuntimeError", "dict_keyiterator 不可用"));
+        };
+        // 迭代器要自己那份字典引用 ✓。
+        // SAFETY: mapping 由视图持有，存活。
+        unsafe { instance.incref_object(object.mapping().as_ptr()) };
+        return Ok(instance
+            .alloc(crate::builtin_objects::IteratorObject::new(
+                iterator_type,
+                object.mapping(),
+                Cell::new(0),
+            ))
+            .into_raw()
+            .cast::<Header>());
     }
     // **items()／values() 也交"引用字典"的真迭代器**（round 119）：先前是**快照列表**迭代器 ✗
     // ⇒ 迭代中改键**不报** `RuntimeError` ✗（`test_dict.test_mutating_iteration_delete_over_items`

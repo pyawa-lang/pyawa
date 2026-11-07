@@ -830,7 +830,33 @@ pub fn dict_init_native(
         ));
     }
     if let Some(source) = rest.first().copied() {
-        if let Some(entries) = instance.dict_entries(source) {
+        // **dict 子类按 `keys()` 协议取顺序**（round 123）：`dict(OrderedDict(...))`／
+        // `CustomReversedDict` 要沿用源的键顺序 ✓；先前只认原始 entries ✗
+        //（`test_dict.test_dict_copy_order` ✓）。精确 `dict` 仍走快路 ✓。
+        let subclass_source = Some(instance.type_of(source)) != instance.type_named("dict")
+            && Some(instance.type_of(source))
+                .zip(instance.type_named("dict"))
+                .map(|(ty, base)| instance.is_subtype(ty, base))
+                .unwrap_or(false);
+        if subclass_source {
+            let keys = crate::executor::call::call_object_method(instance, source, "keys", &[])?;
+            let Some(keys) = keys else {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "dict() 的源的 keys() 不可用",
+                ));
+            };
+            let Some(items) = instance.iterable_items(keys)? else {
+                instance.release(keys);
+                return Err(instance.raise_builtin_error("TypeError", "keys() 不可迭代"));
+            };
+            instance.release(keys);
+            for key in items {
+                let value = crate::executor::subscript::subscript_read(instance, source, key)?;
+                instance.retain(key);
+                dict_put_owned(instance, target, key, value);
+            }
+        } else if let Some(entries) = instance.dict_entries(source) {
             for (key, value) in entries {
                 // SAFETY: 键值由源字典持有；目标要自己那两份 ✓。
                 unsafe {
