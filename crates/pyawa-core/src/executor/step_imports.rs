@@ -54,6 +54,23 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                     let wants_leaf = full != top
                         && instance.type_name(instance.type_of(fromlist)) == "tuple"
                         && instance.tuple_items(fromlist).is_some_and(|items| !items.is_empty());
+                    // **`sys.modules[name] = None` 的"阻断导入"**（round 98）：参照把 None 当
+                    // **显式失败**（`ImportError: import of X halted; None in sys.modules`）✓ ——
+                    // 官方 `test.support.import_helper.import_fresh_module(..., blocked=['_elementtree'])`
+                    // 与 `Lib/xml/etree/ElementTree.py` 的 `try: from _elementtree import * except ImportError`
+                    // 就靠这一条 ✓。先前把 None 当模块交出去 ✗ ⇒ `import *` 报"没有属性字典"的状态 5 ✗
+                    //（官方 `test_xml_etree`／`test_xml_etree_c` 的 setUpModule ✓）。
+                    for candidate in [full.as_str(), top.as_str()] {
+                        if let Some(found) = instance.dict_get(modules, candidate) {
+                            if instance.type_of(found) == instance.singletons().none_type() {
+                                return Err(raise_builtin(
+                                    instance,
+                                    "ImportError",
+                                    &format!("import of {candidate} halted; None in sys.modules"),
+                                ));
+                            }
+                        }
+                    }
                     let module = match instance.dict_get(modules, &full) {
                         Some(found) => {
                             // 缓存命中：`fromlist` 空 ⇒ 交**顶层**（`sys.modules['os.path'] = …` 那种
@@ -180,6 +197,9 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                 // 模块名：从模块命名空间里借读 `__name__` ✓（借用 ⇒ 不还引用 ✓）
                                 let module_name = crate::executor::module_text(instance, module, "__name__")
                                     .unwrap_or_else(|| "?".to_owned());
+                                if crate::diag::flag("PYAWA_IMPORT_DEBUG") {
+                                    eprintln!("[import_debug] IMPORT_FROM name={name} module={module_name} site={}", instance.current_site());
+                                }
                                 let converted = raise_builtin(
                                     instance,
                                     "ImportError",

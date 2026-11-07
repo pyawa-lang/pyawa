@@ -267,6 +267,35 @@ fn ask_search_functions(
             instance.release(result);
             continue;
         }
+        // **旧式 4 元组返回**（round 98）：`search_function` 允许返回
+        // `(encode, decode, streamreader, streamwriter)`（官方 `test_charmapcodec` 的
+        // `testcodec.getregentry()` 正是这个形态 ✗ —— 先前原样返回 ⇒ `_io`／`str()` 解包失败／
+        // `LookupError` ✗）。这里包成 `CodecInfo` 形态（实例属性覆盖内核的两个委托方法 ✓）。
+        // **只包装"纯 tuple"**（round 98 修 ✗）：参照的 `codecs.CodecInfo` 本身是 **tuple 子类** ✓
+        // ⇒ 宽判 `tuple_items` 会把**正常的 `CodecInfo`**也拿进来重包 ✗（丢 `incrementalencoder`
+        // 一族 ⇒ `multibyte_codecs` 夹具红 ✓）。判据：**类型名恰为 `tuple`** ✓。
+        if instance.type_name(instance.type_of(result)) == "tuple" {
+            let items = instance.tuple_items(result).unwrap_or_default();
+            if items.len() >= 4 {
+                let query_name = instance
+                    .text_of(query)
+                    .map(|text| text.to_owned())
+                    .unwrap_or_else(|| "unknown".to_owned());
+                let info = codec_info_of(instance, &query_name)?;
+                for (attribute, index) in [
+                    ("encode", 0usize),
+                    ("decode", 1),
+                    ("streamreader", 2),
+                    ("streamwriter", 3),
+                ] {
+                    if let Some(item) = items.get(index).copied() {
+                        let _ = instance.set_attribute_value(info, attribute, item);
+                    }
+                }
+                instance.release(result);
+                return Ok(Some(info));
+            }
+        }
         return Ok(Some(result));
     }
     Ok(None)
@@ -498,24 +527,40 @@ fn charmap_build_native(
 }
 
 /// 从 `mapping`（`str` 表 或 `dict`）里取"字节 → 码点"的映射 ✓。
-fn decode_table(instance: &Instance, mapping: Option<NonNull<Header>>) -> Option<Vec<Option<char>>> {
+/// **解码表**（round 98 升级）：值可以是**整数码点**、**字符串**（1-n 映射，如
+/// `test_charmapcodec` 的 `0x78: "abc"` ✓）或 `None`（未定义 ✓）⇒ 每格存 **WTF-8 字节** ✓。
+fn decode_table(instance: &Instance, mapping: Option<NonNull<Header>>) -> Option<Vec<Option<Vec<u8>>>> {
     let mapping = mapping?;
     if let Some(text) = instance.text_value(mapping) {
-        let mut table: Vec<Option<char>> = vec![None; 256];
+        let mut table: Vec<Option<Vec<u8>>> = vec![None; 256];
         for (index, character) in text.chars().enumerate().take(256) {
-            table[index] = Some(character);
+            let mut encoded: Vec<u8> = Vec::new();
+            pyawa_core::wtf8::encode_code_point(character as u32, &mut encoded).ok()?;
+            table[index] = Some(encoded);
         }
         return Some(table);
     }
     let entries = instance.dict_entries(mapping)?;
-    let mut table: Vec<Option<char>> = vec![None; 256];
+    let mut table: Vec<Option<Vec<u8>>> = vec![None; 256];
     for (key, value) in entries {
         let Some(index) = instance.int_value(key) else { continue };
         if !(0..256).contains(&index) {
             continue;
         }
-        let Some(codepoint) = instance.int_value(value) else { continue };
-        table[index as usize] = char::from_u32(codepoint as u32);
+        if instance.type_of(value) == instance.singletons().none_type() {
+            continue;
+        }
+        if let Some(codepoint) = instance.int_value(value) {
+            if let Some(character) = char::from_u32(codepoint as u32) {
+                let mut encoded: Vec<u8> = Vec::new();
+                pyawa_core::wtf8::encode_code_point(character as u32, &mut encoded).ok()?;
+                table[index as usize] = Some(encoded);
+            }
+            continue;
+        }
+        if let Some(text) = instance.text_value(value) {
+            table[index as usize] = Some(text.as_bytes().to_vec());
+        }
     }
     Some(table)
 }
@@ -534,9 +579,9 @@ fn charmap_decode_native(
     let mut out: Vec<u8> = Vec::with_capacity(input.len());
     for (position, byte) in input.iter().enumerate() {
         let character = match &table {
-            Some(table) => table[*byte as usize],
+            Some(table) => table[*byte as usize].clone(),
             // 没有映射 ⇒ 恒等（`latin-1` 那一档 ✓）
-            None => Some(*byte as char),
+            None => Some(vec![*byte]),
         };
         let Some(character) = character else {
             match errors.as_str() {
@@ -563,24 +608,37 @@ fn charmap_decode_native(
                 other => return Err(custom_handler_error(instance, other, "charmap")),
             }
         };
-        pyawa_core::wtf8::encode_code_point(character as u32, &mut out)
-            .expect("charmap 表的码点可编码");
+        out.extend_from_slice(&character);
     }
     let value = str_from_wtf8(instance, &out);
     Ok(pair(instance, value, input.len()))
 }
 
 /// 从 `mapping`（`dict`：码点 → 字节）里取映射 ✓。
-fn encode_table(instance: &Instance, mapping: Option<NonNull<Header>>) -> Option<Vec<Option<u8>>> {
+/// **编码表**（round 98 升级）：值可以是**字节整数**、`bytes` 或 `str`（1-n 输出的反向映射 ✓）；
+/// 键是**码点整数** ✓（`test_charmapcodec` 的 `encoding_map[0x78] = b"abc"` 形态 ✓）。
+fn encode_table(instance: &Instance, mapping: Option<NonNull<Header>>) -> Option<Vec<Option<Vec<u8>>>> {
     let entries = instance.dict_entries(mapping?)?;
-    let mut table: Vec<Option<u8>> = vec![None; 0x110000];
+    let mut table: Vec<Option<Vec<u8>>> = vec![None; 0x110000];
     for (key, value) in entries {
         let Some(codepoint) = instance.int_value(key) else { continue };
-        let Some(byte) = instance.int_value(value) else { continue };
-        if !(0..0x110000).contains(&codepoint) || !(0..256).contains(&byte) {
+        if !(0..0x110000).contains(&codepoint) {
             continue;
         }
-        table[codepoint as usize] = Some(byte as u8);
+        let encoded: Option<Vec<u8>> = if let Some(byte) = instance.int_value(value) {
+            if (0..256).contains(&byte) {
+                Some(vec![byte as u8])
+            } else {
+                None
+            }
+        } else if let Some(raw) = instance.bytes_value(value) {
+            Some(raw.to_vec())
+        } else {
+            instance.text_value(value).map(|text| text.as_bytes().to_vec())
+        };
+        if let Some(encoded) = encoded {
+            table[codepoint as usize] = Some(encoded);
+        }
     }
     Some(table)
 }
@@ -601,9 +659,9 @@ fn charmap_encode_native(
     for point in pyawa_core::wtf8::code_points(&text) {
         let code = point.expect("str 载荷必须是合法 WTF-8");
         let byte = match &table {
-            Some(table) if (code as usize) < table.len() => table[code as usize],
+            Some(table) if (code as usize) < table.len() => table[code as usize].clone(),
             // 没有映射 ⇒ 恒等（码点 ≤ 0xFF 才成立 ✓）
-            _ => u8::try_from(code).ok(),
+            _ => u8::try_from(code).ok().map(|byte| vec![byte]),
         };
         let Some(byte) = byte else {
             if errors == "surrogateescape" && (0xDC80..=0xDCFF).contains(&code) {
@@ -628,7 +686,7 @@ fn charmap_encode_native(
             position += 1;
             continue;
         };
-        out.push(byte);
+        out.extend_from_slice(&byte);
         position += 1;
     }
     let bytes = instance.new_bytes(&out);

@@ -160,6 +160,28 @@ pub fn can_locate_through_bridge(instance: &Instance, name: &str) -> bool {
     })
 }
 
+/// **finder 用的定位**（round 99）：在给定 `path`（父包的 `__path__`）或 `sys.path` 里找
+/// `name` 的文件／包 ✓；返回 `(是否包, 包目录)` ✓。
+///
+/// 动因：`importlib.import_module('xml.etree.ElementTree')`（fresh 导入 ✓）会把
+/// **父包的 `__path__`** 作为 `path` 交给 `meta_path` 的 finder ✗ —— 先前 finder 只按
+/// `sys.path` 拼**整个带点名字** ✗ ⇒ 子模块一律找不到 ⇒ `ModuleNotFoundError: No module named
+/// 'xml.etree.ElementTree'` ✗（官方 `test_xml_etree`／`test_xml_etree_c` 的 setUpModule ✓）。
+pub fn locate_in_paths(instance: &Instance, name: &str, paths: &[String]) -> Option<(bool, String)> {
+    let base = name.rsplit('.').next().unwrap_or(name);
+    for directory in paths {
+        let module_file = format!("{directory}/{base}.py");
+        if read_file_through_fs(instance, module_file.as_bytes()).is_some() {
+            return Some((false, directory.clone()));
+        }
+        let package_file = format!("{directory}/{base}/__init__.py");
+        if read_file_through_fs(instance, package_file.as_bytes()).is_some() {
+            return Some((true, format!("{directory}/{base}")));
+        }
+    }
+    None
+}
+
 /// **把过渡桥的加载能力交出去**（第 216 轮；`IM-30`…`IM-32` 的 ①a「Python 层 finder」的**前置** ✓）：
 /// 给 `sys.meta_path` 上的 finder 用 ✓ —— `Some(模块)` ＝ 已装好并**登记进模块表** ✓；
 /// `None` ＝ "这座桥找不到"（finder **必须**如实 `None` ✓，不许编假模块、也不许把"找不到"当异常抛 ✗）。
@@ -333,6 +355,65 @@ pub(crate) fn load_module(
             ))
             .into_raw()
             .cast::<Header>();
+        // **模块 spec 与包元数据**（round 99）：`importlib` 做 fresh 子模块导入时读
+        // **父模块的 `__spec__`**（`test.support.import_helper.import_fresh_module` 一族 ✓；官方
+        // `test_xml_etree` 的 setUpModule ✓）—— 先前模块没有 `__spec__` ✗ ⇒
+        // `AttributeError: 'module' object has no attribute '__spec__'` ✗。
+        // 这里建一个最小 `ModuleSpec` 形态（`AttributeObject`＋实例字典，字段照参照面 ✓）：
+        // `name`／`loader`／`origin`／`parent`／`submodule_search_locations`／`cached`／
+        // `has_location`／`_initializing`。同时补 `__package__`／`__loader__`。
+        let spec_dict = instance.new_dict();
+        let spec_name = instance.new_str(name);
+        instance.dict_set(spec_dict, "name", spec_name);
+        let none = instance.new_none();
+        instance.dict_set(spec_dict, "loader", none);
+        instance.dict_set(spec_dict, "cached", none);
+        instance.dict_set(spec_dict, "parent_module", none);
+        let origin_text = file.clone();
+        let origin = instance.new_str(&origin_text);
+        instance.dict_set(spec_dict, "origin", origin);
+        let parent_name = parent.unwrap_or("");
+        let parent_value = instance.new_str(parent_name);
+        instance.dict_set(spec_dict, "parent", parent_value);
+        let locations = match &package_directory {
+            Some(directory) => {
+                let entry = instance.new_str(directory);
+                instance.new_list(vec![entry])
+            }
+            None => instance.new_none(),
+        };
+        instance.dict_set(spec_dict, "submodule_search_locations", locations);
+        let has_location = instance.new_bool(package_directory.is_none());
+        instance.dict_set(spec_dict, "has_location", has_location);
+        let initializing = instance.new_bool(false);
+        instance.dict_set(spec_dict, "_initializing", initializing);
+        // `importlib` 的循环导入簿记（同上）—— spec 上也要有 ✓。
+        let spec_uninitialized = instance.new_list(Vec::new());
+        instance.dict_set(spec_dict, "_uninitialized_submodules", spec_uninitialized);
+        let spec = instance
+            .alloc(crate::builtin_objects::AttributeObject::new(
+                module_type,
+                core::cell::RefCell::new(Some(spec_dict)),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        instance.dict_set(namespace, "__spec__", spec);
+        // **`__package__` 口径**（round 99 修 ✗）：**包**的 `__package__` 是**自己的名字** ✓、
+        // 普通模块才是父包名 ✓（先前一律给父包名 ✗ ⇒ 包的相对导入基点错位 ⇒ 参照会失败的
+        // `typinganndata/partialexecution` 反而成功 ⇒ `MS-10` 第三类新差异 ✗）。
+        let package_owner = if package_directory.is_some() { name } else { parent_name };
+        let package_value = instance.new_str(package_owner);
+        instance.dict_set(namespace, "__package__", package_value);
+        let loader_value = instance.new_none();
+        instance.dict_set(namespace, "__loader__", loader_value);
+        // **Python importlib 的循环导入簿记**（round 99）：3.14 的 `_find_and_load_unlocked`
+        // 会读写**父模块**的 `_uninitialized_submodules`（`Lib/importlib/_bootstrap.py` ✓）；
+        // 先前模块没有这个属性 ✗ ⇒ fresh 子模块导入走到一半
+        // `AttributeError: 'module' object has no attribute '_uninitialized_submodules'` ✗。
+        let uninitialized = instance.new_list(Vec::new());
+        instance.dict_set(namespace, "_uninitialized_submodules", uninitialized);
+        let cached_value = instance.new_none();
+        instance.dict_set(namespace, "__cached__", cached_value);
         // **先登记再执行**（环状导入要能看到半成品 ✓，与参照一致）
         instance.dict_set(modules, name, module);
         let code = crate::compile::instantiate(instance, &unit);

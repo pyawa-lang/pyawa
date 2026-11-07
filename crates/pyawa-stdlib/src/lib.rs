@@ -556,9 +556,15 @@ fn finder_find_spec(
     else {
         return Ok(none);
     };
+    // **撤回 finder 的"父包 `__path__` 子模块定位"**（round 99 实测回归 ✗）：加上它之后 Python
+    // importlib 能 fresh 导入子模块了 ✓，但**语料**里 `test/typinganndata/partialexecution.py`
+    // 的参考行为是 `ImportError: cannot import name 'a'`（包只执行了一半）⇒ 我们却成功 ✓ ——
+    // `MS-10` 第三类**新差异** ✗。该能力与参照语义纠缠，**按事实撤回**（`importlib` 子模块 fresh
+    // 导入面仍记未接 ✗），只保留 finder 原有的**顶层定位** ✓。
     if !pyawa_core::executor::import::can_locate_through_bridge(instance, &name) {
         return Ok(none);
     }
+    let (is_package, package_directory) = (false, String::new());
     let Some(spec) = module_like(instance, "spec") else {
         return Ok(none);
     };
@@ -574,7 +580,13 @@ fn finder_find_spec(
     // 顶层名字没有点分 ⇒ `parent` 是空串。`_uninitialized_submodules` 是
     // `_find_and_load_unlocked` 给**父包**做的循环导入簿记（`:_bootstrap.py:1340`）——顶层用不到，
     // 但补空表更稳 ✓（`_load_unlocked` 会往 spec 上写 `_initializing`，属性可写 ✓）。
-    set_field(instance, spec, "submodule_search_locations", instance.retain(instance.singletons().none()));
+    let locations = if is_package {
+        let entry = instance.new_str(&package_directory);
+        instance.new_list(vec![entry])
+    } else {
+        instance.retain(instance.singletons().none())
+    };
+    set_field(instance, spec, "submodule_search_locations", locations);
     set_field(instance, spec, "parent", instance.new_str(""));
     set_field(instance, spec, "_uninitialized_submodules", instance.new_list(Vec::new()));
     if let Some(loader) = module_like(instance, "loader") {
