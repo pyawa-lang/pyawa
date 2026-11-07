@@ -261,6 +261,21 @@ pub(crate) fn dict_update_native(
     }
     Ok(instance.retain(instance.singletons().none()))
 }
+/// **给异常额外挂一条 note**（PEP 678；round 122）：dict 更新序列的 TypeError 参照会带
+/// `Cannot convert dictionary update sequence element #i to a sequence` ✓
+/// （`test_dict.test_update_type_error` 的 `__notes__` ✓）。
+fn with_update_note(
+    instance: &Instance,
+    error: crate::ExecError,
+    index: usize,
+) -> crate::ExecError {
+    if let crate::ExecError::Raised { exception } = &error {
+        let note = format!("Cannot convert dictionary update sequence element #{index} to a sequence");
+        crate::builtin_objects::add_exception_note(instance, *exception, &note);
+    }
+    error
+}
+
 /// 往 `mapping` 写入一对**自有引用**（`key`／`value` 各一份由本函数接管 ✓）。
 ///
 /// 已有键 ⇒ 只替换值（旧值归还引擎 ✓）、手上那份 `key` 也归还 ✓；新键 ⇒ `dict_insert_raw` 接管
@@ -347,7 +362,11 @@ pub(crate) fn dict_update_sequence(
                 // SAFETY: 这些引用由 `iterable_items` 给出。
                 unsafe { instance.release_object(leftover.as_ptr()) };
             }
-            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
+            return Err(with_update_note(
+                instance,
+                instance.raise_builtin_error("TypeError", "object is not iterable"),
+                index,
+            ));
         };
         if parts.len() != 2 {
             for item in &parts {
@@ -830,12 +849,20 @@ pub fn dict_init_native(
                     &format!("'{name}' object is not iterable"),
                 ));
             };
-            for pair in items {
-                let Some(parts) = instance.iterable_items(pair)? else {
-                    return Err(instance.raise_builtin_error(
-                        "TypeError",
-                        "cannot convert dictionary update sequence element to a sequence",
-                    ));
+            for (index, pair) in items.iter().enumerate() {
+                let parts = match instance.iterable_items(*pair) {
+                    Ok(Some(parts)) => parts,
+                    Ok(None) => {
+                        return Err(with_update_note(
+                            instance,
+                            instance.raise_builtin_error(
+                                "TypeError",
+                                "cannot convert dictionary update sequence element to a sequence",
+                            ),
+                            index,
+                        ))
+                    }
+                    Err(error) => return Err(with_update_note(instance, error, index)),
                 };
                 if parts.len() != 2 {
                     return Err(instance.raise_builtin_error(
@@ -874,7 +901,7 @@ pub fn dict_init_native(
 }
 pub fn dict_fromkeys_native(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
+    bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
@@ -939,29 +966,32 @@ pub fn dict_fromkeys_native(
             collected
         }
     };
-    let mapping = instance.new_dict();
+    // **类方法口径**（round 122）：`dictlike.fromkeys(...)` 要交 **dictlike 实例** ✓、
+    // `mydict.fromkeys(...)`（覆写 `__new__` 返回 UserDict）要交 UserDict ✓ —— 先前一律
+    // `instance.new_dict()` ✗（`test_fromkeys` 的 `assertIsInstance` ✓）。做法：按绑定类
+    // **走正常实例化**（`call_value`：`cls(...)`，`__new__`／`__init__` 覆写都生效 ✓）。
+    let class_header = match bound.and_then(|value| instance.as_type(value)) {
+        Some(ty) => ty.cast::<Header>(),
+        None => match instance.type_named("dict") {
+            Some(ty) => ty.cast::<Header>(),
+            None => return Err(instance.raise_builtin_error("RuntimeError", "dict 类型不可用")),
+        },
+    };
+    let mapping = crate::executor::call::call_value(instance, class_header, &[], &[])?;
     for key in keys {
-        // **重复键要合并** ✓（照参照：`dict.fromkeys([1, 1])` ⇒ 一个键 ✓）：
-        // `insert_raw` 不查重 ⇒ 先按值相等扫一遍现有键 ✓。
-        // SAFETY: mapping 是刚建的 dict，存活。
-        let duplicated = {
-            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-            dict.entries()
-                .iter()
-                .any(|(existing, _)| crate::executor::values_equal_public(instance, *existing, key))
-        };
-        if duplicated {
+        // **重复键自然合并**（`d[k] = v` 语义 ✓）：`dict.fromkeys([1, 1])` ⇒ 一个键 ✓。
+        // **走统一的属性写通道**（dict 与任意映射子类都适用：`UserDict.__setitem__` ✓）；
+        // `subscript_write` 自己 retain 一份 value ✓。
+        if let Err(error) = crate::executor::subscript::subscript_write(instance, mapping, key, value) {
             // SAFETY: key 这份引用由本函数持有。
             unsafe { instance.release_object(key.as_ptr()) };
-            continue;
+            unsafe { instance.release_object(value.as_ptr()) };
+            return Err(error);
         }
-        // **每个键都要一份 value** ✓（`insert_raw` 接管一份；先前只留了最初那一份 ⇒
-        // 多个键时 value 的引用计数**欠账** ✗ —— 非 immortal 的 value 会成悬垂 ✓）。
-        // SAFETY: value 由本函数持有（最初那份），存活。
-        unsafe { instance.incref_object(value.as_ptr()) };
-        instance.dict_insert_raw(mapping, key, value);
+        // SAFETY: key 这份引用由本函数持有。
+        unsafe { instance.release_object(key.as_ptr()) };
     }
-    // 每个键都接管了一份 value ✓ ⇒ 这里还掉最初那一份 ✓。
+    // 最初那份 value 归还 ✓。
     unsafe { instance.release_object(value.as_ptr()) };
     Ok(mapping)
 }

@@ -191,7 +191,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     if let Some(dict_type) = instance.type_named("dict") {
         if let Some(type_namespace) = instance.type_namespace(dict_type.cast()) {
             let method = make_native(instance, "fromkeys", dict_fromkeys_native as pyawa_core::NativeFn);
-            instance.dict_set(type_namespace, "fromkeys", method);
+            // **包成 `classmethod`**（round 122）：参照 `dict.fromkeys` 是类方法 ⇒
+            // `dictlike.fromkeys(...)` 绑 `dictlike` 交实例 ✓、`mydict.__new__` 覆写生效 ✓
+            //（`test_dict.test_fromkeys` ✓）。先前裸原生函数 ⇒ 拿不到类 ✗。
+            let classmethod = pyawa_core::new_classmethod(instance, method);
+            instance.dict_set(type_namespace, "fromkeys", classmethod);
+            instance.release(method);
+            instance.release(classmethod);
         }
     }
     // **`function.__code__`／`__globals__` 进 `function` 的类型字典** ✓（第 214 轮）：

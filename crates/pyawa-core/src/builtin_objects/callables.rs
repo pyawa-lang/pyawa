@@ -142,6 +142,17 @@ pub unsafe fn classmethod_new(
         .cast::<Header>())
 }
 
+/// **造一个 `classmethod` 包装对象**（**新引用**；round 122 给 `dict.fromkeys` 类级绑定用 ✓）。
+pub fn new_classmethod(instance: &Instance, function: NonNull<Header>) -> NonNull<Header> {
+    let ty = instance
+        .type_named("classmethod")
+        .expect("classmethod 在引导期已登记");
+    instance.retain(function);
+    instance
+        .alloc_payload(ClassMethodObject::new(ty, function))
+        .cast::<Header>()
+}
+
 /// **`staticmethod.__get__`／`classmethod.__get__` 的实参口径**（`P3-17`）
 ///
 /// 参照 3.14.4 实测：
