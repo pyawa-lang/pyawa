@@ -413,6 +413,10 @@ impl Emitter {
                             self.emit_delete_name(value_span, &name);
                         }
                     }
+                    // **记下本次 `return` 的死代码洞**（round 109）：退出调用＋取值＋`RET` 这一段在
+                    // 体内是**不可达于正常流**的 ✓；`with` 的受保护区要在洞两侧切开 ✓（见字段注释）。
+                    let with_hole_start =
+                        if with_levels.is_empty() { None } else { self.with_body_end };
                     // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
                     // （它看的是栈顶且**不弹出**）
                     if let Some(index) = self.boundary_out {
@@ -432,6 +436,10 @@ impl Emitter {
                         opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
                         0,
                     );
+                    if let Some(hole_start) = with_hole_start {
+                        self.with_return_holes
+                            .push((hole_start, self.unit.code.len()));
+                    }
                     Ok(())
                 }
             _ => unreachable!("emit_statement_misc 只接收 stmt_misc 族的 Statement"),

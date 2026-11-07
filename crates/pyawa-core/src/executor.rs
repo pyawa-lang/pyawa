@@ -1141,7 +1141,7 @@ pub(crate) fn bind_arguments(
             })
             .count();
         let message = message_too_many(
-            code.name(),
+            code.qualname(),
             argcount,
             argcount - defaults.len(),
             // **多出来的位置实参有几个就报几个** ✓（round 63 真 bug 修 ✗：先前写死 `given + 1`
@@ -1218,7 +1218,7 @@ pub(crate) fn bind_arguments(
                 Err(raise_builtin(
                     instance,
                     "TypeError",
-                    &message_duplicate(code.name(), &text),
+                    &message_duplicate(code.qualname(), &text),
                 ))
             } else {
                 locals[slot] = Some(value);
@@ -1232,7 +1232,7 @@ pub(crate) fn bind_arguments(
                 Err(raise_builtin(
                     instance,
                     "TypeError",
-                    &message_duplicate(code.name(), &text),
+                    &message_duplicate(code.qualname(), &text),
                 ))
             } else {
                 locals[slot] = Some(value);
@@ -1248,7 +1248,7 @@ pub(crate) fn bind_arguments(
             Err(raise_builtin(
                 instance,
                 "TypeError",
-                &message_unexpected_keyword(code.name(), &text),
+                &message_unexpected_keyword(code.qualname(), &text),
             ))
         };
 
@@ -1288,7 +1288,7 @@ pub(crate) fn bind_arguments(
         for slot in locals.iter_mut().filter_map(Option::take) {
             release(instance, slot);
         }
-        let message = message_missing(code.name(), &missing_positional, false);
+        let message = message_missing(code.qualname(), &missing_positional, false);
         return Err(raise_builtin(instance, "TypeError", &message));
     }
 
@@ -1331,7 +1331,7 @@ pub(crate) fn bind_arguments(
         for slot in locals.iter_mut().filter_map(Option::take) {
             release(instance, slot);
         }
-        let message = message_missing(code.name(), &missing_keyword_only, true);
+        let message = message_missing(code.qualname(), &missing_keyword_only, true);
         return Err(raise_builtin(instance, "TypeError", &message));
     }
 

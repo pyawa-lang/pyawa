@@ -177,6 +177,24 @@ pub struct CpFsVtable {
     pub pipe: Option<
         extern "C" fn(*mut c_void, *mut Handle, *mut Handle, *mut i32) -> CapStatus,
     >,
+    /// **`round 109` 的追加槽**（`AB-41`：**只能从表尾追加** ⇒ `PA_ABI_MINOR` 4→5，旧宿主仍可用）：
+    /// `lutime(name, atime_ns, mtime_ns)` —— **不跟随最后一段符号链接**的 `utime` ✓
+    /// （Linux `utimensat(AT_SYMLINK_NOFOLLOW)` ✓；纳秒级 ✓）。
+    ///
+    /// 为什么要单开一格：`shutil.copy2(src_link, dst, follow_symlinks=False)` 要给**链接自身**回填
+    /// 时间 ✓；跟随语义的 `utime` 对**断链**会 `ENOENT` ✗。消费方按 `CP-3` 处理缺格 ⇒ 只有该
+    /// 操作"未实现"。
+    pub lutime: Option<
+        extern "C" fn(*mut c_void, *const u8, usize, i64, i64, *mut i32) -> CapStatus,
+    >,
+    /// **`round 109` 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 5→6）：`utime_ns(name, atime_ns, mtime_ns)`
+    /// —— **跟随**最后一段的纳秒级 `utime` ✓（`utimensat(AT_FDCWD, path, times, 0)` ✓）。
+    ///
+    /// 为什么要加：旧的 `utime` 槽只带**秒** ✓ ⇒ `shutil.copystat` 的 ns 精度丢失 ✗
+    /// （官方 `test_filecmp` 的浅比较辅助 `st_mtime == st_mtime` 当场红 ✗）。
+    pub utime_ns: Option<
+        extern "C" fn(*mut c_void, *const u8, usize, i64, i64, *mut i32) -> CapStatus,
+    >,
 }
 
 impl CpFsVtable {
@@ -206,6 +224,8 @@ impl CpFsVtable {
         close: None,
         stat_times: None,
         pipe: None,
+        lutime: None,
+        utime_ns: None,
     };
 }
 

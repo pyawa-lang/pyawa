@@ -785,7 +785,11 @@ impl Instance {
             core::mem::size_of::<MethodObject>(),
             MethodObject::slots()
                 .with_repr(crate::builtin_objects::method_repr)
-                .with_getattr(crate::builtin_objects::method_getattr),
+                .with_getattr(crate::builtin_objects::method_getattr)
+                // **`types.MethodType(fn, obj)` 的构造**（round 109）：`Lib/contextlib.py` 的
+                // `MethodType(cm_exit, cm)`（`ExitStack.push` 一族 ✓）与 `unittest.mock` 的清理 ✓
+                // —— 没有 new 槽 ⇒ `TypeError: cannot create 'method' instances` ✗。
+                .with_new(crate::builtin::object::method_type_new),
         );
 
         // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表

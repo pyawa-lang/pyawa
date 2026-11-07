@@ -89,13 +89,38 @@ impl Emitter {
             self.emit_named_none("COPY", 3);
             self.emit_named_none("POP_EXCEPT", 0);
             self.emit_named_none("RERAISE", 1);
-            self.record_exception(
-                plan.region_starts[index],
-                plan.region_end,
-                cleanup_starts[index],
-                self.handler_depth + 2 * (index + 1),
-                true,
-            );
+            // **受保护区按体内 `return` 的死代码洞切开**（round 109，照参照异常表 ✓）：
+            // 洞（退出调用＋取值＋`RET`）本身不归本层；洞**之后**的正常流语句仍归本层 ✓。
+            // 没有洞时就是原来的单区间 `[region_start, body_end)` ✓（夹具不变 ✓）。
+            let mut segment_start = plan.region_starts[index];
+            let mut holes: Vec<(usize, usize)> = plan.return_holes.clone();
+            holes.sort_unstable();
+            for (hole_start, hole_end) in holes {
+                if hole_start > segment_start {
+                    let segment_end = hole_start.min(plan.body_end);
+                    if segment_end > segment_start {
+                        self.record_exception(
+                            segment_start,
+                            segment_end,
+                            cleanup_starts[index],
+                            self.handler_depth + 2 * (index + 1),
+                            true,
+                        );
+                    }
+                }
+                if hole_end > segment_start {
+                    segment_start = hole_end;
+                }
+            }
+            if segment_start < plan.body_end {
+                self.record_exception(
+                    segment_start,
+                    plan.body_end,
+                    cleanup_starts[index],
+                    self.handler_depth + 2 * (index + 1),
+                    true,
+                );
+            }
             self.record_exception(
                 cleanup_starts[index],
                 cleanup_ends[index],

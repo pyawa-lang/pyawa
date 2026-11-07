@@ -41,6 +41,59 @@ pub(crate) fn object_init_subclass_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// **`types.MethodType(function, instance)` 的构造**（round 109）：`method` 类型原先**没有 new 槽** ✗
+/// ⇒ `TypeError: cannot create 'method' instances` ✗ —— `Lib/contextlib.py:476` 的
+/// `MethodType(cm_exit, cm)`（`ExitStack.push`／`_GeneratorContextManager.__enter__` ✓）与
+/// `unittest.mock` 的 patch 收尾都要它 ✓ ⇒ 一个失败 mock 的清理抛错 ⇒ **mock 泄漏到后续测试**
+/// （官方 `test_shutil` 的 `TestWhich` 连带失败、`TestArchives` 的 `_create_exit_wrapper` ✓）。
+///
+/// 口径照参照实测：两个实参 ✓；第一个必须**可调用** ✓（否则 `TypeError: first argument must be callable` ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn method_type_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("method expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    let function = args[0];
+    let this = args[1];
+    // 可调用判据：已知可调用族 **或** 类型 MRO 上有 `__call__` ✓。
+    // SAFETY: 实参由调用方保证存活。
+    let function_type = unsafe { function.as_ref() }.ty();
+    let known_callable = [
+        "function",
+        "builtin_function_or_method",
+        "method",
+        "type",
+    ]
+    .iter()
+    .any(|name| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(function_type, base))
+    });
+    if !known_callable && instance.type_lookup(function_type, "__call__").is_none() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "first argument must be callable",
+        ));
+    }
+    // SAFETY: 两个实参都存活；方法对象各持一份引用。
+    unsafe {
+        instance.incref_object(function.as_ptr());
+        instance.incref_object(this.as_ptr());
+    }
+    Ok(instance
+        .alloc(crate::MethodObject::new(class, function, this))
+        .into_raw()
+        .cast::<Header>())
+}
+
 /// `object.__eq__(self, other)`：与 `==` 同一处实现。
 pub fn object_eq_native(
     instance: &Instance,
@@ -115,6 +168,52 @@ pub fn object_reduce_ex_native(
                         state,
                         listiter,
                         dictiter,
+                    ]));
+                }
+            }
+        }
+    }
+    // **通用实例的 protocol ≥ 2 形状**（round 109 真 bug 修）：参照给
+    // `(copyreg.__newobj__, (类,), state[, None, None])` ✓ —— 先前只给 `(类型, ())` ✗
+    // ⇒ `copy.copy`／`copy.deepcopy` **丢所有实例属性** ✗（`tarfile` 的 `addfile` 先 `copy.copy(TarInfo)`
+    // ⇒ 写出的头里名字/字段全空 ✗，官方 `test_shutil` 的归档用例与 `test_tarfile` 一族 ✓）。
+    let protocol = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_of(value).and_then(|number| number.to_i64()))
+        .unwrap_or(0);
+    if protocol >= 2 {
+        if let Ok(Some(copyreg)) =
+            crate::executor::import::import_through_bridge(instance, "copyreg")
+        {
+            if let Some(namespace) = crate::mounted_instance_dict(instance, copyreg) {
+                if let Some(newobj) = instance.dict_get(namespace, "__newobj__") {
+                    let class_value = instance.retain(ty.cast::<Header>());
+                    let tuple_args = instance.new_tuple(vec![class_value]);
+                    // **state**：实例属性字典的**副本**（参照给新 dict ✓）；没有属性 ⇒ `None` ✓。
+                    let state = match crate::executor::protocol::instance_attributes(instance, object)
+                        .and_then(|attributes| instance.dict_entries(attributes))
+                    {
+                        Some(entries) if !entries.is_empty() => {
+                            let state = instance.new_dict();
+                            for (key, value) in entries {
+                                instance.dict_insert_raw(
+                                    state,
+                                    instance.retain(key),
+                                    instance.retain(value),
+                                );
+                            }
+                            instance.retain(state)
+                        }
+                        _ => instance.retain(instance.singletons().none()),
+                    };
+                    let empty = instance.retain(instance.singletons().none());
+                    return Ok(instance.new_tuple(vec![
+                        instance.retain(newobj),
+                        tuple_args,
+                        state,
+                        empty,
+                        instance.retain(instance.singletons().none()),
                     ]));
                 }
             }

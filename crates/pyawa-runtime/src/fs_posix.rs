@@ -89,6 +89,11 @@ impl PosixFs {
             stat_times: Some(fs_stat_times),
             // **`P3-40` 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 3→4）：`os.pipe` 的两端句柄。
             pipe: Some(fs_pipe),
+            // **round 109 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 4→5）：不跟随符号链接的
+            // `utime`（`os.utime(..., follow_symlinks=False)`／`shutil.copy2` 的 symlink 分支 ✓）。
+            lutime: Some(fs_lutime),
+            // **round 109 追加槽**（`PA_ABI_MINOR` 5→6）：纳秒级、跟随叶子的 `utime` ✓。
+            utime_ns: Some(fs_utime_ns),
         }
     }
 }
@@ -301,6 +306,108 @@ extern "C" fn fs_stat(
     }
 }
 
+/// `utimensat` 的本层封装（round 109）：`nofollow=false` ⇒ 跟随最后一段 ✓。
+#[allow(unsafe_code)]
+fn utimensat_path(path: &std::path::Path, atime_ns: i64, mtime_ns: i64, nofollow: bool) -> i32 {
+    use std::os::unix::ffi::OsStrExt;
+    #[repr(C)]
+    struct Timespec {
+        tv_sec: i64,
+        tv_nsec: i64,
+    }
+    unsafe extern "C" {
+        fn utimensat(
+            dirfd: i32,
+            pathname: *const core::ffi::c_char,
+            times: *const Timespec,
+            flags: i32,
+        ) -> i32;
+    }
+    const AT_FDCWD: i32 = -100;
+    const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return fallback_errno("EINVAL");
+    };
+    let times = [
+        Timespec {
+            tv_sec: atime_ns.div_euclid(1_000_000_000),
+            tv_nsec: atime_ns.rem_euclid(1_000_000_000),
+        },
+        Timespec {
+            tv_sec: mtime_ns.div_euclid(1_000_000_000),
+            tv_nsec: mtime_ns.rem_euclid(1_000_000_000),
+        },
+    ];
+    let flags = if nofollow { AT_SYMLINK_NOFOLLOW } else { 0 };
+    // SAFETY: `c_path` 以 NUL 结尾且在本调用期间存活；`times` 两个元素；flags 合法。
+    unsafe { utimensat(AT_FDCWD, c_path.as_ptr(), times.as_ptr(), flags) }
+}
+
+/// **`utime_ns(name, atime_ns, mtime_ns)`**（round 109 追加槽 ⇒ `PA_ABI_MINOR` 6）：
+/// 跟随最后一段的纳秒级 `utime` ✓（`shutil.copystat` 的 ns 精度 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_utime_ns(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    unsafe extern "C" {
+        fn __errno_location() -> *mut i32;
+    }
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    if utimensat_path(&path, atime_ns, mtime_ns, false) == 0 {
+        return CapStatus::Ok;
+    }
+    // SAFETY: libc 保证 `__errno_location()` 返回本线程有效的 errno 位置。
+    let errno = unsafe { *__errno_location() };
+    // SAFETY: 出参由调用方提供。
+    unsafe { *errno_out = errno };
+    CapStatus::Machine
+}
+
+/// **`lutime(name, atime_ns, mtime_ns)`**（round 109 追加槽 ⇒ `PA_ABI_MINOR` 5）：**不跟随符号链接**
+/// 的 `utime` ✓ —— Linux `utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW)` ✓（纳秒级 ✓）。
+/// 对接参照的 `os.utime(..., follow_symlinks=False)`（`shutil.copy2` 的 symlink 分支 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_lutime(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    unsafe extern "C" {
+        fn __errno_location() -> *mut i32;
+    }
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    if utimensat_path(&path, atime_ns, mtime_ns, true) == 0 {
+        return CapStatus::Ok;
+    }
+    // SAFETY: libc 保证 `__errno_location()` 返回本线程有效的 errno 位置。
+    let errno = unsafe { *__errno_location() };
+    // SAFETY: 出参由调用方提供。
+    unsafe { *errno_out = errno };
+    CapStatus::Machine
+}
+
 /// `utime(name, atime, mtime)`（round 107）：改宿主文件的访问／修改时间 ✓
 /// （`std::fs::File::set_times`；秒级 ✓ —— ABI 只给秒，纳秒面随后补 ✓）。
 #[allow(unsafe_code)]
@@ -462,8 +569,12 @@ fn info_of(meta: &std::fs::Metadata) -> FileInfo {
         size: meta.len(),
         mode: meta.mode(),
         is_dir: meta.is_dir(),
-        dev: 0,
-        ino: 0,
+        // **真 `dev`／`ino`**（round 109）：照参照给宿主 `stat(2)` 的同名字段 ✓ —— 先前恒 0 ✗
+        // ⇒ `os.path.samefile(f, d)` 对**任何**两个路径都给 True ✗（`shutil.move` 于是走
+        // "直接 rename"分支 ⇒ `IsADirectoryError` ✗，官方 `test_shutil` 的 `TestMove` 11 个
+        // 错误与 `TestWhich` 的连带失败都源于此 ✓）。`CP-23` 的 /proc 语义另说，这里只是如实报值 ✓。
+        dev: meta.dev(),
+        ino: meta.ino(),
     }
 }
 
@@ -1029,6 +1140,10 @@ impl RestrictedFs {
         table.stat = Some(restricted_stat);
         table.chmod = Some(restricted_chmod);
         table.utime = Some(restricted_utime);
+        // **round 109 追加槽**：不跟随符号链接的 `utime`（受限根下同属路径写面 ⇒ 同样映射）。
+        table.lutime = Some(restricted_lutime);
+        // **round 109 追加槽**（纳秒级 utime）：受限根下与 `utime` 同属路径写面 ⇒ 同样映射。
+        table.utime_ns = Some(restricted_utime_ns);
         table.mkdir = Some(restricted_mkdir);
         table.rmdir = Some(restricted_rmdir);
         table.unlink = Some(restricted_unlink);
@@ -1147,6 +1262,48 @@ extern "C" fn restricted_utime(
         bytes.len(),
         atime,
         mtime,
+        errno_out,
+    )
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_utime_ns(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_utime_ns(
+        provider.inner_state(),
+        bytes.as_ptr(),
+        bytes.len(),
+        atime_ns,
+        mtime_ns,
+        errno_out,
+    )
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_lutime(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_lutime(
+        provider.inner_state(),
+        bytes.as_ptr(),
+        bytes.len(),
+        atime_ns,
+        mtime_ns,
         errno_out,
     )
 }

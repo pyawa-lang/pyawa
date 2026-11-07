@@ -662,6 +662,15 @@ fn lstat_native(
         return build_stat_result(instance, info, None);
     }
     let path = path_argument(instance, value, "stat")?;
+    lstat_result(instance, &path)
+}
+
+/// **`lstat` 的结果**（round 109 抽出，供 `stat(follow_symlinks=False)` 共用 ✓）：先 `readlink`
+/// （叶子不跟随 ⇒ 断链也能给 `S_IFLNK` ✓），否则普通 `fs_stat` ✓。
+fn lstat_result(
+    instance: &Instance,
+    path: &PathArgument,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
     // **不要先 `resolve_path`**（round 94 真 bug 修 ✗）：那个解析会**跟随最后一段** ⇒ 断链在
     // readlink 之前就报 `ENOENT` ✗（`os.path.lexists` 对断链要 True ✓）。两个能力各自解析：
     // `fs_readlink` 走 `resolve_path_parent`（不动叶子 ✓）、`fs_stat` 才跟随叶子 ✓。
@@ -671,8 +680,10 @@ fn lstat_native(
             // `S_IFLNK | 0o777`（Linux 的链接权限位）✓
             mode: 0o120777,
             is_dir: false,
-            dev: 0,
-            ino: 0,
+            // **真 dev/ino 交给 `fs_stat`**（round 109）：链接自身的能力层拿不到 ⇒ 跟随一次取
+            // （只用于 `samefile` 判据，`mode` 仍是链接 ✓）。
+            dev: instance.fs_stat(&path.bytes).map(|info| info.dev).unwrap_or(0),
+            ino: instance.fs_stat(&path.bytes).map(|info| info.ino).unwrap_or(0),
         };
         return build_stat_result(instance, info, None);
     }
@@ -735,12 +746,35 @@ fn stat_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
     let Some(value) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
     };
     let path = path_argument(instance, value, "stat")?;
+    // **`follow_symlinks=False` 真生效**（round 109）：`shutil.copystat(symlink, …, follow_symlinks=False)`
+    // 要的是**链接自身**的 `st_mode`／`st_mtime` ✓ —— 先前整条 kwargs 被忽略 ✗ ⇒ 拿目标的信息 ⇒
+    // 后续断言对不上 ✗（官方 `test_shutil` 的 `test_copy2_symlinks`／`test_copystat_symlinks` ✓）。
+    let mut follow = true;
+    for (key, kwarg) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            continue;
+        };
+        match name {
+            "follow_symlinks" => follow = instance.truth_of(*kwarg),
+            // `dir_fd` 本层不支持（参照对非相对路径也容忍 ✓）⇒ 只忽略，不编造语义 ✓。
+            "dir_fd" => {}
+            _ => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("stat() got an unexpected keyword argument '{name}'"),
+                ));
+            }
+        }
+    }
+    if !follow {
+        return lstat_result(instance, &path);
+    }
     let info = match instance.fs_stat(&path.bytes) {
         Ok(info) => info,
         Err(error) => {
@@ -1371,6 +1405,14 @@ fn utime_native(
         ));
     };
     let path = path_argument(instance, path_value, "utime")?;
+    // **`follow_symlinks=False`**（round 109）：走能力层的 `lutime` 追加槽（不跟随最后一段 ✓）——
+    // `shutil.copy2(src_link, dst, follow_symlinks=False)` 要给链接自身回填 ns 时间 ✓；
+    // 跟随语义对**断链**会 `ENOENT` ✗（`test_copytree_dangling_symlinks` ✓）。
+    let follow_symlinks = kwargs
+        .iter()
+        .find_map(|(key, value)| (instance.text_of(*key) == Some("follow_symlinks")).then_some(*value))
+        .map(|value| instance.truth_of(value))
+        .unwrap_or(true);
     // `ns=` 优先（参照里 ns／times 互斥 ✓，同时给 ⇒ ValueError）
     let ns_keyword = kwargs
         .iter()
@@ -1385,26 +1427,47 @@ fn utime_native(
             "utime: you may specify either 'times' or 'ns' but not both",
         ));
     }
-    let (atime, mtime) = if let Some(ns) = ns_keyword {
-        let (a, b) = pair_seconds(instance, ns, true)?;
-        (a, b)
+    if !follow_symlinks {
+        let (atime_ns, mtime_ns) = if let Some(ns) = ns_keyword {
+            pair_nanoseconds(instance, ns, true)?
+        } else if let Some(times) = times_arg {
+            if instance.type_of(times) == instance.singletons().none_type() {
+                (0i64, 0i64)
+            } else {
+                pair_nanoseconds(instance, times, false)?
+            }
+        } else {
+            (0i64, 0i64)
+        };
+        return match instance.fs_lutime(&path.bytes, atime_ns, mtime_ns) {
+            Ok(()) => Ok(instance.retain(instance.singletons().none())),
+            Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+        };
+    }
+    // **纳秒级 `utime`**（round 109）：旧的秒级槽会丢小数 ⇒ `shutil.copystat` 的 `st_mtime` 比较当场红 ✗
+    //（官方 `test_filecmp` 的浅比较辅助 ✓）；新追加槽 `utime_ns` 直接送 ns ✓。
+    let (atime_ns, mtime_ns) = if let Some(ns) = ns_keyword {
+        pair_nanoseconds(instance, ns, true)?
     } else if let Some(times) = times_arg {
         if instance.type_of(times) == instance.singletons().none_type() {
             (0i64, 0i64)
         } else {
-            pair_seconds(instance, times, false)?
+            pair_nanoseconds(instance, times, false)?
         }
     } else {
         (0i64, 0i64)
     };
-    match instance.fs_utime(&path.bytes, atime, mtime) {
+    match instance.fs_utime_ns(&path.bytes, atime_ns, mtime_ns) {
         Ok(()) => Ok(instance.retain(instance.singletons().none())),
         Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
     }
 }
 
 /// 从二元组取 `(atime, mtime)` 秒值（`ns=true` ⇒ 纳秒 → 秒，截断 ✓）。
-fn pair_seconds(
+
+/// **纳秒形态**（round 109，`lutime` 追加槽用 ✓）：`ns=True` 的元组本身就是 ns ✓；
+/// `times` 元组（int/float 秒）乘以 1e9 ✓。
+fn pair_nanoseconds(
     instance: &Instance,
     value: NonNull<Header>,
     ns: bool,
@@ -1422,20 +1485,13 @@ fn pair_seconds(
         ));
     }
     let convert = |item: NonNull<Header>| -> Result<i64, pyawa_core::ExecError> {
-        if ns {
-            let Some(seconds) = instance.int_of(item).and_then(|value| value.to_i64()) else {
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    "utime: 'ns' must be a tuple of two ints",
-                ));
-            };
-            return Ok(seconds / 1_000_000_000);
+        if let Some(number) = instance.int_of(item).and_then(|number| number.to_i64()) {
+            return Ok(if ns { number } else { number.saturating_mul(1_000_000_000) });
         }
-        if let Some(seconds) = instance.int_of(item).and_then(|value| value.to_i64()) {
-            return Ok(seconds);
-        }
-        if let Some(number) = instance.float_value(item) {
-            return Ok(number.trunc() as i64);
+        if !ns {
+            if let Some(number) = instance.float_value(item) {
+                return Ok((number * 1_000_000_000.0) as i64);
+            }
         }
         Err(instance.raise_builtin_error(
             "TypeError",
@@ -1444,7 +1500,6 @@ fn pair_seconds(
     };
     Ok((convert(items[0])?, convert(items[1])?))
 }
-
 /// **`posix.chmod(path, mode)`**（round 97）：走 `fs` 的 `chmod` 槽 ✓。
 ///
 /// 动因：官方 `test_tempfile` 的收尾用例 `os.chmod(...)` ✗（`'module' object has no attribute 'chmod'`）；
@@ -2505,7 +2560,17 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定
     // `supports_follow_symlinks` 一族 ✓）。**如实说** ✗：本层还没实现那些可选能力 ✓ ⇒ 给**空表** ✓
     //（语义上就是"一个都不支持" ✓，比编造一串名字**诚实** ✓）。
-    let have_functions = instance.new_list(Vec::new());
+    // **`_have_functions` 真名**（round 109）：`Lib/os.py` 用 `HAVE_LSTAT`／`HAVE_LUTIMES` 等名字
+    // 算出 `os.supports_follow_symlinks` ✓ —— 先前给空表 ✗ ⇒ `shutil.copystat` 的
+    // `if fn in os.supports_follow_symlinks` 全不成立 ⇒ 回退到 `_nop`（返回 None）✗ ⇒
+    // `AttributeError: 'NoneType' object has no attribute 'st_mode'` ✗。只列**真支持**的：
+    // `stat`（follow_symlinks=False 已接线 ✓）与 `utime`（接受该 kw ✓，语义见台账）。
+    let have_functions = instance.new_list(
+        ["HAVE_LSTAT", "HAVE_FSTATAT", "HAVE_LUTIMES", "HAVE_UTIMENSAT"]
+            .iter()
+            .map(|name| instance.new_str(name))
+            .collect(),
+    );
     instance.dict_set(namespace, "_have_functions", have_functions);
     // **`_create_environ`** ✓（第 195 轮）：`os.py` 一导入就调它 ✓。
     // **`posix.environ`** ✓（第 268 轮）：`Lib/os.py` 里 `data = environ` 读的是 `from posix import *`

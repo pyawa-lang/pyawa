@@ -480,6 +480,65 @@ pub(crate) fn bytes_join_native(
     Ok(instance.new_bytes(&out))
 }
 /// `bytes.rfind(sub)`：**最后一个**位置，找不到 `-1`。
+/// `bytes.partition(sep)`／`bytes.rpartition(sep)`（round 109）：返回 `(head, sep, tail)` 三元组 ✓
+/// —— `Lib/tarfile.py` 的 `nts()` 就用 `bytes.partition`（先前 `AttributeError: 'bytes' object has
+/// no attribute 'partition'` ✗ 压住整个 tar 读面 ✓）。空分隔符 ⇒ `ValueError: empty separator` ✓。
+pub(crate) fn bytes_partition_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_partition_like(instance, bound, args, false)
+}
+
+/// `bytes.rpartition(sep)` ✓（与上面同一处实现 ✓）。
+pub(crate) fn bytes_rpartition_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_partition_like(instance, bound, args, true)
+}
+
+fn bytes_partition_like(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    reverse: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let separator = bytes_argument(instance, args, 0)?;
+    if separator.is_empty() {
+        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+    }
+    let found = if reverse {
+        value
+            .windows(separator.len())
+            .rposition(|window| window == separator.as_slice())
+    } else {
+        value
+            .windows(separator.len())
+            .position(|window| window == separator.as_slice())
+    };
+    let (head, sep, tail) = match found {
+        Some(at) => (
+            value[..at].to_vec(),
+            separator.clone(),
+            value[at + separator.len()..].to_vec(),
+        ),
+        None if reverse => (Vec::new(), Vec::new(), value.clone()),
+        None => (value.clone(), Vec::new(), Vec::new()),
+    };
+    let parts = vec![
+        instance.new_bytes(&head),
+        instance.new_bytes(&sep),
+        instance.new_bytes(&tail),
+    ];
+    Ok(instance.new_tuple(parts))
+}
+
 pub(crate) fn bytes_rfind_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

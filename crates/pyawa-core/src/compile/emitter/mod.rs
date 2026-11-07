@@ -33,8 +33,10 @@ pub(super) struct WithCleanupPlan {
     pub(super) context_spans: Vec<Span>,
     /// 每一项受保护区间的起点（异常表要）。
     pub(super) region_starts: Vec<usize>,
-    /// 受保护区间的终点。
-    pub(super) region_end: usize,
+    /// **体内 `return` 的死代码洞**（见 `Emitter::with_return_holes`）：受保护区按洞切开 ✓。
+    pub(super) return_holes: Vec<(usize, usize)>,
+    /// body 末尾（`return` 洞之后可能还有代码 ✓）。
+    pub(super) body_end: usize,
     /// 每一层退出调用的标签（`index > 0` 时清理块跳过三连、`JUMP_BACKWARD_NO_INTERRUPT` 跳回它）。
     pub(super) exit_labels: Vec<usize>,
     /// 清理块出口要**重放**的余部（`emit_rest_and_tail`）。
@@ -167,6 +169,12 @@ pub(super) struct Emitter {
     /// **`with` 体内 `return` 的退出调用"起点"**（第 166 轮）：参照把该 `with` 的**受保护区**止于
     /// **正常流末尾**（＝退出调用之前 ✓），本层先前把整段 body（含退出调用尾声）都圈进去 ✗。
     pub(super) with_body_end: Option<usize>,
+    /// **`with` 体内 `return` 的"死代码洞"**（round 109）：每个元素 `(start, end)` 是这次 `return`
+    /// 在体内就地发出的**退出调用＋取值＋`RETURN_VALUE`** 区间 ✓ —— 参照的异常表把受保护区在这个洞
+    /// **两侧切开** ✓（`if 条件: return …` 后面还有语句时，后半段仍归本 `with` 的清理块 ✓）。
+    /// 先前只记一个 `region_end`（洞起点）⇒ 洞后代码落到保护区外 ✗ ⇒ 异常跳过 `__exit__` ✗
+    /// （`shutil.copyfile` 的 `with open(dst,…)` 体正是此形 ✓，官方 `test_shutil` 两条 close-fail 用例 ✓）。
+    pub(super) with_return_holes: Vec<(usize, usize)>,
     /// **`finally` 栈**（第 270 轮）：`try/finally` 体内每个**出口**（`return`）都要先把 finally
     /// 跑一遍。参照的实测形状（`def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n`）：
     /// `NOP; NOP; <finally 体>; LOAD_SMALL_INT 1; RETURN_VALUE` ⇒ **finally 在 return 之前**，

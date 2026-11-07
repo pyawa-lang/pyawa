@@ -189,17 +189,21 @@ impl Emitter {
                 // 数 `POP_EXCEPT` 用，`with` 的格不能算进去（见字段注释）。
                 let saved_with_depth = self.with_depth;
                 self.with_depth += 2 * items.len();
+                // **体内 `return` 的死代码洞**（round 109）：本层收自己的洞 ✓，层外已有的洞继承 ✓。
+                let saved_return_holes = core::mem::replace(&mut self.with_return_holes, Vec::new());
                 self.emit_block(body, false)?;
+                let body_return_holes = core::mem::replace(
+                    &mut self.with_return_holes,
+                    saved_return_holes,
+                );
                 self.with_depth = saved_with_depth;
                 self.in_epilogue_body = saved_epilogue_body;
                 self.with_exit_stack = saved_with_exits;
                 self.with_return_span = saved_with_return;
                 // **受保护区止于"正常流末尾"** ✓（第 166 轮）：体内有 `return` 时，参照的右端是**退出调用之前**
                 // 那一点 ✓（用 `return` 路径记下的 `with_body_end` ✓）；没有 `return` 就仍是当前长度 ✓。
-                let region_end = self
-                    .with_body_end
-                    .take()
-                    .unwrap_or_else(|| self.unit.code.len());
+                let body_end = self.unit.code.len();
+                let _ = self.with_body_end.take();
                 let none_index = self.intern_constant(Constant::None);
                 // **`NOP`**（实测，第 256 轮逐案收窄）：只当体里存在**跳向块尾的分支**时才发
                 // ——典型是"最后一条是**无 `else` 的 `if`**"（`if flag: return tag` 的假分支就跳到
@@ -255,13 +259,16 @@ impl Emitter {
                 let plan = WithCleanupPlan {
                     context_spans: context_spans.clone(),
                     region_starts: region_starts.clone(),
-                    region_end,
+                    return_holes: body_return_holes.clone(),
+                    body_end,
                     exit_labels: exit_labels.clone(),
                     rest: rest.to_vec(),
                     span: *span,
                     continuation,
                     normal_terminated: terminated,
                 };
+                // **洞继承**：本层的洞也要让外层切开（外层的保护区同样跨过它们 ✓）。
+                self.with_return_holes.extend(body_return_holes);
                 terminated &= self.emit_with_cleanups(&plan)?;
                 self.epilogue_span = context_spans[0];
                 self.epilogue_needed = !terminated;

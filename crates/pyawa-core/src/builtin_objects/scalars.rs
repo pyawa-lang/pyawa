@@ -737,6 +737,9 @@ pub fn str_method_native(name: &str) -> Option<NativeFn> {
         "lower" => bytes_lower_native,
         "strip" => bytes_strip_native,
         "split" => bytes_split_native,
+        // **`partition`／`rpartition`**（round 109）：`Lib/tarfile.py` 的 `nts()` 要它们 ✓。
+        "partition" => bytes_partition_native,
+        "rpartition" => bytes_rpartition_native,
         "join" => bytes_join_native,
         "rfind" => bytes_rfind_native,
         "index" => bytes_index_native,

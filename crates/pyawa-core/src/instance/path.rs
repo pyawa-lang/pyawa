@@ -188,7 +188,7 @@ impl Instance {
     }
 
     /// 按**名字**取平台 errno（`CM-20`）；没有注入表的裸实例用兜底值。
-    fn path_errno(&self, name: &str, fallback: i32) -> i32 {
+    pub(crate) fn path_errno(&self, name: &str, fallback: i32) -> i32 {
         self.platform_constant(name)
             .map(|value| value as i32)
             .unwrap_or(fallback)
