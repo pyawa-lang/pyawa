@@ -109,18 +109,39 @@ fn install_segv_trace() {}
 fn main() {
     install_segv_trace();
     let mut arguments = std::env::args_os().skip(1);
-    let Some(path) = arguments.next() else {
+    let Some(first) = arguments.next() else {
         usage("缺文件参数");
         std::process::exit(EXIT_HOST);
     };
-    let path = std::path::PathBuf::from(path);
-    let script_arguments: Vec<std::ffi::OsString> = arguments.collect();
-    let mode = match path.extension().and_then(|extension| extension.to_str()) {
-        Some("pyawa") => "pyawa",
-        Some("py") => "python",
-        _ => {
-            usage("只接 `.py`／`.pyawa`");
+    // **`-c 代码`**（round 111）：`test.support.script_helper.assert_python_ok('-c', code)` 一族
+    // （`test_list.test_deopt_from_append_list` ✓）与 `-c` 冒烟都需要 ✓。`-c` 的代码**不落盘**
+    // （不写 `.pyac` 产物 ✓），路径名照参照给 `-c`（`sys.argv[0]` 由上层按 `-c` 约定处理 ✓）。
+    let from_code = first == std::ffi::OsStr::new("-c");
+    let (path, inline_source) = if from_code {
+        let Some(code) = arguments.next() else {
+            usage("-c 缺代码参数");
             std::process::exit(EXIT_HOST);
+        };
+        let code_bytes = {
+            use std::os::unix::ffi::OsStrExt;
+            code.as_bytes().to_vec()
+        };
+        let text = String::from_utf8_lossy(&code_bytes).into_owned();
+        (std::path::PathBuf::from("<string>"), Some(text))
+    } else {
+        (std::path::PathBuf::from(first), None)
+    };
+    let script_arguments: Vec<std::ffi::OsString> = arguments.collect();
+    let mode = if from_code {
+        "python"
+    } else {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("pyawa") => "pyawa",
+            Some("py") => "python",
+            _ => {
+                usage("只接 `.py`／`.pyawa`");
+                std::process::exit(EXIT_HOST);
+            }
         }
     };
 
@@ -135,12 +156,15 @@ fn main() {
     // （`SPEC-capabilities.md` §4 表第二项；`CP-38`；分类"可异步化" ✓）。
     let net_provider = PosixNet::new();
     let net_vtable = net_provider.vtable();
-    let source = match read_through_fs(&vtable, &path) {
-        Ok(source) => source,
-        Err(message) => {
-            eprintln!("pyawa: {message}");
-            std::process::exit(EXIT_HOST);
-        }
+    let source = match inline_source {
+        Some(source) => source,
+        None => match read_through_fs(&vtable, &path) {
+            Ok(source) => source,
+            Err(message) => {
+                eprintln!("pyawa: {message}");
+                std::process::exit(EXIT_HOST);
+            }
+        },
     };
 
     // **`pa_host.capabilities` 只传空**：那个指针**不带长度** ✗ ⇒ 宿主若放一个短数组，
@@ -347,7 +371,12 @@ fn main() {
         pyac::Staleness::Fresh => std::fs::read(&artifact).ok(),
         _ => None,
     };
-    let product = fresh.or_else(&compile_and_write);
+    // `-c`：**不写也不读产物** ✓（`<string>` 没有落盘位置 ✓）。
+    let product = if from_code {
+        None
+    } else {
+        fresh.or_else(&compile_and_write)
+    };
     let run_bytecode = |bytes: &Vec<u8>| unsafe {
         // SAFETY: 产物字节在本栈上活着；`state` 由 `pa_create` 交回 ✓。
         pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)

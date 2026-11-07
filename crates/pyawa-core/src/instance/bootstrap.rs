@@ -488,7 +488,10 @@ impl Instance {
         let _list_reverseiterator_type = self.alloc_type_raw(
             "list_reverseiterator",
             core::mem::size_of::<IteratorObject>(),
-            IteratorObject::slots(),
+            IteratorObject::slots()
+                // **属性面**（round 111）：`__next__`／`__iter__`／`__reduce__`／`__setstate__` ✓
+                //（pickle 的 `test_reversed_pickle` ✓）。
+                .with_getattr(crate::builtin_objects::iterator_getattr),
         );
 
         // **`reversed`** ✓（第 727 轮）：`reversed(序列)` 的**通用惰性迭代器**（序列协议：
@@ -496,7 +499,8 @@ impl Instance {
         let _reversed_type = self.alloc_type_raw(
             "reversed",
             core::mem::size_of::<IteratorObject>(),
-            IteratorObject::slots(),
+            IteratorObject::slots()
+                .with_getattr(crate::builtin_objects::iterator_getattr),
         );
 
         // **`longrange_iterator`** ✓（第 228 轮）：`range()` 的**大整数上限**那一支；载荷与 `islice` 同构 ✓
@@ -765,7 +769,10 @@ impl Instance {
             self.alloc_type_raw(
                 name,
                 core::mem::size_of::<IteratorObject>(),
-                IteratorObject::slots(),
+                IteratorObject::slots()
+                    // **属性面**（round 111）：pickle 的 `__reduce__`／`__setstate__`、
+                    // `it.__next__`／`it.__iter__` ✓（`test_iterator_pickle` ✓）。
+                    .with_getattr(crate::builtin_objects::iterator_getattr),
             )
         })
         .collect();

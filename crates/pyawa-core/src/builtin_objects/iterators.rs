@@ -746,6 +746,11 @@ impl IteratorObject {
         self.index.get() == usize::MAX
     }
 
+    /// **pickle 反序列化回填游标**（round 111）：直接写 `index` ✓（`__setstate__` 用）。
+    pub fn set_index_for_pickle(&self, index: usize) {
+        self.index.set(index);
+    }
+
     /// **字典迭代的版本守卫**：第一次推进时记下 `(版本, 长度)`；之后版本变 ⇒ 给
     /// `RuntimeError` 的**两档文案**（照参照：长度也变 ⇒ `changed size`；只变键集 ⇒ `changed keys` ✓）。
     /// 非字典迭代器的 `target` 不是 `dict` ⇒ 调用方不调它 ✓。
@@ -789,4 +794,181 @@ pub(crate) unsafe fn iterator_clear(ptr: *mut Header, instance: &Instance) {
     let object = unsafe { &*ptr.cast::<IteratorObject>() };
     // SAFETY: 该引用由本对象持有。
     unsafe { instance.release_object(object.target().as_ptr()) };
+}
+
+/// **内建迭代器的属性面**（round 111）：`__next__`／`__iter__`／`__reduce__`／`__setstate__`。
+///
+/// 为什么必须有：① `iter(x).__next__` 在参照里可取 ✓（本层先前 AttributeError ✗）；
+/// ② **pickle** 在 protocol 0/1 走 `__reduce_ex__` 的二元组 ⇒ `save_global` 按模块名找类型
+/// ⇒ `Can't pickle <class 'list_iterator'>: it's not found as builtins.list_iterator` ✗；
+/// 参照的迭代器都实现了 `__reduce__`（`(iter, (target,), next_index)` 形 ✓）与 `__setstate__` ✓
+///（`list_tests.test_iterator_pickle`／`test_reversed_pickle` ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // 迭代器的 `__iter__` 回自身 ✓。
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__reduce__" => {
+            let handler: crate::NativeFn = iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, "__reduce__", handler))
+        }
+        "__setstate__" => {
+            let handler: crate::NativeFn = iterator_setstate_native;
+            Some(bind_iterator_method(instance, ptr, "__setstate__", handler))
+        }
+        _ => None,
+    }
+}
+
+/// 把原生函数绑到迭代器实例上（与 `list_getattr` 同一手法 ✓）。
+#[allow(unsafe_code)]
+fn bind_iterator_method(
+    instance: &Instance,
+    ptr: *mut Header,
+    name: &str,
+    handler: crate::NativeFn,
+) -> NonNull<Header> {
+    let builtin_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(crate::BuiltinFunctionObject::new(
+        builtin_type,
+        Box::leak(name.to_string().into_boxed_str()),
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(crate::MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        unsafe { NonNull::new_unchecked(ptr) },
+    ));
+    bound.into_raw().cast::<Header>()
+}
+
+/// `it.__next__()` 的原生实现：推进本迭代器（与 `advance_iterator` 同一处真相 ✓）。
+#[allow(unsafe_code)]
+fn iterator_next_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__next__() 需要迭代器实例",
+        ));
+    };
+    match crate::executor::advance_iterator(instance, iterator, 0)? {
+        Some(value) => Ok(value),
+        None => Err(instance.raise_builtin_error("StopIteration", "")),
+    }
+}
+
+/// `it.__setstate__(state)`：`pickle` 反序列化回填游标 ✓（正向 = next 下标；反向 = next+1 ✓）。
+#[allow(unsafe_code)]
+fn iterator_setstate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__setstate__() 需要迭代器实例",
+        ));
+    };
+    let Some(state) = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_of(value))
+        .and_then(|number| number.to_i64())
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__setstate__() 要整数"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+    let type_name = instance.type_name(instance.type_of(iterator));
+    let reverse = matches!(type_name.as_str(), "list_reverseiterator" | "reversed");
+    let index = if reverse { state.saturating_add(1) } else { state };
+    if index < 0 {
+        return Err(instance.raise_builtin_error("TypeError", "__setstate__() 游标为负"));
+    }
+    // 直接写游标（`IteratorObject` 没有 set_index；用 Cell 的方法经 `advance` 不适用于此）。
+    object.set_index_for_pickle(index as usize);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `it.__reduce__()`：返回 `(iter|reversed, (target,), state)` ✓（形状照参照实测 ✓）。
+#[allow(unsafe_code)]
+fn iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__reduce__() 需要迭代器实例",
+        ));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+    let type_name = instance.type_name(instance.type_of(iterator));
+    let reverse = matches!(type_name.as_str(), "list_reverseiterator" | "reversed");
+    let callable_name = if reverse { "reversed" } else { "iter" };
+    let Some(callable) = instance
+        .builtins()
+        .and_then(|builtins| instance.dict_get(builtins, callable_name))
+    else {
+        return Err(instance.raise_builtin_error(
+            "RuntimeError",
+            "内建 iter／reversed 不可用",
+        ));
+    };
+    // **耗尽形态**照参照：`(iter|reversed, ([],))` —— **二**元组、参数是**空列表**、没有状态 ✓
+    //（实测 `reversed([...])` 耗尽后 `__reduce__()` ⇒ `(<class 'reversed'>, ([],))` ✓；正反向同款 ✓）。
+    // 这一档必须单列：耗尽游标（正向 `usize::MAX`／反向 0）直接当 state 传给 `__setstate__` 会
+    // 越界（先前反向 `saturating_sub` 给 0 ⇒ 反序列化后多吐一个元素 ✗，`test_reversed_pickle` 的
+    // "empty iterator" 档 `[10] != []` ✓）。
+    let exhausted = if reverse {
+        object.index() == 0
+    } else {
+        object.is_exhausted()
+    };
+    if exhausted {
+        let empty = instance.new_list(Vec::new());
+        return Ok(instance.new_tuple(vec![
+            instance.retain(callable),
+            instance.new_tuple(vec![empty]),
+        ]));
+    }
+    let target = instance.retain(object.target());
+    let args = instance.new_tuple(vec![target]);
+    let state = if reverse {
+        object.index().saturating_sub(1) as i64
+    } else {
+        object.index() as i64
+    };
+    Ok(instance.new_tuple(vec![
+        instance.retain(callable),
+        args,
+        instance.new_int(state),
+    ]))
 }

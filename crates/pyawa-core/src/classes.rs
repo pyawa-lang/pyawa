@@ -867,7 +867,16 @@ pub fn build_class_from_parts_with_keywords(
         Some(base) => {
             // SAFETY: base 由注册表持有。
             let base_info = unsafe { base.as_ref() };
-            let slots = base_info.slots().inherit_host_layout_with_new();
+            // **内置布局基类的子类也要 `__del__`**（round 111 真 bug 修 ✗）：参照里
+            // `class A(list): def __del__(self): ...` 的实例在释放时**会**调终结器 ✓；
+            // 先前子类槽只继承布局／`new`／属性面／repr／str ✗、没继承终结器 ✗
+            // ⇒ `list_tests.test_free_after_iterating`（`support.check_free_after_iterating`）里
+            // `done` 永远 False ✗。`python_level_finalize` 自己在 MRO 里找不到 `__del__` 时直接返回 ✓
+            // ⇒ 对所有内置布局子类一律装上不改变无 `__del__` 类的行为 ✓。
+            let slots = base_info
+                .slots()
+                .inherit_host_layout_with_new()
+                .with_finalize(crate::python_level_finalize);
             let created = instance.new_type(static_name, base_info.instance_size(), slots);
             // 宿主钩子（`dealloc`／`traverse`）随布局一起继承
             if let (Some(dealloc), Some(traverse)) =

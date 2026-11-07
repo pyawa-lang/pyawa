@@ -331,12 +331,55 @@ pub unsafe fn builtin_function_getattr(
     if name == "__module__" {
         return Some(instance.new_str("builtins"));
     }
+    // **`__reduce__` 返回名字串**（round 111）：参照的 `iter.__reduce__()` ⇒ `'iter'` ✓ ——
+    // `pickle` 的 `save_reduce` 见到字符串就按 `save_global(obj, rv)` 存 ✓
+    //（否则落到 `object.__reduce_ex__` ⇒ 找 `builtins.builtin_function_or_method` ✗ ——
+    // 迭代器 `__reduce__` 元的第一个元素正是内建 `iter`／`reversed` ✓，`test_iterator_pickle` 卡在这 ✓）。
+    if name == "__reduce__" {
+        let handler: crate::NativeFn = builtin_function_reduce_native;
+        let builtin_type = instance
+            .type_named("builtin_function_or_method")
+            .expect("引导期已登记");
+        let native = instance.alloc(BuiltinFunctionObject::new(
+            builtin_type,
+            "__reduce__",
+            core::cell::Cell::new(handler),
+        ));
+        let native_raw = native.into_raw().cast::<Header>();
+        // SAFETY: 方法对象要自己那份 self（`OM-16`）；ptr 是本类型的存活对象。
+        unsafe { instance.incref_object(ptr) };
+        let bound = instance.alloc(MethodObject::new(
+            instance.type_named("method").expect("method 已登记"),
+            native_raw,
+            unsafe { NonNull::new_unchecked(ptr) },
+        ));
+        return Some(bound.into_raw().cast::<Header>());
+    }
     let text = match name {
         "__name__" | "__qualname__" => object.name(),
         "__doc__" => "",
         _ => return None,
     };
     Some(instance.new_str(text))
+}
+
+/// `builtin.__reduce__()`：返回**名字串** ✓（`pickle.save_reduce` 按 `save_global` 存 ✓）。
+#[allow(unsafe_code)]
+fn builtin_function_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(function) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__reduce__() 需要内建函数实例",
+        ));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*function.as_ptr().cast::<BuiltinFunctionObject>() };
+    Ok(instance.new_str(object.name()))
 }
 
 /// 原生可调用对象的 `repr`：`<built-in function len>`（实测）。

@@ -471,20 +471,22 @@ fn list_dunder_reversed(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let list = bound_list(instance, bound)?;
-    let mut items: Vec<NonNull<Header>> = instance
-        .list_items(list)
-        .unwrap_or_default()
-        .into_iter()
-        // **借用 → 新引用**（`new_list` 吃所有权 ✓；round 106 修 ✗）。
-        .map(|item| instance.retain(item))
-        .collect();
-    items.reverse();
-    // **交迭代器**（参照的 `list_reverseiterator` 语义 ✓）：`reversed(seq)` 会直接把 `__reversed__`
-    // 的返回值当迭代器用（不再 `iter()` 一遍 ✓）⇒ 交列表会变成"状态 5：不是迭代器" ✗。
-    let snapshot = instance.new_list(items);
-    let iterator = instance.iter_object(snapshot);
-    instance.release(snapshot);
-    iterator
+    // **真正的 `list_reverseiterator`**（round 111 真 bug 修 ✗）：参照的反向迭代器**引用原列表** ✓、
+    // 游标是"下一个要取的下标 ＋ 1" ✓ —— 先前把列表**快照**成新 list 再正向迭代 ✗ ⇒
+    // ① 类型名给 `list_iterator` ✗；② 快照看不到之后对原列表的修改 ✗
+    //（`test_reversed_pickle`：反序列化后 `a[:] = data` 期望反向迭代反映新数据 ✓）。
+    let length = instance.list_items(list).map(|items| items.len()).unwrap_or(0);
+    let iterator_type = instance
+        .type_named("list_reverseiterator")
+        .expect("list_reverseiterator 已登记");
+    // 迭代器要自己那份原列表引用 ✓。
+    unsafe { instance.incref_object(list.as_ptr()) };
+    let iterator = instance.alloc(crate::builtin_objects::IteratorObject::new(
+        iterator_type,
+        list,
+        core::cell::Cell::new(length),
+    ));
+    Ok(iterator.into_raw().cast::<Header>())
 }
 
 /// `list.__add__(self, other)`：与 `+` 同一处（`concat_public` ✓）。
@@ -871,14 +873,31 @@ pub unsafe fn list_new(
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let mut borrowed = true;
     if let Some(source) = args.first() {
-        let source_ty = instance.type_name(instance.type_of(*source));
+        let source_type = instance.type_of(*source);
+        let source_ty = instance.type_name(source_type);
+        // **子类覆写了 `__iter__` ⇒ 必须走迭代协议**（round 111）：先前按**类型名**走载荷快路 ✗
+        // ⇒ `LyingTuple((2,)).__iter__()` 明明只吐 `1`，`list(...)` 却按底层元组给 `[2]` ✗
+        //（`seq_tests.test_constructors` 的 `LyingTuple`／`LyingList` ✓）。
+        let default_iter = |base: &str| {
+            instance
+                .type_lookup_owner(source_type, "__iter__")
+                .map(|(owner, _)| {
+                    Some(owner) == instance.type_named(base)
+                        || Some(owner) == instance.type_named("object")
+                })
+                .unwrap_or(true)
+        };
         match source_ty.as_str() {
-            "list" => items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
-            "tuple" => items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
-            "set" | "frozenset" => {
+            "list" if default_iter("list") => {
+                items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec()
+            }
+            "tuple" if default_iter("tuple") => {
+                items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec()
+            }
+            "set" | "frozenset" if default_iter(&source_ty) => {
                 items = unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
             }
-            "dict" => {
+            "dict" if default_iter("dict") => {
                 items = unsafe { &*source.as_ptr().cast::<DictObject>() }
                     .entries()
                     .into_iter()

@@ -145,6 +145,45 @@ pub fn object_reduce_ex_native(
     };
     // SAFETY: object 由调用方保证存活。
     let ty = unsafe { object.as_ref() }.ty();
+    // **类型自己覆写的 `__reduce__` 优先**（round 111）：参照的 `object.__reduce_ex__` 先看
+    // `type(obj).__reduce__` 是不是 object 那份，是覆写就**直接调它** ✓。本层的迭代器把
+    // `__reduce__` 挂在 **getattr 槽**（`iterator_getattr`）上 ⇒ 这里要能取到它 ✓
+    //（`pickle` 的 protocol 0/1 否则走 `save_global` ⇒ `Can't pickle <class 'list_iterator'>` ✗）。
+    // 内建**迭代器**一族把 `__reduce__` 挂在 **getattr 槽**（`iterator_getattr`）上 ⇒ 类型字典里
+    // 查不到"自己的 `__reduce__`" ✓ ⇒ 这里按类型族点名认（与 `iterator_type_for` 同一张名单 ✓）。
+    let iterator_like = [
+        "list_iterator",
+        "tuple_iterator",
+        "str_ascii_iterator",
+        "dict_keyiterator",
+        "set_iterator",
+        "bytes_iterator",
+        "bytearray_iterator",
+        "list_reverseiterator",
+        "reversed",
+    ]
+    .iter()
+    .any(|name| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    });
+    let callable_like = instance
+        .type_named("builtin_function_or_method")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+        || instance
+            .type_named("method")
+            .is_some_and(|base| instance.is_subtype(ty, base));
+    if iterator_like || callable_like {
+        if let Some(result) = crate::executor::call::call_object_method(
+            instance,
+            object,
+            "__reduce__",
+            &[],
+        )? {
+            return Ok(result);
+        }
+    }
     // **`list` 族的"可重建"形状**（round 104）：参照协议 4 给
     // `(copyreg.__newobj__, (类,), None, 元素迭代器, None)` ✓ —— 先前一律给 `(类型, 空参数元组)` ✗
     // ⇒ `copy.copy(list 子类)`／`deepcopy` 得到**空列表** ✗（官方 `test_xml_dom_minicompat` 的

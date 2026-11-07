@@ -79,7 +79,33 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
         instance.release(snapshot);
         return Ok(iterator.into_raw().cast::<Header>());
     }
-    if let Ok(iterator_type) = iterator_type_for(instance, iterable) {
+    // **子类覆写 `__iter__` ⇒ 不能走内建载荷快路**（round 111）：`LyingTuple.__iter__` 只吐 `1`，
+    // 但底层元组是 `(2,)` ⇒ 参照 `list(LyingTuple((2,)))` 给 `[1]` ✓；先前按类型族直造
+    // `tuple_iterator` ✗ ⇒ `[2]` ✗（`seq_tests.test_constructors` ✓）。只在"没有自己的 `__iter__`"
+    // 时走快路 ✓。
+    let overrides_iter = {
+        let ty = instance.type_of(iterable);
+        instance
+            .type_lookup_owner(ty, "__iter__")
+            .map(|(owner, _)| {
+                ![
+                    "list",
+                    "tuple",
+                    "dict",
+                    "set",
+                    "frozenset",
+                    "str",
+                    "bytes",
+                    "bytearray",
+                    "range",
+                ]
+                .iter()
+                .any(|name| Some(owner) == instance.type_named(name))
+            })
+            .unwrap_or(false)
+    };
+    if !overrides_iter {
+        if let Ok(iterator_type) = iterator_type_for(instance, iterable) {
         // 迭代器对象要**自己那一份**引用（本函数不消耗入参）
         // SAFETY: iterable 由调用方保证存活。
         unsafe { instance.incref_object(iterable.as_ptr()) };
@@ -89,6 +115,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             Cell::new(0),
         ));
         return Ok(iterator.into_raw().cast::<Header>());
+        }
     }
     // **走属性通道** ✓（第 627 轮修 ✗）：`__iter__` 可能由类型的 **`getattr` 槽**动态给出 ✓（`range` 就是 ✓）
     // —— 先前只走 `attribute_optional` ✗（不查那个槽 ✓）⇒ `list(range(3))`／`for` 一类报

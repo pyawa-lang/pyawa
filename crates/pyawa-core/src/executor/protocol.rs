@@ -777,19 +777,17 @@ pub(crate) fn equality_public(
     // **容器递归**（用户子类覆写 `__eq__` 时让覆写优先 ✓）。
     if !overridden {
         if subtype(left_ty, "list") && subtype(right_ty, "list") {
-            // **活体双游标**（round 110 真 bug 修 ✗）：参照 `list_richcompare` 每轮重读**两侧当前长度**
-            // ✓、且比较前给两个元素各 `Py_INCREF` ✓。元素的 `__eq__` 可能把两侧列表清空
-            //（`test_list.test_equal_operator_modifying_operand` 的 X/Y/Z ✓）⇒ 清空后循环按"前缀相等"
-            // 结束给 **True** ✓；先前先取长度快照 ✗ ⇒ 清空后仍比到悬垂元素 ⇒ False／崩溃 ✗。
+            // **活体双游标**（round 110/111，照参照 `list_richcompare` 的循环骨架 ✓）：
+            // ① 每轮重读**两侧当前长度** ✓；② 元素比较前各 `Py_INCREF` ✓；
+            // ③ 比较为假就 `break`，但**退出后按"当前长度"判定**：两侧都已走完 ⇒ 相等 ✓
+            //（`test_equal_operator_modifying_operand`：X/Y 的 `__eq__` 把两侧清空 ⇒ 循环因"都走完"结束
+            // ⇒ 参照给 **True** ✓；先前一遇 `__eq__` 假就回 False ✗）。
             let mut index = 0usize;
             loop {
                 let left_items = instance.list_items(left).unwrap_or_default();
                 let right_items = instance.list_items(right).unwrap_or_default();
-                if index == 0 && left_items.len() != right_items.len() {
-                    return Ok(false);
-                }
                 if index >= left_items.len() || index >= right_items.len() {
-                    break;
+                    return Ok(index >= left_items.len() && index >= right_items.len());
                 }
                 let first = left_items[index];
                 let second = right_items[index];
@@ -804,11 +802,15 @@ pub(crate) fn equality_public(
                     instance.release_object(second.as_ptr());
                 }
                 if !verdict? {
-                    return Ok(false);
+                    // **离开循环后按"当前长度"判**（照参照 `break` ＋ 事后比较 ✓）：
+                    // `__eq__` 可能把两侧都清空 ⇒ 循环此刻已"两侧走完" ⇒ 相等 ✓
+                    //（`test_equal_operator_modifying_operand` 的 list1/list2 档 ✓）。
+                    let left_len = instance.list_items(left).map(|items| items.len()).unwrap_or(0);
+                    let right_len = instance.list_items(right).map(|items| items.len()).unwrap_or(0);
+                    return Ok(index >= left_len && index >= right_len);
                 }
                 index += 1;
             }
-            return Ok(true);
         }
         if subtype(left_ty, "tuple") && subtype(right_ty, "tuple") {
             let a = instance.tuple_items(left).unwrap_or_default();
