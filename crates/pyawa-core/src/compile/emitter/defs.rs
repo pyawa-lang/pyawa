@@ -581,9 +581,18 @@ impl Emitter {
                 // （收了也发不出 `LOAD_FAST_BORROW`：模块没有 cell／free 槽。`Lib/` 全量编译实测到
                 // `varnames=["name"]` 的 panic ✓）。
                 if self.kind != ScopeKind::Module {
+                    // **类体里的方法 `nonlocal`**（round 117）：类作用域的 `analyze_cells` 因
+                    // `cellvars` 已含 `__classdict__` 提前返回 ✗ ⇒ `nested.demanded` 为空 ✗ ⇒
+                    // 方法声明的 `nonlocal count` 传不下去 ✗（`UnboundLocalError` ✓）。
+                    let mut class_nonlocals: Vec<String> = Vec::new();
+                    super::super::symbols::collect_nested_scope_nonlocals(body, &mut class_nonlocals);
+                    if std::env::var("PYAWA_NL_DEBUG").is_ok() {
+                        eprintln!("[cls] qualname={} nonlocals={:?} cellvars={:?} freevars={:?} varnames={:?}", self.qualname, class_nonlocals, self.unit.cellvars, self.unit.freevars, self.unit.varnames);
+                    }
                     for referenced in global_load_names(&nested)
                         .into_iter()
                         .chain(nested.demanded.clone())
+                        .chain(class_nonlocals)
                         // **方法单元**里的名字也要算候选 ✓（task-12 ✓）：类体**自己**不读、但方法体里
                         // 引用外层局部时（`def make(): base = 10; class K: def plain(self): return base`），
                         // 那句 `LOAD_GLOBAL base` 落在**方法的 code 常量**里 ✗ —— 只看类体的 `co_names`
@@ -621,7 +630,7 @@ impl Emitter {
                         // 元组元素是**本层 cell 槽的 `LOAD_FAST_BORROW`** ✓（与 `Def` 同口径 ✓）。
                         let slot = self
                             .deref_slot(free)
-                            .expect("自由变量必在本层 cell／free 表里");
+                            .unwrap_or_else(|| panic!("自由变量必在本层 cell／free 表里: free={free} qualname={} cellvars={:?} freevars={:?} varnames={:?}", self.qualname, self.unit.cellvars, self.unit.freevars, self.unit.varnames));
                         self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
@@ -849,9 +858,29 @@ impl Emitter {
                 // 方法体里引用 `T` 时，方法单元要走**同一条**闭包分析 ✓（`LOAD_DEREF` 才发得出 ✓）。
                 if matches!(self.kind, ScopeKind::Function | ScopeKind::Class) {
                     // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
-                    // 光靠名字交集会漏 ✓）—— 只在函数体里收 ✓（类作用域不是 `nonlocal` 的目标 ✗）。
-                    if self.kind == ScopeKind::Function {
-                        collect_nonlocals(body, &mut closure_freevars);
+                    // 光靠名字交集会漏 ✓）。**类作用域也是通道**（round 117）：方法里的
+                    // `nonlocal x` 跳过类体指回外层函数 ✓ —— 先前只对 `Function` 收 ✗ ⇒
+                    // 方法拿不到 free 槽 ⇒ 运行期 `UnboundLocalError` ✗
+                    //（`test_dict.test_str_nonstr` 的 `Key3.__eq__` ✓）。
+                    if matches!(self.kind, ScopeKind::Function | ScopeKind::Class) {
+                        let mut declared: Vec<String> = Vec::new();
+                        collect_nonlocals(body, &mut declared);
+                        // **只收本层真有槽的**（cell／free）✓：类作用域**没有**普通局部这一说
+                        //（类体的名字是 `STORE_NAME` 的名字空间项 ✓）⇒ 只认 cell／free ✗
+                        //（否则探测编译时把 `nonlocal` 名当有槽 ⇒ 发闭包元组时 panic ✗）。
+                        for name in declared {
+                            let from_here = if self.kind == ScopeKind::Class {
+                                self.unit.cellvars.iter().any(|cell| cell == &name)
+                                    || self.unit.freevars.iter().any(|free| free == &name)
+                            } else {
+                                self.plain_local_slot(&name).is_some()
+                                    || self.unit.cellvars.iter().any(|cell| cell == &name)
+                                    || self.unit.freevars.iter().any(|free| free == &name)
+                            };
+                            if from_here && !closure_freevars.iter().any(|item| item == &name) {
+                                closure_freevars.push(name);
+                            }
+                        }
                     }
                     // **内层向外索取的名字**（含隔着若干层的需求 ✓）
                     for wanted in nested.demanded.clone() {
@@ -862,7 +891,14 @@ impl Emitter {
                             closure_freevars.push(wanted);
                         }
                     }
-                    for referenced in global_load_names(&nested) {
+                    // **两层闭包**（round 117）：`nested` 里的**下一层**函数把本层局部当全局读时，
+                    // 那句 `LOAD_GLOBAL` 落在下下一层的 code 常量里 ⇒ 只看 `global_load_names(&nested)`
+                    // 看不到 ✗ ⇒ 本层不建 cell ✗ ⇒ 重编 `nested` 时 `deref_slot` 落空 ⇒ 编译期 panic
+                    //（`test_builtin.test_exec_closure` 的 `make_closure_functions` ✓）。
+                    for referenced in global_load_names(&nested)
+                        .into_iter()
+                        .chain(nested_unit_names(&nested))
+                    {
                         let from_here = self.plain_local_slot(&referenced).is_some()
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
                             || self.unit.freevars.iter().any(|free| free == &referenced);
@@ -954,7 +990,7 @@ impl Emitter {
                         // 不是探针能顶的 ⇒ 如实报错，不静默发错代码 ✗。
                         let slot = self
                             .deref_slot(free)
-                            .expect("自由变量必在本层 cell／free 表里");
+                            .unwrap_or_else(|| panic!("自由变量必在本层 cell／free 表里: free={free} qualname={} cellvars={:?} freevars={:?} varnames={:?}", self.qualname, self.unit.cellvars, self.unit.freevars, self.unit.varnames));
                         self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());

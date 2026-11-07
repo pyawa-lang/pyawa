@@ -202,7 +202,7 @@ verdict("wire-construct", lambda: socket.socket())
 const HONEST_EXPECTED: &str = r#"pure-htons !! NotImplementedError True
 pure-inet_aton !! NotImplementedError True
 pure-CMSG_LEN !! NotImplementedError True
-cap-gethostname !! NotImplementedError True
+cap-gethostname => returned str
 cap-getaddrinfo !! NotImplementedError True
 cap-socketpair => returned tuple
 cls-construct => returned socket

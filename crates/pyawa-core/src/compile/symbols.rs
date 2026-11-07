@@ -422,6 +422,9 @@ pub(super) fn analyze_cells(
         } = def
         {
             let probe_qualname = format!("{qualname}.{name}");
+            // **类体里的方法 `nonlocal`**（round 117）：先收需求（类作用域不是目标，外层函数
+            // 要据此建 cell ✓；探针编译是否成功不影响这一条 ✓）。
+            collect_nested_scope_nonlocals(body, &mut demanded);
             if let Ok(probe) = compile_class_scope(
                 name,
                 &probe_qualname,
@@ -505,7 +508,17 @@ pub(super) fn analyze_cells(
                     demanded.push(wanted.clone());
                 }
             }
-            for referenced in &probe.names {
+            // **两层闭包**（round 117）：内层的**内层**（`b` 里的 `c`）把 `a` 的局部当全局读时，
+            // 那句 `LOAD_GLOBAL` 在 `c` 的 code 常量里 —— 只看 `b` 自己的 `co_names` 看不到 ✗ ⇒
+            // `a` 不把 `x` 变 cell ✗ ⇒ `b` 重编时 `deref_slot(x)` 落空 ⇒ 编译期 panic
+            //（"自由变量必在本层 cell／free 表里"，`test_builtin.test_exec_closure` ✓）。
+            let mut probe_names: Vec<String> = probe.names.clone();
+            for name in nested_unit_names(&probe) {
+                if !probe_names.iter().any(|item| item == &name) {
+                    probe_names.push(name);
+                }
+            }
+            for referenced in &probe_names {
                 if emitter.unit.varnames.iter().any(|local| local == referenced) {
                     // 本层有这个名字 ⇒ 本层把它变 cell 就够了，需求到此为止 ✓
                     if !cells.iter().any(|cell| cell == referenced) {
@@ -984,6 +997,48 @@ pub(super) fn collect_nonlocals(statements: &[Statement], out: &mut Vec<String>)
                 collect_nonlocals(finally_body, out);
             }
             Statement::With { body, .. } => collect_nonlocals(body, out),
+            _ => {}
+        }
+    }
+}
+
+/// **收集"隔着类体的 `nonlocal`"**：类作用域不是 `nonlocal` 的目标 ✓，但它是**通道** ✓ ——
+/// 类体里的方法声明 `nonlocal x` 要跳过类体指回外层函数 ✓
+/// （`def make(): count = 0; class C: def m(self): nonlocal count; count += 1` ✓）。
+/// 给闭包分析用：外层函数据此把 `count` 当 cell ✓（`test_dict.test_str_nonstr` ✓）。
+pub(super) fn collect_nested_scope_nonlocals(statements: &[Statement], out: &mut Vec<String>) {
+    for statement in statements {
+        match statement {
+            Statement::Def { body, .. } => collect_nonlocals(body, out),
+            Statement::Class { body, .. } => collect_nested_scope_nonlocals(body, out),
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_nested_scope_nonlocals(then_body, out);
+                collect_nested_scope_nonlocals(else_body, out);
+            }
+            Statement::While { body, else_body, .. }
+            | Statement::For { body, else_body, .. } => {
+                collect_nested_scope_nonlocals(body, out);
+                collect_nested_scope_nonlocals(else_body, out);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                collect_nested_scope_nonlocals(body, out);
+                for handler in handlers {
+                    collect_nested_scope_nonlocals(&handler.body, out);
+                }
+                collect_nested_scope_nonlocals(else_body, out);
+                collect_nested_scope_nonlocals(finally_body, out);
+            }
+            Statement::With { body, .. } => collect_nested_scope_nonlocals(body, out),
             _ => {}
         }
     }

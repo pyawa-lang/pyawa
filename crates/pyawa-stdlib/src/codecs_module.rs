@@ -790,6 +790,181 @@ fn decode_native(
     ))
 }
 
+/// **`unicode_escape`／`raw_unicode_escape` 的转义字符串解码**（round 117 真缺口）：
+/// 参照的这两个 codec 由 C 的 `escape_decode` 实现 ✓。本层先前只挂名字、调用报
+/// `NotImplementedError` ✗ ⇒ `str(bytes, 'raw-unicode-escape')` 一类在**模块级**就炸 ✗ ——
+/// `test_builtin` 的 `test_conv_no_sign` 表里 `str(br'\u0663…','raw-unicode-escape')` ✓。
+///
+/// 口径：`\n`／`\t`／`\r`／`\a`／`\b`／`\f`／`\v`／`\\`／`\'`／`\"`／行续接／`\xXX`／
+/// `\uXXXX`／`\UXXXXXXXX`／八进制（1–3 位）✓；非 ASCII 字节按 **Latin-1** 映码点 ✓；
+/// 其余反斜杠转义**原样保留**（参照给 DeprecationWarning ＋ 保留 ✓）。
+fn escape_decode(_instance: &Instance, data: &[u8]) -> String {
+    let mut text = String::with_capacity(data.len());
+    let mut index = 0usize;
+    while index < data.len() {
+        let byte = data[index];
+        if byte != b'\\' {
+            text.push(char::from(byte));
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if index >= data.len() {
+            text.push('\\');
+            break;
+        }
+        let escape = data[index];
+        index += 1;
+        match escape {
+            b'\\' => text.push('\\'),
+            b'\'' => text.push('\''),
+            b'"' => text.push('"'),
+            b'n' => text.push('\n'),
+            b't' => text.push('\t'),
+            b'r' => text.push('\r'),
+            b'a' => text.push('\u{7}'),
+            b'b' => text.push('\u{8}'),
+            b'f' => text.push('\u{c}'),
+            b'v' => text.push('\u{b}'),
+            b'\n' => {}
+            b'x' | b'u' | b'U' => {
+                let width = match escape {
+                    b'x' => 2,
+                    b'u' => 4,
+                    _ => 8,
+                };
+                if index + width <= data.len() {
+                    let digits = &data[index..index + width];
+                    if let Ok(raw) = std::str::from_utf8(digits) {
+                        if let Ok(value) = u32::from_str_radix(raw, 16) {
+                            if let Some(character) = char::from_u32(value) {
+                                text.push(character);
+                                index += width;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                // 转义序列不完整 ⇒ 原样保留（参照也保留 ✓）
+                text.push('\\');
+                text.push(escape as char);
+            }
+            b'0'..=b'7' => {
+                let mut value = u32::from(escape - b'0');
+                let mut taken = 1;
+                while taken < 3 && index < data.len() && (b'0'..=b'7').contains(&data[index]) {
+                    value = value * 8 + u32::from(data[index] - b'0');
+                    index += 1;
+                    taken += 1;
+                }
+                if let Some(character) = char::from_u32(value) {
+                    text.push(character);
+                }
+            }
+            other => {
+                text.push('\\');
+                text.push(char::from(other));
+            }
+        }
+    }
+    text
+}
+
+/// **`escape_encode`**：反向（控制字符／反斜杠转义；非 ASCII 按 `\xXX`／`\uXXXX`／`\UXXXXXXXX` ✓）。
+fn escape_encode(_instance: &Instance, text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    for code_point in pyawa_core::wtf8::code_points(text).flatten() {
+        let character = char::from_u32(code_point).unwrap_or('\u{fffd}');
+        match character {
+            '\\' => out.extend_from_slice(b"\\\\"),
+            '\n' => out.extend_from_slice(b"\\n"),
+            '\t' => out.extend_from_slice(b"\\t"),
+            '\r' => out.extend_from_slice(b"\\r"),
+            character if (character as u32) >= 0x20 && (character as u32) < 0x7f => {
+                out.push(character as u8)
+            }
+            character if (character as u32) < 0x100 => {
+                out.extend_from_slice(format!("\\x{:02x}", character as u32).as_bytes())
+            }
+            character if (character as u32) < 0x10000 => {
+                out.extend_from_slice(format!("\\u{:04x}", character as u32).as_bytes())
+            }
+            character => {
+                out.extend_from_slice(format!("\\U{:08x}", character as u32).as_bytes())
+            }
+        }
+    }
+    out
+}
+
+fn unicode_escape_decode_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    escape_decode_native(instance, args)
+}
+
+fn raw_unicode_escape_decode_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    escape_decode_native(instance, args)
+}
+
+fn escape_decode_native(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(data) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "unicode_escape_decode() takes at least 1 argument (0 given)",
+        ));
+    };
+    let bytes = instance
+        .bytes_value(data)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| {
+            instance.raise_builtin_error("TypeError", "escape_decode 的输入必须是 bytes")
+        })?;
+    let text = escape_decode(instance, &bytes);
+    let string = instance.new_str(&text);
+    // `(str, consumed)` 二元组（消耗数＝**字节数** ✓）。
+    Ok(pair(instance, string, bytes.len()))
+}
+
+fn unicode_escape_encode_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    escape_encode_native(instance, args)
+}
+
+fn raw_unicode_escape_encode_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    escape_encode_native(instance, args)
+}
+
+fn escape_encode_native(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let bytes = wtf8_argument(instance, args, 0, "escape_encode")?;
+    let encoded = escape_encode(instance, &bytes);
+    let output = instance.new_bytes(&encoded);
+    Ok(pair(instance, output, code_point_count(&bytes)))
+}
+
 /// **未落地**的那些入口：名字齐 ✓、调用时按 `CM-6` 报未实现 ✓。
 fn not_implemented_native(
     instance: &Instance,
@@ -872,6 +1047,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // 直接转给它们 ✓）。
         ("encode", encode_native as NativeFn),
         ("decode", decode_native as NativeFn),
+        // **`unicode_escape`／`raw_unicode_escape`**（round 117）：转义解码/编码真实现 ✓
+        //（`test_builtin` 的模块级 `str(br'\u0663…', 'raw-unicode-escape')` ✓）。
+        ("unicode_escape_decode", unicode_escape_decode_native as NativeFn),
+        (
+            "raw_unicode_escape_decode",
+            raw_unicode_escape_decode_native as NativeFn,
+        ),
+        ("unicode_escape_encode", unicode_escape_encode_native as NativeFn),
+        (
+            "raw_unicode_escape_encode",
+            raw_unicode_escape_encode_native as NativeFn,
+        ),
     ] {
         let native = make_native(instance, name, handler);
         instance.dict_set(namespace, name, native);
@@ -894,10 +1081,6 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         "utf_32_be_decode",
         "utf_32_le_encode",
         "utf_32_le_decode",
-        "unicode_escape_encode",
-        "unicode_escape_decode",
-        "raw_unicode_escape_encode",
-        "raw_unicode_escape_decode",
     ] {
         let native = make_native(instance, name, not_implemented_native);
         instance.dict_set(namespace, name, native);

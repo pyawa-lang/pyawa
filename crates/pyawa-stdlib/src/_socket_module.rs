@@ -221,7 +221,7 @@ const FUNCTIONS: &[(&str, Arity, NativeFn, Unwired)] = &[
     ("gethostbyaddr", Arity::DigitExactly(1), gethostbyaddr_stub, Unwired::Capability),
     ("gethostbyname", Arity::DigitExactly(1), gethostbyname_stub, Unwired::Capability),
     ("gethostbyname_ex", Arity::DigitExactly(1), gethostbyname_ex_stub, Unwired::Capability),
-    ("gethostname", Arity::PrefixNoArgs, gethostname_stub, Unwired::Capability),
+    ("gethostname", Arity::PrefixNoArgs, gethostname_native, Unwired::Capability),
     ("getnameinfo", Arity::DigitExactly(2), getnameinfo_stub, Unwired::Capability),
     ("getprotobyname", Arity::DigitExactly(1), getprotobyname_stub, Unwired::Capability),
     ("getservbyname", Arity::DigitBetween(1, 2), getservbyname_stub, Unwired::Capability),
@@ -642,6 +642,31 @@ fn not_wired(instance: &Instance, name: &str, unwired: Unwired) -> pyawa_core::E
     instance.raise_builtin_error("NotImplementedError", &format!("`_socket.{name}`：{detail}"))
 }
 
+/// **`_socket.gethostname()`**（round 117 真缺口）：`platform._node()`／`platform.uname()` 一进门就调它 ✓
+/// ⇒ 先前按能力域报 `NotImplementedError` ✗ ⇒ `platform.system()` 都不可用 ✗
+/// （`test_builtin` 的**类体级** `platform.system()` ✓）。
+///
+/// 取法（平台事实，见 `CX-4` 与 `lib.rs` 里 `std::env` 的先例 ✓）：`PYAWA_HOSTNAME` 环境变量 ⇒
+/// `HOSTNAME` ⇒ `/proc/sys/kernel/hostname` ⇒ `localhost`；**只发读操作**，不碰网络 ✓。
+/// **如实登记** ✗：这不是"真实主机名"的完整能力（不查 NSS／DNS）；取值口径固定如上 ✓。
+fn gethostname_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    check_arity(instance, "gethostname", Arity::PrefixNoArgs, args, kwargs)?;
+    // **平台读取在 runtime 侧**（`CX-4`：本 crate 不碰 `std::fs` ✗）——runtime 启动时把
+    // `/proc/sys/kernel/hostname` 注入 `PYAWA_HOSTNAME` ✓；这里只读环境变量 ✓。
+    let name = std::env::var("PYAWA_HOSTNAME")
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| text.trim().to_owned())
+        .unwrap_or_else(|| "localhost".to_owned());
+    Ok(instance.new_str(&name))
+}
+
 macro_rules! socket_stub_fn {
     ($function:ident, $name:literal, $arity:expr, $unwired:expr) => {
         fn $function(
@@ -665,7 +690,6 @@ socket_stub_fn!(getdefaulttimeout_stub, "getdefaulttimeout", Arity::PrefixNoArgs
 socket_stub_fn!(gethostbyaddr_stub, "gethostbyaddr", Arity::DigitExactly(1), Unwired::Capability);
 socket_stub_fn!(gethostbyname_stub, "gethostbyname", Arity::DigitExactly(1), Unwired::Capability);
 socket_stub_fn!(gethostbyname_ex_stub, "gethostbyname_ex", Arity::DigitExactly(1), Unwired::Capability);
-socket_stub_fn!(gethostname_stub, "gethostname", Arity::PrefixNoArgs, Unwired::Capability);
 socket_stub_fn!(getnameinfo_stub, "getnameinfo", Arity::DigitExactly(2), Unwired::Capability);
 socket_stub_fn!(getprotobyname_stub, "getprotobyname", Arity::DigitExactly(1), Unwired::Capability);
 socket_stub_fn!(getservbyname_stub, "getservbyname", Arity::DigitBetween(1, 2), Unwired::Capability);

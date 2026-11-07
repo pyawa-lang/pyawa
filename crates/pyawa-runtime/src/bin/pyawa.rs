@@ -117,6 +117,16 @@ fn main() {
     // SAFETY: 单线程启动阶段设环境变量。
     unsafe {
         std::env::set_var("PYAWA_RECURSION_LIMIT", "160");
+        // **主机名**（round 117）：`_socket.gethostname()` 的取值来源（stdlib 不碰文件系统 ✓）；
+        // 只读 `/proc/sys/kernel/hostname`（Linux；失败就给 `localhost` ✓）。
+        if std::env::var_os("PYAWA_HOSTNAME").is_none() {
+            let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| "localhost".to_owned());
+            std::env::set_var("PYAWA_HOSTNAME", hostname);
+        }
     }
     let builder = std::thread::Builder::new().stack_size(512 * 1024 * 1024);
     if let Ok(handle) = builder.spawn(real_main) {
