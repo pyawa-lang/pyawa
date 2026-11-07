@@ -295,17 +295,24 @@ pub(crate) fn subscript_set(
         // **切片写**（`a[i:j] = …`）：键是 `slice` 时替换那一整段（长度可与原段不同；
         // 带步长的"扩展切片"要求长度相等——消息照参照实测）
         if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
-            let bounds = slice_bounds(instance, key, object.len());
-            let (start, stop, step) = match bounds {
-                Ok(bounds) => bounds,
+            // **先物化右值、再按"当前"列表算切片边界**（round 112 真 bug 修 ✗）：参照的字节码
+            // 次序是 `LOAD 右值 → LOAD 目标/切片 → STORE_SUBSCR` ✓ —— 扩展切片赋值的长度检查发生在
+            // **右值完全求值之后** ✓。先前先 `slice_bounds`（缓存旧长度）✗ ⇒ 右值的迭代把列表清空后
+            // 仍按旧长度对位 ⇒ 长度不等也不报 `ValueError` ✗（`test_list.test_list_index_modifing_operand` ✓）。
+            let items = match sequence_items(instance, value, opcode) {
+                Ok(items) => items,
                 Err(error) => {
                     release(instance, value);
                     return Err(error);
                 }
             };
-            let items = match sequence_items(instance, value, opcode) {
-                Ok(items) => items,
+            let bounds = slice_bounds(instance, key, object.len());
+            let (start, stop, step) = match bounds {
+                Ok(bounds) => bounds,
                 Err(error) => {
+                    for item in items {
+                        release(instance, item);
+                    }
                     release(instance, value);
                     return Err(error);
                 }

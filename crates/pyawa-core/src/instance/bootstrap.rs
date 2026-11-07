@@ -41,6 +41,10 @@ impl Instance {
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),
             call_depth: Cell::new(0),
+            // **默认深度上限的环境覆盖**（round 112）：本层上限低是因为每层 Python 调用吃不少
+            // **原生栈** ✓ —— 宿主（`pyawa` CLI）可以给执行线程开大栈并用
+            // `PYAWA_RECURSION_LIMIT` 提高上限 ✓（`pprint` 一族正常嵌套就要 30+ 层 ✓）；
+            // 不设该变量时仍是保守的 `MAX_CALL_DEPTH` ✓（cargo 测试的线程栈小，保持原状 ✓）。
             recursion_limit: Cell::new(crate::instance::MAX_CALL_DEPTH),
             gc_threshold: Cell::new(DEFAULT_GC_THRESHOLD),
             gc_alloc_count: Cell::new(0),
@@ -577,6 +581,20 @@ impl Instance {
                 .with_repr(crate::builtin_objects::dict_repr)
                 // **方法面**（第 145 轮）
                 .with_getattr(crate::builtin_objects::dict_getattr),
+        );
+        // **`mappingproxy`**（round 112）：`types.MappingProxyType = type(type.__dict__)` ✓ ——
+        // 载荷／方法面沿用 `dict`（MRO 里把 dict 作基类 ✓），`repr` 换成 `mappingproxy({...})` ✓。
+        let _mappingproxy_type = self.alloc_type_raw(
+            "mappingproxy",
+            core::mem::size_of::<DictObject>(),
+            DictObject::slots()
+                .with_new(crate::instance::constructors::mappingproxy_new)
+                .with_repr(crate::instance::constructors::mappingproxy_repr)
+                .with_getattr(crate::builtin_objects::dict_getattr),
+        );
+        let _ = self.register_bases(
+            self.type_named("mappingproxy").expect("刚建"),
+            vec![self.type_named("dict").expect("dict 已登记")],
         );
         // **`memoryview`** ✓（第 187 轮）：被 `_collections_abc.py:1062` 的 `Sequence.register(memoryview)` 用到 ✓
         // ⇒ 与 `range`／`frozenset` 同款：**名字必须是类型** ✓。

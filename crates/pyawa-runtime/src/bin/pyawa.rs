@@ -108,6 +108,19 @@ fn install_segv_trace() {}
 
 fn main() {
     install_segv_trace();
+    // **大栈执行线程**（round 112）：本层 Python 调用是 Rust 递归 ✓ —— 主线程默认 8 MiB 栈；
+    // 给执行线程开 **512 MiB** 栈以留余量 ✓（默认递归上限仍是保守的 `MAX_CALL_DEPTH=64` ✓，
+    // 深容器 `repr` 仍按参照报 `RecursionError` ✓ —— 见 `repr_loop_crash_shapes` 的守卫 ✓）。
+    let builder = std::thread::Builder::new().stack_size(512 * 1024 * 1024);
+    if let Ok(handle) = builder.spawn(real_main) {
+        let _ = handle.join();
+        return;
+    }
+    real_main();
+}
+
+fn real_main() {
+    install_segv_trace();
     let mut arguments = std::env::args_os().skip(1);
     let Some(first) = arguments.next() else {
         usage("缺文件参数");

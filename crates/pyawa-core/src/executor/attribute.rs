@@ -874,6 +874,13 @@ fn attribute_lookup_specials(
         if object_is_type {
             // 命名空间字典的**惰性挂载**在 [`crate::Instance::type_namespace`]（**一处真相** ✓）。
             if let Some(namespace) = instance.type_namespace(object) {
+                // **参照给的是 `mappingproxy` 只读视图**（round 112 真 bug 修 ✗）：先前直接交
+                // 命名空间 dict ✗ ⇒ `types.MappingProxyType = type(type.__dict__)` 得到 **dict** ✗
+                // ⇒ `pprint._dispatch` 的 `mappingproxy.__repr__` 覆盖 `dict.__repr__` 的条目 ✗
+                // ⇒ 每个 dict 的打印都走 mappingproxy 分支 ⇒ 无限递归（`test_pprint` ✓）。
+                if let Some(proxy) = instance.mappingproxy_of(namespace) {
+                    return Ok(Attribute::Owned(proxy)).map(Some);
+                }
                 // SAFETY: namespace 是存活对象；类型自己持一份，这里给调用方**再加一份** ✓。
                 unsafe { instance.incref_object(namespace.as_ptr()) };
                 return Ok(Attribute::Owned(namespace)).map(Some);

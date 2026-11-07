@@ -603,3 +603,81 @@ impl Instance {
         ty
     }
 }
+
+/// **`mappingproxy` 的构造**（round 112）：`types.MappingProxyType = type(type.__dict__)` ✓ ——
+/// 参照的 `type.__dict__` 是 **mappingproxy** 对象 ✓；本层先前直接交命名空间 dict ✗ ⇒
+/// `type(type.__dict__)` 得到 **dict** ✗ ⇒ `pprint._dispatch` 里 `mappingproxy.__repr__` 覆盖了
+/// `dict.__repr__` 的条目 ⇒ **每个 dict 都走 mappingproxy 的打印分支** ⇒ 无限递归 ✗
+/// （`test_pprint` 一团 RecursionError ✓）。
+///
+/// 口径：载荷**照样是 `DictObject`**（MRO 里把 `dict` 作为基类 ⇒ 方法面／下标／`len` 全可用 ✓）；
+/// 构造时**复制**一份条目（参照是**只读视图**；本层如实登记为"快照"，写操作不会回写底层 ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn mappingproxy_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(source) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "mappingproxy() takes exactly one argument",
+        ));
+    };
+    let Some(source_entries) = instance.dict_entries(source) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "mappingproxy() argument must be a mapping",
+        ));
+    };
+    let entries: Vec<(NonNull<Header>, NonNull<Header>)> = source_entries
+        .into_iter()
+        .map(|(key, value)| {
+            // SAFETY: 借用视图 ⇒ 新字典各持一份。
+            unsafe {
+                instance.incref_object(key.as_ptr());
+                instance.incref_object(value.as_ptr());
+            }
+            (key, value)
+        })
+        .collect();
+    Ok(instance
+        .alloc(DictObject::new(class, core::cell::RefCell::new(entries)))
+        .into_raw()
+        .cast::<Header>())
+}
+
+impl Instance {
+    /// **把一份 dict 包成 `mappingproxy`**（round 112；`type.__dict__` 那条读法用 ✓）：
+    /// 载荷是**复制**的条目（本层如实登记为快照 ✓）。
+    pub fn mappingproxy_of(&self, source: NonNull<Header>) -> Option<NonNull<Header>> {
+        let class = self.type_named("mappingproxy")?;
+        let entries = self.dict_entries(source)?;
+        let copied: Vec<(NonNull<Header>, NonNull<Header>)> = entries
+            .into_iter()
+            .map(|(key, value)| {
+                // SAFETY: 借用视图 ⇒ 新字典各持一份。
+                unsafe {
+                    self.incref_object(key.as_ptr());
+                    self.incref_object(value.as_ptr());
+                }
+                (key, value)
+            })
+            .collect();
+        Some(
+            self.alloc(DictObject::new(class, core::cell::RefCell::new(copied)))
+                .into_raw()
+                .cast::<Header>(),
+        )
+    }
+}
+
+/// `mappingproxy` 的 `repr`：`mappingproxy({...})` ✓（内层照 dict 的 repr）。
+pub unsafe fn mappingproxy_repr(
+    ptr: *mut Header,
+    instance: &Instance,
+) -> Result<String, crate::ExecError> {
+    // SAFETY: 载荷与 dict 同构。
+    let inner = unsafe { crate::builtin_objects::dict_repr(ptr, instance) }?;
+    Ok(format!("mappingproxy({inner})"))
+}
