@@ -11,9 +11,11 @@ fn map_lookup_with_protocol(
     instance: &Instance,
     container: NonNull<Header>,
     key: NonNull<Header>,
-) -> Result<Option<usize>, ExecError> {
+) -> Result<(Option<usize>, Option<u64>), ExecError> {
+    // **哈希一起交回**（round 121）：参照对每个键只算一次 `__hash__` ✓ —— 先前"查重算一次、
+    // 插入再算一次" ✗ ⇒ `hash_count` 2 ✗（`test_setdefault_atomic`／`test_setitem_atomic_at_resize` ✓）。
     let Some(hash) = crate::executor::values::key_hash(instance, key) else {
-        return Ok(None);
+        return Ok((None, None));
     };
     // SAFETY: 调用方保证 container 是存活的 dict（类型在上面刚核过）。
     let dict = unsafe { &*container.as_ptr().cast::<DictObject>() };
@@ -30,10 +32,10 @@ fn map_lookup_with_protocol(
             values_equal(instance, existing, key)
         };
         if same {
-            return Ok(Some(position));
+            return Ok((Some(position), Some(hash)));
         }
     }
-    Ok(None)
+    Ok((None, Some(hash)))
 }
 
 
@@ -171,7 +173,9 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         // **哈希索引 ＋ 用户 `__eq__`**（round 70，参照的 `BUILD_MAP` 就是
                         // `PyDict_SetItem` ⇒ 去重 ✓）：先前线性扫 ⇒ O(n²) ✗ 且不看用户 `__eq__` ✗
                         // （`{'halibut': 1, HalibutProxy(): 2}` 实测 2 项 ✗）。
-                        if let Some(slot) = map_lookup_with_protocol(instance, dict_header, key)? {
+                        let (existing, computed_hash) =
+                            map_lookup_with_protocol(instance, dict_header, key)?;
+                        if let Some(slot) = existing {
                             // SAFETY: 刚由 alloc 得到、仍存活。
                             let object = unsafe { &*dict_header.as_ptr().cast::<DictObject>() };
                             if let Some(old) = object.replace_value(slot, value) {
@@ -179,7 +183,7 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                             }
                             release(instance, key);
                         } else {
-                            let Some(hash) = crate::executor::values::key_hash(instance, key) else {
+                            let Some(hash) = computed_hash else {
                                 let kind = instance.type_name(instance.type_of(key)).to_owned();
                                 release(instance, key);
                                 release(instance, value);
@@ -402,7 +406,9 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     // `{名字: 值 for …}` 的建表是 O(n²) ✗（实测 8000 项 2.57 s，
                     // `collections.namedtuple` 的千字段类因此超时）。改走与 `dict_set` 同一套
                     // 惰性哈希索引 ✓：命中替换值（保插入序 ✓）、未命中按哈希插入并**增量维护索引** ✓。
-                    if let Some(position) = map_lookup_with_protocol(instance, container, key)? {
+                    let (existing, computed_hash) =
+                        map_lookup_with_protocol(instance, container, key)?;
+                    if let Some(position) = existing {
                         // SAFETY: 容器类型刚核过是 dict ✓。
                         let dict = unsafe { &*container.as_ptr().cast::<DictObject>() };
                         if let Some(old) = dict.replace_value(position, value) {
@@ -410,7 +416,7 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         }
                         release(instance, key);
                     } else {
-                        let Some(hash) = crate::executor::values::key_hash(instance, key) else {
+                        let Some(hash) = computed_hash else {
                             // **不可哈希键** ⇒ 参照的 `TypeError: unhashable type: 'list'` ✓。
                             let kind = instance.type_name(instance.type_of(key)).to_owned();
                             release(instance, key);

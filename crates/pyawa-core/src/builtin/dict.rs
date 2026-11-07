@@ -78,9 +78,10 @@ pub(crate) fn dict_position_with_protocol(
     instance: &Instance,
     mapping: NonNull<Header>,
     key: NonNull<Header>,
-) -> Result<Option<usize>, crate::ExecError> {
+) -> Result<(Option<usize>, Option<u64>), crate::ExecError> {
+    // 返回算好的哈希一起给调用方 ✓（插入时复用 ⇒ 每键只算一次 `__hash__` ✓）。
     let Some(hash) = crate::executor::values::key_hash_checked(instance, key)? else {
-        return Ok(dict_position(instance, mapping, key));
+        return Ok((dict_position(instance, mapping, key), None));
     };
     // SAFETY: 调用方保证 mapping 是存活的 dict。
     let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
@@ -97,10 +98,10 @@ pub(crate) fn dict_position_with_protocol(
             crate::executor::values::values_equal_public(instance, candidate, key)
         };
         if same {
-            return Ok(Some(position));
+            return Ok((Some(position), Some(hash)));
         }
     }
-    Ok(None)
+    Ok((None, Some(hash)))
 }
 
 pub(crate) fn dict_position(
@@ -227,7 +228,7 @@ pub(crate) fn dict_update_native(
         }
         // **按键的 `==` 协议找位置**（round 120）：键 `__eq__` 抛异常要原样上抛 ✓
         //（`test_bad_key` 的 `d.update({x2: 2})` ✓）。
-        match dict_position_with_protocol(instance, mapping, key)? {
+        match dict_position_with_protocol(instance, mapping, key)?.0 {
             Some(index) => {
                 // SAFETY: 上面刚确认是本实例的 dict。
                 let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
@@ -388,7 +389,7 @@ pub(crate) fn dict_setdefault_native(
     };
     reject_unhashable_key(instance, *key)?;
     // **按键的 `==` 协议找位置**（round 120）：见 `pop` 同一口径 ✓。
-    if let Some(index) = dict_position_with_protocol(instance, mapping, *key)? {
+    if let Some(index) = dict_position_with_protocol(instance, mapping, *key)?.0 {
         let entries = instance.dict_entries(mapping).unwrap_or_default();
         return Ok(instance.retain(entries[index].1));
     }
@@ -425,7 +426,7 @@ pub(crate) fn dict_pop_native(
     reject_unhashable_key(instance, *key)?;
     // **按键的 `==` 协议找位置**（round 120）：键 `__eq__` 抛异常要原样上抛 ✓
     //（`test_bad_key` 的 `d.pop(x2)` ✓）。
-    if let Some(index) = dict_position_with_protocol(instance, mapping, *key)? {
+    if let Some(index) = dict_position_with_protocol(instance, mapping, *key)?.0 {
         // SAFETY: 上面刚确认是本实例的 dict。
         let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
         if let Some((removed_key, value)) = object.remove_at(index) {

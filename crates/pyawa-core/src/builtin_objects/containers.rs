@@ -231,6 +231,10 @@ py_object! {
             /// **键集版本号**（`P3-41` round 42）：改键（插入／删除）时 +1 ⇒ 迭代器据此报
             /// `RuntimeError: dictionary changed size during iteration` ✓（只改值不算 ✓，照参照）。
             version: Cell<u64>,
+            /// **逐项缓存键哈希**（round 121）：参照只算一次 `__hash__` ✓ —— 先前"哈希索引"重建时
+            /// 把**已存键重新哈希** ✗ ⇒ `test_dict.test_setdefault_atomic` 的 `hash_count == 1`
+            /// 当场 2 ✗。`u64::MAX` 是"未知"哨兵（走 `insert_raw` 的键）✓，索引重建时才现算 ✓。
+            hashes: RefCell<Vec<u64>>,
         }
     }
 }
@@ -538,10 +542,13 @@ impl DictObject {
         }
         let built = {
             let entries = self.entries.borrow();
+            let hashes = self.hashes.borrow();
             let mut map: std::collections::HashMap<u64, Vec<usize>> =
                 std::collections::HashMap::new();
             for (position, (key, _)) in entries.iter().enumerate() {
-                if let Some(hash) = hash_of(*key) {
+                // **优先用缓存哈希**（参照只算一次 `__hash__` ✓）；哨兵才现算 ✓。
+                let cached = hashes.get(position).copied().filter(|hash| *hash != u64::MAX);
+                if let Some(hash) = cached.or_else(|| hash_of(*key)) {
                     map.entry(hash).or_default().push(position);
                 }
             }
@@ -572,6 +579,7 @@ impl DictObject {
             let mut entries = self.entries.borrow_mut();
             let position = entries.len();
             entries.push((key, value));
+            self.hashes.borrow_mut().push(hash);
             position
         };
         if let Some(index) = self.index.borrow_mut().as_mut() {
@@ -587,6 +595,12 @@ impl DictObject {
         let mut entries = self.entries.borrow_mut();
         if index >= entries.len() {
             return None;
+        }
+        {
+            let mut hashes = self.hashes.borrow_mut();
+            if index < hashes.len() {
+                hashes.remove(index);
+            }
         }
         Some(entries.remove(index))
     }
@@ -646,6 +660,7 @@ impl DictObject {
         self.bump_version();
         self.invalidate_index();
         self.entries.borrow_mut().push((key, value));
+        self.hashes.borrow_mut().push(u64::MAX);
     }
 
     /// 替换第 `index` 项的值（**新引用**），返回旧值（调用方负责释放）。
@@ -668,6 +683,12 @@ impl DictObject {
         if index >= entries.len() {
             return None;
         }
+        {
+            let mut hashes = self.hashes.borrow_mut();
+            if index < hashes.len() {
+                hashes.remove(index);
+            }
+        }
         Some(entries.remove(index))
     }
 
@@ -688,6 +709,7 @@ impl DictObject {
         }
         self.bump_version();
         entries.push((key, value));
+        self.hashes.borrow_mut().push(u64::MAX);
         None
     }
 }

@@ -402,10 +402,10 @@ pub(crate) fn subscript_set(
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         // **按哈希索引查 ＋ 用户 `__eq__`**（round 71）：同键判定走完整协议 ✓
         //（`d['halibut']=1; d[Proxy()]=2` 之类用户 `__eq__` 的键才与参照一致 ✓）。
-        let position = match crate::builtin::dict::dict_position_with_protocol(
+        let (position, computed_hash) = match crate::builtin::dict::dict_position_with_protocol(
             instance, container, key,
         ) {
-            Ok(position) => position,
+            Ok(found) => found,
             Err(error) => {
                 release(instance, value);
                 return Err(error);
@@ -427,7 +427,9 @@ pub(crate) fn subscript_set(
                 unsafe { instance.incref_object(key.as_ptr()) };
                 // **带哈希插入**（`P3-41` round 42）：`insert_raw` 会作废查找索引 ⇒ 造表时每次
                 // 重扫全表 ⇒ O(n²)。能算哈希就增量维护索引 ✓。
-                match crate::executor::values::key_hash(instance, key) {
+                // **复用上面算好的哈希**（round 121）：每键只算一次 `__hash__` ✓
+                //（`test_setitem_atomic_at_resize` 的 `hash_count == 1` ✓）。
+                match computed_hash {
                     Some(hash) => {
                         object.insert_hashed(key, value, hash);
                     }
