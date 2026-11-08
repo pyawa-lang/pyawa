@@ -79,6 +79,25 @@ impl Instance {
 }
 
 impl Instance {
+    /// **引用事件跟踪**（round 90，诊断；`PYAWA_REF_TRACE=<类型名[,类型名]>`）：给该类型的对象
+    /// 每次 incref／decref 打一行（**现场** = 当前 Python 站点）。用来找"**不在 GC 可达图里的引用**"
+    /// （A 族 `test_free_after_iterating` 的环外引用 ✓）。默认零输出（`OnceLock` 缓存环境变量 ✓）。
+    fn ref_trace_matches(&self, ptr: *mut Header) -> bool {
+        static TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+        let Some(targets) = TARGET.get_or_init(|| {
+            std::env::var("PYAWA_REF_TRACE")
+                .ok()
+                .map(|text| text.split(',').map(str::trim).filter(|part| !part.is_empty()).map(str::to_owned).collect())
+        }) else {
+            return false;
+        };
+        // SAFETY: 调用方保证 ptr 是存活对象。
+        let ty = unsafe { &*ptr }.ty();
+        // SAFETY: ty 由注册表持有。
+        let name = unsafe { ty.as_ref() }.name();
+        targets.iter().any(|target| target == name)
+    }
+
     /// **OM-22**：`sys.getrefcount` 的可见语义——返回值**含参数借用**的那一份。
     pub fn getrefcount<T: PyObject>(&self, object: &T) -> u32 {
         object.header().refcount() + 1
@@ -94,6 +113,13 @@ impl Instance {
         // 先把"它原来是什么类型、现在哪一帧在动它"报出来 ✓ —— 光一句"对已释放对象 incref" ✗
         // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
         self.quarantine_report(ptr, "incref");
+        if self.ref_trace_matches(ptr) {
+            eprintln!(
+                "[ref] +1 ptr={ptr:p} rc={} 现场={}",
+                unsafe { &*ptr }.refcount() + 1,
+                self.current_site()
+            );
+        }
         if self.watch.get() == ptr as usize {
             eprintln!(
                 "[watch] incref {ptr:p} → rc={} 现场={}",
@@ -152,6 +178,13 @@ impl Instance {
         }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };
+        if self.ref_trace_matches(ptr) {
+            eprintln!(
+                "[ref] -1 ptr={ptr:p} rc={} 现场={}",
+                header.refcount().saturating_sub(1),
+                self.current_site()
+            );
+        }
         // **OM-24**：M1 的 `IMMORTAL` 位恒为 0；这里只是防御，不承担语义。
         if header.is_immortal() {
             return;
