@@ -425,12 +425,61 @@ pub fn contains_public(
 
 /// `+=` 的**就地**语义（`NB_INPLACE_ADD`）：`list` 是**就地 extend**（别名可见，实测），
 /// 其余类型退化为基运算 `+`（不可变 ⇒ 重新绑定与就地不可区分）。
+/// **就地运算的用户 dunder 派发**（round 109，PEP 203 口径）：`x op= y` 先看
+/// `type(x)` 的 MRO 上有没有 `__iop__`（**不含 `object` 默认**——它本来就不定义这些）；
+/// 有就调：返回 `NotImplemented` ⇒ 落回"基运算 + 重新绑定" ✓；没有 ⇒ `None`（调用方走快路）✓。
+fn inplace_dunder(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    dunder: &str,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let ty = instance.type_of(left);
+    let Some((_owner, _func)) = instance.type_lookup_owner(ty, dunder) else {
+        return Ok(None);
+    };
+    // 容器快路（list／set／dict）没在类型字典里登记这些 dunder ⇒ 到这里只会是**用户覆写** ✓。
+    let Some(result) = call_special_method(instance, left, dunder, &[right])? else {
+        return Ok(None);
+    };
+    if result == instance.not_implemented() {
+        // SAFETY: result 是新引用。
+        unsafe { instance.release_object(result.as_ptr()) };
+        return Ok(None);
+    }
+    Ok(Some(result))
+}
+
+/// 符号 ⇒ 就地 dunder 名（`None` ⇒ 该符号没有就地协议 ✓）。
+fn inplace_dunder_name(symbol: &str) -> Option<&'static str> {
+    Some(match symbol {
+        "+" => "__iadd__",
+        "-" => "__isub__",
+        "*" => "__imul__",
+        "/" => "__itruediv__",
+        "//" => "__ifloordiv__",
+        "%" => "__imod__",
+        "**" => "__ipow__",
+        "<<" => "__ilshift__",
+        ">>" => "__irshift__",
+        "&" => "__iand__",
+        "|" => "__ior__",
+        "^" => "__ixor__",
+        "@" => "__imatmul__",
+        _ => return None,
+    })
+}
+
 pub(crate) fn inplace_add(
     instance: &Instance,
     left: NonNull<Header>,
     right: NonNull<Header>,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **用户 `__iadd__` 优先**（round 109）：`x += y` 先问 `type(x).__iadd__` ✓。
+    if let Some(result) = inplace_dunder(instance, left, right, "__iadd__")? {
+        return Ok(result);
+    }
     if Some(unsafe { left.as_ref() }.ty()) == instance.type_named("list") {
         let items = sequence_items(instance, right, opcode)?;
         // SAFETY: 类型身份已确认，且 left 是帧值栈上的存活对象。
@@ -605,6 +654,12 @@ pub(crate) fn inplace_arithmetic(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **用户 `__iop__` 优先**（round 109，PEP 203）：有覆写就调；`NotImplemented` 才落回基运算 ✓。
+    if let Some(dunder) = inplace_dunder_name(symbol) {
+        if let Some(result) = inplace_dunder(instance, left, right, dunder)? {
+            return Ok(result);
+        }
+    }
     let container = unsafe { left.as_ref() }.ty();
     let subtype_of = |name: &str| {
         instance

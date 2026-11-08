@@ -527,10 +527,13 @@ fn list_dunder_iadd(
             "__iadd__() takes exactly one argument (0 given)",
         ));
     };
-    let Some(items) = instance.list_items(other) else {
+    // **`list.__iadd__` 接受任意可迭代**（参照：`[1] += (2,)` ✓；`[1] += 5` ⇒ `'int' object is
+    // not iterable` ✓）——先前只认 list ✗（round 109 由 `inplace_add` 统一派发到本函数后暴露）。
+    let name = instance.type_name(instance.type_of(other));
+    let Some(items) = instance.iterable_items(other).map_err(|error| error)? else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "can only concatenate list (not \"other\") to list",
+            &format!("'{name}' object is not iterable"),
         ));
     };
     for item in items {

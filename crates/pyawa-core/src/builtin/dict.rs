@@ -1075,15 +1075,16 @@ pub(crate) fn dict_ior_native(
     let Some(other) = rest.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "__ior__ expected 2 arguments"));
     };
-    if instance.dict_entries(other).is_some() {
-        let result = dict_update_native(instance, Some(mapping), &[other], kwargs)?;
-        instance.release(result);
-    } else if !kwargs.is_empty() {
+    if !kwargs.is_empty() {
         return Err(instance.raise_builtin_error("TypeError", "__ior__ takes no keyword arguments"));
-    } else {
-        // 非 dict ⇒ 按"键值对可迭代"并入 ✓（`a.__ior__("BAD")` ⇒ ValueError ✓）。
-        dict_update_sequence(instance, mapping, other)?;
     }
+    // **统一走 `dict_update_native`**（round 109 真 bug 修 ✗）：它按"dict 条目 → 有 `keys()` 的映射 →
+    // 可迭代键值对"三档处理 ✓。先前这里对"非 dict"直接落 `dict_update_sequence` ✗ ⇒ 对**有 `keys()`
+    // 但没有 `__iter__`** 的映射（`Mapping` 只实现 `keys`／`__getitem__`）会走**旧式序列协议**
+    // （`__getitem__(0), __getitem__(1), …` 永不 `IndexError`）⇒ **死循环** ✗
+    // （`test_dict` 的 `d |= Mapping()`／inplace_shapes 的 `dict_inplace_or_agrees` 实测挂起 ✓）。
+    let result = dict_update_native(instance, Some(mapping), &[other], kwargs)?;
+    instance.release(result);
     Ok(instance.retain(mapping))
 }
 
