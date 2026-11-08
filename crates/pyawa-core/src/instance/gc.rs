@@ -106,12 +106,14 @@ impl Instance {
             .iter()
             .map(|header| header.as_ptr() as usize)
             .collect();
+        let mut any_finalized = false;
         for header in &unreachable {
             let ty = unsafe { header.as_ref() }.ty();
             if let Some(finalize) = unsafe { ty.as_ref() }.slots.finalize {
                 let header_ref = unsafe { header.as_ref() };
                 if !header_ref.has_flag(flags::FINALIZING) {
                     header_ref.set_flag(flags::FINALIZING);
+                    any_finalized = true;
                     // SAFETY: header 是本实例的存活对象。
                     unsafe { finalize(header.as_ptr(), self) };
                 }
@@ -119,7 +121,12 @@ impl Instance {
         }
 
         // 终结器可能复活对象、也可能让别的对象重新变可达（PEP 442）⇒ 重算不可达集合。
-        let unreachable = self.find_unreachable();
+        // **没跑过任何终结器 ⇒ 可达性与第一次相同**（round 110：省一次全堆标记 ✓）。
+        let unreachable = if any_finalized {
+            self.find_unreachable()
+        } else {
+            unreachable
+        };
         let garbage: HashSet<usize> = unreachable.iter().map(|h| h.as_ptr() as usize).collect();
 
         // 复活的对象要清掉 FINALIZING，之后它再次死亡时还能再终结一次（OM-20）。
@@ -409,10 +416,11 @@ impl Instance {
         if candidates.is_empty() {
             return std::collections::HashSet::new();
         }
+        // **O(1) 判类型**（round 110）：先前对每个候选线性扫 `user_types`（O(H·U)）✗。
+        let user_type_set: std::collections::HashSet<usize> =
+            user_types.iter().map(|entry| entry.as_ptr() as usize).collect();
         let is_type = |candidate: &NonNull<Header>| {
-            user_types
-                .iter()
-                .any(|entry| entry.as_ptr() == candidate.as_ptr())
+            user_type_set.contains(&(candidate.as_ptr() as usize))
         };
         let index: std::collections::HashMap<usize, usize> = candidates
             .iter()
@@ -508,6 +516,13 @@ impl Instance {
     pub(crate) fn reclaim_orphan_user_types(&self) {
         let user_types = self.user_type_headers();
         if user_types.is_empty() {
+            return;
+        }
+        // **早退**（round 110）：没有任何 `rc==1` 的用户类型 ⇒ 不可能有孤儿，别做全堆标记 ✓。
+        if !user_types.iter().any(|ty| {
+            // SAFETY: 名单里的类型都存活。
+            unsafe { ty.as_ref() }.refcount() == 1
+        }) {
             return;
         }
         // ① 其它类型以裸指针引用（bases／mro／元类）——跳过"自己 MRO 里的自己" ✓。

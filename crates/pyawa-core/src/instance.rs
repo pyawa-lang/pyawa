@@ -263,6 +263,9 @@ pub struct Instance {
     gc_frozen: RefCell<HashSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
     gc_running: Cell<bool>,
+    /// **显式** `gc.collect()` 正在跑（round 110）：孤儿用户类回收只在显式回收或每 N 次自动回收时做 ✓
+    /// （否则重负载套件每次自动回收都做 `user_types × gc_headers` 扫描 ⇒ 4–5× 变慢 ✗）。
+    gc_explicit: Cell<bool>,
     /// **类型级 dunder 的"每类型一份"包装器**（round 103）：参照里每个内建类型在**自己的类型字典**
     /// 里有自己的 slot wrapper（`list.__repr__ is not dict.__repr__` ✓）—— 本层这些 dunder 由
     /// `object` 的同一个 native 兜底 ✗ ⇒ 在**类型对象**上取到的都是**同一个对象** ✗ ⇒

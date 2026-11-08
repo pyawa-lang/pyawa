@@ -168,6 +168,16 @@ impl Instance {
     ///
     /// 顺序按 **OM-27** 固定：① 求不可达集合 → ② 先清弱引用 → ③ 调终结器 → ④ 释放。
     /// 回收范围仅限 `GC_TRACKED` 对象（**OM-25**）；不可达但尚未释放的对象**禁止**暴露（**OM-30**）。
+    /// **显式** `gc.collect()`：与自动回收区分（round 110）——孤儿用户类回收必须在显式回收时必跑 ✓
+    /// （`test_free_after_iterating` 一类判据都显式 `gc.collect()` ✓），自动回收则节流（每 8 次一次）✓。
+    pub fn collect_explicit(&self) -> usize {
+        let was_explicit = self.gc_explicit.get();
+        self.gc_explicit.set(true);
+        let freed = self.collect();
+        self.gc_explicit.set(was_explicit);
+        freed
+    }
+
     pub fn collect(&self) -> usize {
         if self.gc_running.get() {
             // 终结器／clear 里又触发了一次回收：本次让路，交给外层那次。
