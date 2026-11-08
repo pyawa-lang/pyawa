@@ -141,6 +141,20 @@ impl Instance {
         // 先把"它原来是什么类型、现在哪一帧在动它"报出来 ✓ —— 光一句"对已释放对象 incref" ✗
         // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
         self.quarantine_report(ptr, "incref");
+        // **对已释放对象的 incref 是 UAF**（round 94 诊断）：`PYAWA_ZOMBIE_TRACE=1` 时当场报出**现场** ✓
+        // （先于后续 release 崩溃；用来点名"悬垂引用从哪来"）。判据用**释放登记**（`freed_sites`）：
+        // 引导期那些"从不进活表"的单例不会被误报 ✓。
+        if self.zombie_trace.get()
+            && !self.live.borrow().contains(&(ptr as usize))
+            && self.freed_sites.borrow().contains_key(&(ptr as usize))
+        {
+            let site = self.current_site();
+            panic!(
+                "[悬垂-incref] incref 要碰 {:#x}，但它**不在活表里** ✗（已被释放过）⇒ 悬垂引用来自：{site}\n{}",
+                ptr as usize,
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         if self.ref_trace_matches(ptr) {
             Self::ref_trace_record(ptr);
             eprintln!(
