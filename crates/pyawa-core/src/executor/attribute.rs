@@ -59,11 +59,15 @@ fn type_mro_native(
     let Some(object) = bound else {
         return Err(instance.raise_builtin_error("TypeError", "mro() 缺少 self"));
     };
+    // **列表要自己那份引用**（round 105 真 bug 修 ✗）：`TypeObject::mro()` 给的是**注册表借用的**
+    // 裸指针，而 `new_list` 的契约是**接手新引用** ⇒ 先前直接把借用塞进去 ✗ ⇒ 列表释放时
+    // `list_clear` 对每个类型多减一次（`test_descr` 的 `对已释放对象 decref：类型 type` ✓；
+    // 同轮的 `__mro__`／`__bases__`／`__subclasses__` 都 retain 了，唯独 `mro()` 漏 ✓）。
     // SAFETY: 绑定契约保证 `object` 是类型对象。
     let items: Vec<NonNull<Header>> = unsafe { object.cast::<crate::TypeObject>().as_ref() }
         .mro()
         .into_iter()
-        .map(|base| base.cast::<Header>())
+        .map(|base| instance.retain(base.cast::<Header>()))
         .collect();
     Ok(instance.new_list(items))
 }
