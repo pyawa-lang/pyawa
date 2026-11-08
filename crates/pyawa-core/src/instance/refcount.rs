@@ -210,11 +210,15 @@ impl Instance {
             // 死指针读头部会段错误 ⇒ 释放行只在 `live=true` 时读计数 ✓）。
             let live_here = self.live.borrow().contains(&(ptr as usize));
             if live_here {
+                let remaining = unsafe { &*ptr }.refcount().saturating_sub(1);
                 eprintln!(
-                    "[ref] -1 ptr={ptr:p} rc={} live=true 现场={}",
-                    unsafe { &*ptr }.refcount().saturating_sub(1),
+                    "[ref] -1 ptr={ptr:p} rc={remaining} live=true 现场={}",
                     self.current_site()
                 );
+                // **首次释放的 Rust 路径**（round 93 诊断）：`PYAWA_REF_TRACE_BT=1` 时打回溯。
+                if remaining == 0 && std::env::var_os("PYAWA_REF_TRACE_BT").is_some() {
+                    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+                }
             } else {
                 eprintln!("[ref] -1 ptr={ptr:p} live=false 现场={}", self.current_site());
             }
