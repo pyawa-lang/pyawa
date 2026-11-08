@@ -307,7 +307,10 @@ pub unsafe fn float_new(
                 let number = match body {
                     "inf" | "infinity" => f64::INFINITY,
                     "nan" => f64::NAN,
-                    _ => match trimmed.parse::<f64>() {
+                    // **解析去掉符号后的 `body`**（round 113 真 bug 修 ✗）：先前解析 `trimmed`（还带 `-`）
+                    // 之后再按 `negative` 取负 ⇒ `float('-1.0')` 变 **1.0** ✗（`float(' -1.0')` 同样 ✗）。
+                    // `test_optparse` 的 `nargs` 负坐标用例直接钉住 ✓。
+                    _ => match body.parse::<f64>() {
                         Ok(number) => number,
                         Err(_) => {
                             return Err(instance.raise_builtin_error(
