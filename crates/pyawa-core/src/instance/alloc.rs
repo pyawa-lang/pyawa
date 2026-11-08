@@ -141,6 +141,13 @@ impl Instance {
                 .borrow_mut()
                 .remove(&(header.as_ptr() as usize));
         }
+        if self.ref_trace_matches(header.as_ptr()) {
+            eprintln!(
+                "[ref] alloc ptr={:p} rc=1 现场={}",
+                header.as_ptr(),
+                self.current_site()
+            );
+        }
         self.live.borrow_mut().insert(header.as_ptr() as usize);
         self.bytes_allocated.set(self.bytes_allocated.get() + size);
         if tracked {
@@ -475,6 +482,13 @@ impl Instance {
                 .remove(&(header.as_ptr() as usize));
         }
         self.live.borrow_mut().insert(header.as_ptr() as usize);
+        if self.ref_trace_matches(header.as_ptr()) {
+            eprintln!(
+                "[ref] alloc ptr={:p} rc=1 现场={}",
+                header.as_ptr(),
+                self.current_site()
+            );
+        }
         self.bytes_allocated.set(self.bytes_allocated.get() + size);
         if tracked {
             self.link_gc(header);

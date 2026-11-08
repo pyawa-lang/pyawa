@@ -82,7 +82,7 @@ impl Instance {
     /// **引用事件跟踪**（round 90，诊断；`PYAWA_REF_TRACE=<类型名[,类型名]>`）：给该类型的对象
     /// 每次 incref／decref 打一行（**现场** = 当前 Python 站点）。用来找"**不在 GC 可达图里的引用**"
     /// （A 族 `test_free_after_iterating` 的环外引用 ✓）。默认零输出（`OnceLock` 缓存环境变量 ✓）。
-    fn ref_trace_matches(&self, ptr: *mut Header) -> bool {
+    pub(crate) fn ref_trace_matches(&self, ptr: *mut Header) -> bool {
         static TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
         let Some(targets) = TARGET.get_or_init(|| {
             std::env::var("PYAWA_REF_TRACE")
@@ -95,7 +95,7 @@ impl Instance {
         let ty = unsafe { &*ptr }.ty();
         // SAFETY: ty 由注册表持有。
         let name = unsafe { ty.as_ref() }.name();
-        targets.iter().any(|target| target == name)
+        targets.iter().any(|target| target == "*" || target == name)
     }
 
     /// **OM-22**：`sys.getrefcount` 的可见语义——返回值**含参数借用**的那一份。
@@ -176,15 +176,19 @@ impl Instance {
                 );
             }
         }
-        self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
-        let header = unsafe { &*ptr };
         if self.ref_trace_matches(ptr) {
+            // **放在 `assert_live` 之前**（round 91）：双放现场要先被看见（`live=no` 就是"已经在
+            // 释放登记里"⇒ 本行就是**第二次释放**的现场 ✓）。
+            let live_here = self.live.borrow().contains(&(ptr as usize));
             eprintln!(
-                "[ref] -1 ptr={ptr:p} rc={} 现场={}",
-                header.refcount().saturating_sub(1),
+                "[ref] -1 ptr={ptr:p} rc={} live={} 现场={}",
+                unsafe { &*ptr }.refcount().saturating_sub(1),
+                live_here,
                 self.current_site()
             );
         }
+        self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
+        let header = unsafe { &*ptr };
         // **OM-24**：M1 的 `IMMORTAL` 位恒为 0；这里只是防御，不承担语义。
         if header.is_immortal() {
             return;
