@@ -10,6 +10,7 @@ impl Instance {
             bytes_allocated: Cell::new(0),
             current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
+            python_finalized: RefCell::new(std::collections::HashSet::new()),
             mappingproxy_live: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),
             live: RefCell::new(HashSet::new()),

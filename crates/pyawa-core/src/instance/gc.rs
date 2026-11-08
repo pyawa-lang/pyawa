@@ -169,6 +169,17 @@ impl Instance {
     /// **OM-20**：单个对象的释放三步（正常引用计数路径）。
     pub(crate) fn release_one(&self, ptr: NonNull<Header>) {
         let ty = unsafe { ptr.as_ref() }.ty();
+        // **终结延迟判定的重放**（round 82）：`release_one` 正常情况下只在计数 0 时被调用；
+        // 但 "终结器自身帧的形参延迟释放" 那条路会把对象**先入队、后重放** —— 重放时计数若已
+        // 回不到 0，就是**真复活** ⇒ 只清 `FINALIZING`、不释放（照 `OM-20` 复活语义，之后再死
+        // 还能再终结一次 ✓）；计数为 0 ⇒ 终结已做过（`FINALIZING` 保持），直接走清引用/释放 ✓。
+        {
+            let header = unsafe { ptr.as_ref() };
+            if header.has_flag(flags::FINALIZING) && header.refcount() != 0 {
+                header.clear_flag(flags::FINALIZING);
+                return;
+            }
+        }
 
         // ① 终结器（`__del__`）：置 FINALIZING 防止重入；可以复活（把计数改回 > 0）。
         // **口径照本层 `OM-20`**：复活的对象清掉 FINALIZING ⇒ 之后再次死亡时**还能**再终结一次
@@ -210,8 +221,15 @@ impl Instance {
                     eprintln!("[del] 终结后 rc={remaining}");
                 }
                 if remaining != 0 {
-                    // 复活：清除 FINALIZING 并**放弃释放**（OM-20）。
-                    header.clear_flag(flags::FINALIZING);
+                    // **先别下"复活"结论**（round 82 真 bug 修 ✗）：终结器自己的 Python 帧可能还
+                    // 持有 `self` 形参（形参所有权归帧 ✓），而它的 `release_object` 在**清空栈重入**
+                    // 时被**延迟**到本轮 `release_one` 之后 ⇒ 这里看到的 `remaining` 是"临时引用"
+                    // 而非复活（实测：`保活后 rc=1`／`finalize 返回后 rc=2`／`终结后 rc=1`，随后
+                    // 帧释放才把 rc 打到 0 ⇒ 旧代码清 FINALIZING ⇒ 下一轮 `release_one` 再终结
+                    // ⇒ `__del__` 无限重复）。
+                    // 做法：**保持 `FINALIZING`**，把对象塞回待处理栈**队首**（让终结器帧先被释放）；
+                    // 重放时 `release_one` 顶部会按彼时计数判定真复活还是直接释放 ✓。
+                    self.pending.borrow_mut().insert(0, ptr);
                     return;
                 }
             }
@@ -241,7 +259,8 @@ impl Instance {
             unsafe { self.release_object(mapping.as_ptr()) };
         }
 
-        // ③ 释放内存。
+        // ③ 释放内存。（旁表条目随对象释放摘掉 ✓，round 82）
+        self.forget_python_finalized(ptr.as_ptr() as usize);
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
         let size = unsafe { ty.as_ref() }.instance_size;
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
@@ -260,6 +279,8 @@ impl Instance {
 
     /// **OM-27** ④：释放一个不可达对象（`clear` 已经跑过，这里不再调终结器）。
     pub(crate) fn free_garbage(&self, header: NonNull<Header>) {
+        // 旁表条目随对象释放摘掉 ✓（round 82）。
+        self.forget_python_finalized(header.as_ptr() as usize);
         let ty = unsafe { header.as_ref() }.ty();
         // **弱引用失效**（round 59，GC 路径）：回调**排队**，等整个回收循环结束再调 ✓
         // （避免在 clear／free 的借用窗口里跑任意 Python 代码 ✗）。

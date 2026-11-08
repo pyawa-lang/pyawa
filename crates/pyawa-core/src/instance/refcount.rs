@@ -120,6 +120,11 @@ impl Instance {
         header.set_refcount(header.refcount() + 1);
     }
 
+    /// **round 82**：待处理栈重放前的活表检查（死地址跳过 ✓）。
+    pub(crate) fn is_live_address(&self, ptr: NonNull<Header>) -> bool {
+        self.live.borrow().contains(&(ptr.as_ptr() as usize))
+    }
+
     pub unsafe fn release_object(&self, ptr: *mut Header) {
         // SAFETY: 由调用方保证 ptr 有效。
         // SAFETY: 调用方保证 ptr 有效；**先查活表** ✓（第 273 轮诊断）。
@@ -189,6 +194,11 @@ impl Instance {
         loop {
             let next = self.pending.borrow_mut().pop();
             let Some(object) = next else { break };
+            // **重复入队的是"终结延迟判定"的对象**（round 82）：它可能已在更早的一轮里被释放
+            // （`FINALIZING` 保持 → 形参释放把计数打到 0 → 正常释放）⇒ 这里跳过死地址 ✓。
+            if !self.is_live_address(object) {
+                continue;
+            }
             self.release_one(object);
         }
         self.draining.set(false);

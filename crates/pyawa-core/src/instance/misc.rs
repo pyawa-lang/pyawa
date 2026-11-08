@@ -74,6 +74,21 @@ impl Instance {
         self.live.borrow().len()
     }
 
+    /// **Python 级终结器旁表**（round 82）：是否已跑过 `__del__` ✓。
+    pub(crate) fn python_finalized_contains(&self, pointer: usize) -> bool {
+        self.python_finalized.borrow().contains(&pointer)
+    }
+
+    /// 记一次 Python 级终结（round 82）。
+    pub(crate) fn mark_python_finalized(&self, pointer: usize) {
+        self.python_finalized.borrow_mut().insert(pointer);
+    }
+
+    /// 对象释放时摘掉旁表条目（round 82，地址复用安全 ✓）。
+    pub(crate) fn forget_python_finalized(&self, pointer: usize) {
+        self.python_finalized.borrow_mut().remove(&pointer);
+    }
+
     /// **OM-26**：回收阈值三元组。默认值见 [`DEFAULT_GC_THRESHOLD`]。
     ///
     /// 后两位**存而不生效**（单代，**临时**）；它们照样要能读回来，纯 Python 层会解三元组。

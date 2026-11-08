@@ -428,6 +428,15 @@ pub unsafe fn free_fixed_layout(ptr: *mut Header) {
 /// 本层暂**吞掉**（报告机制要 `sys.unraisablehook`，随后补——清单里记着）。
 pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
     let object = NonNull::new(ptr).expect("调用方保证非空");
+    // **Python 级 `__del__` 至多一次**（round 82，照参照 `tp_finalize`）：`header` 的保留位
+    // （bit 4–7）禁止占用 ⇒ 用旁表 ✓。复活后再死**不再**跑 `__del__`（`ownership_shapes`
+    // 的 `finalized 1` 行与参照逐字节一致 ✓；宿主终结器槽不受影响，`object_model` 的
+    // "复活后再死可再终结"语义仍成立 ✓）。
+    let pointer = ptr as usize;
+    if instance.python_finalized_contains(pointer) {
+        return;
+    }
+    instance.mark_python_finalized(pointer);
     // **特殊查找**（`_PyObject_LookupSpecial` ✓，第 578 轮）：参照取 `__del__` **只扫 `type(self)` 的 MRO** ✓
     //（不碰实例字典 ✗、不走 `__getattribute__`/'__getattr__' ✗）。MRO 里没有 ⇒ 参照**根本不调** ✗ ⇒
     // 这里直接返回 ✓ —— 同时掐掉 `super` 对象那条绕行 ✓：旧写法走完整 `getattr` ✗ ⇒ 对 `super` 会绕进

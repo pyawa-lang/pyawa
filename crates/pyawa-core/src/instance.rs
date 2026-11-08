@@ -109,6 +109,12 @@ pub struct Instance {
     current_frame: core::cell::Cell<Option<NonNull<Header>>>,
     /// **`NotImplemented` 单例**（第 215 轮）。
     not_implemented_singleton: core::cell::Cell<Option<NonNull<Header>>>,
+    /// **Python 级终结器旁表**（round 82，照 `OM-20` 的参照语义 ＝ at-most-once）：
+    /// 地址 → 已跑过 `__del__` ✓。`header` 的 bit 4–7 是**禁止占用**的保留位（`OM-7`）⇒ 不能加标志
+    /// ⇒ 用旁表 ✓；对象释放时同步摘除（地址复用不会串味 ✓）。
+    /// 只对**用户类的 `__del__`**（`python_level_finalize`）生效；宿主终结器槽保持 `OM-20` 的
+    /// "复活后再死可再终结"语义（`object_model` 的用例钉住 ✓）。
+    python_finalized: RefCell<std::collections::HashSet<usize>>,
     /// **`mappingproxy` 的活视图来源**（round 125）：键/值/项视图的 `.mapping` 要是**源字典的活视图** ✓
     /// ⇒ 按代理地址记源 dict 指针；等价比较等入口先同步快照 ✓（`test_dict.test_views_mapping` ✓）。
     mappingproxy_live: RefCell<std::collections::HashMap<usize, NonNull<Header>>>,
