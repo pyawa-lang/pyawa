@@ -833,28 +833,20 @@ pub fn dict_init_native(
         ));
     }
     if let Some(source) = rest.first().copied() {
-        // **dict 子类按 `keys()` 协议取顺序**（round 123）：`dict(OrderedDict(...))`／
-        // `CustomReversedDict` 要沿用源的键顺序 ✓；先前只认原始 entries ✗
-        //（`test_dict.test_dict_copy_order` ✓）。精确 `dict` 仍走快路 ✓。
-        let subclass_source = Some(instance.type_of(source)) != instance.type_named("dict")
-            && Some(instance.type_of(source))
-                .zip(instance.type_named("dict"))
-                .map(|(ty, base)| instance.is_subtype(ty, base))
-                .unwrap_or(false);
-        if subclass_source {
-            let keys = crate::executor::call::call_object_method(instance, source, "keys", &[])?;
-            let Some(keys) = keys else {
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    "dict() 的源的 keys() 不可用",
-                ));
-            };
-            let Some(items) = instance.iterable_items(keys)? else {
-                instance.release(keys);
-                return Err(instance.raise_builtin_error("TypeError", "keys() 不可迭代"));
-            };
-            instance.release(keys);
-            for key in items {
+        // **映射协议**（`keys()`）：参照的 `dict(m)` 接受**任何有 `keys()` 的映射** ✓ ——
+        // dict 子类（`OrderedDict`／`CustomReversedDict`，键**顺序**要沿用 ✓ round 123）与
+        // `MutableMapping` 实现（`os.environ` 的 `_Environ.copy()` 就是 `dict(self)` ✓）都走这条
+        // （`test_graphlib` 的 `os.environ.copy()` 先前落进"可迭代对"分支 ✗ ⇒
+        // `ValueError: dictionary update sequence element does not have length 2` ✓）。
+        // 精确 `dict` 仍走 entries 快路 ✓。
+        let exact_dict = Some(instance.type_of(source)) == instance.type_named("dict");
+        let mapping_source = if exact_dict {
+            None
+        } else {
+            mapping_keys(instance, source)?
+        };
+        if let Some(keys) = mapping_source {
+            for key in keys {
                 let value = crate::executor::subscript::subscript_read(instance, source, key)?;
                 instance.retain(key);
                 dict_put_owned(instance, target, key, value);
