@@ -962,11 +962,21 @@ pub(crate) fn equality_public(
         }
     }
     // 用户类的 `__eq__`（两侧都问；`NotImplemented` 交给下一跳 ✓）。
-    if let Some(verdict) = call_compare_dunder(instance, left, "__eq__", right)? {
-        return Ok(verdict);
-    }
-    if let Some(verdict) = call_compare_dunder(instance, right, "__eq__", left)? {
-        return Ok(verdict);
+    // **子类优先级照参照 `do_richcompare`**（round 112）：右侧类型是左侧的**严格子类** ⇒ **先问右侧**
+    // （`eq(B(), C())` 里 C 是 B 子类 ⇒ 期望 `C.__eq__` 先、`B.__eq__` 后 ✓；`test_binop` 的
+    // `test_comparison_orders`／`test_fallback_rmethod_blocking` 都钉这一条 ✓——
+    // 「子类优先」还负责"`__eq__ = None` 阻断"：`SupEq() == S()` 里 S 的 `__eq__ = None` 会先被调用 ⇒
+    // `TypeError: 'NoneType' object is not callable` ✓，而先问左侧会提前拿到 True ✗）。
+    let right_first = right_ty != left_ty && instance.is_subtype(right_ty, left_ty);
+    let order = if right_first {
+        [(right, left), (left, right)]
+    } else {
+        [(left, right), (right, left)]
+    };
+    for (object, other) in order {
+        if let Some(verdict) = call_compare_dunder(instance, object, "__eq__", other)? {
+            return Ok(verdict);
+        }
     }
     Ok(values_equal_public(instance, left, right))
 }
@@ -1264,7 +1274,18 @@ fn rich_compare(
         _ => return Ok(None),
     };
     let not_implemented = instance.not_implemented();
-    for (name, object, other) in [(forward, left, right), (reflected, right, left)] {
+    // **子类优先级照参照 `do_richcompare`**（round 112）：右侧类型是左侧的**严格子类** ⇒ **反射先问**
+    // （`le(B(), C())` 里 C 是 B 子类 ⇒ 期望 `C.__ge__` 先、`B.__le__` 后 ✓；`test_binop` 的
+    // `test_comparison_orders` 钉住 ✓）。
+    let left_ty = instance.type_of(left);
+    let right_ty = instance.type_of(right);
+    let right_first = right_ty != left_ty && instance.is_subtype(right_ty, left_ty);
+    let order = if right_first {
+        [(reflected, right, left), (forward, left, right)]
+    } else {
+        [(forward, left, right), (reflected, right, left)]
+    };
+    for (name, object, other) in order {
         let Some(result) = call_special_method(instance, object, name, &[other])? else {
             continue;
         };

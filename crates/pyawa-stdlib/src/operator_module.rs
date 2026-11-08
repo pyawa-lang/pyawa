@@ -74,7 +74,10 @@ fn eq_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "eq", args)?;
-    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
+    // **走完整富比较协议**（round 112，真缺口）：`==` 要派发用户 `__eq__`／反射、`__eq__ = None` 要报
+    // `TypeError`、容器与子类优先级照 `COMPARE_OP` 同一处真相 ✓ —— 先前用 `values_equal_public`（**值相等**
+    // 快照，不含 dunder 派发）✗ ⇒ `test_binop` 的 `op_sequence(eq, A, A)` 记不到任何调用 ✗。
+    let equal = pyawa_core::executor::protocol::compare_public(instance, *left, *right, "==", 0)?;
     Ok(instance.new_bool(equal))
 }
 
@@ -86,8 +89,9 @@ fn ne_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "ne", args)?;
-    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
-    Ok(instance.new_bool(!equal))
+    // **`!=` 同样走完整协议**（含 `__ne__ = None` 报 `TypeError` 的"None 阻断"语义 ✓）。
+    let different = pyawa_core::executor::protocol::compare_public(instance, *left, *right, "!=", 0)?;
+    Ok(instance.new_bool(different))
 }
 
 /// `operator.is_(a, b)`（身份）。
