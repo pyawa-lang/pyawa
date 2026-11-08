@@ -732,6 +732,9 @@ pub fn dict_eq_native(
     let Some(dict_type) = instance.type_named("dict") else {
         return Ok(instance.retain(instance.not_implemented()));
     };
+    // **活视图代理先同步快照**（round 125）：`.mapping` 是源字典的活视图 ✓。
+    instance.sync_mappingproxy(left);
+    instance.sync_mappingproxy(*right);
     if !instance.is_subtype(instance.type_of(*right), dict_type) {
         // 非 dict ⇒ NotImplemented（反射走对方的 `__eq__` ✓，与参照一致 ✓）。
         return Ok(instance.retain(instance.not_implemented()));

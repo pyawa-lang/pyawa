@@ -109,6 +109,9 @@ pub struct Instance {
     current_frame: core::cell::Cell<Option<NonNull<Header>>>,
     /// **`NotImplemented` 单例**（第 215 轮）。
     not_implemented_singleton: core::cell::Cell<Option<NonNull<Header>>>,
+    /// **`mappingproxy` 的活视图来源**（round 125）：键/值/项视图的 `.mapping` 要是**源字典的活视图** ✓
+    /// ⇒ 按代理地址记源 dict 指针；等价比较等入口先同步快照 ✓（`test_dict.test_views_mapping` ✓）。
+    mappingproxy_live: RefCell<std::collections::HashMap<usize, NonNull<Header>>>,
     /// **`mappingproxy` 的来源类型**（round 114）：`MappingProxyType(OrderedDict(...))` 的
     /// `.copy()`／`repr` 要还原**底层映射类型** ✓ ⇒ 按代理对象地址记一份来源类型 ✓
     /// （类型对象活到实例销毁 ⇒ 不会悬垂 ✓；条目随代理存活而累积，量小如实登记）。

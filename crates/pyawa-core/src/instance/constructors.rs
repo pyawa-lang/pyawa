@@ -673,6 +673,51 @@ impl Instance {
             .copied()
     }
 
+    /// **登记一个"活视图" `mappingproxy`**（round 125）：`.mapping` 用 ✓。
+    pub fn register_mappingproxy_live(&self, proxy: NonNull<Header>, source: NonNull<Header>) {
+        self.mappingproxy_live
+            .borrow_mut()
+            .insert(proxy.as_ptr() as usize, source);
+    }
+
+    /// 取 `mappingproxy` 的活来源（没有 ⇒ `None`）。
+    pub fn mappingproxy_live_source(&self, proxy: NonNull<Header>) -> Option<NonNull<Header>> {
+        self.mappingproxy_live
+            .borrow()
+            .get(&(proxy.as_ptr() as usize))
+            .copied()
+    }
+
+    /// **把活视图代理的快照与源字典同步**（round 125）：`m == d` 一类入口先调 ✓。
+    /// 旧条目逐项归还（借用视图 ⇒ 需要自己 retain 新的）✓。
+    pub fn sync_mappingproxy(&self, proxy: NonNull<Header>) {
+        let Some(source) = self.mappingproxy_live_source(proxy) else {
+            return;
+        };
+        let Some(entries) = self.dict_entries(source) else {
+            return;
+        };
+        // SAFETY: proxy 是 mappingproxy（DictObject 同构布局）✓。
+        let dict = unsafe { &*proxy.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+        // 清掉旧快照（键值各一份引用要归还 ✓）。
+        let old_entries = core::mem::take(&mut *dict.entries.borrow_mut());
+        for (key, value) in old_entries {
+            // SAFETY: 旧引用由代理持有。
+            unsafe {
+                self.release_object(key.as_ptr());
+                self.release_object(value.as_ptr());
+            }
+        }
+        for (key, value) in entries {
+            // SAFETY: 键值由源 dict 持有；代理要自己那两份。
+            unsafe {
+                self.incref_object(key.as_ptr());
+                self.incref_object(value.as_ptr());
+            }
+            self.dict_insert_raw(proxy, key, value);
+        }
+    }
+
     /// **按来源类型"复制"一份映射**（round 114）：`mappingproxy.copy()` 用 ✓ ——
     /// 来源是 `OrderedDict` 一类 ⇒ 构造它的新实例 ✓（pprint 的 `mappingproxy(OrderedDict([...]))` ✓）；
     /// 来源是普通 dict ⇒ 新 dict ✓。

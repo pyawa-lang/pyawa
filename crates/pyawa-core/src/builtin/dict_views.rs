@@ -746,5 +746,10 @@ pub(crate) unsafe fn view_getattr(
     }
     // SAFETY: 契约同其它 getattr 槽。
     let object = unsafe { &*ptr.cast::<DictViewObject>() };
-    instance.mappingproxy_of(object.mapping())
+    let proxy = instance.mappingproxy_of(object.mapping())?;
+    // **登记"活视图"来源**（round 125）：`.mapping` 在参照里是**源字典的活视图** ✓ ——
+    // 等价比较等入口会先同步快照 ✓（`test_dict.test_views_mapping` 的 `d["foo"]="bar"` 后
+    // `m == d` ✓）。
+    instance.register_mappingproxy_live(proxy, object.mapping());
+    Some(proxy)
 }
