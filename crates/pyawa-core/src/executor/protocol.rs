@@ -990,31 +990,66 @@ pub fn compare_public(
     let left_sequence = if left_is_tuple { instance.tuple_items(left) } else { instance.list_items(left) };
     let right_sequence = if right_is_tuple { instance.tuple_items(right) } else { instance.list_items(right) };
     if left_is_tuple == right_is_tuple {
-        if let (Some(left_items), Some(right_items)) = (left_sequence, right_sequence) {
-            for (first, second) in left_items.iter().zip(right_items.iter()) {
-                if values_equal_public(instance, *first, *second) {
-                    continue;
+        if left_sequence.is_some() && right_sequence.is_some() {
+            // **活体双游标**（round 96，照参照 `list_richcompare` 的循环骨架 ✓）：先前一次快照
+            // 之后一直用**借用**元素 ✗ ⇒ 元素的 `__lt__` 把列表清空时（`test_list` 的
+            // `test_lt_operator_modifying_operand`：`evil.__lt__` 里 `other.clear()`）元素被释放、
+            // 快照里的指针悬垂 ⇒ 下一轮用它就是 UAF ✗（`PYAWA_FRAME_OWN` 实验模型下实测抛出
+            // `[悬垂-incref] call_object_method` ✓）。现在：每轮**重读**两侧列表、比较前各
+            // `incref` 一份、比完归还 ✓（与上面的 `==` 路径同一口径 ✓）。
+            let mut index = 0usize;
+            loop {
+                let left_items = if left_is_tuple {
+                    instance.tuple_items(left).unwrap_or_default()
+                } else {
+                    instance.list_items(left).unwrap_or_default()
+                };
+                let right_items = if right_is_tuple {
+                    instance.tuple_items(right).unwrap_or_default()
+                } else {
+                    instance.list_items(right).unwrap_or_default()
+                };
+                if index >= left_items.len() || index >= right_items.len() {
+                    let shorter = left_items.len() < right_items.len();
+                    let same_length = left_items.len() == right_items.len();
+                    let _ = opcode;
+                    return Ok(match symbol {
+                        "<" => shorter,
+                        "<=" => shorter || same_length,
+                        ">" => !shorter && !same_length,
+                        ">=" => !shorter,
+                        _ => false,
+                    });
                 }
-                // 首个不等的那对**定序** ✓（两边必不可比时才报错 ✓；此处二者已**不相等** ✓
-                // ⇒ 只判"前者更小吗"就够 ✓，`<` 为假即后者更小 ✓）。
-                let first_is_less = compare_public(instance, *first, *second, "<", opcode)?;
-                let _ = opcode;
-                return Ok(match symbol {
-                    "<" | "<=" => first_is_less,
-                    ">" | ">=" => !first_is_less,
-                    _ => false,
-                });
+                let first = left_items[index];
+                let second = right_items[index];
+                // SAFETY: 两个元素由各自容器持有；比较期间本函数各持一份 ✓。
+                unsafe {
+                    instance.incref_object(first.as_ptr());
+                    instance.incref_object(second.as_ptr());
+                }
+                let equal = values_equal_public(instance, first, second);
+                let outcome = if equal {
+                    Ok(None)
+                } else {
+                    compare_public(instance, first, second, "<", opcode).map(Some)
+                };
+                // SAFETY: 比较期间本函数各持一份 ⇒ 归还 ✓。
+                unsafe {
+                    instance.release_object(first.as_ptr());
+                    instance.release_object(second.as_ptr());
+                }
+                match outcome? {
+                    None => index += 1,
+                    Some(first_is_less) => {
+                        return Ok(match symbol {
+                            "<" | "<=" => first_is_less,
+                            ">" | ">=" => !first_is_less,
+                            _ => false,
+                        })
+                    }
+                }
             }
-            let shorter = left_items.len() < right_items.len();
-            let same_length = left_items.len() == right_items.len();
-            let _ = opcode;
-            return Ok(match symbol {
-                "<" => shorter,
-                "<=" => shorter || same_length,
-                ">" => !shorter && !same_length,
-                ">=" => !shorter,
-                _ => false,
-            });
         }
     }
     // **数值混比**（`float` 与 `int`／`bool`）✓（第 280 轮修 ✗）：参照里 `1.0 > 0` 为真 ✓，

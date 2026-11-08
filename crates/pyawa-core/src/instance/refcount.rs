@@ -154,6 +154,7 @@ impl Instance {
         // 引导期那些"从不进活表"的单例不会被误报 ✓。
         if self.zombie_trace.get()
             && !self.live.borrow().contains(&(ptr as usize))
+            && !self.is_registered_type(unsafe { NonNull::new_unchecked(ptr) })
             && self.freed_sites.borrow().contains_key(&(ptr as usize))
         {
             let site = self.current_site();
@@ -180,6 +181,22 @@ impl Instance {
         }
         // SAFETY: 由调用方保证 ptr 有效。
         unsafe { &*ptr }.incref();
+    }
+
+    /// **释放登记查询**（round 96 诊断）：这个地址是否已被释放过（`PYAWA_ZOMBIE_TRACE` 才记录 ✓）。
+    pub(crate) fn was_freed(&self, ptr: NonNull<Header>) -> bool {
+        self.freed_sites
+            .borrow()
+            .contains_key(&(ptr.as_ptr() as usize))
+    }
+
+    /// **注册表中类型对象**（round 96 诊断）：类型不进活表、由 `types` 注册表持有 ⇒ `incref` 的
+    /// "不在活表"断言对它们要放行（`release_object` 对注册类型的 guard 会提前返回、不真释放 ✓）。
+    pub(crate) fn is_registered_type(&self, ptr: NonNull<Header>) -> bool {
+        self.types
+            .borrow()
+            .iter()
+            .any(|ty| ty.as_ptr() as usize == ptr.as_ptr() as usize)
     }
 
     /// **OM-20** ①：把**正在终结**的对象复活——计数从 0 回到 1。

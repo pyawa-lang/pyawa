@@ -1039,6 +1039,23 @@ pub fn build_class_from_parts_with_keywords(
     // `ValueError: not enough values to unpack (expected 4, got 0)` ✗）。
     // 每一遍都按**命名空间插入序** ✓（参照的 `__set_name__` 次序也是定义序 ✓）。
     let mut items: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(entries.len());
+    // **诊断（round 96，`PYAWA_CLASS_KEY_TRACE=1`）**：搬运命名空间时键/值是否还活着 ✓。
+    if std::env::var_os("PYAWA_CLASS_KEY_TRACE").is_some() {
+        for (key, value) in &entries {
+            let key_live = instance.is_live_address(*key);
+            let value_live = instance.is_live_address(*value);
+            let key_freed = instance.was_freed(*key);
+            let value_freed = instance.was_freed(*value);
+            if key_freed || value_freed {
+                eprintln!(
+                    "[class-key] name={name} namespace={namespace:p} entries={} key={:p}(live={key_live},freed={key_freed}) value={:p}(live={value_live},freed={value_freed})",
+                    entries.len(),
+                    key.as_ptr(),
+                    value.as_ptr()
+                );
+            }
+        }
+    }
     for (key, value) in entries {
         // **`BC-4`**：类体里的**函数**要把 `co_qualname` 补成 `C.m`——参照实现由**编译器**写死，
         // 编译器**已经有类体**（且会写死 `C.m`）⇒ 这里只在**不匹配**时才补（换一份 code 再包新函数；见
