@@ -310,6 +310,9 @@ impl Instance {
         }
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
         let size = unsafe { ty.as_ref() }.instance_size;
+        // **释放前写毒值**（round 107 诊断；`PYAWA_REFCOUNT_CANARY=1` 才写 ✓）：之后任何
+        // `incref`/`release` 碰它就当场 panic，能定位"第二次释放"的 Rust 路径 ✓。
+        crate::instance::poison_refcount(header);
         self.unlink(header);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
         if !quarantine_mode() && !leak_mode() && self.pool_tuple(header, ty) {

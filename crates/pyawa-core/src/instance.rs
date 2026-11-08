@@ -30,6 +30,8 @@ mod convert;
 pub(crate) use convert::CP437;
 /// 形参所有权实验开关（round 95；见 `refcount::frame_own_params`）。
 pub(crate) use refcount::frame_own_params;
+/// refcount 毒值诊断（round 107；见 `refcount::poison_refcount`）。
+pub(crate) use refcount::poison_refcount;
 mod gc;
 mod context;
 // `P3-41`：`repr` 递归守卫的三支结果（`OM-11`）。

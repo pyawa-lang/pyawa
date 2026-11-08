@@ -4,6 +4,25 @@
 
 use super::*;
 
+/// **refcount 毒值**（round 107 确定性诊断）：对象真正释放前把 `refcount` 写成这个值；之后任何
+/// `incref`／`release` 再碰它 ⇒ 当场 panic 并带现场＋Rust 回溯（比 glibc 的 `malloc`/`double-linked`
+/// 崩溃更早、且能直接指出**第二次释放**来自哪条 Rust 路径 ✓）。环境门控：`PYAWA_REFCOUNT_CANARY=1`。
+pub(crate) const REFCOUNT_POISON: u32 = 0xDEAD_BEEF;
+
+/// canary 开关（`OnceLock` 缓存 env ✓）。
+pub(crate) fn refcount_canary() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("PYAWA_REFCOUNT_CANARY").is_some())
+}
+
+/// 释放前写毒值（`free_garbage` 调用；只在 canary 模式 ✓）。
+pub(crate) fn poison_refcount(header: NonNull<Header>) {
+    if refcount_canary() {
+        // SAFETY: 调用方保证 header 仍可写（dealloc 之前）。
+        unsafe { header.as_ref() }.set_refcount(REFCOUNT_POISON);
+    }
+}
+
 /// **形参所有权**（round 98 起为**默认模型**）：帧拥有前 `argcount` 个局部槽
 /// （`bind_arguments` 把实参**所有权**填进去 ⇒ 帧释放时归还 ✓）。
 ///
@@ -185,6 +204,14 @@ impl Instance {
         // 先把"它原来是什么类型、现在哪一帧在动它"报出来 ✓ —— 光一句"对已释放对象 incref" ✗
         // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
         self.quarantine_report(ptr, "incref");
+        if refcount_canary() && unsafe { &*ptr }.refcount() == REFCOUNT_POISON {
+            panic!(
+                "[canary] incref 碰到**已释放**对象 {:#x}（refcount=毒值）⇒ 现场={}\n{}",
+                ptr as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         // **对已释放对象的 incref 是 UAF**（round 94 诊断）：`PYAWA_ZOMBIE_TRACE=1` 时当场报出**现场** ✓
         // （先于后续 release 崩溃；用来点名"悬垂引用从哪来"）。判据用**释放登记**（`freed_sites`）：
         // 引导期那些"从不进活表"的单例不会被误报 ✓。
@@ -316,6 +343,14 @@ impl Instance {
                     }
                 }
             }
+        }
+        if refcount_canary() && unsafe { &*ptr }.refcount() == REFCOUNT_POISON {
+            panic!(
+                "[canary] release 碰到**已释放**对象 {:#x}（refcount=毒值）⇒ 现场={}\n{}",
+                ptr as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
         }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };
