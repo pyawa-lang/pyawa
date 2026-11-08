@@ -293,8 +293,11 @@ impl Instance {
                     "[ref] -1 ptr={ptr:p} rc={remaining} live=true 现场={}",
                     self.current_site()
                 );
-                // **首次释放的 Rust 路径**（round 93 诊断）：`PYAWA_REF_TRACE_BT=1` 时打回溯。
-                if remaining == 0 && std::env::var_os("PYAWA_REF_TRACE_BT").is_some() {
+                // **首次释放的 Rust 路径**（round 93 诊断）：`PYAWA_REF_TRACE_BT=1` 时打回溯；
+                // `PYAWA_REF_TRACE_BT_ALL=1` 时**每次** -1 都打（round 104 诊断）。
+                if (remaining == 0 && std::env::var_os("PYAWA_REF_TRACE_BT").is_some())
+                    || std::env::var_os("PYAWA_REF_TRACE_BT_ALL").is_some()
+                {
                     eprintln!("{}", std::backtrace::Backtrace::force_capture());
                 }
             } else {

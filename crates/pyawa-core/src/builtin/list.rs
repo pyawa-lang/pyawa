@@ -430,6 +430,13 @@ fn list_dunder_setitem(
             "__setitem__() takes exactly 2 arguments",
         ));
     };
+    // **值那份要按 `subscript_set` 的"接管"契约先 retain**（round 104 真 bug 修 ✗）：本函数是
+    // **原生** `__setitem__`，`args` 是**借用视图**（`call_callable` 的 native 分支调用后会释放
+    // 实参）✗ —— 先前把借用指针直接交给"接管值"的 `subscript_set` ⇒ 写入失败路径里值被释放一次、
+    // native 分支返回后又释放一次 ⇒ **同一个值双放** ✓（round 102 的融合存取修复让对象更早被释放，
+    // 于是在 `test_list.test_set_subscript` 暴露；`PYAWA_REF_TRACE=...BT_ALL` 现场：两次 -1 都
+    // 落在 `subscript_set ← list_dunder_setitem` 与 `call_callable` ✓）。
+    instance.retain(value);
     crate::executor::subscript::subscript_set(instance, list, key, value, 0)?;
     Ok(instance.retain(instance.singletons().none()))
 }

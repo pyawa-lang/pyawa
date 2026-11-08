@@ -85,7 +85,9 @@ impl Instance {
         // 引用"的用户类字典 ⇒ 其命名空间里的环由后面的普通回收/引用计数级联处理 ✓。
         // 简单夹具已能收环（`test_free_after_iterating` 的风格 ✓），但 `unittest.assertRaises` 那条
         // 构造里类型还多一份引用（`rc=2`）⇒ 当前判据不收；默认关 ⇒ 套件行为与 round 98 前一致 ✓。
-        if std::env::var_os("PYAWA_ORPHAN_RECLAIM").is_some() {
+        // **默认开**（round 104 起；逃生阀 `PYAWA_ORPHAN_RECLAIM=0`）：用户类类型是 `Box::leak` 分配的、
+        // 不进 `gc_headers`，类环（类型→命名空间→函数→cell→迭代器→实例）只能靠这里收 ✓。
+        if std::env::var("PYAWA_ORPHAN_RECLAIM").ok().as_deref() != Some("0") {
             self.reclaim_orphan_user_types();
         }
         let unreachable = self.find_unreachable();

@@ -293,15 +293,35 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     let second = frame.get().pop()?;
                     let low = oparg & 0x0F;
                     let high = oparg >> 4;
-                    if frame.get().set_local(high, Some(first)).is_err()
-                        || frame.get().set_local(low, Some(second)).is_err()
-                    {
-                        release(instance, first);
-                        release(instance, second);
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "STORE_FAST_STORE_FAST 的槽位越界",
-                        });
+                    let high_old = match frame.get().set_local(high, Some(first)) {
+                        Ok(old) => old,
+                        Err(_) => {
+                            release(instance, first);
+                            release(instance, second);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "STORE_FAST_STORE_FAST 的槽位越界",
+                            });
+                        }
+                    };
+                    let low_old = match frame.get().set_local(low, Some(second)) {
+                        Ok(old) => old,
+                        Err(_) => {
+                            if let Ok(Some(stored)) = frame.get().set_local(high, None) {
+                                unsafe { instance.release_object(stored.as_ptr()) };
+                            }
+                            release(instance, second);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "STORE_FAST_STORE_FAST 的槽位越界",
+                            });
+                        }
+                    };
+                    if let Some(old) = high_old {
+                        unsafe { instance.release_object(old.as_ptr()) };
+                    }
+                    if let Some(old) = low_old {
+                        unsafe { instance.release_object(old.as_ptr()) };
                     }
                 }
         _ => unreachable!("step_locals 只接收本族的 opcode"),

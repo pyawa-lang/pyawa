@@ -38,9 +38,12 @@ STEP=$((STEP + 1)); echo -n "⑥ 绿套件烟测（test_rlcompleter ＋ test_dic
 TD="$PWD/target/upstream/extracted/usr/lib/python3.14"
 rm -rf target/recon/__pyawa__
 if ! PYAWA_DANGLING=1 PYTHONPATH="$TD:Lib" ./target/release/pyawa "$TD/test/test_rlcompleter.py" >target/fastcheck_smoke1.log 2>&1; then tail -5 target/fastcheck_smoke1.log; fail "test_rlcompleter"; fi
-# test_dict 的既有 1F 基线：只要求"没有崩溃/N 悬垂/失败数不增加"（不放松任何判定：计数必须等于已知基线 1）
+# test_dict 的基线（round 104 起应为全绿）：不放松判定——**必须**是 OK(skipped=10)，否则视为漂移
 PYAWA_DANGLING=1 PYTHONPATH="$TD:Lib" ./target/release/pyawa "$TD/test/test_dict.py" >target/fastcheck_smoke2.log 2>&1
-grep -qE "^FAILED \(failures=1, skipped=10\)" target/fastcheck_smoke2.log || { tail -10 target/fastcheck_smoke2.log; fail "test_dict 基线漂移（期望 failures=1, skipped=10）"; }
+grep -qE "^OK \(skipped=10\)" target/fastcheck_smoke2.log || { tail -10 target/fastcheck_smoke2.log; fail "test_dict 基线漂移（期望 OK (skipped=10)）"; }
+# test_list 的基线（round 104 起）：只剩 test_deopt_from_append_list 一个 error、无 failure
+PYAWA_DANGLING=1 PYTHONPATH="$TD:Lib" ./target/release/pyawa "$TD/test/test_list.py" >target/fastcheck_smoke3.log 2>&1
+grep -qE "^FAILED \(errors=1, skipped=2\)" target/fastcheck_smoke3.log || { tail -10 target/fastcheck_smoke3.log; fail "test_list 基线漂移（期望 errors=1, skipped=2）"; }
 echo "✓"
 
 echo "fastcheck: OK ✓（快档）  墙钟 $(( $(date +%s) - START ))s"
