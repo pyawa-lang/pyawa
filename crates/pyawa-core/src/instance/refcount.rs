@@ -298,7 +298,17 @@ impl Instance {
                     eprintln!("{}", std::backtrace::Backtrace::force_capture());
                 }
             } else {
-                eprintln!("[ref] -1 ptr={ptr:p} live=false 现场={}", self.current_site());
+                // 类型对象不进活表但**仍存活**（注册表持有）⇒ 能安全读计数，打出来便于对账 ✓。
+                let readable = self.is_registered_type(unsafe { NonNull::new_unchecked(ptr) });
+                if readable {
+                    eprintln!(
+                        "[ref] -1 ptr={ptr:p} rc={} live=false(注册类型) 现场={}",
+                        unsafe { &*ptr }.refcount().saturating_sub(1),
+                        self.current_site()
+                    );
+                } else {
+                    eprintln!("[ref] -1 ptr={ptr:p} live=false 现场={}", self.current_site());
+                }
             }
         }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
