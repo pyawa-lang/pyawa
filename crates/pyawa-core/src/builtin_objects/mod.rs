@@ -29,6 +29,7 @@ pub use self::contextvars::*;
 pub use self::thread::*;
 pub use self::iterators::*;
 pub use self::callables::*;
+pub(crate) use self::type_runtime::FRAME_STACK;
 pub use self::exceptions::*;
 pub use self::type_runtime::*;
 pub use self::constructors::*;

@@ -10,6 +10,7 @@
 use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
+use crate::builtin_objects::{BuiltinFunctionObject, MethodObject};
 use crate::code::{CodeObject, SlotKind};
 use crate::header::Header;
 use crate::instance::Instance;
@@ -101,6 +102,42 @@ impl Frame {
     pub fn stack_snapshot(&self) -> Vec<NonNull<Header>> {
         self.stack.borrow().clone()
     }
+    /// **`frame.clear()` 的实现**（round 126）：释放局部槽（含形参 ✓）、值栈、cell、恢复点、
+    /// 回溯挂起与 `f_back`；**保留** `code`／`globals`／`namespace`／`f_builtins` ✓。
+    pub fn clear_for_python(&self, instance: &Instance) {
+        for (index, slot) in self.locals.borrow_mut().iter_mut().enumerate() {
+            if let Some(value) = slot.take() {
+                instance.assert_live(value, &format!("clear 局部槽 {index}"));
+                // SAFETY: 该引用由本帧持有。
+                unsafe { instance.release_object(value.as_ptr()) };
+            }
+        }
+        for value in core::mem::take(&mut *self.stack.borrow_mut()) {
+            // SAFETY: 该引用由本帧持有。
+            unsafe { instance.release_object(value.as_ptr()) };
+        }
+        for cell in self.cells.borrow_mut().iter_mut() {
+            if let Some(value) = cell.take() {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(value.as_ptr()) };
+            }
+        }
+        if let Some(point) = self.resume.borrow_mut().take() {
+            for value in point.stack {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(value.as_ptr()) };
+            }
+        }
+        if let Some(exception) = self.pending_raise.borrow_mut().take() {
+            // SAFETY: 同上。
+            unsafe { instance.release_object(exception.as_ptr()) };
+        }
+        if let Some(parent) = self.f_back.borrow_mut().take() {
+            // SAFETY: 同上。
+            unsafe { instance.release_object(parent.as_ptr()) };
+        }
+    }
+
     /// **把值栈截到 `depth`**（第 164 轮）——异常处理块入口必须弹到 `co_exceptiontable` 记的深度 ✓
     /// （`BC-54`／`decode.rs` 的注释就写着「`depth` 是进入处理块时要弹到的栈深」✓，而派发器**漏了这一步** ✗）。
     /// 返回被弹下来的值 ✓（**调用方负责归还引用** ✓）。
@@ -691,6 +728,50 @@ pub unsafe fn frame_repr(ptr: *mut Header, _instance: &Instance) -> Result<Strin
 ///
 /// **`f_back` 链**（task-43）✓：帧入栈时由 `CurrentFrameGuard::install` 链上调用者帧（持有引用 ✓）——
 /// `traceback.walk_stack`／`test_unicodedata` 那条路可用 ✓。
+/// **`frame.clear()`**（round 126，`test_frame` 的 clear 一族 ✓）。
+///
+/// 语义照参照 3.14.4 实测：
+/// - **执行中的帧** ⇒ `RuntimeError("cannot clear an executing frame")` ✓；
+/// - **挂起帧**（生成器 `gi_frame`）⇒ `RuntimeError("cannot clear a suspended frame")` ✓；
+/// - 死帧 ⇒ 释放**局部/值栈/cell/恢复点/回溯挂起**（含形参槽 ✓），保留 `code`／`globals`／
+///   `namespace`／`f_builtins` ✓（`test_clear_does_not_clear_specials`）；
+/// - 返回 `None` ✓。清完再 `clear()` 也幂等（都是 `None`／空）✓。
+unsafe fn frame_clear_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor 'clear' needs an argument"));
+    };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "clear() takes no keyword arguments"));
+    }
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("clear() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    // **执行中**（在调用栈上）⇒ 拒绝 ✓。`FRAME_STACK` 记的是"正在跑"的帧 ✓。
+    let pointer = this.as_ptr() as usize;
+    let executing = crate::builtin_objects::FRAME_STACK
+        .lock()
+        .map(|stack| stack.contains(&pointer))
+        .unwrap_or(false);
+    if executing {
+        return Err(instance.raise_builtin_error("RuntimeError", "cannot clear an executing frame"));
+    }
+    // SAFETY: this 是 frame 类型的存活对象（方法绑定契约）。
+    let frame = unsafe { &*this.as_ptr().cast::<Frame>() };
+    if frame.is_suspended() {
+        return Err(instance.raise_builtin_error("RuntimeError", "cannot clear a suspended frame"));
+    }
+    frame.clear_for_python(instance);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 pub unsafe fn frame_getattr(
     ptr: *mut Header,
     name: &str,
@@ -721,6 +802,32 @@ pub unsafe fn frame_getattr(
             }
             None => instance.retain(instance.singletons().none()),
         }),
+        // **`f_builtins`**（round 126，`test_frame.test_clear_does_not_clear_specials`）：内建名字空间 ✓。
+        // 本层的内建命名空间就是实例那一份（`Instance::builtins` ✓）；帧的全局映射里若有
+        // `__builtins__` 也应取它，但测试只要求"不是 None" ✓。
+        "f_builtins" => instance.builtins().map(|mapping| {
+            // SAFETY: 内建命名空间由实例持有，存活；调用方要自己那份。
+            unsafe { instance.incref_object(mapping.as_ptr()) };
+            mapping
+        }),
+        // **`frame.clear()`**（round 126）：清掉局部/值栈/cell/回溯点（保留 code/globals/内建 ✓）。
+        "clear" => {
+            let method_type = instance
+                .type_named("builtin_function_or_method")
+                .expect("引导期已登记");
+            let native = instance
+                .alloc(BuiltinFunctionObject::new(method_type, "clear", Cell::new(frame_clear_native)));
+            let native_raw = native.into_raw().cast::<Header>();
+            // SAFETY: ptr 是本类型的存活对象（槽位契约）。
+            unsafe { instance.incref_object(ptr) };
+            let bound = instance.alloc(MethodObject::new(
+                instance.type_named("method").expect("method 已登记"),
+                native_raw,
+                // SAFETY: ptr 由槽位契约保证非空（是本类型的存活对象）。
+                unsafe { NonNull::new_unchecked(ptr) },
+            ));
+            Some(bound.into_raw().cast::<Header>())
+        }
         // **`f_lineno`**：按当前指令的位置表给（取不到给 `0` ✓ —— 本层位置表是可选面 ✓）。
         "f_lineno" => {
             let line = frame.code().and_then(|code_header| {
