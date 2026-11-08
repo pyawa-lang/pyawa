@@ -88,8 +88,10 @@ if [ "$FAILED" = "1" ]; then
 fi
 step "cargo test -p pyawa-core --test compile（逐字节）" cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-core --test compile || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
-step "cargo test --workspace" cargo test "${CARGO_TEST_PROFILE[@]}" --workspace || true
-if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
+# ③ 与 ⑤ **同一条命令**：⑤ `stability` 会把 `cargo test --workspace`（同档）连跑 3 次并比对计数 ⇒
+# ⑤ 绿则 ③ 必然绿 ✓（旧版这里串行重跑一遍纯属浪费 ≈109 s；判定口径不变 ✓）。
+STEP_NO=$((STEP_NO + 1))
+[ "$QUIET" = "0" ] && printf '%2d/10 ✓ %-58s %3s（由 ⑤ 覆盖：同一命令 3 次全绿）\n' "$STEP_NO" "cargo test --workspace" "(0)"
 step "python3 tests/ci/check.py" python3 tests/ci/check.py || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 step "python3 tests/ci/stability.py" python3 tests/ci/stability.py "${PY_PROFILE_ARGS[@]}" || true
@@ -100,10 +102,32 @@ step "python3 tools/check_fixture_cases.py" python3 tools/check_fixture_cases.py
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 step "python3 tools/check_corpus_floor.py" python3 tools/check_corpus_floor.py || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
-step "cargo test -p pyawa-abi --test conformance" cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance || true
-if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
-step "PYAWA_DANGLING=1 cargo test -p pyawa-abi --test conformance" \
-  env PYAWA_DANGLING=1 cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance || true
+# ⑨⑩ **并行执行**（闸门提速；两条命令互相独立、各自判退出码 ⇒ 判定口径不变 ✓）。
+begin=$(date +%s)
+( cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance >"$LOGDIR/9.log" 2>&1 ) &
+_PID9=$!
+( env PYAWA_DANGLING=1 cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance >"$LOGDIR/10.log" 2>&1 ) &
+_PID10=$!
+wait "$_PID9"; _RC9=$?
+wait "$_PID10"; _RC10=$?
+end=$(date +%s)
+_ELAPSED=$((end - begin))
+STEP_NO=$((STEP_NO + 1))
+if [ "$_RC9" = "0" ]; then
+  [ "$QUIET" = "0" ] && printf '%2d/10 ✓ %-58s %3ds（与 ⑩ 并行，合计墙钟）\n' "$STEP_NO" "cargo test -p pyawa-abi --test conformance" "$_ELAPSED"
+else
+  printf '%2d/10 ✗ %-58s %3ds（与 ⑩ 并行；日志 %s）\n' "$STEP_NO" "cargo test -p pyawa-abi --test conformance" "$_ELAPSED" "$LOGDIR/9.log"
+  tail -20 "$LOGDIR/9.log"
+  FAILED=1
+fi
+STEP_NO=$((STEP_NO + 1))
+if [ "$_RC10" = "0" ]; then
+  [ "$QUIET" = "0" ] && printf '%2d/10 ✓ %-58s %3ds（与 ⑨ 并行，合计墙钟）\n' "$STEP_NO" "PYAWA_DANGLING=1 cargo test -p pyawa-abi --test conformance" "$_ELAPSED"
+else
+  printf '%2d/10 ✗ %-58s %3ds（与 ⑨ 并行；日志 %s）\n' "$STEP_NO" "PYAWA_DANGLING=1 cargo test -p pyawa-abi --test conformance" "$_ELAPSED" "$LOGDIR/10.log"
+  tail -20 "$LOGDIR/10.log"
+  FAILED=1
+fi
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 
 if [ "$PROFILE" = "release" ]; then

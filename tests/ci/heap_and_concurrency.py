@@ -90,8 +90,24 @@ def main(argv: list[str] | None = None) -> int:
     #    那条修好之后，把下面那行 `failures.append(...)` 打开就能升级成硬判据。
     runs = 3
     perturbed_green = 0
-    for _ in range(runs):
-        if green(run_conformance({"MALLOC_PERTURB_": PERTURB}, release).stdout):
+    # **并行跑 3 次扰动**（闸门提速；这一部分**只报率、不判红** ⇒ 不影响判定 ✓）：conf二
+    # 参照侧与 VM 侧各是一个进程，单次跑只吃一个核 ⇒ 12 核上 3 路并发基本线性加速 ✓。
+    perturbed_env = dict(os.environ)
+    perturbed_env["MALLOC_PERTURB_"] = PERTURB
+    perturbed_processes = [
+        subprocess.Popen(
+            conformance_command(release),
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=perturbed_env,
+        )
+        for _ in range(runs)
+    ]
+    for process in perturbed_processes:
+        output, _ = process.communicate(timeout=1800)
+        if green(output):
             perturbed_green += 1
     # if perturbed_green != runs:
     #     failures.append(f"堆扰动 {runs} 次里只有 {perturbed_green} 次全绿")

@@ -24,8 +24,13 @@
 ## 3. 快慢两档验收
 
 - **快档**（轮内反复用）：`tools/quickcheck.sh`（编译 ＋ 编译期用例 ＋ 关键护栏 ＋ 可选探针）。
-- **慢档**（每笔提交前一次）：十项 `&&` 闸门（`cargo check --workspace --all-targets` 0 警告／逐字节／`tests/ci/check.py`／`stability.py`／`heap_and_concurrency.py`／对拍普通与 `PYAWA_DANGLING=1`／语料下限 182／夹具 490）。
-- **禁止**用慢档做轮内迭代；**禁止**用快档替代提交前闸门。
+- **提交前快档**（`tools/fastcheck.sh`）：`cargo check --all-targets` 0 警告 ＋ 逐字节 ＋ `tests/ci/check.py` ＋ 夹具 ＋ 语料下限 ＋ 少量"必须保持绿"的官方套件烟测（含基线计数断言，不放松判定）。
+- **慢档**（`tools/roundcheck.sh`）：十项 `&&` 闸门（`cargo check --workspace --all-targets` 0 警告／逐字节／`tests/ci/check.py`／`stability.py`／`heap_and_concurrency.py`／对拍普通与 `PYAWA_DANGLING=1`／语料下限 182／夹具 490）＋ 官方全量 survey，**两者并行**跑（闸门内 ③ 由 ⑤ 覆盖、⑨⑩ 并行；survey 默认 `--jobs 4` 让核）。
+- **分档节奏（2026-11-09 用户批准提速）**：
+  - **行为变更轮**（改动默认路径／运行时语义）：提交前必须 `tools/roundcheck.sh` 全绿（十项 ＋ survey）；
+  - **纯诊断轮／默认零输出轮**：`tools/fastcheck.sh` 全绿即可提交；但**每两轮至少一次** `tools/roundcheck.sh`，且下一次行为变更轮必须补；
+  - survey 同节奏：行为变更轮必跑；诊断轮可并到"每两轮一次"的整轮验收里。
+- **禁止**用慢档做轮内迭代；**禁止**用快档替代**行为变更轮**的提交前闸门。
 
 ## 4. 时间盒与升级
 
