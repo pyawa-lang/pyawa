@@ -400,6 +400,12 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 if let Some(self_object) = bound_self {
                     release(instance, self_object);
                 }
+                // **`callable` 是 CALL_FUNCTION_EX 从栈上弹出的"新引用"** ⇒ 调用后必须归还 ✓
+                // （round 102 真 bug 修 ✗：先前**只在错误路径**归还、成功路径漏了 ⇒ 每次 `f(*args)` 漏一份
+                //  **被调对象**：`A(*args)` 会漏类对象一份 ⇒ `test.support.check_free_after_iterating`
+                //  里类对象 rc 永远回不到 1 ⇒ 类型/实例环不收 ⇒ `test_dict`/`test_list` 的
+                //  `test_free_after_iterating` 恒红 ✓。返回错误时也在这里归还 ⇒ 不再泄漏 ✓）。
+                release(instance, callable);
                 frame.get().push(result?)?;
             }
         _ => unreachable!("step_calls_call_function_ex 只接收 CALL_FUNCTION_EX"),
