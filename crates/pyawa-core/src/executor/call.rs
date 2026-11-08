@@ -540,7 +540,7 @@ pub(crate) fn call_callable(
                     init_args.extend(args.iter().copied());
                     let result = call_callable(instance, initializer, None, init_args, kwargs, opcode)?;
                     release(instance, result);
-                    // 形参所有权实验开关：实验模型下帧已归还实参 ⇒ 不再补这一份（round 95）。
+                    // 形参所有权（round 98 起默认）：帧已归还实参 ⇒ 不再补这一份（`PYAWA_FRAME_OWN=0` 才补）。
                     if !crate::instance::frame_own_params() {
                         let own_finalizer = instance
                             .type_lookup_owner(class, "__del__")
@@ -611,7 +611,7 @@ pub(crate) fn call_callable(
             )?;
             // `__init__` 必须返回 None（`T`／参照实现如此）；返回值丢掉那份引用
             release(instance, result);
-            // 形参所有权实验开关：实验模型下帧已归还实参 ⇒ 不再补这一份（round 95）。
+            // 形参所有权（round 98 起默认）：帧已归还实参 ⇒ 不再补这一份（`PYAWA_FRAME_OWN=0` 才补）。
             if !crate::instance::frame_own_params() {
                 let own_finalizer = instance
                     .type_lookup_owner(class, "__del__")

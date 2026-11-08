@@ -4,12 +4,20 @@
 
 use super::*;
 
-/// **形参所有权实验开关**（round 95；`PYAWA_FRAME_OWN=1` 才开）：帧拥有前 `argcount` 个局部槽
-/// （`bind_arguments` 把实参**所有权**填进去 ⇒ 帧释放时归还 ✓）。默认**关**（= 现行模型：帧跳过形参槽、
-/// 实参由调用方一侧归还）。做成开关是为了**不重编源码就能逐个点名**剩余"借用实参"站点 ✓。
+/// **形参所有权**（round 98 起为**默认模型**）：帧拥有前 `argcount` 个局部槽
+/// （`bind_arguments` 把实参**所有权**填进去 ⇒ 帧释放时归还 ✓）。
+///
+/// 历史：round 43/81/83/84/89-97 反复试验"帧拥有形参"；round 95 做成运行期开关、round 96-97 修掉
+/// 两处"清空操作数"UAF、round 97 实测 `PYAWA_FRAME_OWN=1` 全量套件 **ok 68 持平、无 ok 回退**、
+/// 十项闸门全绿 ⇒ round 98 **翻成默认** ✓。应急回退：`PYAWA_FRAME_OWN=0` 走旧模型（帧跳过形参槽）。
 pub(crate) fn frame_own_params() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var_os("PYAWA_FRAME_OWN").is_some())
+    *FLAG.get_or_init(|| {
+        !matches!(
+            std::env::var("PYAWA_FRAME_OWN").ok().as_deref(),
+            Some("0") | Some("false") | Some("no")
+        )
+    })
 }
 
 /// 被跟踪对象的地址集合（round 92；只在 `PYAWA_REF_TRACE` 开启时填充）。
@@ -171,6 +179,9 @@ impl Instance {
                 unsafe { &*ptr }.refcount() + 1,
                 self.current_site()
             );
+            if std::env::var_os("PYAWA_REF_TRACE_INCREF_BT").is_some() {
+                eprintln!("{}", std::backtrace::Backtrace::force_capture());
+            }
         }
         if self.watch.get() == ptr as usize {
             eprintln!(
@@ -285,6 +296,17 @@ impl Instance {
             .iter()
             .any(|ty| ty.as_ptr() as usize == ptr as usize)
         {
+            // **诊断（round 98，`PYAWA_TYPE_REL_TRACE=1`）**：把"注册类型被放到 0"的**首次**现场打出来
+            // （这是欠计数/多放的源头；guard 只挡住症状 ✓）。
+            if std::env::var_os("PYAWA_TYPE_REL_TRACE").is_some() {
+                // SAFETY: ptr 是注册表里的类型对象（存活）。
+                let name = unsafe { &*ptr.cast::<crate::TypeObject>() }.name();
+                eprintln!(
+                    "[type-rel] 注册类型 {name} 被放到 0：现场={}\n{}",
+                    self.current_site(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
             return;
         }
 

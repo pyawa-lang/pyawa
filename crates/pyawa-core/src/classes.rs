@@ -1161,6 +1161,8 @@ pub fn build_class_from_parts_with_keywords(
         &subclass_keywords,
     )?;
 
+    // **登记为"动态（用户）类类型"**（round 99）：参与孤儿类型回收 ✓（见 `Instance::user_types`）。
+    instance.register_user_type(ty.cast::<Header>());
     // SAFETY: ty 由注册表持有；这里新增一份引用交给调用方。
     unsafe { instance.incref_object(ty.cast::<Header>().as_ptr()) };
     Ok(ty.cast::<Header>())

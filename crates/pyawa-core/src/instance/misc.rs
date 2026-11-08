@@ -84,6 +84,19 @@ impl Instance {
         self.ast_parser.get()
     }
 
+    /// **登记动态（用户）类类型**（round 99）：参与"孤儿类型回收" ✓。
+    pub(crate) fn register_user_type(&self, ty: NonNull<Header>) {
+        let mut list = self.user_types.borrow_mut();
+        if !list.iter().any(|entry| entry.as_ptr() == ty.as_ptr()) {
+            list.push(ty);
+        }
+    }
+
+    /// 动态类类型的快照（GC 用 ✓）。
+    pub(crate) fn user_type_headers(&self) -> Vec<NonNull<Header>> {
+        self.user_types.borrow().clone()
+    }
+
     /// **`__getattribute__` 派发守卫**（round 87）。
     pub fn getattribute_dispatching(&self) -> bool {
         self.getattribute_dispatching.get()

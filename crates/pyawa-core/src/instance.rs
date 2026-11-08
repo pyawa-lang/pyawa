@@ -120,6 +120,12 @@ pub struct Instance {
     /// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点。core 不能依赖
     /// stdlib（分层）⇒ 由 `_ast` 模块在引导期登记一个函数指针 ✓（未登记时 compile 照旧报未接线 ✓）。
     ast_parser: Cell<Option<crate::AstParserFn>>,
+    /// **动态（用户）类类型的"孤儿回收"名单**（round 99）：`class`/`type()` 造出的类型 —— 参照里类型是
+    /// GC 对象；本层**不释放类型 Box**（`alloc_type_raw` 的 `Box::leak` 与 `AttributeObject::slots().dealloc`
+    /// 不同构 ⇒ 真释放会 invalid free ✗），改为**保守孤儿回收**：`rc == 1`（只剩注册表）× 没有活对象以它
+    /// 为 `ty` × 没有其它类型以它为 bases/mro/元类 ⇒ 摘注册表＋清字典（环随之由引用计数释放 ✓；类型本体留着，
+    /// 任何裸 `ty` 指针仍有效 ✓）。可收 `test_dict`/`test_list` 的 `test_free_after_iterating` ✓。
+    user_types: RefCell<Vec<NonNull<Header>>>,
     /// **`__getattribute__` 派发守卫**（round 87）：用户覆写走钩子期间置位，防止默认实现递归 ✓。
     getattribute_dispatching: Cell<bool>,
     /// **类型对象的 `__text_signature__` 旁表**（round 87）：`staticmethod`/`classmethod`/`property`

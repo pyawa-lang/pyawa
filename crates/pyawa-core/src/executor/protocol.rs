@@ -365,7 +365,7 @@ fn instance_attribute_delete_inner(
                     Vec::new(),
                     0,
                 );
-                // 形参所有权实验开关：实验模型下帧已归还实参 ⇒ 不再补这一份（round 95）。
+                // 形参所有权（round 98 起默认）：帧已归还实参 ⇒ 不再补这一份（`PYAWA_FRAME_OWN=0` 才补）。
                 if !crate::instance::frame_own_params() {
                     instance.release(name_object);
                 }

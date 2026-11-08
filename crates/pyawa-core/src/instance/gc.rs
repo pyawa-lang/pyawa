@@ -81,6 +81,13 @@ impl Instance {
 
     /// [`Instance::collect`] 的主体；进入前 `gc_running` 已置位。
     pub(crate) fn collect_inner(&self) -> usize {
+        // **孤儿用户类回收**（round 99，实验开关 `PYAWA_ORPHAN_RECLAIM=1` 才开）：清掉"只剩注册表
+        // 引用"的用户类字典 ⇒ 其命名空间里的环由后面的普通回收/引用计数级联处理 ✓。
+        // 简单夹具已能收环（`test_free_after_iterating` 的风格 ✓），但 `unittest.assertRaises` 那条
+        // 构造里类型还多一份引用（`rc=2`）⇒ 当前判据不收；默认关 ⇒ 套件行为与 round 98 前一致 ✓。
+        if std::env::var_os("PYAWA_ORPHAN_RECLAIM").is_some() {
+            self.reclaim_orphan_user_types();
+        }
         let unreachable = self.find_unreachable();
         self.gc_alloc_count.set(0);
         if unreachable.is_empty() {
@@ -381,6 +388,265 @@ impl Instance {
             .filter(|(_, reached)| !*reached)
             .map(|(candidate, _)| *candidate)
             .collect()
+    }
+
+    /// **含用户类型的动态可达性**（round 99，仅用于"孤儿类型判定"，不用于释放）：候选＝回收链表 ∪
+    /// 用户类型；类型的外部计数减 1（注册表那份不算根 ✓）；类型只把**字典**算作计数边（bases／mro 是
+    /// 裸指针 ✓）；标记边额外走 `header.ty()` 与类型的 dict／bases／mro ✓。返回**不可达地址集合**。
+    fn find_unreachable_dynamic_user_types(&self) -> std::collections::HashSet<usize> {
+        let user_types = self.user_type_headers();
+        let mut candidates = self.gc_headers();
+        for ty in &user_types {
+            if !candidates.iter().any(|entry| entry.as_ptr() == ty.as_ptr()) {
+                candidates.push(*ty);
+            }
+        }
+        if candidates.is_empty() {
+            return std::collections::HashSet::new();
+        }
+        let is_type = |candidate: &NonNull<Header>| {
+            user_types
+                .iter()
+                .any(|entry| entry.as_ptr() == candidate.as_ptr())
+        };
+        let index: std::collections::HashMap<usize, usize> = candidates
+            .iter()
+            .enumerate()
+            .map(|(position, candidate)| (candidate.as_ptr() as usize, position))
+            .collect();
+        let mut external: Vec<u32> = candidates
+            .iter()
+            .map(|candidate| {
+                // SAFETY: 候选存活。
+                let mut count = unsafe { candidate.as_ref() }.refcount();
+                if is_type(candidate) {
+                    count = count.saturating_sub(1);
+                }
+                count
+            })
+            .collect();
+        let mut counted: Vec<Vec<*mut Header>> = Vec::with_capacity(candidates.len());
+        for candidate in &candidates {
+            let children: Vec<*mut Header> = if is_type(candidate) {
+                // SAFETY: 候选存活。
+                let type_object = unsafe { &*candidate.as_ptr().cast::<crate::TypeObject>() };
+                let mut only_dict = Vec::new();
+                if let Some(dict) = type_object.dict() {
+                    only_dict.push(dict.as_ptr() as *mut Header);
+                }
+                only_dict
+            } else {
+                self.children_of(*candidate)
+            };
+            counted.push(children);
+        }
+        for children in &counted {
+            for child in children {
+                let child_address = *child as *mut Header as usize;
+                if let Some(&child_position) = index.get(&child_address) {
+                    external[child_position] = external[child_position].saturating_sub(1);
+                }
+            }
+        }
+        let mut marked = vec![false; candidates.len()];
+        let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
+        while let Some(position) = stack.pop() {
+            if marked[position] {
+                continue;
+            }
+            marked[position] = true;
+            let candidate = candidates[position];
+            let mut children = counted[position].clone();
+            // SAFETY: 候选存活。
+            let own_type = unsafe { candidate.as_ref() }.ty();
+            children.push(own_type.as_ptr() as *mut Header);
+            if is_type(&candidate) {
+                // SAFETY: 候选是用户类型。
+                let type_object = unsafe { &*candidate.as_ptr().cast::<crate::TypeObject>() };
+                if let Some(dict) = type_object.dict() {
+                    children.push(dict.as_ptr() as *mut Header);
+                }
+                for base in type_object.bases() {
+                    children.push(base.as_ptr() as *mut Header);
+                }
+                for entry in type_object.mro() {
+                    children.push(entry.as_ptr() as *mut Header);
+                }
+            }
+            for child in children {
+                let child_address = child as *mut Header as usize;
+                if let Some(&child_position) = index.get(&child_address) {
+                    if !marked[child_position] {
+                        stack.push(child_position);
+                    }
+                }
+            }
+        }
+        candidates
+            .iter()
+            .zip(marked)
+            .filter(|(_, reached)| !*reached)
+            .map(|(candidate, _)| candidate.as_ptr() as usize)
+            .collect()
+    }
+
+    /// **孤儿用户类回收**（round 99）：参照里类型是 GC 对象 ✓；本层**不移动/不释放类型 Box**
+    /// （`alloc_type_raw` 用 `Box::leak` 分配、而用户类类型的 `dealloc` 槽是
+    /// `AttributeObject::slots()` 那一份（布局不同构）⇒ 真释放会 `free(): invalid pointer` ✗），
+    /// 改为**保守判定 + 摘注册表 + 清字典**：
+    ///
+    /// - 孤儿判据（全部成立）：`rc == 1`（只剩 `types` 注册表那份）；**没有其它类型**以它为
+    ///   bases／mro／元类（裸指针 ✓）；动态可达性判它**不可达**；它的**所有活实例**也不可达；
+    /// - 动作：先给活实例跑终结器（清字典后 `__del__` 就找不到了 ✓），再摘 `types`／`user_types`／
+    ///   按地址索引的缓存、弱引用失效、清类型字典／bases／mro ⇒ 环由**普通引用计数**级联释放 ✓；
+    ///   类型对象本体留着（裸 `ty` 指针仍有效 ✓，Box 内存如实泄漏 ✓）。
+    pub(crate) fn reclaim_orphan_user_types(&self) {
+        let user_types = self.user_type_headers();
+        if user_types.is_empty() {
+            return;
+        }
+        // ① 其它类型以裸指针引用（bases／mro／元类）——跳过"自己 MRO 里的自己" ✓。
+        let registry = self.types.borrow().clone();
+        let mut referenced_by_types: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for type_ptr in &registry {
+            // SAFETY: 注册表里的类型都存活。
+            let type_object = unsafe { &*type_ptr.as_ptr() };
+            let own_address = type_ptr.as_ptr() as usize;
+            for base in type_object.bases() {
+                let base_address = base.as_ptr() as usize;
+                if base_address != own_address {
+                    referenced_by_types.insert(base_address);
+                }
+            }
+            for entry in type_object.mro() {
+                let entry_address = entry.as_ptr() as usize;
+                if entry_address != own_address {
+                    referenced_by_types.insert(entry_address);
+                }
+            }
+            // SAFETY: 同上（类型对象的头部 `ty` 是元类）。
+            let header_ref = unsafe { &*type_ptr.as_ptr().cast::<Header>() };
+            let metaclass_address = header_ref.ty().as_ptr() as usize;
+            if metaclass_address != own_address {
+                referenced_by_types.insert(metaclass_address);
+            }
+        }
+        // ② 动态可达性（含用户类型节点）。
+        let unreachable = self.find_unreachable_dynamic_user_types();
+        // ③ 收集孤儿。
+        let mut orphans: Vec<NonNull<Header>> = Vec::new();
+        for ty in &user_types {
+            let address = ty.as_ptr() as usize;
+            // SAFETY: 名单里的类型都存活。
+            let header = unsafe { ty.as_ref() };
+            if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+                // SAFETY: ty 存活。
+                let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
+                eprintln!(
+                    "[orphan-scan] {name} rc={} raw={} ptr={address:#x}",
+                    header.refcount(),
+                    referenced_by_types.contains(&address)
+                );
+            }
+            if header.refcount() != 1 || referenced_by_types.contains(&address) {
+                continue;
+            }
+            if !unreachable.contains(&address) {
+                continue;
+            }
+            let mut all_instances_unreachable = true;
+            for candidate in self.gc_headers() {
+                // SAFETY: 回收链表上的对象都存活。
+                let candidate_type = unsafe { candidate.as_ref() }.ty();
+                if candidate_type.as_ptr() as usize != address {
+                    continue;
+                }
+                if !unreachable.contains(&(candidate.as_ptr() as usize)) {
+                    all_instances_unreachable = false;
+                    break;
+                }
+            }
+            if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+                // SAFETY: ty 存活。
+                let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
+                eprintln!(
+                    "[orphan] {name} rc={} raw={} attr_unreach={} inst_ok={}",
+                    header.refcount(),
+                    referenced_by_types.contains(&address),
+                    unreachable.contains(&address),
+                    all_instances_unreachable
+                );
+            }
+            if all_instances_unreachable {
+                orphans.push(*ty);
+            }
+        }
+        // ④ 回收：先终结活实例，再摘注册表/缓存、清字典。
+        for ty in orphans {
+            let address = ty.as_ptr() as usize;
+            // SAFETY: 名单里的类型都存活。
+            let type_object = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() };
+            // **先给活实例跑终结器**（清字典后 `__del__` 就从 MRO 上消失了 ✗）。
+            let instances: Vec<NonNull<Header>> = self
+                .gc_headers()
+                .into_iter()
+                .filter(|header| {
+                    // SAFETY: 回收链表上的对象都存活。
+                    unsafe { header.as_ref() }.ty().as_ptr() as usize == address
+                })
+                .collect();
+            if !instances.is_empty() {
+                if let Some(finalize) = type_object.slots().finalize {
+                    for instance in instances {
+                        // SAFETY: instance 存活。
+                        let instance_ref = unsafe { instance.as_ref() };
+                        if !instance_ref.has_flag(flags::FINALIZING) {
+                            instance_ref.set_flag(flags::FINALIZING);
+                            // SAFETY: 槽位契约（instance 是本实例的存活对象）。
+                            unsafe { finalize(instance.as_ptr(), self) };
+                        }
+                    }
+                }
+            }
+            self.types
+                .borrow_mut()
+                .retain(|entry| entry.as_ptr() as usize != address);
+            self.user_types
+                .borrow_mut()
+                .retain(|entry| entry.as_ptr() != ty.as_ptr());
+            let removed: Vec<NonNull<Header>> = {
+                let mut cache = self.type_dunders.borrow_mut();
+                let keys: Vec<(usize, &'static str)> = cache
+                    .keys()
+                    .filter(|(key, _)| *key == address)
+                    .cloned()
+                    .collect();
+                keys.into_iter()
+                    .filter_map(|key| cache.remove(&key))
+                    .collect()
+            };
+            for value in removed {
+                // SAFETY: 缓存交出的引用归调用方。
+                unsafe { self.release_object(value.as_ptr()) };
+            }
+            self.isinstance_cache
+                .borrow_mut()
+                .retain(|(left, right, _), _| *left != address && *right != address);
+            self.type_text_signatures.borrow_mut().remove(&address);
+            self.mappingproxy_sources
+                .borrow_mut()
+                .retain(|_, value| value.as_ptr() as usize != address);
+            let callbacks = self.take_weakref_callbacks(ty);
+            self.queue_weakref_callbacks(callbacks);
+            self.forget_weakref_object(ty);
+            if let Some(dict) = type_object.dict() {
+                type_object.set_dict(None);
+                // SAFETY: 这份引用由类型对象持有。
+                unsafe { self.release_object(dict.as_ptr()) };
+            }
+            type_object.bases.borrow_mut().clear();
+            type_object.mro.borrow_mut().clear();
+        }
     }
 
     /// 按 `traverse` 槽位取一个对象的直接引用（**OM-12**／**OM-29**／**OM-36**）。

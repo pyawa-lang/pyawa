@@ -15,6 +15,7 @@ impl Instance {
             builtin_text_signatures: RefCell::new(std::collections::HashMap::new()),
             type_text_signatures: RefCell::new(std::collections::HashMap::new()),
             getattribute_dispatching: Cell::new(false),
+            user_types: RefCell::new(Vec::new()),
             mappingproxy_live: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),
             live: RefCell::new(HashSet::new()),
