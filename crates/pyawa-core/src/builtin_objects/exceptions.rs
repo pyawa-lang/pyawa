@@ -335,6 +335,30 @@ pub unsafe fn exception_getattr(
                 None => instance.new_none(),
             })
         }
+        // **`StopIteration.value`／`StopAsyncIteration.value`**（round 83）：参照里是 `args[0]`
+        // （无实参 ⇒ `None`）✓；先前没有这个属性 ⇒ `except StopIteration as e: e.value` 当场
+        // AttributeError ✗（`test_frame.test_f_generator` 的 `g.close()` 与协程收尾 ✓）。
+        "value" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            let ty = unsafe { (*ptr).ty() };
+            let is_stop = instance
+                .type_named("StopIteration")
+                .is_some_and(|stop| instance.is_subtype(ty, stop))
+                || instance
+                    .type_named("StopAsyncIteration")
+                    .is_some_and(|stop| instance.is_subtype(ty, stop));
+            if !is_stop {
+                return None;
+            }
+            Some(match object.args().first() {
+                Some(value) => {
+                    // SAFETY: 值由本对象持有，这里新增一份交给调用方 ✓。
+                    unsafe { instance.incref_object(value.as_ptr()) };
+                    *value
+                }
+                None => instance.new_none(),
+            })
+        }
         // **`OSError` 一族的属性面**（round 108）：`errno`／`strerror`／`filename`／`filename2` ✓
         // —— 参照里它们就是 `args` 的前四项（`OSError(errno, strerror, filename, filename2)` ✓）；
         // 先前完全取不到 ✗ ⇒ `except FileNotFoundError as e: e.filename` 当场 AttributeError ✗

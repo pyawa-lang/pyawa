@@ -94,6 +94,10 @@ py_object! {
         /// **生命周期**：入帧时由 `CurrentFrameGuard::install` 链上（`set_f_back` **接手一份新引用** ✓），
         /// `frame_clear` 时释放 ✓；`f_back` 属性给出**新引用**或 `None` ✓。
         f_back: RefCell<Option<NonNull<Header>>>,
+        /// **`f_generator`**（round 83）：本帧所属的生成器／协程对象（**本帧持有一份引用** ✓；
+        /// 普通函数帧为 `None` ✓）。与 `GeneratorObject` 的"持有帧"构成**双向引用** ⇒ 两者
+        /// 都走 GC（`traverse`／`clear` 成对 ✓）。
+        generator: RefCell<Option<NonNull<Header>>>,
     }
 }
 
@@ -170,12 +174,14 @@ impl Frame {
         };
         // SAFETY: code 由帧持有，存活。
         let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
-        let mut slot = 0usize;
-        while let Some(name) = code.varname(slot) {
+        // **localsplus 全表**（round 83）：除了 `co_varnames` 还要收 **cell/free 槽** ✓
+        // —— 参照的 `f_locals` 快照含闭包槽（`test_frame.test_closure_with_inline_comprehension`
+        // 的 `KeyError: 'k'` 就是漏了 cellvar ✓）。
+        for slot in 0..self.kinds.len() {
             if let Ok(Some(value)) = self.local(slot) {
-                instance.dict_set(dict, name, value);
+                let name = crate::executor::format::localsplus_name(code, slot);
+                instance.dict_set(dict, &name, value);
             }
-            slot += 1;
         }
         dict
     }
@@ -213,6 +219,7 @@ impl Frame {
             resume: RefCell::new(None),
             stacksize: info.stacksize(),
             suspended: Cell::new(false),
+            generator: RefCell::new(None),
         }
     }
 
@@ -232,6 +239,16 @@ impl Frame {
     /// 本帧的命名空间映射（**借用**；不是映射帧则为 `None`）。
     pub fn namespace(&self) -> Option<NonNull<Header>> {
         *self.namespace.borrow()
+    }
+
+    /// **`f_generator`**（round 83）：设置本帧所属的生成器／协程（**接手一份新引用** ✓）。
+    pub fn set_generator(&self, generator: NonNull<Header>) -> Option<NonNull<Header>> {
+        core::mem::replace(&mut *self.generator.borrow_mut(), Some(generator))
+    }
+
+    /// 本帧所属的生成器／协程（**借用**）。
+    pub fn generator(&self) -> Option<NonNull<Header>> {
+        *self.generator.borrow()
     }
 
     /// **`BC-57`**：本帧的全局映射（**借用**；没有就是 `None`）。
@@ -586,6 +603,9 @@ unsafe fn frame_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     if let Some(exception) = *frame.pending_raise.borrow() {
         visit(exception.as_ptr());
     }
+    if let Some(generator) = *frame.generator.borrow() {
+        visit(generator.as_ptr());
+    }
     if let Some(parent) = *frame.f_back.borrow() {
         visit(parent.as_ptr());
     }
@@ -633,6 +653,10 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
     if let Some(parent) = frame.f_back.borrow_mut().take() {
         // SAFETY: 这份引用由帧持有。
         unsafe { instance.release_object(parent.as_ptr()) };
+    }
+    if let Some(generator) = frame.generator.borrow_mut().take() {
+        // SAFETY: 这份引用由帧持有。
+        unsafe { instance.release_object(generator.as_ptr()) };
     }
     if let Some(globals) = frame.globals.borrow_mut().take() {
         // SAFETY: 这份引用由帧持有。
@@ -828,6 +852,15 @@ pub unsafe fn frame_getattr(
             ));
             Some(bound.into_raw().cast::<Header>())
         }
+        // **`f_generator`**（round 83）：生成器／协程帧给所属对象，普通函数帧给 `None` ✓。
+        "f_generator" => Some(match frame.generator() {
+            Some(generator) => {
+                // SAFETY: generator 由本帧持有，存活；调用方要自己那份。
+                unsafe { instance.incref_object(generator.as_ptr()) };
+                generator
+            }
+            None => instance.retain(instance.singletons().none()),
+        }),
         // **`f_lineno`**：按当前指令的位置表给（取不到给 `0` ✓ —— 本层位置表是可选面 ✓）。
         "f_lineno" => {
             let line = frame.code().and_then(|code_header| {

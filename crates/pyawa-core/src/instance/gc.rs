@@ -260,6 +260,13 @@ impl Instance {
         }
 
         // ③ 释放内存。（旁表条目随对象释放摘掉 ✓，round 82）
+        if std::env::var_os("PYAWA_STR_FREE_BT").is_some() {
+            // SAFETY: ty 由注册表持有。
+            let ty_name = unsafe { ty.as_ref() }.name();
+            if ty_name == "str" {
+                eprintln!("[str-free] ptr={:p}\n{}", ptr.as_ptr(), std::backtrace::Backtrace::force_capture());
+            }
+        }
         self.forget_python_finalized(ptr.as_ptr() as usize);
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
         let size = unsafe { ty.as_ref() }.instance_size;

@@ -832,6 +832,14 @@ pub(crate) fn call_callable(
             Cell::new(false),
             Cell::new(false),
         ));
+        let generator_header = generator.as_ptr().cast::<Header>();
+        // **`f_generator` 反向引用**（round 83）：帧持有生成器一份（`frame_traverse`／
+        // `frame_clear` 成对 ✓）；生成器持有帧那份已在上面 `incref` ✓ ⇒ 双向引用都走 GC ✓。
+        unsafe { instance.incref_object(generator_header.as_ptr()) };
+        if let Some(previous) = frame.get().set_generator(generator_header) {
+            // SAFETY: previous 这份由帧交出。
+            unsafe { instance.release_object(previous.as_ptr()) };
+        }
         return Ok(generator.into_raw().cast::<Header>());
     }
 
