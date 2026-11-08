@@ -365,7 +365,10 @@ fn instance_attribute_delete_inner(
                     Vec::new(),
                     0,
                 );
-                instance.release(name_object);
+                // 形参所有权实验开关：实验模型下帧已归还实参 ⇒ 不再补这一份（round 95）。
+                if !crate::instance::frame_own_params() {
+                    instance.release(name_object);
+                }
                 release(instance, returned?);
                 return Ok(());
             }

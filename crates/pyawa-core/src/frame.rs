@@ -666,8 +666,11 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
         // SAFETY: 同上。
         unsafe { instance.release_object(namespace.as_ptr()) };
     }
+    // **形参所有权实验开关**（round 95）：`PYAWA_FRAME_OWN=1` ⇒ 帧拥有前 `argcount` 个槽 ⇒ 全部释放 ✓；
+    // 默认关 ⇒ 维持现行模型（形参槽只清空、不释放 ✓）。
+    let own_params = crate::instance::frame_own_params();
     for (index, slot) in frame.locals.borrow_mut().iter_mut().enumerate() {
-        if index < param_slots {
+        if index < param_slots && !own_params {
             // 形参槽：所有权在调用方（`CALL`）一侧 ✓ ⇒ 这里只清空、不释放 ✓。
             *slot = None;
             continue;

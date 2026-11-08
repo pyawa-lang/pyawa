@@ -540,13 +540,16 @@ pub(crate) fn call_callable(
                     init_args.extend(args.iter().copied());
                     let result = call_callable(instance, initializer, None, init_args, kwargs, opcode)?;
                     release(instance, result);
-                    let own_finalizer = instance
-                        .type_lookup_owner(class, "__del__")
-                        .is_some_and(|(owner, _)| owner == class);
-                    if instance.type_name(instance.type_of(initializer)) == "function"
-                        && !own_finalizer
-                    {
-                        release(instance, created);
+                    // 形参所有权实验开关：实验模型下帧已归还实参 ⇒ 不再补这一份（round 95）。
+                    if !crate::instance::frame_own_params() {
+                        let own_finalizer = instance
+                            .type_lookup_owner(class, "__del__")
+                            .is_some_and(|(owner, _)| owner == class);
+                        if instance.type_name(instance.type_of(initializer)) == "function"
+                            && !own_finalizer
+                        {
+                            release(instance, created);
+                        }
                     }
                 }
                 None => {
@@ -608,13 +611,16 @@ pub(crate) fn call_callable(
             )?;
             // `__init__` 必须返回 None（`T`／参照实现如此）；返回值丢掉那份引用
             release(instance, result);
-            let own_finalizer = instance
-                .type_lookup_owner(class, "__del__")
-                .is_some_and(|(owner, _)| owner == class);
-            let is_function_initializer =
-                instance.type_name(instance.type_of(initializer)) == "function";
-            if is_function_initializer && !own_finalizer {
-                release(instance, created);
+            // 形参所有权实验开关：实验模型下帧已归还实参 ⇒ 不再补这一份（round 95）。
+            if !crate::instance::frame_own_params() {
+                let own_finalizer = instance
+                    .type_lookup_owner(class, "__del__")
+                    .is_some_and(|(owner, _)| owner == class);
+                let is_function_initializer =
+                    instance.type_name(instance.type_of(initializer)) == "function";
+                if is_function_initializer && !own_finalizer {
+                    release(instance, created);
+                }
             }
             // initializer 的那份引用由 `call_callable` 接手（它内部会按需释放）
         } else {

@@ -4,6 +4,14 @@
 
 use super::*;
 
+/// **形参所有权实验开关**（round 95；`PYAWA_FRAME_OWN=1` 才开）：帧拥有前 `argcount` 个局部槽
+/// （`bind_arguments` 把实参**所有权**填进去 ⇒ 帧释放时归还 ✓）。默认**关**（= 现行模型：帧跳过形参槽、
+/// 实参由调用方一侧归还）。做成开关是为了**不重编源码就能逐个点名**剩余"借用实参"站点 ✓。
+pub(crate) fn frame_own_params() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("PYAWA_FRAME_OWN").is_some())
+}
+
 /// 被跟踪对象的地址集合（round 92；只在 `PYAWA_REF_TRACE` 开启时填充）。
 static REF_TRACKED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
     std::sync::OnceLock::new();

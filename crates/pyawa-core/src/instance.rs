@@ -28,6 +28,8 @@ mod interrupt;
 mod convert;
 // **编码表与归一函数**（第 726 轮）：`_codecs`／`bytes.decode`／`str.encode` 的**一处真相** ✓。
 pub(crate) use convert::CP437;
+/// 形参所有权实验开关（round 95；见 `refcount::frame_own_params`）。
+pub(crate) use refcount::frame_own_params;
 mod gc;
 mod context;
 // `P3-41`：`repr` 递归守卫的三支结果（`OM-11`）。
