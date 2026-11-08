@@ -127,6 +127,33 @@ pub(crate) fn attribute_lookup(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<Attribute, ExecError> {
+    // **用户 `__getattribute__` 优先**（round 87，参照 `PyObject_GenericGetAttr` 之前的
+    // `tp_getattro` 语义）：类型 MRO 上**覆写**了 `__getattribute__` ⇒ `getattr(obj, 名)`／
+    // `obj.名` 一律先调它 ✓。守卫：钩子执行期间（`object.__getattribute__` → `attribute_read`）
+    // 不再重入 ✓；`__getattribute__` 这个名字本身也不派发 ✓（否则取钩子就递归 ✓）。
+    if name != "__getattribute__" && object != instance.singletons().none() {
+        // 类型对象走自己的 `type` 通道（元类 `__getattribute__` 另案 ✓）。
+        if !instance.is_type_object(object) && !instance.getattribute_dispatching() {
+            let object_type = unsafe { object.as_ref() }.ty();
+            if let Some((owner, hook)) = instance.type_lookup_owner(object_type, "__getattribute__") {
+                let object_default = instance.type_named("object");
+                if !object_default.is_some_and(|default| default == owner) {
+                    let name_object = instance.new_str(name);
+                    instance.set_getattribute_dispatching(true);
+                    let result = crate::executor::call::call_callable(
+                        instance,
+                        hook,
+                        Some(object),
+                        vec![name_object],
+                        Vec::new(),
+                        0,
+                    );
+                    instance.set_getattribute_dispatching(false);
+                    return result.map(Attribute::Owned);
+                }
+            }
+        }
+    }
     // ① 类型自己的 `getattr` 槽（`OM-11`）——**内建类型的属性通道**，不许旁路
     // SAFETY: object 是存活对象。
     let object_type = unsafe { object.as_ref() }.ty();
@@ -417,6 +444,9 @@ pub(crate) fn attribute_lookup(
             ))
             .into_raw()
             .cast::<Header>();
+        // **文本签名**（round 87）：`inspect.signature(C.mro)` 参照里是 `()`（`($self, /)` 去掉绑定
+        // 首参）✓ —— `rlcompleter` 的 `CompleteMe.mro()` 期望靠它（否则给 `None.mro(` ✗）。
+        instance.set_builtin_text_signature(native, "($self, /)");
         // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
         unsafe { instance.incref_object(object.as_ptr()) };
         let bound = instance.alloc(MethodObject::new(
@@ -709,6 +739,9 @@ fn attribute_lookup_specials(
     // 这里只对**恰是 `object` 的类型**给 `"()"`，其余类型给 `None` ✓（不再写进 `object` 命名空间，
     // 否则会被 MRO 继承 ✗）。
     if name == "__text_signature__" && instance.is_type_object(object) {
+        if let Some(signature) = instance.type_text_signature(object) {
+            return Ok(Some(Attribute::Owned(instance.new_str(signature))));
+        }
         let is_object = instance
             .type_named("object")
             .is_some_and(|object_type| object_type.cast::<Header>() == object);

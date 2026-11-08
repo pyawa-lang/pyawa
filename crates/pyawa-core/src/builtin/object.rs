@@ -130,6 +130,70 @@ pub fn object_ne_native(
 }
 
 /// `object.__repr__(self)`：本层已有的默认 repr（`object_repr`）。
+
+/// **`object.__lt__` 一族**（round 87）：参照里 `object.__dict__` 有四个富比较 dunder，默认都返回
+/// `NotImplemented`（随后由解释器抛 `TypeError: '<' not supported…`）✓。本层这些行为此前只在
+/// `COMPARE_OP` 里特判、类型字典里**没有名字** ⇒ `dir(<实例>)` 补了名字后 `getattr` 取不到 ⇒
+/// `rlcompleter` 的 parens 判据不齐 ✗（`test_rlcompleter.test_attr_matches` ✓）。
+pub fn object_comparison_not_implemented_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(instance.retain(instance.not_implemented()))
+}
+
+/// **`object.__sizeof__()`**（round 87）：默认给**头部大小**（与参照 `object().__sizeof__() == 16` 同口径 ✓）。
+pub fn object_sizeof_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(instance.new_int(core::mem::size_of::<crate::Header>() as i64))
+}
+
+/// **`object.__getstate__()`**（round 87，PEP 574 一族）：参照 3.11+ 的默认实现 ——
+/// 有实例字典就给（`dict`）；没有就给 `None` ✓。`copy`／`pickle` 的默认状态路径要用它 ✓。
+pub fn object_getstate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__getstate__' needs an argument",
+        ));
+    };
+    match crate::mounted_instance_dict(instance, object) {
+        Some(mapping) => Ok(instance.retain(mapping)),
+        None => Ok(instance.new_none()),
+    }
+}
+
+/// **`object.__reduce__()`**（round 87）：委托 `__reduce_ex__(0)` ✓（参照的默认实现同口径 ✓；
+/// `rlcompleter` 只要求它**可调用**，但把它做成真实现以免影响 `copy`／`pickle` 的默认路径 ✓）。
+pub fn object_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__reduce__' needs an argument",
+        ));
+    };
+    let protocol = instance.new_int(0);
+    let result = object_reduce_ex_native(instance, Some(object), &[protocol], &[]);
+    instance.release(protocol);
+    result
+}
+
 /// `object.__reduce_ex__(protocol)` ✓（参照里它**存在** ✓：协议 0/1 走 `copyreg._reconstructor`、
 /// 协议 ≥2 走 `copyreg.__newobj__` ✓）。本层如实给一个**形状合理**的结果
 /// `(类型, 空参数元组)` ✓ —— 导入期只需要"取得到、不抛" ✓（`enum.py` 还要在类上**设置**它 ✓）。
@@ -489,6 +553,27 @@ pub fn object_text_native(
     Ok(instance.new_str(&text))
 }
 /// **`object.__init__`** ✓（第 210 轮落地）：`Lib/types.py:50` 的 `type(object.__init__)` 要它 ✓。
+/// **`object.__dir__()`**（round 87）：参照里 `object.__dict__` 有 `__dir__` ⇒ `dir(<实例>)` 的
+/// 补全走 `getattr(None, '__dir__')` 时拿到的是**绑定方法**（`rlcompleter` 靠它判断可调用 ✓）。
+/// 实现直接复用 `dir_new`（一处真相 ✓）。
+pub fn object_dir_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__dir__' needs an argument"));
+    };
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("__dir__() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    crate::builtin_objects::dir_new(instance, None, &[this], &[])
+}
+
 pub fn object_init_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

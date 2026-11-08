@@ -407,6 +407,27 @@ pub fn dir_new(
         let object = args[0];
         if instance.is_type_object(object) {
             collect_type_mro_names(instance, object.cast(), &mut names);
+            // **`mro`**（round 87）：参照里它在 **`type` 的类型字典**上（`type.mro`）⇒ `dir(type)`
+            // 看得到、而 `dir(<普通类>)` **看不到** ✓（实测 `'mro' in dir(int)` 为 False ✓）。
+            // 本层 `type.mro` 是 `getattr` 动态给的、字典里没有 ⇒ 这里**只给 `dir(type)` 补名** ✓
+            // （`rlcompleter` 的 `CompleteMe.mro()` 是经 `get_class_members(type)` 拿到的 ✓）。
+            if instance
+                .type_named("type")
+                .is_some_and(|type_type| type_type.cast::<Header>() == object)
+            {
+                // 参照 `dir(type)` 里由 `getattr` 动态给的那几个名字（本层没进 `type` 的类型字典 ✓）。
+                for name in [
+                    "mro",
+                    "__name__",
+                    "__qualname__",
+                    "__subclasses__",
+                    "__prepare__",
+                    "__bases__",
+                    "__base__",
+                ] {
+                    names.insert(name.to_owned());
+                }
+            }
         } else if instance.type_name(instance.type_of(object)) == "module" {
             // **模块的 `dir` 只列模块字典**（round 103）：参照 `dir(sys)` 不含 `object` 那一族 dunder
             // （`__eq__`／`__delattr__`… 全无 ✗）—— 先前把模块类型的 MRO 名也收进来 ✗ ⇒ 官方
@@ -418,6 +439,43 @@ pub fn dir_new(
         } else {
             let ty = instance.type_of(object);
             collect_type_mro_names(instance, ty.cast(), &mut names);
+            // **`object` 一族 dunder 名字**（round 87）：参照的 `dir(<实例>)` 是"类型 MRO 上的**名字**"
+            // —— 本层这些行为在 `getattr` 槽里**特判**、没进 `object` 的类型字典 ⇒ `dir` 会少
+            // `__class__`／`__eq__`／`__delattr__`… 一族 ✗（`test_rlcompleter` 的
+            // `None.*`/`dir(None)` 期望与 `test_frame` 的 `f_locals` 一族都受影响 ✓）。
+            // 这是参照 `object.__dict__` 的**名字面**；能否真取到值由属性通道决定（与参照同口径 ✓）。
+            const OBJECT_DUNDERS: [&str; 24] = [
+                "__class__", "__delattr__", "__dir__", "__doc__", "__eq__", "__format__",
+                "__ge__", "__getattribute__", "__getstate__", "__gt__", "__hash__",
+                "__init__", "__init_subclass__", "__le__", "__lt__", "__ne__", "__new__",
+                "__reduce__", "__reduce_ex__", "__repr__", "__setattr__", "__sizeof__",
+                "__str__", "__subclasshook__",
+            ];
+            for name in OBJECT_DUNDERS {
+                names.insert(name.to_owned());
+            }
+            // **`__slots__` 声明的名字**（round 87）：参照里它们是**类型上的描述符** ⇒ `dir(实例)`
+            // 看得到（`test_rlcompleter.test_uncreated_attr` 要求"未创建的 slot 也要能补全" ✓）。
+            // 本层的 `__slots__` 语义尚未实现（实例仍用普通属性字典）⇒ 这里至少把**名字**补进 `dir` ✓。
+            for base in unsafe { &*ty.as_ptr() }.mro() {
+                // SAFETY: base 由注册表持有。
+                let Some(mapping) = (unsafe { &*base.as_ptr() }).dict() else { continue };
+                let Some(slots) = instance.dict_get(mapping, "__slots__") else { continue };
+                match instance.iterable_items(slots) {
+                    Ok(Some(items)) => {
+                        for item in items {
+                            if let Some(text) = instance.text_of(item) {
+                                names.insert(text.to_owned());
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(text) = instance.text_of(slots) {
+                            names.insert(text.to_owned());
+                        }
+                    }
+                }
+            }
             // **动态 getset 属性面**（round 60）：生成器的 `gi_*` 在参照里是类型上的 getset
             // 描述符（`dir(g)` 看得到 ✓），本层由 `getattr` 槽动态给值 ⇒ `dir` 这里补上名字 ✓。
             if instance.type_name(ty) == "generator" {

@@ -127,12 +127,9 @@ fn view_type(instance: &Instance, kind: u8) -> Option<NonNull<TypeObject>> {
         instance.dict_set(namespace, name, function);
         instance.release(function);
     }
-    // 视图类型也要能在 `builtins` 下按名字找到（pickle／`type(x).__name__` 之外的查找 ✓）。
-    if let Some(builtins) = instance.builtins() {
-        instance.retain(ty.cast::<Header>());
-        instance.dict_set(builtins, name, ty.cast::<Header>());
-        instance.release(ty.cast::<Header>());
-    }
+    // **不往 `builtins` 命名空间塞惰性类型**（round 87）：先前塞了 ⇒ `dir(builtins)` 多出
+    // `dict_items` 一族 ✗（官方 `test_rlcompleter` 的期望列表是照 `dir(builtins)` 算的 ⇒ 当场不齐 ✗；
+    // 参照的 `builtins` 里也**没有**这些名字 ✓）。pickle 走 `__reduce__` 的**列表快照**，不需要按名找回 ✓。
     Some(ty)
 }
 
@@ -264,13 +261,8 @@ fn view_iterator_type(instance: &Instance, name: &'static str) -> Option<NonNull
     if let Some(object_type) = instance.type_named("object") {
         let _ = instance.register_bases(ty, vec![object_type]);
     }
-    // **进 `builtins` 名字空间** ✓：pickle 的 `save_reduce` 要按 `builtins.<类型名>` 找回类型 ✓
-    //（`test_itemiterator_pickling`／`test_valuesiterator_pickling` ✓）。
-    if let Some(builtins) = instance.builtins() {
-        instance.retain(ty.cast::<Header>());
-        instance.dict_set(builtins, name, ty.cast::<Header>());
-        instance.release(ty.cast::<Header>());
-    }
+    // **不往 `builtins` 命名空间塞惰性迭代器类型**（round 87，理由同上 ✓）：pickle 的
+    // `__reduce__` 交 `(iter, ([快照],))`，不按名字找回类型 ✓。
     Some(ty)
 }
 

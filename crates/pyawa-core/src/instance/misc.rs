@@ -84,6 +84,31 @@ impl Instance {
         self.ast_parser.get()
     }
 
+    /// **`__getattribute__` 派发守卫**（round 87）。
+    pub fn getattribute_dispatching(&self) -> bool {
+        self.getattribute_dispatching.get()
+    }
+
+    /// 设置 `__getattribute__` 派发守卫（round 87）。
+    pub fn set_getattribute_dispatching(&self, value: bool) {
+        self.getattribute_dispatching.set(value);
+    }
+
+    /// **类型对象 `__text_signature__` 旁表**（round 87）。
+    pub fn set_type_text_signature(&self, ty: NonNull<Header>, signature: &'static str) {
+        self.type_text_signatures
+            .borrow_mut()
+            .insert(ty.as_ptr() as usize, signature);
+    }
+
+    /// 取类型对象的文本签名（`None` ⇒ 没有 ✓）。
+    pub fn type_text_signature(&self, ty: NonNull<Header>) -> Option<&'static str> {
+        self.type_text_signatures
+            .borrow()
+            .get(&(ty.as_ptr() as usize))
+            .copied()
+    }
+
     /// **内建函数 `__text_signature__` 旁表**（round 86）。
     pub fn set_builtin_text_signature(&self, function: NonNull<Header>, signature: &'static str) {
         self.builtin_text_signatures

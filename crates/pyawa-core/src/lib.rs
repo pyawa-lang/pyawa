@@ -11,6 +11,11 @@
 // `builtin_objects` 是**私有模块** ✗，stdlib 直接调不到 ✓（与 `weakref_new` 同一个教训 ✓）。
 pub use builtin::context::locals_native;
 pub use builtin::dict::dict_fromkeys_native;
+pub use builtin::object::object_dir_native;
+pub use builtin::object::object_comparison_not_implemented_native;
+pub use builtin::object::object_getstate_native;
+pub use builtin::object::object_reduce_native;
+pub use builtin::object::object_sizeof_native;
 pub use builtin::object::object_init_native;
 // **`builtins.compile()`**（task-43）：stdlib 的 `compile` 注册与 `exec`/`eval` 的 code 对象分支用它。
 pub use builtin::compile::{

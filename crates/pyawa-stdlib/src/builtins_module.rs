@@ -399,6 +399,36 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.dict_set(type_namespace, "__str__", str_method);
             let repr_method = make_native(instance, "__repr__", pyawa_core::object_text_native as pyawa_core::NativeFn);
             instance.dict_set(type_namespace, "__repr__", repr_method);
+            // **`object` 的其余 dunder 行为面**（round 87）：`dir(<实例>)` 现在会列出这些名字
+            // （见 `dir_new` 的 OBJECT_DUNDERS）⇒ 属性通道必须真能取到（否则 `rlcompleter` 的
+            // parens 判据不齐 ✓）。
+            for (name, handler) in [
+                ("__lt__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__le__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__gt__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__ge__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__sizeof__", pyawa_core::object_sizeof_native as pyawa_core::NativeFn),
+                ("__getstate__", pyawa_core::object_getstate_native as pyawa_core::NativeFn),
+                ("__reduce__", pyawa_core::object_reduce_native as pyawa_core::NativeFn),
+            ] {
+                let native = make_native(instance, name, handler);
+                instance.dict_set(type_namespace, name, native);
+            }
+            // **`object.__dir__`**（round 87）：`rlcompleter` 要 `getattr(obj,'__dir__')` 是绑定方法 ✓。
+            let dir_method = make_native(instance, "__dir__", pyawa_core::object_dir_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__dir__", dir_method);
+            // **内建类型自己的文本签名**（round 87）：`inspect.signature(staticmethod/classmethod/
+            // property)` 要非空签名（参照 `(function, /)`；否则 rlcompleter 给 `staticmethod()` 而非
+            // 期望的 `staticmethod(` ✗）。
+            for (type_name, signature) in [
+                ("staticmethod", "(function, /)"),
+                ("classmethod", "(function, /)"),
+                ("property", "(fget=None, fset=None, fdel=None, doc=None)"),
+            ] {
+                if let Some(ty) = instance.type_named(type_name) {
+                    instance.set_type_text_signature(ty.cast::<Header>(), signature);
+                }
+            }
             // **`object.__init_subclass__` 的文本签名**（round 86）：`_collections_abc` 一类
             // 在 `dir(None)` 里给 `__init_subclass__`，`inspect.signature` 要它 '' 参数 ⇒ 结果是 `()`
             // （`test_rlcompleter` 的 expected 有 `None.__init_subclass__()` ✓）。

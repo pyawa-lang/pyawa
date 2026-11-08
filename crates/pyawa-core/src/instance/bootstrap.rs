@@ -13,6 +13,8 @@ impl Instance {
             python_finalized: RefCell::new(std::collections::HashSet::new()),
             ast_parser: core::cell::Cell::new(None),
             builtin_text_signatures: RefCell::new(std::collections::HashMap::new()),
+            type_text_signatures: RefCell::new(std::collections::HashMap::new()),
+            getattribute_dispatching: Cell::new(false),
             mappingproxy_live: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),
             live: RefCell::new(HashSet::new()),

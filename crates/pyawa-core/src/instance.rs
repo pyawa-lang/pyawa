@@ -118,6 +118,12 @@ pub struct Instance {
     /// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点。core 不能依赖
     /// stdlib（分层）⇒ 由 `_ast` 模块在引导期登记一个函数指针 ✓（未登记时 compile 照旧报未接线 ✓）。
     ast_parser: Cell<Option<crate::AstParserFn>>,
+    /// **`__getattribute__` 派发守卫**（round 87）：用户覆写走钩子期间置位，防止默认实现递归 ✓。
+    getattribute_dispatching: Cell<bool>,
+    /// **类型对象的 `__text_signature__` 旁表**（round 87）：`staticmethod`/`classmethod`/`property`
+    /// 一类内建类在参照里有非空签名（`(function, /)` 等）——`inspect.signature(<类>)` 的类分支
+    /// 会先读"MRO 里第一个非空 `base.__text_signature__`" ✓。
+    type_text_signatures: RefCell<std::collections::HashMap<usize, &'static str>>,
     /// **内建函数的 `__text_signature__` 旁表**（round 86）：`inspect.signature` 解析内建可调用
     /// 对象（`object.__init__`／`__new__`／`__init_subclass__`）的文本签名入口 ✓。
     builtin_text_signatures: RefCell<std::collections::HashMap<usize, &'static str>>,
