@@ -863,18 +863,47 @@ pub(crate) fn equality_public(
             if a.len() != b.len() {
                 return Ok(false);
             }
-            for (key, value) in a {
-                let Some(position) = instance.dict_lookup_key_checked(right, key)? else {
-                    return Ok(false);
-                };
-                let Some((_, other_value)) = b.get(position).copied() else {
-                    return Ok(false);
-                };
-                if !equality_public(instance, value, other_value)? {
-                    return Ok(false);
+            // **比较期间各持一份**（round 97，照 bpo-27945 的事故面 ✓）：键／值的 `__eq__`／`__del__`
+            // 可能在比较中途**清空任一操作数**（官方 `test_dict.test_equal_operator_modifying_operand`
+            // 的 `X.__eq__` / `X.__del__` ✓）⇒ 先前直接借用快照指针 ✗ ⇒ 释放后再读是 UAF ✓
+            // （`PYAWA_FRAME_OWN=1` 实验路径下实测段错误 ✓）。
+            let mut kept: Vec<NonNull<Header>> = Vec::with_capacity((a.len() + b.len()) * 2);
+            for (key, value) in a.iter().chain(b.iter()) {
+                // SAFETY: 键值由各自字典持有；比较期间本函数各持一份 ✓。
+                unsafe {
+                    instance.incref_object(key.as_ptr());
+                    instance.incref_object(value.as_ptr());
                 }
+                kept.push(*key);
+                kept.push(*value);
             }
-            return Ok(true);
+            let answer = (|| -> Result<bool, ExecError> {
+                for (key, value) in &a {
+                    // 优先按**活字典**查（顺序／哈希语义照旧 ✓）；字典已被清空时退回**快照**查找 ✓
+                    // （清空是用户 `__eq__` 的合法副作用，参照不因此崩溃 ✓）。
+                    let other_value = match instance.dict_lookup_key_checked(right, *key)? {
+                        Some(position) => b.get(position).map(|(_, value)| *value),
+                        None => b
+                            .iter()
+                            .find(|(other_key, _)| {
+                                values_equal_public(instance, *key, *other_key)
+                            })
+                            .map(|(_, value)| *value),
+                    };
+                    let Some(other_value) = other_value else {
+                        return Ok(false);
+                    };
+                    if !equality_public(instance, *value, other_value)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            })();
+            for value in kept {
+                // SAFETY: 上面各持一份。
+                unsafe { instance.release_object(value.as_ptr()) };
+            }
+            return answer;
         }
     }
     // 用户类的 `__eq__`（两侧都问；`NotImplemented` 交给下一跳 ✓）。
