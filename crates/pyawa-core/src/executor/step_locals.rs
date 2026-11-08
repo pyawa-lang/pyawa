@@ -231,12 +231,21 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     let load_slot = oparg & 0x0F;
                     slot_trace(instance, &code, store_slot, "写(融合113高)");
                     slot_trace(instance, &code, load_slot, "读(融合113低)");
-                    if frame.get().set_local(store_slot, Some(value)).is_err() {
-                        release(instance, value);
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "STORE_FAST_LOAD_FAST 的槽位越界",
-                        });
+                    // **被覆盖槽的旧值要归还**（round 103 真 bug 修 ✗）：`set_local` 返回旧值，先前
+                    // 直接丢掉 ⇒ 每次融合存取漏一份旧值引用（常见于 `a = b = …`／`while` 的融合形态）。
+                    match frame.get().set_local(store_slot, Some(value)) {
+                        Ok(Some(old)) => {
+                            // SAFETY: 旧值那份由本帧交出。
+                            unsafe { instance.release_object(old.as_ptr()) };
+                        }
+                        Ok(None) => {}
+                        Err(_) => {
+                            release(instance, value);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "STORE_FAST_LOAD_FAST 的槽位越界",
+                            });
+                        }
                     }
                     let loaded = frame.get().local(load_slot)?.ok_or(ExecError::UnboundLocal {
                         slot: load_slot,

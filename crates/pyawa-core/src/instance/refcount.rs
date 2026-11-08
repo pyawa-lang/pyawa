@@ -308,6 +308,9 @@ impl Instance {
                     );
                 } else {
                     eprintln!("[ref] -1 ptr={ptr:p} live=false 现场={}", self.current_site());
+                    if std::env::var_os("PYAWA_REF_TRACE_DEAD_BT").is_some() {
+                        eprintln!("{}", std::backtrace::Backtrace::force_capture());
+                    }
                 }
             }
         }
