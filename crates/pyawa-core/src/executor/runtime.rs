@@ -570,6 +570,17 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
     let Some(frame) = instance.current_frame() else {
         return;
     };
+    // **保住"最近一次抛出"槽**（round 84）：下面的属性探针（`attribute_optional_of`）会对
+    // **没有实例字典**的异常内部抛一个 `AttributeError`（`raise()` 会把 `pending_exception`
+    // 换成它、并释放掉原异常那份保活）⇒ 宿主随后读 `pending_exception` 会拿到
+    // `AttributeError`（`assignment_emission` 的 TS-47 用例即中 ✓）。
+    // 这里存一份**自有引用**，函数结束时把槽恢复成原来的指针 ✓（引用账：临时 +1 起、最后归还 ✓）。
+    let saved_pending = instance.pending_exception();
+    if let Some(pointer) = saved_pending {
+        // SAFETY: 槽里的指针对应存活对象（由实例保活）。
+        unsafe { instance.incref_object(pointer.as_ptr()) };
+    }
+    // 结束时把槽**先清空**、再把开头那份**自有引用转交**给槽（见函数尾 ✓）。
     // **把旧回溯接到新回溯的 `tb_next` 上**（round 53，照参照的重抛语义 ✓）：先前直接
     // `set_attribute_value` **替换** ✗ ⇒ 旧回溯（连同它持有的帧链）在**正在抛出新异常的路径里**
     // 就被释放 ⇒ 那条链上的帧/代码对象与调用栈/GC 相互踩踏 ⇒ `test_extcall` 稳定堆损坏
@@ -589,6 +600,17 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
     // **尽力而为**（异常实例若没有实例字典，如实不挂 ✓）。
     let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
     release(instance, traceback);
+    // 恢复"最近一次抛出"槽（见开头 ✓）：先清空（探针可能把槽换成 `AttributeError`），
+    // 再把开头那份**自有引用转交**给槽 ⇒ 槽与末尾各持一份，账平 ✓。
+    if let Some(current) = instance.set_pending_exception(None) {
+        // SAFETY: 被换下来的那份由实例槽持有。
+        unsafe { instance.release_object(current.as_ptr()) };
+    }
+    if let Some(pointer) = saved_pending {
+        // **转交**（不归还）：这份引用现在归槽 ✓。
+        debug_assert!(instance.pending_exception().is_none());
+        instance.set_pending_exception(Some(pointer));
+    }
 }
 
 /// 抛一个内建异常（带消息）。

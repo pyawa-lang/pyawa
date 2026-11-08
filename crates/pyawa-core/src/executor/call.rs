@@ -855,12 +855,23 @@ pub(crate) fn call_callable(
     }
     let outcome = execute(instance, &frame);
     instance.leave_call();
-    match outcome? {
-        ExecOutcome::Returned(value) => Ok(value_into_raw(instance, value)),
-        ExecOutcome::Yielded(_) => Err(ExecError::Unsupported {
+    match outcome {
+        Ok(ExecOutcome::Returned(value)) => Ok(value_into_raw(instance, value)),
+        Ok(ExecOutcome::Yielded(_)) => Err(ExecError::Unsupported {
             opcode,
             what: "非生成器函数不该让出（码元被改坏了？）",
         }),
+        Err(ExecError::Raised { exception }) => {
+            // **逐帧展开回溯链**（round 84）：参照里异常穿过**每一个 Python 帧**都会往
+            // `__traceback__` 链上补一条（`tb_frame` = 该帧、`tb_next` = 内层那条）✓；
+            // 先前只有 `raise()` 在抛出帧挂一条 ✗ ⇒ `tb_next` 只剩 1 帧 ✗（`test_frame` 的
+            // `make_frames` 沿 tb_next 走不到 outer/inner ⇒ 多格红 ✓）。
+            // 时机：`execute` 返回时 `CurrentFrameGuard` 已把 `current_frame` 还原成**调用者**
+            // ⇒ 这条 tb 的 `tb_frame` 正是调用者、行号停在 CALL 位置 ✓。
+            crate::executor::runtime::attach_traceback(instance, exception);
+            Err(ExecError::Raised { exception })
+        }
+        Err(other) => Err(other),
     }
 }
 
