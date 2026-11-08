@@ -1418,6 +1418,12 @@ fn dispatch_raise(
         push_int(instance, frame, (offset_bytes / 2) as i64)?;
     }
     push(instance, frame, exception)?;
+    // **`Err(Raised)` 那一份引用要归还**（round 124 A 族真 bug 修 ✗）：`push` 是**借用**接口
+    // （内部 `own` 会新增一份）⇒ 调用方自己那份仍归自己 ✗。先前这里没还 ⇒ 每个被处理的异常都
+    // **多留一份引用** ⇒ rc 永不归零 ⇒ 异常→`__traceback__`→帧→局部变量整条链泄漏 ✗
+    //（实测：`try: raise E except E: pass` 之后 E 的 rc 停在 1、帧与局部对象都不回收 ✓ ——
+    // `test_dict`／`test_list` 的 `test_free_after_iterating`、`test_weakref` 超时的根 ✓）。
+    release(instance, exception);
     decoder.set_position(entry.target / 2);
     Ok(())
 }
