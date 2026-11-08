@@ -4,6 +4,10 @@
 
 use super::*;
 
+/// 被跟踪对象的地址集合（round 92；只在 `PYAWA_REF_TRACE` 开启时填充）。
+static REF_TRACKED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+    std::sync::OnceLock::new();
+
 impl Instance {
     /// 归还一份引用（[`Self::retain`] 的配对）。
     ///
@@ -98,6 +102,30 @@ impl Instance {
         targets.iter().any(|target| target == "*" || target == name)
     }
 
+    /// **引用事件跟踪（安全版）**：`release_object` 可能在**已释放**指针上调用 ⇒ 不能解引用头部
+    /// （读 `ty` 会段错误 ✓）。这里只查"曾被跟踪器记录过的地址集合"（round 92）。
+    fn ref_trace_tracked(ptr: *mut Header) -> bool {
+        let Some(set) = REF_TRACKED.get() else {
+            return false;
+        };
+        let Ok(set) = set.lock() else {
+            return false;
+        };
+        set.contains(&(ptr as usize))
+    }
+
+    /// 记录被跟踪对象的地址（分配／incref 时调用；只在跟踪开启时有意义）。
+    pub(crate) fn ref_trace_record(ptr: *mut Header) {
+        const _: () = ();
+        if REF_TRACKED.get().is_none() && std::env::var_os("PYAWA_REF_TRACE").is_none() {
+            return;
+        }
+        let set = REF_TRACKED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+        if let Ok(mut set) = set.lock() {
+            set.insert(ptr as usize);
+        }
+    }
+
     /// **OM-22**：`sys.getrefcount` 的可见语义——返回值**含参数借用**的那一份。
     pub fn getrefcount<T: PyObject>(&self, object: &T) -> u32 {
         object.header().refcount() + 1
@@ -114,6 +142,7 @@ impl Instance {
         // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
         self.quarantine_report(ptr, "incref");
         if self.ref_trace_matches(ptr) {
+            Self::ref_trace_record(ptr);
             eprintln!(
                 "[ref] +1 ptr={ptr:p} rc={} 现场={}",
                 unsafe { &*ptr }.refcount() + 1,
@@ -176,16 +205,19 @@ impl Instance {
                 );
             }
         }
-        if self.ref_trace_matches(ptr) {
-            // **放在 `assert_live` 之前**（round 91）：双放现场要先被看见（`live=no` 就是"已经在
-            // 释放登记里"⇒ 本行就是**第二次释放**的现场 ✓）。
+        if Self::ref_trace_tracked(ptr) {
+            // **放在 `assert_live` 之前**（round 91）：双放现场要先被看见 ✓；**不解引用**（round 92：
+            // 死指针读头部会段错误 ⇒ 释放行只在 `live=true` 时读计数 ✓）。
             let live_here = self.live.borrow().contains(&(ptr as usize));
-            eprintln!(
-                "[ref] -1 ptr={ptr:p} rc={} live={} 现场={}",
-                unsafe { &*ptr }.refcount().saturating_sub(1),
-                live_here,
-                self.current_site()
-            );
+            if live_here {
+                eprintln!(
+                    "[ref] -1 ptr={ptr:p} rc={} live=true 现场={}",
+                    unsafe { &*ptr }.refcount().saturating_sub(1),
+                    self.current_site()
+                );
+            } else {
+                eprintln!("[ref] -1 ptr={ptr:p} live=false 现场={}", self.current_site());
+            }
         }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };

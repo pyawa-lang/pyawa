@@ -142,6 +142,7 @@ impl Instance {
                 .remove(&(header.as_ptr() as usize));
         }
         if self.ref_trace_matches(header.as_ptr()) {
+            crate::instance::Instance::ref_trace_record(header.as_ptr());
             eprintln!(
                 "[ref] alloc ptr={:p} rc=1 现场={}",
                 header.as_ptr(),
@@ -483,6 +484,7 @@ impl Instance {
         }
         self.live.borrow_mut().insert(header.as_ptr() as usize);
         if self.ref_trace_matches(header.as_ptr()) {
+            crate::instance::Instance::ref_trace_record(header.as_ptr());
             eprintln!(
                 "[ref] alloc ptr={:p} rc=1 现场={}",
                 header.as_ptr(),
