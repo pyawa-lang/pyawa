@@ -673,6 +673,28 @@ impl Instance {
             .copied()
     }
 
+    /// **`iter(callable, sentinel)`**（round 85）：造一个 `callable_iterator`（**新引用** ✓、
+    /// 两格引用各 retain 一份 ✓）。
+    pub fn new_callable_iterator(
+        &self,
+        callable: NonNull<Header>,
+        sentinel: NonNull<Header>,
+    ) -> NonNull<Header> {
+        let ty = self
+            .type_named("callable_iterator")
+            .expect("callable_iterator 在引导期已登记");
+        // SAFETY: 调用方保证两者存活；本对象各持一份。
+        unsafe {
+            self.incref_object(callable.as_ptr());
+            self.incref_object(sentinel.as_ptr());
+        }
+        self.alloc(crate::builtin_objects::CallableIteratorObject::new(
+            ty, callable, sentinel,
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
     /// **登记一个"活视图" `mappingproxy`**（round 125）：`.mapping` 用 ✓。
     pub fn register_mappingproxy_live(&self, proxy: NonNull<Header>, source: NonNull<Header>) {
         self.mappingproxy_live

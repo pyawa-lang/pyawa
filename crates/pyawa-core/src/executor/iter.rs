@@ -136,54 +136,24 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             // `0,1,2,…` 依次取、遇 `IndexError` 收尾 ✓（`re._compiler` 的 `_compile` 迭代
             // `SubPattern` 就靠它 ✓）。这里**先物化**成列表再交给现成的 `list_iterator` ✓
             // （对 `re` 的用法等价 ✓；**如实记**：不是惰性 ✗，超大序列会先整体取完 ✓）。
-            if let Some(getitem) =
-                crate::executor::attribute::attribute_lookup_swallowing(
-                    instance,
-                    iterable,
-                    "__getitem__",
-                )
+            // **序列协议（`__getitem__`）⇒ 惰性迭代器**（round 85 真 bug 修 ✗）：先前这里
+            // **一次物化**整个序列（循环调 `__getitem__` 到 `IndexError`）✗ ⇒ 对**无限序列**
+            // （`test_iter.UnlimitedSequenceClass.__getitem__` 永不抛 IndexError）当场死循环 ✗。
+            // 参照给的是**惰性**的 `iterator` 对象（每次 `__next__` 取一个下标）✓。
+            if crate::executor::attribute::attribute_lookup_swallowing(instance, iterable, "__getitem__")
+                .is_some()
             {
-                let mut collected: Vec<NonNull<Header>> = Vec::new();
-                let mut index = 0i64;
-                loop {
-                    let key = instance.new_int(index);
-                    let outcome = match getitem {
-                        crate::executor::Attribute::Method { function, this } => {
-                            crate::executor::call::call_callable(
-                                instance, function, Some(this), vec![key], Vec::new(), 0,
-                            )
-                        }
-                        crate::executor::Attribute::Value(method) => {
-                            crate::executor::call::call_callable(
-                                instance, method, Some(iterable), vec![key], Vec::new(), 0,
-                            )
-                        }
-                        crate::executor::Attribute::Owned(method) => {
-                            crate::executor::call::call_callable(
-                                instance, method, Some(iterable), vec![key], Vec::new(), 0,
-                            )
-                        }
-                    };
-                    match outcome {
-                        Ok(item) => {
-                            collected.push(item);
-                            index += 1;
-                        }
-                        Err(ExecError::Raised { exception }) => {
-                            let raised = instance.type_of(exception);
-                            let index_error = instance.type_named("IndexError");
-                            if Some(raised) == index_error
-                                || index_error.is_some_and(|base| instance.is_subtype(raised, base))
-                            {
-                                break;
-                            }
-                            return Err(ExecError::Raised { exception });
-                        }
-                        Err(other) => return Err(other),
-                    }
-                }
-                let list = instance.new_list(collected);
-                return iter_value(instance, list);
+                // SAFETY: iterable 由调用方保证存活；迭代器要自己那份引用。
+                unsafe { instance.incref_object(iterable.as_ptr()) };
+                let iterator_type = instance
+                    .type_named("iterator")
+                    .expect("iterator 在引导期已登记");
+                let object = instance.alloc(crate::builtin_objects::SequenceIteratorObject::new(
+                    iterator_type,
+                    iterable,
+                    Cell::new(0),
+                ));
+                return Ok(object.into_raw().cast::<Header>());
             }
             let name = instance.type_name(ty).to_owned();
             if crate::diag::flag("PYAWA_ITER_DEBUG") {

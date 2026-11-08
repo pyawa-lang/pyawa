@@ -344,6 +344,12 @@ pub fn compile_native(
         let Some(name) = instance.text_of(*key) else {
             continue;
         };
+        // **`_feature_version`**（round 85）：`inspect.signature` 解析文本签名时走
+        // `ast.parse(..., _feature_version=...)` ⇒ `compile()` 要收下这个**私有**关键字 ✓
+        // （参照的 `compile` 同款；本层不做版本特性开关，值忽略 ✓）。
+        if name == "_feature_version" {
+            continue;
+        }
         let Some(position) = NAMES.iter().position(|candidate| *candidate == name) else {
             return Err(instance.raise_builtin_error(
                 "TypeError",

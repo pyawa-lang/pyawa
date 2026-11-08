@@ -24,6 +24,10 @@ pub(super) enum Lexeme {
     },
     /// **`bytes` 字面量**（`P1-12`／`b'…'`）：转义在**词法**这一层就解成字节。
     Bytes(Vec<u8>),
+    /// **`$`**（round 85）：**只为 `_tokenize` 视图**保留的词素（`inspect.signature` 的文本签名
+    /// 里 `$self`／`$type` 要被 `tokenize` 当成 `OP` ✓；CPython 的 C tokenizer 同口径 ✓）。
+    /// 编译路径（`lex` 的解析器消费者）遇到它照样报语法错 ✓ —— 参照的**语法**也不接受 `$` ✓。
+    Dollar,
     Assign,
     /// `+=` 一族（增强赋值）。
     AugAssign(AugOperator),
@@ -1229,6 +1233,14 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
             '?' if mode == Mode::Extension => {
                 let start = column!(index);
                 lexemes.push(Lexeme::Question);
+                spans.push(Span::new(line, line, start, start + 1));
+                index += 1;
+            }
+            // **`$`**：词法上收成独立词素（`tokenize` 视图要它 ✓）；**解析器侧照旧报语法错** ✓
+            // —— 参照的 C tokenizer 也把 `$` 当 `OP` 发，而 `ast.parse` 的语法不接受它 ✓。
+            '$' => {
+                let start = column!(index);
+                lexemes.push(Lexeme::Dollar);
                 spans.push(Span::new(line, line, start, start + 1));
                 index += 1;
             }

@@ -2024,6 +2024,25 @@ fn iter_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "iter", args, 1)?;
+    // **`iter(callable, sentinel)`**（round 85）：两参形态 ⇒ `callable_iterator` ✓
+    // （先前忽略第二参、直接 `iter_object(callable)` ⇒ `TypeError: 'method' object is not iterable`
+    // ⇒ `Lib/tokenize.py` 的 `iter(readline, b"")` 炸 ⇒ `inspect.signature` 的文本签名解析全挂 ✗）。
+    if args.len() == 2 {
+        // 参照：第一参必须可调用（`iter(1, 2)` ⇒ `TypeError: iter(v, w): v must be callable` ✓）。
+        if !instance.is_callable(args[0]) {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "iter(v, w): v must be callable",
+            ));
+        }
+        return Ok(instance.new_callable_iterator(args[0], args[1]));
+    }
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("iter expected at most 2 arguments, got {}", args.len()),
+        ));
+    }
     instance.iter_object(args[0])
 }
 

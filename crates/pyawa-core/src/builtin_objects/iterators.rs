@@ -1003,3 +1003,159 @@ fn iterator_reduce_native(
         instance.new_int(state),
     ]))
 }
+
+py_object! {
+    /// **序列协议（`__getitem__`）的惰性迭代器**（round 85；参照名 `iterator`）：
+    /// 每次 `__next__` 用**当前下标**调 `target[index]`，`IndexError` ⇒ `StopIteration`（耗尽）✓。
+    /// 先前是"`iter()` 里一次性把整个序列物化" ✗ ⇒ 对**无限序列**（`__getitem__` 永不抛
+    /// IndexError，如 `test_iter` 的 `UnlimitedSequenceClass`）当场死循环 ✗。
+    pub struct SequenceIteratorObject {
+        /// 被索引的对象（**本对象持有一份引用**）。
+        target: NonNull<Header>,
+        /// 下一个要取的下标 ✓。
+        index: core::cell::Cell<usize>,
+    }
+}
+
+impl SequenceIteratorObject {
+    /// 槽位表：`dealloc` ＋ `traverse`／`clear`。
+    pub fn slots() -> crate::type_object::Slots {
+        crate::type_object::Slots::new(Self::dealloc)
+            .with_traverse(sequence_iterator_traverse)
+            .with_clear(sequence_iterator_clear)
+            // **`__next__`／`__iter__`／`__setstate__`** 属性面（round 85）✓。
+            .with_getattr(sequence_iterator_getattr)
+    }
+
+    /// 被索引的对象（借用）。
+    pub fn target(&self) -> NonNull<Header> {
+        self.target
+    }
+
+    /// 当前下标（借用）。
+    pub fn index(&self) -> usize {
+        self.index.get()
+    }
+
+    /// 写回下标（`__setstate__`／推进用）✓。
+    pub fn set_index(&self, index: usize) {
+        self.index.set(index);
+    }
+}
+
+unsafe fn sequence_iterator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<SequenceIteratorObject>() };
+    // 访问器形态（`gc_field_coverage` 的判据要求 `object.<字段>(` ✓）。
+    visit(object.target().as_ptr());
+}
+
+unsafe fn sequence_iterator_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &mut *ptr.cast::<SequenceIteratorObject>() };
+    // SAFETY: 这份引用由本对象持有（`clear` 只会跑一次 ✓）。
+    unsafe { instance.release_object(object.target.as_ptr()) };
+}
+
+/// `sequence_iterator` 的属性面：`__next__`／`__iter__`／`__setstate__` ✓
+/// （`__reduce__` 暂不给：需要 `iter(target)` 形式的重建器，留后续轮 ✓ —— 如实）。
+pub unsafe fn sequence_iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__setstate__" => {
+            let handler: crate::NativeFn = sequence_iterator_setstate_native;
+            Some(bind_iterator_method(instance, ptr, "__setstate__", handler))
+        }
+        _ => None,
+    }
+}
+
+/// `it.__setstate__(state)`（序列迭代器，round 85）：负数**夹到 0**（参照行为：
+/// `test_iter_neg_setstate` 里 `setstate(-42)` 之后 `next` 给 `0, 1` ✓）。
+fn sequence_iterator_setstate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__setstate__() 需要迭代器实例",
+        ));
+    };
+    let Some(state) = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_of(value))
+        .and_then(|number| number.to_i64())
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__setstate__() 要整数"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<SequenceIteratorObject>() };
+    object.set_index(usize::try_from(state).unwrap_or(0));
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+py_object! {
+    /// **`iter(callable, sentinel)` 的迭代器**（round 85，参照名 `callable_iterator`）：
+    /// 每次 `__next__` 调 `callable()`，结果 `== sentinel` 就 `StopIteration`（结果本身不再交出）✓。
+    /// 两个字段都**持有引用** ⇒ 挂 `traverse`／`clear` ✓（`OM-40`／`OM-20` ②）。
+    pub struct CallableIteratorObject {
+        /// 被反复调用的可调用对象（**本对象持有一份引用**）。
+        callable: NonNull<Header>,
+        /// 停止哨兵值（**本对象持有一份引用**）。
+        sentinel: NonNull<Header>,
+    }
+}
+
+impl CallableIteratorObject {
+    /// 槽位表：`dealloc` ＋ `traverse`／`clear`。
+    pub fn slots() -> crate::type_object::Slots {
+        crate::type_object::Slots::new(Self::dealloc)
+            .with_traverse(callable_iterator_traverse)
+            .with_clear(callable_iterator_clear)
+    }
+
+    /// 被调用的可调用对象（借用）。
+    pub fn callable(&self) -> NonNull<Header> {
+        self.callable
+    }
+
+    /// 停止哨兵（借用）。
+    pub fn sentinel(&self) -> NonNull<Header> {
+        self.sentinel
+    }
+}
+
+/// 遍历两格引用（生成器/迭代器可成环 ⇒ 必须走 GC ✓）。
+unsafe fn callable_iterator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<CallableIteratorObject>() };
+    visit(object.callable().as_ptr());
+    visit(object.sentinel().as_ptr());
+}
+
+/// 交出两格引用（`OM-21`：逐个释放）。
+unsafe fn callable_iterator_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &mut *ptr.cast::<CallableIteratorObject>() };
+    // SAFETY: 这两份引用由本对象持有。
+    unsafe {
+        instance.release_object(object.callable.as_ptr());
+        instance.release_object(object.sentinel.as_ptr());
+    }
+}

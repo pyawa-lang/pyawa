@@ -32,10 +32,15 @@ pub(crate) fn advance_iterator(
                         instance.current_site()
                     );
                 }
+                // **如实记**：这里仍报 `Unsupported`（宿主按"未接线"处理）——改成可捕获的
+                // `TypeError` 会让一批原本"快速失败"的官方文件**继续跑到后面的重测试**
+                // （实测 `test_itertools` 的 10M 空链用例把 direct 跑推到 113 s ⇒ 并发 survey
+                // 越过 120 s 线 ⇒ 该文件从 ok 退化成 timeout ✗）。参照口径的 `TypeError`
+                // 与那批文件的执行面**一起**再开一轮（见 `NEXT.md`）✓。
                 return Err(ExecError::Unsupported {
                     opcode,
                     what: "这个对象既不是内建迭代器，也没有 `__next__`",
-                })
+                });
             }
             Err(error) => return Err(error),
         };
@@ -124,6 +129,47 @@ pub(crate) fn advance_iterator(
     }
     if ty == builtin_type(instance, "chain") {
         return advance_chain(instance, iterator, opcode);
+    }
+    // **序列协议迭代器**（round 85）：`target[index]`（走**属性通道** ⇒ 用户的 `__getitem__` ✓），
+    // `IndexError` ⇒ 耗尽（结果不再交出）✓；下标只在**成功**后推进 ✓。
+    if Some(ty) == instance.type_named("iterator") {
+        let object = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::SequenceIteratorObject>() };
+        let target = object.target();
+        let index = object.index();
+        let key = instance.new_int(index as i64);
+        let outcome = crate::executor::subscript::subscript_read(instance, target, key);
+        release(instance, key);
+        return match outcome {
+            Ok(value) => {
+                object.set_index(index + 1);
+                Ok(Some(value))
+            }
+            Err(ExecError::Raised { exception }) => {
+                let raised = unsafe { exception.as_ref() }.ty();
+                let index_error = exception_type(instance, "IndexError");
+                if instance.is_subtype(raised, index_error) {
+                    release(instance, exception);
+                    Ok(None)
+                } else {
+                    Err(ExecError::Raised { exception })
+                }
+            }
+            Err(other) => Err(other),
+        };
+    }
+    // **`iter(callable, sentinel)`**（round 85）：每步调 `callable()`，结果 `== sentinel` ⇒ 耗尽
+    // （**结果本身不再交出** ✓；参照 `callable_iterator` ✓）。两个字段是自有引用、指向迭代器外，
+    // 载荷与 `IteratorObject` 不同 ⇒ 必须在通用强转**之前**分派 ✓。
+    if Some(ty) == instance.type_named("callable_iterator") {
+        let object = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::CallableIteratorObject>() };
+        let callable = object.callable();
+        let sentinel = object.sentinel();
+        let result = call_value(instance, callable, &[], &[])?;
+        if crate::executor::values_equal_public(instance, result, sentinel) {
+            release(instance, result);
+            return Ok(None);
+        }
+        return Ok(Some(result));
     }
     // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
     let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };

@@ -987,7 +987,10 @@ impl Instance {
         let count_type = self.alloc_type_raw(
             "count",
             core::mem::size_of::<crate::builtin_objects::CountIteratorObject>(),
-            crate::builtin_objects::CountIteratorObject::slots(),
+            crate::builtin_objects::CountIteratorObject::slots()
+                // **`__next__`／`__iter__` 属性面**（round 85）：`tokenize` 把
+                // `_itertools.chain(...).__next__` 交给 C tokenizer ✓ ⇒ 内建迭代器都得有 ✓。
+                .with_getattr(crate::builtin_objects::iterator_getattr),
         );
         assert!(
             self.register_bases(count_type, vec![object_type]).is_some(),
@@ -1015,7 +1018,9 @@ impl Instance {
             let ty = self.alloc_type_raw(
                 name,
                 core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
-                crate::builtin_objects::ItStateObject::slots(),
+                crate::builtin_objects::ItStateObject::slots()
+                    // **同上**（round 85）：`chain.__next__` 等属性面 ✓。
+                    .with_getattr(crate::builtin_objects::iterator_getattr),
             );
             assert!(
                 self.register_bases(ty, vec![object_type]).is_some(),
@@ -1067,6 +1072,30 @@ impl Instance {
         let generator_type = self.type_named("generator").expect("generator 已登记");
         let coroutine_type = self.type_named("coroutine").expect("coroutine 已登记");
         let async_generator_type = self.type_named("async_generator").expect("async_generator 已登记");
+
+        // **序列协议迭代器类型**（round 85，参照名 `iterator`）：载荷 `SequenceIteratorObject`，
+        // 内部类型、不进 `TS-41` 表 —— `iter(<只有 __getitem__ 的对象>)` 的**惰性**迭代器 ✓。
+        let sequence_iterator_type = self.alloc_type_raw(
+            "iterator",
+            core::mem::size_of::<crate::builtin_objects::SequenceIteratorObject>(),
+            crate::builtin_objects::SequenceIteratorObject::slots(),
+        );
+        assert!(
+            self.register_bases(sequence_iterator_type, vec![object_type]).is_some(),
+            "OM-13：iterator 的基类也是 object"
+        );
+
+        // **`iter(callable, sentinel)` 的迭代器类型**（round 85，参照名 `callable_iterator`）：
+        // 载荷是 `CallableIteratorObject`，内部类型、不进 `TS-41` 表（与 `frame` 同档 ✓）。
+        let callable_iterator_type = self.alloc_type_raw(
+            "callable_iterator",
+            core::mem::size_of::<crate::builtin_objects::CallableIteratorObject>(),
+            crate::builtin_objects::CallableIteratorObject::slots(),
+        );
+        assert!(
+            self.register_bases(callable_iterator_type, vec![object_type]).is_some(),
+            "OM-13：callable_iterator 的基类也是 object"
+        );
 
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(

@@ -143,7 +143,7 @@ fn push_container<T: crate::header::PyObject>(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-pub(crate) const ITERATOR_TYPE_NAMES: [&str; 34] = [
+pub(crate) const ITERATOR_TYPE_NAMES: [&str; 36] = [
     // **`reversed`** ✓（第 727 轮）：通用反向迭代器（序列协议 ✓）。
     "reversed",
     "tuple_iterator",
@@ -166,6 +166,10 @@ pub(crate) const ITERATOR_TYPE_NAMES: [&str; 34] = [
     "map",
     "filter",
     "dict_keyiterator",
+    // **`iter(callable, sentinel)`**（round 85）：参照名 `callable_iterator` ✓。
+    "callable_iterator",
+    // **序列协议（`__getitem__`）的惰性迭代器**（round 85）：参照名 `iterator` ✓。
+    "iterator",
     // **`items()`／`values()` 的迭代器**（round 119）：照参照应有真迭代器类型 ✓
     //（先前视图迭代交的是快照 list_iterator ✗ ⇒ 迭代中改键不报 RuntimeError ✗）。
     "dict_itemiterator",
