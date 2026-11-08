@@ -829,6 +829,7 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                 let mut varkw_annotation: Option<(AnnotationSource, Option<Span>)> = None;
                 // 裸 `*`（或 `*args`）之后就是**仅关键字**形参
                 let mut after_star = false;
+                let mut bare_star = false;
                 let mut expect_parameter = true;
                 loop {
                     match tokens.get(*cursor) {
@@ -839,6 +840,9 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                         // `*args`／`**kw`（`BC-56` 的签名元数据；`varnames` 排在最后两位）
                         Some(Lexeme::Star) => {
                             *cursor += 1;
+                            // **裸 `*` 判定**（round 111）：紧跟名字才是 `*args` ✓。
+                            let star_followed_by_name =
+                                matches!(tokens.get(*cursor), Some(Lexeme::Name(_)));
                             // `*名字` ⇒ `*args`；裸 `*`（后面是逗号或 `)`）⇒ 只是引出仅关键字形参
                             if let Some(Lexeme::Name(name)) = tokens.get(*cursor) {
                                 varargs = Some(name.clone());
@@ -867,6 +871,9 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                                         ));
                                     }
                                 }
+                            }
+                            if !star_followed_by_name {
+                                bare_star = true;
                             }
                             after_star = true;
                             expect_parameter = false;
@@ -956,6 +963,38 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                         other => {
                             return Err(CompileError::Syntax(format!("形参表里出现 {other:?}")))
                         }
+                    }
+                }
+                // **形参表语法校验**（round 111；官方 `test_keywordonlyarg` 的 8 条 SyntaxError 钉住）：
+                // ① 裸 `*` 后面必须至少有一个仅关键字形参（`def f(p, *):` ✗）；
+                // ② 形参名不得重复（位置／仅位置／仅关键字／`*args`／`**kw` 统一编号）；
+                // ③ `None`／`True`／`False` 不能当形参名（参照是 `SyntaxError: invalid syntax`）。
+                if bare_star && kwonly.is_empty() {
+                    return Err(CompileError::Syntax(
+                        "named arguments must follow bare *".to_owned(),
+                    ));
+                }
+                {
+                    let mut seen: Vec<&str> = Vec::new();
+                    let mut all_names: Vec<&str> =
+                        parameters.iter().map(|item| item.name.as_str()).collect();
+                    all_names.extend(kwonly.iter().map(|item| item.name.as_str()));
+                    if let Some(name) = varargs.as_deref() {
+                        all_names.push(name);
+                    }
+                    if let Some(name) = varkw.as_deref() {
+                        all_names.push(name);
+                    }
+                    for name in all_names {
+                        if matches!(name, "None" | "True" | "False") {
+                            return Err(CompileError::Syntax("invalid syntax".to_owned()));
+                        }
+                        if seen.contains(&name) {
+                            return Err(CompileError::Syntax(format!(
+                                "duplicate argument '{name}' in function definition"
+                            )));
+                        }
+                        seen.push(name);
                     }
                 }
                 // 返回注解：`-> 类型`

@@ -1837,6 +1837,8 @@ fn install_function_attribute_descriptors(instance: &Instance) {
         ("__qualname__", "qualname"),
         ("__doc__", "doc"),
         ("__module__", "module"),
+        ("__defaults__", "defaults"),
+        ("__kwdefaults__", "kwdefaults"),
         // **`__annotate__` 暂不装** ✗（`P3-17` 如实登记）：参照里它也可写，但本层 `cell` 对象
         // 还没有 `cell_contents`（`Lib/dataclasses.py:1298` 的 slots 路径要用它 ✗）⇒ 一旦
         // `fn.__annotate__ = …` 真的写进字段，`dataclasses` 的 `_update_func_cell_for__class__`

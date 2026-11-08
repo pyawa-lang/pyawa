@@ -416,6 +416,9 @@ pub(crate) fn parse_call_suffix(
     let mut star_arguments: Vec<Expression> = Vec::new();
     let mut keywords: Vec<(String, Expression)> = Vec::new();
     let mut dict_arguments: Vec<Expression> = Vec::new();
+    // **位置实参不能跟在关键字实参之后**（round 111；参照 `SyntaxError: positional argument
+    // follows keyword argument` ✓ —— 官方 `test_keywordonlyarg.testSyntaxErrorForFunctionCall` 钉住 ✓）。
+    let mut seen_keyword = false;
     loop {
         match lexed.lexemes.get(cursor) {
             Some(Lexeme::RightParen) => {
@@ -458,6 +461,7 @@ pub(crate) fn parse_call_suffix(
             cursor += 1;
             let (value, next) = parse_expression(lexed, cursor)?;
             dict_arguments.push(value);
+            seen_keyword = true;
             cursor = next;
             // **`f(**x for x in …)` ⇒ 参照的 `SyntaxError: invalid syntax`** ✓（round 54）：
             // 生成器表达式不能直接当 `**` 实参 ⇒ CPython 在 `**x` 处报"invalid syntax" ✓
@@ -502,6 +506,7 @@ pub(crate) fn parse_call_suffix(
                 )));
             }
             keywords.push((name, value));
+            seen_keyword = true;
             cursor = next;
         } else {
             // **`+`／`-` 开头的实参是合法的一元式**（第 318 轮）：`f(-1.5)`／`f(x, +2)` ——
@@ -518,6 +523,11 @@ pub(crate) fn parse_call_suffix(
             // 报"实参表里出现 Some(Walrus)" ✗（`Lib/_py_warnings.py:436` 的
             // `_is_internal_filename(filename := frame.f_code.co_filename)` 正卡它 ✓）。
             // 关键字实参那一路**照旧**不吃裸海象 ✓（参照里 `f(a=x := 1)` 本身是语法错 ✓）。
+            if seen_keyword {
+                return Err(CompileError::Syntax(
+                    "positional argument follows keyword argument".to_owned(),
+                ));
+            }
             let (argument, next) = parse_condition(lexed, cursor)?;
             // **实参位置的生成器表达式**（第 125 轮）：`f(x for x in y)` ✓ ——
             //   参照允许它**只作为唯一实参**（否则要加括号 ✓）⇒ 这里如实要求唯一 ✓。

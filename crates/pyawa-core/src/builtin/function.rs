@@ -4,7 +4,7 @@
 //! * 仍在原处的被引用项：（无） ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::builtin_objects::{FunctionObject};
+use crate::builtin_objects::{FunctionObject, TupleObject};
 use crate::executor::ExecError;
 use core::ptr::NonNull;
 use crate::header::Header;
@@ -553,6 +553,10 @@ pub(crate) enum FunctionAttributeKind {
     Qualname,
     Doc,
     Module,
+    /// `f.__defaults__`（位置默认值元组／`None`；round 111 接线可写）
+    Defaults,
+    /// `f.__kwdefaults__`（仅关键字默认值 dict／`None`；round 111 接线可写）
+    Kwdefaults,
 }
 
 impl FunctionAttributeKind {
@@ -567,6 +571,8 @@ impl FunctionAttributeKind {
             "qualname" => Some(Self::Qualname),
             "doc" => Some(Self::Doc),
             "module" => Some(Self::Module),
+            "defaults" => Some(Self::Defaults),
+            "kwdefaults" => Some(Self::Kwdefaults),
             _ => None,
         }
     }
@@ -578,6 +584,8 @@ impl FunctionAttributeKind {
             Self::Qualname => "__qualname__",
             Self::Doc => "__doc__",
             Self::Module => "__module__",
+            Self::Defaults => "__defaults__",
+            Self::Kwdefaults => "__kwdefaults__",
         }
     }
 }
@@ -612,6 +620,10 @@ fn replace_override(
         FunctionAttributeKind::Qualname => object.set_qualname_override(value),
         FunctionAttributeKind::Doc => object.set_doc_override(value),
         FunctionAttributeKind::Module => object.set_module_override(value),
+        // **`__defaults__`／`__kwdefaults__` 不走"覆盖值"面**：它们直接改函数字段 ✓（见 `set` 分支）。
+        FunctionAttributeKind::Defaults | FunctionAttributeKind::Kwdefaults => {
+            value.map(|_| value.unwrap())
+        }
     }
 }
 
@@ -716,6 +728,73 @@ pub(crate) unsafe fn function_attribute_descriptor_set(
         }
         // 参照实测：`__doc__`／`__module__` 的 `__set__` 不收类型限制 ✓。
         FunctionAttributeKind::Doc | FunctionAttributeKind::Module => {}
+        // **`__defaults__`**：`None` 或 tuple ✓（参照：`TypeError: __defaults__ must be set to a
+        // tuple or None` ✓）。tuple ⇒ 每项各留一份交给函数字段 ✓。
+        FunctionAttributeKind::Defaults => {
+            let is_none = value == instance.singletons().none();
+            let is_tuple = instance
+                .type_named("tuple")
+                .is_some_and(|tuple_ty| instance.type_of(value) == tuple_ty);
+            if !is_none && !is_tuple {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "__defaults__ must be set to a tuple or None",
+                ));
+            }
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old: Vec<NonNull<Header>> = object.defaults().to_vec();
+            let fresh: Vec<NonNull<Header>> = if is_none {
+                Vec::new()
+            } else {
+                // SAFETY: is_tuple 已确认。
+                let tuple = unsafe { &*value.as_ptr().cast::<TupleObject>() };
+                let mut items = Vec::with_capacity(tuple.len());
+                for index in 0..tuple.len() {
+                    let item = tuple.item(index).expect("下标在范围内");
+                    // SAFETY: 元素由元组持有。
+                    unsafe { instance.incref_object(item.as_ptr()) };
+                    items.push(item);
+                }
+                items
+            };
+            // SAFETY: 仍是同一函数对象（函数字段可写）。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_defaults(fresh);
+            for old_item in old {
+                // SAFETY: 旧默认值那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(old_item.as_ptr()) };
+            }
+            return Ok(instance.retain(instance.singletons().none()));
+        }
+        // **`__kwdefaults__`**：`None` 或 dict ✓（参照：`TypeError: __kwdefaults__ must be set to a
+        // dict or None` ✓）。只换字段持有那份 ✓。
+        FunctionAttributeKind::Kwdefaults => {
+            let is_none = value == instance.singletons().none();
+            let is_dict = instance
+                .type_named("dict")
+                .is_some_and(|dict_ty| instance.is_subtype(instance.type_of(value), dict_ty));
+            if !is_none && !is_dict {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "__kwdefaults__ must be set to a dict or None",
+                ));
+            }
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old = object.kwdefaults();
+            let fresh = if is_none { None } else { Some(value) };
+            if let Some(mapping) = fresh {
+                // 字段接手一份新引用。
+                instance.retain(mapping);
+            }
+            // SAFETY: 仍是同一函数对象（函数字段可写）。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_kwdefaults(fresh);
+            if let Some(old) = old {
+                // SAFETY: 旧 dict 那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+            return Ok(instance.retain(instance.singletons().none()));
+        }
     }
     // SAFETY: 上面已确认 target 是函数对象。
     let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
@@ -768,6 +847,31 @@ pub(crate) unsafe fn function_attribute_descriptor_delete(
                 "TypeError",
                 &format!("{} must be set to a string object", kind.attribute_name()),
             ))
+        }
+        // `del f.__defaults__`／`del f.__kwdefaults__` ⇒ 清空字段（读回 `None` ✓）。
+        FunctionAttributeKind::Defaults => {
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old: Vec<NonNull<Header>> = object.defaults().to_vec();
+            // SAFETY: 同一函数对象；字段可写。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_defaults(Vec::new());
+            for item in old {
+                // SAFETY: 旧默认值那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(item.as_ptr()) };
+            }
+            Ok(instance.retain(instance.singletons().none()))
+        }
+        FunctionAttributeKind::Kwdefaults => {
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old = object.kwdefaults();
+            // SAFETY: 同一函数对象；字段可写。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_kwdefaults(None);
+            if let Some(old) = old {
+                // SAFETY: 旧 dict 那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+            Ok(instance.retain(instance.singletons().none()))
         }
         FunctionAttributeKind::Doc | FunctionAttributeKind::Module => {
             // SAFETY: 上面已确认 target 是函数对象。
