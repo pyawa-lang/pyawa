@@ -76,6 +76,15 @@ pub(crate) fn set_contains(
 ) -> Option<NonNull<Header>> {
     // SAFETY: 调用方保证 set 是本实例的 `set`。
     let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+    if std::env::var_os("PYAWA_SET_TRACE").is_some() {
+        // SAFETY: set/item 由调用方保证存活。
+        let item_ty = instance.type_name(instance.type_of(item));
+        eprintln!(
+            "[set-trace] set={set:p} item={:p} ty={item_ty} 现场={}",
+            item.as_ptr(),
+            instance.current_site()
+        );
+    }
     if let Some(hash) = crate::executor::values::key_hash(instance, item) {
         object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
         for existing in object.candidates(hash) {
@@ -300,7 +309,26 @@ pub(crate) unsafe fn set_clear(ptr: *mut Header, instance: &Instance) {
     // （否则 `clear` 之后的下一次查询会拿旧地址强转 ⇒ 悬垂读 ✗）。
     *object.index.borrow_mut() = None;
     // **同 `list_clear`** ✗（第 206 轮修复 ✓）。
-    for value in core::mem::take(&mut *object.items.borrow_mut()) {
+    let values = core::mem::take(&mut *object.items.borrow_mut());
+    // **诊断（round 108，`PYAWA_DANGLING=1` 时）**：集合元素里若出现**已被释放**的指针，直接点名
+    // "集合地址／长度／下标／元素地址"，而不是只报一条 `set_clear` 的悬垂（那样看不出是哪个集合 ✓）。
+    if crate::diag::flag("PYAWA_DANGLING") {
+        for (index, value) in values.iter().enumerate() {
+            // **注册类型不进活表**（由 `types` 注册表持有）⇒ 排除，避免误报 ✓。
+            if !instance.is_live_address(*value)
+                && !instance.is_registered_type(unsafe { core::ptr::NonNull::new_unchecked(value.as_ptr()) })
+            {
+                // SAFETY: 只做地址打印，不解引用。
+                panic!(
+                    "[set-clear] 集合 {ptr:p}（len={}）的下标 {index} 元素 {value:p} **已不在活表** \
+                     ⇒ 某处把元素放进集合却没留计数（现场/回溯见下）\n{}",
+                    values.len(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
+    }
+    for value in values {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(value.as_ptr()) };
     }
@@ -586,7 +614,17 @@ pub(crate) fn set_intersection_native(
     let (this, rest) = set_method_receiver(instance, bound, args, "intersection")?;
     if rest.is_empty() {
         // 参照：没有实参 ⇒ 一份拷贝 ✓。
-        return Ok(instance.new_set(instance.set_items(this).unwrap_or_default()));
+        // **拷贝要自己那份引用**（round 108 真 bug 修 ✗）：`set_items` 给的是**借用**，而 `new_set`
+        // 的契约是**接手一批新引用** ⇒ 先前直接把借用交出去 ✗ ⇒ 新集合里的元素**没有计数** ✓
+        // （`PYAWA_DANGLING=1` 跑 `test_set` 的 `[set-clear] … 已不在活表` 现场：`set.intersection()`
+        // 无参拷贝的元素被原集合先释放 ⇒ 集合收尸时再减一次 ⇒ 悬垂/堆损坏 ✓）。
+        let items: Vec<NonNull<Header>> = instance
+            .set_items(this)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| instance.retain(item))
+            .collect();
+        return Ok(instance.new_set(items));
     }
     let mut others: Vec<Vec<NonNull<Header>>> = Vec::new();
     for argument in &rest {
