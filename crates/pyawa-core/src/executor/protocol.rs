@@ -484,9 +484,12 @@ pub(crate) fn inplace_add(
     let list_ty = instance.type_named("list");
     let builtin_list_iadd = list_ty.is_some_and(|list_ty| {
         instance.is_subtype(left_ty, list_ty)
-            && instance
-                .type_lookup_owner(left_ty, "__iadd__")
-                .is_some_and(|(owner, _)| owner == list_ty)
+            && match instance.type_lookup_owner(left_ty, "__iadd__") {
+                // `list` 的 `__iadd__` **不在类型字典里**（走本层的 dunder 分派表）⇒ `None` 也是内建口径 ✓；
+                // 用户子类显式覆写 ⇒ owner 是子类 ⇒ 走通用 dunder 派发 ✓。
+                Some((owner, _)) => owner == list_ty,
+                None => true,
+            }
     });
     if builtin_list_iadd {
         let right_ty = unsafe { right.as_ref() }.ty();
@@ -494,7 +497,18 @@ pub(crate) fn inplace_add(
         let is_tuple = instance
             .type_named("tuple")
             .is_some_and(|tuple_ty| instance.is_subtype(right_ty, tuple_ty));
-        if !is_list && !is_tuple {
+        // **右侧自带用户 `__radd__` ⇒ 走 `+` 的反射协议**（参照实测：`list += UserList("x")`／
+        // `list += R()`（R 有 `__radd__`）⇒ **反射结果胜出**；没有 `__radd__` 的可迭代 ⇒ 就地扩展 ✓）。
+        let user_radd = instance
+            .type_lookup_owner(right_ty, "__radd__")
+            .is_some_and(|(owner, _)| {
+                ![
+                    "int", "bool", "float", "complex", "str", "bytes", "list", "tuple", "dict",
+                ]
+                .iter()
+                .any(|candidate| instance.type_named(candidate) == Some(owner))
+            });
+        if !is_list && !is_tuple && user_radd {
             return concat_public(instance, left, right, opcode);
         }
     }
