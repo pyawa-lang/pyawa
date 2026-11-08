@@ -115,6 +115,12 @@ pub struct Instance {
     /// 只对**用户类的 `__del__`**（`python_level_finalize`）生效；宿主终结器槽保持 `OM-20` 的
     /// "复活后再死可再终结"语义（`object_model` 的用例钉住 ✓）。
     python_finalized: RefCell<std::collections::HashSet<usize>>,
+    /// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点。core 不能依赖
+    /// stdlib（分层）⇒ 由 `_ast` 模块在引导期登记一个函数指针 ✓（未登记时 compile 照旧报未接线 ✓）。
+    ast_parser: Cell<Option<crate::AstParserFn>>,
+    /// **内建函数的 `__text_signature__` 旁表**（round 86）：`inspect.signature` 解析内建可调用
+    /// 对象（`object.__init__`／`__new__`／`__init_subclass__`）的文本签名入口 ✓。
+    builtin_text_signatures: RefCell<std::collections::HashMap<usize, &'static str>>,
     /// **`mappingproxy` 的活视图来源**（round 125）：键/值/项视图的 `.mapping` 要是**源字典的活视图** ✓
     /// ⇒ 按代理地址记源 dict 指针；等价比较等入口先同步快照 ✓（`test_dict.test_views_mapping` ✓）。
     mappingproxy_live: RefCell<std::collections::HashMap<usize, NonNull<Header>>>,

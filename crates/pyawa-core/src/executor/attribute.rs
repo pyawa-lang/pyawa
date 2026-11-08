@@ -703,6 +703,22 @@ fn attribute_lookup_specials(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<Option<Attribute>, ExecError> {
+    // **类型对象的 `__text_signature__`**（round 86）：参照里 `object.__text_signature__` 是 `"()"`
+    // —— `inspect.signature` 对"无自定义 `__init__/__new__` 的类"走 `sigcls.from_callable(object)`
+    // 递归，靠它终止 ✓。其它类**不继承**它（参照实测 `dict.__text_signature__` 是 `None` ✓）：
+    // 这里只对**恰是 `object` 的类型**给 `"()"`，其余类型给 `None` ✓（不再写进 `object` 命名空间，
+    // 否则会被 MRO 继承 ✗）。
+    if name == "__text_signature__" && instance.is_type_object(object) {
+        let is_object = instance
+            .type_named("object")
+            .is_some_and(|object_type| object_type.cast::<Header>() == object);
+        return Ok(Some(if is_object {
+            Attribute::Owned(instance.new_str("()"))
+        } else {
+            Attribute::Owned(instance.new_none())
+        }));
+    }
+
     let object_type = unsafe { object.as_ref() }.ty();
     if name == "__annotations__" && object_type == builtin_type(instance, "function") {
         return crate::builtin::function::function_annotations(instance, object.as_ptr())

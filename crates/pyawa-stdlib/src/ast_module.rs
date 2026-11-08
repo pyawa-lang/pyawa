@@ -303,5 +303,223 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "__all__", exports);
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
+    // **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点 ✓（core 不依赖 stdlib）。
+    instance.set_ast_parser(parse_signature_ast);
     namespace
+}
+
+
+// --------------------------------------------------------------------------- #
+// **`compile(..., PyCF_ONLY_AST)` 的最小 AST 解析面**（round 86）
+// --------------------------------------------------------------------------- #
+//
+// 目标只有一个：让 `inspect.signature` 解析**文本签名**（它把
+// `def foo<清理后的签名>: pass` 交给 `ast.parse`，再读 `module.body[0].args` 一族）。
+// 本层没有完整 AST 解析器（`compile` 直接出字节码）⇒ 这里实现**签名语法**能造出的那几类节点：
+// `Module`／`FunctionDef`／`arguments`／`arg` ✓；其余形状**如实 Err**（不造假值 ✓）。
+
+/// 建一个 `_ast` 类实例（无参构造）。
+fn new_node(
+    instance: &Instance,
+    class_name: &str,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(class) = instance.type_named(class_name) else {
+        return Err(instance.raise_builtin_error(
+            "RuntimeError",
+            &format!("_ast.{class_name} 不可用"),
+        ));
+    };
+    pyawa_core::call_value(instance, class.cast::<Header>(), &[], &[])
+}
+
+/// 给节点写一个字段（`set_attribute_value` 是**借用**语义 ⇒ 这里写完归还自己那份 ✓）。
+fn set_field(
+    instance: &Instance,
+    node: NonNull<Header>,
+    field: &str,
+    value: NonNull<Header>,
+) -> Result<(), pyawa_core::ExecError> {
+    instance.set_attribute_value(node, field, value)?;
+    instance.release(value);
+    Ok(())
+}
+
+/// 造 `arg` 节点。
+fn make_arg(instance: &Instance, name: &str) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let node = new_node(instance, "arg")?;
+    let name_object = instance.new_str(name);
+    set_field(instance, node, "arg", name_object)?;
+    let none = instance.new_none();
+    set_field(instance, node, "annotation", none)?;
+    let none = instance.new_none();
+    set_field(instance, node, "type_comment", none)?;
+    Ok(node)
+}
+
+/// 按逗号切参数（**顶层**逗号；括号深度 > 0 的逗号属默认值里的表达式 ⇒ 不切）。
+fn split_parameters(text: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    for character in text.chars() {
+        match character {
+            '(' | '[' | '{' => {
+                depth += 1;
+                current.push(character);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                current.push(character);
+            }
+            ',' if depth == 0 => {
+                parts.push(current.trim().to_owned());
+                current = String::new();
+            }
+            _ => current.push(character),
+        }
+    }
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_owned());
+    }
+    parts
+}
+
+/// **声明**给 compile 的 AST 解析回调（只支持 `def <名字>(<参数表>): pass`）✓。
+pub fn parse_signature_ast(
+    instance: &Instance,
+    source: &str,
+    _filename: &str,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let unsupported = || pyawa_core::ExecError::Unsupported {
+        opcode: 0,
+        what: "compile()：`PyCF_ONLY_AST` 目前只接线了签名解析（`def 名字(<参数表>): pass`）",
+    };
+    // 形如 `def foo(<参数>): pass` —— 取**配对**的圆括号内容 ✓。
+    let Some(open) = source.find('(') else {
+        return Err(unsupported());
+    };
+    let mut depth = 0i32;
+    let mut close = None;
+    for (offset, character) in source[open..].char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close) = close else {
+        return Err(unsupported());
+    };
+    let parameters = &source[open + 1..close];
+
+    let mut posonly: Vec<NonNull<Header>> = Vec::new();
+    let mut positional: Vec<NonNull<Header>> = Vec::new();
+    let mut kwonly: Vec<NonNull<Header>> = Vec::new();
+    let mut vararg: Option<NonNull<Header>> = None;
+    let mut kwarg: Option<NonNull<Header>> = None;
+    let mut star_seen = false;
+    for part in split_parameters(parameters) {
+        if part.is_empty() {
+            continue;
+        }
+        if part == "/" {
+            // `/` 之前的位置参数变成 **仅位置** ✓。
+            posonly.append(&mut positional);
+            positional = Vec::new();
+            continue;
+        }
+        if part == "*" {
+            star_seen = true;
+            continue;
+        }
+        if let Some(name) = part.strip_prefix("**") {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(unsupported());
+            }
+            kwarg = Some(make_arg(instance, name)?);
+            continue;
+        }
+        if let Some(name) = part.strip_prefix('*') {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(unsupported());
+            }
+            vararg = Some(make_arg(instance, name)?);
+            star_seen = true;
+            continue;
+        }
+        // 带默认值的参数：本层还不造 `Constant`／表达式节点 ⇒ 如实拒绝（`inspect` 会退化成 '(' ✓）。
+        if part.contains('=') {
+            return Err(unsupported());
+        }
+        let node = make_arg(instance, part.trim())?;
+        if star_seen {
+            kwonly.push(node);
+        } else {
+            positional.push(node);
+        }
+    }
+
+    // `arguments` 节点：七个字段 ✓（`posonlyargs, args, vararg, kwonlyargs, kw_defaults, kwarg, defaults`）。
+    let arguments = new_node(instance, "arguments")?;
+    let posonly_list = instance.new_list(posonly);
+    set_field(instance, arguments, "posonlyargs", posonly_list)?;
+    let args_list = instance.new_list(positional);
+    set_field(instance, arguments, "args", args_list)?;
+    match vararg {
+        Some(node) => set_field(instance, arguments, "vararg", node)?,
+        None => {
+            let none = instance.new_none();
+            set_field(instance, arguments, "vararg", none)?;
+        }
+    }
+    // `kw_defaults` 的长度必须与 `kwonlyargs` 一致 ⇒ 先记长度（列表接手后就拿不到 len 了）✓；
+    // 本层不接受默认值 ⇒ 每格 `None` ✓。
+    let kwonly_count = kwonly.len();
+    let kwonly_list = instance.new_list(kwonly);
+    set_field(instance, arguments, "kwonlyargs", kwonly_list)?;
+    let kw_defaults: Vec<NonNull<Header>> =
+        (0..kwonly_count).map(|_| instance.new_none()).collect();
+    let kw_defaults_list = instance.new_list(kw_defaults);
+    set_field(instance, arguments, "kw_defaults", kw_defaults_list)?;
+    match kwarg {
+        Some(node) => set_field(instance, arguments, "kwarg", node)?,
+        None => {
+            let none = instance.new_none();
+            set_field(instance, arguments, "kwarg", none)?;
+        }
+    }
+    let defaults = instance.new_list(Vec::new());
+    set_field(instance, arguments, "defaults", defaults)?;
+
+    // `FunctionDef`：`name, args, body, decorator_list, returns, type_comment, type_params` ✓
+    let function = new_node(instance, "FunctionDef")?;
+    let name = instance.new_str("foo");
+    set_field(instance, function, "name", name)?;
+    set_field(instance, function, "args", arguments)?;
+    let body = instance.new_list(Vec::new());
+    set_field(instance, function, "body", body)?;
+    let decorators = instance.new_list(Vec::new());
+    set_field(instance, function, "decorator_list", decorators)?;
+    let none = instance.new_none();
+    set_field(instance, function, "returns", none)?;
+    let none = instance.new_none();
+    set_field(instance, function, "type_comment", none)?;
+    let type_params = instance.new_list(Vec::new());
+    set_field(instance, function, "type_params", type_params)?;
+
+    // `Module`：`body, type_ignores` ✓
+    let module = new_node(instance, "Module")?;
+    let body = instance.new_list(vec![function]);
+    set_field(instance, module, "body", body)?;
+    let type_ignores = instance.new_list(Vec::new());
+    set_field(instance, module, "type_ignores", type_ignores)?;
+    Ok(module)
 }

@@ -74,6 +74,31 @@ impl Instance {
         self.live.borrow().len()
     }
 
+    /// 登记 **AST 解析回调**（round 86，由 `_ast` 模块在引导期调用一次 ✓）。
+    pub fn set_ast_parser(&self, parser: crate::AstParserFn) {
+        self.ast_parser.set(Some(parser));
+    }
+
+    /// 取 AST 解析回调（未登记 ⇒ `None` ✓）。
+    pub fn ast_parser(&self) -> Option<crate::AstParserFn> {
+        self.ast_parser.get()
+    }
+
+    /// **内建函数 `__text_signature__` 旁表**（round 86）。
+    pub fn set_builtin_text_signature(&self, function: NonNull<Header>, signature: &'static str) {
+        self.builtin_text_signatures
+            .borrow_mut()
+            .insert(function.as_ptr() as usize, signature);
+    }
+
+    /// 取内建函数的 `__text_signature__`（借用，`None` ⇒ 没有）✓。
+    pub fn builtin_text_signature(&self, function: NonNull<Header>) -> Option<&'static str> {
+        self.builtin_text_signatures
+            .borrow()
+            .get(&(function.as_ptr() as usize))
+            .copied()
+    }
+
     /// **Python 级终结器旁表**（round 82）：是否已跑过 `__del__` ✓。
     pub(crate) fn python_finalized_contains(&self, pointer: usize) -> bool {
         self.python_finalized.borrow().contains(&pointer)

@@ -11,6 +11,8 @@ impl Instance {
             current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
             python_finalized: RefCell::new(std::collections::HashSet::new()),
+            ast_parser: core::cell::Cell::new(None),
+            builtin_text_signatures: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_live: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),
             live: RefCell::new(HashSet::new()),

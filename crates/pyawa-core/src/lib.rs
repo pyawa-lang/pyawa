@@ -115,6 +115,12 @@ pub use value::Value;
 
 /// `_contextvars.copy_context()` 的实现入口（第 332 轮；stdlib 的模块要用 ✓）。
 pub use builtin_objects::new_classmethod;
+
+/// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 交给 `_ast` 模块登记的实现 ✓
+/// （core 不依赖 stdlib：由 stdlib 在引导期把函数指针登记进实例 ✓）。
+pub type AstParserFn =
+    fn(&crate::Instance, &str, &str)
+        -> Result<core::ptr::NonNull<crate::Header>, crate::ExecError>;
 pub use builtin_objects::copy_context_value;
 pub use builtin::thread::thread_handle_new;
 pub use builtin_objects::filter_new;

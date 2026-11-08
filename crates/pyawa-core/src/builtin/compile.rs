@@ -475,10 +475,17 @@ pub fn compile_native(
         return Err(instance.raise_builtin_error("ValueError", "compile(): unrecognised flags"));
     }
     if flags & PYCF_ONLY_AST != 0 {
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "compile()：`PyCF_ONLY_AST`（返回 AST 对象）尚未接线",
-        });
+        // **`PyCF_ONLY_AST`**（round 86）：交给 `_ast` 模块登记的解析回调（core 不依赖 stdlib ✓）。
+        // 目前只实现"**签名解析所需的最小面**"（`def foo(<参数表>): pass` 的 Module/FunctionDef/
+        // arguments/arg 节点）——`inspect.signature` 的文本签名路径正好只用这些 ✓；
+        // 完整 AST（任意源码）仍留后续轮（回调对不认识的形状**如实报错**，不造假值 ✓）。
+        let Some(parser) = instance.ast_parser() else {
+            return Err(ExecError::Unsupported {
+                opcode: 0,
+                what: "compile()：`PyCF_ONLY_AST`（AST 解析回调未登记）",
+            });
+        };
+        return parser(instance, &source, &filename);
     }
     if flags & PYCF_ALLOW_TOP_LEVEL_AWAIT != 0 {
         return Err(ExecError::Unsupported {

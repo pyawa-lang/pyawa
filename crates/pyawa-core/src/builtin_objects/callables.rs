@@ -342,6 +342,13 @@ pub unsafe fn builtin_function_getattr(
     if name == "__module__" {
         return Some(instance.new_str("builtins"));
     }
+    // **`__text_signature__`**（round 86）：`inspect.signature` 解析内建可调用对象的入口 ✓。
+    if name == "__text_signature__" {
+        return Some(match instance.builtin_text_signature(unsafe { NonNull::new_unchecked(ptr) }) {
+            Some(signature) => instance.new_str(signature),
+            None => instance.new_none(),
+        });
+    }
     // **`__reduce__` 返回名字串**（round 111）：参照的 `iter.__reduce__()` ⇒ `'iter'` ✓ ——
     // `pickle` 的 `save_reduce` 见到字符串就按 `save_global(obj, rv)` 存 ✓
     //（否则落到 `object.__reduce_ex__` ⇒ 找 `builtins.builtin_function_or_method` ✗ ——

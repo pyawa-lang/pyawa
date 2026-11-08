@@ -242,6 +242,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
                 "__new__",
                 pyawa_core::object_new_native as pyawa_core::NativeFn,
             );
+            // **文本签名**（round 86）：`inspect.signature` 的类签名靠它 ✓。
+            instance.set_builtin_text_signature(new_method, "($type, *args, **kwargs)");
             instance.dict_set(object_namespace, "__new__", new_method);
             // **数据类型也要"看起来有 `__new__`"** ✓（第 252 轮）：`Lib/enum.py` 的 `_find_data_type_`
             // 靠 `'__new__' in base.__dict__` 认数据类型 ✓（第 247 轮探针实测本层缺它 ⇒ `ReprEnum` 族
@@ -389,12 +391,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {
             let method = make_native(instance, "__init__", pyawa_core::object_init_native as pyawa_core::NativeFn);
+            instance.set_builtin_text_signature(method, "($self, /, *args, **kwargs)");
             instance.dict_set(type_namespace, "__init__", method);
+
             // **`__str__`／`__repr__`** ✓（第 210 轮）：默认 `<X object at 0x…>` ✓（`Lib/types.py` 要 ✓）。
             let str_method = make_native(instance, "__str__", pyawa_core::object_text_native as pyawa_core::NativeFn);
             instance.dict_set(type_namespace, "__str__", str_method);
             let repr_method = make_native(instance, "__repr__", pyawa_core::object_text_native as pyawa_core::NativeFn);
             instance.dict_set(type_namespace, "__repr__", repr_method);
+            // **`object.__init_subclass__` 的文本签名**（round 86）：`_collections_abc` 一类
+            // 在 `dir(None)` 里给 `__init_subclass__`，`inspect.signature` 要它 '' 参数 ⇒ 结果是 `()`
+            // （`test_rlcompleter` 的 expected 有 `None.__init_subclass__()` ✓）。
+            if let Some(init_subclass) = instance.dict_get(type_namespace, "__init_subclass__") {
+                instance.set_builtin_text_signature(init_subclass, "($type, /)");
+            }
         }
     }
     // **`Ellipsis`／`NotImplemented` 两个名字** ✓（第 215 轮）：`Lib/types.py` 要 `type(Ellipsis)` ✓
