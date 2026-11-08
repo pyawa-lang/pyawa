@@ -303,7 +303,7 @@ pub unsafe fn defaultdict_getitem(
         crate::executor::call::call_callable(instance, factory, None, Vec::new(), Vec::new(), 0)?;
     // **写回**：`subscript_set` 借用键、**接管值** ✓ ⇒ 先添一份给字典、我们这份交给调用方 ✓。
     instance.retain(produced);
-    crate::executor::subscript::subscript_set(instance, data, key, produced, 0)?;
+    crate::executor::subscript::subscript_set_inner(instance, data, key, produced, 0)?;
     Ok(produced)
 }
 
@@ -325,7 +325,7 @@ pub unsafe fn defaultdict_setitem(
     };
     let data = data_of(instance, this)?;
     instance.retain(value);
-    crate::executor::subscript::subscript_set(instance, data, key, value, 0)?;
+    crate::executor::subscript::subscript_set_inner(instance, data, key, value, 0)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 

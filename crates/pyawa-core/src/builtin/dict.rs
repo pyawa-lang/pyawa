@@ -715,7 +715,7 @@ pub fn dict_delitem_native(
     let (Some(container), Some(key)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__delitem__ expected 2 arguments"));
     };
-    crate::executor::subscript::subscript_del(instance, container, *key, 0)?;
+    crate::executor::subscript::subscript_del_inner(instance, container, *key, 0)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 /// `dict.__eq__(self, other)`：与 `==` **同一处实现** ✓（`values_equal`）。

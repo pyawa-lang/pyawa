@@ -476,6 +476,28 @@ pub(crate) fn inplace_add(
     right: NonNull<Header>,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **list 的 `+=` 特殊口径**（round 114，照参照实测）：左侧是 **list 族且 `__iadd__` 的落地类型是
+    // 内建 `list`**（用户没覆写）时——右侧是 list／tuple ⇒ 就地扩展 ✓；**否则回退 `+` 的反射协议** ✓
+    // （`l = list('spam'); l += UserList('eggs')` ⇒ 结果类型 **UserList** ✓、`l += 'eggs'` ⇒ TypeError ✓；
+    // 先前统一先调 `list.__iadd__`（收任意可迭代）⇒ 就地扩展、类型仍是 list ✗）。
+    let left_ty = unsafe { left.as_ref() }.ty();
+    let list_ty = instance.type_named("list");
+    let builtin_list_iadd = list_ty.is_some_and(|list_ty| {
+        instance.is_subtype(left_ty, list_ty)
+            && instance
+                .type_lookup_owner(left_ty, "__iadd__")
+                .is_some_and(|(owner, _)| owner == list_ty)
+    });
+    if builtin_list_iadd {
+        let right_ty = unsafe { right.as_ref() }.ty();
+        let is_list = list_ty.is_some_and(|list_ty| instance.is_subtype(right_ty, list_ty));
+        let is_tuple = instance
+            .type_named("tuple")
+            .is_some_and(|tuple_ty| instance.is_subtype(right_ty, tuple_ty));
+        if !is_list && !is_tuple {
+            return concat_public(instance, left, right, opcode);
+        }
+    }
     // **用户 `__iadd__` 优先**（round 109）：`x += y` 先问 `type(x).__iadd__` ✓。
     if let Some(result) = inplace_dunder(instance, left, right, "__iadd__")? {
         return Ok(result);

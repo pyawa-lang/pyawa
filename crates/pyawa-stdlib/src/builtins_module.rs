@@ -1872,25 +1872,41 @@ fn resolve_namespaces(
         }
         Ok(())
     };
-    match (explicit_globals, explicit_locals) {
-        (Some(globals), Some(locals)) => {
-            check_dict(locals)?;
-            Ok((Some(globals), locals, false, false))
+    // **`exec`／`eval` 往 globals 注入 `__builtins__`**（round 114，照参照 `_PyFrame_Init`）：globals 里没有
+    // 这一格 ⇒ 塞进**当前内建名字空间**（`instance.builtins()` 的 dict；借用口径 ⇒ 无需额外 incref ✓）。
+    // `test_descrtut` 的 `exec("x = 3; print(x)", a)` 之后 `sorted(a.keys())` 期望含 `'__builtins__'` ✓。
+    let ensure_builtins = |globals: Option<NonNull<Header>>| {
+        if let Some(globals) = globals {
+            if instance.dict_get(globals, "__builtins__").is_none() {
+                if let Some(builtins) = instance.builtins() {
+                    instance.dict_set(globals, "__builtins__", builtins);
+                }
+            }
         }
-        (Some(globals), None) => Ok((Some(globals), globals, false, false)),
-        (None, Some(locals)) => {
-            check_dict(locals)?;
-            let (implicit_globals, implicit_locals) = pyawa_core::implicit_namespaces(instance);
-            instance.release(implicit_locals);
-            let globals_owned = implicit_globals.is_some();
-            Ok((implicit_globals, locals, false, globals_owned))
-        }
-        (None, None) => {
-            let (globals, locals) = pyawa_core::implicit_namespaces(instance);
-            let globals_owned = globals.is_some();
-            Ok((globals, locals, true, globals_owned))
-        }
-    }
+    };
+    ensure_builtins(explicit_globals);
+    let resolved: (Option<NonNull<Header>>, NonNull<Header>, bool, bool) =
+        match (explicit_globals, explicit_locals) {
+            (Some(globals), Some(locals)) => {
+                check_dict(locals)?;
+                Ok::<_, ExecError>((Some(globals), locals, false, false))
+            }
+            (Some(globals), None) => Ok::<_, ExecError>((Some(globals), globals, false, false)),
+            (None, Some(locals)) => {
+                check_dict(locals)?;
+                let (implicit_globals, implicit_locals) = pyawa_core::implicit_namespaces(instance);
+                instance.release(implicit_locals);
+                let globals_owned = implicit_globals.is_some();
+                Ok::<_, ExecError>((implicit_globals, locals, false, globals_owned))
+            }
+            (None, None) => {
+                let (globals, locals) = pyawa_core::implicit_namespaces(instance);
+                let globals_owned = globals.is_some();
+                Ok::<_, ExecError>((globals, locals, true, globals_owned))
+            }
+        }?;
+    ensure_builtins(resolved.0);
+    Ok(resolved)
 }
 
 /// **`ascii(obj)`** ✓（task-19 第 3 轮 ✓）：参照口径 ＝ **`repr(obj)` 再把非 ASCII 转义** ✓

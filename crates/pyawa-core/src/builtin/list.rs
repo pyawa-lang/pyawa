@@ -413,7 +413,8 @@ fn list_dunder_getitem(
             "__getitem__() takes exactly one argument (0 given)",
         ));
     };
-    crate::executor::subscript::subscript_get(instance, list, key, 0)
+    // **原生 `list.__getitem__` 不派发用户覆写**（否则用户 `__getitem__` 里调它会递归 ✗）。
+    crate::executor::subscript::subscript_get_inner(instance, list, key, 0)
 }
 
 /// `list.__setitem__(self, key, value)`。
@@ -437,7 +438,7 @@ fn list_dunder_setitem(
     // 于是在 `test_list.test_set_subscript` 暴露；`PYAWA_REF_TRACE=...BT_ALL` 现场：两次 -1 都
     // 落在 `subscript_set ← list_dunder_setitem` 与 `call_callable` ✓）。
     instance.retain(value);
-    crate::executor::subscript::subscript_set(instance, list, key, value, 0)?;
+    crate::executor::subscript::subscript_set_inner(instance, list, key, value, 0)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -455,7 +456,7 @@ fn list_dunder_delitem(
             "__delitem__() takes exactly one argument (0 given)",
         ));
     };
-    crate::executor::subscript::subscript_del(instance, list, key, 0)?;
+    crate::executor::subscript::subscript_del_inner(instance, list, key, 0)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -527,8 +528,10 @@ fn list_dunder_iadd(
             "__iadd__() takes exactly one argument (0 given)",
         ));
     };
-    // **`list.__iadd__` 接受任意可迭代**（参照：`[1] += (2,)` ✓；`[1] += 5` ⇒ `'int' object is
-    // not iterable` ✓）——先前只认 list ✗（round 109 由 `inplace_add` 统一派发到本函数后暴露）。
+    // **`list.__iadd__` 直调语义**：接受任意可迭代（`[1].__iadd__((2,))` ✓）、非可迭代报
+    // `TypeError: 'int' object is not iterable` ✓（`test_list.test_iadd` 的 `assertRaises` 钉住 ✓）。
+    // **操作符 `l += x` 的特殊口径在 `protocol::inplace_add` 里**（round 114）：右侧不是 list／tuple 时
+    // 不走这里的就地扩展，而是回退到 `+` 的反射协议（参照实测 `list += UserList` ⇒ 结果类型 **UserList** ✓）。
     let name = instance.type_name(instance.type_of(other));
     let Some(items) = instance.iterable_items(other).map_err(|error| error)? else {
         return Err(instance.raise_builtin_error(

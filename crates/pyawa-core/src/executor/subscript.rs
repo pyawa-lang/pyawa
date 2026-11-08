@@ -126,7 +126,52 @@ pub(crate) fn subscript_slice(
 }
 
 /// 下标**读**（`BINARY_OP` ＋ `NB_SUBSCR`，3.14 无 `BINARY_SUBSCR`）。返回**新引用**。
+
+/// **用户覆写的下标协议**（round 114）：`type` 的 MRO 上 `__getitem__`／`__setitem__`／`__delitem__`
+/// 的落地类型**不是**内建容器（`list`／`tuple`／`dict`／`str`／`bytes`／`bytearray`）⇒ 必须先派发用户方法 ✓
+/// （参照：`class D(dict): def __getitem__…` 的 `d[k]` 走 Python 方法 ✓；`test_descrtut` 的
+/// `a[0]`／`a['noway']` 期望返回 `self.default` 就靠这条 ✓）。
+fn user_overrides_subscript(instance: &Instance, ty: NonNull<crate::TypeObject>, name: &str) -> bool {
+    let Some((owner, _)) = instance.type_lookup_owner(ty, name) else {
+        return false;
+    };
+    ![
+        "list",
+        "tuple",
+        "dict",
+        "str",
+        "bytes",
+        "bytearray",
+    ]
+    .iter()
+    .any(|candidate| instance.type_named(candidate) == Some(owner))
+}
+
+/// `obj[key]` 的**公开入口**（`BINARY_SUBSCR`）：先派发用户覆写 `__getitem__`，再进内建快路 ✓。
 pub(crate) fn subscript_get(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let container_type = unsafe { container.as_ref() }.ty();
+    // **用户覆写 `__getitem__` 优先**（round 114，含切片键 ✓）。
+    if user_overrides_subscript(instance, container_type, "__getitem__") {
+        if let Some(result) = crate::executor::call::call_object_method(
+            instance,
+            container,
+            "__getitem__",
+            &[key],
+        )? {
+            return Ok(result);
+        }
+    }
+    subscript_get_inner(instance, container, key, opcode)
+}
+
+/// **内建下标读**（不派发用户 `__getitem__`）：`dict.__getitem__`／`list.__getitem__` 等**原生**
+/// 实现走这里 ✓ —— 否则"用户 `__getitem__` 里调 `dict.__getitem__`"会无限递归 ✗（round 114 实测）。
+pub(crate) fn subscript_get_inner(
     instance: &Instance,
     container: NonNull<Header>,
     key: NonNull<Header>,
@@ -291,6 +336,32 @@ pub(crate) fn subscript_get(
 
 /// 下标**写**（`STORE_SUBSCR`；`value` 是**新引用**，无论成败都会被接手）。
 pub(crate) fn subscript_set(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    value: NonNull<Header>,
+    opcode: u8,
+) -> Result<(), ExecError> {
+    let container_type = unsafe { container.as_ref() }.ty();
+    // **用户覆写 `__setitem__` 优先**（round 114）：`value` 那份由本函数接手 ⇒ 调用前后都要归还 ✓。
+    if user_overrides_subscript(instance, container_type, "__setitem__") {
+        let outcome = crate::executor::call::call_object_method(
+            instance,
+            container,
+            "__setitem__",
+            &[key, value],
+        );
+        release(instance, value);
+        if let Some(result) = outcome? {
+            release(instance, result);
+        }
+        return Ok(());
+    }
+    subscript_set_inner(instance, container, key, value, opcode)
+}
+
+/// **内建下标写**（不派发用户覆写）：原生 `dict.__setitem__`／`list.__setitem__` 走这里 ✓。
+pub(crate) fn subscript_set_inner(
     instance: &Instance,
     container: NonNull<Header>,
     key: NonNull<Header>,
@@ -497,6 +568,26 @@ pub fn subscript_del(
     key: NonNull<Header>,
     opcode: u8,
 ) -> Result<(), ExecError> {
+    let container_type = unsafe { container.as_ref() }.ty();
+    // **用户覆写 `__delitem__` 优先**（round 114）。
+    if user_overrides_subscript(instance, container_type, "__delitem__") {
+        if let Some(result) =
+            crate::executor::call::call_object_method(instance, container, "__delitem__", &[key])?
+        {
+            release(instance, result);
+        }
+        return Ok(());
+    }
+    subscript_del_inner(instance, container, key, opcode)
+}
+
+/// **内建下标删**（不派发用户覆写）：原生 `dict.__delitem__`／`list.__delitem__` 走这里 ✓。
+pub fn subscript_del_inner(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    opcode: u8,
+) -> Result<(), ExecError> {
     // SAFETY: 两个都是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
 
@@ -635,7 +726,7 @@ pub fn subscript_read(
     container: NonNull<Header>,
     key: NonNull<Header>,
 ) -> Result<NonNull<Header>, ExecError> {
-    subscript_get(instance, container, key, 0)
+    subscript_get_inner(instance, container, key, 0)
 }
 
 /// **`STORE_SUBSCR` 语义**（`pa_settable` 用）：容器 ＋ 键 ＋ 值（值为**借用**，写入时接管新引用）。
