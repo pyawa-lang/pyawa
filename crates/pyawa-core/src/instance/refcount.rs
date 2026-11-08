@@ -100,10 +100,35 @@ impl Instance {
 
 impl Instance {
     /// **引用事件跟踪**（round 90，诊断；`PYAWA_REF_TRACE=<类型名[,类型名]>`）：给该类型的对象
-    /// 每次 incref／decref 打一行（**现场** = 当前 Python 站点）。用来找"**不在 GC 可达图里的引用**"
-    /// （A 族 `test_free_after_iterating` 的环外引用 ✓）。默认零输出（`OnceLock` 缓存环境变量 ✓）。
+    /// 每次 incref／decref 打一行（**现场** = 当前 Python 站点）。`PYAWA_REF_TRACE_CLASS=<类名>`
+    /// （round 99）另按**类型对象自己的名字**跟踪（盯"类对象本身"而不是它的实例 ✓）。
+    /// 默认零输出（`OnceLock` 缓存环境变量 ✓）。
     pub(crate) fn ref_trace_matches(&self, ptr: *mut Header) -> bool {
         static TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+        static CLASS_TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+        // **按类自己的名字**：目标是注册表里的类型对象 ⇒ 用 `TypeObject::name` ✓。
+        if let Some(class_targets) = CLASS_TARGET.get_or_init(|| {
+            std::env::var("PYAWA_REF_TRACE_CLASS").ok().map(|text| {
+                text.split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+        }) {
+            let is_type = self
+                .types
+                .borrow()
+                .iter()
+                .any(|entry| entry.as_ptr() as usize == ptr as usize);
+            if is_type {
+                // SAFETY: 刚确认 ptr 是注册表里的类型对象（存活）。
+                let type_name = unsafe { &*ptr.cast::<crate::TypeObject>() }.name();
+                if class_targets.iter().any(|target| target == "*" || target == type_name) {
+                    return true;
+                }
+            }
+        }
         let Some(targets) = TARGET.get_or_init(|| {
             std::env::var("PYAWA_REF_TRACE")
                 .ok()
@@ -133,7 +158,10 @@ impl Instance {
     /// 记录被跟踪对象的地址（分配／incref 时调用；只在跟踪开启时有意义）。
     pub(crate) fn ref_trace_record(ptr: *mut Header) {
         const _: () = ();
-        if REF_TRACKED.get().is_none() && std::env::var_os("PYAWA_REF_TRACE").is_none() {
+        if REF_TRACKED.get().is_none()
+            && std::env::var_os("PYAWA_REF_TRACE").is_none()
+            && std::env::var_os("PYAWA_REF_TRACE_CLASS").is_none()
+        {
             return;
         }
         let set = REF_TRACKED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
