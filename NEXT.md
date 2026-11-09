@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`808a25c`（round 164：`set.clear()` 真 bug 修＋`[gc-marked]` 链增强；weakref 残留根帧＝check_threaded_weak_dict_copy，经 AttributeError traceback 可达）
+- **HEAD**：`628b495`（round 165：新诊断口 `PYAWA_GC_REVERSE`/`PYAWA_EXC_SITE`；钉住 weakref 残留＝每颗被吞 AttributeError 泄漏 +1 引用，其 traceback 拖测试帧）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：约 **75–80 ok / 397 ≈ 19–20%**（10-31 是 41／10.3%）；超时 1–2（基本只剩 `test_weakref`）
@@ -14,7 +14,7 @@
   **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
 - **未修 bug ＋ 判据**（如实 ✓）：
   - **编译器**：推导式内嵌生成器表达式引用推导变量 **round 162 已接线**（隐藏形参法 ✓；判据见台账 round 162 §2）
-  - `test_weakref` **169 s** ✗（唯一超时；已修：dict 删除 O(1)、SkipTest 不挂回溯、分代 GC；剩因＝四连 skip 后 1.48 M live 可达（根帧＝check_threaded_weak_dict_copy，经 keys 列表＋AttributeError traceback；_limbo/_active/pending 排除）⇒ 下一轮查 AttributeError 持有者）
+  - `test_weakref` **169 s** ✗（唯一超时；已修：dict 删除 O(1)、SkipTest 不挂回溯、分代 GC；剩因＝每颗被吞 AttributeError **泄漏 +1 引用**（rc=1 ext=1、无候选父；位点 WeakValueDictionary.update 等）⇒ traceback 拖测试帧 ⇒ 1.48 M live；下一轮按位点抓吞异常路径）
   - 形参所有权／引用泄漏 ✗（台账 13 处；三版方案已撤回）
   - 日常面：`json.load(f)` ✗（`StopIteration`）· `defaultdict` ✗ · `match` 同行 suite ✗ · `urllib.request` ✗
   - `P3-42` KeyError 族／特殊方法派发；`P3-35` 剩余 5 形态；`P3-29`／`P3-37` 剩余面

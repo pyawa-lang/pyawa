@@ -233,6 +233,9 @@ pub struct Instance {
     modules: RefCell<Option<NonNull<Header>>>,
     /// **BC-60** ②：**本实例**的当前异常状态（正在处理的异常）——**禁止**进程级全局。
     exception_state: RefCell<Vec<NonNull<Header>>>,
+    /// **异常分配位点**（round 165 诊断，`PYAWA_EXC_SITE=1` 才记）：对象地址 ⇒ 抛出位点。
+    /// 用来追"GC 根里的异常是谁抛的"（`[gc-reverse]` 已排除候选持有者 ⇒ 只能看来源 ✓）。
+    exception_sites: RefCell<std::collections::HashMap<usize, String>>,
     /// 诊断（round 62，`PYAWA_EXC_INFO_DEBUG=1`）：与 `exception_state` 同形的**压入现场**表 ✓。
     exception_state_sites: RefCell<Vec<String>>,
     /// `__build_class__`（引导期建好；见 [`Instance::build_class`]）。

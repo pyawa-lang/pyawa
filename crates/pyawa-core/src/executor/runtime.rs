@@ -491,6 +491,10 @@ pub(crate) fn unsupported_operand(
 
 /// 抛一个异常：记在实例上（借它保活）并交出错误（`BC-60` ②）。
 pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
+    // **异常分配位点诊断**（round 165）：`PYAWA_EXC_SITE=1` 时记下"哪个位点抛的"。
+    if std::env::var_os("PYAWA_EXC_SITE").is_some() {
+        instance.record_exception_site(exception, instance.current_site());
+    }
     // **两份所有权**：实例状态一份、`Err(Raised)` 一份——所以这里必须为状态**新增**一份。
     // 少了这一步就是双重所有权：状态与错误各自以为"我持有它"，先释放的一方让另一方悬垂
     // （症状：调用方拿到 `Err(Raised)` 里的异常对象时读到已释放内存）。

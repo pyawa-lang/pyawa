@@ -446,10 +446,21 @@ impl Instance {
             .map(|candidate| unsafe { candidate.as_ref() }.refcount())
             .collect();
 
-        for candidate in candidates {
+        // **反向边探针**（round 165，`PYAWA_GC_REVERSE=1`）：记"谁引用了我"（首个候选父）；
+        // 用来追"外部计数 >0 却找不到候选父"的对象（= 被**非候选**持有者引用）。
+        let reverse = std::env::var_os("PYAWA_GC_REVERSE").is_some();
+        let mut parent_of: Vec<Option<usize>> = if reverse {
+            vec![None; candidates.len()]
+        } else {
+            Vec::new()
+        };
+        for (parent_position, candidate) in candidates.iter().enumerate() {
             for child in self.children_of(*candidate) {
                 if let Some(&position) = index.get(&(child as usize)) {
                     external[position] = external[position].saturating_sub(1);
+                    if reverse && parent_of[position].is_none() {
+                        parent_of[position] = Some(parent_position);
+                    }
                 }
             }
         }
@@ -464,6 +475,41 @@ impl Instance {
                 if !marked[position] {
                     stack.push(position);
                 }
+            }
+        }
+        if reverse {
+            let mut shown = 0usize;
+            for position in &stack {
+                // SAFETY: 候选存活。
+                let header = unsafe { candidates[*position].as_ref() };
+                let ty = header.ty();
+                let name = unsafe { ty.as_ref() }.name();
+                if name != "AttributeError" || shown >= 12 {
+                    continue;
+                }
+                shown += 1;
+                let mut chain: Vec<String> = Vec::new();
+                let mut at = *position;
+                for _ in 0..6 {
+                    match parent_of[at] {
+                        Some(parent) => {
+                            let pty = unsafe { candidates[parent].as_ref() }.ty();
+                            chain.push(unsafe { pty.as_ref() }.name().to_owned());
+                            at = parent;
+                        }
+                        None => {
+                            chain.push("<非候选持有者>".to_owned());
+                            break;
+                        }
+                    }
+                }
+                let header = unsafe { candidates[*position].as_ref() };
+                eprintln!(
+                    "[gc-reverse] AttributeError rc={} ext={} parents={chain:?} site={:?}",
+                    header.refcount(),
+                    external[*position],
+                    self.exception_site_of(candidates[*position])
+                );
             }
         }
         // **根帧诊断**（round 159）：哪些 frame 还是根（>0 外部引用）⇒ 打出 code 名。
@@ -554,7 +600,7 @@ impl Instance {
                 // SAFETY: 候选存活。
                 let ty = unsafe { candidate.as_ref() }.ty();
                 let name = unsafe { ty.as_ref() }.name().to_owned();
-                if matches!(name.as_str(), "generator" | "cell" | "function" | "DummyKey") && marked[position] {
+                if matches!(name.as_str(), "generator" | "cell" | "function" | "DummyKey" | "AttributeError" | "Thread") && marked[position] {
                     let mut chain: Vec<String> = Vec::new();
                     let mut at = position;
                     for _ in 0..8 {

@@ -393,6 +393,23 @@ impl Instance {
         }
     }
 
+    /// **记异常分配位点**（round 165 诊断）。
+    pub fn record_exception_site(&self, exception: NonNull<Header>, site: String) {
+        let mut sites = self.exception_sites.borrow_mut();
+        if sites.len() > 100_000 {
+            return;
+        }
+        sites.insert(exception.as_ptr() as usize, site);
+    }
+
+    /// 读异常分配位点（round 165 诊断）。
+    pub fn exception_site_of(&self, exception: NonNull<Header>) -> Option<String> {
+        self.exception_sites
+            .borrow()
+            .get(&(exception.as_ptr() as usize))
+            .cloned()
+    }
+
     /// **按代显式回收**（round 148）：`full=false`（`gc.collect(0)`／`collect(1)`）时跳过孤儿类型回收 ✓。
     pub fn collect_explicit_generation(&self, full: bool) -> usize {
         let was_explicit = self.gc_explicit.get();
