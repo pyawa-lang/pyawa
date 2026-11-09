@@ -380,6 +380,23 @@ impl Instance {
         roots
     }
 
+    /// **模块对象也是根**（round 126）：`sys.modules` 对模块对象的引用是否被计数取决于导入实现；
+    /// 若那份引用没计数，模块对象（AttributeObject）及其命名空间 dict 会被判不可达 ⇒ 模块里的**类**
+    /// 会被判孤儿 ⇒ 误回收（实测 `test_dict` 下 argparse/unittest 的类被大量回收 ✗）。参照口径：
+    /// 模块由 `sys.modules` 持有 ⇒ 恒可达；这里把每个模块对象标根 ✓（其 dict/值随之可达 ✓）。
+    fn module_roots(&self) -> Vec<usize> {
+        let mut roots = Vec::new();
+        let Some(modules) = self.modules() else {
+            return roots;
+        };
+        if let Some(entries) = self.dict_entries(modules) {
+            for (_key, value) in entries {
+                roots.push(value.as_ptr() as usize);
+            }
+        }
+        roots
+    }
+
     /// **OM-29**／**OM-30**：求不可达的跟踪对象。
     ///
     /// 两步：先按"引用计数 − 来自跟踪对象内部的引用数"找出根（外部引用 > 0），
@@ -412,8 +429,10 @@ impl Instance {
 
         let mut marked = vec![false; candidates.len()];
         let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
-        // **解释器栈上的帧是根**（round 125）✓。
-        for address in self.interpreter_stack_roots() {
+        // **解释器栈上的帧 ＋ sys.modules 里的模块对象**都是根（round 125／126）✓。
+        let mut extra_roots = self.interpreter_stack_roots();
+        extra_roots.extend(self.module_roots());
+        for address in extra_roots {
             if let Some(&position) = index.get(&address) {
                 if !marked[position] {
                     stack.push(position);
@@ -545,8 +564,10 @@ impl Instance {
         }
         let mut marked = vec![false; candidates.len()];
         let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
-        // **解释器栈上的帧是根**（round 125）✓。
-        for address in self.interpreter_stack_roots() {
+        // **解释器栈上的帧 ＋ sys.modules 里的模块对象**都是根（round 125／126）✓。
+        let mut extra_roots = self.interpreter_stack_roots();
+        extra_roots.extend(self.module_roots());
+        for address in extra_roots {
             if let Some(&position) = index.get(&address) {
                 if !marked[position] {
                     stack.push(position);
