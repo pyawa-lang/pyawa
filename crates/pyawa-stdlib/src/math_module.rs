@@ -690,10 +690,30 @@ fn fsum_native(
         return Err(instance.raise_builtin_error("TypeError", "fsum() takes exactly one argument (0 given)"));
     };
     let mut sum = 0.0f64;
-    for value in instance.collect_iterable(*iterable)? {
-        let number = real_argument(instance, value)?;
-        sum += number;
+    // **走迭代器协议**（round 134 重试）：`statistics.py` 的 `fsum(map(...))`／生成器都用它 ✓。
+    let iterator = instance.iter_object(*iterable)?;
+    loop {
+        let next = instance.advance_iterator(iterator);
+        match next {
+            Ok(Some(value)) => {
+                let outcome = real_argument(instance, value);
+                instance.release(value);
+                match outcome {
+                    Ok(number) => sum += number,
+                    Err(error) => {
+                        instance.release(iterator);
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
     }
+    instance.release(iterator);
     Ok(instance.new_float(sum))
 }
 
@@ -757,18 +777,65 @@ fn sumprod_native(
             &format!("sumprod() takes exactly 2 arguments ({} given)", args.len()),
         ));
     }
-    let left = instance.collect_iterable(args[0])?;
-    let right = instance.collect_iterable(args[1])?;
-    if left.len() != right.len() {
-        return Err(instance.raise_builtin_error(
-            "ValueError",
-            "Inputs are not the same length",
-        ));
-    }
+    // **迭代器协议**（round 134 重试）：`statistics.py:682` 的
+    // `sumprod((xi - xbar for xi in x), (yi - ybar for yi in y))` ✓。
+    let left_iterator = instance.iter_object(args[0])?;
+    let right_iterator = instance.iter_object(args[1])?;
     let mut total = 0.0f64;
-    for (pair_left, pair_right) in left.into_iter().zip(right) {
-        total += real_argument(instance, pair_left)? * real_argument(instance, pair_right)?;
+    loop {
+        let left = match instance.advance_iterator(left_iterator) {
+            Ok(value) => value,
+            Err(error) => {
+                instance.release(left_iterator);
+                instance.release(right_iterator);
+                return Err(error);
+            }
+        };
+        let right = match instance.advance_iterator(right_iterator) {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(left) = left {
+                    instance.release(left);
+                }
+                instance.release(left_iterator);
+                instance.release(right_iterator);
+                return Err(error);
+            }
+        };
+        let (Some(left_value), Some(right_value)) = (left, right) else {
+            if let Some(left) = left {
+                instance.release(left);
+            }
+            if let Some(right) = right {
+                instance.release(right);
+            }
+            // **两个迭代器只在"循环出口/错误出口"释放一次**（round 134 真双放修 ✗）：先前这里先释放、
+            // `break` 后又走到循环后的释放 ⇒ 同一迭代器被放两次（`PYAWA_DANGLING=1` 实测悬垂 ✓）。
+            if left.is_none() && right.is_none() {
+                break;
+            }
+            instance.release(left_iterator);
+            instance.release(right_iterator);
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "Inputs are not the same length",
+            ));
+        };
+        let left_number = real_argument(instance, left_value);
+        let right_number = real_argument(instance, right_value);
+        instance.release(left_value);
+        instance.release(right_value);
+        match (left_number, right_number) {
+            (Ok(left_number), Ok(right_number)) => total += left_number * right_number,
+            (Err(error), _) | (_, Err(error)) => {
+                instance.release(left_iterator);
+                instance.release(right_iterator);
+                return Err(error);
+            }
+        }
     }
+    instance.release(left_iterator);
+    instance.release(right_iterator);
     Ok(instance.new_float(total))
 }
 
