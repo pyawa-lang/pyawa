@@ -91,6 +91,15 @@ impl Instance {
             self.reclaim_orphan_user_types();
         }
         let unreachable = self.find_unreachable();
+        if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some() && !unreachable.is_empty() {
+            let mut names: Vec<String> = Vec::new();
+            for header in &unreachable {
+                // SAFETY: 候选存活。
+                let ty = unsafe { header.as_ref() }.ty();
+                names.push(unsafe { ty.as_ref() }.name().to_owned());
+            }
+            eprintln!("[gc-unreachable] {} {:?}", unreachable.len(), names);
+        }
         self.gc_alloc_count.set(0);
         if unreachable.is_empty() {
             return 0;
@@ -380,6 +389,26 @@ impl Instance {
 
         let mut marked = vec![false; candidates.len()];
         let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
+        if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some() {
+            for position in &stack {
+                // SAFETY: 候选存活。
+                let ty = unsafe { candidates[*position].as_ref() }.ty();
+                eprintln!(
+                    "[gc-root] {:p} type={} rc={} external_after={}",
+                    candidates[*position].as_ptr(),
+                    unsafe { ty.as_ref() }.name(),
+                    unsafe { candidates[*position].as_ref() }.refcount(),
+                    external[*position]
+                );
+            }
+        }
+        let debug_roots = std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some();
+        // **只在诊断模式下建"谁标记了我"表**（默认零开销 ✓）。
+        let mut marked_from: Vec<Option<usize>> = if debug_roots {
+            vec![None; candidates.len()]
+        } else {
+            Vec::new()
+        };
         while let Some(position) = stack.pop() {
             if marked[position] {
                 continue;
@@ -388,8 +417,30 @@ impl Instance {
             for child in self.children_of(candidates[position]) {
                 if let Some(&child_position) = index.get(&(child as usize)) {
                     if !marked[child_position] {
+                        if debug_roots && marked_from[child_position].is_none() {
+                            marked_from[child_position] = Some(position);
+                        }
                         stack.push(child_position);
                     }
+                }
+            }
+        }
+        if debug_roots {
+            for (position, candidate) in candidates.iter().enumerate() {
+                // SAFETY: 候选存活。
+                let ty = unsafe { candidate.as_ref() }.ty();
+                let name = unsafe { ty.as_ref() }.name().to_owned();
+                if matches!(name.as_str(), "generator" | "cell" | "function") && marked[position] {
+                    let mut chain: Vec<String> = Vec::new();
+                    let mut at = position;
+                    for _ in 0..8 {
+                        let Some(previous) = marked_from[at] else { break };
+                        let pty = unsafe { candidates[previous].as_ref() }.ty();
+                        let pname = unsafe { pty.as_ref() }.name().to_owned();
+                        chain.push(pname);
+                        at = previous;
+                    }
+                    eprintln!("[gc-marked] {name} chain={chain:?}");
                 }
             }
         }
