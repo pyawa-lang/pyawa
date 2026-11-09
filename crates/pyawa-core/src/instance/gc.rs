@@ -516,6 +516,12 @@ impl Instance {
         }
         let mut marked = vec![false; candidates.len()];
         let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
+        let debug_mark = std::env::var_os("PYAWA_MARK_DEBUG").is_some();
+        let mut marked_from: Vec<Option<usize>> = if debug_mark {
+            vec![None; candidates.len()]
+        } else {
+            Vec::new()
+        };
         while let Some(position) = stack.pop() {
             if marked[position] {
                 continue;
@@ -543,8 +549,87 @@ impl Instance {
                 let child_address = child as *mut Header as usize;
                 if let Some(&child_position) = index.get(&child_address) {
                     if !marked[child_position] {
+                        if debug_mark && marked_from[child_position].is_none() {
+                            marked_from[child_position] = Some(position);
+                        }
                         stack.push(child_position);
                     }
+                }
+            }
+        }
+        if debug_mark {
+            for (position, candidate) in candidates.iter().enumerate() {
+                // SAFETY: 候选存活。
+                let ty = unsafe { candidate.as_ref() }.ty();
+                let name = unsafe { ty.as_ref() }.name().to_owned();
+                if name == "A" && marked[position] {
+                    let mut chain: Vec<String> = Vec::new();
+                    let mut at = position;
+                    let mut root: Option<usize> = None;
+                    for _ in 0..10 {
+                        let Some(previous) = marked_from[at] else { break };
+                        let pty = unsafe { candidates[previous].as_ref() }.ty();
+                        let pname = unsafe { pty.as_ref() }.name().to_owned();
+                        chain.push(pname);
+                        root = Some(previous);
+                        at = previous;
+                    }
+                    let root_info = root
+                        .map(|root| {
+                            // SAFETY: 候选存活。
+                            let header = unsafe { candidates[root].as_ref() };
+                            let pty = header.ty();
+                            format!(
+                                "{:p}:{}:rc={}",
+                                candidates[root].as_ptr(),
+                                unsafe { pty.as_ref() }.name(),
+                                header.refcount()
+                            )
+                        })
+                        .unwrap_or_else(|| "none".to_owned());
+                    let mut root_referrers: Vec<String> = Vec::new();
+                    if let Some(root) = root {
+                        let root_address = candidates[root].as_ptr() as usize;
+                        for referrer in self.gc_headers() {
+                            for child in self.children_of(referrer) {
+                                if child as usize == root_address {
+                                    let referrer_type = unsafe { referrer.as_ref() }.ty();
+                                    let referrer_name =
+                                        unsafe { referrer_type.as_ref() }.name().to_owned();
+                                    if referrer_name == "cell" {
+                                        let cell = unsafe {
+                                            &*referrer.as_ptr().cast::<crate::cell::CellObject>()
+                                        };
+                                        let value_info = cell
+                                            .value()
+                                            .map(|value| {
+                                                let vty = unsafe { value.as_ref() }.ty();
+                                                format!(
+                                                    "{:p}:{}",
+                                                    value.as_ptr(),
+                                                    unsafe { vty.as_ref() }.name()
+                                                )
+                                            })
+                                            .unwrap_or_else(|| "none".to_owned());
+                                        root_referrers.push(format!(
+                                            "{:p}:cell(value={value_info})",
+                                            referrer.as_ptr()
+                                        ));
+                                    } else {
+                                        root_referrers.push(format!(
+                                            "{:p}:{referrer_name}",
+                                            referrer.as_ptr()
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    eprintln!(
+                        "[mark] {name} at {candidate:p} chain={chain:?} root={root_info} \
+                         root_referrers=[{}]",
+                        root_referrers.join(",")
+                    );
                 }
             }
         }
@@ -624,6 +709,10 @@ impl Instance {
                     header.refcount(),
                     referenced_by_types.contains(&address),
                     !reachable
+                );
+                eprintln!(
+                    "[orphan-scan] {name} registered_instances={}",
+                    self.user_instances_of(*ty).len()
                 );
                 if header.refcount() != 1 || !reachable {
                     // **反查"谁引用它"**（round 119 诊断）：扫全部 gc 候选的 children ＋ 其它类型的字典。
@@ -743,7 +832,20 @@ impl Instance {
             // 无法证明不可达"的情形 ✓）⇒ 保守判"可能还活着"，**不回收该类型** ✓。
             let mut all_instances_unreachable = true;
             for instance in self.user_instances_of(*ty) {
-                if !unreachable.contains(&(instance.as_ptr() as usize)) {
+                let instance_address = instance.as_ptr() as usize;
+                // SAFETY: 登记表里的实例按"活"登记（释放时注销 ✓）。
+                let instance_header = unsafe { instance.as_ref() };
+                let tracked = instance_header.has_flag(flags::GC_TRACKED);
+                let in_unreachable = unreachable.contains(&instance_address);
+                if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+                    eprintln!(
+                        "[orphan-instance] ty={:p} inst={instance_address:#x} rc={} tracked={}                          in_unreachable={in_unreachable}",
+                        ty.as_ptr(),
+                        instance_header.refcount(),
+                        tracked
+                    );
+                }
+                if !in_unreachable {
                     all_instances_unreachable = false;
                     break;
                 }

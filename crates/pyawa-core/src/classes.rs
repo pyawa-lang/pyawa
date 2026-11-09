@@ -180,6 +180,7 @@ pub unsafe fn build_class_native(
                 instance.release(method);
                 let namespace = outcome?;
                 crate::executor::run_class_body(instance, body, namespace)?;
+                pop_classdictcell(instance, namespace);
                 return finish_callable_metaclass(
                     instance,
                     meta,
@@ -259,6 +260,14 @@ pub unsafe fn build_class_native(
 
     // 跑类体：它的局部变量就是这个命名空间（`LOAD_NAME`／`STORE_NAME`）
     crate::executor::run_class_body(instance, body, namespace)?;
+    // **去掉 `__classdictcell__`**（round 120，照参照 `type_new` 口径）：类体收尾会把
+    // `__classdict__` 这个 cell 也挂进命名空间（本层 `compile.rs` 实测产物 ✓），而**cell 里存的就是
+    // 命名空间本身** ⇒ `dict ↔ cell` **自环** ✓；参照在 `type.__new__` 里把它 pop 掉 ⇒ 命名空间
+    // 不再持有 cell。本层用户类型不 dealloc ⇒ 这个自环让**类字典的 rc 永远多 1** ⇒ 动态可达性把
+    // 类字典当**根** ⇒ 穿过类字典的环（`__del__` 闭包 → 生成器 → 实例）永远收不掉 ✗
+    //（`test_userlist.test_free_after_iterating` ✓；round 120 实测 `root=dict rc=2`、
+    //  `root_referrers=[cell(value=dict)]` 正是它 ✓）。
+    pop_classdictcell(instance, namespace);
 
     // **PEP 560：基类先解析** ✓（task-24 尾件 ✓）：自定义元类与建类核心都收**解析后**的基类 ✓
     // （参照实测 `class SupportsAbs[T](Protocol)` 的 `_ProtocolMeta.__new__` 只收到 `(Protocol,)` ✓，
@@ -705,6 +714,16 @@ pub fn build_class_from_parts(
 
 /// **带类关键字**的建类核心（`__build_class__`／`type.__new__` 两条真路用它 ✓）：
 /// `class_keywords`（去掉 `metaclass` 之后 ✓）转交 `__init_subclass__(**kwds)` ✓。
+/// **把 `__classdictcell__` 从类命名空间里摘掉**（round 120，照参照 `type_new`）：本层类体收尾会把
+/// `__classdict__` cell 挂进命名空间，而 cell 的载荷就是命名空间本身 ⇒ `dict ↔ cell` 自环 ✓。
+/// 参照在 `type.__new__` 里 pop（`C.__dict__` 里看不到它 ✓）；这里同口径，**顺带释放字典交出的那份** ✓。
+fn pop_classdictcell(instance: &Instance, namespace: NonNull<Header>) {
+    let key = instance.new_str("__classdictcell__");
+    instance.dict_remove_key(namespace, key);
+    // SAFETY: key 是上面刚造的新引用，`dict_remove_key` 借用查找、不接手。
+    unsafe { instance.release_object(key.as_ptr()) };
+}
+
 pub fn build_class_from_parts_with_keywords(
     instance: &Instance,
     name: String,
