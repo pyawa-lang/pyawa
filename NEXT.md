@@ -6,10 +6,10 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`45b0485`（round 166：`dir(set)`/`dir(frozenset())` 与 CPython 逐名一致 57/44；`set.clear()` 已接）
+- **HEAD**：`f2faa20`（round 167：全量 survey **78/69/245/5**（timeout 7⇒5）；补 Lib/test/tokenizedata 数据包）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
-- **官方套件**（报告级，会漂 ✓）：约 **75–80 ok / 397 ≈ 19–20%**（10-31 是 41／10.3%）；超时 1–2（基本只剩 `test_weakref`）
+- **官方套件**（报告级，会漂 ✓）：**78 ok / 69 unimplemented / 245 runtime / 5 timeout**（round 167 全量 survey）
 - **内存类硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）⇒ `target/memdangle_survey.tsv`；
   **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
 - **未修 bug ＋ 判据**（如实 ✓）：
