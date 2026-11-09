@@ -169,6 +169,8 @@ impl Instance {
         name: &str,
         value: NonNull<Header>,
     ) -> Result<(), ExecError> {
+        // **`f_trace` 写帧**要维护本地追踪开关（round 181；与 `attribute_write` 同一处真相 ✓）。
+        crate::executor::attribute::maintain_frame_trace(self, object, name, value);
         // **只有"类型自己定义了 `__setattr__`"才走协议** ✓（第 715 轮 ✗ 修）：`object` 自己也有一份
         // `__setattr__` ✓ ⇒ 若不加这道判据，**每一次**普通赋值都会绕进协议 ✗ ⇒ 把
         // `instance_attribute_set` 里那套**数据描述符 `__set__`／类型对象命名空间／引用还账**全绕过去 ✗

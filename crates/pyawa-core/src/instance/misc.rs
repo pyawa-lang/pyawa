@@ -307,6 +307,16 @@ impl Instance {
         self.getattribute_dispatching.set(value);
     }
 
+    /// **本地追踪回调执行中**（round 181）。
+    pub fn trace_dispatching(&self) -> bool {
+        self.trace_dispatching.get()
+    }
+
+    /// 设置追踪回调执行标志。
+    pub fn set_trace_dispatching(&self, value: bool) {
+        self.trace_dispatching.set(value);
+    }
+
     /// **类型对象 `__text_signature__` 旁表**（round 87）。
     pub fn set_type_text_signature(&self, ty: NonNull<Header>, signature: &'static str) {
         self.type_text_signatures

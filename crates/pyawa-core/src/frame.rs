@@ -84,6 +84,11 @@ py_object! {
         /// 参照实现里"抛在挂起点"就是这条路径：恢复前把异常放这儿，`execute` 一恢复就按
         /// **本帧自己的**异常表派发它（所以生成器体里的 `try/except` 能接住它）。
         pending_raise: RefCell<Option<NonNull<Header>>>,
+        /// **本地追踪是否启用**（round 181）：`f_trace` 被设成**可调用**值时置位 ✓
+        /// （`execute` 主循环每条指令读一次 `Cell<bool>`，未启用时零额外分配 ✓）。
+        trace_active: Cell<bool>,
+        /// 上次已下发 `'line'` 事件的行号（`-1` ⇒ 还没发过）。
+        trace_last_line: Cell<i64>,
         /// 值栈上界（从 code object 抄一份，避免每次入栈都借 `code`）。
         stacksize: usize,
         /// 是否处于挂起状态（`BC-47`）。
@@ -216,6 +221,8 @@ impl Frame {
             instruction_pointer: Cell::new(0),
             exception_cursor: Cell::new(0),
             pending_raise: RefCell::new(None),
+            trace_active: Cell::new(false),
+            trace_last_line: Cell::new(-1),
             resume: RefCell::new(None),
             stacksize: info.stacksize(),
             suspended: Cell::new(false),
@@ -558,6 +565,29 @@ impl Frame {
 
     /// **BC-47**：从恢复点继续——指令指针、值栈镜像、异常表游标一并还原。
     /// 放一个"恢复时要先抛"的异常（**新引用**，由帧接手；返回被顶下来的旧值）。
+    /// 本地追踪是否启用（借用）。
+    pub fn trace_active(&self) -> bool {
+        self.trace_active.get()
+    }
+
+    /// 设置本地追踪开关。
+    pub fn set_trace_active(&self, active: bool) {
+        self.trace_active.set(active);
+        if !active {
+            self.trace_last_line.set(-1);
+        }
+    }
+
+    /// 上次下发 `'line'` 事件的行号。
+    pub fn trace_last_line(&self) -> i64 {
+        self.trace_last_line.get()
+    }
+
+    /// 记下已下发的行号。
+    pub fn set_trace_last_line(&self, line: i64) {
+        self.trace_last_line.set(line);
+    }
+
     pub fn set_pending_raise(
         &self,
         exception: Option<NonNull<Header>>,

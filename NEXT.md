@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`bc844e6`（round 180：全量 survey 79/68/245/5；tools named runner 补父包属性）
+- **HEAD**：`8e614bb`（round 181：帧本地追踪 'line' 事件驱动接上（f_trace 可调用值 ⇒ 行号变化回调）；test_frame 10F/7E 不退）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

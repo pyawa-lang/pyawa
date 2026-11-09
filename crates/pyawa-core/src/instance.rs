@@ -159,6 +159,8 @@ pub struct Instance {
     user_types: RefCell<Vec<NonNull<Header>>>,
     /// **`__getattribute__` 派发守卫**（round 87）：用户覆写走钩子期间置位，防止默认实现递归 ✓。
     getattribute_dispatching: Cell<bool>,
+    /// **本地追踪回调执行中**（round 181）：防追踪函数自己被追踪（递归）。
+    trace_dispatching: Cell<bool>,
     /// **类型对象的 `__text_signature__` 旁表**（round 87）：`staticmethod`/`classmethod`/`property`
     /// 一类内建类在参照里有非空签名（`(function, /)` 等）——`inspect.signature(<类>)` 的类分支
     /// 会先读"MRO 里第一个非空 `base.__text_signature__`" ✓。

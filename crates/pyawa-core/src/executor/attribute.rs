@@ -740,12 +740,40 @@ pub fn attribute_optional(
 }
 
 /// **`OM-11` 的 `setattr` 语义**（`pa_setfield` 用）：对象 ＋ 名字 ＋ 值（值为**借用**）。
+/// **`f_trace` 写到帧上时维护"本地追踪开关"**（round 181）：`execute` 主循环每条指令只读
+/// 一个 `Cell<bool>` ✓（否则每条指令查挂载字典 ⇒ 热路径变慢 ✗）。`attribute_write` 与
+/// `Instance::set_attribute_with_protocol` 两处入口都调它（一处真相 ✓）。
+pub(crate) fn maintain_frame_trace(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    value: NonNull<Header>,
+) {
+    if name != "f_trace" {
+        return;
+    }
+    let Some(frame_type) = instance.type_named("frame") else {
+        return;
+    };
+    if instance.type_of(object) != frame_type {
+        return;
+    }
+    // SAFETY: 类型刚确认是 frame，对象存活。
+    let frame = unsafe { &*object.as_ptr().cast::<crate::frame::Frame>() };
+    let enabled = value != instance.singletons().none()
+        && attribute_lookup_swallowing(instance, value, "__call__").is_some();
+    frame.set_trace_active(enabled);
+}
+
 pub fn attribute_write(
     instance: &Instance,
     object: NonNull<Header>,
     name: &str,
     value: NonNull<Header>,
 ) -> Result<(), ExecError> {
+    // **`f_trace` 写到帧上时顺手维护"本地追踪开关"**（round 181）：`execute` 主循环每条指令
+    // 只读一个 `Cell<bool>` ✓（否则要每条指令查挂载字典 ⇒ 热路径变慢 ✗）。
+    maintain_frame_trace(instance, object, name, value);
     // SAFETY: 调用方保证 value 存活；属性表要自己那份。
     unsafe { instance.incref_object(value.as_ptr()) };
     instance_attribute_set(instance, object, name, value, 0)

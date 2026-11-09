@@ -1734,6 +1734,62 @@ fn load_deref_value(
     Ok(value)
 }
 
+/// **本地追踪的 `'line'` 事件**（round 181）：行号变化时调帧上 `f_trace` 回调
+/// （`trace(frame, 'line', None)`；参照的本地追踪只对**设了 `f_trace` 的那一帧**生效 ✓）。
+///
+/// 递归保护：回调执行期间不再下发事件（`trace_dispatching`），防追踪函数自己被追。
+fn trace_line_event<'a>(
+    instance: &'a Instance,
+    frame: &Owned<'a, Frame>,
+    code: &CodeObject,
+) -> Result<(), ExecError> {
+    let line = line_at_offset(code, frame.get().instruction_pointer()) as i64;
+    if line == frame.get().trace_last_line() {
+        return Ok(());
+    }
+    if instance.trace_dispatching() {
+        return Ok(());
+    }
+    // `f_trace` 在**挂载实例字典**里（round 179 的口径 ✓）。
+    // SAFETY: frame 由调用方持有，存活。
+    // SAFETY: frame 由调用方持有，存活。
+    let header = unsafe { frame.as_ptr().cast::<Header>().as_ref() };
+    let Some(trace) = header
+        .instance_dict()
+        .and_then(|dict| instance.dict_get(dict, "f_trace"))
+    else {
+        return Ok(());
+    };
+    // 非可调用值（`test_lineno_with_tracing` 的 `f_trace = True`）⇒ 不发事件 ✓
+    // （`trace_active` 只在可调用时置位，这里再守一次，防"设了之后又被换成不可调用值"）。
+    if crate::executor::attribute::attribute_lookup_swallowing(instance, trace, "__call__").is_none() {
+        return Ok(());
+    }
+    frame.get().set_trace_last_line(line);
+    let frame_value = frame.as_ptr().cast::<Header>();
+    let event = instance.new_str("line");
+    // 参照的本地追踪回调签名是 `trace(frame, event, arg)` ✓（arg 对 `'line'` 事件是 `None` ✓）。
+    let argument = instance.retain(instance.singletons().none());
+    instance.set_trace_dispatching(true);
+    let result = crate::executor::call::call_callable(
+        instance,
+        trace,
+        None,
+        vec![instance.retain(frame_value), event, argument],
+        Vec::new(),
+        0,
+    );
+    instance.set_trace_dispatching(false);
+    match result {
+        Ok(value) => {
+            // SAFETY: 返回值是本函数的新引用。
+            unsafe { instance.release_object(value.as_ptr()) };
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub fn execute<'a>(
     instance: &'a Instance,
     frame: &Owned<'a, Frame>,
@@ -1788,6 +1844,11 @@ pub fn execute<'a>(
         }
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
+        // **本地追踪的 `'line'` 事件**（round 181）：只有 `f_trace` 被设成可调用值时
+        // `trace_active` 才为真 ⇒ 未启用时只多读一个 `Cell<bool>` ✓（实测开销在噪声内）。
+        if frame.get().trace_active() {
+            trace_line_event(instance, frame, code)?;
+        }
         let oparg = instruction.oparg as usize;
 
         // BC-50：一律按名字分派，**禁止**依赖具体编号
