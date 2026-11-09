@@ -533,6 +533,9 @@ impl Instance {
             .borrow_mut()
             .entry(name.to_owned())
             .or_insert(ptr);
+        // **代数 +1**（round 145）：让"按名字算出来"的缓存（专用迭代器类型集合）在惰性类型
+        // 出现后自动重建 ✓。
+        self.types_generation.set(self.types_generation.get() + 1);
         ptr
     }
 }

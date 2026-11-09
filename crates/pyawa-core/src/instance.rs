@@ -130,6 +130,14 @@ pub struct Instance {
     /// （每次 `builtin_type(instance, …)` 都扫一遍 ⇒ 套件里类型一多就**每次 Python 调用**吃几微秒 ✓）；
     /// 现在 O(1) 哈希查找 ✓（`or_insert` 保持"先登记者优先"，与线性扫的旧口径一致 ✓）。
     types_by_name: RefCell<std::collections::HashMap<String, NonNull<TypeObject>>>,
+    /// **类型注册代数**（round 145）：每登记一个类型 +1 ⇒ 依据"全部内建名"算出来的缓存（如
+    /// [`Instance::is_dedicated_iterator_type`] 的集合）在代数变化时**重建** ✓（惰性建的迭代器
+    /// 类型在首次推进之后才出现时，缓存不能过期 ✗）。
+    types_generation: Cell<usize>,
+    /// **"有专用推进分支"的迭代器类型地址集合**（round 145 性能）：`advance_iterator` 先前对
+    /// **每个**步进都比 20+ 个内建名 ✗（`for` 循环每轮一次 ⇒ 热路径大头）；这里按代数缓存一份
+    /// 集合，普通迭代器（`list_iterator`／`range_iterator` 等）**一次哈希查**就跳过整条链 ✓。
+    dedicated_iterator_types: RefCell<Option<(usize, std::collections::HashSet<usize>)>>,
     /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
     user_type_set: RefCell<std::collections::HashSet<usize>>,
     /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**

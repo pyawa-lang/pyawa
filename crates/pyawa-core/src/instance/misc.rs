@@ -89,6 +89,57 @@ impl Instance {
         self.ast_parser.get()
     }
 
+    /// 这个迭代器类型**有没有专用推进分支**（round 145 性能）：`advance_iterator` 的 20+ 个
+    /// 内建名比较只对链表里的类型有意义；普通迭代器（`list_iterator`／`range_iterator` 等）一次
+    /// 哈希查即可跳到通用路径 ✓。集合按 `types_generation` 缓存（惰性类型后建 ⇒ 自动重建 ✓）。
+    pub(crate) fn is_dedicated_iterator_type(&self, ty: NonNull<crate::TypeObject>) -> bool {
+        const DEDICATED: &[&str] = &[
+            "list_reverseiterator",
+            "reversed",
+            "count",
+            "repeat",
+            "islice",
+            "range_iterator",
+            "longrange_iterator",
+            "product",
+            "permutations",
+            "compress",
+            "combinations",
+            "combinations_with_replacement",
+            "zip",
+            "map",
+            "filter",
+            "zip_longest",
+            "pairwise",
+            "batched",
+            "cycle",
+            "accumulate",
+            "starmap",
+            "takewhile",
+            "dropwhile",
+            "filterfalse",
+            "chain",
+        ];
+        let generation = self.types_generation.get();
+        let mut cache = self.dedicated_iterator_types.borrow_mut();
+        let stale = match cache.as_ref() {
+            Some((cached, _)) => *cached != generation,
+            None => true,
+        };
+        if stale {
+            let mut set = std::collections::HashSet::with_capacity(DEDICATED.len());
+            for name in DEDICATED {
+                if let Some(found) = self.type_named(name) {
+                    set.insert(found.as_ptr() as usize);
+                }
+            }
+            *cache = Some((generation, set));
+        }
+        cache
+            .as_ref()
+            .is_some_and(|(_, set)| set.contains(&(ty.as_ptr() as usize)))
+    }
+
     /// 是否是**用户定义类**的类型对象（round 135：迭代器协议的错误口径按它分档 ✓）。
     pub(crate) fn is_user_type(&self, ty: NonNull<Header>) -> bool {
         self.user_type_set.borrow().contains(&(ty.as_ptr() as usize))

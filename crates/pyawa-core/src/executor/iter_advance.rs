@@ -12,6 +12,88 @@ use crate::IteratorObject;
 use crate::TupleObject;
 use core::ptr::NonNull;
 
+/// **专用推进分支链**（round 145 提取）：只有"有专用分支"的迭代器类型才走这里 ✓
+/// （调用方先用 [`Instance::is_dedicated_iterator_type`] 一次哈希查过滤 ✓ —— 普通
+/// `list_iterator`／`range_iterator` 不再逐个比 20+ 内建名 ✗）。
+fn advance_dedicated(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Option<Result<Option<NonNull<Header>>, ExecError>> {
+    // SAFETY: iterator 是存活对象（调用方已确认是迭代器）✓。
+    let ty = unsafe { iterator.as_ref() }.ty();
+    if ty == builtin_type(instance, "list_reverseiterator") {
+        return Some(advance_list_reverseiterator(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "reversed") {
+        return Some(advance_reversed(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "count") {
+        return Some(advance_count(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "repeat") {
+        return Some(advance_repeat(instance, iterator, opcode));
+    }
+    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
+    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
+    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
+    if ty == builtin_type(instance, "islice")
+        || Some(ty) == instance.type_named("range_iterator")
+        || Some(ty) == instance.type_named("longrange_iterator") {
+        return Some(advance_islice(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "product") {
+        return Some(advance_product(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "permutations") {
+        return Some(advance_permutations(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "compress") {
+        return Some(advance_compress(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "combinations")
+        || ty == builtin_type(instance, "combinations_with_replacement") {
+        return Some(advance_combinations(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "zip") {
+        return Some(advance_zip(instance, iterator, opcode));
+    }
+    // **内建 `map`／`filter`**（`P3-41` round 41）：参照里它们是**惰性迭代器** ✓。
+    if ty == builtin_type(instance, "map") {
+        return Some(advance_map(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "filter") {
+        return Some(advance_filter(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "zip_longest") {
+        return Some(advance_zip_longest(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "pairwise") {
+        return Some(advance_pairwise(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "batched") {
+        return Some(advance_batched(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "cycle") {
+        return Some(advance_cycle(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "accumulate") {
+        return Some(advance_accumulate(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "starmap") {
+        return Some(advance_starmap(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "takewhile")
+        || ty == builtin_type(instance, "dropwhile")
+        || ty == builtin_type(instance, "filterfalse") {
+        return Some(advance_takewhile(instance, iterator, opcode));
+    }
+    if ty == builtin_type(instance, "chain") {
+        return Some(advance_chain(instance, iterator, opcode));
+    }
+    None
+}
+
 pub(crate) fn advance_iterator(
     instance: &Instance,
     iterator: NonNull<Header>,
@@ -70,74 +152,18 @@ pub(crate) fn advance_iterator(
             Err(other) => Err(other),
         };
     }
-    if ty == builtin_type(instance, "list_reverseiterator") {
-        return advance_list_reverseiterator(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "reversed") {
-        return advance_reversed(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "count") {
-        return advance_count(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "repeat") {
-        return advance_repeat(instance, iterator, opcode);
-    }
-    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
-    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
-    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
-    if ty == builtin_type(instance, "islice")
-        || Some(ty) == instance.type_named("range_iterator")
-        || Some(ty) == instance.type_named("longrange_iterator") {
+    // **`range` 迭代器快路径**（round 145 性能）：`for i in range(N)` 是最高频循环 ⇒ 先直接认
+    // 两种 range 迭代器（类型名 O(1) 查）再走专用分支过滤 ✓（先前要过 6+ 个内建名比较 ✗）。
+    if Some(ty) == instance.type_named("range_iterator")
+        || Some(ty) == instance.type_named("longrange_iterator")
+    {
         return advance_islice(instance, iterator, opcode);
     }
-    if ty == builtin_type(instance, "product") {
-        return advance_product(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "permutations") {
-        return advance_permutations(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "compress") {
-        return advance_compress(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "combinations")
-        || ty == builtin_type(instance, "combinations_with_replacement") {
-        return advance_combinations(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "zip") {
-        return advance_zip(instance, iterator, opcode);
-    }
-    // **内建 `map`／`filter`**（`P3-41` round 41）：参照里它们是**惰性迭代器** ✓。
-    if ty == builtin_type(instance, "map") {
-        return advance_map(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "filter") {
-        return advance_filter(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "zip_longest") {
-        return advance_zip_longest(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "pairwise") {
-        return advance_pairwise(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "batched") {
-        return advance_batched(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "cycle") {
-        return advance_cycle(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "accumulate") {
-        return advance_accumulate(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "starmap") {
-        return advance_starmap(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "takewhile")
-        || ty == builtin_type(instance, "dropwhile")
-        || ty == builtin_type(instance, "filterfalse") {
-        return advance_takewhile(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "chain") {
-        return advance_chain(instance, iterator, opcode);
+    // **专用分支过滤**（round 145 性能）：普通迭代器一次哈希查就跳过整条链 ✓。
+    if instance.is_dedicated_iterator_type(ty) {
+        if let Some(result) = advance_dedicated(instance, iterator, opcode) {
+            return result;
+        }
     }
     // **序列协议迭代器**（round 85）：`target[index]`（走**属性通道** ⇒ 用户的 `__getitem__` ✓），
     // `IndexError` ⇒ 耗尽（结果不再交出）✓；下标只在**成功**后推进 ✓。
