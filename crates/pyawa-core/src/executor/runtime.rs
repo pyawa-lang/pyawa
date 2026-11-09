@@ -567,6 +567,15 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
     if crate::diag::flag("PYAWA_NO_TRACEBACK_ATTACH") {
         return;
     }
+    // **控制流异常不挂回溯**（round 159）：`unittest.SkipTest` 只携带"理由字符串"（`str(e)` ✓），
+    // 从不读 `__traceback__`；而挂上回溯后，**被测函数的整条帧链**（含 70k 条目的局部）会跟着异常
+    // 活到套件结束 ⇒ live 2.6 M ⇒ 全量 GC 1.3 s/次 ✗（实测 `test_weakref` 类内 177 s 的 GC）。
+    // 这是**文档化的如实偏差**：SkipTest 的 `__traceback__` 为 `None`（参照会挂 ✓）。
+    // 其它所有异常照旧挂 ✓（`test_raise`／doctest 一族要 `tb_next` ✓）。
+    let exception_type = instance.type_of(exception);
+    if instance.type_name(exception_type) == "SkipTest" {
+        return;
+    }
     let Some(frame) = instance.current_frame() else {
         return;
     };

@@ -415,6 +415,19 @@ impl Instance {
         let started = std::time::Instant::now();
         let live_before = self.live_objects();
         let freed = self.collect_inner();
+        if std::env::var_os("PYAWA_EXC_STATE_DEBUG").is_some() {
+            let pending = self.pending_exception();
+            let pending_name = pending.map(|value| {
+                // SAFETY: 槽里的对象由实例保活。
+                let ty = unsafe { value.as_ref() }.ty();
+                unsafe { ty.as_ref() }.name().to_owned()
+            });
+            eprintln!(
+                "[exc-state] pending={:?} stack={}",
+                pending_name,
+                self.exception_depth()
+            );
+        }
         // **年轻代边界要在清扫之后取**（round 157 真 bug 修 ✗）：清扫前取的头指针可能是马上要释放的
         // 垃圾 ⇒ 边界悬垂 ⇒ 下一次"年轻段"走到链尾都碰不到它 ⇒ 把**整链**当年轻代（实测 378k ✗）。
         self.gc_young_mark.set(self.gc_head.get());

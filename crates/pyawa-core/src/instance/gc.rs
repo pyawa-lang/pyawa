@@ -466,6 +466,31 @@ impl Instance {
                 }
             }
         }
+        // **根帧诊断**（round 159）：哪些 frame 还是根（>0 外部引用）⇒ 打出 code 名。
+        if std::env::var_os("PYAWA_GC_ROOT_FRAMES").is_some() {
+            let mut shown = 0usize;
+            for position in &stack {
+                // SAFETY: 候选存活。
+                let header = unsafe { candidates[*position].as_ref() };
+                let ty = header.ty();
+                let name = unsafe { ty.as_ref() }.name();
+                if name != "frame" {
+                    continue;
+                }
+                if shown >= 40 {
+                    break;
+                }
+                shown += 1;
+                // SAFETY: 类型名确认。
+                let frame = unsafe { &*candidates[*position].as_ptr().cast::<crate::Frame>() };
+                let code = frame.code().map(|code| {
+                    // SAFETY: code 由帧持有。
+                    let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
+                    format!("{}:{}:{}", code.filename(), code.qualname(), code.firstlineno())
+                });
+                eprintln!("[root-frame] rc={} code={code:?}", header.refcount());
+            }
+        }
         if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some() {
             for position in &stack {
                 // SAFETY: 候选存活。
