@@ -192,7 +192,11 @@ pub(crate) fn attribute_lookup(
         // **只有真的是 `dict` 才能按 `DictObject` 取项** ✓（第 185 轮实证 ✓）：`instance_attributes` 也可能给出
         // **内联属性对象**（布局不同 ✗）⇒ 照 `DictObject` 强转会**未对齐指针** ⇒ 直接 abort ✗
         //（实测就是 `executor.rs` 那行的 misaligned panic ✗）。不是 dict 就跳过这一支 ✓。
-        let is_dict = instance.type_name(instance.type_of(mapping)) == "dict";
+        // **按类型指针比较**（round 175 热路径）：`type_name()` 会**每次都分配一个 `String`** ✗
+        // （所有属性读的公共税）；`type_named("dict")` 是 O(1) 名字索引、零分配 ✓。
+        let is_dict = instance
+            .type_named("dict")
+            .is_some_and(|dict| instance.type_of(mapping) == dict);
         // **哈希索引**（round 73 性能真 bug 修 ✗）：先前把实例字典 `entries()` **整份克隆**后线性找
         // ✗ ⇒ 每次属性读一次分配＋扫描（实测空类实例属性读 4.4 µs ✗，全部脚本的公共税）。
         // 实例字典的键恒为 `str`（属性名）⇒ 直接用 `dict_get`（字符串键哈希索引，**不克隆**）✓。

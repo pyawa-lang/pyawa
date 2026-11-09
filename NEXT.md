@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`80b705c`（round 174：全量 survey 79/69/244/5（ok 78⇒79）；call_value 内建快路（len 循环 13.956s⇒13.222s ≈5%））
+- **HEAD**：`00008b8`（round 175：新增 tools/bench_hot.py 热点微基准（attr 读约 baseline+0.93µs/次、内建调用 +1.9µs/次）；去 attr 读一处 String 分配（噪声内））
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 69 unimplemented / 244 runtime / 5 timeout**（round 174 全量 survey）
