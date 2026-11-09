@@ -1801,6 +1801,7 @@ pub fn execute<'a>(
         // 闭包返回 `Option<Value>`：`Some` 表示这条指令结束了整个执行（`RETURN_VALUE`）。
         let outcome = (|| -> Result<Step<'a>, ExecError> {
         match name {
+            "DICT_MERGE" | "DICT_UPDATE" | "CALL_FUNCTION_EX" | "CALL_INTRINSIC_1" | "CALL_INTRINSIC_2" | "LOAD_BUILD_CLASS" | "LOAD_SPECIAL" | "PUSH_NULL" | "MAKE_FUNCTION" | "SET_FUNCTION_ATTRIBUTE" | "CALL" | "CALL_KW" => return step_calls::step_calls(instance, frame, oparg, opcode_number, name),
             "RESUME" | "NOP" | "POP_TOP" | "NOT_TAKEN" | "LOAD_SMALL_INT" | "CACHE" => return step_misc::step_misc(instance, frame, oparg, name),
             "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" | "CHECK_ASSIGNMENT" => return step_checks::step_checks(instance, frame, oparg, opcode_number, name),
             "LOAD_COMMON_CONSTANT" | "LOAD_NAME" | "LOAD_GLOBAL" | "STORE_GLOBAL" | "DELETE_GLOBAL" | "STORE_NAME" | "DELETE_NAME" => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
@@ -1809,7 +1810,6 @@ pub fn execute<'a>(
             "JUMP_FORWARD" | "JUMP_BACKWARD" | "JUMP_BACKWARD_NO_INTERRUPT" | "POP_JUMP_IF_TRUE" | "POP_JUMP_IF_FALSE" | "POP_JUMP_IF_NONE" | "POP_JUMP_IF_NOT_NONE" => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
             "BUILD_TUPLE" | "BUILD_LIST" | "BUILD_SET" | "BUILD_SLICE" | "BINARY_SLICE" | "BUILD_MAP" | "BUILD_STRING" | "UNPACK_SEQUENCE" | "UNPACK_EX" | "LIST_APPEND" | "SET_ADD" | "MAP_ADD" | "LIST_EXTEND" | "SET_UPDATE" | "GET_LEN" | "STORE_SUBSCR" | "STORE_SLICE" | "DELETE_SUBSCR" => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),
             "GET_ITER" | "FOR_ITER" | "END_FOR" | "POP_ITER" | "GET_YIELD_FROM_ITER" | "GET_AITER" | "GET_ANEXT" | "END_ASYNC_FOR" | "CLEANUP_THROW" | "GET_AWAITABLE" | "SEND" | "END_SEND" => return step_iterators::step_iterators(instance, frame, &mut decoder, &instruction, opcode_number, name),
-            "DICT_MERGE" | "DICT_UPDATE" | "CALL_FUNCTION_EX" | "CALL_INTRINSIC_1" | "CALL_INTRINSIC_2" | "LOAD_BUILD_CLASS" | "LOAD_SPECIAL" | "PUSH_NULL" | "MAKE_FUNCTION" | "SET_FUNCTION_ATTRIBUTE" | "CALL" | "CALL_KW" => return step_calls::step_calls(instance, frame, oparg, opcode_number, name),
             "MATCH_SEQUENCE" | "MATCH_MAPPING" | "MATCH_KEYS" | "MATCH_CLASS" => return step_match::step_match(instance, frame, oparg, opcode_number, name),
             "FORMAT_SIMPLE" | "CONVERT_VALUE" | "FORMAT_WITH_SPEC" | "SWAP" | "COPY" => return step_format::step_format(instance, frame, oparg, opcode_number, name),
             "PUSH_EXC_INFO" | "POP_EXCEPT" | "CHECK_EXC_MATCH" | "RERAISE" | "WITH_EXCEPT_START" | "RAISE_VARARGS" => return step_exceptions::step_exceptions(instance, frame, oparg, opcode_number, name),

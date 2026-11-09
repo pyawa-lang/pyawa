@@ -232,7 +232,12 @@ fn is_unknown(opcode: u8) -> bool {
 
 /// `EXTENDED_ARG` 的编号（`BC-30`：从 `opmap` 取，不写死）。
 fn extended_arg_opcode() -> u8 {
-    opcode::opcode("EXTENDED_ARG").expect("BC-1 要求 opmap 含 EXTENDED_ARG") as u8
+    // **只算一次**（round 143 性能）：解码器**每条指令**都取它 ⇒ 先前每次都做一次
+    // "名字 → 编号"二分（字符串比较 ✗）；现在 `OnceLock` 缓存 ✓（BC-30 仍从 opmap 取，不写死 ✓）。
+    static CACHED: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        opcode::opcode("EXTENDED_ARG").expect("BC-1 要求 opmap 含 EXTENDED_ARG") as u8
+    })
 }
 
 /// 发射方体检：把 `BC-32`／`BC-33`／`BC-34`／`BC-35`／`BC-36` 一次查全。

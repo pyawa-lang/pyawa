@@ -107,6 +107,22 @@ pub fn opcode(name: &str) -> Option<u16> {
 
 /// 编号 → 名字。
 pub fn opname(op: u16) -> Option<&'static str> {
+    // **O(1) 直接索引**（round 143 性能）：`execute` **每条指令**都要 `opname` 一次 ⇒ 先前每次都
+    // 二分查找（~7 次比较 ✗）；这里首次调用建一张 256 项直接表（`OnceLock`，之后只多一次原子读 ✓）。
+    static DIRECT: std::sync::OnceLock<[Option<&'static str>; 256]> = std::sync::OnceLock::new();
+    let table = DIRECT.get_or_init(|| {
+        let mut table = [None; 256];
+        for (number, name) in OPNAME.iter() {
+            if let Some(slot) = table.get_mut(*number as usize) {
+                *slot = Some(*name);
+            }
+        }
+        table
+    });
+    // **`op >= 256` 的查询**（测试与 Pyawa 专有占位名会用到 ✓）：退回二分（冷路径 ✓）。
+    if let Some(found) = table.get(op as usize).copied().flatten() {
+        return Some(found);
+    }
     OPNAME
         .binary_search_by_key(&op, |(candidate, _)| *candidate)
         .ok()
@@ -115,10 +131,18 @@ pub fn opname(op: u16) -> Option<&'static str> {
 
 /// `BC-35`：该指令的 inline cache 宽度（码元数）；无 cache 的指令为 0。
 pub fn inline_cache_entries(op: u16) -> u32 {
-    INLINE_CACHE_ENTRIES
-        .binary_search_by_key(&op, |(candidate, _)| *candidate)
-        .map(|index| INLINE_CACHE_ENTRIES[index].1)
-        .unwrap_or(0)
+    // **O(1) 直接索引**（round 143 性能）：解码器**每条指令**查一次（先前每次二分 ✗）。
+    static DIRECT: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+    let table = DIRECT.get_or_init(|| {
+        let mut table = [0u8; 256];
+        for (number, entries) in INLINE_CACHE_ENTRIES.iter() {
+            if let Some(slot) = table.get_mut(*number as usize) {
+                *slot = (*entries).min(u32::from(u8::MAX)) as u8;
+            }
+        }
+        table
+    });
+    u32::from(table.get(op as usize).copied().unwrap_or(0))
 }
 
 /// `BC-31`：Pyawa 专有指令的编号（名字，编号）；`BC-32` 要求它们**不**出现在 `OPMAP` 里。
