@@ -2724,7 +2724,18 @@ pub fn instantiate_named<'a>(
     let consts: Vec<Option<core::ptr::NonNull<crate::Header>>> = unit
         .constants
         .iter()
-        .map(|constant| instantiate_constant(instance, constant, Some(filename)))
+        // **嵌套单元默认仍用占位文件名**（round 178 回归修 ✗）：给嵌套单元真文件名会让
+        // `inspect`／`linecache` 找到源码 ⇒ 触发 `ast.parse`（本层 AST 解析只接了签名面）⇒
+        // **67 个官方套件从 runtime 变成 unimplemented 级 abort**（survey 实测 79/136/180/2 ✗）。
+        // 想试真名：`PYAWA_NESTED_FILENAMES=1`（仅供后续补齐 AST 后翻默认 ✓）。
+        .map(|constant| {
+            let nested = if crate::diag::flag("PYAWA_NESTED_FILENAMES") {
+                Some(filename)
+            } else {
+                None
+            };
+            instantiate_constant(instance, constant, nested)
+        })
         .collect();
     // `CodeObject::name` 目前是 `&'static str`（`BC-4` 的临时形态）⇒ 这里泄漏一份。
     // 这条路径是"编译产物 → 可执行 code object"的**测试**用途，可接受；正式 loader 接上时
