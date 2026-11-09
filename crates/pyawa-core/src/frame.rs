@@ -830,6 +830,22 @@ pub unsafe fn frame_getattr(
     match name {
         // **函数帧给 `FrameLocalsProxy`**（round 177）：可写穿视图 ✓；模块／类帧仍给命名空间
         // （`locals() is globals()` 那半除外）—— `locals_snapshot` 自己判 ✓。
+        // **`f_trace`／`f_trace_lines`／`f_trace_opcodes`**（round 179）：可写属性（挂载实例字典）✓；
+        // 读取时**没设过给参照默认**：`f_trace=None`、`f_trace_lines=True`、`f_trace_opcodes=False` ✓
+        // （`test_frame.test_lineno_with_tracing` 只要求可写 ＋ 行号正确；追踪事件本身下一轮 ✓）。
+        "f_trace" | "f_trace_lines" | "f_trace_opcodes" => {
+            // SAFETY: ptr 是本帧的存活对象（调用方保证）。
+            let header = unsafe { &*ptr.cast::<Header>() };
+            let stored = header.instance_dict().and_then(|dict| {
+                instance.dict_get(dict, name)
+            });
+            Some(match (stored, name) {
+                (Some(value), _) => instance.retain(value),
+                (None, "f_trace_lines") => instance.singletons().boolean(true),
+                (None, "f_trace_opcodes") => instance.singletons().boolean(false),
+                (None, _) => instance.singletons().none(),
+            })
+        }
         "f_locals" => {
             // **默认口径仍是快照 `dict`**（不在本轮改默认：`f_locals` 被 `Lib/` 广泛当 dict 用，
             // 全量回归要一轮验收）。`PYAWA_FRAME_LOCALS_PROXY=1` 打开 **`FrameLocalsProxy`** 原型

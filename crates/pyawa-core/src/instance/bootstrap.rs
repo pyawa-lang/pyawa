@@ -1135,6 +1135,11 @@ impl Instance {
             self.register_bases(frame_type, vec![object_type]).is_some(),
             "OM-13：内部 Frame 类型的基类也是 object"
         );
+        // **帧可挂实例字典**（round 179）：`f_trace`／`f_trace_lines`／`f_trace_opcodes` 是**可写**属性
+        // （`sys._getframe(0).f_trace = True` ✓；`test_frame.test_lineno_with_tracing` ✓）——挂载的字典
+        // 由 `Header.dict` 那条通道管，GC 的 `children_of` 已把 `instance_dict()` 算作边 ✓（OM-14）。
+        // SAFETY: frame_type 是刚建好的类型对象，存活 ✓。
+        unsafe { frame_type.as_ref() }.mark_external_instance_dict();
 
         // **内部** code 类型：`compile::instantiate` 与 `Instance::code_with_qualname` 都按
         // "引导期已登记"取它（两处的 `expect` 就是这么写的）⇒ 它必须与 `Frame` 一样在这里登记。

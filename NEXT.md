@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`d9a7d79`（round 178：补 round 176 大回归——嵌套文件名回占位名、frame repr 兜全局 __file__；全量 survey 79/69/244/5）
+- **HEAD**：`3a579c7`（round 179：帧 f_trace/f_trace_lines/f_trace_opcodes 可写＋参照默认；test_frame 10F/8E⇒10F/7E）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 69 unimplemented / 244 runtime / 5 timeout**（round 174 全量 survey）
