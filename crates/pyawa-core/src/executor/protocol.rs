@@ -822,6 +822,97 @@ fn call_compare_dunder(
     Ok(Some(truth?))
 }
 
+/// **相等比较的"富结果"语义**（round 138）：参照的 `==`／`!=` 也**返回用户 `__eq__`／`__ne__` 的结果对象**
+/// （`test_richcmp.Vector` 的 `a == b` 返回 Vector ✓）；`None` ⇒ 走既有 `equality_public`（bool）兜底 ✓。
+pub fn equality_compare_result(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let (direct, reflected) = match symbol {
+        "==" => ("__eq__", "__eq__"),
+        "!=" => ("__ne__", "__ne__"),
+        _ => return Ok(None),
+    };
+    let left_type = instance.type_of(left);
+    let right_type = instance.type_of(right);
+    let right_first = right_type != left_type && instance.is_subtype(right_type, left_type);
+    let order: [(&str, NonNull<Header>, NonNull<Header>); 2] = if right_first {
+        [(reflected, right, left), (direct, left, right)]
+    } else {
+        [(direct, left, right), (reflected, right, left)]
+    };
+    for (name, operand, other) in order {
+        // **只对用户定义类启用富结果**（round 138 真 bug 修）：内建容器（`dict` 的
+        // `test_equal_operator_modifying_operand` 会在 `__eq__` 里改字典 ✓）仍走既有
+        // `equality_public` 的结构比较路径 ✗ ⇒ 否则会踩到"比较中途改动"的旧假设而崩 ✗。
+        if !instance.is_user_type_object(instance.type_of(operand)) {
+            continue;
+        }
+        if !type_has_own_dunder(instance, operand, name) {
+            continue;
+        }
+        let Some(result) = call_object_method(instance, operand, name, &[other])? else {
+            continue;
+        };
+        if result == instance.not_implemented() {
+            release(instance, result);
+            continue;
+        }
+        let _ = opcode;
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
+/// **大小比较的"富结果"语义**（round 138，P3-42）：参照的 `<`／`<=`／`>`／`>=` **返回用户
+/// `__lt__` 等方法的结果对象**（不是强制 bool ✓）——`test_richcmp.Vector` 就靠它做逐元素向量比较 ✓。
+/// 返回 `Some(轻结果)` ⇒ 调用方直接把它当表达式结果；`None` ⇒ 按既有 `compare_public`（bool）兜底 ✓。
+///
+/// 派发口径与参照 `do_richcompare` 同：子类优先（右侧类型是左侧子类 ⇒ 反射先 ✓）；两侧都没有
+/// `NotImplemented` 之外的结果 ⇒ `None` ✓（由 `compare_public` 报原有的 `TypeError` ✓）。
+pub fn order_compare_result(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let (direct, reflected) = match symbol {
+        "<" => ("__lt__", "__gt__"),
+        "<=" => ("__le__", "__ge__"),
+        ">" => ("__gt__", "__lt__"),
+        ">=" => ("__ge__", "__le__"),
+        _ => return Ok(None),
+    };
+    let left_type = instance.type_of(left);
+    let right_type = instance.type_of(right);
+    let right_first = right_type != left_type && instance.is_subtype(right_type, left_type);
+    let order: [(&str, NonNull<Header>, NonNull<Header>); 2] = if right_first {
+        [(reflected, right, left), (direct, left, right)]
+    } else {
+        [(direct, left, right), (reflected, right, left)]
+    };
+    for (name, operand, other) in order {
+        // **只派发"自己的"实现** ✓（`object` 的默认 `__lt__` 只返回 `NotImplemented` ✓）。
+        if !overrides_compare(instance, operand, name) {
+            continue;
+        }
+        let Some(result) = call_object_method(instance, operand, name, &[other])? else {
+            continue;
+        };
+        if result == instance.not_implemented() {
+            release(instance, result);
+            continue;
+        }
+        let _ = opcode;
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
 /// **`==` 的完整语义**（`P3-42` 特殊方法派发，round 44）：用户类先问 `__eq__`；容器**逐元素**
 /// 递归（元素上的 `__eq__` 同样生效 ✓）；最后退回结构相等（`values_equal`）。
 ///

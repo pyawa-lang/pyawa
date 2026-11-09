@@ -116,7 +116,11 @@ fn main() {
     // `RecursionError` ✓（`repr_loop_crash_shapes` 守卫 ✓）。`cargo test` 不经过这里 ⇒ 默认 64 ✓。
     // SAFETY: 单线程启动阶段设环境变量。
     unsafe {
-        std::env::set_var("PYAWA_RECURSION_LIMIT", "160");
+        // **外部可覆盖**（round 138 起）：默认 160；调用方可设 `PYAWA_RECURSION_LIMIT` 提高
+        //（512 MiB 执行线程栈足够更高层数；`test_richcmp` 一类的深递归用例需要 ✓）。
+        if std::env::var_os("PYAWA_RECURSION_LIMIT").is_none() {
+            std::env::set_var("PYAWA_RECURSION_LIMIT", "160");
+        }
         // **主机名**（round 117）：`_socket.gethostname()` 的取值来源（stdlib 不碰文件系统 ✓）；
         // 只读 `/proc/sys/kernel/hostname`（Linux；失败就给 `localhost` ✓）。
         if std::env::var_os("PYAWA_HOSTNAME").is_none() {

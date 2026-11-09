@@ -58,11 +58,37 @@ pub(super) fn step_operators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                             what: "COMPARE_OP 的 cmp 下标（oparg >> 5）超出 cmp_op 的六元组（BC-39／BC-58）",
                         },
                     )?;
-                    let truth = compare_public(instance, left, right, operator, opcode_number);
-                    release(instance, left);
-                    release(instance, right);
-                    let raw = instance.singletons().boolean(truth?);
-                    push(instance, frame.get(), raw)?;
+                    // **富结果语义**（round 138）：用户类的大小比较要返回 `__lt__` 等方法的结果对象
+                    // （`test_richcmp.Vector` 的逐元素向量比较 ✓）；没有用户实现 ⇒ 原 bool 兜底 ✓。
+                    let rich = match equality_compare_result(
+                        instance,
+                        left,
+                        right,
+                        operator,
+                        opcode_number,
+                    )
+                    .and_then(|value| match value {
+                        Some(value) => Ok(Some(value)),
+                        None => order_compare_result(instance, left, right, operator, opcode_number),
+                    }) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            release(instance, left);
+                            release(instance, right);
+                            return Err(error);
+                        }
+                    };
+                    if let Some(value) = rich {
+                        release(instance, left);
+                        release(instance, right);
+                        push(instance, frame.get(), value)?;
+                    } else {
+                        let truth = compare_public(instance, left, right, operator, opcode_number);
+                        release(instance, left);
+                        release(instance, right);
+                        let raw = instance.singletons().boolean(truth?);
+                        push(instance, frame.get(), raw)?;
+                    }
                 }
                 "BINARY_OP" => {
                     let right = frame.get().pop()?;
