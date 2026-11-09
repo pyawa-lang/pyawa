@@ -245,7 +245,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         .type_named("StopAsyncIteration")
                         .expect("异常层次在引导期已登记");
                     if instance.is_subtype(ty, stop_async_iteration) {
-                        release(instance, exception);
+                        crate::discard_raised(instance, exception);
                         // 迭代器那一格也丢掉
                         release(instance, frame.get().pop()?);
                         if let Some(target) = instruction.jump_target() {
@@ -273,12 +273,12 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                             Some(value) => {
                                 // SAFETY: 值由异常对象持有，新增一份交给值栈。
                                 unsafe { instance.incref_object(value.as_ptr()) };
-                                release(instance, exception);
+                                crate::discard_raised(instance, exception);
                                 push(instance, frame.get(), value)?;
                                 release(instance, value);
                             }
                             None => {
-                                release(instance, exception);
+                                crate::discard_raised(instance, exception);
                                 push(instance, frame.get(), instance.singletons().none())?;
                             }
                         }

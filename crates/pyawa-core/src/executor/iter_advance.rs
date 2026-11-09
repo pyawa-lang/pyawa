@@ -143,7 +143,9 @@ pub(crate) fn advance_iterator(
                 // SAFETY: exception 是存活对象。
                 let raised = unsafe { exception.as_ref() }.ty();
                 if instance.is_subtype(raised, exception_type(instance, "StopIteration")) {
-                    release(instance, exception);
+                    // **吞异常要连 `pending_exception` 槽那份一起还**（round 169）：`raise()` 给槽加过
+                    // 一份保活；只还 `Err` 那份 ⇒ 槽永久钉住"异常＋回溯＋帧" ✗（`discard_raised` 一处真相 ✓）。
+                    crate::discard_raised(instance, exception);
                     Ok(None)
                 } else {
                     Err(ExecError::Raised { exception })
@@ -183,7 +185,7 @@ pub(crate) fn advance_iterator(
                 let raised = unsafe { exception.as_ref() }.ty();
                 let index_error = exception_type(instance, "IndexError");
                 if instance.is_subtype(raised, index_error) {
-                    release(instance, exception);
+                    crate::discard_raised(instance, exception);
                     Ok(None)
                 } else {
                     Err(ExecError::Raised { exception })

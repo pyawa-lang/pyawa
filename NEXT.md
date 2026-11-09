@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`2627727`（round 168：test_unicode_identifiers 转绿 —— SyntaxError 位置面＋PEP 3131 NFKC 归一化（生成 3641 条表））
+- **HEAD**：`9b0c4d3`（round 169：吞异常统一 discard_raised（连 pending 槽）；证否它是 1.48 M 残留根因）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**78 ok / 69 unimplemented / 245 runtime / 5 timeout**（round 167 全量 survey；round 168 预计 79 ok）
