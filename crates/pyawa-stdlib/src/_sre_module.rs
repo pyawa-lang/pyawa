@@ -1207,6 +1207,18 @@ fn match_getitem_native(
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // **快路径（round 137 热点）**：`m[整数]` 直接取组 —— `Lib/ntpath.expandvars` 的
+    // replacement 对每个匹配都做 `m[lastindex]`（100k 次 ⇒ 每微秒都算数 ✓）。走通用
+    // `match_group_native` 要过"参数解析/可变参准备/组解析"三道，这里直取 `group_text` ✓。
+    if args.len() == 1 && kwargs.is_empty() {
+        if let Some(index) = instance.int_of(args[0]).and_then(|value| value.to_i64()) {
+            let data = match_data(instance, bound)?;
+            return match group_text(&data, index) {
+                Some(text) => Ok(text_object(instance, &text, data.is_bytes)),
+                None => Ok(instance.retain(instance.singletons().none())),
+            };
+        }
+    }
     match_group_native(instance, bound, args, kwargs)
 }
 
