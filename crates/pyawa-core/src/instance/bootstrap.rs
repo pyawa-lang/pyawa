@@ -21,6 +21,7 @@ impl Instance {
             types_by_name: RefCell::new(std::collections::HashMap::new()),
             types_generation: Cell::new(0),
             dedicated_iterator_types: RefCell::new(None),
+            iterable_source_kinds: RefCell::new(std::collections::HashMap::new()),
             user_instances: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_live: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),

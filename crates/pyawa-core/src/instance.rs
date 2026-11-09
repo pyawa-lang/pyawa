@@ -138,6 +138,9 @@ pub struct Instance {
     /// **每个**步进都比 20+ 个内建名 ✗（`for` 循环每轮一次 ⇒ 热路径大头）；这里按代数缓存一份
     /// 集合，普通迭代器（`list_iterator`／`range_iterator` 等）**一次哈希查**就跳过整条链 ✓。
     dedicated_iterator_types: RefCell<Option<(usize, std::collections::HashSet<usize>)>>,
+    /// **被迭代源类型 → 布局种类缓存**（round 146 性能，`iter.rs::source_kind` 用）：避免每个元素都做
+    /// 7 次 `type_is_subtype_of`（`type_named` ＋ MRO 线性扫 ✗）。类型布局与实例无关 ⇒ 只存 `u8` 小码 ✓。
+    iterable_source_kinds: RefCell<std::collections::HashMap<usize, u8>>,
     /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
     user_type_set: RefCell<std::collections::HashSet<usize>>,
     /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**

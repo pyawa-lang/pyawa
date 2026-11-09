@@ -354,6 +354,43 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, _opcode: u8)
     Ok(true)
 }
 
+/// **被迭代源类型 → 布局种类**（round 146 性能）：`iterable_length`／`iterable_item` 先前对
+/// 每个元素都做 7 次 `type_is_subtype_of`（每次 `type_named` ＋ MRO 线性扫 ✗）；这里按**类型地址**
+/// 缓存一次判定（`thread_local`，类型布局与判定结果与实例无关 ✓），之后每元素只付一次哈希 ✓。
+const SOURCE_TUPLE: u8 = 1;
+const SOURCE_LIST: u8 = 2;
+const SOURCE_DICT: u8 = 3;
+const SOURCE_SET: u8 = 4;
+const SOURCE_STR: u8 = 5;
+const SOURCE_BYTES: u8 = 6;
+const SOURCE_BYTEARRAY: u8 = 7;
+const SOURCE_UNKNOWN: u8 = 0;
+
+fn source_kind(instance: &Instance, ty: NonNull<crate::TypeObject>) -> u8 {
+    if let Some(kind) = instance.iterable_source_kind(ty) {
+        return kind;
+    }
+    let kind = if type_is_subtype_of(instance, ty, "tuple") {
+        SOURCE_TUPLE
+    } else if type_is_subtype_of(instance, ty, "list") {
+        SOURCE_LIST
+    } else if type_is_subtype_of(instance, ty, "dict") {
+        SOURCE_DICT
+    } else if type_is_subtype_of(instance, ty, "set") || type_is_subtype_of(instance, ty, "frozenset") {
+        SOURCE_SET
+    } else if type_is_subtype_of(instance, ty, "str") {
+        SOURCE_STR
+    } else if type_is_subtype_of(instance, ty, "bytes") {
+        SOURCE_BYTES
+    } else if type_is_subtype_of(instance, ty, "bytearray") {
+        SOURCE_BYTEARRAY
+    } else {
+        SOURCE_UNKNOWN
+    };
+    instance.set_iterable_source_kind(ty, kind);
+    kind
+}
+
 /// 该类型是不是内建 `name`（**含子类** ✓）。
 ///
 /// **task-14 真 bug 修** ✗：先前 `iterable_length`／`iterable_item` 对 tuple／list／set／str／bytes
@@ -377,35 +414,36 @@ pub(crate) fn iterable_length(
 ) -> Result<usize, ExecError> {
     // SAFETY: raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
-    if type_is_subtype_of(instance, ty, "tuple") {
+    let kind = source_kind(instance, ty);
+    if kind == SOURCE_TUPLE {
         // SAFETY: 类型身份已确认。
         return Ok(unsafe { &*raw.as_ptr().cast::<TupleObject>() }.len());
     }
-    if type_is_subtype_of(instance, ty, "list") {
+    if kind == SOURCE_LIST {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<ListObject>() }.len());
     }
-    if instance.is_subtype(ty, builtin_type(instance, "dict")) {
+    if kind == SOURCE_DICT {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len());
     }
-    if type_is_subtype_of(instance, ty, "set") || type_is_subtype_of(instance, ty, "frozenset") {
+    if kind == SOURCE_SET {
         // **`frozenset` 与 `set` 同一份载荷**（第 292 轮）：`UNPACK_SEQUENCE` 一族按元素个数
         // 走这条路 ✓ ⇒ 先前只认 `set` ✗ ⇒ `'frozenset' object is not iterable` 之后又撞一条 ✗。
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<SetObject>() }.len());
     }
-    if type_is_subtype_of(instance, ty, "str") {
+    if kind == SOURCE_STR {
         // P3-38 S2a-2：`len(str)` 按**码点计数**（代理各算 1 ✓；合法 UTF-8 与旧口径一致 ✓）。
         if let Some(length) = instance.str_code_point_len(raw) {
             return Ok(length);
         }
     }
-    if type_is_subtype_of(instance, ty, "bytes") {
+    if kind == SOURCE_BYTES {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().len());
     }
-    if type_is_subtype_of(instance, ty, "bytearray") {
+    if kind == SOURCE_BYTEARRAY {
         // **`bytearray` 也要认** ✓（第 645 轮）：载荷是 `BytearrayObject` ✓（`bytes` 那条对不上 ✗）
         // ⇒ `list(bytearray(…))` 先前报"只接线了 tuple／list／dict／set／str／bytes 的内建迭代器" ✗。
         // SAFETY: 类型身份已确认。
@@ -434,6 +472,7 @@ pub(crate) fn iterable_item(
 ) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
+    let kind = source_kind(instance, ty);
 
     let owned = |value: NonNull<Header>| {
         // SAFETY: value 由容器持有，存活。
@@ -441,7 +480,7 @@ pub(crate) fn iterable_item(
         value
     };
 
-    if type_is_subtype_of(instance, ty, "tuple") {
+    if kind == SOURCE_TUPLE {
         // SAFETY: 类型身份已确认。
         let value = unsafe { &*raw.as_ptr().cast::<TupleObject>() }.item(index);
         return value.map(owned).ok_or(ExecError::Unsupported {
@@ -449,7 +488,7 @@ pub(crate) fn iterable_item(
             what: "迭代器游标越界",
         });
     }
-    if type_is_subtype_of(instance, ty, "list") {
+    if kind == SOURCE_LIST {
         // SAFETY: 同上。
         let value = unsafe { &*raw.as_ptr().cast::<ListObject>() }.item(index);
         return value.map(owned).ok_or(ExecError::Unsupported {
@@ -457,7 +496,7 @@ pub(crate) fn iterable_item(
             what: "迭代器游标越界",
         });
     }
-    if instance.is_subtype(ty, builtin_type(instance, "dict")) {
+    if kind == SOURCE_DICT {
         // SAFETY: 同上。字典迭代的是**键**（与参照实现一致）
         let value = unsafe { &*raw.as_ptr().cast::<DictObject>() }
             .entry(index)
@@ -467,7 +506,7 @@ pub(crate) fn iterable_item(
             what: "迭代器游标越界",
         });
     }
-    if type_is_subtype_of(instance, ty, "set") || type_is_subtype_of(instance, ty, "frozenset") {
+    if kind == SOURCE_SET {
         // **`frozenset` 与 `set` 同一份载荷**（第 292 轮）：按游标取元素这条路也要认它 ✓
         //（`_collections_abc` 注册基类时迭代集合 ✓，元类路径打通后当场踩到 ✓）。
         // SAFETY: 同上。
@@ -477,7 +516,7 @@ pub(crate) fn iterable_item(
             what: "迭代器游标越界",
         });
     }
-    if type_is_subtype_of(instance, ty, "str") {
+    if kind == SOURCE_STR {
         // P3-38 S2a-2 批 2：按**码点**取第 `index` 个（孤立代理也各占一格 ✓），单字符对象走
         // `new_str_code_point`（标量⇒UTF-8 表示；代理⇒WTF-8 表示 ✓）。
         let point = instance
@@ -489,7 +528,7 @@ pub(crate) fn iterable_item(
         return Ok(instance.new_str_code_point(point));
     }
     // `bytes`：迭代给**整数**（实测 `list(b'ab') == [97, 98]`）
-    if type_is_subtype_of(instance, ty, "bytes") {
+    if kind == SOURCE_BYTES {
         // SAFETY: 同上。
         let value = unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().to_vec();
         let byte = *value.get(index).ok_or(ExecError::Unsupported {
@@ -501,7 +540,7 @@ pub(crate) fn iterable_item(
     // **`bytearray`：与 `bytes` 同款，按整数给** ✓（第 647 轮 ✗ 修）：载荷是 `BytearrayObject` ✓
     // —— 先前这条 `iterable_item` 只认 `bytes` ✗ ⇒ `list(bytearray(…))` 报"只接线了 tuple／list／dict／
     // set／str／bytes 的迭代" ✗（**源码里那句本身就是短的** ✗，所以前几轮加的类型名永远显不出来 ✓）。
-    if type_is_subtype_of(instance, ty, "bytearray") {
+    if kind == SOURCE_BYTEARRAY {
         // SAFETY: 类型身份已确认。
         let value = unsafe { &*raw.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() }
             .value()

@@ -89,6 +89,21 @@ impl Instance {
         self.ast_parser.get()
     }
 
+    /// 取"被迭代源类型 → 布局种类"缓存（round 146 性能，见 `iter.rs::source_kind`）。
+    pub(crate) fn iterable_source_kind(&self, ty: NonNull<crate::TypeObject>) -> Option<u8> {
+        self.iterable_source_kinds
+            .borrow()
+            .get(&(ty.as_ptr() as usize))
+            .copied()
+    }
+
+    /// 写"被迭代源类型 → 布局种类"缓存（同上）。
+    pub(crate) fn set_iterable_source_kind(&self, ty: NonNull<crate::TypeObject>, kind: u8) {
+        self.iterable_source_kinds
+            .borrow_mut()
+            .insert(ty.as_ptr() as usize, kind);
+    }
+
     /// 这个迭代器类型**有没有专用推进分支**（round 145 性能）：`advance_iterator` 的 20+ 个
     /// 内建名比较只对链表里的类型有意义；普通迭代器（`list_iterator`／`range_iterator` 等）一次
     /// 哈希查即可跳到通用路径 ✓。集合按 `types_generation` 缓存（惰性类型后建 ⇒ 自动重建 ✓）。
