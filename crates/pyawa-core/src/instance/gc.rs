@@ -930,7 +930,7 @@ impl Instance {
                     );
                 }
             }
-            if header.refcount() != 1 || referenced_by_types.contains(&address) {
+            if referenced_by_types.contains(&address) {
                 continue;
             }
             if !unreachable.contains(&address) {
@@ -1044,16 +1044,12 @@ impl Instance {
                     }
                 }
             }
-            self.types
-                .borrow_mut()
-                .retain(|entry| entry.as_ptr() as usize != address);
-            self.user_types
-                .borrow_mut()
-                .retain(|entry| entry.as_ptr() != ty.as_ptr());
-            self.user_type_set
-                .borrow_mut()
-                .remove(&address);
-            self.forget_user_instances(ty);
+            // **不摘注册表**（round 129 试验）：类型对象是 `Box::leak` 的，摘掉 `types` 后**任何仍持计数引用的
+            // 持有者**（帧槽/traceback 等）将来释放它时就不认识它是"注册类型" ⇒ `assert_live` 报悬垂 ✗
+            // （实测 `test_dict` 下 `Exc` 被收回后 `release_object` 悬垂 ✓）。保留注册/用户类型名单只清字典 ⇒
+            // 类型指针永远有效、也不会 invalid-free ✓（内存如实泄漏，与既有"类型本体不 dealloc"口径一致 ✓）。
+            // 因此这里**只**摘按地址索引的缓存/旁表（下面那几行）✓。
+            let _ = &address;
             let removed: Vec<NonNull<Header>> = {
                 let mut cache = self.type_dunders.borrow_mut();
                 let keys: Vec<(usize, &'static str)> = cache

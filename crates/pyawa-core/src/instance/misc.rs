@@ -139,12 +139,6 @@ impl Instance {
             .unwrap_or_default()
     }
 
-    /// 摘掉某个用户类型的实例登记桶（类型被回收时 ✓）。
-    pub(crate) fn forget_user_instances(&self, ty: NonNull<Header>) {
-        self.user_instances
-            .borrow_mut()
-            .remove(&(ty.as_ptr() as usize));
-    }
 
     /// 动态类类型的快照（GC 用 ✓）。
     pub(crate) fn user_type_headers(&self) -> Vec<NonNull<Header>> {
