@@ -903,6 +903,30 @@ pub fn equality_compare_result(
         if !instance.is_user_type_object(instance.type_of(operand)) {
             continue;
         }
+        if name == "__ne__" && !type_has_own_dunder(instance, operand, name) {
+            // **`!=` 的 object.__ne__ 默认**（round 150 真 bug 修 ✗）：自己没有 `__ne__`、
+            // 但有 `__eq__` ⇒ 参照走"委托 `__eq__` 再取反"（**只问这个操作数自己的 `__eq__`** ✓；
+            // `test_compare.test_ne_low_priority` 钉住：`Base() != Derived()` 期望
+            // `['Derived.__ne__', 'Base.__eq__']` —— 先前这里直接跳过 ⇒ 少一次 `Base.__eq__` ✗）。
+            let operand_type = instance.type_of(operand);
+            let has_own_eq = instance
+                .type_lookup_owner(operand_type, "__eq__")
+                .is_some_and(|(owner, _)| Some(owner) != instance.type_named("object"));
+            if has_own_eq {
+                attempted = true;
+                if let Some(result) = call_object_method(instance, operand, "__eq__", &[other])? {
+                    if result == instance.not_implemented() {
+                        release(instance, result);
+                    } else {
+                        let truth = instance.truthiness_of(result);
+                        release(instance, result);
+                        let negated = instance.new_bool(!truth?);
+                        return Ok(Some(RichCompare::Value(negated)));
+                    }
+                }
+            }
+            continue;
+        }
         if !type_has_own_dunder(instance, operand, name) {
             continue;
         }

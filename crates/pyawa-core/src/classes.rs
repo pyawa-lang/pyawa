@@ -1046,6 +1046,17 @@ pub fn build_class_from_parts_with_keywords(
             names.extend(items.iter().filter_map(|item| instance.text_of(*item).map(|text| text.to_owned())));
         }
         if !names.is_empty() {
+            // **名字改写（`__x` → `_类名__x`）**（round 150 真 bug 修 ✗）：槽名与实例属性写入都走
+            // 编译器改写后的键 ✓ ⇒ 槽表必须用同一套改写后的名字，否则 `__slots__ = ('__num',)`
+            // 的类写 `self.__num` 会撞"非槽名"✗（`test_binop.Rat` 实测 8 格 error ✓）。
+            let owner = unsafe { ty.as_ref() }.name().to_owned();
+            let stripped = owner.trim_start_matches('_');
+            let prefix = format!("_{stripped}");
+            for slot in names.iter_mut() {
+                if slot.starts_with("__") && !slot.ends_with("__") && !stripped.is_empty() {
+                    *slot = format!("{prefix}{slot}");
+                }
+            }
             instance.register_type_slots(ty, names);
         }
     }

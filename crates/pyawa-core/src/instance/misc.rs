@@ -123,7 +123,29 @@ impl Instance {
             }
             match table.get(&(entry.as_ptr() as usize)) {
                 Some(slots) => {
-                    if slots.contains(name) {
+                    // **私有名改写兼容**（round 150 真 bug 修 ✗）：源码里 `__slots__` 可写
+                    // 原文名（`'__num'`）或已改写名（`'_Rat__num'`）；而本层**编译器未做**类内
+                    // `self.__num` 的名字改写（属性名原样到达）⇒ 两种形态都要认 ✓
+                    //（`test_binop.Rat`：`__slots__ = ['_Rat__num']`、写 `self.__num`，先前 8 格 error ✓）．
+                    // SAFETY: 类型由注册表持有。
+                    let class_name = unsafe { entry.as_ref() }.name().to_owned();
+                    let stripped = class_name.trim_start_matches('_').to_owned();
+                    let mangled = if !stripped.is_empty()
+                        && name.starts_with("__")
+                        && !name.ends_with("__")
+                        && name.len() > 2
+                    {
+                        Some(format!("_{stripped}{name}"))
+                    } else {
+                        None
+                    };
+                    if slots.contains(name)
+                        || mangled.as_ref().is_some_and(|mangled| slots.contains(mangled))
+                        || (name.starts_with('_') && name.contains("__") && !name.ends_with("__") && {
+                            let raw = name.split_once("__").map(|(_, rest)| format!("__{rest}"));
+                            raw.as_ref().is_some_and(|raw| slots.contains(raw))
+                        })
+                    {
                         contains = true;
                     }
                 }
