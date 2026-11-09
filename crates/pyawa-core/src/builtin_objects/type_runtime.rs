@@ -485,6 +485,18 @@ pub fn dir_new(
             }
             // **动态 getset 属性面**（round 60）：生成器的 `gi_*` 在参照里是类型上的 getset
             // 描述符（`dir(g)` 看得到 ✓），本层由 `getattr` 槽动态给值 ⇒ `dir` 这里补上名字 ✓。
+            // **`set`／`frozenset` 的参照方法名面**（round 166）：方法都在 `getattr` 槽里 ⇒
+            // 不补的话 `dir(set())` 只有 `union` 一个 ✗（参照有全套 ✓）。
+            if instance.type_name(ty) == "set" {
+                for name in crate::builtin::set::SET_TYPE_DIR_NAMES {
+                    names.insert((*name).to_owned());
+                }
+            }
+            if instance.type_name(ty) == "frozenset" {
+                for name in crate::builtin::set::FROZENSET_TYPE_DIR_NAMES {
+                    names.insert((*name).to_owned());
+                }
+            }
             if instance.type_name(ty) == "generator" {
                 for name in ["gi_code", "gi_frame", "gi_running", "gi_suspended", "gi_yieldfrom"] {
                     names.insert(name.to_owned());

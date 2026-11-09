@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`628b495`（round 165：新诊断口 `PYAWA_GC_REVERSE`/`PYAWA_EXC_SITE`；钉住 weakref 残留＝每颗被吞 AttributeError 泄漏 +1 引用，其 traceback 拖测试帧）
+- **HEAD**：`45b0485`（round 166：`dir(set)`/`dir(frozenset())` 与 CPython 逐名一致 57/44；`set.clear()` 已接）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：约 **75–80 ok / 397 ≈ 19–20%**（10-31 是 41／10.3%）；超时 1–2（基本只剩 `test_weakref`）
