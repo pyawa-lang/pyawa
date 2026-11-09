@@ -140,7 +140,18 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             // **一次物化**整个序列（循环调 `__getitem__` 到 `IndexError`）✗ ⇒ 对**无限序列**
             // （`test_iter.UnlimitedSequenceClass.__getitem__` 永不抛 IndexError）当场死循环 ✗。
             // 参照给的是**惰性**的 `iterator` 对象（每次 `__next__` 取一个下标）✓。
-            if crate::executor::attribute::attribute_lookup_swallowing(instance, iterable, "__getitem__")
+            // **类型对象不走序列协议**（round 153 真 bug 修 ✗）：`list(list)` 在参照里是
+            // `TypeError: 'type' object is not iterable` ✓；round 152 给**注册 `list` 类型对象**加的
+            // "未绑定方法描述符"让 `attribute_lookup(list, "__getitem__")` 有值 ⇒ 这里把 `list` **类型**
+            // 当序列迭代 ⇒ `list.__getitem__(list, 0)` 走 native 且永不 `IndexError` ⇒ 死循环 ✗
+            // （`test_iter.test_builtin_list` 首格挂住 90 s ✓）。类型对象的 `__getitem__` 只用于
+            // `list.__getitem__(a, i)` 这类**显式取描述符**，不参与"可迭代"判定 ✓。
+            if !instance.is_type_object(iterable)
+                && crate::executor::attribute::attribute_lookup_swallowing(
+                    instance,
+                    iterable,
+                    "__getitem__",
+                )
                 .is_some()
             {
                 // SAFETY: iterable 由调用方保证存活；迭代器要自己那份引用。
