@@ -25,18 +25,27 @@ pub(crate) fn advance_iterator(
         let method = match attribute_optional(instance, iterator, "__next__") {
             Ok(Some(method)) => method,
             Ok(None) => {
+                let iterator_type = unsafe { iterator.as_ref() }.ty();
+                let name = instance.type_name(iterator_type).to_owned();
                 if crate::diag::flag("PYAWA_ITER_DEBUG") {
-                    let name = instance.type_name(unsafe { iterator.as_ref() }.ty());
                     eprintln!(
                         "[advance_iterator] 不可迭代：type={name} site={}",
                         instance.current_site()
                     );
                 }
-                // **如实记**：这里仍报 `Unsupported`（宿主按"未接线"处理）——改成可捕获的
-                // `TypeError` 会让一批原本"快速失败"的官方文件**继续跑到后面的重测试**
-                // （实测 `test_itertools` 的 10M 空链用例把 direct 跑推到 113 s ⇒ 并发 survey
-                // 越过 120 s 线 ⇒ 该文件从 ok 退化成 timeout ✗）。参照口径的 `TypeError`
-                // 与那批文件的执行面**一起**再开一轮（见 `NEXT.md`）✓。
+                // **用户自定义类的迭代器 ⇒ 参照口径的 `TypeError`**（round 135）：`test_iter.test_3720`
+                // 的 `BadIterator` 在 `__next__` 里 `del BadIterator.__next__` ⇒ 参照抛
+                // `TypeError: 'BadIterator' object is not iterable` 且被测试捕获 ✓；先前落 `Unsupported`
+                //（宿主当"未接线"直接 abort）✗ ⇒ `test_iter` 整档被首格截断 ✓。
+                // **内建迭代器保持 `Unsupported`**（既有口径）：改成 `TypeError` 会让 `test_itertools`
+                // 的 10M 空链用例走异常路径变慢（113 s ⇒ 越过 120 s 线 ⇒ 该套件 ok→timeout ✗，实测过 ✓）。
+                if instance.is_user_type_object(iterator_type) {
+                    instance.release(iterator);
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("'{name}' object is not iterable"),
+                    ));
+                }
                 return Err(ExecError::Unsupported {
                     opcode,
                     what: "这个对象既不是内建迭代器，也没有 `__next__`",

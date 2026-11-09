@@ -89,6 +89,16 @@ impl Instance {
         self.ast_parser.get()
     }
 
+    /// 是否是**用户定义类**的类型对象（round 135：迭代器协议的错误口径按它分档 ✓）。
+    pub(crate) fn is_user_type(&self, ty: NonNull<Header>) -> bool {
+        self.user_type_set.borrow().contains(&(ty.as_ptr() as usize))
+    }
+
+    /// 同上，入参是类型对象指针的便捷版（round 135）。
+    pub(crate) fn is_user_type_object(&self, ty: NonNull<TypeObject>) -> bool {
+        self.is_user_type(ty.cast::<Header>())
+    }
+
     /// **登记动态（用户）类类型**（round 99）：参与"孤儿类型回收" ✓。
     pub(crate) fn register_user_type(&self, ty: NonNull<Header>) {
         let mut list = self.user_types.borrow_mut();
