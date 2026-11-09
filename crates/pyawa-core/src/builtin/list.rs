@@ -346,12 +346,9 @@ pub(crate) fn list_remove_native(
     }
 }
 /// **`list` 的方法面**（第 143 轮）：照 `str_getattr` 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
-pub unsafe fn list_getattr(
-    ptr: *mut Header,
-    name: &str,
-    instance: &Instance,
-) -> Option<NonNull<Header>> {
-    let handler: NativeFn = match name {
+/// **`list` 的方法名 → 原生实现**（round 151 提取；`list_getattr` 与"类型级未绑定描述符"共用 ✓）。
+pub fn list_method_handler(name: &str) -> Option<NativeFn> {
+let handler: NativeFn = match name {
         "append" => list_append_native,
         // **`list` 的 dunder／`copy` 面**（round 106）：官方 `list_tests`／`seq_tests` 大量直接调用
         // `u.__getitem__`／`u.__setitem__`／`u.__delitem__`／`u.copy()`／`u.__iadd__` 一族 ✓ ——
@@ -379,6 +376,15 @@ pub unsafe fn list_getattr(
         "remove" => list_remove_native,
         _ => return None,
     };
+    Some(handler)
+}
+
+pub unsafe fn list_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = list_method_handler(name)?;
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
     let method_type = instance

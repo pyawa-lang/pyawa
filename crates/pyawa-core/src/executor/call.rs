@@ -738,12 +738,22 @@ pub(crate) fn call_callable(
         // SAFETY: 类型身份已确认。
         let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
         let function = native.function();
-        let bound = match bound_self {
-            Some(self_object) => Some(self_object),
-            None => None,
+        // **未绑定方法描述符**（round 151）：从**类型对象**上取内建方法（`list.__len__`）时，
+        // 名字带 `descriptor:` 前缀 ⇒ 把**第一个位置实参**当 `self` ✓（参照的 method_descriptor ✓）。
+        // 用名字前缀而不是加结构字段：`BuiltinFunctionObject::new` 由 `py_object!` 按字段生成，
+        // 加字段要改 20+ 个调用点且动布局尺寸 ✓ —— 前缀是零成本约定（名字只在 repr 用 ✓）。
+        let descriptor = native.name().starts_with("descriptor:");
+        let (bound, forwarded) = if descriptor && bound_self.is_none() && !args.is_empty() {
+            (Some(args[0]), &args[1..])
+        } else {
+            let bound = match bound_self {
+                Some(self_object) => Some(self_object),
+                None => None,
+            };
+            (bound, &args[..])
         };
         // SAFETY: 签名契约见 `NativeFn`（借用视图 ＋ 新引用返回值）。
-        let result = unsafe { function(instance, bound, &args, &kwargs) };
+        let result = unsafe { function(instance, bound, forwarded, &kwargs) };
         // 借用视图：实参的引用仍归本函数，调用完要按约归还
         for argument in args {
             release(instance, argument);

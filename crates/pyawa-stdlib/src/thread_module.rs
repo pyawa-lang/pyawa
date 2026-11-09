@@ -90,6 +90,91 @@ fn make_native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<He
     object.into_raw().cast::<Header>()
 }
 
+/// `_thread.daemon_threads_allowed()`：参照默认允许 daemon 线程 ✓（单线程仿真下这个开关
+/// 不影响调度 ✓，如实给 `True` ✓）。`threading._DummyThread` 的构造会调它 ✓（round 151）。
+fn daemon_threads_allowed_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_bool(true))
+}
+
+/// `_thread.set_name(name)`：单线程仿真下**无事可做**（没有真实 OS 线程名）⇒ 返回 `None` ✓
+/// —— `threading.py` 的 `Thread._set_os_name` 会调它 ✓（round 151）。
+fn set_name_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_none())
+}
+
+/// `_thread.start_new_thread(function, args[, kwargs])` 的**单线程同步仿真**（round 151）：
+/// 直接在本线程里调用 `function(*args)` ✓（本层每实例单线程，DESIGN §5 的协作式口径 ✓），
+/// 返回一个 ident 整数 ✓。**如实登记**：没有并发，`join` 前就已完成 ✓。
+fn start_new_thread_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(function) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "start_new_thread() takes at least 1 argument (0 given)",
+        ));
+    };
+    let mut call_args: Vec<NonNull<Header>> = Vec::new();
+    if let Some(tuple) = args.get(1).copied() {
+        if let Some(items) = instance.tuple_items(tuple) {
+            for item in items {
+                instance.retain(item);
+                call_args.push(item);
+            }
+        }
+    }
+    let outcome = pyawa_core::executor::call::call_value(instance, function, &call_args, &[]);
+    for argument in call_args {
+        instance.release(argument);
+    }
+    let result = outcome?;
+    instance.release(result);
+    Ok(instance.new_int(1))
+}
+
+/// `_thread.start_joinable_thread(function, *, handle=None, daemon=False)` 的**单线程同步仿真**
+/// （round 151）：同步跑完 `function()`，再把 `handle` 标成"已完成" ✓（`threading.py` 的
+/// `Thread.join`／`is_alive` 都读这个句柄 ✓）。
+fn start_joinable_thread_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(function) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "start_joinable_thread() missing 1 required positional argument: 'function'",
+        ));
+    };
+    let mut handle: Option<NonNull<Header>> = None;
+    for (key, value) in kwargs {
+        if instance.text_of(*key) == Some("handle") {
+            handle = Some(*value);
+        }
+    }
+    let outcome = pyawa_core::executor::call::call_value(instance, function, &[], &[]);
+    let result = outcome?;
+    instance.release(result);
+    if let Some(handle) = handle {
+        pyawa_core::thread_handle_mark_done(instance, handle)?;
+    }
+    Ok(instance.new_none())
+}
+
 /// 建 `_thread` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -124,17 +209,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     }
     // **未落地**的入口（名字齐 ✓、调用时如实报未实现 ✓）——`threading.py` 一类还没进 `Lib/`。
     for name in [
-        "start_new_thread",
         "exit",
         "exit_thread",
         "interrupt_main",
         "stack_size",
-        "daemon_threads_allowed",
         // **第 333 轮补的三条** ✓：`Lib/threading.py` 在**模块级**就取它们 ✓
         // （`_start_joinable_thread = _thread.start_joinable_thread` 等 ✓）⇒ 名字必须在 ✓，
         // 调用时按 `CM-6` **如实报未实现** ✓（本层没有真线程 ✓）。
-        "start_joinable_thread",
-        "set_name",
     ] {
         let native = make_native(instance, name, not_implemented_native);
         instance.dict_set(namespace, name, native);
@@ -166,6 +247,23 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 单线程下"关掉所有线程"这件事**已经**成立 ✓，这是**如实实现** ✓）。
     let shutdown = make_native(instance, "_shutdown", shutdown_native);
     instance.dict_set(namespace, "_shutdown", shutdown);
+    // **线程创建的单线程同步仿真**（round 151）：`threading.py` 的两条入口都接上 ✓。
+    let start_new = make_native(instance, "start_new_thread", start_new_thread_native);
+    instance.dict_set(namespace, "start_new_thread", start_new);
+    let start_joinable = make_native(
+        instance,
+        "start_joinable_thread",
+        start_joinable_thread_native,
+    );
+    instance.dict_set(namespace, "start_joinable_thread", start_joinable);
+    let set_name = make_native(instance, "set_name", set_name_native);
+    instance.dict_set(namespace, "set_name", set_name);
+    let daemon_allowed = make_native(
+        instance,
+        "daemon_threads_allowed",
+        daemon_threads_allowed_native,
+    );
+    instance.dict_set(namespace, "daemon_threads_allowed", daemon_allowed);
     // **`_local`** ✓（第 724 轮）：`Lib/threading.py:67` 的 `from _thread import _local as local` ✓
     // —— 缺它就走 `from _threading_local import local` 那条**回退** ✗，而 `Lib/_threading_local.py:120`
     // 又 `from threading import current_thread, RLock` ⇒ 正在初始化的 `threading` 里没有它 ⇒

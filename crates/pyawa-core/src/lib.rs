@@ -128,6 +128,7 @@ pub type AstParserFn =
         -> Result<core::ptr::NonNull<crate::Header>, crate::ExecError>;
 pub use builtin_objects::copy_context_value;
 pub use builtin::thread::thread_handle_new;
+pub use builtin::thread::{thread_handle_mark_done, thread_handle_getattr};
 pub use builtin_objects::filter_new;
 pub use builtin_objects::map_new;
 

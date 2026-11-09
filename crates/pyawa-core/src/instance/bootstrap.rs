@@ -769,7 +769,8 @@ impl Instance {
             // 一跑就踩它 ✗（实测 `TypeError: cannot create '_ThreadHandle' instances` ✓）
             // ⇒ 补 `tp_new`（`plain_new` 按登记尺寸分配 ✓，与 `object`／`bool` 同一手法 ✓）。
             crate::builtin_objects::ThreadHandleObject::slots()
-                .with_new(crate::builtin::thread::thread_handle_slot_new),
+                .with_new(crate::builtin::thread::thread_handle_slot_new)
+                .with_getattr(crate::builtin::thread::thread_handle_getattr),
         );
         {
             let base = self.type_named("object").expect("object 已登记");

@@ -244,7 +244,9 @@ pub unsafe fn context_getattr(
         "get" => context_not_implemented_native,
         "__contains__" => context_not_implemented_native,
         "copy" => context_not_implemented_native,
-        "run" => context_not_implemented_native,
+        // **`run` 接线**（round 151）：单线程仿真下"当前上下文"就是全局 ⇒ 直接同步调用 ✓
+        //（`threading.Thread.start` 的 `self._context.run(self.run)` 靠它 ✓）。
+        "run" => context_run_native,
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };

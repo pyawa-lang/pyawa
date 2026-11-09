@@ -269,6 +269,93 @@ pub fn thread_handle_new(instance: &Instance) -> Result<NonNull<Header>, ExecErr
     Ok(handle.into_raw().cast::<Header>())
 }
 
+/// **把句柄标记为"已完成"**（round 151 的单线程仿真用；`_thread.start_joinable_thread` 跑完同步体后调用）。
+pub fn thread_handle_mark_done(
+    instance: &Instance,
+    handle: NonNull<Header>,
+) -> Result<(), ExecError> {
+    if instance.type_name(instance.type_of(handle)) != "_ThreadHandle" {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "handle must be a _ThreadHandle",
+        ));
+    }
+    // SAFETY: 上面确认过类型 ⇒ 载荷就是 `ThreadHandleObject`。
+    let object = unsafe { &*handle.as_ptr().cast::<crate::builtin_objects::ThreadHandleObject>() };
+    object.mark_done();
+    let _ = instance;
+    Ok(())
+}
+
+/// `_ThreadHandle.is_done()`（round 151）：单线程仿真里"同步跑完 ⇒ 已完成" ✓。
+pub(crate) unsafe fn thread_handle_is_done_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(handle) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "_ThreadHandle: 缺 self"));
+    };
+    // SAFETY: 调用方保证 bound 是本类型的存活对象。
+    let object = unsafe { &*handle.as_ptr().cast::<crate::builtin_objects::ThreadHandleObject>() };
+    Ok(instance.new_bool(object.is_done()))
+}
+
+/// `_ThreadHandle.join(timeout=None)`：单线程仿真里"已经在调用前跑完" ⇒ 立刻返回 `None` ✓。
+pub(crate) unsafe fn thread_handle_join_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(instance.new_none())
+}
+
+/// `_ThreadHandle.ident`（属性读）：单线程 ⇒ 恒为"主线程 ident" ✓。
+pub(crate) unsafe fn thread_handle_ident_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(instance.new_int(MAIN_THREAD_IDENT as i64))
+}
+
+/// **`_ThreadHandle` 的属性面**（round 151）：`is_done`／`join`／`ident` 三个（`threading.py`
+/// 的 `Thread.is_alive`／`join`／`ident` 都直接读它们 ✓）—— 造**绑定到句柄**的
+/// `builtin_function_or_method`（与 `list_getattr` 同一手法 ✓）。
+pub unsafe fn thread_handle_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "is_done" => thread_handle_is_done_native,
+        "join" => thread_handle_join_native,
+        "ident" => thread_handle_ident_native,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+        method_type,
+        "_ThreadHandle",
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 绑定方法要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
 /// **`_ThreadHandle()` 的 `tp_new`** ✓（第 724 轮）：`Lib/threading.py` 的 `Thread.__init__` 里
 /// `self._handle = _ThreadHandle()` ✓，模块级 `_MainThread()` 一跑就踩它 ✗
 /// —— 缺 `tp_new` 报 `TypeError: cannot create '_ThreadHandle' instances` ✓；
