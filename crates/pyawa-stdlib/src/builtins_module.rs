@@ -3199,19 +3199,22 @@ fn sum_native(
     };
     for item in items_of(instance, args[0])? {
         let next = instance.add_values(total, item);
-        instance.release(item);
         match next {
             Some(value) => {
                 instance.release(total);
+                instance.release(item);
                 total = value;
             }
             None => {
+                // **先取类型名、再释放**（round 133 真 UAF 修 ✗）：先前先 `release(item)` 再
+                // `type_name(item)` ⇒ 读已释放对象（`test_statistics` 的 sum(混类型) 实测 SIGSEGV ✓）。
                 let message = format!(
                     "unsupported operand type(s) for +: '{}' and '{}'",
                     type_name(instance, total),
                     type_name(instance, item)
                 );
                 instance.release(total);
+                instance.release(item);
                 return Err(instance.raise_builtin_error("TypeError", &message));
             }
         }
