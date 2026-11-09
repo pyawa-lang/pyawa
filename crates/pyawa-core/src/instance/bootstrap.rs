@@ -18,6 +18,7 @@ impl Instance {
             user_types: RefCell::new(Vec::new()),
             user_type_set: RefCell::new(std::collections::HashSet::new()),
             retired_types: RefCell::new(std::collections::HashSet::new()),
+            types_by_name: RefCell::new(std::collections::HashMap::new()),
             user_instances: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_live: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),

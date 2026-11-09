@@ -40,14 +40,20 @@ impl Instance {
     /// 这是**内部**查询（`TS-41` 的对拍与引导期要用）；Python 可见的属性访问**必须**走
     /// `OM-11` 的 `getattr` 槽位，**禁止**用这个函数旁路属性通道。
     pub fn type_named(&self, name: &str) -> Option<NonNull<TypeObject>> {
-        self.types
-            .borrow()
-            .iter()
-            .copied()
-            .find(|ty| {
-                // SAFETY: 注册表里的类型都存活。
-                unsafe { ty.as_ref() }.name() == name
-            })
+        // **O(1) 名字索引**（round 142 性能修 ✓）：先查索引；缺失时退回线性扫（兼容"索引之前的登记"✓
+        // 并顺手补索引 ✓）。
+        if let Some(found) = self.types_by_name.borrow().get(name) {
+            return Some(*found);
+        }
+        let found = self.types.borrow().iter().copied().find(|ty| {
+            // SAFETY: 注册表里的类型都存活。
+            unsafe { ty.as_ref() }.name() == name
+        })?;
+        self.types_by_name
+            .borrow_mut()
+            .entry(name.to_owned())
+            .or_insert(found);
+        Some(found)
     }
 
     /// **TS-40**／**TS-29**：`subtype` 是不是 `supertype` 的子类型（含自身）。

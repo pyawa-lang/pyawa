@@ -528,6 +528,11 @@ impl Instance {
         self.bytes_allocated
             .set(self.bytes_allocated.get() + core::mem::size_of::<TypeObject>());
         self.types.borrow_mut().push(ptr);
+        // **名字索引**（round 142）：先登记者优先（与 `type_named` 旧线性扫口径一致 ✓）。
+        self.types_by_name
+            .borrow_mut()
+            .entry(name.to_owned())
+            .or_insert(ptr);
         ptr
     }
 }

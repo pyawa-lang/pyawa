@@ -1051,6 +1051,8 @@ impl Instance {
             self.types
                 .borrow_mut()
                 .retain(|entry| entry.as_ptr() as usize != address);
+            // **名字索引同步摘掉**（round 142）：否则 `type_named` 会返回已退休的类型 ✗。
+            self.types_by_name.borrow_mut().retain(|_, entry| entry.as_ptr() as usize != address);
             self.user_types
                 .borrow_mut()
                 .retain(|entry| entry.as_ptr() != ty.as_ptr());

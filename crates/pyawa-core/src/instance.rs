@@ -126,6 +126,10 @@ pub struct Instance {
     /// 仍被 `Box::leak` 保留（裸 `ty` 指针仍有效 ✓）；登记在这里让 `assert_live` 认得它 ⇒ 仍在别处的
     /// 计数引用将来释放它时不会被当野指针 ✓（round 129 曾因此悬垂）。
     retired_types: RefCell<std::collections::HashSet<usize>>,
+    /// **类型名 → 类型对象索引**（round 142 真性能修 ✗）：`type_named` 先前是**对 `types` 线性扫**
+    /// （每次 `builtin_type(instance, …)` 都扫一遍 ⇒ 套件里类型一多就**每次 Python 调用**吃几微秒 ✓）；
+    /// 现在 O(1) 哈希查找 ✓（`or_insert` 保持"先登记者优先"，与线性扫的旧口径一致 ✓）。
+    types_by_name: RefCell<std::collections::HashMap<String, NonNull<TypeObject>>>,
     /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
     user_type_set: RefCell<std::collections::HashSet<usize>>,
     /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**
