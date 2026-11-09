@@ -37,6 +37,9 @@ def main() -> None:
     # **流式输出**（round 149）：每条用例跑完立刻打印（默认只在最后汇总 ⇒ 套件跑不完/超时就
     # 什么都看不到 ✗）；排查"类内累积变慢"（`test_weakref.MappingTestCase`）必须看**逐条时序** ✓。
     ap.add_argument("--stream", action="store_true")
+    # **只跑匹配的用例**（round 160）：`--test NAME`（可重复）按 id 子串过滤 ⇒ 能在"类内上下文"
+    # （前面用例的全局状态）里单独给一条用例计时 ✓；先前只能整档跑。
+    ap.add_argument("--test", action="append", default=[])
     args = ap.parse_args()
 
     path = pathlib.Path(args.test_file).resolve()
@@ -45,8 +48,21 @@ def main() -> None:
     sys.path.insert(0, str(path.parent))
     module = __import__(path.stem)
     suite = unittest.defaultTestLoader.loadTestsFromModule(module)
+    selected = list(flatten(suite))
+    if args.test:
+        # 不用嵌套推导式（本层嵌套推导式的作用域有已知缺口）：显式两段循环 ✓。
+        matched = []
+        for test in selected:
+            keep = False
+            for pattern in args.test:
+                if pattern in test.id():
+                    keep = True
+                    break
+            if keep:
+                matched.append(test)
+        selected = matched
     times = []
-    for test in flatten(suite):
+    for test in selected:
         started = time.monotonic()
         test.run(unittest.TestResult())
         elapsed = time.monotonic() - started

@@ -6,13 +6,14 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`c061e34`（round 159：控制流异常 `SkipTest` 不挂 `__traceback__`（如实偏差）；线程化用例跳过后 live 645 783 ⇒ 8x）
+- **HEAD**：`ecbd3bc`（round 160：`test_durations.py --test` 用例筛选工具；钉出编译器 bug：推导式内嵌生成器表达式引用推导变量 ⇒ cell 提升缺失/解析错）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：约 **75–80 ok / 397 ≈ 19–20%**（10-31 是 41／10.3%）；超时 1–2（基本只剩 `test_weakref`）
 - **内存类硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）⇒ `target/memdangle_survey.tsv`；
   **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
 - **未修 bug ＋ 判据**（如实 ✓）：
+  - **编译器**：推导式内嵌生成器表达式引用推导变量 ⇒ 编译期 panic／解析错（最小复现见台账 round 160；判据：`[x for x in xs if any(str(x) == y for y in ['1','3'])]` 能跑）
   - `test_weakref` 285 s ✗（唯一超时；根因＝4 万+ 异常对象的 traceback 保活被测局部；候选 `pending_exception`／`exception_state` 栈）
   - 形参所有权／引用泄漏 ✗（台账 13 处；三版方案已撤回）
   - 日常面：`json.load(f)` ✗（`StopIteration`）· `defaultdict` ✗ · `match` 同行 suite ✗ · `urllib.request` ✗
