@@ -322,6 +322,47 @@ pub fn object_reduce_ex_native(
             }
         }
     }
+    // **协议 0／1 的形状**（round 116 真缺口）：参照给
+    // `(copyreg._reconstructor, (类, object, None), state)` ✓ —— 先前落到"`(类型, 空参数元组)`" ✗
+    // ⇒ 协议 0／1 的 pickle／copy **丢全部实例属性** ✗（`test_userlist.test_pickle` 的
+    // `pickle.dumps(lst, 0/1)` 反序列化后 `[] != [4,5,6,7]` ✓）。
+    {
+        if let Ok(Some(copyreg)) = crate::executor::import::import_through_bridge(instance, "copyreg") {
+            if let Some(namespace) = crate::mounted_instance_dict(instance, copyreg) {
+                if let Some(reconstructor) = instance.dict_get(namespace, "_reconstructor") {
+                    let class_value = instance.retain(ty.cast::<Header>());
+                    let object_type = instance
+                        .type_named("object")
+                        .map(|object_ty| instance.retain(object_ty.cast::<Header>()))
+                        .unwrap_or_else(|| instance.retain(instance.singletons().none()));
+                    let none = instance.retain(instance.singletons().none());
+                    let reconstructor_args =
+                        instance.new_tuple(vec![class_value, object_type, none]);
+                    let state = match crate::executor::protocol::instance_attributes(instance, object)
+                        .and_then(|attributes| instance.dict_entries(attributes))
+                    {
+                        Some(entries) if !entries.is_empty() => {
+                            let state = instance.new_dict();
+                            for (key, value) in entries {
+                                instance.dict_insert_raw(
+                                    state,
+                                    instance.retain(key),
+                                    instance.retain(value),
+                                );
+                            }
+                            instance.retain(state)
+                        }
+                        _ => instance.retain(instance.singletons().none()),
+                    };
+                    return Ok(instance.new_tuple(vec![
+                        instance.retain(reconstructor),
+                        reconstructor_args,
+                        state,
+                    ]));
+                }
+            }
+        }
+    }
     // 类型对象也是对象（本层如此登记）⇒ 直接当元组第一项 ✓。
     let ty_object = ty.cast::<Header>();
     Ok(instance.new_tuple(vec![ty_object, instance.new_tuple(Vec::new())]))

@@ -32,7 +32,12 @@ impl Instance {
         if crate::executor::call::inherited_call_slot(ty).is_some() {
             return true;
         }
-        ty == self.metatype()
+        // **类对象恒可调用**（round 116 真 bug 修 ✗）：先前的 `ty == metatype()` 只覆盖"元类恰是
+        // `type`"的情形 ✗ ⇒ 元类是 **用户元类／`ABCMeta`** 的类（`collections.UserList` ✓）被误判为
+        // 不可调用 ✗（`pickle` 的 `save_reduce` 用 `callable()` 校验 `__reduce__` 首项 ⇒
+        // `PicklingError: first item … must be callable, not abc.ABCMeta` ✓）。
+        self.is_type_object(object)
+            || ty == self.metatype()
             || Some(ty) == self.type_named("function")
             || Some(ty) == self.type_named("builtin_function_or_method")
             || Some(ty) == self.type_named("method")
