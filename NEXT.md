@@ -6,14 +6,14 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`3c568c4`（round 161：推导式内嵌生成器引用推导变量 ⇒ 进程级 panic 改成明确编译错误；真因＝module 不跑 `analyze_cells`＋内联推导式 cell 路径未接）
+- **HEAD**：`0c2398a`（round 162：推导式内嵌生成器引用推导变量已真正接线——隐藏形参法；processes 两作用域均对）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：约 **75–80 ok / 397 ≈ 19–20%**（10-31 是 41／10.3%）；超时 1–2（基本只剩 `test_weakref`）
 - **内存类硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）⇒ `target/memdangle_survey.tsv`；
   **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
 - **未修 bug ＋ 判据**（如实 ✓）：
-  - **编译器**：推导式内嵌生成器表达式引用推导变量 ⇒ 现为**明确编译错误**（round 161 ✓ 不再 panic）；修法：module 跑 `analyze_cells`＋内联推导式 cell 化目标走 deref（判据见台账 round 161 §2）
+  - **编译器**：推导式内嵌生成器表达式引用推导变量 **round 162 已接线**（隐藏形参法 ✓；判据见台账 round 162 §2）
   - `test_weakref` 285 s ✗（唯一超时；根因＝4 万+ 异常对象的 traceback 保活被测局部；候选 `pending_exception`／`exception_state` 栈）
   - 形参所有权／引用泄漏 ✗（台账 13 处；三版方案已撤回）
   - 日常面：`json.load(f)` ✗（`StopIteration`）· `defaultdict` ✗ · `match` 同行 suite ✗ · `urllib.request` ✗

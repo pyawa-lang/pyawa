@@ -82,7 +82,7 @@ impl Emitter {
                         ScopeKind::Class => format!("{}.<genexpr>", self.qualname),
                         ScopeKind::Function => format!("{}.<locals>.<genexpr>", self.qualname),
                     };
-                    let parameters = vec![Parameter {
+                    let mut parameters = vec![Parameter {
                         name: iterator,
                         posonly: false,
                         annotation: None,
@@ -121,21 +121,33 @@ impl Emitter {
                             closure_freevars.push(referenced);
                         }
                     }
-                    // **推导式内嵌生成器引用推导变量 ⇒ 如实报未接线**（round 161）：本层作用域
-                    // 的 cell 提升／内联推导式的 cell 读写路径还没接（module 作用域连
-                    // `analyze_cells` 都没跑；函数作用域会撞 `RefCell 借用冲突` ✗）⇒ 先前是
-                    // **进程级 panic** ✗ ⇒ 这里在发射前明确拒绝（调用方能转 SyntaxError ✓）。
-                    // 判据（round 162）：让 module 也跑 `analyze_cells`，且内联推导式对 cell 化目标
-                    // 走 `LOAD_DEREF`／`STORE_DEREF`；之后这两条最小复现应能跑 ✓。
-                    if let Some(captured) = closure_freevars
-                        .iter()
-                        .find(|free| self.comprehension_locals.iter().any(|local| local == *free))
-                    {
-                        return Err(CompileError::Unsupported(format!(
-                            "推导式内嵌生成器表达式引用推导变量「{captured}」：cell 提升尚未接线（见台账 round 161）"
-                        )));
+                    // **推导式内嵌生成器引用推导变量**（round 162）：推导变量是**本层普通局部**
+                    // （内联推导式的目标，未提升成 cell ✓）⇒ 用**隐藏形参**把它传进生成器：
+                    // 生成器单元多收几个与推导变量同名的形参（体内按 `LOAD_FAST` 读 ✓），
+                    // 调用点在 `.0` 之后按同序压值 ✓。这样 module／函数两种作用域都能跑，
+                    // 也不用碰"内联推导式的 cell 读写路径"（尚未接线 ✓）。
+                    let mut parameter_captures: Vec<String> = Vec::new();
+                    let mut true_freevars: Vec<String> = Vec::new();
+                    for free in closure_freevars.drain(..) {
+                        if self.comprehension_locals.iter().any(|local| local == &free) {
+                            parameter_captures.push(free);
+                        } else {
+                            true_freevars.push(free);
+                        }
                     }
-                    if !closure_freevars.is_empty() {
+                    let closure_freevars = true_freevars;
+                    if !parameter_captures.is_empty() {
+                        for capture in &parameter_captures {
+                            parameters.push(Parameter {
+                                name: capture.clone(),
+                                posonly: false,
+                                annotation: None,
+                                annotation_span: None,
+                                default: None,
+                            });
+                        }
+                    }
+                    if !parameter_captures.is_empty() || !closure_freevars.is_empty() {
                         unit = compile_scope(
                             "<genexpr>",
                             &nested_qualname,
@@ -153,21 +165,12 @@ impl Emitter {
                             Span::new(span.line_start, span.line_start, 0, 0),
                         )?;
                     }
-                    // **闭包元组**在 `LOAD_CONST` **之前** ✓、`SET_FUNCTION_ATTRIBUTE 8` 在 `MAKE_FUNCTION`
-                    // **之后** ✓（参照实测 ✓）。
                     if !closure_freevars.is_empty() {
                         for free in &closure_freevars {
-                            // **如实报未接线，不 panic**（round 161）：`[x for x in xs if any(y == x for y in z)]`
-                            // —— 推导式内嵌"引用推导变量"的生成器表达式时，编译器还没把推导变量提升成 cell
-                            // （module 作用域连 `analyze_cells` 都没跑 ✓；函数作用域提升了但内联推导式的
-                            // cell 读写路径还会撞 `RefCell 借用冲突` ✓）⇒ 先前是**进程级 panic** ✗ ⇒
-                            // 改成明确的编译错误（调用方能转 SyntaxError／报未接线，不再崩 ✓）。
-                            // 判据（round 162）：`compile/symbols.rs` 让 module 也跑 `analyze_cells`，并让
-                            // 内联推导式对 cell 化目标走 `LOAD_DEREF`／`STORE_DEREF`。
                             let Some(slot) = self.deref_slot(free) else {
                                 return Err(CompileError::Unsupported(
                                     format!(
-                                        "推导式内嵌生成器表达式引用推导变量「{free}」：cell 提升尚未接线（见台账 round 161）"
+                                        "生成器表达式引用「{free}」：cell／自由变量槽缺失（见台账 round 161/162）"
                                     ),
                                 ));
                             };
@@ -183,7 +186,15 @@ impl Emitter {
                     }
                     self.emit_expression(&outer_iterable)?;
                     self.emit_named(outer_iterable.span(), "GET_ITER", 0);
-                    self.emit_named(*span, "CALL", 0);
+                    // **隐藏形参的值**（round 162）：按 `parameters` 里同序压栈 ✓
+                    for capture in &parameter_captures {
+                        let slot = self.slot_of(capture);
+                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
+                    }
+                    // **CALL 的 argc 只数实参**：栈布局是 `[函数, self 槽, 实参…]` ✓ ——
+                    // 这里 `self` 槽放的就是 `.0` 迭代器（生成器当作它的第一个实参 ✓），
+                    // 所以 argc ＝ 隐藏形参个数 ✓（先前 +1 会多弹一个 NULL 槽 ⇒ `'NULL' object is not callable` ✗）。
+                    self.emit_named(*span, "CALL", parameter_captures.len() as u8);
                     self.last_span = *span;
                     self.epilogue_span = *span;
                     Ok(())
