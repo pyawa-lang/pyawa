@@ -1760,6 +1760,15 @@ fn trace_line_event<'a>(
     else {
         return Ok(());
     };
+    // **`f_trace_lines=False` 时不发 `'line'` 事件**（round 182）：参照里本地追踪也要过这个开关 ✓。
+    if let Some(lines) = header
+        .instance_dict()
+        .and_then(|dict| instance.dict_get(dict, "f_trace_lines"))
+    {
+        if instance.truthiness_of(lines).map(|enabled| !enabled).unwrap_or(false) {
+            return Ok(());
+        }
+    }
     // 非可调用值（`test_lineno_with_tracing` 的 `f_trace = True`）⇒ 不发事件 ✓
     // （`trace_active` 只在可调用时置位，这里再守一次，防"设了之后又被换成不可调用值"）。
     if crate::executor::attribute::attribute_lookup_swallowing(instance, trace, "__call__").is_none() {
