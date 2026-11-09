@@ -78,11 +78,11 @@ fn eq_native(
     // `TypeError`、容器与子类优先级照 `COMPARE_OP` 同一处真相 ✓ —— 先前用 `values_equal_public`（**值相等**
     // 快照，不含 dunder 派发）✗ ⇒ `test_binop` 的 `op_sequence(eq, A, A)` 记不到任何调用 ✗。
     // **富结果语义**（round 138）：与 `==` 算子同口径（`test_richcmp.Vector` 的 `operator.eq` 也返回 Vector ✓）。
-    let rich = pyawa_core::executor::protocol::equality_compare_result(
-        instance, *left, *right, "==", 0,
-    )?;
-    if let Some(value) = rich {
-        return Ok(value);
+    use pyawa_core::executor::protocol::RichCompare;
+    match pyawa_core::executor::protocol::equality_compare_result(instance, *left, *right, "==", 0)? {
+        Some(RichCompare::Value(value)) => return Ok(value),
+        Some(RichCompare::Fallback) => return Ok(instance.new_bool(*left == *right)),
+        None => {}
     }
     let equal = pyawa_core::executor::protocol::compare_public(instance, *left, *right, "==", 0)?;
     Ok(instance.new_bool(equal))
@@ -98,11 +98,11 @@ fn ne_native(
     let (left, right) = two_arguments(instance, "ne", args)?;
     // **`!=` 同样走完整协议**（含 `__ne__ = None` 报 `TypeError` 的"None 阻断"语义 ✓）；
     // 富结果语义（round 138）：与 `!=` 算子同口径。
-    let rich = pyawa_core::executor::protocol::equality_compare_result(
-        instance, *left, *right, "!=", 0,
-    )?;
-    if let Some(value) = rich {
-        return Ok(value);
+    use pyawa_core::executor::protocol::RichCompare;
+    match pyawa_core::executor::protocol::equality_compare_result(instance, *left, *right, "!=", 0)? {
+        Some(RichCompare::Value(value)) => return Ok(value),
+        Some(RichCompare::Fallback) => return Ok(instance.new_bool(*left != *right)),
+        None => {}
     }
     let different = pyawa_core::executor::protocol::compare_public(instance, *left, *right, "!=", 0)?;
     Ok(instance.new_bool(different))
@@ -164,17 +164,23 @@ fn ordering_native(
     let (left, right) = two_arguments(instance, name, args)?;
     // **富结果语义**（round 138）：与 `<` 算子同口径 —— 用户类实现返回**结果对象**本身 ✓
     // （`test_richcmp.Vector` 的 `operator.lt` 也要求返回 Vector ✓）；否则原 bool 兜底 ✓。
-    let rich = pyawa_core::executor::protocol::order_compare_result(
-        instance, *left, *right, symbol, 0,
-    )?;
-    Ok(match rich {
-        Some(value) => value,
+    use pyawa_core::executor::protocol::RichCompare;
+    match pyawa_core::executor::protocol::order_compare_result(instance, *left, *right, symbol, 0)? {
+        Some(RichCompare::Value(value)) => Ok(value),
+        Some(RichCompare::Fallback) => Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "'{symbol}' not supported between instances of '{}' and '{}'",
+                instance.type_name(instance.type_of(*left)),
+                instance.type_name(instance.type_of(*right))
+            ),
+        )),
         None => {
             let truth =
                 pyawa_core::executor::protocol::compare_public(instance, *left, *right, symbol, 0)?;
-            instance.new_bool(truth)
+            Ok(instance.new_bool(truth))
         }
-    })
+    }
 }
 
 /// `operator.lt(a, b)`。

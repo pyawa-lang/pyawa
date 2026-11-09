@@ -822,6 +822,15 @@ fn call_compare_dunder(
     Ok(Some(truth?))
 }
 
+/// **富比较派发结果**（round 139）：`Value`＝拿到用户 dunder 的结果对象（直接当表达式值）；
+/// `Fallback`＝**已经派发过**、两侧都 `NotImplemented` ⇒ 调用方按参照兜底（`==`/`!=` 身份判定、
+/// 大小比较 `TypeError`），**不得再走 `compare_public`**（否则用户 dunder 会被重复调用 ✗，
+/// `test_binop.test_comparison_orders` 就是数调用次数的 ✓）。
+pub enum RichCompare {
+    Value(NonNull<Header>),
+    Fallback,
+}
+
 /// **相等比较的"富结果"语义**（round 138）：参照的 `==`／`!=` 也**返回用户 `__eq__`／`__ne__` 的结果对象**
 /// （`test_richcmp.Vector` 的 `a == b` 返回 Vector ✓）；`None` ⇒ 走既有 `equality_public`（bool）兜底 ✓。
 pub fn equality_compare_result(
@@ -830,12 +839,17 @@ pub fn equality_compare_result(
     right: NonNull<Header>,
     symbol: &str,
     opcode: u8,
-) -> Result<Option<NonNull<Header>>, ExecError> {
+) -> Result<Option<RichCompare>, ExecError> {
     let (direct, reflected) = match symbol {
         "==" => ("__eq__", "__eq__"),
+        // **`!=` 的富路径只看"自己的 `__ne__`"**（round 139 真 bug 修 ✗）：没有自己 `__ne__` 的类
+        // 走 `object.__ne__` 默认（委托 `__eq__` 再取反 ⇒ **bool** ✓），这条语义在 `compare_public`
+        // 里已经完整（含"左侧默认 ne 先命中、不会先碰右侧 `__ne__ = None`"的次序 ✓）⇒ 这里返回
+        // `None` 交回去 ✓（否则 `e != xn` 会错误地先调 `XN.__ne__ = None` 抛 TypeError ✗）。
         "!=" => ("__ne__", "__ne__"),
         _ => return Ok(None),
     };
+
     let left_type = instance.type_of(left);
     let right_type = instance.type_of(right);
     let right_first = right_type != left_type && instance.is_subtype(right_type, left_type);
@@ -844,6 +858,25 @@ pub fn equality_compare_result(
     } else {
         [(direct, left, right), (reflected, right, left)]
     };
+    // **`!=` 的富路径只在自己 `__ne__` 会**先命中**时启用**（round 139 修正）：
+    // 参照次序里，若首个操作数**没有自己的 `__ne__` 但有 `__eq__`** ⇒ `object.__ne__` 的默认
+    // "委托 `__eq__` 再取反"会先给出结果（不会再问右侧 `__ne__`）⇒ 交回 `compare_public` ✓；
+    // 顺序扫描 order：先碰到"自己的 `__ne__`" ⇒ 用富路径；先碰到"自己的 `__eq__`" ⇒ `None`。
+    if symbol == "!=" {
+        for (_name, operand, _other) in order {
+            if type_has_own_dunder(instance, operand, "__ne__") {
+                break;
+            }
+            let operand_type = instance.type_of(operand);
+            let has_own_eq = instance
+                .type_lookup_owner(operand_type, "__eq__")
+                .is_some_and(|(owner, _)| Some(owner) != instance.type_named("object"));
+            if has_own_eq {
+                return Ok(None);
+            }
+        }
+    }
+    let mut attempted = false;
     for (name, operand, other) in order {
         // **只对用户定义类启用富结果**（round 138 真 bug 修）：内建容器（`dict` 的
         // `test_equal_operator_modifying_operand` 会在 `__eq__` 里改字典 ✓）仍走既有
@@ -854,6 +887,7 @@ pub fn equality_compare_result(
         if !type_has_own_dunder(instance, operand, name) {
             continue;
         }
+        attempted = true;
         let Some(result) = call_object_method(instance, operand, name, &[other])? else {
             continue;
         };
@@ -862,9 +896,13 @@ pub fn equality_compare_result(
             continue;
         }
         let _ = opcode;
-        return Ok(Some(result));
+        return Ok(Some(RichCompare::Value(result)));
     }
-    Ok(None)
+    Ok(if attempted {
+        Some(RichCompare::Fallback)
+    } else {
+        None
+    })
 }
 
 /// **大小比较的"富结果"语义**（round 138，P3-42）：参照的 `<`／`<=`／`>`／`>=` **返回用户
@@ -879,7 +917,7 @@ pub fn order_compare_result(
     right: NonNull<Header>,
     symbol: &str,
     opcode: u8,
-) -> Result<Option<NonNull<Header>>, ExecError> {
+) -> Result<Option<RichCompare>, ExecError> {
     let (direct, reflected) = match symbol {
         "<" => ("__lt__", "__gt__"),
         "<=" => ("__le__", "__ge__"),
@@ -895,11 +933,13 @@ pub fn order_compare_result(
     } else {
         [(direct, left, right), (reflected, right, left)]
     };
+    let mut attempted = false;
     for (name, operand, other) in order {
         // **只派发"自己的"实现** ✓（`object` 的默认 `__lt__` 只返回 `NotImplemented` ✓）。
         if !overrides_compare(instance, operand, name) {
             continue;
         }
+        attempted = true;
         let Some(result) = call_object_method(instance, operand, name, &[other])? else {
             continue;
         };
@@ -908,9 +948,13 @@ pub fn order_compare_result(
             continue;
         }
         let _ = opcode;
-        return Ok(Some(result));
+        return Ok(Some(RichCompare::Value(result)));
     }
-    Ok(None)
+    Ok(if attempted {
+        Some(RichCompare::Fallback)
+    } else {
+        None
+    })
 }
 
 /// **`==` 的完整语义**（`P3-42` 特殊方法派发，round 44）：用户类先问 `__eq__`；容器**逐元素**
@@ -967,6 +1011,15 @@ pub(crate) fn equality_public(
             // ③ 比较为假就 `break`，但**退出后按"当前长度"判定**：两侧都已走完 ⇒ 相等 ✓
             //（`test_equal_operator_modifying_operand`：X/Y 的 `__eq__` 把两侧清空 ⇒ 循环因"都走完"结束
             // ⇒ 参照给 **True** ✓；先前一遇 `__eq__` 假就回 False ✗）。
+            // **长度不同 ⇒ 直接不等**（round 139 真 bug 修 ✗）：参照 `list_richcompare` 的 `Py_EQ` 分支
+            // 先比长度、不同立即返回 False ✓；先前**逐元素比**到首个不匹配才看长度 ⇒ 递归容器
+            // （`UserList.__eq__` 的 `self.data == other.data`，两侧 data 均含对面 ⇒ 无限互递归 ✗）
+            // 会一路递归到解释器深度上限 ✗（`test_richcmp.test_recursion` 实测 RecursionError 逃逸 ✓）。
+            let left_len = instance.list_items(left).map(|items| items.len()).unwrap_or(0);
+            let right_len = instance.list_items(right).map(|items| items.len()).unwrap_or(0);
+            if left_len != right_len {
+                return Ok(false);
+            }
             let mut index = 0usize;
             loop {
                 let left_items = instance.list_items(left).unwrap_or_default();

@@ -58,36 +58,50 @@ pub(super) fn step_operators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                             what: "COMPARE_OP 的 cmp 下标（oparg >> 5）超出 cmp_op 的六元组（BC-39／BC-58）",
                         },
                     )?;
-                    // **富结果语义**（round 138）：用户类的大小比较要返回 `__lt__` 等方法的结果对象
-                    // （`test_richcmp.Vector` 的逐元素向量比较 ✓）；没有用户实现 ⇒ 原 bool 兜底 ✓。
+                    // **富结果语义**（round 138/139）：用户类的大小/相等比较返回 dunder 的结果对象；
+                    // 三态：`Value` 直接当表达式值；`Fallback`（已派发、两侧 NotImplemented）按参照兜底
+                    // 且**不再重跑 compare_public**（否则 dunder 被重复调用 ✗）；`None` 才走 compare_public ✓。
                     let rich = match equality_compare_result(
-                        instance,
-                        left,
-                        right,
-                        operator,
-                        opcode_number,
-                    )
-                    .and_then(|value| match value {
-                        Some(value) => Ok(Some(value)),
-                        None => order_compare_result(instance, left, right, operator, opcode_number),
-                    }) {
-                        Ok(value) => value,
-                        Err(error) => {
+                        instance, left, right, operator, opcode_number,
+                    )? {
+                        Some(value) => Some(value),
+                        None => order_compare_result(instance, left, right, operator, opcode_number)?,
+                    };
+                    match rich {
+                        Some(crate::executor::protocol::RichCompare::Value(value)) => {
                             release(instance, left);
                             release(instance, right);
-                            return Err(error);
+                            push(instance, frame.get(), value)?;
                         }
-                    };
-                    if let Some(value) = rich {
-                        release(instance, left);
-                        release(instance, right);
-                        push(instance, frame.get(), value)?;
-                    } else {
-                        let truth = compare_public(instance, left, right, operator, opcode_number);
-                        release(instance, left);
-                        release(instance, right);
-                        let raw = instance.singletons().boolean(truth?);
-                        push(instance, frame.get(), raw)?;
+                        Some(crate::executor::protocol::RichCompare::Fallback) => {
+                            // 参照 `do_richcompare` 的兜底：`==`/`!=` 用**身份**判定；
+                            // 大小比较 ⇒ `TypeError: '<' not supported between instances of ...`。
+                            let left_name = instance.type_name(unsafe { left.as_ref() }.ty()).to_owned();
+                            let right_name = instance.type_name(unsafe { right.as_ref() }.ty()).to_owned();
+                            let identity = left == right;
+                            release(instance, left);
+                            release(instance, right);
+                            let raw = match operator {
+                                "==" => instance.singletons().boolean(identity),
+                                "!=" => instance.singletons().boolean(!identity),
+                                _ => {
+                                    return Err(instance.raise_builtin_error(
+                                        "TypeError",
+                                        &format!(
+                                            "'{operator}' not supported between instances of '{left_name}' and '{right_name}'"
+                                        ),
+                                    ))
+                                }
+                            };
+                            push(instance, frame.get(), raw)?;
+                        }
+                        None => {
+                            let truth = compare_public(instance, left, right, operator, opcode_number);
+                            release(instance, left);
+                            release(instance, right);
+                            let raw = instance.singletons().boolean(truth?);
+                            push(instance, frame.get(), raw)?;
+                        }
                     }
                 }
                 "BINARY_OP" => {
