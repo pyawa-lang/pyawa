@@ -586,7 +586,32 @@ pub(crate) fn attribute_lookup(
             instance.current_site()
         );
     }
-    Err(raise_builtin(
+    // **内建 `list` 类型对象的未绑定方法描述符**（round 152）：`list.__len__(a)`／
+    // `list.append(a, x)` 是参照的 method_descriptor 用法 ✓；本层实现放在 `list_getattr` 槽里
+    // （实例可绑 ✓、类型对象取不到 ✗）⇒ 这里对**注册的 `list` 类型**造一个"未绑定描述符"
+    // （名字带 `descriptor:` 前缀，`call_callable` 会把首参当 `self` ✓）。
+    if instance.is_type_object(object) {
+        if instance.type_named("list").is_some_and(|list_type| list_type.cast::<Header>() == object) {
+            if let Some(handler) = crate::builtin::list::list_method_handler(name) {
+                let method_type = instance
+                    .type_named("builtin_function_or_method")
+                    .expect("builtin_function_or_method 在引导期已登记");
+                let display: &'static str =
+                    Box::leak(format!("descriptor:list.{name}").into_boxed_str());
+                let native = instance
+                    .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                        method_type,
+                        display,
+                        core::cell::Cell::new(handler),
+                    ))
+                    .into_raw()
+                    .cast::<Header>();
+                return Ok(Attribute::Owned(native));
+            }
+        }
+    }
+
+        Err(raise_builtin(
         instance,
         "AttributeError",
         &format!("'{type_name}' object has no attribute '{name}'"),

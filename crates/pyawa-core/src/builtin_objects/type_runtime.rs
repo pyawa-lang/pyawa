@@ -407,6 +407,13 @@ pub fn dir_new(
         let object = args[0];
         if instance.is_type_object(object) {
             collect_type_mro_names(instance, object.cast(), &mut names);
+            // **内建 `list` 的参照名字面**（round 152）：`list` 的方法大多在 `getattr` 槽里、
+            // 不在类型字典 ⇒ `dir(list)` 会少名字 ✗ ⇒ 补一张参照表面表 ✓（tut3 逐项钉住 ✓）。
+            if instance.type_named("list").is_some_and(|list_type| list_type.cast::<Header>() == object) {
+                for name in crate::builtin::list::LIST_TYPE_DIR_NAMES {
+                    names.insert((*name).to_owned());
+                }
+            }
             // **`mro`**（round 87）：参照里它在 **`type` 的类型字典**上（`type.mro`）⇒ `dir(type)`
             // 看得到、而 `dir(<普通类>)` **看不到** ✓（实测 `'mro' in dir(int)` 为 False ✓）。
             // 本层 `type.mro` 是 `getattr` 动态给的、字典里没有 ⇒ 这里**只给 `dir(type)` 补名** ✓
