@@ -852,9 +852,42 @@ class Check:
     run: Callable[[], list[str]]
 
 
+def check_next_page_size() -> list[str]:
+    """CX-23：`NEXT.md` 是单页交接 —— ≤ 40 行；禁止在本页写逐轮复盘（历史只进台账）。"""
+    path = pathlib.Path(__file__).resolve().parents[2] / "NEXT.md"
+    if not path.is_file():
+        return ["NEXT.md 不存在"]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    problems = []
+    if len(lines) > 40:
+        problems.append(f"NEXT.md 有 {len(lines)} 行（CX-23 上限 40）⇒ 逐轮复盘请移动账 docs/rounds/")
+    longest = max((len(line) for line in lines), default=0)
+    if longest > 4000:
+        problems.append(f"NEXT.md 最长行 {longest} 字符（CX-23）：疑似把逐轮复盘塞进了单行")
+    return problems
+
+
+def check_next_head_line() -> list[str]:
+    """CX-24：`NEXT.md` 的 HEAD 行必须是短哈希（可解析为真实提交），禁止写指针。"""
+    path = pathlib.Path(__file__).resolve().parents[2] / "NEXT.md"
+    if not path.is_file():
+        return ["NEXT.md 不存在"]
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"^\s*-\s*\*\*HEAD\*\*[:：]\s*`?([0-9a-f]{7,40})`?", text, re.M)
+    if not match:
+        return ["NEXT.md 的 HEAD 行不是短哈希（CX-24）：应写 `git rev-parse --short HEAD` 的输出，禁止写指针"]
+    proc = subprocess.run(["git", "cat-file", "-e", f"{match.group(1)}^{{commit}}"],
+                          cwd=path.parent, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return [f"NEXT.md HEAD 行写 {match.group(1)}，但仓库里解析不到（CX-24）"]
+    return []
+
+
 def build_checks() -> list[Check]:
     checks = [
         Check("T-CX-1", ("CX-1",), "编号零悬空（全库引用）＋ 重复定义", check_spec_ids),
+        Check("T-CX-14", ("CX-23",), "NEXT 单页 ≤40 行、禁止逐轮复盘", check_next_page_size),
+        Check("T-CX-15", ("CX-24",), "NEXT 的 HEAD 行＝短哈希、可解析", check_next_head_line),
         Check("T-CX-2", ("CX-2",), "文档集状态：SPEC-INDEX §1 ↔ README", check_doc_status),
         Check("T-CX-3", ("CX-3",), "禁全局可变状态（VM 核心 crate 的 src/）", check_global_mutable_state),
         Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 ＋ C 层模块 crate 的 src/）", check_platform_dependencies),
