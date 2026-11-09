@@ -119,6 +119,21 @@ pub fn call_value(
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // **内建可调用的快路**（round 174）：`call_value` 内部调用点极多（属性探针／迭代协议／
+    // `call_object_method`…）⇒ 先前每次都把**借用实参**逐份 incref 进 `Vec` 再交给
+    // `call_callable`（后者再逐份释放）✗ ⇒ 两次分配 ＋ 每实参两次原子无关计数。内建函数
+    // （`builtin_function_or_method`）的 `NativeFn` 契约本来就是"实参借用视图"，可直接调用 ✓。
+    if kwargs.is_empty() {
+        // SAFETY: callable 由调用方保证存活。
+        let callable_type = unsafe { callable.as_ref() }.ty();
+        if callable_type == builtin_type(instance, "builtin_function_or_method") {
+            // SAFETY: 类型身份刚确认。
+            let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
+            let function = native.function();
+            // SAFETY: 签名契约见 `NativeFn`（借用视图 ＋ 新引用返回值）。
+            return unsafe { function(instance, None, args, kwargs) };
+        }
+    }
     let mut owned_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
     for argument in args {
         // SAFETY: 调用方保证实参存活。
