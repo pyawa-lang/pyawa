@@ -665,6 +665,23 @@ impl Instance {
                                 format!("{user_name}:{:p}", user_ty.as_ptr())
                             })
                     });
+                    // **实例的类字典 vs root**（round 122 诊断）：直接对比"实例的类型的 dict 指针"与 root 指针。
+                    let owner_type_dict = {
+                        // SAFETY: 候选存活。
+                        let owner_ty = unsafe { candidate.as_ref() }.ty();
+                        // SAFETY: 类型由注册表持有。
+                        unsafe { &*owner_ty.as_ptr().cast::<crate::TypeObject>() }
+                            .dict()
+                            .map(|dict| dict.as_ptr() as usize)
+                    };
+                    let root_address_for_cmp =
+                        root.map(|root| candidates[root].as_ptr() as usize);
+                    eprintln!(
+                        "[mark] {name} owner_type_dict={:x?} root={:x?} same={}",
+                        owner_type_dict,
+                        root_address_for_cmp,
+                        owner_type_dict == root_address_for_cmp
+                    );
                     let root_keys = root
                         .map(|root| {
                             self.dict_entries(candidates[root])
