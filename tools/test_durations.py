@@ -34,6 +34,9 @@ def main() -> None:
     ap.add_argument("test_file")
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--sort", choices=["slow", "fast"], default="slow")
+    # **流式输出**（round 149）：每条用例跑完立刻打印（默认只在最后汇总 ⇒ 套件跑不完/超时就
+    # 什么都看不到 ✗）；排查"类内累积变慢"（`test_weakref.MappingTestCase`）必须看**逐条时序** ✓。
+    ap.add_argument("--stream", action="store_true")
     args = ap.parse_args()
 
     path = pathlib.Path(args.test_file).resolve()
@@ -46,7 +49,10 @@ def main() -> None:
     for test in flatten(suite):
         started = time.monotonic()
         test.run(unittest.TestResult())
-        times.append((time.monotonic() - started, test.id()))
+        elapsed = time.monotonic() - started
+        if args.stream:
+            print(f"{elapsed:9.3f}s  {test.id()}", flush=True)
+        times.append((elapsed, test.id()))
     times.sort(reverse=args.sort == "slow")
     for elapsed, test_id in times[: args.top]:
         print(f"{elapsed:9.3f}s  {test_id}")
