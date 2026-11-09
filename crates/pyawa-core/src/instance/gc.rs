@@ -93,6 +93,7 @@ impl Instance {
         // 调 `gc.collect()` ✓ ⇒ 语义不丢；④ 让自动回收回归"纯循环垃圾"，类型级清理集中到显式时机 ✓。
         let reclaim_env = std::env::var("PYAWA_ORPHAN_RECLAIM").ok();
         if reclaim_env.as_deref() != Some("0")
+            && !self.gc_skip_reclaim.get()
             && (self.gc_explicit.get() || reclaim_env.as_deref() == Some("1"))
         {
             self.reclaim_orphan_user_types();

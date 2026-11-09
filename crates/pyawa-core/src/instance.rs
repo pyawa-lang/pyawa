@@ -295,6 +295,10 @@ pub struct Instance {
     /// **显式** `gc.collect()` 正在跑（round 110）：孤儿用户类回收只在显式回收或每 N 次自动回收时做 ✓
     /// （否则重负载套件每次自动回收都做 `user_types × gc_headers` 扫描 ⇒ 4–5× 变慢 ✗）。
     gc_explicit: Cell<bool>,
+    /// **本次显式回收是否"只收年轻代"**（round 148）：`gc.collect(0)`／`collect(1)` 是"年轻代"语义，
+    /// 参照里也不会做全量类型级清理 ⇒ 本层对应地**跳过孤儿类型回收**（它要遍历全部候选＋用户类型，
+    /// 是显式回收的最大单项成本 ✗）。`gc.collect()`（默认 2）仍做全量回收 ✓（`free_after` 家族靠它 ✓）。
+    gc_skip_reclaim: Cell<bool>,
     /// **类型级 dunder 的"每类型一份"包装器**（round 103）：参照里每个内建类型在**自己的类型字典**
     /// 里有自己的 slot wrapper（`list.__repr__ is not dict.__repr__` ✓）—— 本层这些 dunder 由
     /// `object` 的同一个 native 兜底 ✗ ⇒ 在**类型对象**上取到的都是**同一个对象** ✗ ⇒

@@ -79,6 +79,7 @@ impl Instance {
             gc_frozen: RefCell::new(HashSet::new()),
             gc_running: Cell::new(false),
             gc_explicit: Cell::new(false),
+            gc_skip_reclaim: Cell::new(false),
             repr_guard: RefCell::new(Vec::new()),
             interrupted: core::sync::atomic::AtomicBool::new(false),
         };

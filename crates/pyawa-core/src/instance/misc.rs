@@ -349,9 +349,17 @@ impl Instance {
     /// **显式** `gc.collect()`：与自动回收区分（round 110）——孤儿用户类回收必须在显式回收时必跑 ✓
     /// （`test_free_after_iterating` 一类判据都显式 `gc.collect()` ✓），自动回收则节流（每 8 次一次）✓。
     pub fn collect_explicit(&self) -> usize {
+        self.collect_explicit_generation(true)
+    }
+
+    /// **按代显式回收**（round 148）：`full=false`（`gc.collect(0)`／`collect(1)`）时跳过孤儿类型回收 ✓。
+    pub fn collect_explicit_generation(&self, full: bool) -> usize {
         let was_explicit = self.gc_explicit.get();
+        let was_skip = self.gc_skip_reclaim.get();
         self.gc_explicit.set(true);
+        self.gc_skip_reclaim.set(!full);
         let freed = self.collect();
+        self.gc_skip_reclaim.set(was_skip);
         self.gc_explicit.set(was_explicit);
         freed
     }

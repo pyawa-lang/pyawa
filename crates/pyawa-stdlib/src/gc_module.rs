@@ -208,7 +208,9 @@ fn collect_native(
         return Err(instance.raise_builtin_error("ValueError", "invalid generation"));
     }
     // **单代**：任何合法代都跑同一趟全量循环回收（如实偏差见模块头）。
-    Ok(instance.new_int(instance.collect_explicit() as i64))
+    // **按代**：`collect(0)`／`collect(1)` 是年轻代语义 ⇒ 跳过孤儿类型回收（快 ✓）；
+    // `collect()`／`collect(2)` 全量 ✓（`free_after` 家族用默认参数 ✓）。
+    Ok(instance.new_int(instance.collect_explicit_generation(generation >= 2) as i64))
 }
 
 /// `gc.isenabled()`：用户可见的启用状态（默认启用；`disable()` 之后为假）。
