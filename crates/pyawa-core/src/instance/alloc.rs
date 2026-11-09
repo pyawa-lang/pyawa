@@ -427,7 +427,9 @@ impl Instance {
     pub fn alloc<'a, T: PyObject>(&'a self, value: T) -> Owned<'a, T> {
         let ptr = self.adopt(value);
         self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
-        if self.gc_alloc_count.get() >= self.gc_next_collect.get() {
+        // **强制全量的请求要"立刻"生效**（round 158）：`gc.set_threshold` 之后 `next_collect` 可能是
+        // "live 级"的大数（2.6M）⇒ 等阈值要再分配几百万个对象，垃圾会拖累一串后续用例 ✗。
+        if self.gc_force_full.get() || self.gc_alloc_count.get() >= self.gc_next_collect.get() {
             // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
             // **开关**（第 93 轮，`PYAWA_NO_GC=1` 才跳过 ✓）：用来判定"刚造好就是垃圾"是不是
             // **这次回收**干的 ✓ —— 若关掉之后崩就没了 ✓，那病灶就在"回收与刚分配对象"的时序上 ✓。
