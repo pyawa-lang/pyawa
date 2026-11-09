@@ -22,6 +22,13 @@ def main() -> int:
     name = sys.argv[2]
     module = types.ModuleType(name)
     module.__file__ = path
+    # **父包上也要挂一份**（round 180）：`exec` 进具名模块绕过了 import 机制 ⇒
+    # `from test import test_pdb`（测试文件常自引用本模块做 subprocess 用例）会走
+    # `from package import name` 的**属性取法** ⇒ 父包上没有这个属性就 `ImportError` ✗。
+    parent_name, _, short_name = name.rpartition(".")
+    parent = sys.modules.get(parent_name) if parent_name else None
+    if parent is not None:
+        setattr(parent, short_name, module)
     sys.modules[name] = module
     source = open(path).read()
     # `__name__` 是导入名 ⇒ 文件自己的 `if __name__ == "__main__":` 不触发 ✓。

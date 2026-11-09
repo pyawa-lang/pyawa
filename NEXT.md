@@ -6,10 +6,10 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`3a579c7`（round 179：帧 f_trace/f_trace_lines/f_trace_opcodes 可写＋参照默认；test_frame 10F/8E⇒10F/7E）
+- **HEAD**：`bc844e6`（round 180：全量 survey 79/68/245/5；tools named runner 补父包属性）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
-- **官方套件**（报告级，会漂 ✓）：**79 ok / 69 unimplemented / 244 runtime / 5 timeout**（round 174 全量 survey）
+- **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
 - **内存类硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）⇒ `target/memdangle_survey.tsv`；
   **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
 - **未修 bug ＋ 判据**（如实 ✓）：
