@@ -1032,6 +1032,24 @@ pub fn build_class_from_parts_with_keywords(
         unsafe { ty.as_ref() }.mark_external_instance_dict();
     }
 
+    // **`__slots__` 登记**（round 147）：槽名表放进 `Instance::type_slots` ⇒ `instance_attribute_set`
+    // 对非槽名报参照的 `AttributeError` ✓（`test_descrtut` 的 tut2 ✓）；值本身仍存在实例字典里
+    // （槽即字典键 ✓，完整"无实例字典"语义随后收 ✓）。
+    if let Some(slots_value) = instance.dict_get(namespace, "__slots__") {
+        let mut names: Vec<String> = Vec::new();
+        if let Some(text) = instance.text_of(slots_value) {
+            // 参照：**字符串形态按空白切**（`__slots__ = 'a b'` 是两个槽 ✓）。
+            names.extend(text.split_whitespace().map(|item| item.to_owned()));
+        } else if let Some(items) = instance.list_items(slots_value) {
+            names.extend(items.iter().filter_map(|item| instance.text_of(*item).map(|text| text.to_owned())));
+        } else if let Some(items) = instance.tuple_items(slots_value) {
+            names.extend(items.iter().filter_map(|item| instance.text_of(*item).map(|text| text.to_owned())));
+        }
+        if !names.is_empty() {
+            instance.register_type_slots(ty, names);
+        }
+    }
+
     // 把类体的命名空间搬进**类型字典**（`OM-11` 的属性通道就是查它）
     // SAFETY: namespace 是刚造的 dict。
     let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };

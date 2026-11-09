@@ -245,6 +245,25 @@ pub fn instance_attribute_set(
     // SAFETY: ty 由注册表持有。
     let type_object = unsafe { header.ty().as_ref() };
     let has_instance_dict = type_object.type_flags() & crate::HAS_INSTANCE_DICT != 0;
+    // **`__slots__` 强制**（round 147）：有槽名表 ⇒ 写非槽名要报参照原话
+    // `'X' object has no attribute 'y' and no __dict__ for setting new attributes` ✓
+    // （`test_descrtut` tut2 的 `a.x1 = 1` ✓；数据描述符那条在上面已先走 ✓）。
+    // **只对用户定义类生效**（round 147 真 bug 修 ✗）：把这条用在**引擎内部对象**（异常／traceback
+    // 一类，写属性是 `attach_traceback` 的内部动作）会触发"报错 → 挂 traceback → 又写属性 → 又报错"
+    // 的**无限递归**（实测 gdb 栈 20+ 层 `instance_attribute_set → raise_builtin → attach_traceback` ✓）。
+    let type_ptr = header.ty().cast::<crate::TypeObject>();
+    if name != "__dict__" && instance.is_user_type_object(type_ptr) {
+        if let Some(in_slot) = instance.type_slot_contains(type_ptr, name) {
+            if !in_slot {
+                release(instance, value);
+                let message = format!(
+                    "'{}' object has no attribute '{name}' and no __dict__ for setting new attributes",
+                    type_object.name()
+                );
+                return Err(raise_builtin(instance, "AttributeError", &message));
+            }
+        }
+    }
     // **`obj.__dict__ = {…}`**（实测）：**整体替换**挂载的字典；值不是字典就是实测那条
     // `TypeError: __dict__ must be set to a dictionary, not a 'int'`。
     if name == "__dict__" && has_instance_dict {

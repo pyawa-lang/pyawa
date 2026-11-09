@@ -89,6 +89,60 @@ impl Instance {
         self.ast_parser.get()
     }
 
+    /// 登记一个类型的 `__slots__` 槽名表（round 147）。
+    pub(crate) fn register_type_slots(&self, ty: NonNull<crate::TypeObject>, names: Vec<String>) {
+        if !names.is_empty() {
+            self.type_slots
+                .borrow_mut()
+                .insert(ty.as_ptr() as usize, names.into_iter().collect());
+        }
+    }
+
+    /// 名字在该类型的**MRO 上的槽名表**里吗？（`None` ＝整条 MRO 都没有 `__slots__` ⇒ 不限制 ✓）
+    ///
+    /// **必须沿 MRO 找**（round 147 真 bug 修 ✗）：`Lib/_pydatetime.py` 的
+    /// `class datetime(date): __slots__ = time.__slots__` 只列了 time 的槽，而 `datetime.__new__`
+    /// 会写 `self._year`（**date 的槽** ✓）——只看精确类型会误报 ✗（对拍 22 条 lib3_* 当场红 ✓）。
+    pub(crate) fn type_slot_contains(&self, ty: NonNull<crate::TypeObject>, name: &str) -> Option<bool> {
+        let table = self.type_slots.borrow();
+        // **没有登记过任何 `__slots__` ⇒ 直接放行**（bootstrap 期一律走这条 ✓）：既快，也避免在
+        // 运行时引导阶段对"还没成型"的类型对象解引用 `mro()`（round 147 实测：引导期 `_io`
+        // 建流对象时 set_attribute 会崩 ✗）。
+        if table.is_empty() {
+            return None;
+        }
+        // SAFETY: 类型由注册表持有、MRO 条目都存活。
+        let mro = unsafe { ty.as_ref() }.mro();
+        let object_type = self.type_named("object");
+        let mut contains = false;
+        for entry in mro {
+            let entry_ty = entry.cast::<crate::TypeObject>();
+            // **`object` 自身不授予实例字典** ✓。
+            if Some(entry_ty) == object_type {
+                continue;
+            }
+            match table.get(&(entry.as_ptr() as usize)) {
+                Some(slots) => {
+                    if slots.contains(name) {
+                        contains = true;
+                    }
+                }
+                None => {
+                    // **用户类**没声明 `__slots__` ⇒ 参照给它（及其子类）实例字典 ⇒ 不限制 ✓
+                    // （`Lib/typing.py` 的 `_SpecialGenericAlias` 继承无 `__slots__` 的
+                    // `_BaseGenericAlias` 正是这种 ✓）。
+                    // **内建基类**（`dict`／`list` 等）没有槽表也**不授予**字典 ⇒ 继续走 ✓
+                    //（`class defaultdict2(dict): __slots__ = [...]` 必须受限 ✓，tut2 ✓）。
+                    if self.is_user_type_object(entry_ty) {
+                        return None;
+                    }
+                }
+            }
+        }
+        // 走到这里 ⇒ 没有"授予字典"的用户基类 ⇒ 限制生效 ✓。
+        Some(contains)
+    }
+
     /// 取"被迭代源类型 → 布局种类"缓存（round 146 性能，见 `iter.rs::source_kind`）。
     pub(crate) fn iterable_source_kind(&self, ty: NonNull<crate::TypeObject>) -> Option<u8> {
         self.iterable_source_kinds

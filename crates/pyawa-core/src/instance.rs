@@ -141,6 +141,11 @@ pub struct Instance {
     /// **被迭代源类型 → 布局种类缓存**（round 146 性能，`iter.rs::source_kind` 用）：避免每个元素都做
     /// 7 次 `type_is_subtype_of`（`type_named` ＋ MRO 线性扫 ✗）。类型布局与实例无关 ⇒ 只存 `u8` 小码 ✓。
     iterable_source_kinds: RefCell<std::collections::HashMap<usize, u8>>,
+    /// **`__slots__` 声明的槽名**（round 147）：键是类型地址、值是槽名表。当前实现：实例仍用普通
+    /// 属性字典**存值**（槽就是字典键 ✓），但**写非槽名**要按参照报
+    /// `'X' object has no attribute 'y' and no __dict__ for setting new attributes` ✓
+    /// （`test_descrtut` 的 tut2 钉这一条 ✓）。完整"无实例字典"语义（`__dict__` 不存在）随后收。
+    type_slots: RefCell<std::collections::HashMap<usize, std::collections::HashSet<String>>>,
     /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
     user_type_set: RefCell<std::collections::HashSet<usize>>,
     /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**
