@@ -34,6 +34,10 @@ pub unsafe fn set_getattr(
         // **`union`**（task-46：从 stdlib 的临时补丁迁回 core ✓ —— `Lib/hashlib.py` 导入期
         // 就 `algorithms_available.union(...)`；round 20 为了先让 hashlib 导入在 stdlib 里
         // 临时挂了这一格，现按"一处真相"收进 core ✓）。
+        // **`clear`**（round 164 真 bug 修 ✗）：`Lib/_weakrefset.py:48` 的 `clear` 是 `self.data.clear()`
+        // ⇒ 本层 `set` 缺 `clear` ⇒ `weakref.WeakSet().clear()` 报 `'set' object has no attribute 'clear'` ✗
+        // （`threading._dangling.clear()` 也走它 ✓）。先前是**方法面缺口**，不是语义问题 ✓。
+        "clear" => set_clear_method_native,
         "union" => set_union_native,
         // **`intersection`／`issubset`／`isdisjoint`／`difference`**（round 92）：`unittest.mock`
         // 的 `_mock_set_magics` 用 `set.intersection` ✗ ⇒ 官方 `test__colorize` 的
@@ -248,6 +252,19 @@ pub(crate) fn set_update_native(
             instance.set_insert_raw(set, item);
         }
     }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `set.clear()`（round 164）：清空并归还元素引用（复用 `set_clear` ✓ 一处真相）。
+pub(crate) fn set_clear_method_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    // SAFETY: `set` 是绑定来的本实例存活对象；`set_clear` 只清载荷并归还引用。
+    unsafe { set_clear(set.as_ptr(), instance) };
     Ok(instance.retain(instance.singletons().none()))
 }
 

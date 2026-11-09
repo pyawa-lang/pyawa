@@ -554,14 +554,25 @@ impl Instance {
                 // SAFETY: 候选存活。
                 let ty = unsafe { candidate.as_ref() }.ty();
                 let name = unsafe { ty.as_ref() }.name().to_owned();
-                if matches!(name.as_str(), "generator" | "cell" | "function") && marked[position] {
+                if matches!(name.as_str(), "generator" | "cell" | "function" | "DummyKey") && marked[position] {
                     let mut chain: Vec<String> = Vec::new();
                     let mut at = position;
                     for _ in 0..8 {
                         let Some(previous) = marked_from[at] else { break };
                         let pty = unsafe { candidates[previous].as_ref() }.ty();
                         let pname = unsafe { pty.as_ref() }.name().to_owned();
-                        chain.push(pname);
+                        if pname == "frame" {
+                            // SAFETY: 类型名确认。
+                            let frame = unsafe { &*candidates[previous].as_ptr().cast::<crate::Frame>() };
+                            let code = frame.code().map(|code| {
+                                // SAFETY: code 由帧持有。
+                                let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
+                                format!("{}:{}", code.qualname(), code.firstlineno())
+                            });
+                            chain.push(format!("frame{code:?}"));
+                        } else {
+                            chain.push(pname);
+                        }
                         at = previous;
                     }
                     eprintln!("[gc-marked] {name} chain={chain:?}");
