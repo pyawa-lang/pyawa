@@ -1822,7 +1822,18 @@ pub fn execute<'a>(
 
         match outcome {
             Ok(Step::Return(value)) => return Ok(ExecOutcome::Returned(value)),
-            Ok(Step::Yield(value)) => return Ok(ExecOutcome::Yielded(value)),
+            Ok(Step::Yield(value)) => {
+                // **生成器挂起 ⇒ 断开 `f_back`**（round 119 真 leak 修）：参照里挂起期间
+                // `gi_frame.f_back is None` ✓；本层先前保留 f_back 的**强引用** ⇒ 生成器帧把
+                // "创建它的调用者帧"钉住 ⇒ `帧 → 类 → 类型字典 → __del__ 闭包 cell → 生成器 → 帧`
+                // 成环，且类的 rc 永远多 1（实测 `class A(UserList)` 的 A `rc=2`、referrer 正是
+                // `frame(wrapper)`）⇒ `test_userlist.test_free_after_iterating` 收不掉 ✗。
+                if let Some(parent) = frame.get().take_f_back() {
+                    // SAFETY: f_back 那份由本帧持有，这里交还。
+                    unsafe { instance.release_object(parent.as_ptr()) };
+                }
+                return Ok(ExecOutcome::Yielded(value));
+            }
             Ok(Step::Continue) => {}
             Err(ExecError::Raised { exception }) => {
                 // BC-60 ①：按异常表回退值栈到 `depth`、按 `lasti` 压最后一条指令偏移、

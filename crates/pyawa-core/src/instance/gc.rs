@@ -194,6 +194,7 @@ impl Instance {
     /// **OM-20**：单个对象的释放三步（正常引用计数路径）。
     pub(crate) fn release_one(&self, ptr: NonNull<Header>) {
         let ty = unsafe { ptr.as_ref() }.ty();
+        self.unregister_user_instance(ty, ptr);
         // **终结延迟判定的重放**（round 82）：`release_one` 正常情况下只在计数 0 时被调用；
         // 但 "终结器自身帧的形参延迟释放" 那条路会把对象**先入队、后重放** —— 重放时计数若已
         // 回不到 0，就是**真复活** ⇒ 只清 `FINALIZING`、不释放（照 `OM-20` 复活语义，之后再死
@@ -311,6 +312,7 @@ impl Instance {
 
     /// **OM-27** ④：释放一个不可达对象（`clear` 已经跑过，这里不再调终结器）。
     pub(crate) fn free_garbage(&self, header: NonNull<Header>) {
+        self.unregister_user_instance(unsafe { header.as_ref() }.ty(), header);
         // 旁表条目随对象释放摘掉 ✓（round 82）。
         self.forget_python_finalized(header.as_ptr() as usize);
         let ty = unsafe { header.as_ref() }.ty();
@@ -570,10 +572,13 @@ impl Instance {
             return;
         }
         // **早退**（round 110）：没有任何 `rc==1` 的用户类型 ⇒ 不可能有孤儿，别做全堆标记 ✓。
-        if !user_types.iter().any(|ty| {
-            // SAFETY: 名单里的类型都存活。
-            unsafe { ty.as_ref() }.refcount() == 1
-        }) {
+        // **诊断模式不早退**（round 119）：`PYAWA_ORPHAN_DEBUG=1` 时照常全扫，便于反查引用者 ✓。
+        if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_none()
+            && !user_types.iter().any(|ty| {
+                // SAFETY: 名单里的类型都存活。
+                unsafe { ty.as_ref() }.refcount() == 1
+            })
+        {
             return;
         }
         // ① 其它类型以裸指针引用（bases／mro／元类）——跳过"自己 MRO 里的自己" ✓。
@@ -610,29 +615,135 @@ impl Instance {
             let address = ty.as_ptr() as usize;
             // SAFETY: 名单里的类型都存活。
             let header = unsafe { ty.as_ref() };
+            let reachable = unreachable.contains(&address);
             if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
                 // SAFETY: ty 存活。
                 let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
                 eprintln!(
-                    "[orphan-scan] {name} rc={} raw={} ptr={address:#x}",
+                    "[orphan-scan] {name} rc={} raw={} attr_unreach={} ptr={address:#x}",
                     header.refcount(),
-                    referenced_by_types.contains(&address)
+                    referenced_by_types.contains(&address),
+                    !reachable
                 );
+                if header.refcount() != 1 || !reachable {
+                    // **反查"谁引用它"**（round 119 诊断）：扫全部 gc 候选的 children ＋ 其它类型的字典。
+                    let mut referrers: Vec<String> = Vec::new();
+                    for candidate in self.gc_headers() {
+                        for child in self.children_of(candidate) {
+                            if child as usize == address {
+                                // SAFETY: 候选存活。
+                                let referrer_ty = unsafe { candidate.as_ref() }.ty();
+                                let referrer_name = unsafe { referrer_ty.as_ref() }.name().to_owned();
+                                if referrer_name == "frame" {
+                                    // SAFETY: 候选存活；帧的 code 由帧持有。
+                                    let frame = unsafe {
+                                        &*candidate.as_ptr().cast::<crate::Frame>()
+                                    };
+                                    let code_name = frame
+                                        .code()
+                                        .map(|code| {
+                                            unsafe { code.cast::<crate::CodeObject>().as_ref() }
+                                                .name()
+                                                .to_owned()
+                                        })
+                                        .unwrap_or_else(|| "?".to_owned());
+                                    referrers.push(format!(
+                                        "{:p}:frame({code_name})",
+                                        candidate.as_ptr()
+                                    ));
+                                } else {
+                                    referrers.push(format!(
+                                        "{:p}:{referrer_name}",
+                                        candidate.as_ptr()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    for other in self.user_type_headers() {
+                        if other.as_ptr() as usize == address {
+                            continue;
+                        }
+                        // SAFETY: 名单里类型存活。
+                        let type_object = unsafe { &*other.as_ptr().cast::<crate::TypeObject>() };
+                        let mut children: Vec<*mut Header> = Vec::new();
+                        if let Some(dict) = type_object.dict() {
+                            children.push(dict.as_ptr() as *mut Header);
+                        }
+                        for base in type_object.bases() {
+                            children.push(base.as_ptr() as *mut Header);
+                        }
+                        for entry in type_object.mro() {
+                            children.push(entry.as_ptr() as *mut Header);
+                        }
+                        if children.iter().any(|child| *child as usize == address) {
+                            referrers.push(format!("type:{:p}", other.as_ptr()));
+                        }
+                    }
+                    eprintln!(
+                        "[orphan-referrers] {name} rc={} addr={address:#x} referrers=[{}]",
+                        header.refcount(),
+                        referrers.join(",")
+                    );
+                }
             }
             if header.refcount() != 1 || referenced_by_types.contains(&address) {
                 continue;
             }
             if !unreachable.contains(&address) {
+                // **诊断（round 119，`PYAWA_ORPHAN_DEBUG=1`）**：类被判"可达"时，反查**谁引用它**
+                // （扫全部 gc 候选的 children ＋ 其它类型的字典），把"多余那份引用的持有者"点出来 ✓。
+                if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+                    let mut referrers: Vec<String> = Vec::new();
+                    for candidate in self.gc_headers() {
+                        for child in self.children_of(candidate) {
+                            if child as usize == address {
+                                // SAFETY: 候选存活。
+                                let referrer_ty = unsafe { candidate.as_ref() }.ty();
+                                referrers.push(format!(
+                                    "{:p}:{}",
+                                    candidate.as_ptr(),
+                                    unsafe { referrer_ty.as_ref() }.name()
+                                ));
+                            }
+                        }
+                    }
+                    for other in self.user_type_headers() {
+                        if other.as_ptr() as usize == address {
+                            continue;
+                        }
+                        // SAFETY: 名单里类型存活。
+                        let type_object = unsafe { &*other.as_ptr().cast::<crate::TypeObject>() };
+                        let mut children: Vec<*mut Header> = Vec::new();
+                        if let Some(dict) = type_object.dict() {
+                            children.push(dict.as_ptr() as *mut Header);
+                        }
+                        for base in type_object.bases() {
+                            children.push(base.as_ptr() as *mut Header);
+                        }
+                        for entry in type_object.mro() {
+                            children.push(entry.as_ptr() as *mut Header);
+                        }
+                        if children.iter().any(|child| *child as usize == address) {
+                            referrers.push(format!("type:{:p}", other.as_ptr()));
+                        }
+                    }
+                    // SAFETY: ty 存活。
+                    let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
+                    eprintln!(
+                        "[orphan-referrers] {name} rc={} addr={address:#x} referrers=[{}]",
+                        header.refcount(),
+                        referrers.join(",")
+                    );
+                }
                 continue;
             }
+            // **活实例枚举走登记表**（round 119）：不再只扫 `gc_headers` ✗（会漏非跟踪布局的实例 ⇒
+            // round 118 的"判据空过"✗）。登记表里的实例若**不在动态不可达集合**里（含"根本没被跟踪、
+            // 无法证明不可达"的情形 ✓）⇒ 保守判"可能还活着"，**不回收该类型** ✓。
             let mut all_instances_unreachable = true;
-            for candidate in self.gc_headers() {
-                // SAFETY: 回收链表上的对象都存活。
-                let candidate_type = unsafe { candidate.as_ref() }.ty();
-                if candidate_type.as_ptr() as usize != address {
-                    continue;
-                }
-                if !unreachable.contains(&(candidate.as_ptr() as usize)) {
+            for instance in self.user_instances_of(*ty) {
+                if !unreachable.contains(&(instance.as_ptr() as usize)) {
                     all_instances_unreachable = false;
                     break;
                 }
@@ -657,15 +768,8 @@ impl Instance {
             let address = ty.as_ptr() as usize;
             // SAFETY: 名单里的类型都存活。
             let type_object = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() };
-            // **先给活实例跑终结器**（清字典后 `__del__` 就从 MRO 上消失了 ✗）。
-            let instances: Vec<NonNull<Header>> = self
-                .gc_headers()
-                .into_iter()
-                .filter(|header| {
-                    // SAFETY: 回收链表上的对象都存活。
-                    unsafe { header.as_ref() }.ty().as_ptr() as usize == address
-                })
-                .collect();
+            // **先给活实例跑终结器**（清字典后 `__del__` 就从 MRO 上消失了 ✗）；实例清单取**登记表** ✓。
+            let instances: Vec<NonNull<Header>> = self.user_instances_of(ty);
             if !instances.is_empty() {
                 if let Some(finalize) = type_object.slots().finalize {
                     for instance in instances {
@@ -685,6 +789,10 @@ impl Instance {
             self.user_types
                 .borrow_mut()
                 .retain(|entry| entry.as_ptr() != ty.as_ptr());
+            self.user_type_set
+                .borrow_mut()
+                .remove(&address);
+            self.forget_user_instances(ty);
             let removed: Vec<NonNull<Header>> = {
                 let mut cache = self.type_dunders.borrow_mut();
                 let keys: Vec<(usize, &'static str)> = cache

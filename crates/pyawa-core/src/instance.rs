@@ -122,6 +122,11 @@ pub struct Instance {
     /// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点。core 不能依赖
     /// stdlib（分层）⇒ 由 `_ast` 模块在引导期登记一个函数指针 ✓（未登记时 compile 照旧报未接线 ✓）。
     ast_parser: Cell<Option<crate::AstParserFn>>,
+    /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
+    user_type_set: RefCell<std::collections::HashSet<usize>>,
+    /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**
+    /// 才能"先跑终结器、再清类型字典"（round 118 的教训：只扫 `gc_headers` 会漏非跟踪布局的实例 ✗）。
+    user_instances: RefCell<std::collections::HashMap<usize, std::collections::HashSet<usize>>>,
     /// **动态（用户）类类型的"孤儿回收"名单**（round 99）：`class`/`type()` 造出的类型 —— 参照里类型是
     /// GC 对象；本层**不释放类型 Box**（`alloc_type_raw` 的 `Box::leak` 与 `AttributeObject::slots().dealloc`
     /// 不同构 ⇒ 真释放会 invalid free ✗），改为**保守孤儿回收**：`rc == 1`（只剩注册表）× 没有活对象以它

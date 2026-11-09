@@ -283,6 +283,11 @@ impl Frame {
         self.f_back.replace(frame)
     }
 
+    /// **取走 `f_back`**（round 119）：生成器挂起时断链用 ✓ —— 返回的引用由调用方释放 ✓。
+    pub fn take_f_back(&self) -> Option<NonNull<Header>> {
+        self.f_back.borrow_mut().take()
+    }
+
     /// **BC-43**：值栈上界。
     pub fn stacksize(&self) -> usize {
         self.stacksize

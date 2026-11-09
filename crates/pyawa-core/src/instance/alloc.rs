@@ -495,6 +495,8 @@ impl Instance {
         if tracked {
             self.link_gc(header);
         }
+        // **用户类实例登记**（round 119）：类型是用户类型时按类型地址登记实例地址 ✓。
+        self.register_user_instance(ty, header);
         ptr
     }
 

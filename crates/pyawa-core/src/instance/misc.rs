@@ -89,7 +89,56 @@ impl Instance {
         let mut list = self.user_types.borrow_mut();
         if !list.iter().any(|entry| entry.as_ptr() == ty.as_ptr()) {
             list.push(ty);
+            self.user_type_set
+                .borrow_mut()
+                .insert(ty.as_ptr() as usize);
         }
+    }
+
+    /// **登记 / 注销用户类实例**（round 119，`adopt`／`release_one`／`free_garbage` 调 ✓）。
+    pub(crate) fn register_user_instance(&self, ty: NonNull<TypeObject>, object: NonNull<Header>) {
+        if !self.user_type_set.borrow().contains(&(ty.as_ptr() as usize)) {
+            return;
+        }
+        self.user_instances
+            .borrow_mut()
+            .entry(ty.as_ptr() as usize)
+            .or_default()
+            .insert(object.as_ptr() as usize);
+    }
+
+    pub(crate) fn unregister_user_instance(&self, ty: NonNull<TypeObject>, object: NonNull<Header>) {
+        if self.user_type_set.borrow().is_empty() {
+            return;
+        }
+        if let Some(entries) = self
+            .user_instances
+            .borrow_mut()
+            .get_mut(&(ty.as_ptr() as usize))
+        {
+            entries.remove(&(object.as_ptr() as usize));
+        }
+    }
+
+    /// 某个用户类型的活实例地址快照（孤儿回收用 ✓）。
+    pub(crate) fn user_instances_of(&self, ty: NonNull<Header>) -> Vec<NonNull<Header>> {
+        self.user_instances
+            .borrow()
+            .get(&(ty.as_ptr() as usize))
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|address| NonNull::new(*address as *mut Header))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 摘掉某个用户类型的实例登记桶（类型被回收时 ✓）。
+    pub(crate) fn forget_user_instances(&self, ty: NonNull<Header>) {
+        self.user_instances
+            .borrow_mut()
+            .remove(&(ty.as_ptr() as usize));
     }
 
     /// 动态类类型的快照（GC 用 ✓）。
