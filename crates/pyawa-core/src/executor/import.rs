@@ -95,6 +95,65 @@ fn locate_source(instance: &Instance, name: &str) -> Option<(String, Option<Stri
 ///
 /// **为什么单独成函数**：定位（`can_locate_through_bridge` ✓）与装载必须分开 ✓ ——
 /// finder 的 `find_spec` 只许"找" ✗（把"装"放进去会让嵌套导入**重入**导入机制 ✗，第 217／222 轮 ✓）。
+/// **编译期语法错 → `SyntaxError`（带参照的位置面）**（round 168）：
+/// 消息里的 `（第 L 行，列 C）` 标记被抽出来当 `lineno`／`offset`（列 +1 ⇒ 1 基 ✓），
+/// 显示的 `msg` 去掉标记后补 `(文件名, line N)`；`filename` 取模块名最后一段 + `.py` ✓
+/// （与参照 `badsyntax_3131.py` 同口径 ✓），`text` 尽力给空串（本层不保留源码行 ✓）。
+fn raise_syntax_error(instance: &Instance, message: &str, chunk: &str) -> ExecError {
+    // 模块名最后一段 ＋ `.py`（`test.tokenizedata.badsyntax_3131` ⇒ `badsyntax_3131.py` ✓，
+    // 与参照的 `badsyntax_3131.py` 同口径 ✓）。
+    let file_name = format!("{}.py", chunk.rsplit('.').next().unwrap_or(chunk));
+    let mut base = message.to_owned();
+    let mut lineno: Option<u32> = None;
+    let mut offset: Option<u32> = None;
+    if let Some(start) = base.find("（第 ") {
+        let tail = &base[start..];
+        if let Some(end) = tail.find('）') {
+            let marker = &tail["（第 ".len()..end];
+            let mut parts = marker.split("，列 ");
+            if let (Some(line_text), Some(column_text)) = (parts.next(), parts.next()) {
+                let line_text = line_text.trim().trim_end_matches('行').trim();
+                let column_text = column_text.trim();
+                if let (Ok(line), Ok(column)) =
+                    (line_text.parse::<u32>(), column_text.parse::<u32>())
+                {
+                    lineno = Some(line);
+                    offset = Some(column + 1);
+                }
+            }
+            base.replace_range(start..start + end + '）'.len_utf8(), "");
+            if let Some(line) = lineno {
+                base.push_str(&format!(" ({file_name}, line {line})"));
+            }
+        }
+    }
+    let exception = crate::executor::format::new_exception(
+        instance,
+        crate::executor::exception_type(instance, "SyntaxError"),
+        &base,
+    );
+    let filename_value = instance.new_str(&file_name);
+    let outcome = instance.set_attribute_value(exception, "filename", filename_value);
+    if std::env::var_os("PYAWA_SYNTAX_DEBUG").is_some() {
+        eprintln!("[syntax] set filename => {outcome:?}");
+    }
+    // SAFETY: 上面那份引用由本函数持有。
+    unsafe { instance.release_object(filename_value.as_ptr()) };
+    if let Some(line) = lineno {
+        let value = instance.new_int(line as i64);
+        let _ = instance.set_attribute_value(exception, "lineno", value);
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    if let Some(column) = offset {
+        let value = instance.new_int(column as i64);
+        let _ = instance.set_attribute_value(exception, "offset", value);
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    crate::executor::raise_object_public(instance, exception)
+}
+
 pub fn exec_module_into_namespace(
     instance: &Instance,
     name: &str,
@@ -122,7 +181,12 @@ pub fn exec_module_into_namespace(
     ) {
         Ok(unit) => unit,
         Err(crate::compile::CompileError::Syntax(message)) => {
-            return Err(crate::executor::raise_builtin(instance, "SyntaxError", &message))
+            // **`SyntaxError` 的位置面**（round 168）：参照的 `SyntaxError` 有
+            // `msg`／`filename`／`lineno`／`offset`／`text`，且消息末尾带 `(文件名, line N)`
+            // —— 本层只给消息串 ⇒ 官方用例（`test_unicode_identifiers.test_invalid`）读
+            // `err.filename` 直接 `AttributeError` ✗。这里从消息里的"（第 L 行，列 C）"标记
+            // 解析出位置、去掉标记，再按参照补 `(badsyntax_3131.py, line 2)` 并挂属性 ✓。
+            return Err(raise_syntax_error(instance, &message, &chunk));
         }
         Err(crate::compile::CompileError::Unsupported(what)) => {
             return Err(crate::executor::raise_builtin(instance, "NotImplementedError", &what))
@@ -567,8 +631,10 @@ pub(crate) fn load_module(
     // **按实报错**（第 139 轮）：文件找到了、但编译不过 ⇒ 说清是哪个模块、哪句话 ✓；
     // 编译时撞到"尚未接线" ⇒ 原样上抛 ✓；两者都没有 ⇒ 才是真的"找不到" ✓。
     if let Some(message) = last_syntax {
-        let text = format!("加载模块 '{name}'：{message}");
-        return Err(instance.raise_builtin_error("SyntaxError", &text));
+        // **语法错的文案照参照**（round 168）：参照**不**加"加载模块 '…'："前缀，而是
+        // `invalid character … (文件名, line N)` ⇒ 交给 `raise_syntax_error` 统一加位置面 ✓
+        // （`test_unicode_identifiers.test_invalid` 逐字断言 ✓）。
+        return Err(raise_syntax_error(instance, &message, &name));
     }
     if let Some(what) = last_unsupported {
         // 编译撞到"尚未接线" ⇒ **原样如实上抛**（点明模块名 ✓，不再伪装成"模块不存在" ✗）

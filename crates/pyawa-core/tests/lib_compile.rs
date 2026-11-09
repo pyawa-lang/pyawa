@@ -19,6 +19,23 @@ const KNOWN: &[(&str, &str)] = &[
     // 并把 `AssignAttr`／`AssignSubscript`／`AssignChained`／`AssignTuple`／`AugAssign`／`Return`／
     // `Expression`／`If`／`While`／`For`／`With` 各臂的表达式一并交进去 ✓
     // ⇒ **`Lib/` 全量过编译期不变量（`KNOWN` 为空 ✓）**。
+    //
+    // **round 167／168**：`Lib/test/tokenizedata/` 是**从上游复制来的测试数据包**（`test.*` 由本层
+    // `Lib/test` 提供 ⇒ 数据只能放在这里）；其中三个是**故意编不过**的样本，供 tokenizer 相关测试
+    // （`test_unicode_identifiers`／`test_source_encoding` 等）断言 `SyntaxError` ✓ ——
+    // 它们是**数据**，不是可编译模块 ⇒ 按本文件的纪律登记 ✓。
+    (
+        "test/tokenizedata/bad_coding2.py",
+        "故意坏样本：源文件带 U+FEFF（BOM）但声明非 UTF-8 编码 ⇒ SyntaxError（tokenizer 测试数据）",
+    ),
+    (
+        "test/tokenizedata/badsyntax_3131.py",
+        "故意坏样本：含 `€`（U+20AC）非法标识符 ⇒ SyntaxError（test_unicode_identifiers 断言用）",
+    ),
+    (
+        "test/tokenizedata/badsyntax_pep3120.py",
+        "故意坏样本：PEP 3120 非法源编码样本 ⇒ SyntaxError（编码测试数据）",
+    ),
 ];
 
 fn python_files(root: &Path, out: &mut Vec<PathBuf>) {

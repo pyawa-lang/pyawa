@@ -1196,6 +1196,9 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                     index += 1;
                 }
                 let text: String = characters[start_index..index].iter().collect();
+                // **PEP 3131**：标识符做 **NFKC** 归一化（round 168；逐字符近似，表见 `nfkc.rs`）
+                // —— `µ`(U+00B5) ⇒ `μ`(U+03BC)、`𝔘𝔫𝔦𝔠𝔬𝔡𝔢` ⇒ `Unicode` ✓。
+                let text: String = super::nfkc::normalize_identifier(&text).into_owned();
                 let end = column!(index);
                 lexemes.push(match text.as_str() {
                     "return" => Lexeme::Return,
@@ -1224,7 +1227,7 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                     continue;
                 }
                 return Err(CompileError::Syntax(format!(
-                    "不认识的字符 '\\\\'（第 {line} 行，列 {}）",
+                    "invalid character '\\\\' (U+005C)（第 {line} 行，列 {}）",
                     column!(index)
                 )));
             }
@@ -1245,8 +1248,12 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                 index += 1;
             }
             other => {
+                // **文案照参照**（round 168）：CPython 的 tokenizer 报
+                // `invalid character '€' (U+20AC) (文件名, line N)`；这里给前半句 ＋ 行/列标记，
+                // 由 `import` 桥补 `(文件名, line N)` 并挂 `SyntaxError.filename/lineno/offset` ✓。
                 return Err(CompileError::Syntax(format!(
-                    "不认识的字符 {other:?}（第 {line} 行，列 {}）",
+                    "invalid character {other:?} (U+{:04X})（第 {line} 行，列 {}）",
+                    other as u32,
                     column!(index)
                 )))
             }

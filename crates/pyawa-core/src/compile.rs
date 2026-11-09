@@ -472,6 +472,7 @@ pub fn compile(
     Ok(unit)
 }
 
+mod nfkc;
 mod symbols;
 mod verify;
 use self::symbols::*;
