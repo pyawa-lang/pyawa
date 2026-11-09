@@ -400,6 +400,9 @@ pub struct pa_state {
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
     message: Option<CString>,
+    /// **`co_filename` 的来源**（round 176）：CLI 在 `pa_exec_bytecode`／`pa_exec_string` 前设置；
+    /// 未设置时用测试占位名 `<pyawa-test>` ✓（`test_frame.ReprTest.test_repr` 要真实路径 ✓）。
+    program_filename: Option<String>,
 }
 
 impl pa_state {
@@ -442,8 +445,8 @@ impl pa_state {
             registrations: Vec::new(),
             diagnostic: false,
             message: None,
-        }
-    }
+            program_filename: None,
+        }    }
 
     /// 造一个**诊断实例**（`AB-56`）：`reason` 是给宿主看的可诊断信息（`T-AB-4`）。
     fn diagnostic(reason: String) -> Self {
@@ -469,6 +472,7 @@ impl pa_state {
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
+            program_filename: None,
         }
     }
 
@@ -834,7 +838,12 @@ pub unsafe extern "C" fn pa_exec_string(
         ensure_module_name(state);
         // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）
         install_main_module(state);
-        let code = instantiate(&state.instance, &unit);
+        // `co_filename`：显式设置过（CLI）就用它；否则**参照口径**＝`compile(source, filename, …)`
+        // 里的 `filename` 参数（本 ABI 的 `chunkname` ✓）⇒ `<string>` 一族 ✓。
+        let code = match state.program_filename.as_deref() {
+            Some(filename) => pyawa_core::compile::instantiate_named(&state.instance, &unit, filename),
+            None => pyawa_core::compile::instantiate_named(&state.instance, &unit, &chunk),
+        };
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
         // SAFETY: namespace 由本状态持有，存活。
@@ -916,6 +925,37 @@ pub unsafe extern "C" fn pa_exec_file(
     })
 }
 
+/// **CX-11-EXEMPT 白名单**：无 panic 面——只读 `len` 字节并拷进 `String`（长度上限由宿主给的 `len` 决定；
+/// 不分配实例对象、不执行脚本；非法指针／非 UTF-8 一律回 `PA_ERR_INVALID` ✓）。
+///
+/// `pa_set_program_filename(st, name, len)`（round 176）：**设置 `co_filename` 的来源**
+/// （CLI 在 `pa_exec_bytecode`／`pa_exec_string` 前调；不设 ⇒ 测试占位名 `<pyawa-test>` ✓）。
+///
+/// # Safety
+///
+/// `st` 必须是 `pa_create` 交回的存活状态；`name` 必须指向 `len` 个可读字节（NUL 不要求）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_set_program_filename(
+    st: *mut pa_state,
+    name: *const core::ffi::c_char,
+    len: isize,
+) -> i32 {
+    let Some(state) = (unsafe { st.as_mut() }) else {
+        return status::PA_ERR_INVALID;
+    };
+    if name.is_null() || len < 0 {
+        return status::PA_ERR_INVALID;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len as usize) };
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => {
+            state.program_filename = Some(text);
+            status::PA_OK
+        }
+        Err(_) => status::PA_ERR_INVALID,
+    }
+}
+
 /// `pa_exec_bytecode(st, buf, len)`：执行 `.pyac`——**产物容器与装载器尚未接线**（`P3-12`）⇒
 /// **`.pyac` 装载器**（第 404 轮接线 ✓）：解码产物头部与代码段 ⇒ 执行（`IM-18`…`IM-21`、`BC-29`）。
 ///
@@ -975,7 +1015,15 @@ pub unsafe extern "C" fn pa_exec_bytecode(
         ensure_module_name(state);
         // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）：CLI 走的是**这一条**（产物路径 ✓）。
         install_main_module(state);
-        let code = instantiate(&state.instance, &unit);
+        // **`co_filename` 的来源**（round 176）：CLI 在 `pa_exec_bytecode` 前用
+        // `pa_set_program_filename` 给出**脚本路径** ✓（参照的 `f_code.co_filename` 就是它 ✓）。
+        if std::env::var_os("PYAWA_FILENAME_DEBUG").is_some() {
+            eprintln!("[filename] bytecode path program_filename={:?}", state.program_filename);
+        }
+        let code = match state.program_filename.as_deref() {
+            Some(filename) => pyawa_core::compile::instantiate_named(&state.instance, &unit, filename),
+            None => instantiate(&state.instance, &unit),
+        };
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
         // SAFETY: namespace 由本状态持有，存活。

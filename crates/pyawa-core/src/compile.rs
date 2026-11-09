@@ -237,6 +237,10 @@ pub struct CompiledUnit {
     pub nlocals: usize,
     /// `co_flags`。
     pub flags: u32,
+    /// **`co_firstlineno`**（round 176）：模块＝1，函数／类体＝`def`／`class` 那一行 ✓
+    /// （参照口径；本层先前一律 1 ⇒ `test_frame.test_repr` 的 `offset` 全错 ✗）。
+    /// `0` ＝ 未知（从 `.pyac` 旧格式读回时不会出现——格式版本已随字段一起升 ✓）。
+    pub firstlineno: usize,
     /// `co_names`。
     pub names: Vec<String>,
     /// `co_varnames`。
@@ -618,6 +622,7 @@ fn compile_class_scope(
             kwonlyargcount: 0,
             nlocals: 0,
             flags: 0,
+            firstlineno: span.line_start as usize,
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
@@ -907,6 +912,11 @@ fn compile_scope(
             freevars: Vec::new(),
             demanded: Vec::new(),
             // `varnames` 的顺序（实测／`argbind.rs` 记着）：位置参数 → 仅关键字 → `*args` → `**kw`
+            firstlineno: if name == "<module>" {
+                1
+            } else {
+                resume_span.line_start as usize
+            },
             nlocals: parameters.len()
                 + kwonly.len()
                 + usize::from(varargs.is_some())
@@ -2695,13 +2705,26 @@ pub fn instantiate<'a>(
     instance: &'a crate::Instance,
     unit: &CompiledUnit,
 ) -> crate::Owned<'a, crate::CodeObject> {
+    // 测试路径的默认口径（`<pyawa-test>`）；正式 loader／CLI 走 [`instantiate_named`] ✓。
+    instantiate_named(instance, unit, "<pyawa-test>")
+}
+
+/// 按 [`CompiledUnit`] 造 `CodeObject`，**`co_filename` 由调用方给**（round 176）：
+/// 参照的 `co_filename` 就是源码文件名／`<string>`／`<stdin>` ✓；本层先前在**所有**路径上
+/// 写死 `<pyawa-test>` ✗ ⇒ CLI 跑脚本时 `frame.f_code.co_filename`／`f_repr` 全是占位名 ✗
+/// （`test_frame.ReprTest.test_repr` 逐字断言真实路径 ✓）。
+pub fn instantiate_named<'a>(
+    instance: &'a crate::Instance,
+    unit: &CompiledUnit,
+    filename: &str,
+) -> crate::Owned<'a, crate::CodeObject> {
     let code_type = instance
         .type_named("CodeObject")
         .expect("CodeObject 在引导期已登记");
     let consts: Vec<Option<core::ptr::NonNull<crate::Header>>> = unit
         .constants
         .iter()
-        .map(|constant| instantiate_constant(instance, constant))
+        .map(|constant| instantiate_constant(instance, constant, Some(filename)))
         .collect();
     // `CodeObject::name` 目前是 `&'static str`（`BC-4` 的临时形态）⇒ 这里泄漏一份。
     // 这条路径是"编译产物 → 可执行 code object"的**测试**用途，可接受；正式 loader 接上时
@@ -2711,9 +2734,19 @@ pub fn instantiate<'a>(
         code_type,
         static_name,
         unit.qualname.clone(),
-        "<pyawa-test>".to_owned(),
-        // `co_firstlineno`（测试路径固定 1）
-        1,
+        filename.to_owned(),
+        // **`co_firstlineno`**（round 176）：参照里函数是 `def` 那一行、模块是 1 ✓。
+        // 本层先前一律 1 ✗ ⇒ `outer.__code__.co_firstlineno` 一族全错 ✗（`test_frame.test_repr`
+        // 的 `offset = outer.__code__.co_firstlineno` 就靠它 ✓）。函数的**第一条指令**是
+        // `RESUME`、位置表首项就是 `(def 行, …)` ✓ ⇒ 取 `positions[0].0` 即可 ✓。
+        if unit.firstlineno > 0 {
+            unit.firstlineno
+        } else {
+            unit.positions
+                .iter()
+                .find_map(|(line, _, _, _)| *line)
+                .unwrap_or(1) as usize
+        },
         // **`co_stacksize`**：本层给的是**保守上界**（见 `stack_bound` 的说明）
         stack_bound(&unit),
         unit.nlocals,
@@ -2782,6 +2815,7 @@ fn constant_expression(expression: &Expression) -> Option<Constant> {
 fn instantiate_constant(
     instance: &crate::Instance,
     constant: &Constant,
+    filename: Option<&str>,
 ) -> Option<core::ptr::NonNull<crate::Header>> {
     match constant {
         Constant::None => Some(instance.retain(instance.singletons().none())),
@@ -2800,11 +2834,11 @@ fn instantiate_constant(
         // - `A.B`／`[a, b]`／前向引用串 ⇒ 静态解析不了 ⇒ 按 `Any`（**放行** ✓，并如实记 ✓）。
         Constant::AnnUnion { left, right } => {
             let marker = instance.new_str("Union");
-            let left = instantiate_constant(instance, left)?;
-            let right = instantiate_constant(instance, right)?;
+            let left = instantiate_constant(instance, left, filename)?;
+            let right = instantiate_constant(instance, right, filename)?;
             Some(instance.new_tuple(vec![marker, left, right]))
         }
-        Constant::AnnSubscript { base, .. } => instantiate_constant(instance, base),
+        Constant::AnnSubscript { base, .. } => instantiate_constant(instance, base, filename),
         Constant::AnnList(_) | Constant::AnnAttribute { .. } | Constant::AnnString(_) => {
             Some(instance.new_str("Any"))
         }
@@ -2832,7 +2866,10 @@ fn instantiate_constant(
         Constant::Slice { start, stop, step } => {
             Some(instance.new_slice(*start, *stop, *step))
         }
-        Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
+        Constant::Code(inner) => Some(match filename {
+            Some(filename) => instantiate_named(instance, inner, filename).into_raw().cast(),
+            None => instantiate(instance, inner).into_raw().cast(),
+        }),
         Constant::Names(names) => {
             let items: Vec<core::ptr::NonNull<crate::Header>> =
                 names.iter().map(|name| instance.new_str(name)).collect();
@@ -2842,7 +2879,7 @@ fn instantiate_constant(
             // 折叠出来的 `frozenset`：这里以**集合对象**落地（`SET_UPDATE` 只按可迭代取元素）
             let mut items = Vec::with_capacity(parts.len());
             for part in parts {
-                items.push(instantiate_constant(instance, part)?);
+                items.push(instantiate_constant(instance, part, filename)?);
             }
             Some(instance.new_set(items))
         }
@@ -2850,7 +2887,7 @@ fn instantiate_constant(
         Constant::Tuple(parts) => {
             let mut items = Vec::with_capacity(parts.len());
             for part in parts {
-                items.push(instantiate_constant(instance, part)?);
+                items.push(instantiate_constant(instance, part, filename)?);
             }
             Some(instance.new_tuple(items))
         }

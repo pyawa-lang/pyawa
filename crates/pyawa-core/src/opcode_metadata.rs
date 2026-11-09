@@ -9,7 +9,7 @@
 /// `BC-41` 要求它随 `.pyac` 头部一起判陈旧。取值由实现维护。
 ///
 /// 版本 2：新增 Pyawa 专有指令 `CHECK_ASSIGNMENT`（`BC-65`／`TS-47`）。
-pub const INSTRUCTION_SET_VERSION: u32 = 2;
+pub const INSTRUCTION_SET_VERSION: u32 = 3;
 
 /// `BC-30`（实测）：有参指令的编号下界。
 pub const HAVE_ARGUMENT: u16 = 43;

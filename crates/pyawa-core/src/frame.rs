@@ -747,7 +747,9 @@ pub unsafe fn frame_repr(ptr: *mut Header, _instance: &Instance) -> Result<Strin
         None => ("<unknown>".to_owned(), "<unknown>".to_owned(), 0),
     };
     Ok(format!(
-        "<frame at 0x{address:x}, file {filename:?}, line {line}, code {name}>"
+        // 参照用**单引号**包文件名（`file '…'`）；先前用 `{:?}`（双引号）✗ ⇒ `test_frame.test_repr`
+        // 的正则逐字断言单引号 ✗（round 176）。
+        "<frame at 0x{address:x}, file '{filename}', line {line}, code {name}>"
     ))
 }
 

@@ -328,6 +328,7 @@ pub(crate) fn emit_param_thunk(
         nlocals: 1,
         // thunk 嵌在外壳函数里 ⇒ `CO_NESTED`（参照实测 0x13 ✓）。
         flags: 0x13,
+        firstlineno: 1,
         names: Vec::new(),
         varnames: vec![".format".to_owned()],
         cellvars: Vec::new(),
@@ -1152,6 +1153,7 @@ impl Emitter {
             nlocals: 1,
             // **在函数里 ⇒ `CO_NESTED`（0x13）** ✓（参照实测 `def outer(): type Y = int` ✓）。
             flags: if self.kind == ScopeKind::Function { 0x13 } else { 0x3 },
+            firstlineno: 1,
             names: Vec::new(),
             varnames: vec![".format".to_owned()],
             cellvars: Vec::new(),
@@ -1249,6 +1251,7 @@ impl Emitter {
             nlocals: 1,
             // thunk 定义在外壳**函数**里 ⇒ `CO_NESTED`（0x13 ✓）。
             flags: 0x13,
+            firstlineno: 1,
             names: Vec::new(),
             varnames: vec![".format".to_owned()],
             cellvars: Vec::new(),
@@ -1303,6 +1306,7 @@ impl Emitter {
             posonlyargcount: 0,
             kwonlyargcount: 0,
             nlocals: 0,
+            firstlineno: 1,
             // 壳定义在**函数里**（或泛型外壳的类体里 ✓）⇒ `CO_NESTED`（0x13 ✓）；模块级 0x3 ✓。
             flags: if self.kind == ScopeKind::Function
                 || self.qualname.contains(".<locals>.")
@@ -1526,6 +1530,7 @@ impl Emitter {
             kwonlyargcount: 0,
             nlocals: 0,
             flags: 0x3,
+            firstlineno: 1,
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
@@ -1833,6 +1838,7 @@ impl Emitter {
             kwonlyargcount: 0,
             nlocals: 0,
             flags: 0x3,
+            firstlineno: 1,
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
@@ -2026,6 +2032,7 @@ impl Emitter {
                 kwonlyargcount: 0,
                 nlocals: 1,
                 flags: 0x3,
+                firstlineno: 1,
                 names: Vec::new(),
                 varnames: vec!["format".to_owned()],
                 cellvars: Vec::new(),
@@ -2258,6 +2265,7 @@ impl Emitter {
                 kwonlyargcount: 0,
                 nlocals: 1,
                 flags: 0x3,
+                firstlineno: 1,
                 names: Vec::new(),
                 varnames: vec!["format".to_owned()],
                 cellvars: Vec::new(),

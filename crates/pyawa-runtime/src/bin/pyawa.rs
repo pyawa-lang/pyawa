@@ -24,6 +24,7 @@ use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAI
 use pyawa_abi::{
     pa_setcapability, pa_setcapability_async,
     pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host,
+    pa_set_program_filename,
     pa_state, status, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
@@ -411,6 +412,16 @@ fn real_main() {
     } else {
         fresh.or_else(&compile_and_write)
     };
+    // **`co_filename` 的来源**（round 176）：参照里 CLI 脚本的 `f_code.co_filename` 就是**脚本路径** ✓
+    // （`test_frame.ReprTest.test_repr` 逐字断言 ✓）；本层先前全写死 `<pyawa-test>` ✗。
+    // SAFETY: `program_name` 在本栈上活着；`state` 由 `pa_create` 交回 ✓。
+    unsafe {
+        pa_set_program_filename(
+            state,
+            program_name.as_ptr().cast::<c_char>(),
+            program_name.len() as isize,
+        );
+    }
     let run_bytecode = |bytes: &Vec<u8>| unsafe {
         // SAFETY: 产物字节在本栈上活着；`state` 由 `pa_create` 交回 ✓。
         pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)

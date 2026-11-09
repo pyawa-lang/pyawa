@@ -15,7 +15,13 @@ use std::path::PathBuf;
 /// 源码注释里的白名单标记（`src/lib.rs` 的版本三件套上各出现一次）。
 const EXEMPT_MARKER: &str = "CX-11-EXEMPT";
 /// 允许不包边界的入口（**显式**第二道闸：改这里必须同时给出源码理由）。
-const EXEMPT_EXPECTED: &[&str] = &["pa_abi_size", "pa_abi_version", "pa_version"];
+const EXEMPT_EXPECTED: &[&str] = &[
+    "pa_abi_size",
+    "pa_abi_version",
+    // round 176：只拷一段宿主给的字节进 `String`（不分配实例对象、不执行脚本）；非法输入回 `PA_ERR_INVALID`。
+    "pa_set_program_filename",
+    "pa_version",
+];
 
 /// 一个 `#[unsafe(no_mangle)]` 导出及其解析出的源码片段。
 #[derive(Debug)]
