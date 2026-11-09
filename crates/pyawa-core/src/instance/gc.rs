@@ -87,7 +87,14 @@ impl Instance {
         // 构造里类型还多一份引用（`rc=2`）⇒ 当前判据不收；默认关 ⇒ 套件行为与 round 98 前一致 ✓。
         // **默认开**（round 104 起；逃生阀 `PYAWA_ORPHAN_RECLAIM=0`）：用户类类型是 `Box::leak` 分配的、
         // 不进 `gc_headers`，类环（类型→命名空间→函数→cell→迭代器→实例）只能靠这里收 ✓。
-        if std::env::var("PYAWA_ORPHAN_RECLAIM").ok().as_deref() != Some("0") {
+        // **回收时机（round 128）**：孤儿回收只在**显式 `gc.collect()`** 时做（`PYAWA_ORPHAN_RECLAIM=1` 可强制每次；
+        // `=0` 关闭 ✓）。理由：① 自动回收里做"全类型扫描＋清类字典"成本高（根集合还要扫模块表/命名空间 ✓）；
+        // ② 导入期（模块已登记 `sys.modules`、类还在建）反复触发容易踩"半成品类" ✗；③ `free_after` 家族判据都显式
+        // 调 `gc.collect()` ✓ ⇒ 语义不丢；④ 让自动回收回归"纯循环垃圾"，类型级清理集中到显式时机 ✓。
+        let reclaim_env = std::env::var("PYAWA_ORPHAN_RECLAIM").ok();
+        if reclaim_env.as_deref() != Some("0")
+            && (self.gc_explicit.get() || reclaim_env.as_deref() == Some("1"))
+        {
             self.reclaim_orphan_user_types();
         }
         let unreachable = self.find_unreachable();
