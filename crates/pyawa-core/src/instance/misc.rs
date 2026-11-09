@@ -374,6 +374,25 @@ impl Instance {
         self.collect_explicit_generation(true)
     }
 
+    /// **请求下一次自动回收做全量**（round 157）。
+    pub fn request_full_collect(&self) {
+        self.gc_force_full.set(true);
+    }
+
+    /// **自动回收**（round 157）：默认年轻代；每 16 轮一次全量 ✓。
+    pub fn collect_auto(&self) -> usize {
+        if self.gc_force_full.replace(false) {
+            return self.collect();
+        }
+        let tick = self.gc_auto_ticks.get().wrapping_add(1);
+        self.gc_auto_ticks.set(tick);
+        if tick % 16 == 0 {
+            self.collect()
+        } else {
+            self.collect_explicit_generation(false)
+        }
+    }
+
     /// **按代显式回收**（round 148）：`full=false`（`gc.collect(0)`／`collect(1)`）时跳过孤儿类型回收 ✓。
     pub fn collect_explicit_generation(&self, full: bool) -> usize {
         let was_explicit = self.gc_explicit.get();
@@ -396,6 +415,9 @@ impl Instance {
         let started = std::time::Instant::now();
         let live_before = self.live_objects();
         let freed = self.collect_inner();
+        // **年轻代边界要在清扫之后取**（round 157 真 bug 修 ✗）：清扫前取的头指针可能是马上要释放的
+        // 垃圾 ⇒ 边界悬垂 ⇒ 下一次"年轻段"走到链尾都碰不到它 ⇒ 把**整链**当年轻代（实测 378k ✗）。
+        self.gc_young_mark.set(self.gc_head.get());
         self.gc_running.set(false);
         // 弱引用回调在回收循环**之后**统一调（round 59 ✓；回调里可安全跑 Python ✓）。
         self.drain_weakref_callbacks();

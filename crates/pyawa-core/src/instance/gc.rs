@@ -98,7 +98,14 @@ impl Instance {
         {
             self.reclaim_orphan_user_types();
         }
-        let unreachable = self.find_unreachable();
+        // **年轻代候选**（round 157）：`collect(0)`／`collect(1)` 只收"上次回收以来的新对象"。
+        let young = self.gc_skip_reclaim.get();
+        let candidates = if young {
+            self.gc_headers_young()
+        } else {
+            self.gc_headers()
+        };
+        let unreachable = self.find_unreachable_in(&candidates);
         if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some() && !unreachable.is_empty() {
             let mut names: Vec<String> = Vec::new();
             for header in &unreachable {
@@ -140,7 +147,7 @@ impl Instance {
         // 终结器可能复活对象、也可能让别的对象重新变可达（PEP 442）⇒ 重算不可达集合。
         // **没跑过任何终结器 ⇒ 可达性与第一次相同**（round 110：省一次全堆标记 ✓）。
         let unreachable = if any_finalized {
-            self.find_unreachable()
+            self.find_unreachable_in(&candidates)
         } else {
             unreachable
         };
@@ -416,8 +423,13 @@ impl Instance {
     ///
     /// 两步：先按"引用计数 − 来自跟踪对象内部的引用数"找出根（外部引用 > 0），
     /// 再从根出发按 `traverse` 标记；没被标记的就是不可达集合。
-    pub(crate) fn find_unreachable(&self) -> Vec<NonNull<Header>> {
-        let candidates = self.gc_headers();
+
+    /// **给定候选集**求不可达（round 157 分代）：`gc.collect(0)` 只把**年轻段**当候选 ✓
+    /// —— 老对象不扫、不判、不释放；它们指向年轻对象的引用按"外部引用"计 ⇒ 年轻人不会被误收 ✓。
+    pub(crate) fn find_unreachable_in(
+        &self,
+        candidates: &[NonNull<Header>],
+    ) -> Vec<NonNull<Header>> {
         if candidates.is_empty() {
             return Vec::new();
         }
@@ -434,7 +446,7 @@ impl Instance {
             .map(|candidate| unsafe { candidate.as_ref() }.refcount())
             .collect();
 
-        for candidate in &candidates {
+        for candidate in candidates {
             for child in self.children_of(*candidate) {
                 if let Some(&position) = index.get(&(child as usize)) {
                     external[position] = external[position].saturating_sub(1);
@@ -1115,6 +1127,20 @@ impl Instance {
         let mut result = Vec::with_capacity(self.gc_count.get());
         let mut cursor = self.gc_head.get();
         while !cursor.is_null() {
+            // SAFETY: 链上的指针都由本实例分配且尚未释放。
+            result.push(unsafe { NonNull::new_unchecked(cursor) });
+            cursor = unsafe { (*cursor).gc_next() };
+        }
+        result
+    }
+
+    /// **年轻段候选**（round 157）：从链头走到"上次回收记下的边界"为止 ✓（链新对象压头 ✓）。
+    /// 边界指针只用于**比较**（可能已被全量回收释放 ⇒ 绝不解引用 ✓）；失配时退化成"整链年轻" ✓（安全）。
+    pub(crate) fn gc_headers_young(&self) -> Vec<NonNull<Header>> {
+        let mark = self.gc_young_mark.get();
+        let mut result = Vec::new();
+        let mut cursor = self.gc_head.get();
+        while !cursor.is_null() && cursor != mark {
             // SAFETY: 链上的指针都由本实例分配且尚未释放。
             result.push(unsafe { NonNull::new_unchecked(cursor) });
             cursor = unsafe { (*cursor).gc_next() };

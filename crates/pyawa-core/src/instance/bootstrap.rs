@@ -80,6 +80,9 @@ impl Instance {
             gc_running: Cell::new(false),
             gc_explicit: Cell::new(false),
             gc_skip_reclaim: Cell::new(false),
+            gc_young_mark: Cell::new(core::ptr::null_mut()),
+            gc_auto_ticks: Cell::new(0),
+            gc_force_full: Cell::new(false),
             repr_guard: RefCell::new(Vec::new()),
             interrupted: core::sync::atomic::AtomicBool::new(false),
         };

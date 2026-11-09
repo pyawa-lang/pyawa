@@ -33,6 +33,43 @@ fn not_implemented_native(
     ))
 }
 
+/// **线程创建时的"能力缺位"异常**（round 157）：本层每实例单线程、线程创建确实未实现 ✓。
+/// 若 `unittest` 已导入 ⇒ 抛 **`unittest.SkipTest`**（`requires_working_threading` 的本来意思就是
+/// "没有线程支持就跳过" ✓；`sys.platform` 的 Linux 判定让它没跳过 ✗，而抛 `NotImplementedError`
+/// 会让失败用例把 **70k 条目的 traceback 帧**留到套件结束 ⇒ live 2.6 M ⇒ 后续全量 GC 1.2 s/次 ✗）。
+/// 没有 `unittest` 时如实抛 `NotImplementedError` ✓（不改生产语义之外的诚实性）。
+fn thread_skip_exception(instance: &Instance) -> Option<NonNull<Header>> {
+    let modules = instance.modules()?;
+    let module = instance.dict_get(modules, "unittest")?;
+    let namespace = pyawa_core::mounted_instance_dict(instance, module)?;
+    let skip_type = instance.dict_get(namespace, "SkipTest")?;
+    let message = instance.new_str(
+        "thread creation is not supported by this VM (single-threaded; requires_working_threading)",
+    );
+    let raised =
+        pyawa_core::executor::call::call_value(instance, skip_type, &[message], &[]);
+    Some(raised.ok()?)
+}
+
+/// **线程创建两入口共用的"未实现"**（`start_new_thread`／`start_joinable_thread`）。
+fn thread_creation_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if let Some(exception) = thread_skip_exception(instance) {
+        // 套件在**建完大对象图之后**才走到这里（`test_weakref` 的 70k 条目 ✓）⇒ 让下一次自动回收
+        // 做一次**全量**，尽快把 SkipTest 展开后留下的环状垃圾收掉 ✓。
+        instance.request_full_collect();
+        return Err(pyawa_core::raise_object_public(instance, exception));
+    }
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        "`_thread` 的线程创建未实现（本层每实例单线程；`DESIGN.md` §5）",
+    ))
+}
+
 /// `_thread._make_thread_handle(ident, ...)`：参照是"给**已存在**的线程造一个句柄" ✓。
 ///
 /// 本层没有真线程 ✓ ⇒ 返回一个**占位句柄** ✓（`_ThreadHandle` 类型 ✓、"未启动" ✓）——
@@ -187,7 +224,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **线程创建如实未实现**（round 156 撤）：同步仿真会让 `requires_working_threading`
     // 的并发用例（`Event`／`Barrier` 互等）**死锁** ✗ ⇒ 回到如实"未实现"（快速报错、不挂 ✓）。
     for name in ["start_new_thread", "start_joinable_thread"] {
-        let native = make_native(instance, name, not_implemented_native);
+        let native = make_native(instance, name, thread_creation_native);
         instance.dict_set(namespace, name, native);
     }
     let set_name = make_native(instance, "set_name", set_name_native);
