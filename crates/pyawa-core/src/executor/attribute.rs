@@ -80,10 +80,14 @@ fn type_mro_native(
 /// ③ 都没有 ⇒ [`ExecError::AttributeNotFound`]
 /// **`LOAD_ATTR` 的协议口径** ✓（第 712 轮）：先走属性通道 ✓，找不到再问类型的 `__getattr__` ✓
 ///（参照的规矩 ✓ —— 与内建 `getattr(obj, 名)` **一处真相** ✓）。回退拿到的值包成 `Attribute::Owned` ✓。
-/// **放弃一次属性查找的 `Err`**（round 170 真泄漏修 ✗）：`raise()` 给异常对象加过一份
+/// **放弃一次属性查找的 `Err`**（round 170/171 真泄漏修 ✗；公开给"回退前还异常"的调用方 ✓）：`raise()` 给异常对象加过一份
 /// `Err(Raised)` 的引用以及 `pending_exception` 槽的一份保活；`__getattr__` 回退路径在
 /// "原始查找失败、但回退成功"时**必须把原始异常两份都还掉**，否则每走一次 `__getattr__`
 /// 就漏一颗 `AttributeError`（其回溯／帧链随之被钉住 ⇒ `test_weakref` 的 1.48 M live ✗）。
+pub(crate) fn discard_attribute_error(instance: &Instance, error: &ExecError) {
+    discard_lookup_error(instance, error);
+}
+
 fn discard_lookup_error(instance: &Instance, error: &ExecError) {
     if let ExecError::Raised { exception } = error {
         crate::discard_raised(instance, *exception);

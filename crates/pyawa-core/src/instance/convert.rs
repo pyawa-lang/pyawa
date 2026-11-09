@@ -75,14 +75,26 @@ impl Instance {
         let iterator = match crate::executor::iter_value(self, object) {
             Ok(iterator) => iterator,
             Err(error) => {
-                let has_iter = crate::executor::attribute::attribute_lookup_special(
+                // **探测失败的异常要还**（round 171 真泄漏修 ✗）：`.is_ok()` 先前把 Err 直接丢 ⇒
+                // 每探一次漏一颗 `AttributeError`（`*args` 展开／`iter()` 回退路径 ✓）。
+                let has_iter = match crate::executor::attribute::attribute_lookup_special(
                     self,
                     object,
                     "__iter__",
-                )
-                .is_ok();
-                let has_getitem =
-                    crate::executor::attribute_lookup(self, object, "__getitem__").is_ok();
+                ) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        crate::executor::attribute::discard_attribute_error(self, &error);
+                        false
+                    }
+                };
+                let has_getitem = match crate::executor::attribute_lookup(self, object, "__getitem__") {
+                    Ok(_) => true,
+                    Err(error) => {
+                        crate::executor::attribute::discard_attribute_error(self, &error);
+                        false
+                    }
+                };
                 if has_iter || has_getitem {
                     return Err(error);
                 }
