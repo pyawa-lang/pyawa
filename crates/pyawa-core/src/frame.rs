@@ -814,7 +814,24 @@ pub unsafe fn frame_getattr(
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let frame = unsafe { &*ptr.cast::<Frame>() };
     match name {
-        "f_locals" => Some(frame.locals_snapshot(instance)),
+        // **函数帧给 `FrameLocalsProxy`**（round 177）：可写穿视图 ✓；模块／类帧仍给命名空间
+        // （`locals() is globals()` 那半除外）—— `locals_snapshot` 自己判 ✓。
+        "f_locals" => {
+            // **默认口径仍是快照 `dict`**（不在本轮改默认：`f_locals` 被 `Lib/` 广泛当 dict 用，
+            // 全量回归要一轮验收）。`PYAWA_FRAME_LOCALS_PROXY=1` 打开 **`FrameLocalsProxy`** 原型
+            // （写穿视图 ＋ 构造器 ＋ 映射面，round 177）✓；下一轮跑完 survey 再翻默认 ✓。
+            let use_proxy = frame.namespace().is_none()
+                && crate::diag::flag("PYAWA_FRAME_LOCALS_PROXY");
+            if use_proxy {
+                Some(crate::builtin_objects::frame_locals_proxy(
+                    instance,
+                    // SAFETY: ptr 是本帧的存活对象（调用方保证）。
+                    unsafe { NonNull::new_unchecked(ptr) },
+                ))
+            } else {
+                Some(frame.locals_snapshot(instance))
+            }
+        }
         // **`f_code`**：traceback 用它取 `co_filename`／`co_name`／`co_positions` 一族 ✓。
         "f_code" => frame.code().map(|code| {
             // SAFETY: code 由帧持有，存活；调用方要自己那份。

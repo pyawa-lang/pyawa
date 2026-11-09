@@ -583,6 +583,14 @@ impl Instance {
             crate::builtin_objects::ItStateObject::slots(),
         );
 
+        // **`FrameLocalsProxy`**（round 177）：`frame.f_locals` 对函数帧给出的**可写穿**视图
+        // （PEP 667 的 3.13+ 口径 ✓；`test_frame.TestFrameLocals` 一族 ✓）。
+        let _frame_locals_proxy_type = self.alloc_type_raw(
+            "FrameLocalsProxy",
+            core::mem::size_of::<crate::builtin_objects::FrameLocalsProxy>(),
+            crate::builtin_objects::FrameLocalsProxy::slots(),
+        );
+
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
         let _tuple_type = self.alloc_type_raw(
             "tuple",

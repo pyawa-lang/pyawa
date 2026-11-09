@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`350782d`（round 176：co_filename/co_firstlineno 与参照一致；frame repr 单引号；pyac v3；test_frame 12F/7E⇒10F/8E）
+- **HEAD**：`9db472e`（round 177：FrameLocalsProxy 原型进仓，默认关闭（PYAWA_FRAME_LOCALS_PROXY=1）；默认口径 test_frame 10F/8E 零回归；开关下 16F/16E 待收）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 69 unimplemented / 244 runtime / 5 timeout**（round 174 全量 survey）
