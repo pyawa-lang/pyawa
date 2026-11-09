@@ -117,6 +117,9 @@ def main() -> None:
     )
     ap.add_argument("--jobs", type=int, default=max(4, (os.cpu_count() or 4) - 1))
     ap.add_argument("--limit", type=int, default=0)
+    # **分片**（round 131：DSH 单条命令墙钟上限 10 分钟时用 ✓；两片各自跑完再合并 tsv ✓）。
+    ap.add_argument("--start", type=int, default=0)
+    ap.add_argument("--end", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=120.0)
     args = ap.parse_args()
 
@@ -140,6 +143,8 @@ def main() -> None:
     files = sorted(root.glob("test_*.py"))
     if args.limit:
         files = files[: args.limit]
+    if args.start or args.end:
+        files = files[args.start : (args.end or None)]
 
     rows = []
     reasons = collections.Counter()

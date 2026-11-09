@@ -536,6 +536,8 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
     ("groups", match_groups_native as NativeFn),
     ("groupdict", match_groupdict_native as NativeFn),
     ("expand", match_expand_native as NativeFn),
+    // **`m[g]`**（round 131，PEP 里 `Match.__getitem__` 是公开协议 ✓）：与 `m.group(g)` 同口径 ✓。
+    ("__getitem__", match_getitem_native as NativeFn),
     ("__repr__", match_repr_native as NativeFn),
     // 参照里 `str(m) == repr(m)` ✓（`object.__str__` 回落到 `__repr__` ✓）——我们的回落没走这条路 ✗
     // ⇒ 两个名字挂**同一个原生** ✓（一处真相 ✓，不为 `print` 另写一份 ✓）。
@@ -1197,6 +1199,17 @@ fn pattern_finditer_native(
 
 
 /// `Match.expand(template) -> str` ✓（第 590 轮）：按本匹配展开模板 ✓（语义与 `sub` 的模板同一处 ✓）。
+/// **`re.Match.__getitem__(key)`**（round 131）：参照口径与 `group(key)` 一致 ✓
+/// （int／str 分组名都收；其它类型由 `group` 自己报错 ✓）。
+fn match_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    match_group_native(instance, bound, args, kwargs)
+}
+
 fn match_expand_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

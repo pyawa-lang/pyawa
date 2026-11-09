@@ -348,11 +348,39 @@ pub unsafe fn float_new(
                 };
                 unsafe { instance.release_object(result.as_ptr()) };
                 number
+            } else if let Some(bytes) = instance.bytes_like_value(*only) {
+                // **`float(b'1.5')`**（参照也收 bytes／bytearray ✓；解析口径同字符串 ✓）。
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let trimmed = text.trim();
+                let lowered = trimmed.to_ascii_lowercase();
+                let (negative, body) = match lowered.strip_prefix('-') {
+                    Some(rest) => (true, rest),
+                    None => (false, lowered.strip_prefix('+').unwrap_or(&lowered)),
+                };
+                let number = match body {
+                    "inf" | "infinity" => f64::INFINITY,
+                    "nan" => f64::NAN,
+                    _ => match body.parse::<f64>() {
+                        Ok(number) => number,
+                        Err(_) => {
+                            return Err(instance.raise_builtin_error(
+                                "ValueError",
+                                &format!("could not convert string to float: {trimmed}"),
+                            ));
+                        }
+                    },
+                };
+                if negative { -number } else { number }
             } else {
-                return Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "float_new：这个实参形态还没接线（字符串解析等）",
-                });
+                // **其余实参形态 ⇒ 参照的 `TypeError`**（round 131 真缺口）：先前落"未接线" ✗ ⇒
+                // `float(None)` 一类把整个套件 abort 掉（`test_statistics` 实测 type=NoneType ✓）。
+                let kind = instance.type_name(instance.type_of(*only));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!(
+                        "float() argument must be a string or a real number, not '{kind}'"
+                    ),
+                ));
             }
         }
         _ => {
