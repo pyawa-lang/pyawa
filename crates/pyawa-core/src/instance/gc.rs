@@ -392,6 +392,13 @@ impl Instance {
         if let Some(entries) = self.dict_entries(modules) {
             for (_key, value) in entries {
                 roots.push(value.as_ptr() as usize);
+                // **模块的命名空间 dict 也直接标根**（round 127）：模块对象是 `AttributeObject` 且用
+                // **外部实例字典**（不内联）⇒ `AttributeObject::traverse` 只走内联字典 ✗ ⇒ 只标模块对象时
+                // 它的命名空间 dict/类仍会被判不可达（实测：`re.RegexFlag`／`signal.Signals` 等 enum 类被
+                // 回收 ✗）。这里把 dict 也当根 ✓。
+                if let Some(namespace) = crate::executor::protocol::instance_attributes(self, value) {
+                    roots.push(namespace.as_ptr() as usize);
+                }
             }
         }
         roots
