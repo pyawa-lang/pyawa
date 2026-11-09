@@ -491,7 +491,29 @@ impl Instance {
                 eprintln!("[root-frame] rc={} code={code:?}", header.refcount());
             }
         }
-        if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some() {
+        // **根集合的"只打印汇总"模式**（round 163）：大图（>10 万候选）时逐条打印会刷几十万行 ✗
+        // ⇒ `PYAWA_GC_ROOTS_DEBUG=2` 只打**按类型的根数汇总**（诊断"谁被当成根"更快 ✓）。
+        if std::env::var("PYAWA_GC_ROOTS_DEBUG").as_deref() == Ok("2") {
+            let mut counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for position in &stack {
+                // SAFETY: 候选存活。
+                let ty = unsafe { candidates[*position].as_ref() }.ty();
+                let name = unsafe { ty.as_ref() }.name().to_owned();
+                *counts.entry(name).or_insert(0) += 1;
+            }
+            let mut top: Vec<(String, usize)> = counts.into_iter().collect();
+            top.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+            let summary: Vec<String> = top
+                .iter()
+                .take(12)
+                .map(|(name, count)| format!("{name}={count}"))
+                .collect();
+            eprintln!("[gc-root-types] total={} {}", stack.len(), summary.join(" "));
+        }
+        if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some()
+            && std::env::var("PYAWA_GC_ROOTS_DEBUG").as_deref() != Ok("2")
+        {
             for position in &stack {
                 // SAFETY: 候选存活。
                 let ty = unsafe { candidates[*position].as_ref() }.ty();

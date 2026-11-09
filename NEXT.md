@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`0c2398a`（round 162：推导式内嵌生成器引用推导变量已真正接线——隐藏形参法；processes 两作用域均对）
+- **HEAD**：`ad6db28`（round 163：`PYAWA_GC_ROOTS_DEBUG=2` 根集合按类型汇总；钉住 weakref 四连 skip 后 1.48 M live＝被根经闭包持有，DummyKey 非根）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：约 **75–80 ok / 397 ≈ 19–20%**（10-31 是 41／10.3%）；超时 1–2（基本只剩 `test_weakref`）
@@ -14,7 +14,7 @@
   **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
 - **未修 bug ＋ 判据**（如实 ✓）：
   - **编译器**：推导式内嵌生成器表达式引用推导变量 **round 162 已接线**（隐藏形参法 ✓；判据见台账 round 162 §2）
-  - `test_weakref` 285 s ✗（唯一超时；根因＝4 万+ 异常对象的 traceback 保活被测局部；候选 `pending_exception`／`exception_state` 栈）
+  - `test_weakref` **169 s** ✗（唯一超时；已修：dict 删除 O(1)、SkipTest 不挂回溯、分代 GC；剩因＝四连 skip 后 1.48 M live 可达（根 5288，DummyKey 非根）⇒ 疑 `threading` 侧 `_limbo`/`_active`/`Thread._target` 未清）
   - 形参所有权／引用泄漏 ✗（台账 13 处；三版方案已撤回）
   - 日常面：`json.load(f)` ✗（`StopIteration`）· `defaultdict` ✗ · `match` 同行 suite ✗ · `urllib.request` ✗
   - `P3-42` KeyError 族／特殊方法派发；`P3-35` 剩余 5 形态；`P3-29`／`P3-37` 剩余面
