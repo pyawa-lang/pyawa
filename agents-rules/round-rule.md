@@ -36,6 +36,9 @@
   `target/roundcheck/chunk-*.log`），survey 用 `python3 tools/libtests_survey.py --release --resume --seconds 420`
   **多次续跑**直至跑满 397 文件（进度 `target/libtests_survey.progress.json`，`--timeout` 口径不变）。
   四块全绿 ＋ survey 跑满 ⇒ 视为**慢档等价通过** ✓（台账里写明分块数字）。
+  survey 分片跑法：每片 `--start/--end` 跑完把 `target/libtests_survey.tsv` cp 到
+  `target/recon/<名字>.tsv`；全部分片完成后用
+  `python3 tools/libtests_survey_merge.py target/recon/<名字>_*.tsv [--extra 名字:kind:理由]` 合并并打印统计 ✓。
 - **禁止**用慢档做轮内迭代；**禁止**用快档替代**行为变更轮**的提交前闸门。
 
 ## 4. 时间盒与升级
