@@ -333,8 +333,15 @@ impl TypeObject {
     /// 设置类型字典（**新引用**，由类型对象接手）。
     pub fn set_dict(&self, mapping: Option<NonNull<Header>>) {
         if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
-            if let Some(mapping) = mapping {
-                eprintln!("[setdict] 类型字典 ← {:p}", mapping.as_ptr());
+            // **round 123 诊断**：带上类型名，便于把"泄漏的类字典"反查到具体类/路径 ✓。
+            let name = self.name();
+            match mapping {
+                Some(mapping) => eprintln!(
+                    "[setdict] 类型 {name} 字典 ← {:p} rc={}",
+                    mapping.as_ptr(),
+                    unsafe { &*mapping.as_ptr() }.refcount()
+                ),
+                None => eprintln!("[setdict] 类型 {name} 字典 ← None"),
             }
         }
         *self.dict.borrow_mut() = mapping;

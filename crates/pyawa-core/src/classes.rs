@@ -352,24 +352,21 @@ pub unsafe fn build_class_native(
                 instance.watch_address(namespace);
             }
             let namespace_for_init = instance.retain(namespace);
-            let result = match custom_new {
-                Some(new_method) => {
-                    let built = crate::executor::call::call_value(
-                        instance,
-                        new_method,
-                        &[
-                            metaclass.cast::<Header>(),
-                            name_value,
-                            bases_value,
-                            namespace,
-                        ],
-                        &forwarded_keywords,
-                    )?;
-                    // **这条路不吃命名空间** ⇒ 调用方那一份留着**不动** ✓（与第 234 轮的既有口径一致 ✓：
-                    // `M.__new__` 是否"接管"了它由那个元类自己决定 ✓ ⇒ 这里**不还** ✗，免得把
-                    // 类字典里那一份打掉 ✓（实测：这里 `release` 会当场把类字典打空 ⇒ 段错误 ✗）。
-                    built
-                }
+            // `custom_new` 有 ⇒ 元类自己处理命名空间（**不吃**本函数这份 ✗）⇒ 本函数负责归还；
+            // `custom_new` 没有 ⇒ 落 `build_class_from_parts_with_keywords`（它**吃掉**命名空间 ✓）。
+            let namespace_consumed = custom_new.is_none();
+            let new_outcome = match custom_new {
+                Some(new_method) => crate::executor::call::call_value(
+                    instance,
+                    new_method,
+                    &[
+                        metaclass.cast::<Header>(),
+                        name_value,
+                        bases_value,
+                        namespace,
+                    ],
+                    &forwarded_keywords,
+                ),
                 None => build_class_from_parts_with_keywords(
                     instance,
                     name.clone(),
@@ -377,7 +374,20 @@ pub unsafe fn build_class_native(
                     namespace,
                     requested_metaclass,
                     &forwarded_keywords,
-                )?,
+                ),
+            };
+            let result = match new_outcome {
+                Ok(built) => built,
+                Err(error) => {
+                    instance.release(namespace_for_init);
+                    // **错误路径也要还本函数那份命名空间**（round 123 泄漏修）：先前 `?` 直接冒泡
+                    // ⇒ 自定义元类路径的类体命名空间**永远漏 1 份**（`test_userlist.free_after` 的
+                    // "root 类字典 rc=1 无持有者" 就是它 ✓）。**已被吃掉的路径不还** ✓。
+                    if !namespace_consumed {
+                        unsafe { instance.release_object(namespace.as_ptr()) };
+                    }
+                    return Err(error);
+                }
             };
             if crate::diag::flag("PYAWA_NS_DEBUG") {
                 eprintln!(
@@ -403,6 +413,9 @@ pub unsafe fn build_class_native(
                 instance.release(outcome);
             }
             instance.release(namespace_for_init);
+            if !namespace_consumed {
+                unsafe { instance.release_object(namespace.as_ptr()) };
+            }
             return Ok(result);
         }
     }
