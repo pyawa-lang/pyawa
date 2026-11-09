@@ -131,7 +131,19 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             let result = call_callable_value(instance, method, Some(iterable))?;
             ensure_iterator_result(instance, result)
         }
-        Err(_) => {
+        Err(lookup_error) => {
+            // **诊断口（round 172，默认静默；不改变行为）**：这里**丢掉的异常**每 `iter(不可迭代对象)`
+            // 漏一颗（`Err` 一份 ＋ `pending_exception` 槽一份）。**为什么不能就地还**：三种还法都让
+            // `test_dict.test_constructor` 间歇失败（`{}` vs `{'foo':'bar'}` = **陈旧内容** ⇒ 内存踩踏 ✗），
+            // 且实测所有 `rc=2`（还一份后 rc=1 仍在槽里，**不是**双放）⇒ 真正的病在"槽里那份最终被
+            // 释放时"（异常 → 回溯 → 帧链的所有权），见台账 round 171/172。这里只开一个**只读**诊断口 ✓。
+            if crate::diag::flag("PYAWA_ITER_ERR_DEBUG") {
+                if let crate::ExecError::Raised { exception } = lookup_error {
+                    // SAFETY: 只读计数。
+                    let rc = unsafe { exception.as_ref() }.refcount();
+                    eprintln!("[iter-err] rc={rc}");
+                }
+            }
             // **旧式序列协议** ✓（第 675 轮）：没有 `__iter__` 但**有 `__getitem__`** 的对象，参照按
             // `0,1,2,…` 依次取、遇 `IndexError` 收尾 ✓（`re._compiler` 的 `_compile` 迭代
             // `SubPattern` 就靠它 ✓）。这里**先物化**成列表再交给现成的 `list_iterator` ✓
