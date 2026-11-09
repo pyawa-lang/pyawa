@@ -17,6 +17,7 @@ impl Instance {
             getattribute_dispatching: Cell::new(false),
             user_types: RefCell::new(Vec::new()),
             user_type_set: RefCell::new(std::collections::HashSet::new()),
+            retired_types: RefCell::new(std::collections::HashSet::new()),
             user_instances: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_live: RefCell::new(std::collections::HashMap::new()),
             mappingproxy_sources: RefCell::new(std::collections::HashMap::new()),

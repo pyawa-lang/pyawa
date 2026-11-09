@@ -1044,12 +1044,19 @@ impl Instance {
                     }
                 }
             }
-            // **不摘注册表**（round 129 试验）：类型对象是 `Box::leak` 的，摘掉 `types` 后**任何仍持计数引用的
-            // 持有者**（帧槽/traceback 等）将来释放它时就不认识它是"注册类型" ⇒ `assert_live` 报悬垂 ✗
-            // （实测 `test_dict` 下 `Exc` 被收回后 `release_object` 悬垂 ✓）。保留注册/用户类型名单只清字典 ⇒
-            // 类型指针永远有效、也不会 invalid-free ✓（内存如实泄漏，与既有"类型本体不 dealloc"口径一致 ✓）。
-            // 因此这里**只**摘按地址索引的缓存/旁表（下面那几行）✓。
-            let _ = &address;
+            // **摘注册表 + 登记 retired**（round 130）：registration 摘掉可以避免"僵尸类"占着名字
+            // （round 129 保留注册表的隐患 ✓）；同时把地址记进 `retired_types` ⇒ `assert_live` 认得它 ⇒
+            // 仍在别处的计数引用将来释放它时不会被当野指针 ✓（类型本体 Box::leak 保留、裸 `ty` 指针有效 ✓；
+            // 注册表那份引用如实泄漏 ⇒ rc 不会再降到 0，不会 invalid-free ✓）。
+            self.types
+                .borrow_mut()
+                .retain(|entry| entry.as_ptr() as usize != address);
+            self.user_types
+                .borrow_mut()
+                .retain(|entry| entry.as_ptr() != ty.as_ptr());
+            self.user_type_set.borrow_mut().remove(&address);
+            self.retired_types.borrow_mut().insert(address);
+            self.user_instances.borrow_mut().remove(&address);
             let removed: Vec<NonNull<Header>> = {
                 let mut cache = self.type_dunders.borrow_mut();
                 let keys: Vec<(usize, &'static str)> = cache

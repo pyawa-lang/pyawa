@@ -122,6 +122,10 @@ pub struct Instance {
     /// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点。core 不能依赖
     /// stdlib（分层）⇒ 由 `_ast` 模块在引导期登记一个函数指针 ✓（未登记时 compile 照旧报未接线 ✓）。
     ast_parser: Cell<Option<crate::AstParserFn>>,
+    /// **已回收类型的地址登记**（round 130）：孤儿回收把类型从 `types`/`user_types` 摘掉后，**类型本体**
+    /// 仍被 `Box::leak` 保留（裸 `ty` 指针仍有效 ✓）；登记在这里让 `assert_live` 认得它 ⇒ 仍在别处的
+    /// 计数引用将来释放它时不会被当野指针 ✓（round 129 曾因此悬垂）。
+    retired_types: RefCell<std::collections::HashSet<usize>>,
     /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
     user_type_set: RefCell<std::collections::HashSet<usize>>,
     /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**

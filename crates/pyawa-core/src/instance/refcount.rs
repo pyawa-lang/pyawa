@@ -96,6 +96,10 @@ impl Instance {
         {
             return;
         }
+        // **已回收类型也认**（round 130）：本体仍在（`Box::leak`），裸 `ty` 与残余计数引用都可能回来 ✓。
+        if self.retired_types.borrow().contains(&address) {
+            return;
+        }
         {
             // 诊断增强（round 59）：开了 `PYAWA_ZOMBIE_TRACE=1` 时附上**最早那次释放**的
             // 类型与现场（"谁把它放掉的" ✓）。
