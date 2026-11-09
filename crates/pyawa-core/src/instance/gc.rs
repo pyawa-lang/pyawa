@@ -590,6 +590,26 @@ impl Instance {
                     let mut root_referrers: Vec<String> = Vec::new();
                     if let Some(root) = root {
                         let root_address = candidates[root].as_ptr() as usize;
+                        // **先扫 live 表**（含未跟踪对象 ✓）：root 的持有者可能不在 gc 候选里
+                        // （round 121 实测：类字典 rc=1、gc 候选里没有引用者 ⇒ 持有者在 live 但未跟踪）。
+                        for address in self.live_addresses() {
+                            if address == root_address {
+                                continue;
+                            }
+                            // SAFETY: live 表里登记的都是本实例的存活对象头。
+                            let header = unsafe {
+                                NonNull::new_unchecked(address as *mut Header)
+                            };
+                            for child in self.children_of(header) {
+                                if child as usize == root_address {
+                                    let referrer_type = unsafe { header.as_ref() }.ty();
+                                    root_referrers.push(format!(
+                                        "live:{address:#x}:{}",
+                                        unsafe { referrer_type.as_ref() }.name()
+                                    ));
+                                }
+                            }
+                        }
                         for referrer in self.gc_headers() {
                             for child in self.children_of(referrer) {
                                 if child as usize == root_address {
@@ -625,11 +645,52 @@ impl Instance {
                             }
                         }
                     }
+                    let root_is_some_type_dict = root.map(|root| {
+                        let root_address = candidates[root].as_ptr() as usize;
+                        self.user_type_headers()
+                            .into_iter()
+                            .find(|user_ty| {
+                                // SAFETY: 名单里类型存活。
+                                unsafe { &*user_ty.as_ptr().cast::<crate::TypeObject>() }
+                                    .dict()
+                                    .is_some_and(|dict| dict.as_ptr() as usize == root_address)
+                            })
+                            .map(|user_ty| {
+                                // SAFETY: 同上。
+                                let user_name = unsafe {
+                                    &*user_ty.as_ptr().cast::<crate::TypeObject>()
+                                }
+                                .name()
+                                .to_owned();
+                                format!("{user_name}:{:p}", user_ty.as_ptr())
+                            })
+                    });
+                    let root_keys = root
+                        .map(|root| {
+                            self.dict_entries(candidates[root])
+                                .map(|entries| {
+                                    entries
+                                        .iter()
+                                        .take(8)
+                                        .map(|(key, _)| {
+                                            self.text_of(*key)
+                                                .map(|text| text.to_owned())
+                                                .unwrap_or_else(|| "<?>".to_owned())
+                                        })
+                                        .collect::<Vec<String>>()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or_default();
                     eprintln!(
-                        "[mark] {name} at {candidate:p} chain={chain:?} root={root_info} \
-                         root_referrers=[{}]",
+                        "[mark] {name} at {candidate:p} external={} rc={} chain={chain:?} root={root_info} \
+                         root_referrers=[{}] root_type_dict_of={root_is_some_type_dict:?} \
+                         root_keys={root_keys:?}",
+                        external[position],
+                        unsafe { candidate.as_ref() }.refcount(),
                         root_referrers.join(",")
                     );
+                    let _ = ();
                 }
             }
         }
@@ -711,8 +772,12 @@ impl Instance {
                     !reachable
                 );
                 eprintln!(
-                    "[orphan-scan] {name} registered_instances={}",
-                    self.user_instances_of(*ty).len()
+                    "[orphan-scan] {name} registered_instances={} dict={:p}",
+                    self.user_instances_of(*ty).len(),
+                    unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }
+                        .dict()
+                        .map(|dict| dict.as_ptr())
+                        .unwrap_or(core::ptr::null_mut())
                 );
                 if header.refcount() != 1 || !reachable {
                     // **反查"谁引用它"**（round 119 诊断）：扫全部 gc 候选的 children ＋ 其它类型的字典。

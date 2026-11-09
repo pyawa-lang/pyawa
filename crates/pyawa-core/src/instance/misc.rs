@@ -74,6 +74,11 @@ impl Instance {
         self.live.borrow().len()
     }
 
+    /// **全部存活对象地址快照**（round 121 诊断：反查"谁持有某个对象"时要用到**未跟踪**对象 ✓）。
+    pub(crate) fn live_addresses(&self) -> Vec<usize> {
+        self.live.borrow().iter().copied().collect()
+    }
+
     /// 登记 **AST 解析回调**（round 86，由 `_ast` 模块在引导期调用一次 ✓）。
     pub fn set_ast_parser(&self, parser: crate::AstParserFn) {
         self.ast_parser.set(Some(parser));
