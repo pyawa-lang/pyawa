@@ -80,6 +80,16 @@ fn type_mro_native(
 /// ③ 都没有 ⇒ [`ExecError::AttributeNotFound`]
 /// **`LOAD_ATTR` 的协议口径** ✓（第 712 轮）：先走属性通道 ✓，找不到再问类型的 `__getattr__` ✓
 ///（参照的规矩 ✓ —— 与内建 `getattr(obj, 名)` **一处真相** ✓）。回退拿到的值包成 `Attribute::Owned` ✓。
+/// **放弃一次属性查找的 `Err`**（round 170 真泄漏修 ✗）：`raise()` 给异常对象加过一份
+/// `Err(Raised)` 的引用以及 `pending_exception` 槽的一份保活；`__getattr__` 回退路径在
+/// "原始查找失败、但回退成功"时**必须把原始异常两份都还掉**，否则每走一次 `__getattr__`
+/// 就漏一颗 `AttributeError`（其回溯／帧链随之被钉住 ⇒ `test_weakref` 的 1.48 M live ✗）。
+fn discard_lookup_error(instance: &Instance, error: &ExecError) {
+    if let ExecError::Raised { exception } = error {
+        crate::discard_raised(instance, *exception);
+    }
+}
+
 pub(crate) fn attribute_lookup_with_getattr(
     instance: &Instance,
     object: NonNull<Header>,
@@ -95,6 +105,8 @@ pub(crate) fn attribute_lookup_with_getattr(
             // **PEP 562**：**模块自己的** `__getattr__`（在模块命名空间里 ✓，不在类型 MRO 上 ✗）——
             // `typing.Match`／`Match = __getattr__('Match')` 那条懒建路 ✓（`Lib/typing.py:3827` ✓）。
             if let Some(value) = crate::executor::module_getattr_missing(instance, object, name) {
+                // **原始查找失败的那颗异常要还**（round 170 真泄漏修 ✗）。
+                discard_lookup_error(instance, &error);
                 return Ok(Attribute::Owned(value));
             }
             // 守卫 ②：**类型 MRO 上真的没有 `__getattr__`** 就直接把**原始错误**抛回去 ✓ ——
@@ -109,6 +121,8 @@ pub(crate) fn attribute_lookup_with_getattr(
             }
             match attribute_lookup(instance, object, "__getattr__") {
                 Ok(Attribute::Method { function, this }) => {
+                    // **原始查找失败的那颗异常要还**（round 170 真泄漏修 ✗）。
+                    discard_lookup_error(instance, &error);
                     let name_object = instance.new_str(name);
                     let found = crate::executor::call::call_callable(
                         instance,
@@ -117,8 +131,11 @@ pub(crate) fn attribute_lookup_with_getattr(
                         vec![name_object],
                         Vec::new(),
                         0,
-                    )?;
-                    Ok(Attribute::Owned(found))
+                    );
+                    match found {
+                        Ok(found) => Ok(Attribute::Owned(found)),
+                        Err(failure) => Err(failure),
+                    }
                 }
                 _ => Err(error),
             }

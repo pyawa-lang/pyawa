@@ -504,10 +504,12 @@ impl Instance {
                     }
                 }
                 let header = unsafe { candidates[*position].as_ref() };
+                let pointer = candidates[*position].as_ptr() as usize;
                 eprintln!(
-                    "[gc-reverse] AttributeError rc={} ext={} parents={chain:?} site={:?}",
+                    "[gc-reverse] AttributeError rc={} ext={} parents={chain:?} holders={:?} site={:?}",
                     header.refcount(),
                     external[*position],
+                    self.debug_holder_of(pointer),
                     self.exception_site_of(candidates[*position])
                 );
             }
@@ -1212,6 +1214,57 @@ impl Instance {
     }
 
     /// 按 `traverse` 槽位取一个对象的直接引用（**OM-12**／**OM-29**／**OM-36**）。
+    /// **图外持有者扫描**（round 170 诊断，`PYAWA_GC_HOLDER_DEBUG=1`）：给定一个"根"对象地址，
+    /// 扫 `Instance` 的**非 GC 字段**（`exception_state`／`pending_exception`／`gc_frozen`／
+    /// `weakrefs` 注册表／`types`／`user_types`／`retired_types`）里有没有它 ⇒ 命中就说明
+    /// 这个对象被"GC 图之外的引擎结构"强引用（那才是"rc>0 却找不到候选父"的来源 ✓）。
+    pub(crate) fn debug_holder_of(&self, pointer: usize) -> Vec<&'static str> {
+        let mut hits = Vec::new();
+        if self
+            .exception_state
+            .borrow()
+            .iter()
+            .any(|value| value.as_ptr() as usize == pointer)
+        {
+            hits.push("exception_state");
+        }
+        if self
+            .pending_exception()
+            .is_some_and(|value| value.as_ptr() as usize == pointer)
+        {
+            hits.push("pending_exception");
+        }
+        if self.gc_frozen.borrow().contains(&pointer) {
+            hits.push("gc_frozen");
+        }
+        for holders in self.weakrefs.borrow().values() {
+            if holders.iter().any(|value| value.as_ptr() as usize == pointer) {
+                hits.push("weakrefs-registry");
+                break;
+            }
+        }
+        if self
+            .user_types
+            .borrow()
+            .iter()
+            .any(|value| value.as_ptr() as usize == pointer)
+        {
+            hits.push("user_types");
+        }
+        if self
+            .types
+            .borrow()
+            .iter()
+            .any(|value| value.as_ptr() as usize == pointer)
+        {
+            hits.push("types");
+        }
+        if self.retired_types.borrow().contains(&pointer) {
+            hits.push("retired_types");
+        }
+        hits
+    }
+
     pub(crate) fn children_of(&self, header: NonNull<Header>) -> Vec<*mut Header> {
         let ty = unsafe { header.as_ref() }.ty();
         let mut children = Vec::new();
