@@ -121,6 +121,11 @@ def main() -> None:
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=120.0)
+    # **可续跑**（round 132）：每轮只跑 `--seconds` 秒、进度存 `*.progress.json`；跑满 397 个文件后再汇报总数 ✓
+    # （本会话单条命令 ~600 s 上限 ⇒ 一次跑不完整个 survey ✓）。
+    ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--seconds", type=float, default=420.0)
+    ap.add_argument("--reset-progress", action="store_true")
     args = ap.parse_args()
 
     root = pathlib.Path(args.dir).resolve()
@@ -148,19 +153,60 @@ def main() -> None:
 
     rows = []
     reasons = collections.Counter()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        for name, kind, msg in pool.map(
-            lambda p: run_one(binary, p, args.timeout), files
-        ):
-            rows.append((name, kind, msg))
-            if kind == "syntax":
-                reasons[msg] += 1
+    progress_path = OUT.with_suffix(".progress.json")
+    if args.resume:
+        import json
+        import time as _time
+
+        done = {}
+        if progress_path.is_file() and not args.reset_progress:
+            try:
+                done = json.loads(progress_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                done = {}
+        pending = [p for p in files if p.name not in done]
+        started = _time.monotonic()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            for offset in range(0, len(pending), args.jobs):
+                batch = pending[offset : offset + args.jobs]
+                for name, kind, msg in pool.map(
+                    lambda p: run_one(binary, p, args.timeout), batch
+                ):
+                    done[name] = (kind, msg)
+                    if kind == "syntax":
+                        reasons[msg] += 1
+                progress_path.write_text(
+                    json.dumps(done, ensure_ascii=False), encoding="utf-8"
+                )
+                # 每批都刷新 tsv（排序后写）⇒ 中途被上限截断也不丢结果 ✓
+                with OUT.open("w", encoding="utf-8") as fh:
+                    fh.write("file\tkind\treason\n")
+                    for name in sorted(done):
+                        kind, msg = done[name]
+                        fh.write(f"{name}\t{kind}\t{msg}\n")
+                if _time.monotonic() - started >= args.seconds:
+                    break
+        rows = [(name, *done[name]) for name in sorted(done)]
+        if len(done) < len(files):
+            print(
+                f"survey 可续跑：本轮累计 {len(done)}/{len(files)} 个文件"
+                f"（预算 {args.seconds:.0f}s）"
+            )
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            for name, kind, msg in pool.map(
+                lambda p: run_one(binary, p, args.timeout), files
+            ):
+                rows.append((name, kind, msg))
+                if kind == "syntax":
+                    reasons[msg] += 1
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    with OUT.open("w", encoding="utf-8") as fh:
-        fh.write("file\tkind\treason\n")
-        for row in rows:
-            fh.write("\t".join(row) + "\n")
+    if not args.resume:
+        with OUT.open("w", encoding="utf-8") as fh:
+            fh.write("file\tkind\treason\n")
+            for row in rows:
+                fh.write("\t".join(row) + "\n")
 
     total = len(rows)
     ok = sum(1 for _, k, _ in rows if k == "ok")

@@ -30,6 +30,12 @@
   - **行为变更轮**（改动默认路径／运行时语义）：提交前必须 `tools/roundcheck.sh` 全绿（十项 ＋ survey）；
   - **纯诊断轮／默认零输出轮**：`tools/fastcheck.sh` 全绿即可提交；但**每两轮至少一次** `tools/roundcheck.sh`，且下一次行为变更轮必须补；
   - survey 同节奏：行为变更轮必跑；诊断轮可并到"每两轮一次"的整轮验收里。
+- **环境上限下的等价分块**（round 132 起；DSH 会话单条命令约 **600 s** 被 `SIGTERM` 时）：
+  `tools/roundcheck.sh` 整体（gate 800+ s）与完整 survey 都跑不完 ⇒ 用
+  `tools/gate_chunk.sh small|stability|heap|conformance` **四块**分别跑（合起来＝十项，各块日志
+  `target/roundcheck/chunk-*.log`），survey 用 `python3 tools/libtests_survey.py --release --resume --seconds 420`
+  **多次续跑**直至跑满 397 文件（进度 `target/libtests_survey.progress.json`，`--timeout` 口径不变）。
+  四块全绿 ＋ survey 跑满 ⇒ 视为**慢档等价通过** ✓（台账里写明分块数字）。
 - **禁止**用慢档做轮内迭代；**禁止**用快档替代**行为变更轮**的提交前闸门。
 
 ## 4. 时间盒与升级
