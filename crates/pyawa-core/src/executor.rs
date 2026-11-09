@@ -1315,9 +1315,7 @@ pub(crate) fn bind_arguments(
             let name_object = instance.alloc(StrObject::new(instance.singletons().str_type(), name.clone()));
             let name_raw = name_object.as_ptr().cast::<Header>();
             let position = dict
-                .entries()
-                .iter()
-                .position(|(existing, _)| values_equal(instance, *existing, name_raw));
+                .find_live_position(|existing| values_equal(instance, existing, name_raw));
             if let Some(position) = position {
                 found = dict.entry(position).map(|(_, value)| value);
             }

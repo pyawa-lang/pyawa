@@ -227,9 +227,7 @@ fn step_calls_dict_merge<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                     // SAFETY: destination 在帧值栈上，存活；键值由本函数持有。
                     let destination_dict = unsafe { &*destination.as_ptr().cast::<DictObject>() };
                     let existing = destination_dict
-                        .entries()
-                        .iter()
-                        .position(|(candidate, _)| values_equal(instance, *candidate, key));
+                        .find_live_position(|candidate| values_equal(instance, candidate, key));
                     if let Some(position) = existing {
                         if is_merge {
                             // 参照用 `%U`（`str(键)`）再套单引号 ⇒ `'a'`／`'1'`／`'('x',)'` ✓

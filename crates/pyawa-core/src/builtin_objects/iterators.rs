@@ -737,6 +737,10 @@ impl IteratorObject {
     /// `StopIteration` 就**永久耗尽** ✓（`list_tests.test_exhausted_iterator`：耗尽后 `append(9)`
     /// 不能再吐 ✓；`test_tier2_invalidates_iterator` ✓）。先前只看"下标 < 当前长度" ✗
     /// ⇒ 追加元素后又"复活" ✗。
+    pub fn set_index(&self, value: usize) {
+        self.index.set(value);
+    }
+
     pub fn mark_exhausted(&self) {
         self.index.set(usize::MAX);
     }

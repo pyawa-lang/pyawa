@@ -78,9 +78,7 @@ pub(crate) fn lookup_in_mapping(
     // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
     let position = dict
-        .entries()
-        .iter()
-        .position(|(existing, _)| str_matches_public(instance, *existing, name))?;
+        .find_live_position(|existing| str_matches_public(instance, existing, name))?;
     let (_, value) = dict.entry(position)?;
     // **借用**：value 由字典持有 ✓（`P3-41` round 43 修 ✗）：先前这里 **incref** 而
     // 调用点一律 `push(instance, frame, value)`（`push` 自己会 `own()` 再加一份 ✓）⇒
@@ -217,9 +215,7 @@ pub fn instance_attribute_set(
         // SAFETY: namespace 是本实例里的 dict。
         let dict = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
         let position = dict
-            .entries()
-            .into_iter()
-            .position(|(existing, _)| str_matches_public(instance, existing, name));
+            .find_live_position(|existing| str_matches_public(instance, existing, name));
         match position {
             Some(slot) => {
                 if let Some(old) = dict.replace_value(slot, value) {
@@ -306,9 +302,7 @@ pub fn instance_attribute_set(
     // SAFETY: mapping 由对象或本函数持有。
     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
     let position = dict
-        .entries()
-        .into_iter()
-        .position(|(existing, _)| str_matches_public(instance, existing, name));
+        .find_live_position(|existing| str_matches_public(instance, existing, name));
     match position {
         Some(slot) => {
             if let Some(old) = dict.replace_value(slot, value) {
@@ -419,9 +413,7 @@ fn instance_attribute_delete_inner(
     // SAFETY: mapping 是属性字典（dict）。
     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
     let position = dict
-        .entries()
-        .into_iter()
-        .position(|(key, _)| str_matches_public(instance, key, name))
+        .find_live_position(|key| str_matches_public(instance, key, name))
         .ok_or_else(missing)?;
     if let Some((key, value)) = dict.remove(position) {
         release(instance, key);
@@ -1160,7 +1152,15 @@ pub(crate) fn equality_public(
                     // 优先按**活字典**查（顺序／哈希语义照旧 ✓）；字典已被清空时退回**快照**查找 ✓
                     // （清空是用户 `__eq__` 的合法副作用，参照不因此崩溃 ✓）。
                     let other_value = match instance.dict_lookup_key_checked(right, *key)? {
-                        Some(position) => b.get(position).map(|(_, value)| *value),
+                        // **按原始位置取活条目**（round 156 真 bug 修 ✗）：`b` 是**过滤后**的快照，
+                        // 它的下标不是原始位置（墓碑不在）⇒ 必须查活字典 ✓。
+                        Some(position) => {
+                            // SAFETY: right 由调用方保证存活（本函数各持一份引用）。
+                            let dict = unsafe {
+                                &*right.as_ptr().cast::<crate::builtin_objects::DictObject>()
+                            };
+                            dict.entry(position).map(|(_, value)| value)
+                        }
                         None => b
                             .iter()
                             .find(|(other_key, _)| {

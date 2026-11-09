@@ -132,10 +132,11 @@ pub(crate) fn dict_position(
         }
         return None;
     }
-    let entries = instance.dict_entries(mapping)?;
-    entries
-        .iter()
-        .position(|(candidate, _)| crate::executor::values::values_equal_public(instance, *candidate, key))
+    // SAFETY: mapping 由调用方保证是本实例的 dict。
+    let dict = unsafe { &*mapping.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+    dict.find_live_position(|candidate| {
+        crate::executor::values::values_equal_public(instance, candidate, key)
+    })
 }
 /// `update(other)`：逐对并入 ✓（**已有的键替换值** ✓，新键插入 ✓；引用规矩照 `insert_raw` ✓）。
 pub(crate) fn dict_update_native(
@@ -503,7 +504,11 @@ pub(crate) fn dict_clear_native(
     loop {
         // SAFETY: 绑定的是本实例的 dict。
         let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        match object.remove_at(0) {
+        // **找第一个活条目**（round 156）：墓碑位上 `remove_at(0)` 会返回 `None` ⇒ 先前提前收手 ✗。
+        let Some((position, _)) = object.next_live_entry(0) else {
+            break;
+        };
+        match object.remove_at(position) {
             Some((key, value)) => unsafe {
                 instance.release_object(key.as_ptr());
                 instance.release_object(value.as_ptr());
@@ -530,7 +535,11 @@ pub(crate) fn dict_popitem_native(
     }
     // SAFETY: 绑定的是本实例的 dict。
     let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-    match object.remove_at(length - 1) {
+    // **最后一个活条目**（round 156）：`length - 1` 可能落在墓碑上 ✗。
+    let Some((position, _)) = object.last_live_entry() else {
+        return Err(instance.raise_builtin_error("KeyError", "'popitem(): dictionary is empty'"));
+    };
+    match object.remove_at(position) {
         Some((key, value)) => Ok(instance.new_tuple(vec![key, value])),
         None => Err(instance.raise_builtin_error("KeyError", "popitem(): dictionary is empty")),
     }
@@ -557,15 +566,16 @@ pub(crate) fn dict_lookup(
     // **通用键型**（`None`／tuple／用户对象…）：按 `==` 语义找位置，再取该位置的值 ✓
     //（`dict_lookup_key` 已含哈希索引 ＋ 不可哈希兜底 ✓）。
     // 返回的是字典**借用**的那一份 ✓（`dict_get_native` 出去前会自己 `retain` ✓）。
+    // **按原始位置取条目**（round 156 真 bug 修 ✗）：`dict_entries` 是**过滤后**的列表（墓碑不在），
+    // 它的下标不再是原始位置 ⇒ 必须用 `DictObject::entry(position)` ✓（`b.get(3)` 先前给 None ✓）。
     if let Some(position) = instance.dict_lookup_key_checked(mapping, key)? {
-        return Ok(instance
-            .dict_entries(mapping)
-            .unwrap_or_default()
-            .get(position)
-            .map(|(_, value)| *value));
+        // SAFETY: 调用方保证 mapping 是本实例的 dict。
+        let dict = unsafe { &*mapping.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+        return Ok(dict.entry(position).map(|(_, value)| value));
     }
-    Ok(dict_position(instance, mapping, key)
-        .and_then(|position| instance.dict_entries(mapping)?.get(position).map(|(_, value)| *value)))
+    // SAFETY: 同上。
+    let dict = unsafe { &*mapping.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+    Ok(dict_position(instance, mapping, key).and_then(|position| dict.entry(position).map(|(_, value)| value)))
 }
 pub(crate) fn dict_get_native(
     instance: &Instance,
@@ -778,8 +788,8 @@ pub fn dict_setitem_native(
     // ⇒ 容器先拿一份值的引用 ✓（实参那份归调用方 ✓）；键只在**插入**那一支添引用 ✓。
     // SAFETY: container／key／value 都由调用方保证存活。
     let object = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DictObject>() };
-    let position = object.entries().iter().position(|(existing, _)| {
-        crate::executor::values_equal_public(instance, *existing, *key)
+    let position = object.find_live_position(|existing| {
+        crate::executor::values_equal_public(instance, existing, *key)
     });
     unsafe { instance.incref_object(value.as_ptr()) };
     match position {

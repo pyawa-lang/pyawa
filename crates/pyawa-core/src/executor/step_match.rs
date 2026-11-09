@@ -56,9 +56,7 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                     for index in 0..key_items.len() {
                         let key = key_items.item(index).expect("下标在范围内");
                         match mapping
-                            .entries()
-                            .iter()
-                            .position(|(existing, _)| values_equal(instance, *existing, key))
+                            .find_live_position(|existing| values_equal(instance, existing, key))
                         {
                             Some(position) => {
                                 let (_, value) = mapping.entry(position).expect("刚查到的位置");

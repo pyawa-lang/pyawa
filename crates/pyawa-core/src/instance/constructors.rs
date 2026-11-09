@@ -722,7 +722,10 @@ impl Instance {
         // SAFETY: proxy 是 mappingproxy（DictObject 同构布局）✓。
         let dict = unsafe { &*proxy.as_ptr().cast::<crate::builtin_objects::DictObject>() };
         // 清掉旧快照（键值各一份引用要归还 ✓）。
-        let old_entries = core::mem::take(&mut *dict.entries.borrow_mut());
+        let old_entries = dict.entries();
+        dict.entries.borrow_mut().clear();
+        dict.hashes.borrow_mut().clear();
+        dict.deleted.set(0);
         for (key, value) in old_entries {
             // SAFETY: 旧引用由代理持有。
             unsafe {

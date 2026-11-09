@@ -358,11 +358,10 @@ impl Instance {
     /// **按对象键删一项**（round 59，给 `_remove_dead_weakref` 用）：找到就删并归还键值引用 ✓。
     /// 返回是否删掉 ✓。
     pub fn dict_remove_key(&self, mapping: NonNull<Header>, key: NonNull<Header>) -> bool {
-        let Some(entries) = self.dict_entries(mapping) else {
-            return false;
-        };
-        let position = entries.iter().position(|(candidate, _)| {
-            crate::executor::values::values_equal_public(self, *candidate, key)
+        // SAFETY: mapping 由调用方保证是本实例的 dict（`dict_entries` 口径 ✓）。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let position = dict.find_live_position(|candidate| {
+            crate::executor::values::values_equal_public(self, candidate, key)
         });
         let Some(position) = position else {
             return false;
@@ -401,9 +400,7 @@ impl Instance {
         // 不可哈希／没覆盖的键 ⇒ 线性兜底（正常路径：设置键时已被拒 ✓）。
         // SAFETY: 调用方保证 mapping 存活。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        dict.entries()
-            .iter()
-            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, key))
+        dict.find_live_position(|existing| crate::executor::values_equal_public(self, existing, key))
     }
 
     /// **可失败的 `dict_lookup_key`**（round 120）：键的 `__hash__`／`__eq__` 抛异常时**原样上抛** ✓
@@ -441,9 +438,7 @@ impl Instance {
                 // SAFETY: 调用方保证 mapping 存活。
                 let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
                 Ok(dict
-                    .entries()
-                    .iter()
-                    .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, key)))
+                    .find_live_position(|existing| crate::executor::values_equal_public(self, existing, key)))
             }
         }
     }

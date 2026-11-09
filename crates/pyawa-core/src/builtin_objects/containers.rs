@@ -231,6 +231,8 @@ py_object! {
             /// **键集版本号**（`P3-41` round 42）：改键（插入／删除）时 +1 ⇒ 迭代器据此报
             /// `RuntimeError: dictionary changed size during iteration` ✓（只改值不算 ✓，照参照）。
             version: Cell<u64>,
+            /// 墓碑计数（round 156 调试）
+            deleted: Cell<usize>,
             /// **逐项缓存键哈希**（round 121）：参照只算一次 `__hash__` ✓ —— 先前"哈希索引"重建时
             /// 把**已存键重新哈希** ✗ ⇒ `test_dict.test_setdefault_atomic` 的 `hash_count == 1`
             /// 当场 2 ✗。`u64::MAX` 是"未知"哨兵（走 `insert_raw` 的键）✓，索引重建时才现算 ✓。
@@ -511,6 +513,80 @@ impl SetObject {
 }
 
 impl DictObject {
+    pub fn tombstone() -> (NonNull<Header>, NonNull<Header>) {
+        let dangling = NonNull::<Header>::dangling();
+        (dangling, dangling)
+    }
+
+    pub fn is_tombstone(key: NonNull<Header>) -> bool {
+        key == NonNull::<Header>::dangling()
+    }
+
+    pub fn next_live_entry(
+        &self,
+        from: usize,
+    ) -> Option<(usize, (NonNull<Header>, NonNull<Header>))> {
+        let entries = self.entries.borrow();
+        for position in from..entries.len() {
+            let entry = entries[position];
+            if !Self::is_tombstone(entry.0) {
+                return Some((position, entry));
+            }
+        }
+        None
+    }
+
+    /// 最后一个活条目（跳过墓碑；给 `popitem`／`clear` 一类"从尾部取"的调用 ✓）。
+    pub fn last_live_entry(&self) -> Option<(usize, (NonNull<Header>, NonNull<Header>))> {
+        let entries = self.entries.borrow();
+        for position in (0..entries.len()).rev() {
+            let entry = entries[position];
+            if !Self::is_tombstone(entry.0) {
+                return Some((position, entry));
+            }
+        }
+        None
+    }
+
+    pub fn find_live_position(
+        &self,
+        predicate: impl Fn(NonNull<Header>) -> bool,
+    ) -> Option<usize> {
+        let entries = self.entries.borrow();
+        for (position, (key, _)) in entries.iter().enumerate() {
+            if Self::is_tombstone(*key) {
+                continue;
+            }
+            if predicate(*key) {
+                return Some(position);
+            }
+        }
+        None
+    }
+
+    fn compact_if_needed(&self) {
+        let deleted = self.deleted.get();
+        if deleted < 32 || deleted * 2 < self.entries.borrow().len() {
+            return;
+        }
+        let mut entries = self.entries.borrow_mut();
+        let mut hashes = self.hashes.borrow_mut();
+        let mut kept_entries: Vec<(NonNull<Header>, NonNull<Header>)> =
+            Vec::with_capacity(entries.len() - deleted);
+        let mut kept_hashes: Vec<u64> = Vec::with_capacity(hashes.len() - deleted);
+        for (position, entry) in entries.iter().enumerate() {
+            if Self::is_tombstone(entry.0) {
+                continue;
+            }
+            kept_entries.push(*entry);
+            kept_hashes.push(hashes.get(position).copied().unwrap_or(u64::MAX));
+        }
+        *entries = kept_entries;
+        *hashes = kept_hashes;
+        self.deleted.set(0);
+        self.invalidate_index();
+    }
+
     /// **替换某一项的值**（第 147 轮，`dict.update`／`setdefault` 用 ✓）：返回**旧值** ✓，
     /// 由调用方归还引擎 ✓（本对象不再持有它 ✓）。
     pub fn set_value_at(&self, index: usize, value: NonNull<Header>) -> Option<NonNull<Header>> {
@@ -546,6 +622,9 @@ impl DictObject {
             let mut map: std::collections::HashMap<u64, Vec<usize>> =
                 std::collections::HashMap::new();
             for (position, (key, _)) in entries.iter().enumerate() {
+                if Self::is_tombstone(*key) {
+                    continue;
+                }
                 // **优先用缓存哈希**（参照只算一次 `__hash__` ✓）；哨兵才现算 ✓。
                 let cached = hashes.get(position).copied().filter(|hash| *hash != u64::MAX);
                 if let Some(hash) = cached.or_else(|| hash_of(*key)) {
@@ -591,18 +670,37 @@ impl DictObject {
     /// **摘掉某一项**（第 147 轮，`dict.pop` 用 ✓）：键与值**各一份引用转交**调用方 ✓。
     pub fn remove_at(&self, index: usize) -> Option<(NonNull<Header>, NonNull<Header>)> {
         self.bump_version();
-        self.invalidate_index();
-        let mut entries = self.entries.borrow_mut();
-        if index >= entries.len() {
-            return None;
-        }
+        // **索引增量更新而不是整体作废**（round 156 性能）：墓碑保住"位置不变" ✓ ⇒ 删一项只需把
+        // 该位置从它那个哈希桶里摘掉 ✓。先前每次删除都 `invalidate_index` ⇒ 下一次查找重建整张索引
+        // 是 O(n) ⇒ `WeakKeyDictionary` 的 20k 次删除 O(n²)（实测 17 s ✓）。
+        let hash = {
+            let hashes = self.hashes.borrow();
+            hashes.get(index).copied().unwrap_or(u64::MAX)
+        };
+        let removed = {
+            let mut entries = self.entries.borrow_mut();
+            let slot = entries.get_mut(index)?;
+            if Self::is_tombstone(slot.0) {
+                return None;
+            }
+            core::mem::replace(slot, Self::tombstone())
+        };
         {
             let mut hashes = self.hashes.borrow_mut();
-            if index < hashes.len() {
-                hashes.remove(index);
+            if let Some(slot) = hashes.get_mut(index) {
+                *slot = u64::MAX;
             }
         }
-        Some(entries.remove(index))
+        if hash != u64::MAX {
+            if let Some(index_map) = self.index.borrow_mut().as_mut() {
+                if let Some(bucket) = index_map.get_mut(&hash) {
+                    bucket.retain(|position| *position != index);
+                }
+            }
+        }
+        self.deleted.set(self.deleted.get() + 1);
+        self.compact_if_needed();
+        Some(removed)
     }
 
     /// 见 [`TupleObject::slots`]。
@@ -612,19 +710,25 @@ impl DictObject {
             .with_clear(dict_clear)
     }
 
-    /// 条目数。
     pub fn len(&self) -> usize {
+        self.entries.borrow().len().saturating_sub(self.deleted.get())
+    }
+
+    pub fn raw_len(&self) -> usize {
         self.entries.borrow().len()
     }
 
-    /// 是否为空。
     pub fn is_empty(&self) -> bool {
-        self.entries.borrow().is_empty()
+        self.len() == 0
     }
 
-    /// 按位置取条目（**借用**）——顺序是插入顺序。
     pub fn entry(&self, index: usize) -> Option<(NonNull<Header>, NonNull<Header>)> {
-        self.entries.borrow().get(index).copied()
+        let entry = self.entries.borrow().get(index).copied()?;
+        if Self::is_tombstone(entry.0) {
+            None
+        } else {
+            Some(entry)
+        }
     }
 
     /// 全部条目（**借用**的副本）。
@@ -642,7 +746,12 @@ impl DictObject {
         //（对象整体悬垂时，读到的字段可能"自洽" ✗），而且本函数在**查找热路径**上 ✓ ⇒ 白付开销 ✗
         // ⇒ 撤掉守卫、只留这段注记 ✓。**下一步**：从 `run_class_body`／`build_class_native` 这一侧
         // 核**命名空间字典的所有权**（谁提前把它释放了 ✓），而不是在这里加检查 ✓。
-        self.entries.borrow().clone()
+        self.entries
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|(key, _)| !Self::is_tombstone(*key))
+            .collect()
     }
 
     /// 找某个键的位置（按指针；值相等的查找在 `executor` 里做）。
@@ -650,7 +759,7 @@ impl DictObject {
         self.entries
             .borrow()
             .iter()
-            .position(|(candidate, _)| *candidate == key)
+            .position(|(candidate, _)| !Self::is_tombstone(*candidate) && *candidate == key)
     }
 
     /// 追加一个**新引用**的键值对（不查重；调用方先用"值相等"查过）。
@@ -677,19 +786,7 @@ impl DictObject {
 
     /// 删除第 `index` 项，返回 `(键, 值)`（调用方负责释放这两份引用）。
     pub fn remove(&self, index: usize) -> Option<(NonNull<Header>, NonNull<Header>)> {
-        self.bump_version();
-        self.invalidate_index();
-        let mut entries = self.entries.borrow_mut();
-        if index >= entries.len() {
-            return None;
-        }
-        {
-            let mut hashes = self.hashes.borrow_mut();
-            if index < hashes.len() {
-                hashes.remove(index);
-            }
-        }
-        Some(entries.remove(index))
+        self.remove_at(index)
     }
 
     /// 写入一个**新引用**的键值对；键已存在时替换值并交出旧值（调用方负责释放）。
@@ -821,12 +918,13 @@ pub(crate) unsafe fn dict_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut 
 pub(crate) unsafe fn dict_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<DictObject>() };
-    // **同 `list_clear`** ✗（第 206 轮修复 ✓）。
-    for (key, value) in core::mem::take(&mut *object.entries.borrow_mut()) {
-        // SAFETY: 这些引用由本对象持有。
+    for (key, value) in object.entries() {
         unsafe {
             instance.release_object(key.as_ptr());
             instance.release_object(value.as_ptr());
         }
     }
+    object.entries.borrow_mut().clear();
+    object.hashes.borrow_mut().clear();
+    object.deleted.set(0);
 }

@@ -173,9 +173,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     // SAFETY: mapping 由帧或函数持有，存活。
                     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
                     let position = dict
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                        .find_live_position(|existing| str_matches_public(instance, existing, &name));
                     if let Some(position) = position {
                         if let Some((old_key, old_value)) = dict.remove(position) {
                             release(instance, old_key);
@@ -200,9 +198,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     // SAFETY: mapping 由帧或函数持有，存活。
                     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
                     let position = dict
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                        .find_live_position(|existing| str_matches_public(instance, existing, &name));
                     match position {
                         Some(position) => {
                             if let Some((old_key, old_value)) = dict.remove(position) {
@@ -280,9 +276,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     } else {
                         let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
                         let position = mapping
-                            .entries()
-                            .iter()
-                            .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                            .find_live_position(|existing| str_matches_public(instance, existing, &name));
                         if let Some(position) = position {
                             if let Some((old_key, old_value)) = mapping.remove(position) {
                                 release(instance, old_key);
@@ -308,9 +302,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     // SAFETY: namespace 由帧持有，存活。
                     let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
                     let position = mapping
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                        .find_live_position(|existing| str_matches_public(instance, existing, &name));
                     match position {
                         Some(position) => {
                             if let Some((old_key, old_value)) = mapping.remove(position) {

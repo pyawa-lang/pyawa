@@ -159,9 +159,7 @@ fn remove_module_entry(instance: &Instance, modules: NonNull<Header>, name: &str
     // SAFETY: modules 由实例持有、存活，且按契约是 dict。
     let mapping = unsafe { &*modules.as_ptr().cast::<crate::builtin_objects::DictObject>() };
     let position = mapping
-        .entries()
-        .iter()
-        .position(|(key, _)| crate::executor::str_matches_public(instance, *key, name));
+        .find_live_position(|key| crate::executor::str_matches_public(instance, key, name));
     let position = position?;
     let (key, value) = mapping.remove(position)?;
     instance.release(key);

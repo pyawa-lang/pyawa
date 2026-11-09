@@ -83,9 +83,7 @@ fn namespace_lookup(vm: &Vm, namespace: NonNull<Header>, name: &str) -> NonNull<
     let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
     let key = vm.instance.new_str(name);
     let position = mapping
-        .entries()
-        .iter()
-        .position(|(existing, _)| {
+        .find_live_position(|existing| {
             // SAFETY: 两边的键都存活。
             let left = unsafe { &*existing.as_ptr().cast::<StrObject>() }.value().to_owned();
             let right = unsafe { &*key.as_ptr().cast::<StrObject>() }.value().to_owned();
@@ -741,9 +739,7 @@ fn a_class_body_can_read_the_module_globals() {
     // SAFETY: 字典由类型对象持有。
     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
     let position = dict
-        .entries()
-        .iter()
-        .position(|(key, _)| {
+        .find_live_position(|key| {
             // SAFETY: key 由字典持有。
             unsafe { &*key.as_ptr().cast::<pyawa_core::StrObject>() }.value() == "x"
         })

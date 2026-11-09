@@ -240,33 +240,33 @@ pub(crate) fn advance_iterator(
     }
     let target = object.target();
     let index = object.index();
-    let length = iterable_length(instance, target, opcode)?;
-    if index >= length {
-        object.mark_exhausted();
-        return Ok(None);
-    }
-    // **dict 的 items()／values() 迭代器**（round 119）：快照式视图迭代器换成"引用字典"的
-    // 真迭代器后 ✓，这里按类型取 值／(键, 值) ✓（变异由上面的版本守卫报 ✓）。
-    let item = if Some(ty) == instance.type_named("dict_valueiterator")
+    let dict_iterator = Some(ty) == instance.type_named("dict_valueiterator")
         || Some(ty) == instance.type_named("dict_itemiterator")
-    {
-        // **按下标直取**（round 119 性能修正）：先前 `dict_entries` 整份克隆 ✗ ⇒ 大表迭代
-        // O(n²) ✗（`test_userstring` 因此超时 ✓）。`DictObject::entry(index)` 是借用 ✓。
-        // SAFETY: 类型身份刚确认 ⇒ 目标就是 DictObject ✓。
+        || Some(ty) == instance.type_named("dict_keyiterator");
+    let item = if dict_iterator {
         let dict = unsafe { &*target.as_ptr().cast::<DictObject>() };
-        let Some((key, value)) = dict.entry(index) else {
+        let Some((position, (key, value))) = dict.next_live_entry(index) else {
             object.mark_exhausted();
             return Ok(None);
         };
+        object.set_index(position + 1);
         if Some(ty) == instance.type_named("dict_valueiterator") {
             instance.retain(value)
-        } else {
+        } else if Some(ty) == instance.type_named("dict_itemiterator") {
             instance.new_tuple(vec![instance.retain(key), instance.retain(value)])
+        } else {
+            instance.retain(key)
         }
     } else {
-        iterable_item(instance, target, index, opcode)?
+        let length = iterable_length(instance, target, opcode)?;
+        if index >= length {
+            object.mark_exhausted();
+            return Ok(None);
+        }
+        let item = iterable_item(instance, target, index, opcode)?;
+        object.advance();
+        item
     };
-    object.advance();
     Ok(Some(item))
 }
 

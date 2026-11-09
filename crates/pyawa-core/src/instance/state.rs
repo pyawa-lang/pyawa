@@ -70,10 +70,7 @@ impl Instance {
         let key = self
             .adopt(StrObject::new(self.singletons().str_type(), name.to_owned()))
             .cast::<Header>();
-        let position = dict
-            .entries()
-            .into_iter()
-            .position(|(existing, _)| str_matches(self, existing, name));
+        let position = dict.find_live_position(|existing| str_matches(self, existing, name));
         match position {
             Some(slot) => {
                 // 键已在表里：新键那份引用交回去

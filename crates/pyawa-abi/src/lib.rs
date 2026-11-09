@@ -1869,9 +1869,7 @@ pub unsafe extern "C" fn pa_getglobal(state: *mut pa_state, name: *const c_char)
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
-            .entries()
-            .iter()
-            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+            .find_live_position(|key| str_equals(&state.instance, key, &text));
         match position {
             Some(position) => {
                 let (_, value) = mapping.entry(position).expect("刚查到的位置");
@@ -1908,9 +1906,7 @@ pub unsafe extern "C" fn pa_setglobal(state: *mut pa_state, name: *const c_char)
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
-            .entries()
-            .iter()
-            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+            .find_live_position(|key| str_equals(&state.instance, key, &text));
         if let Some(position) = position {
             if let Some((old_key, old_value)) = mapping.remove(position) {
                 // SAFETY: 旧键值由字典持有。
@@ -2110,9 +2106,7 @@ pub unsafe extern "C" fn pa_register(
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
-            .entries()
-            .iter()
-            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+            .find_live_position(|key| str_equals(&state.instance, key, &text));
         if let Some(position) = position {
             if let Some((old_key, old_value)) = mapping.remove(position) {
                 // SAFETY: 旧键值由字典持有。
@@ -2416,9 +2410,7 @@ fn set_global_value(state: &mut pa_state, name: &str, value: NonNull<Header>) {
     // SAFETY: globals 由本状态持有，存活。
     let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
     let position = mapping
-        .entries()
-        .iter()
-        .position(|(key, _)| str_equals(&state.instance, *key, name));
+        .find_live_position(|key| str_equals(&state.instance, key, name));
     if let Some(position) = position {
         if let Some((old_key, old_value)) = mapping.remove(position) {
             // SAFETY: 旧键值由字典持有。
