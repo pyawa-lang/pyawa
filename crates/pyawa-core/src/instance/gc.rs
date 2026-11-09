@@ -359,6 +359,27 @@ impl Instance {
         true
     }
 
+    /// **解释器栈根**（round 125）：从 `current_frame()` 起沿 `f_back` 链的全部帧地址 —— 这些帧
+    /// （以及它们能到达的对象）必须当**根** ✓（参照口径：解释器栈是根）。先前只按"外部引用数"找根；
+    /// 若栈对帧的那份引用**没计数**（`current_frame` 是旁表指针）⇒ 栈上帧可能被判不可达 ✗ ⇒ 过度回收
+    /// （round 124 的 `test_rlcompleter` 帧槽悬垂即此类）。这里把整条帧链强制标根 ✓。
+    fn interpreter_stack_roots(&self) -> Vec<usize> {
+        let mut roots = Vec::new();
+        let mut at = self.current_frame();
+        let mut guard = 0usize;
+        while let Some(frame) = at {
+            roots.push(frame.as_ptr() as usize);
+            // SAFETY: 当前帧链上的帧都存活（由 `CurrentFrameGuard` 持有 ✓）。
+            let frame_ref = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+            at = frame_ref.f_back();
+            guard += 1;
+            if guard > 4096 {
+                break;
+            }
+        }
+        roots
+    }
+
     /// **OM-29**／**OM-30**：求不可达的跟踪对象。
     ///
     /// 两步：先按"引用计数 − 来自跟踪对象内部的引用数"找出根（外部引用 > 0），
@@ -391,6 +412,14 @@ impl Instance {
 
         let mut marked = vec![false; candidates.len()];
         let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
+        // **解释器栈上的帧是根**（round 125）✓。
+        for address in self.interpreter_stack_roots() {
+            if let Some(&position) = index.get(&address) {
+                if !marked[position] {
+                    stack.push(position);
+                }
+            }
+        }
         if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some() {
             for position in &stack {
                 // SAFETY: 候选存活。
@@ -516,6 +545,14 @@ impl Instance {
         }
         let mut marked = vec![false; candidates.len()];
         let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
+        // **解释器栈上的帧是根**（round 125）✓。
+        for address in self.interpreter_stack_roots() {
+            if let Some(&position) = index.get(&address) {
+                if !marked[position] {
+                    stack.push(position);
+                }
+            }
+        }
         let debug_mark = std::env::var_os("PYAWA_MARK_DEBUG").is_some();
         let mut marked_from: Vec<Option<usize>> = if debug_mark {
             vec![None; candidates.len()]
@@ -950,6 +987,11 @@ impl Instance {
         // ④ 回收：先终结活实例，再摘注册表/缓存、清字典。
         for ty in orphans {
             let address = ty.as_ptr() as usize;
+            if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+                // SAFETY: ty 存活。
+                let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
+                eprintln!("[orphan-reclaim] {name} ptr={address:#x}");
+            }
             // SAFETY: 名单里的类型都存活。
             let type_object = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() };
             // **先给活实例跑终结器**（清字典后 `__del__` 就从 MRO 上消失了 ✗）；实例清单取**登记表** ✓。
