@@ -254,7 +254,9 @@ pub(crate) fn subscript_get_inner(
         return Ok(instance.new_generic_alias(container, key));
     }
     let str_type = instance.singletons().str_type();
-    if container_type == str_type {
+    // **`str` 子类也走这条**（round 136）：`test_re` 的 `class my_unicode(str)` 实例取下标
+    // （`re.compile(my_unicode("abc"))` 内部）先前落到「下标只接线了 …」✗ ⇒ 现在按子类判 ✓。
+    if instance.is_subtype(container_type, str_type) {
         // P3-38 S2a-2 批 2：整数下标按**码点**取（负下标照旧归一 ✓；孤立代理也占一格 ✓）。
         let points = instance
             .str_code_point_vec(container)

@@ -43,6 +43,29 @@ RELEASE_BIN = WORKSPACE / "target/release/pyawa"
 OUT = WORKSPACE / "target/libtests_survey.tsv"
 
 
+
+def _run_capture(cmd, cwd, env, timeout):
+    """跑一个子进程并捕获输出——**用临时文件而非管道**（round 136）：
+    子进程若再派生子进程（`test_os`／`test_popen` 一类），管道会被孙进程继承；超时杀父进程后
+    `communicate()` 仍等管道的 EOF ⇒ **survey 驱动被挂死** ✗（实测 207-237 片被平台 SIGTERM）。
+    换成临时文件：超时杀掉子进程即可立刻返回 ✓（文件描述符随进程组消亡 ✓）。"""
+    with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=cwd,
+                env=env,
+                stdout=out_file,
+                stderr=err_file,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None, ""
+        out_file.seek(0)
+        err_file.seek(0)
+        text = (err_file.read() + out_file.read()).decode("utf-8", "replace")
+        return proc.returncode, text
+
 def run_named(binary: pathlib.Path, path: pathlib.Path, timeout: float):
     """**以导入名再跑一次**（官方 regrtest 的派发形状；`tools/libtests_named_runner.py` ✓）。
 
@@ -55,18 +78,13 @@ def run_named(binary: pathlib.Path, path: pathlib.Path, timeout: float):
     parent = str(path.parent.parent)
     env["PYTHONPATH"] = parent + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     with tempfile.TemporaryDirectory() as td:
-        try:
-            proc = subprocess.run(
-                [str(binary), str(runner), str(path), "test." + path.stem],
-                cwd=td,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return False
-        return proc.returncode == 0
+        code, _text = _run_capture(
+            [str(binary), str(runner), str(path), "test." + path.stem],
+            td,
+            env,
+            timeout,
+        )
+        return code == 0
 
 
 def run_one(binary: pathlib.Path, path: pathlib.Path, timeout: float):
@@ -76,27 +94,19 @@ def run_one(binary: pathlib.Path, path: pathlib.Path, timeout: float):
     parent = str(path.parent.parent)
     env["PYTHONPATH"] = parent + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     with tempfile.TemporaryDirectory() as td:
-        try:
-            proc = subprocess.run(
-                [str(binary), str(path)],
-                cwd=td,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            out = (proc.stderr or "") + (proc.stdout or "")
-            lines = out.strip().splitlines()
-            msg = lines[-1] if lines else ""
-        except subprocess.TimeoutExpired:
+        code, out = _run_capture([str(binary), str(path)], td, env, timeout)
+        if code is None:
             return path.name, "timeout", "超时"
+        lines = out.strip().splitlines()
+        msg = lines[-1] if lines else ""
+        returncode = code
         # 分类按 CLI 的结构化消息（"未捕获（状态 N）"）而非进程退出码：
         # 退出码在"打不开文件/语法错"等路径上并不唯一，状态码才稳定。
         if "状态 2" in out:
             kind = "syntax"
         elif "状态 5" in out:
             kind = "unimplemented"
-        elif "未捕获" in out or proc.returncode != 0:
+        elif "未捕获" in out or returncode != 0:
             kind = "runtime"
         else:
             kind = "ok"
