@@ -121,6 +121,20 @@ impl Emitter {
                             closure_freevars.push(referenced);
                         }
                     }
+                    // **推导式内嵌生成器引用推导变量 ⇒ 如实报未接线**（round 161）：本层作用域
+                    // 的 cell 提升／内联推导式的 cell 读写路径还没接（module 作用域连
+                    // `analyze_cells` 都没跑；函数作用域会撞 `RefCell 借用冲突` ✗）⇒ 先前是
+                    // **进程级 panic** ✗ ⇒ 这里在发射前明确拒绝（调用方能转 SyntaxError ✓）。
+                    // 判据（round 162）：让 module 也跑 `analyze_cells`，且内联推导式对 cell 化目标
+                    // 走 `LOAD_DEREF`／`STORE_DEREF`；之后这两条最小复现应能跑 ✓。
+                    if let Some(captured) = closure_freevars
+                        .iter()
+                        .find(|free| self.comprehension_locals.iter().any(|local| local == *free))
+                    {
+                        return Err(CompileError::Unsupported(format!(
+                            "推导式内嵌生成器表达式引用推导变量「{captured}」：cell 提升尚未接线（见台账 round 161）"
+                        )));
+                    }
                     if !closure_freevars.is_empty() {
                         unit = compile_scope(
                             "<genexpr>",
@@ -143,9 +157,20 @@ impl Emitter {
                     // **之后** ✓（参照实测 ✓）。
                     if !closure_freevars.is_empty() {
                         for free in &closure_freevars {
-                            let slot = self
-                                .deref_slot(free)
-                                .unwrap_or_else(|| panic!("生成器表达式的自由变量必在本层 cell／free 表里：{free:?}（varnames={:?} cellvars={:?} freevars={:?}）", self.unit.varnames, self.unit.cellvars, self.unit.freevars));
+                            // **如实报未接线，不 panic**（round 161）：`[x for x in xs if any(y == x for y in z)]`
+                            // —— 推导式内嵌"引用推导变量"的生成器表达式时，编译器还没把推导变量提升成 cell
+                            // （module 作用域连 `analyze_cells` 都没跑 ✓；函数作用域提升了但内联推导式的
+                            // cell 读写路径还会撞 `RefCell 借用冲突` ✓）⇒ 先前是**进程级 panic** ✗ ⇒
+                            // 改成明确的编译错误（调用方能转 SyntaxError／报未接线，不再崩 ✓）。
+                            // 判据（round 162）：`compile/symbols.rs` 让 module 也跑 `analyze_cells`，并让
+                            // 内联推导式对 cell 化目标走 `LOAD_DEREF`／`STORE_DEREF`。
+                            let Some(slot) = self.deref_slot(free) else {
+                                return Err(CompileError::Unsupported(
+                                    format!(
+                                        "推导式内嵌生成器表达式引用推导变量「{free}」：cell 提升尚未接线（见台账 round 161）"
+                                    ),
+                                ));
+                            };
                             self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                         }
                         self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
