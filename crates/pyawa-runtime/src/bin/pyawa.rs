@@ -422,6 +422,11 @@ fn real_main() {
             program_name.len() as isize,
         );
     }
+    // **`linecache` 注册运行脚本源码**（round 189）：试过（把源码按占位名 `<pyawa-test>` 注册进
+    // `linecache.cache`）——`traceback.extract_tb(...).line` 立刻有文本 ✓，但 `inspect` 也会因此
+    // **找得到源码** ⇒ 走 `ast.parse`（本层只接线签名面）⇒ **大片 unimplemented abort** ✗
+    // （与 round 178 的嵌套真文件名同一个雷 ✓）。**本轮撤回**：先补 AST 解析再开这一步 ✓
+    // （已登记进 NEXT；`test_exception_locations` 两档要 `f.line`，所以也压在 AST 上 ✓）。
     let run_bytecode = |bytes: &Vec<u8>| unsafe {
         // SAFETY: 产物字节在本栈上活着；`state` 由 `pa_create` 交回 ✓。
         pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)

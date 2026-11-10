@@ -142,6 +142,59 @@ pub(crate) fn bytes_decode_native(
     }
     instance.decode_with_encoding_and_errors(&value, &encoding, &errors)
 }
+/// **`bytes.fromhex(string)`／`bytearray.fromhex(string)`**（round 189）：十六进制文本 → 字节 ✓
+/// （参照口径：跳过 **ASCII 空白**、两字符一组；奇长／非十六进制 ⇒
+/// `ValueError: non-hexadecimal number found in fromhex() arg at position N` ✓；
+/// 非 `str` ⇒ `TypeError: fromhex() argument must be str, not …` ✓）。
+pub fn bytes_fromhex_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fromhex() takes exactly one argument (0 given)",
+        ));
+    };
+    let Some(text) = instance.text_of(value) else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("fromhex() argument must be str, not {name}"),
+        ));
+    };
+    let mut bytes = Vec::with_capacity(text.len() / 2);
+    let mut high: Option<u8> = None;
+    let mut position = 0usize;
+    for character in text.chars() {
+        let character_position = position;
+        position += character.len_utf8();
+        if character.is_ascii_whitespace() {
+            continue;
+        }
+        let Some(digit) = character.to_digit(16) else {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!("non-hexadecimal number found in fromhex() arg at position {character_position}"),
+            ));
+        };
+        let digit = digit as u8;
+        match high.take() {
+            Some(first) => bytes.push(first * 16 + digit),
+            None => high = Some(digit),
+        }
+    }
+    if high.is_some() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("non-hexadecimal number found in fromhex() arg at position {position}"),
+        ));
+    }
+    Ok(instance.new_bytes(&bytes))
+}
+
 /// `bytes.maketrans(from, to)` ⇒ **256 字节**的查表 ✓（见上）。
 pub fn bytes_maketrans_native(
     instance: &Instance,

@@ -1605,6 +1605,17 @@ impl Instance {
                 "center",
                 crate::builtin::bytes::bytes_center_native as crate::NativeFn,
             ),
+            // **`bytes.fromhex`／`bytearray.fromhex`**（round 189）。
+            (
+                self.type_named("bytes").expect("bytes 已登记"),
+                "fromhex",
+                crate::builtin::bytes::bytes_fromhex_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("bytearray").expect("bytearray 已登记"),
+                "fromhex",
+                crate::builtin::bytes::bytes_fromhex_native as crate::NativeFn,
+            ),
             // **`set.union`**（task-46）：实例面走 `set_getattr`；类型级入口（`set.union({1}, {2})` ✓）
             // 从这里装 —— stdlib `_hashlib_module` 的临时补丁同步移除（一处真相 ✓）。
             (
