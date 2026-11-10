@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`26a8579`（round 208：type() 三参元类转交（只对 ABCMeta 一族）⇒ __abstractmethods__ 正确、test_collections 13F/32E→16F/15E；import enum 不回归）
+- **HEAD**：`37cc5c5`（round 209：内建族子类中间层 Python 覆盖属性解析（MyCounter.update→Counter.update）⇒ test_collections 16F/15E→16F/13E）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

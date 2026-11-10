@@ -847,19 +847,29 @@ fn attribute_lookup_specials(
     // **只对内建类型的严格子类生效** ✓（第 270 轮那一版放太宽 ✗ ⇒ 被 ③ `the_corpus_has_no_new_divergences`
     // 拦下 ✗）：普通类**一律走原路** ✓，既有 dunder 语义不受影响 ✓。
     if !instance.is_type_object(object) {
-        let in_builtin_family = std::env::var_os("PYAWA_NO_BUILTIN_FAMILY").is_none() && [
-            "dict", "list", "tuple", "set", "frozenset", "deque", "int", "str", "float", "bytes",
-            "bytearray", "bool",
-        ]
-        .iter()
-        .any(|name| {
-            instance.type_named(name).is_some_and(|base| {
-                object_type != base && instance.is_subtype(object_type, base)
-            })
-        });
-        if in_builtin_family {
+        // **哪个内建基类**（同一个循环里记下来 ✓ —— round 209 修 ✗：先前只判 `owner == object_type`
+        // ⇒ **中间层 Python 类的覆盖**（`class MyCounter(Counter)` 的 `Counter.update`）被漏掉 ✗
+        // ⇒ 落到下面"继承来的 `getattr` 槽"（`dict.update` native）✗ ⇒ `m.update(None)` 报
+        // `TypeError: 'NoneType' object is not iterable` ✓）。
+        let mut builtin_base: Option<NonNull<crate::TypeObject>> = None;
+        if std::env::var_os("PYAWA_NO_BUILTIN_FAMILY").is_none() {
+            for name in [
+                "dict", "list", "tuple", "set", "frozenset", "deque", "int", "str", "float",
+                "bytes", "bytearray", "bool",
+            ] {
+                if let Some(base) = instance.type_named(name) {
+                    if object_type != base && instance.is_subtype(object_type, base) {
+                        builtin_base = Some(base);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(base) = builtin_base {
             if let Some((owner, value)) = instance.type_lookup_owner(object_type, name) {
-                if owner == object_type {
+                // **自身或"内建基类之上的中间层"都算**（后者是本轮修的格 ✓）；纯内建基类那层
+                // （`dict.update` 这种）留给下面的 `getattr` 槽（走快路 ✓、语义相同 ✓）。
+                if owner == object_type || owner != base {
                     let value_type = unsafe { value.as_ref() }.ty();
                     let callable_like = Some(value_type) == instance.type_named("function")
                         || Some(value_type) == instance.type_named("builtin_function_or_method");
