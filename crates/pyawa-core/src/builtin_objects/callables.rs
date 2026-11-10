@@ -1289,6 +1289,37 @@ pub(crate) unsafe fn attribute_traverse(ptr: *mut Header, visit: &mut dyn FnMut(
 pub(crate) unsafe fn attribute_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<AttributeObject>() };
+    if std::env::var_os("PYAWA_TB_CLEAR_DEBUG").is_some() {
+        // SAFETY: ptr 存活（调用方契约）。
+        let ty = unsafe { &*ptr }.ty();
+        if unsafe { ty.as_ref() }.name() == "traceback" {
+            let payload = object.attributes();
+            // SAFETY: 两个字典都由 ptr 持有，存活。
+            let payload_keys: Vec<String> = payload
+                .map(|dict| {
+                    unsafe { &*dict.as_ptr().cast::<crate::builtin_objects::DictObject>() }
+                        .entries()
+                        .into_iter()
+                        .map(|(key, _)| instance.text_of(key).unwrap_or("?").to_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let frame_pointer = payload.and_then(|dict| {
+                // SAFETY: 字典由 ptr 持有，存活。
+                let dictionary = unsafe { &*dict.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+                let key = instance.new_str("tb_frame");
+                let found = dictionary
+                    .find_live_position(|existing| instance.text_of(existing) == Some("tb_frame"));
+                let _ = key;
+                found.map(|position| {
+                    dictionary.entry(position).map(|(_, value)| value.as_ptr() as usize)
+                }).flatten()
+            });
+            eprintln!(
+                "[tb-clear] ptr={ptr:p} payload_keys={payload_keys:?} frame={frame_pointer:?}",
+            );
+        }
+    }
     if let Some(mapping) = object.set_attributes(None) {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(mapping.as_ptr()) };

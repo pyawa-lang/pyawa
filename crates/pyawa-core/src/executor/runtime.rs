@@ -627,6 +627,12 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
     if let Some(previous) = previous {
         if let Ok(Some(previous_frame)) = instance.attribute_optional_of(previous, "tb_frame") {
             if previous_frame == frame {
+                // **探针交出的 `previous_frame` 也要还**（round 197 真泄漏修 ✗）：它来自
+                // `attribute_optional_of`（**新引用**）；先前这个早退分支只还了 `previous`（回溯对象），
+                // 把 `previous_frame` 那份漏了 ⇒ 帧 rc 永远多 1 ⇒ 整条帧链（局部变量）不释放 ✗
+                // （实测 `fai2.py`：`S.__getitem__` 帧 +3/−2、末态 rc=1、`A.__del__` 不跑 ✓）。
+                // SAFETY: 探针交出的新引用。
+                unsafe { instance.release_object(previous_frame.as_ptr()) };
                 // SAFETY: previous 是上面探针交出的新引用。
                 unsafe { instance.release_object(previous.as_ptr()) };
                 // **恢复"最近一次抛出"槽的口径与主路径一致**（round 193 真泄漏修 ✗）：

@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`8b660e1`（round 196：OWNED_DROP/FRAME_DROP 诊断口；帧账算清＝+3/-3 平衡、落域确实发生，漏的是某条回溯释放时没还 tb_frame）
+- **HEAD**：`b85d8ce`（round 197：attach_traceback 去重早退分支补还 previous_frame ⇒ fai2 done True、test_iter 5F/1E⇒4F/1E（free_after_iterating 转绿））
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
