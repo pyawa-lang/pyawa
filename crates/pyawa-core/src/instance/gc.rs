@@ -294,6 +294,11 @@ impl Instance {
             // SAFETY: 同 ①。
             unsafe { clear(ptr.as_ptr(), self) };
         }
+        // **`mappingproxy` 活视图登记要注销**（round 195 真 bug 修 ✗）：否则代理地址被后续新
+        // dict 复用时会被"陈旧登记"误认成活视图（并把老源条目拷进新 dict ✗）。
+        if unsafe { ty.as_ref() }.name() == "mappingproxy" {
+            self.forget_mappingproxy(ptr.as_ptr());
+        }
         // ②′ **OM-14**：另行挂载的实例字典也是本对象持有的一份引用
         if let Some(mapping) = unsafe { ptr.as_ref() }.take_instance_dict() {
             // SAFETY: 这份引用由本对象持有。

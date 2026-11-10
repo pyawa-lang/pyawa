@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`01ff5e5`（round 194：WATCH_SITE_WATCH 盯单颗异常；泄漏 AttributeError 收支 +2/-2 末态 rc=1＝只漏 Err 那份；摘回溯两条路都失败（协议 10/10、低层 7/10）⇒ 一碰异常挂载字典就抖出 latent 堆问题）
+- **HEAD**：`3d6e460`（round 195：修 mappingproxy_live 陈旧登记（源强引用＋释放注销＋按类型过滤）＋ iter_value 探针改"只查不抛+discard_raised"；test_dict 20/20、fai2 tb 15/15）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

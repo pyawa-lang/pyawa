@@ -697,9 +697,32 @@ impl Instance {
 
     /// **登记一个"活视图" `mappingproxy`**（round 125）：`.mapping` 用 ✓。
     pub fn register_mappingproxy_live(&self, proxy: NonNull<Header>, source: NonNull<Header>) {
-        self.mappingproxy_live
+        // **源要持一份强引用**（round 195 真 bug 修 ✗）：先前只记**裸指针** ⇒ 源字典先死、
+        // 代理还活着时 `sync_mappingproxy` 会读已释放的源（UAF）✗。
+        // SAFETY: source 由调用方保证存活；登记表要自己那份。
+        unsafe { self.incref_object(source.as_ptr()) };
+        if let Some(previous) = self
+            .mappingproxy_live
             .borrow_mut()
-            .insert(proxy.as_ptr() as usize, source);
+            .insert(proxy.as_ptr() as usize, source)
+        {
+            // SAFETY: 被顶下来的那份由登记表持有。
+            unsafe { self.release_object(previous.as_ptr()) };
+        }
+    }
+
+    /// **代理释放时的注销**（round 195）：把活视图登记与来源类型都摘掉，并**归还源的那份强引用** ✓。
+    ///
+    /// 不注销的后果（实测）：代理地址被之后的新 dict 复用 ⇒ `sync_mappingproxy` 拿**陈旧登记**
+    /// 把老源（`test_views_mapping` 里 `d["foo"]="bar"]`）的条目**拷进新 dict** ⇒
+    /// `{} != {'foo':'bar'}` 那种"陈旧内容"随机出现 ✗（`test_dict.test_constructor` 2/5 偶发）。
+    pub fn forget_mappingproxy(&self, proxy: *mut crate::Header) {
+        let address = proxy as usize;
+        if let Some(source) = self.mappingproxy_live.borrow_mut().remove(&address) {
+            // SAFETY: 登记表持有的一份。
+            unsafe { self.release_object(source.as_ptr()) };
+        }
+        self.mappingproxy_sources.borrow_mut().remove(&address);
     }
 
     /// 取 `mappingproxy` 的活来源（没有 ⇒ `None`）。
@@ -713,9 +736,22 @@ impl Instance {
     /// **把活视图代理的快照与源字典同步**（round 125）：`m == d` 一类入口先调 ✓。
     /// 旧条目逐项归还（借用视图 ⇒ 需要自己 retain 新的）✓。
     pub fn sync_mappingproxy(&self, proxy: NonNull<Header>) {
+        // **只对真的是 `mappingproxy` 的对象同步**（round 195；调用点在 `==` 上，操作数可能是普通 dict
+        // ⇒ 陈旧地址登记会把普通 dict 当成活视图 ✗）。
+        let is_proxy = self
+            .type_named("mappingproxy")
+            .is_some_and(|proxy_type| self.type_of(proxy) == proxy_type);
+        if !is_proxy {
+            return;
+        }
         let Some(source) = self.mappingproxy_live_source(proxy) else {
             return;
         };
+        // **源必须还活着**（强引用已在登记时持有 ⇒ 正常不会死；这里再兜一层，防"登记前就死"的旧路径）✓。
+        if !self.is_live_address(source) {
+            self.forget_mappingproxy(proxy.as_ptr());
+            return;
+        }
         let Some(entries) = self.dict_entries(source) else {
             return;
         };

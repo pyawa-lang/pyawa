@@ -743,8 +743,15 @@ pub fn dict_eq_native(
         return Ok(instance.retain(instance.not_implemented()));
     };
     // **活视图代理先同步快照**（round 125）：`.mapping` 是源字典的活视图 ✓。
-    instance.sync_mappingproxy(left);
-    instance.sync_mappingproxy(*right);
+    // **只对 `mappingproxy` 操作数调**（round 195 真 bug 修 ✗）：先前无条件对两个操作数调 ⇒ 普通 dict 若
+    // 复用了已释放代理的地址，会被"陈旧登记"当成活视图而**被写入老源的条目** ✗（`{} != {'foo':'bar'}`）。
+    let proxy_type = instance.type_named("mappingproxy");
+    if proxy_type.is_some_and(|proxy| instance.type_of(left) == proxy) {
+        instance.sync_mappingproxy(left);
+    }
+    if proxy_type.is_some_and(|proxy| instance.type_of(*right) == proxy) {
+        instance.sync_mappingproxy(*right);
+    }
     if !instance.is_subtype(instance.type_of(*right), dict_type) {
         // 非 dict ⇒ NotImplemented（反射走对方的 `__eq__` ✓，与参照一致 ✓）。
         return Ok(instance.retain(instance.not_implemented()));

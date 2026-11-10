@@ -1125,9 +1125,14 @@ pub(crate) fn equality_public(
         }
         // **`dict`**：键用结构查（用户键的 `__eq__` 属 P3-42 后续格），**值**递归（`__eq__` 生效 ✓）。
         if subtype(left_ty, "dict") && subtype(right_ty, "dict") {
-            // **活视图代理先同步快照**（round 125）。
-            instance.sync_mappingproxy(left);
-            instance.sync_mappingproxy(right);
+            // **活视图代理先同步快照**（round 125）；**只对 `mappingproxy` 操作数调**（round 195 真 bug 修 ✗）。
+            let proxy_type = instance.type_named("mappingproxy");
+            if proxy_type.is_some_and(|proxy| instance.type_of(left) == proxy) {
+                instance.sync_mappingproxy(left);
+            }
+            if proxy_type.is_some_and(|proxy| instance.type_of(right) == proxy) {
+                instance.sync_mappingproxy(right);
+            }
             let a = instance.dict_entries(left).unwrap_or_default();
             let b = instance.dict_entries(right).unwrap_or_default();
             if a.len() != b.len() {

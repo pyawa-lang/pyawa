@@ -119,8 +119,27 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
     // **走属性通道** ✓（第 627 轮修 ✗）：`__iter__` 可能由类型的 **`getattr` 槽**动态给出 ✓（`range` 就是 ✓）
     // —— 先前只走 `attribute_optional` ✗（不查那个槽 ✓）⇒ `list(range(3))`／`for` 一类报
     // `TypeError: 'range' object is not iterable` ✗（本轮 `range_builtin` 对拍实测 ✓）。
-    // **特殊方法按 `type(iterable)` 的 MRO 找** ✓（类对象 ⇒ 元类 MRO ✓；第 410 轮，task-21 ✓）
-    match crate::executor::attribute::attribute_lookup_special(instance, iterable, "__iter__") {
+    // **先做"不造异常"的存在性探测**（round 195）：`attribute_lookup_special` 对"没有 `__iter__`"的对象
+    // 会抛一颗 AttributeError（`raise()` 给 `Err` 与 `pending` 各加一份引用），`iter_value` 这里故意吞掉它
+    // ⇒ 每 `iter(旧式序列对象)` 就漏一份（并钉住回溯→帧链）。这里先**只查询**：普通对象看 MRO 的
+    // `type_lookup`；有 `getattr` 槽的内建类型（`range` 一族）照旧走属性通道 ✓。没有 `__iter__` ⇒
+    // 直接走旧式序列协议，**根本不会有异常诞生** ✓。
+    let has_special_iter = if instance.is_type_object(iterable) {
+        instance
+            .type_lookup(instance.type_of(iterable), "__iter__")
+            .is_some()
+    } else {
+        let object_type = instance.type_of(iterable);
+        instance.type_lookup(object_type, "__iter__").is_some()
+            || unsafe { object_type.as_ref() }.slots().getattr.is_some()
+    };
+    let special_lookup = if has_special_iter {
+        crate::executor::attribute::attribute_lookup_special(instance, iterable, "__iter__")
+    } else {
+        // "无可查"的占位（该值只在下面 `PYAWA_ITER_ERR_DEBUG` 打印分支用到）✓。
+        Err(crate::ExecError::Interrupted)
+    };
+    match special_lookup {
         Ok(crate::executor::Attribute::Method { function, this }) => {
             let result = call_callable_value(instance, function, Some(this))?;
             ensure_iterator_result(instance, result)
@@ -131,17 +150,17 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             ensure_iterator_result(instance, result)
         }
         Err(lookup_error) => {
-            // **诊断口（round 172，默认静默；不改变行为）**：这里**丢掉的异常**每 `iter(不可迭代对象)`
-            // 漏一颗（`Err` 一份 ＋ `pending_exception` 槽一份）。**为什么不能就地还**：三种还法都让
-            // `test_dict.test_constructor` 间歇失败（`{}` vs `{'foo':'bar'}` = **陈旧内容** ⇒ 内存踩踏 ✗），
-            // 且实测所有 `rc=2`（还一份后 rc=1 仍在槽里，**不是**双放）⇒ 真正的病在"槽里那份最终被
-            // 释放时"（异常 → 回溯 → 帧链的所有权），见台账 round 171/172。这里只开一个**只读**诊断口 ✓。
-            if crate::diag::flag("PYAWA_ITER_ERR_DEBUG") {
-                if let crate::ExecError::Raised { exception } = lookup_error {
+            // **把探针异常按 `discard_raised` 口径还掉**（round 195 真泄漏修）：
+            // round 171/172 的三版"就地还"都因 `test_dict` 偶发失败而撤回——**本轮找到并修掉了那个
+            // 真正的病根**（`mappingproxy_live` 用裸指针登记、代理地址被新 dict 复用 ⇒ 陈旧内容）。
+            // 病根修掉后这里可以安全地 `discard_raised`（release `Err` 那份 ＋ 若 `pending` 仍是它则清槽）✓。
+            if let crate::ExecError::Raised { exception } = lookup_error {
+                if crate::diag::flag("PYAWA_ITER_ERR_DEBUG") {
                     // SAFETY: 只读计数。
                     let rc = unsafe { exception.as_ref() }.refcount();
                     eprintln!("[iter-err] rc={rc}");
                 }
+                crate::discard_raised(instance, exception);
             }
             // **旧式序列协议** ✓（第 675 轮）：没有 `__iter__` 但**有 `__getitem__`** 的对象，参照按
             // `0,1,2,…` 依次取、遇 `IndexError` 收尾 ✓（`re._compiler` 的 `_compile` 迭代
