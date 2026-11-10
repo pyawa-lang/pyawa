@@ -354,6 +354,67 @@ pub fn generic_alias_mro_entries(
 /// 为什么需要 ✗：`Lib/typing.py` 的 `_ProtocolMeta.__new__`（1968 行起）对**未解析的基类**读
 /// `base.__name__` ✓ —— `class SupportsAbs[T](Protocol)` 的基里带一个 `Generic[T]` 别名 ⇒
 /// 先前报 `'GenericAlias' object has no attribute '__name__'` ⇒ `import typing` 卡在 2913 行 ✓。
+/// **`GenericAlias.__call__`**（round 216）：参照里别名**可调用**，转调 `origin(*args)` ✓
+/// （`Group[int, list[int]](1, [2])` ⇒ `Group(1,[2])` ✓，`test_collections.TestNamedTuple`
+/// `test_non_generic_subscript` ✓）。别名类型没有 `call` 槽 ⇒ 挂 Python 级 `__call__` ✓
+///（调用方的"无 call 槽 ⇒ 找 `type(obj).__call__`"那一路会命中 ✓）。
+pub fn generic_alias_call(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__call__ 缺少 self"));
+    };
+    let Some(origin) = instance.attribute_optional_of(this, "__origin__")? else {
+        return Err(instance.raise_builtin_error("TypeError", "别名没有 __origin__"));
+    };
+    // **实参按"借用"处理**（round 216 真 bug 修 ✗）：`call_callable` 只借不接管 ✓；但本函数拿到的
+    // `args`／`kwargs` 是**调用方持有的引用** ✓ ⇒ 自己各 retain 一份再用、用完逐个还 ✓
+    //（先前直接把裸指针转交 ✗ ⇒ namedtuple 别名的调用会把实参提前释放 ⇒ `malloc` 崩 ✗）。
+    let retained_args: Vec<NonNull<Header>> = args
+        .iter()
+        .map(|value| {
+            // SAFETY: 实参由调用方保证存活。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            *value
+        })
+        .collect();
+    let mut retained_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
+    for (name, value) in kwargs {
+        // SAFETY: 同上。
+        unsafe {
+            instance.incref_object(name.as_ptr());
+            instance.incref_object(value.as_ptr());
+        }
+        retained_kwargs.push((*name, *value));
+    }
+    // `attribute_optional_of` 给的是**新引用** ⇒ 调完要还。
+    let outcome = crate::executor::call::call_callable(
+        instance,
+        origin,
+        None,
+        retained_args.clone(),
+        retained_kwargs.clone(),
+        0,
+    );
+    for value in retained_args {
+        // SAFETY: 上面各持一份。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    for (name, value) in retained_kwargs {
+        // SAFETY: 同上。
+        unsafe {
+            instance.release_object(name.as_ptr());
+            instance.release_object(value.as_ptr());
+        }
+    }
+    // SAFETY: 上面那份新引用由本函数持有。
+    unsafe { instance.release_object(origin.as_ptr()) };
+    outcome
+}
+
 pub fn generic_alias_getattr(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -370,6 +431,13 @@ pub fn generic_alias_getattr(
     else {
         return Err(instance.raise_builtin_error("TypeError", "__getattr__ 的名字要是 str"));
     };
+    // **`__parameters__`**（round 216）：非泛型 `GenericAlias` 的 `__parameters__` 是 **`()`** ✓
+    //（`Group = namedtuple(...); Group[int, list[int]].__parameters__ == ()` ✓；
+    // `test_collections.TestNamedTuple.test_non_generic_subscript`）。转发给 origin 会丢（namedtuple
+    // 类本身没有 `__parameters__` ✓）⇒ 这里直接给空元组 ✓。
+    if name == "__parameters__" {
+        return Ok(instance.new_tuple(Vec::new()));
+    }
     // **别把 `__getattr__` 自己转出去** ✗（否则自递归 ✓）。
     if name != "__getattr__" {
         if let Some(origin) = instance.attribute_optional_of(this, "__origin__")? {

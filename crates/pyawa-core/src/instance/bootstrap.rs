@@ -1682,6 +1682,28 @@ impl Instance {
                 "__call__",
                 crate::builtin_objects::dunder_call_native as crate::NativeFn,
             ),
+            // **集合的四个二元运算符类型字典项**（round 216）：`Counter` 的 multiset 测试直接取
+            // `set.__sub__`／`__or__`／`__and__` 当参照 ✓。
+            (
+                self.type_named("set").expect("set 已登记"),
+                "__sub__",
+                crate::builtin::set::set_sub_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("set").expect("set 已登记"),
+                "__or__",
+                crate::builtin::set::set_or_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("set").expect("set 已登记"),
+                "__and__",
+                crate::builtin::set::set_and_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("set").expect("set 已登记"),
+                "__xor__",
+                crate::builtin::set::set_xor_native as crate::NativeFn,
+            ),
             // **`dict.__reversed__`**（round 214）：`collections.abc.Reversible` 探测要它 ✓。
             (
                 self.type_named("dict").expect("dict 已登记"),

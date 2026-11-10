@@ -568,6 +568,71 @@ pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, 
 /// （参照实测：可接多个可迭代；`{1}.union(5)` ⇒ `TypeError: 'int' object is not iterable` ✓；
 /// 关键字实参 ⇒ `TypeError: set.union() takes no keyword arguments` ✓）。
 /// 去重口径与 `set.add` 同一处（`values_equal_public` ✓）。
+/// **集合二元运算符的类型字典入口**（round 216）：`set.__sub__`／`__or__`／`__and__`／`__xor__`
+/// （`test_collections.TestCounter.test_multiset_operations` 直接取它们 ✓）。绑定／未绑定都认 ✓。
+fn set_binary_op_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    symbol: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, rest) = match bound {
+        Some(left) => (left, args),
+        None => match args.split_first() {
+            Some((left, rest)) => (*left, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "unbound method needs an argument",
+                ))
+            }
+        },
+    };
+    let Some(right) = rest.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{symbol} expected 1 argument, got 0"),
+        ));
+    };
+    Ok(crate::executor::set_operation(instance, left, *right, symbol))
+}
+
+pub(crate) fn set_sub_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "-")
+}
+
+pub(crate) fn set_or_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "|")
+}
+
+pub(crate) fn set_and_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "&")
+}
+
+pub(crate) fn set_xor_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "^")
+}
+
 pub(crate) fn set_union_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

@@ -148,6 +148,20 @@ impl Instance {
             // **`__getattr__` 也随第一次造别名装上** ✓（task-24 尾件 ✓）：别名缺属性转给
             // `__origin__` ✓（参照 `_GenericAlias` ✓）—— `Lib/typing.py` 的 `_ProtocolMeta.__new__`
             // 读 `base.__name__` 靠它 ✓。
+            // **`__call__` 也随第一次造别名装上**（round 216）：`Group[int, list[int]](1,[2])` ✓。
+            if self.dict_get(namespace, "__call__").is_none() {
+                let function_type = self
+                    .type_named("builtin_function_or_method")
+                    .expect("builtin_function_or_method 在引导期已登记");
+                let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    function_type,
+                    "__call__",
+                    core::cell::Cell::new(
+                        crate::builtin_objects::generic_alias_call as crate::NativeFn,
+                    ),
+                ));
+                self.dict_set(namespace, "__call__", function.into_raw().cast::<Header>());
+            }
             if self.dict_get(namespace, "__getattr__").is_none() {
                 let function_type = self
                     .type_named("builtin_function_or_method")

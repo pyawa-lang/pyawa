@@ -398,6 +398,21 @@ pub unsafe fn function_getattr(
             let ty = instance.type_of(unsafe { NonNull::new_unchecked(ptr) });
             Some(instance.retain(ty.cast()))
         }
+        // **`function.__builtins__`**（round 216）：参照里它是**只读属性**，值取
+        // `__globals__["__builtins__"]`（没有 ⇒ 空 dict 一类）；`namedtuple` 的 `__new__`
+        // 模板就是 `__builtins__ == {}`（`test_collections.TestNamedTuple.test_new_builtins_issue_43102` ✓）。
+        "__builtins__" => match object.globals() {
+            Some(mapping) => {
+                if let Some(found) = instance.dict_get(mapping, "__builtins__") {
+                    // SAFETY: found 由映射持有，交调用方一份。
+                    unsafe { instance.incref_object(found.as_ptr()) };
+                    Some(found)
+                } else {
+                    Some(instance.new_dict())
+                }
+            }
+            None => Some(instance.new_dict()),
+        },
         "__globals__" => match object.globals() {
             Some(mapping) => {
                 // SAFETY: mapping 由函数持有，存活。
