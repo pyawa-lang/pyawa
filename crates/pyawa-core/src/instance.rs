@@ -161,6 +161,10 @@ pub struct Instance {
     getattribute_dispatching: Cell<bool>,
     /// **本地追踪回调执行中**（round 181）：防追踪函数自己被追踪（递归）。
     trace_dispatching: Cell<bool>,
+    /// **`traceback` 对象计数**（round 191 诊断）：创建数／释放数（GC_LOG 时打印）。
+    traceback_created: Cell<usize>,
+    /// 已释放的 `traceback` 对象数。
+    traceback_freed: Cell<usize>,
     /// **全局追踪函数**（round 183；`sys.settrace` 存的值，**本实例持一份引用**）：
     /// 事件驱动仍只做"帧本地 `f_trace`"这半（全局 `'call'`/`'return'` 事件下一轮）✓，
     /// 但 `settrace`/`gettrace` 的**存取语义**先照参照（`sys.gettrace() is f` ✓）。

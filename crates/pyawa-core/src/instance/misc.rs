@@ -568,12 +568,14 @@ impl Instance {
         }
         if crate::diag::flag("PYAWA_GC_LOG") {
             eprintln!(
-                "[gc] index={} live={} live_after={} freed={} ms={}",
+                "[gc] index={} live={} live_after={} freed={} ms={} tb_created={} tb_freed={}",
                 self.gc_collections.get(),
                 live_before,
                 self.live_objects(),
                 freed,
-                started.elapsed().as_millis()
+                started.elapsed().as_millis(),
+                self.traceback_created.get(),
+                self.traceback_freed.get()
             );
         }
         freed

@@ -185,6 +185,21 @@ impl Instance {
         let traceback_type = self
             .type_named("traceback")
             .unwrap_or_else(|| self.new_attribute_type("traceback"));
+        self.traceback_created.set(self.traceback_created.get() + 1);
+        if std::env::var_os("PYAWA_TB_DEBUG").is_some() {
+            // SAFETY: frame 由调用方保证存活。
+            let code_name = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() }
+                .code()
+                .map(|code| unsafe { &*code.as_ptr().cast::<crate::CodeObject>() })
+                .map(|code| code.name().to_owned())
+                .unwrap_or_default();
+            eprintln!(
+                "[tb] created seq={} frame={:p} code={code_name} site={}",
+                self.traceback_created.get(),
+                frame.as_ptr(),
+                self.current_site()
+            );
+        }
         let object = self
             .alloc(crate::builtin_objects::AttributeObject::new(
                 traceback_type,

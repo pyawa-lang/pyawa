@@ -16,6 +16,8 @@ impl Instance {
             type_text_signatures: RefCell::new(std::collections::HashMap::new()),
             getattribute_dispatching: Cell::new(false),
             trace_dispatching: Cell::new(false),
+            traceback_created: Cell::new(0),
+            traceback_freed: Cell::new(0),
             global_trace: RefCell::new(None),
             global_profile: RefCell::new(None),
             user_types: RefCell::new(Vec::new()),

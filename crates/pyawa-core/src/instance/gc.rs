@@ -300,6 +300,18 @@ impl Instance {
             unsafe { self.release_object(mapping.as_ptr()) };
         }
 
+        // **`traceback` 计数**（round 191 诊断）：真正释放前记一笔 ✓。
+        if unsafe { ty.as_ref() }.name() == "traceback" {
+            self.traceback_freed
+                .set(self.traceback_freed.get() + 1);
+            if std::env::var_os("PYAWA_TB_DEBUG").is_some() {
+                eprintln!(
+                    "[tb] freed ptr={:p} count={}",
+                    ptr.as_ptr(),
+                    self.traceback_freed.get()
+                );
+            }
+        }
         // ③ 释放内存。（旁表条目随对象释放摘掉 ✓，round 82）
         if std::env::var_os("PYAWA_STR_FREE_BT").is_some() {
             // SAFETY: ty 由注册表持有。

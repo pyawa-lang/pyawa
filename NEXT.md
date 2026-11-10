@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`42c7109`（round 190：帧泄漏诊断口 PYAWA_WATCH_FRAME＋holders 扩扫；病灶锁定「回溯释放时 tb_frame 那份引用漏还」）
+- **HEAD**：`1965077`（round 191：回溯计数＋PYAWA_TB_DEBUG；钉到 fai2 里 16 创建/15 释放 ⇒ 泄漏的是承载 StopIteration 回溯的那颗，持有 wrapper 帧）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

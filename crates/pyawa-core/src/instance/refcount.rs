@@ -325,6 +325,30 @@ impl Instance {
                 self.current_site()
             );
         }
+        // **盯帧诊断**（round 190/191）：释放侧对称打点 ✓。
+        if flag("PYAWA_WATCH_FRAME") {
+            // SAFETY: 调用方保证 ptr 存活。
+            let header = unsafe { &*ptr };
+            let ty = header.ty();
+            // SAFETY: ty 由注册表持有。
+            if unsafe { ty.as_ref() }.name() == "frame" {
+                // SAFETY: ptr 是帧（类型名刚核过）。
+                let frame = unsafe { &*ptr.cast::<crate::Frame>() };
+                let code_name = frame
+                    .code()
+                    .map(|code| unsafe { &*code.as_ptr().cast::<crate::CodeObject>() })
+                    .map(|code| code.name().to_owned())
+                    .unwrap_or_default();
+                let wanted = std::env::var("PYAWA_WATCH_FRAME_CODE").unwrap_or_default();
+                if wanted.is_empty() || wanted == code_name {
+                    eprintln!(
+                        "[watch-frame] -1 {ptr:p} code={code_name} rc={} 现场={}",
+                        header.refcount().saturating_sub(0),
+                        self.current_site(),
+                    );
+                }
+            }
+        }
         // **按判据盯**（第 115 轮，`PYAWA_WATCH_DICT=1`）：任何 `dict` **掉到 0** 都报现场 ✓
         // —— 第 114 轮查明"死在 @540 的是**另一个类**的命名空间" ✓ ⇒ 盯一个地址不够 ✓，
         // 要用**判据**（类型＝`dict` ✓）把**第一个被打到 0 的那个**逼出来 ✓。
