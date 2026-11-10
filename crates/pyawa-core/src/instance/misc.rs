@@ -317,6 +317,48 @@ impl Instance {
         self.trace_dispatching.set(value);
     }
 
+    /// **全局追踪函数**（借用 → 新引用；`None` ⇒ 无）。
+    pub fn global_trace(&self) -> Option<NonNull<Header>> {
+        match *self.global_trace.borrow() {
+            Some(value) => {
+                // SAFETY: 实例持有这份引用；借用视图要新引用 ✓。
+                unsafe { self.incref_object(value.as_ptr()) };
+                Some(value)
+            }
+            None => None,
+        }
+    }
+
+    /// 设置全局追踪函数（**接管** `value` 的新引用；`None` ⇒ 清掉 ✓）。
+    pub fn set_global_trace(&self, value: Option<NonNull<Header>>) {
+        let previous = self.global_trace.replace(value);
+        if let Some(previous) = previous {
+            // SAFETY: 旧值那份由实例持有。
+            unsafe { self.release_object(previous.as_ptr()) };
+        }
+    }
+
+    /// **全局性能钩子**（同 `global_trace` 口径）。
+    pub fn global_profile(&self) -> Option<NonNull<Header>> {
+        match *self.global_profile.borrow() {
+            Some(value) => {
+                // SAFETY: 实例持有这份引用；借用视图要新引用 ✓。
+                unsafe { self.incref_object(value.as_ptr()) };
+                Some(value)
+            }
+            None => None,
+        }
+    }
+
+    /// 设置全局性能钩子（同 `set_global_trace` 口径）。
+    pub fn set_global_profile(&self, value: Option<NonNull<Header>>) {
+        let previous = self.global_profile.replace(value);
+        if let Some(previous) = previous {
+            // SAFETY: 旧值那份由实例持有。
+            unsafe { self.release_object(previous.as_ptr()) };
+        }
+    }
+
     /// **类型对象 `__text_signature__` 旁表**（round 87）。
     pub fn set_type_text_signature(&self, ty: NonNull<Header>, signature: &'static str) {
         self.type_text_signatures

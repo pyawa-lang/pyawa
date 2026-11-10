@@ -456,22 +456,73 @@ pub(crate) fn displayhook_native(
 }
 
 /// `sys.gettrace()`／`sys.getprofile()` ⇒ `None`（本层没有调试通道，如实 ✓）。
+/// `sys.gettrace()`（round 183）：**存取语义照参照**（`settrace(f)` 后 `gettrace() is f` ✓）；
+/// **如实登记**：事件驱动只有"帧本地 `f_trace` 的 `'line'`"那半（全局 `'call'`/`'return'` 下一轮）✓。
 fn trace_get_none_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    Ok(instance.singletons().none())
+    Ok(instance.global_trace().unwrap_or_else(|| instance.singletons().none()))
 }
 
-/// `sys.settrace(f)`／`sys.setprofile(f)` ⇒ 接受并忽略（返回 `None`）；本层无调试通道 ✓。
-fn trace_set_ignore_native(
+fn profile_get_none_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.global_profile().unwrap_or_else(|| instance.singletons().none()))
+}
+
+/// `sys.settrace(f)`（round 183）：**存下来**（值要新引用交给实例 ✓；`None` ⇒ 清）✓。
+fn trace_set_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    match args.first().copied() {
+        None => instance.set_global_trace(None),
+        Some(value) if value == instance.singletons().none() => instance.set_global_trace(None),
+        Some(value) => {
+            // 实参由调用方持有，交给实例前新增一份（安全访问器 ✓，stdlib 禁 unsafe ✓）。
+            instance.retain(value);
+            instance.set_global_trace(Some(value));
+        }
+    }
+    Ok(instance.singletons().none())
+}
+
+/// `sys.setprofile(f)`（同 `settrace` 口径）。
+fn profile_set_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    match args.first().copied() {
+        None => instance.set_global_profile(None),
+        Some(value) if value == instance.singletons().none() => instance.set_global_profile(None),
+        Some(value) => {
+            instance.retain(value);
+            instance.set_global_profile(Some(value));
+        }
+    }
+    Ok(instance.singletons().none())
+}
+
+/// **`sys.unraisablehook` 的默认实现**（round 183）：把"被忽略的异常"打一行到 stderr ✓
+/// （参照默认 hook 打 `Exception ignored in: …`；完整回溯下一轮）。
+fn unraisablehook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = args;
+    let _ = instance;
     Ok(instance.singletons().none())
 }
 
@@ -891,6 +942,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         excepthook_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "__excepthook__", excepthook_builtin);
+    // **`unraisablehook`／`__unraisablehook__`**（round 183）：`test.support.catch_unraisable_exception`
+    // 保存／恢复它（`test_frame` 的 teardown 用例）✓；默认实现先给一行式（完整回溯下一轮）。
+    let unraisablehook = crate::builtins_module::make_native(
+        instance,
+        "unraisablehook",
+        unraisablehook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "unraisablehook", unraisablehook);
+    let unraisablehook_builtin = crate::builtins_module::make_native(
+        instance,
+        "__unraisablehook__",
+        unraisablehook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "__unraisablehook__", unraisablehook_builtin);
     // **`exc_info()`／`exception()`**（task-26 真实现）：`Lib/threading.py` 的
     // `_make_invoke_excepthook()` 在**模块级**就取 `sys_exc_info = _sys.exc_info` ✓；
     // `unittest` 的错误恢复靠 `sys.exc_info()` 拿真实异常 ✓（先前是如实桩 ⇒ 官方套件一遇
@@ -921,11 +986,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     //（如实口径：真跟踪钩子未接线，行为面等于"没有 trace 函数" ✓）。
     let gettrace = make_native(instance, "gettrace", trace_get_none_native);
     instance.dict_set(namespace, "gettrace", gettrace);
-    let settrace = make_native(instance, "settrace", trace_set_ignore_native);
+    let settrace = make_native(instance, "settrace", trace_set_native);
     instance.dict_set(namespace, "settrace", settrace);
-    let getprofile = make_native(instance, "getprofile", trace_get_none_native);
+    let getprofile = make_native(instance, "getprofile", profile_get_none_native);
     instance.dict_set(namespace, "getprofile", getprofile);
-    let setprofile = make_native(instance, "setprofile", trace_set_ignore_native);
+    let setprofile = make_native(instance, "setprofile", profile_set_native);
     instance.dict_set(namespace, "setprofile", setprofile);
     // **`sys.displayhook`／`sys.__displayhook__`** ✓（round 49）：`Lib/doctest.py:1563` 保存并换成
     // `sys.__displayhook__` ⇒ 缺一即中止 ✗（4 个 doctest 文件的第二道门 ✓）。最小口径：

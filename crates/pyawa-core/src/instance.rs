@@ -161,6 +161,12 @@ pub struct Instance {
     getattribute_dispatching: Cell<bool>,
     /// **本地追踪回调执行中**（round 181）：防追踪函数自己被追踪（递归）。
     trace_dispatching: Cell<bool>,
+    /// **全局追踪函数**（round 183；`sys.settrace` 存的值，**本实例持一份引用**）：
+    /// 事件驱动仍只做"帧本地 `f_trace`"这半（全局 `'call'`/`'return'` 事件下一轮）✓，
+    /// 但 `settrace`/`gettrace` 的**存取语义**先照参照（`sys.gettrace() is f` ✓）。
+    global_trace: RefCell<Option<NonNull<Header>>>,
+    /// **全局性能钩子**（`sys.setprofile`，同口径）。
+    global_profile: RefCell<Option<NonNull<Header>>>,
     /// **类型对象的 `__text_signature__` 旁表**（round 87）：`staticmethod`/`classmethod`/`property`
     /// 一类内建类在参照里有非空签名（`(function, /)` 等）——`inspect.signature(<类>)` 的类分支
     /// 会先读"MRO 里第一个非空 `base.__text_signature__`" ✓。
