@@ -501,6 +501,11 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
                 "[watch-site] raise at {site}\n{}",
                 std::backtrace::Backtrace::force_capture()
             );
+            // **顺带把这一颗盯住**（`PYAWA_WATCH_SITE_WATCH=1`）：之后它的每次 incref/decref
+            // 都会打现场＋回溯 ⇒ 找出"谁加了引用没还" ✓。
+            if std::env::var_os("PYAWA_WATCH_SITE_WATCH").is_some() {
+                instance.watch_address(exception);
+            }
         }
     }
     // **异常分配位点诊断**（round 165）：`PYAWA_EXC_SITE=1` 时记下"哪个位点抛的"。

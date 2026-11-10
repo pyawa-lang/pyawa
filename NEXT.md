@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`56d4411`（round 193：attach_traceback 同帧去重分支补 pending 正确交接；「iter_value 不造异常」实验做成 tb 15/15 但 test_dict 2/5 偶发⇒撤回）
+- **HEAD**：`01ff5e5`（round 194：WATCH_SITE_WATCH 盯单颗异常；泄漏 AttributeError 收支 +2/-2 末态 rc=1＝只漏 Err 那份；摘回溯两条路都失败（协议 10/10、低层 7/10）⇒ 一碰异常挂载字典就抖出 latent 堆问题）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
