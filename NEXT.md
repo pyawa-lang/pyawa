@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`f529812`（round 199：诊断口热路径 env 查找改 flag_cached（OnceLock），test_userstring 108s→88-90s 回归消除；下轮补跑整轮 survey 实测）
+- **HEAD**：`83d6d2a`（round 200：iter(callable,sentinel) 重入耗尽口径（gh-101892）⇒ test_iter 4F/1E→3F/1E；整轮 survey 未跑完：209/397＝47 ok/36 未实现/124 运行期/2 超时，下轮拆细补跑）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

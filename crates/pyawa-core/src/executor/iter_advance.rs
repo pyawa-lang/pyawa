@@ -221,6 +221,14 @@ pub(crate) fn advance_iterator(
         let callable = object.callable();
         let sentinel = object.sentinel();
         let result = call_value(instance, callable, &[], &[])?;
+        // **重入耗尽**（round 200，gh-101892）：`callable` 自己把本迭代器耗尽了（例如它内部
+        // `list(iterator)`）——参照的口径是"**本次结果不再交出**，直接 `StopIteration`" ✓；
+        // 先前只看"返回值 == 哨兵" ⇒ 重入耗尽后仍把结果交出去 ✗（`test_iter.test_iter_function_
+        // concealing_reentrant_exhaustion` 实测 "StopIteration not raised" ✓）。
+        if object.exhausted() {
+            release(instance, result);
+            return Ok(None);
+        }
         if crate::executor::values_equal_public(instance, result, sentinel) {
             release(instance, result);
             object.set_exhausted();
