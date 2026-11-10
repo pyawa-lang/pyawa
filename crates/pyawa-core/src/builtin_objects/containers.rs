@@ -110,6 +110,68 @@ pub(crate) fn bound_dict(
 /// 动因：上限榜上 `AttributeError: 'frozenset' object has no attribute '__contains__'` 那一族
 /// **12** 个模块 ✓ —— 本层的 `in` 是**指令内联**的 ✓，但 `x.__contains__(y)` 这种**取属性**的路
 /// 先前只有 `bytes` 接了一个 ✓（`str_getattr` 一带 ✓）。
+/// **内建容器的 `__getitem__` 类型字典入口**（round 214）：`tuple.__getitem__`／`list.__getitem__` 一类
+/// 在类型上取要是**同一个对象**（`namedtuple` 的 `Point.__getitem__ == tuple.__getitem__` ✓）；
+/// 绑定／未绑定两种形态都认 ✓（未绑定：接收者在 `args[0]` ✓）。
+pub(crate) fn container_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (container, rest) = match bound {
+        Some(container) => (container, args),
+        None => match args.split_first() {
+            Some((container, rest)) => (*container, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "descriptor '__getitem__' needs an argument",
+                ))
+            }
+        },
+    };
+    let Some(key) = rest.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__getitem__ expected 1 argument, got 0",
+        ));
+    };
+    crate::executor::subscript::subscript_get_inner(instance, container, *key, 0)
+}
+
+/// **`dict.__reversed__`**（round 214）：`collections.abc.Reversible` 的 `_check_methods` 要看
+/// `dict.__dict__['__reversed__']` ✓（`Counter()`／`dict()` 都是 Reversible ✓）。返回键的反向迭代器 ✓
+///（值/项视图的反向由各自类型再补 ✓）。
+pub(crate) fn dict_reversed_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (container, _) = match bound {
+        Some(container) => (container, args),
+        None => match args.split_first() {
+            Some((container, rest)) => (*container, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "descriptor '__reversed__' needs an argument",
+                ))
+            }
+        },
+    };
+    let entries = instance.dict_entries(container).unwrap_or_default();
+    let mut keys: Vec<NonNull<Header>> = Vec::with_capacity(entries.len());
+    for (key, _) in entries.into_iter().rev() {
+        keys.push(instance.retain(key));
+    }
+    let list = instance.new_list(keys);
+    let iterator = crate::executor::iter_value(instance, list);
+    instance.release(list);
+    iterator
+}
+
 /// **`dict.__contains__` 的"内建语义"入口**（round 212）：`dict` 子类覆写里会写
 /// `dict.__contains__(self, k)` ✓ —— 若这里再走 `contains()` 的协议回退会**递归**到覆写本身 ✗
 /// （`test_collections` 的 `lowerdict` 实测 `RecursionError` ✗）⇒ 这里**只走内建哈希查键** ✓。

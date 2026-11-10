@@ -1643,6 +1643,34 @@ impl Instance {
                 "__getitem__",
                 crate::builtin_objects::dict_getitem_builtin_native as crate::NativeFn,
             ),
+            // **`tuple`／`list`／`str`／`bytes` 的 `__getitem__` 类型字典项**（round 214）：
+            // `Point.__getitem__ == tuple.__getitem__`（test_factory ✓）；值统一走通用下标读 ✓。
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("list").expect("list 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("str").expect("str 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("bytes").expect("bytes 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            // **`dict.__reversed__`**（round 214）：`collections.abc.Reversible` 探测要它 ✓。
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__reversed__",
+                crate::builtin_objects::dict_reversed_native as crate::NativeFn,
+            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,
