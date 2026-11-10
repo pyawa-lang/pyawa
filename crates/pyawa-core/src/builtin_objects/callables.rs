@@ -1289,7 +1289,8 @@ pub(crate) unsafe fn attribute_traverse(ptr: *mut Header, visit: &mut dyn FnMut(
 pub(crate) unsafe fn attribute_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<AttributeObject>() };
-    if std::env::var_os("PYAWA_TB_CLEAR_DEBUG").is_some() {
+    static TB_CLEAR_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if crate::diag::flag_cached("PYAWA_TB_CLEAR_DEBUG", &TB_CLEAR_DEBUG) {
         // SAFETY: ptr 存活（调用方契约）。
         let ty = unsafe { &*ptr }.ty();
         if unsafe { ty.as_ref() }.name() == "traceback" {

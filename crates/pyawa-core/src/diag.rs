@@ -8,6 +8,13 @@ pub(crate) fn flag(name: &str) -> bool {
     std::env::var_os(name).is_some()
 }
 
+/// **缓存版开关**（round 199 性能修 ✗）：热路径（每次 `Owned` 落域／每次清属性／每次 raise）上
+/// `std::env::var_os` 太贵（实测 `test_userstring` 86 s → 108 s ✗）⇒ 每个开关一个 `OnceLock<bool>`，
+/// 进程内只查一次环境 ✓（诊断开关本来就不需要运行期改变 ✓）。
+pub(crate) fn flag_cached(name: &'static str, slot: &'static std::sync::OnceLock<bool>) -> bool {
+    *slot.get_or_init(|| std::env::var_os(name).is_some())
+}
+
 /// `PYAWA_<name>` unset => on (negated switch).
 pub(crate) fn flag_off(name: &str) -> bool {
     std::env::var_os(name).is_none()

@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`290ce28`（round 198：8 处探针 Err(Raised) 丢弃改 discard_error；量化：weakref 四连 skip live 1.48M，关回溯挂载后 779k；tb 差 108 ⇒ 主攻回溯挂载保留帧链）
+- **HEAD**：`f529812`（round 199：诊断口热路径 env 查找改 flag_cached（OnceLock），test_userstring 108s→88-90s 回归消除；下轮补跑整轮 survey 实测）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

@@ -186,7 +186,8 @@ impl Instance {
             .type_named("traceback")
             .unwrap_or_else(|| self.new_attribute_type("traceback"));
         self.traceback_created.set(self.traceback_created.get() + 1);
-        if std::env::var_os("PYAWA_TB_DEBUG").is_some() {
+        static TB_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if crate::diag::flag_cached("PYAWA_TB_DEBUG", &TB_DEBUG) {
             // SAFETY: frame 由调用方保证存活。
             let code_name = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() }
                 .code()

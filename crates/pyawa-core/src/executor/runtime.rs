@@ -493,8 +493,12 @@ pub(crate) fn unsupported_operand(
 pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
     // **按"站点"盯异常**（round 192 诊断）：`PYAWA_WATCH_SITE=<site 子串>` 时，
     // 该站点抛出的异常打回溯（找泄漏的 AttributeError 是哪条 Rust 路径造的 ✓）。
-    if let Some(wanted) = std::env::var_os("PYAWA_WATCH_SITE") {
-        let wanted = wanted.to_string_lossy().into_owned();
+    static WATCH_SITE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if crate::diag::flag_cached("PYAWA_WATCH_SITE", &WATCH_SITE) {
+        let wanted = std::env::var_os("PYAWA_WATCH_SITE")
+            .expect("刚确认设置过")
+            .to_string_lossy()
+            .into_owned();
         let site = instance.current_site();
         if site.contains(&wanted) {
             eprintln!(
@@ -509,7 +513,8 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
         }
     }
     // **异常分配位点诊断**（round 165）：`PYAWA_EXC_SITE=1` 时记下"哪个位点抛的"。
-    if std::env::var_os("PYAWA_EXC_SITE").is_some() {
+    static EXC_SITE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if crate::diag::flag_cached("PYAWA_EXC_SITE", &EXC_SITE) {
         instance.record_exception_site(exception, instance.current_site());
     }
     // **两份所有权**：实例状态一份、`Err(Raised)` 一份——所以这里必须为状态**新增**一份。

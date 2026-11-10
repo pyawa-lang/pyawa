@@ -892,7 +892,8 @@ pub(crate) fn call_callable(
             "maximum recursion depth exceeded",
         ));
     }
-    let frame_debug = std::env::var_os("PYAWA_FRAME_DROP_DEBUG").is_some();
+    static FRAME_DROP_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let frame_debug = crate::diag::flag_cached("PYAWA_FRAME_DROP_DEBUG", &FRAME_DROP_DEBUG);
     if frame_debug {
         // SAFETY: frame 刚分配，存活；code 名用于过滤。
         let name = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() }

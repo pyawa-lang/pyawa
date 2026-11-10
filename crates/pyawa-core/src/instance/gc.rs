@@ -309,7 +309,8 @@ impl Instance {
         if unsafe { ty.as_ref() }.name() == "traceback" {
             self.traceback_freed
                 .set(self.traceback_freed.get() + 1);
-            if std::env::var_os("PYAWA_TB_DEBUG").is_some() {
+            static TB_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if crate::diag::flag_cached("PYAWA_TB_DEBUG", &TB_DEBUG) {
                 eprintln!(
                     "[tb] freed ptr={:p} count={}",
                     ptr.as_ptr(),

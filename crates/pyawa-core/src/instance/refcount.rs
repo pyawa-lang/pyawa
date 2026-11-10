@@ -251,7 +251,8 @@ impl Instance {
         }
         // **盯帧诊断**（round 190）：`PYAWA_WATCH_FRAME=1` ＋ `PYAWA_WATCH_FRAME_CODE=<co_name>`
         // ⇒ 该 code 的帧被 incref／decref 时打现场＋回溯（用来找"谁给它加了引用却没记成 GC 边"）。
-        if flag("PYAWA_WATCH_FRAME") {
+        static WATCH_FRAME: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if crate::diag::flag_cached("PYAWA_WATCH_FRAME", &WATCH_FRAME) {
             // SAFETY: ptr 由调用方保证存活。
             let header = unsafe { &*ptr };
             let ty = header.ty();
@@ -326,7 +327,8 @@ impl Instance {
             );
         }
         // **盯帧诊断**（round 190/191）：释放侧对称打点 ✓。
-        if flag("PYAWA_WATCH_FRAME") {
+        static WATCH_FRAME: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if crate::diag::flag_cached("PYAWA_WATCH_FRAME", &WATCH_FRAME) {
             // SAFETY: 调用方保证 ptr 存活。
             let header = unsafe { &*ptr };
             let ty = header.ty();
