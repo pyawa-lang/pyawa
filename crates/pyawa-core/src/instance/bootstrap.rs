@@ -1625,6 +1625,40 @@ impl Instance {
             ));
             self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
         }
+        // **迭代器类型的"类属性面"**（round 186）：参照的 `type(iter([]))` 上**有** `__iter__`／`__next__`
+        // （slot wrapper ✓）⇒ `collections.abc.Iterator` 的 `__subclasshook__`（`_check_methods(C,'__iter__')`
+        // 走 `getattr(C, …)`）才能认出它们 ✓。本层这两个名字只在**实例**的 `getattr` 槽上 ⇒ 类型对象上
+        // 取不到 ✗ ⇒ `isinstance(iter(x), collections.abc.Iterator)` 判 False ✗（`test_iter.check_pickle` ✓）。
+        // 值只用于"存在性"（`_check_methods` 判 `getattr(C, name, None) is not None` ✓）；
+        // 正常调用仍走实例 `getattr` 槽 ⇒ 行为不变 ✓。
+        for name in [
+            "iterator",
+            "list_iterator",
+            "tuple_iterator",
+            "str_ascii_iterator",
+            "dict_keyiterator",
+            "set_iterator",
+            "bytes_iterator",
+            "bytearray_iterator",
+            "list_reverseiterator",
+            "reversed",
+            "range_iterator",
+            "longrange_iterator",
+            "callable_iterator",
+        ] {
+            let Some(iterator_type) = self.type_named(name) else {
+                continue;
+            };
+            for attribute in ["__iter__", "__next__"] {
+                let native = self.alloc(BuiltinFunctionObject::new(
+                    builtin_function_type,
+                    attribute,
+                    Cell::new(crate::builtin::object::object_repr_slot_native as crate::NativeFn),
+                ));
+                self.set_type_attribute(iterator_type, attribute, native.into_raw().cast::<Header>());
+            }
+        }
+
         // **dict 的类级方法面**（round 118）：`dict.items(d)` 一类未绑定调用 ✓
         //（`test_container_iterator` 的 `dict.items(container)` ✓）；适配器把 args[0] 挪成接收者 ✓。
         if let Some(dict_type) = self.type_named("dict") {
