@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`37cc5c5`（round 209：内建族子类中间层 Python 覆盖属性解析（MyCounter.update→Counter.update）⇒ test_collections 16F/15E→16F/13E）
+- **HEAD**：`15ff09e`（round 210：tuple 子类 protocol≥2 __reduce_ex__ 形状⇒namedtuple copy/pickle 重建成功；proto 0/1 与 tuple.__new__ 静态形态试后撤回（致 test_iter 段错误））
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

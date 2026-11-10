@@ -276,6 +276,52 @@ pub fn object_reduce_ex_native(
             }
         }
     }
+    // **`tuple` 族的"可重建"形状**（round 210 真 bug 修 ✗）：参照协议 ≥2 给
+    // `(copyreg.__newobj__, (类, *self.__getnewargs__()), None, None, None)` ✓ —— 先前落到通用
+    // 5 元组、参数只有 `(类,)` ✗ ⇒ `NT(1,2,3)` 的 `copy.copy` 报
+    // `NT.__new__() missing 3 required positional arguments` ✗（`test_collections.TestNamedTuple` 一片 ✓）。
+    let protocol = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_of(value).and_then(|number| number.to_i64()))
+        .unwrap_or(0);
+    let tuple_type = instance.type_named("tuple");
+    if protocol >= 2
+        && tuple_type.is_some_and(|base| instance.is_subtype(ty, base))
+        && Some(ty) != tuple_type
+    {
+        if let Some(newargs) =
+            crate::executor::call::call_object_method(instance, object, "__getnewargs__", &[])?
+        {
+            if let Ok(Some(copyreg)) =
+                crate::executor::import::import_through_bridge(instance, "copyreg")
+            {
+                if let Some(namespace) = crate::mounted_instance_dict(instance, copyreg) {
+                    if let Some(newobj) = instance.dict_get(namespace, "__newobj__") {
+                        let items = instance.tuple_items(newargs).unwrap_or_default();
+                        // **先逐项 retain 再放 newargs**（`tuple_items` 给的是**借用** ✓）。
+                        let mut values: Vec<NonNull<Header>> =
+                            Vec::with_capacity(items.len() + 1);
+                        values.push(instance.retain(ty.cast::<Header>()));
+                        for item in items {
+                            values.push(instance.retain(item));
+                        }
+                        // SAFETY: newargs 是新引用，本函数接手。
+                        unsafe { instance.release_object(newargs.as_ptr()) };
+                        let tuple_args = instance.new_tuple(values);
+                        let empty = instance.retain(instance.singletons().none());
+                        return Ok(instance.new_tuple(vec![
+                            instance.retain(newobj),
+                            tuple_args,
+                            empty,
+                            instance.retain(instance.singletons().none()),
+                            instance.retain(instance.singletons().none()),
+                        ]));
+                    }
+                }
+            }
+        }
+    }
     // **通用实例的 protocol ≥ 2 形状**（round 109 真 bug 修）：参照给
     // `(copyreg.__newobj__, (类,), state[, None, None])` ✓ —— 先前只给 `(类型, ())` ✗
     // ⇒ `copy.copy`／`copy.deepcopy` **丢所有实例属性** ✗（`tarfile` 的 `addfile` 先 `copy.copy(TarInfo)`
