@@ -218,11 +218,31 @@ impl Instance {
             // `tb_lasti // 2` 当下标 ⇒ 落在 `CACHE` 槽时本层表里没有对应项；此时给 **0**
             // （**如实**表示"位置表口径没有这一槽"，不伪造位置），保证格式化不越界。
             // 编译器口径统一后这里自然恢复真偏移 ✓。
+            // **`tb_lasti` 要和本层的 `co_positions()` 口径一致**（round 188 真 bug 修 ✗）：
+            // 本层的 positions 表**按"指令序号"**排（不含 `CACHE`），而 `traceback` 模块用
+            // `tb_lasti // 2` 当**下标**去索引 `co_positions()` ⇒ 先前给"码元偏移 × 2" ✗
+            // ⇒ 索引漂到后面的指令（实测 `extract_tb` 拿到 `pass` 那行的列 ✗）。
+            // 这里把"码元偏移"换成"**指令序号** × 2" ⇒ `tb_lasti // 2` 恰好是指令序号 ✓
+            // （如实记：与参照"字节偏移"的字面口径不同，但和本层 positions 约定自洽 ✓）。
             let lasti = match code_ref {
-                Some(code) if instruction_pointer < code.positions().len() => {
-                    (instruction_pointer * 2) as i64
+                Some(code) => {
+                    let raw = code.code();
+                    let mut unit = 0usize;
+                    let mut ordinal = 0usize;
+                    let mut found = 0usize;
+                    while unit < instruction_pointer {
+                        let Some(op) = raw.get(unit * 2) else {
+                            break;
+                        };
+                        unit += 1 + crate::opcode::inline_cache_entries(u16::from(*op)) as usize;
+                        ordinal += 1;
+                    }
+                    if unit == instruction_pointer {
+                        found = ordinal;
+                    }
+                    (found * 2) as i64
                 }
-                _ => 0,
+                None => 0,
             };
             (lineno, lasti)
         };

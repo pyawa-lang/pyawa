@@ -604,6 +604,24 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
         .ok()
         .flatten()
         .filter(|value| *value != instance.singletons().none());
+    // **同一帧不重复入链**（round 188）：异常在协议层（`iter()`／`next()`）里被"重新抛出"时，
+    // 本层会再走一次 `raise()` ⇒ 先前给**同一个帧**又接一节 tb ✗（`__init__` 会出现两节 ✓ 参照只一节 ✗）。
+    // 若已有回溯的第一节就是当前帧 ⇒ 不新建、直接沿用（更深的链原样保留 ✓）。
+    if let Some(previous) = previous {
+        if let Ok(Some(previous_frame)) = instance.attribute_optional_of(previous, "tb_frame") {
+            if previous_frame == frame {
+                // SAFETY: previous 是上面探针交出的新引用。
+                unsafe { instance.release_object(previous.as_ptr()) };
+                if let Some(pointer) = saved_pending {
+                    debug_assert!(instance.pending_exception().is_none());
+                    instance.set_pending_exception(Some(pointer));
+                }
+                return;
+            }
+            // SAFETY: 探针交出的新引用，比较完即还。
+            unsafe { instance.release_object(previous_frame.as_ptr()) };
+        }
+    }
     let traceback = instance.new_traceback(frame);
     if let Some(previous) = previous {
         let _ = instance.set_attribute_value(traceback, "tb_next", previous);
