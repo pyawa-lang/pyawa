@@ -539,6 +539,46 @@ impl Instance {
                 }
             }
         }
+        // **回溯/异常"是否可达"诊断**（round 192）：`PYAWA_GC_REVERSE_EXTRA=1` 时把
+        // `traceback` 与异常族对象**逐个**打出：`rc`／`ext`／（反向父链）——判断泄漏的回溯
+        // 到底是"根"还是"被某个根链拉住"。
+        if std::env::var_os("PYAWA_GC_REVERSE_EXTRA").is_some() && reverse {
+            let mut shown = 0usize;
+            for (position, candidate) in candidates.iter().enumerate() {
+                // SAFETY: 候选存活。
+                let header = unsafe { candidate.as_ref() };
+                let ty = header.ty();
+                let name = unsafe { ty.as_ref() }.name();
+                let interesting = name == "traceback"
+                    || self.instance_name_is_exception(unsafe { ty.as_ref() });
+                if !interesting || shown >= 40 {
+                    continue;
+                }
+                // **只打"还在"的**：`rc>0` 且（`ext>0` 或 `parents` 能走到根）✓
+                shown += 1;
+                let mut chain: Vec<String> = Vec::new();
+                let mut at = position;
+                for _ in 0..8 {
+                    match parent_of[at] {
+                        Some(parent) => {
+                            let pty = unsafe { candidates[parent].as_ref() }.ty();
+                            chain.push(unsafe { pty.as_ref() }.name().to_owned());
+                            at = parent;
+                        }
+                        None => {
+                            chain.push("<非候选持有者>".to_owned());
+                            break;
+                        }
+                    }
+                }
+                eprintln!(
+                    "[gc-extra] {name} ptr={:p} rc={} ext={} parents={chain:?}",
+                    candidate.as_ptr(),
+                    header.refcount(),
+                    external[position]
+                );
+            }
+        }
         // **根帧诊断**（round 159）：哪些 frame 还是根（>0 外部引用）⇒ 打出 code 名。
         if std::env::var_os("PYAWA_GC_ROOT_FRAMES").is_some() {
             let mut shown = 0usize;
@@ -1243,6 +1283,27 @@ impl Instance {
     /// 扫 `Instance` 的**非 GC 字段**（`exception_state`／`pending_exception`／`gc_frozen`／
     /// `weakrefs` 注册表／`types`／`user_types`／`retired_types`）里有没有它 ⇒ 命中就说明
     /// 这个对象被"GC 图之外的引擎结构"强引用（那才是"rc>0 却找不到候选父"的来源 ✓）。
+    fn instance_name_is_exception(&self, ty: &crate::TypeObject) -> bool {
+        let base = match self.type_named("BaseException") {
+            Some(base) => base,
+            None => return false,
+        };
+        let mut current = Some(ty as *const crate::TypeObject);
+        while let Some(pointer) = current {
+            // SAFETY: 类型由注册表／基类持有。
+            let object = unsafe { &*pointer };
+            if std::ptr::eq(object, unsafe { base.as_ref() }) {
+                return true;
+            }
+            current = object
+                .bases()
+                .first()
+                .copied()
+                .map(|base| base.as_ptr() as *const crate::TypeObject);
+        }
+        false
+    }
+
     pub(crate) fn debug_holder_of(&self, pointer: usize) -> Vec<&'static str> {
         let mut hits = Vec::new();
         if self

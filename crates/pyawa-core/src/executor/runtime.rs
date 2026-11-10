@@ -491,6 +491,18 @@ pub(crate) fn unsupported_operand(
 
 /// 抛一个异常：记在实例上（借它保活）并交出错误（`BC-60` ②）。
 pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
+    // **按"站点"盯异常**（round 192 诊断）：`PYAWA_WATCH_SITE=<site 子串>` 时，
+    // 该站点抛出的异常打回溯（找泄漏的 AttributeError 是哪条 Rust 路径造的 ✓）。
+    if let Some(wanted) = std::env::var_os("PYAWA_WATCH_SITE") {
+        let wanted = wanted.to_string_lossy().into_owned();
+        let site = instance.current_site();
+        if site.contains(&wanted) {
+            eprintln!(
+                "[watch-site] raise at {site}\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+    }
     // **异常分配位点诊断**（round 165）：`PYAWA_EXC_SITE=1` 时记下"哪个位点抛的"。
     if std::env::var_os("PYAWA_EXC_SITE").is_some() {
         instance.record_exception_site(exception, instance.current_site());
