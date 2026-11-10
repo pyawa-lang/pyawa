@@ -110,6 +110,30 @@ pub(crate) fn bound_dict(
 /// 动因：上限榜上 `AttributeError: 'frozenset' object has no attribute '__contains__'` 那一族
 /// **12** 个模块 ✓ —— 本层的 `in` 是**指令内联**的 ✓，但 `x.__contains__(y)` 这种**取属性**的路
 /// 先前只有 `bytes` 接了一个 ✓（`str_getattr` 一带 ✓）。
+/// **可调用对象的 `__call__` 类型字典入口**（round 215）：`collections.abc.Callable` 的
+/// `__subclasshook__` 用 `_check_methods(C, "__call__")`（查 `C.__dict__` ✓）⇒ 只放 call 槽不够 ✗
+/// （`isinstance(lambda: 0, Callable)` 判 False ✗）。值与真实调用等价（转 `call_callable` ✓）。
+pub(crate) fn dunder_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = match bound {
+        Some(receiver) => (receiver, args),
+        None => match args.split_first() {
+            Some((receiver, rest)) => (*receiver, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "__call__ 需要一个接收者",
+                ))
+            }
+        },
+    };
+    crate::executor::call::call_callable(instance, receiver, None, rest.to_vec(), kwargs.to_vec(), 0)
+}
+
 /// **内建容器的 `__getitem__` 类型字典入口**（round 214）：`tuple.__getitem__`／`list.__getitem__` 一类
 /// 在类型上取要是**同一个对象**（`namedtuple` 的 `Point.__getitem__ == tuple.__getitem__` ✓）；
 /// 绑定／未绑定两种形态都认 ✓（未绑定：接收者在 `args[0]` ✓）。

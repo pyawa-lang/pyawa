@@ -888,11 +888,18 @@ pub fn equality_compare_result(
         }
     }
     let mut attempted = false;
+    // **有"内建一侧"被跳过**（round 215 真 bug 修 ✗）：`Counter(...) == dict` 里 `Counter.__eq__`
+    // 返回 `NotImplemented` 后，参照会问**右侧内建 `dict.__eq__`**（返回 True ✓）；先前把内建侧
+    // 直接 `continue` ✗、最后又给 `Fallback`（身份兜底）⇒ 判 False ✗（`test_collections`
+    // `TestCounter.test_basics` 实测 `Counter(...) != {...}` ✓）。⇒ 记录"跳过过内建侧"，
+    // 此时**返回 `None`**（交回 `compare_public`／`equality_public` 走完整协议 ✓）。
+    let mut skipped_builtin = false;
     for (name, operand, other) in order {
         // **只对用户定义类启用富结果**（round 138 真 bug 修）：内建容器（`dict` 的
         // `test_equal_operator_modifying_operand` 会在 `__eq__` 里改字典 ✓）仍走既有
         // `equality_public` 的结构比较路径 ✗ ⇒ 否则会踩到"比较中途改动"的旧假设而崩 ✗。
         if !instance.is_user_type_object(instance.type_of(operand)) {
+            skipped_builtin = true;
             continue;
         }
         if name == "__ne__" && !type_has_own_dunder(instance, operand, name) {
@@ -933,7 +940,7 @@ pub fn equality_compare_result(
         let _ = opcode;
         return Ok(Some(RichCompare::Value(result)));
     }
-    Ok(if attempted {
+    Ok(if attempted && !skipped_builtin {
         Some(RichCompare::Fallback)
     } else {
         None

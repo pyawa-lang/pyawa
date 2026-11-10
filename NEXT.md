@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`51e45b3`（round 214：tuple/list/str/bytes 装 __getitem__（Point.__getitem__==tuple.__getitem__）＋ dict.__reversed__ ⇒ test_collections 14F/7E→13F/6E（总失败 19））
+- **HEAD**：`6380c42`（round 215：dict.__eq__ 槽位/快照混用 + 富比较内建侧回退 + function/method __call__ ⇒ test_collections 13F/6E→12F/6E（总失败 18））
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

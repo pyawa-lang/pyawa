@@ -1665,6 +1665,23 @@ impl Instance {
                 "__getitem__",
                 crate::builtin_objects::container_getitem_native as crate::NativeFn,
             ),
+            // **`__call__` 类型字典入口**（round 215）：`Callable.__subclasshook__` 查 `C.__dict__` ✓。
+            // **只给 function／builtin_function_or_method／method**（`type` 那格会打坏导入期 ✓，见台账）✓。
+            (
+                self.type_named("function").expect("function 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("builtin_function_or_method").expect("builtin_function_or_method 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("method").expect("method 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
             // **`dict.__reversed__`**（round 214）：`collections.abc.Reversible` 探测要它 ✓。
             (
                 self.type_named("dict").expect("dict 已登记"),

@@ -769,11 +769,17 @@ pub fn dict_eq_native(
     if a.len() != b.len() {
         return Ok(instance.new_bool(false));
     }
+    // **按"表槽位"取值，不要拿 `dict_entries()` 活条目快照按下标索引**（round 215 真 bug 修 ✗）：
+    // `dict_lookup_key_checked` 给的是**表槽位**（含 tombstone 语义 ✓）；`dict_entries()` 是活条目
+    // 压缩版 ⇒ 有删除的字典（`Counter` 里 `del` 过 ✓）槽位与下标错位 ⇒ 取到错项/None ⇒ `==` 假 ✗
+    //（`test_collections.TestCounter.test_basics` 的 `c == dict(...)` 实测 ✓）。
+    // SAFETY: right 是存活 dict（上面判过子类型）。
+    let right_object = unsafe { &*right.as_ptr().cast::<crate::builtin_objects::DictObject>() };
     for (key, value) in a {
         let Some(position) = instance.dict_lookup_key_checked(*right, key)? else {
             return Ok(instance.new_bool(false));
         };
-        let Some((_, other_value)) = b.get(position).copied() else {
+        let Some((_, other_value)) = right_object.entry(position) else {
             return Ok(instance.new_bool(false));
         };
         if !crate::executor::protocol::equality_public(instance, value, other_value)? {
