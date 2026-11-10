@@ -25,7 +25,6 @@ use crate::executor::is_iterator_type;
 use crate::executor::iterator_type_for;
 use crate::executor::raise_builtin;
 use crate::executor::release;
-use crate::executor::values_equal;
 
 
 
@@ -794,17 +793,44 @@ pub(crate) fn contains(
     // **迭代回退**（round 86，参照 `in` 的第二条通道）：没有 `__contains__` 的对象按 `__iter__`／
     // 旧式 `__getitem__`／内建可迭代（`deque` 等）逐个比较 ✓（`test_contains` 的 `seq`／`deque` 钉住）。
     // 拿不到迭代器（既不是容器也不能迭代）⇒ 仍报原来那句 TypeError ✓。
-    if let Ok(iterator) = iter_value(instance, container) {
+    let iterator = match iter_value(instance, container) {
+        Ok(iterator) => Some(iterator),
+        Err(crate::ExecError::Raised { exception }) => {
+            // **用户 `__iter__`／`__getitem__` 抛的异常要原样上抛** ✓（round 184 真 bug 修 ✗）：
+            // 参照里 `3 in BadIterableClass()`（`__iter__` 抛 `ZeroDivisionError`）给的是
+            // **那个异常**，不是"不是容器"的 TypeError ✗（`test_iter.test_in_and_not_in` ✓）。
+            // 只有**`TypeError`**（"不可迭代"那一档）才吞掉、落到本函数末尾统一报 ✓。
+            // SAFETY: exception 是存活对象。
+            let raised = unsafe { exception.as_ref() }.ty();
+            let type_error = instance
+                .type_named("TypeError")
+                .expect("TypeError 在引导期已登记");
+            if instance.is_subtype(raised, type_error) {
+                crate::discard_raised(instance, exception);
+                None
+            } else {
+                return Err(crate::ExecError::Raised { exception });
+            }
+        }
+        Err(other) => return Err(other),
+    };
+    if let Some(iterator) = iterator {
         let mut found = false;
         loop {
             match crate::executor::advance_iterator(instance, iterator, opcode) {
                 Ok(Some(value)) => {
-                    if values_equal(instance, value, item) {
-                        crate::executor::release(instance, value);
+                    // **富比较协议**（round 184 真 bug 修 ✗）：`in` 的**迭代回退**也要走 `==`
+                    // （含用户 `__eq__`／**反射**／`NotImplemented` 回退／异常传播 ✓）——
+                    // 先前用只认内建值的 `values_equal` ✗ ⇒ `ALWAYS_EQ in IteratorProxyClass(iter([1]))`
+                    // 判 False ✗（`test_iter.test_in_and_not_in` ✓）。比较次序照参照
+                    // **容器元素在左、查找值在右**（与参照 `PyObject_RichCompareBool(el, item)` 同口径 ✓：
+                    // `1 == ALWAYS_EQ` 走反射 ✓；`NEVER_EQ == ALWAYS_EQ` 左值给出 `False` ⇒ 不再反射 ✓）。
+                    let verdict = crate::executor::protocol::equality_public(instance, value, item);
+                    crate::executor::release(instance, value);
+                    if verdict? {
                         found = true;
                         break;
                     }
-                    crate::executor::release(instance, value);
                 }
                 Ok(None) => break,
                 Err(error) => {
