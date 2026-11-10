@@ -850,6 +850,20 @@ impl DequeObject {
         self.items.borrow().len()
     }
 
+    /// **按位置取元素**（**借用**；越界给 `None`）——`deque[i]` 的下标读走它 ✓。
+    pub fn item(&self, position: usize) -> Option<NonNull<Header>> {
+        self.items.borrow().get(position).copied()
+    }
+
+    /// **按位置换元素**（**接管**新引用，返回被换下的旧值由调用方释放）——`deque[i] = v` 走它 ✓。
+    pub fn replace(&self, position: usize, value: NonNull<Header>) -> Option<NonNull<Header>> {
+        let mut items = self.items.borrow_mut();
+        let slot = items.get_mut(position)?;
+        let old = *slot;
+        *slot = value;
+        Some(old)
+    }
+
     /// `maxlen` 的**原始**值（`usize::MAX` ＝ 不限 ✓）。
     pub fn raw_maxlen(&self) -> usize {
         self.maxlen.get()

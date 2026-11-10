@@ -214,6 +214,20 @@ pub(crate) fn subscript_get_inner(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(value);
     }
+    // **`deque` 的下标读**（round 203）：参照 `collections.deque` 支持 `d[i]`（负下标照旧归一 ✓）。
+    if instance.is_subtype(container_type, builtin_type(instance, "deque")) {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DequeObject>() };
+        let index = scalar_index(instance, key, "deque")?;
+        let position = match normalize_index(index, object.len()) {
+            Some(position) => position,
+            None => return Err(raise_builtin(instance, "IndexError", "deque index out of range")),
+        };
+        let value = object.item(position).expect("刚刚检查过范围");
+        // SAFETY: value 由容器持有，存活。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(value);
+    }
     if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
         // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46；本层 dict 不哈希 ⇒ 必须显式拦 ✗）。
         crate::builtin::dict::reject_unhashable_key(instance, key)?;
@@ -458,6 +472,33 @@ pub(crate) fn subscript_set_inner(
             None => {
                 release(instance, value);
                 return Err(raise_builtin(instance, "IndexError", "list index out of range"));
+            }
+        };
+        if let Some(old) = object.replace(position, value) {
+            release(instance, old);
+        }
+        return Ok(());
+    }
+    // **`deque` 的下标写**（round 203）：参照 `d[i] = v`（负下标照旧归一 ✓；越界 `IndexError`）。
+    if instance.is_subtype(container_type, builtin_type(instance, "deque")) {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DequeObject>() };
+        let index = match scalar_index(instance, key, "deque") {
+            Ok(index) => index,
+            Err(error) => {
+                release(instance, value);
+                return Err(error);
+            }
+        };
+        let position = match normalize_index(index, object.len()) {
+            Some(position) => position,
+            None => {
+                release(instance, value);
+                return Err(raise_builtin(
+                    instance,
+                    "IndexError",
+                    "deque assignment index out of range",
+                ));
             }
         };
         if let Some(old) = object.replace(position, value) {

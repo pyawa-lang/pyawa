@@ -409,9 +409,15 @@ pub(crate) fn dict_setdefault_native(
     };
     reject_unhashable_key(instance, *key)?;
     // **按键的 `==` 协议找位置**（round 120）：见 `pop` 同一口径 ✓。
-    if let Some(index) = dict_position_with_protocol(instance, mapping, *key)?.0 {
-        let entries = instance.dict_entries(mapping).unwrap_or_default();
-        return Ok(instance.retain(entries[index].1));
+    if let Some(position) = dict_position_with_protocol(instance, mapping, *key)?.0 {
+        // **按"槽位"取值，不要拿 `dict_entries()` 快照按槽位索引**（round 203 真 bug 修 ✗）：
+        // `dict_position_with_protocol` 给的是**表里的槽位**（含 tombstone 语义）；`dict_entries()`
+        // 给的是**活条目快照**（下标与槽位不是一回事 ✗）⇒ 先前 `entries[position]` 在"槽位 == 快照长度"
+        // 时直接 panic（`test_collections` 实测：`index out of bounds: len is 54 but index is 54` ✗）。
+        // SAFETY: mapping 由调用方保证是 dict 且存活。
+        let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let (_, value) = object.entry(position).expect("刚查到位置必然在表里");
+        return Ok(instance.retain(value));
     }
     // **引用账**（第 297 轮修真 bug）：返回值那一份要**自己 retain** ✓ ——
     // 先前 `Some(value)` 那条直接返回借来的实参 ✗ ⇒ 调用方释放结果时把**字典里那一份**也放掉了 ✗
