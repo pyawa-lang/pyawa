@@ -1172,6 +1172,9 @@ py_object! {
         target: NonNull<Header>,
         /// 下一个要取的下标 ✓。
         index: core::cell::Cell<usize>,
+            /// **已耗尽**（round 187，默认初始化组 ✓）：撞过 `IndexError` 就**永久耗尽** ✓
+            /// （`test_iter.test_sinkstate_sequence`：耗尽后把 `a.n` 改大也不得再吐元素 ✓）。
+            exhausted: core::cell::Cell<bool>
     }
 }
 
@@ -1198,6 +1201,21 @@ impl SequenceIteratorObject {
     /// 写回下标（`__setstate__`／推进用）✓。
     pub fn set_index(&self, index: usize) {
         self.index.set(index);
+    }
+
+    /// 已耗尽（借用）。
+    pub fn exhausted(&self) -> bool {
+        self.exhausted.get()
+    }
+
+    /// 标记耗尽。
+    pub fn set_exhausted(&self) {
+        self.exhausted.set(true);
+    }
+
+    /// `__setstate__` 回填：清掉耗尽标记 ✓（反序列化后按新下标继续 ✓）。
+    pub fn clear_exhausted(&self) {
+        self.exhausted.set(false);
     }
 }
 
@@ -1264,6 +1282,13 @@ fn sequence_iterator_reduce_native(
     else {
         return Err(instance.raise_builtin_error("RuntimeError", "内建 iter 不可用"));
     };
+    // **已耗尽** ⇒ 参照给 `(iter, ((),))`（空迭代器；`test_iter.test_mutating_seq_class_iter_pickle`
+    // 的 exhausted 档 ✓）——耗尽闩不可放入 state，所以直接交空序列 ✓。
+    if object.exhausted() {
+        let empty = instance.new_tuple(Vec::new());
+        let args = instance.new_tuple(vec![empty]);
+        return Ok(instance.new_tuple(vec![instance.retain(callable), args]));
+    }
     let args = instance.new_tuple(vec![instance.retain(object.target())]);
     Ok(instance.new_tuple(vec![
         instance.retain(callable),
@@ -1297,6 +1322,8 @@ fn sequence_iterator_setstate_native(
     // SAFETY: 绑定的是本类型的存活对象。
     let object = unsafe { &*iterator.as_ptr().cast::<SequenceIteratorObject>() };
     object.set_index(usize::try_from(state).unwrap_or(0));
+    // **`__setstate__` 是"重新定位"** ⇒ 清掉耗尽标记 ✓（`test_iter.test_mutating_seq_class_iter_pickle` ✓）。
+    object.clear_exhausted();
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -1309,6 +1336,10 @@ py_object! {
         callable: NonNull<Header>,
         /// 停止哨兵值（**本对象持有一份引用**）。
         sentinel: NonNull<Header>,
+            /// **已耗尽**（round 187，默认初始化组 ✓）：参照的 `callable_iterator` 一旦撞到哨兵就
+            /// **永久耗尽** ✓（`test_iter.test_sinkstate_callable`：`list(b)==range(5)` 之后再来 `list(b)`
+            /// 必须是 `[]` ✓）。
+            exhausted: Cell<bool>
     }
 }
 
@@ -1328,6 +1359,16 @@ impl CallableIteratorObject {
     /// 停止哨兵（借用）。
     pub fn sentinel(&self) -> NonNull<Header> {
         self.sentinel
+    }
+
+    /// 已耗尽（借用）。
+    pub fn exhausted(&self) -> bool {
+        self.exhausted.get()
+    }
+
+    /// 标记耗尽。
+    pub fn set_exhausted(&self) {
+        self.exhausted.set(true);
     }
 }
 

@@ -689,7 +689,7 @@ impl Instance {
             self.incref_object(sentinel.as_ptr());
         }
         self.alloc(crate::builtin_objects::CallableIteratorObject::new(
-            ty, callable, sentinel,
+            ty, callable, sentinel, core::cell::Cell::new(false),
         ))
         .into_raw()
         .cast::<Header>()

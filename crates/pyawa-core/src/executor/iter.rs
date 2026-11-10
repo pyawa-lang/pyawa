@@ -174,6 +174,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
                     iterator_type,
                     iterable,
                     Cell::new(0),
+                    Cell::new(false),
                 ));
                 return Ok(object.into_raw().cast::<Header>());
             }

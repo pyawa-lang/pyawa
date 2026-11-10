@@ -171,6 +171,11 @@ pub(crate) fn advance_iterator(
     // `IndexError` ⇒ 耗尽（结果不再交出）✓；下标只在**成功**后推进 ✓。
     if Some(ty) == instance.type_named("iterator") {
         let object = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::SequenceIteratorObject>() };
+        // **耗尽后永久耗尽**（round 187）：参照撞过 `IndexError` 后不再取下标 ✓
+        //（`test_iter.test_sinkstate_sequence`：耗尽后把 `a.n` 改大也必须是 `[]` ✓）。
+        if object.exhausted() {
+            return Ok(None);
+        }
         let target = object.target();
         let index = object.index();
         let key = instance.new_int(index as i64);
@@ -184,8 +189,17 @@ pub(crate) fn advance_iterator(
             Err(ExecError::Raised { exception }) => {
                 let raised = unsafe { exception.as_ref() }.ty();
                 let index_error = exception_type(instance, "IndexError");
-                if instance.is_subtype(raised, index_error) {
+                // **`StopIteration` 也当耗尽**（round 187）：序列协议里 `__getitem__` 抛
+                // `StopIteration` 的旧式序列照参照**结束循环** ✓（`test_iter.test_stop_sequence` ✓）。
+                let stop_iteration = instance
+                    .type_named("StopIteration")
+                    .expect("StopIteration 在引导期已登记");
+                if instance.is_subtype(raised, index_error)
+                    || instance.is_subtype(raised, stop_iteration)
+                {
                     crate::discard_raised(instance, exception);
+                    // **标记永久耗尽**（round 187）。
+                    object.set_exhausted();
                     Ok(None)
                 } else {
                     Err(ExecError::Raised { exception })
@@ -199,11 +213,17 @@ pub(crate) fn advance_iterator(
     // 载荷与 `IteratorObject` 不同 ⇒ 必须在通用强转**之前**分派 ✓。
     if Some(ty) == instance.type_named("callable_iterator") {
         let object = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::CallableIteratorObject>() };
+        // **耗尽后永久耗尽**（round 187）：参照撞到哨兵后不再调 callable ✓
+        //（`test_iter.test_sinkstate_callable` 的第二次 `list(b) == []` ✓）。
+        if object.exhausted() {
+            return Ok(None);
+        }
         let callable = object.callable();
         let sentinel = object.sentinel();
         let result = call_value(instance, callable, &[], &[])?;
         if crate::executor::values_equal_public(instance, result, sentinel) {
             release(instance, result);
+            object.set_exhausted();
             return Ok(None);
         }
         return Ok(Some(result));
