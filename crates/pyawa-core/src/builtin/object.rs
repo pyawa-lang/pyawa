@@ -377,28 +377,57 @@ pub fn object_reduce_ex_native(
             if let Some(namespace) = crate::mounted_instance_dict(instance, copyreg) {
                 if let Some(reconstructor) = instance.dict_get(namespace, "_reconstructor") {
                     let class_value = instance.retain(ty.cast::<Header>());
-                    let object_type = instance
-                        .type_named("object")
-                        .map(|object_ty| instance.retain(object_ty.cast::<Header>()))
-                        .unwrap_or_else(|| instance.retain(instance.singletons().none()));
-                    let none = instance.retain(instance.singletons().none());
-                    let reconstructor_args =
-                        instance.new_tuple(vec![class_value, object_type, none]);
-                    let state = match crate::executor::protocol::instance_attributes(instance, object)
-                        .and_then(|attributes| instance.dict_entries(attributes))
-                    {
-                        Some(entries) if !entries.is_empty() => {
-                            let state = instance.new_dict();
-                            for (key, value) in entries {
-                                instance.dict_insert_raw(
-                                    state,
-                                    instance.retain(key),
-                                    instance.retain(value),
-                                );
-                            }
-                            instance.retain(state)
+                    // **`tuple` 子类**（round 211）：参照给 `(cls, tuple, self.__getnewargs__())` ✓ ——
+                    // `_reconstructor` 再 `tuple.__new__(cls, state)` 重建成员 ✓（本层这条静态调用已成立 ✓）。
+                    let tuple_base = instance.type_named("tuple");
+                    let is_tuple_subclass = tuple_base
+                        .is_some_and(|base| instance.is_subtype(ty, base) && Some(ty) != tuple_base);
+                    let base_value = if is_tuple_subclass {
+                        instance.retain(tuple_base.expect("刚判过").cast::<Header>())
+                    } else {
+                        instance
+                            .type_named("object")
+                            .map(|object_ty| instance.retain(object_ty.cast::<Header>()))
+                            .unwrap_or_else(|| instance.retain(instance.singletons().none()))
+                    };
+                    // 第三参数：tuple 子类给 `__getnewargs__()` 结果；其余给 `None` ✓。
+                    let reconstructor_state = if is_tuple_subclass {
+                        match crate::executor::call::call_object_method(
+                            instance,
+                            object,
+                            "__getnewargs__",
+                            &[],
+                        )? {
+                            Some(newargs) => newargs,
+                            None => instance.retain(instance.singletons().none()),
                         }
-                        _ => instance.retain(instance.singletons().none()),
+                    } else {
+                        instance.retain(instance.singletons().none())
+                    };
+                    let reconstructor_args = instance.new_tuple(vec![
+                        class_value,
+                        base_value,
+                        reconstructor_state,
+                    ]);
+                    let state = if is_tuple_subclass {
+                        instance.retain(instance.singletons().none())
+                    } else {
+                        match crate::executor::protocol::instance_attributes(instance, object)
+                            .and_then(|attributes| instance.dict_entries(attributes))
+                        {
+                            Some(entries) if !entries.is_empty() => {
+                                let state = instance.new_dict();
+                                for (key, value) in entries {
+                                    instance.dict_insert_raw(
+                                        state,
+                                        instance.retain(key),
+                                        instance.retain(value),
+                                    );
+                                }
+                                instance.retain(state)
+                            }
+                            _ => instance.retain(instance.singletons().none()),
+                        }
                     };
                     return Ok(instance.new_tuple(vec![
                         instance.retain(reconstructor),
