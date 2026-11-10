@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`655b7ad`（round 189：bytes/bytearray.fromhex 接线；linecache 注册实验撤回（会触发 ast.parse abort）；test_free_after_iterating 嫌疑＝被 except 处理过的异常钉回溯帧）
+- **HEAD**：`42c7109`（round 190：帧泄漏诊断口 PYAWA_WATCH_FRAME＋holders 扩扫；病灶锁定「回溯释放时 tb_frame 那份引用漏还」）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

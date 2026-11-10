@@ -484,7 +484,11 @@ impl Instance {
                 let header = unsafe { candidates[*position].as_ref() };
                 let ty = header.ty();
                 let name = unsafe { ty.as_ref() }.name();
-                if name != "AttributeError" || shown >= 12 {
+                let reverse_all = std::env::var_os("PYAWA_GC_REVERSE_ALL").is_some();
+                if !reverse_all && (name != "AttributeError" || shown >= 12) {
+                    continue;
+                }
+                if reverse_all && shown >= 80 {
                     continue;
                 }
                 shown += 1;
@@ -505,13 +509,22 @@ impl Instance {
                 }
                 let header = unsafe { candidates[*position].as_ref() };
                 let pointer = candidates[*position].as_ptr() as usize;
-                eprintln!(
-                    "[gc-reverse] AttributeError rc={} ext={} parents={chain:?} holders={:?} site={:?}",
-                    header.refcount(),
-                    external[*position],
-                    self.debug_holder_of(pointer),
-                    self.exception_site_of(candidates[*position])
-                );
+                if reverse_all {
+                    eprintln!(
+                        "[gc-reverse] {name} rc={} ext={} parents={chain:?} holders={:?}",
+                        header.refcount(),
+                        external[*position],
+                        self.debug_holder_of(pointer),
+                    );
+                } else {
+                    eprintln!(
+                        "[gc-reverse] AttributeError rc={} ext={} parents={chain:?} holders={:?} site={:?}",
+                        header.refcount(),
+                        external[*position],
+                        self.debug_holder_of(pointer),
+                        self.exception_site_of(candidates[*position])
+                    );
+                }
             }
         }
         // **根帧诊断**（round 159）：哪些 frame 还是根（>0 外部引用）⇒ 打出 code 名。
@@ -1261,6 +1274,46 @@ impl Instance {
         }
         if self.retired_types.borrow().contains(&pointer) {
             hits.push("retired_types");
+        }
+        // **其余可能"持有但不计入候选边"的实例字段**（round 190 诊断）：全局 trace/profile、
+        // 模块表、待处理栈、元组复用池 ✓。
+        for (label, hit) in [
+            (
+                "global_trace",
+                self.global_trace
+                    .borrow()
+                    .is_some_and(|value| value.as_ptr() as usize == pointer),
+            ),
+            (
+                "global_profile",
+                self.global_profile
+                    .borrow()
+                    .is_some_and(|value| value.as_ptr() as usize == pointer),
+            ),
+            (
+                "modules",
+                self.modules
+                    .borrow()
+                    .is_some_and(|value| value.as_ptr() as usize == pointer),
+            ),
+            (
+                "pending",
+                self.pending
+                    .borrow()
+                    .iter()
+                    .any(|value| value.as_ptr() as usize == pointer),
+            ),
+            (
+                "tuple_pool",
+                self.tuple_pool
+                    .borrow()
+                    .iter()
+                    .any(|value| value.as_ptr() as usize == pointer),
+            ),
+        ] {
+            if hit {
+                hits.push(label);
+            }
         }
         hits
     }

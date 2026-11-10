@@ -249,6 +249,32 @@ impl Instance {
                 self.current_site()
             );
         }
+        // **盯帧诊断**（round 190）：`PYAWA_WATCH_FRAME=1` ＋ `PYAWA_WATCH_FRAME_CODE=<co_name>`
+        // ⇒ 该 code 的帧被 incref／decref 时打现场＋回溯（用来找"谁给它加了引用却没记成 GC 边"）。
+        if flag("PYAWA_WATCH_FRAME") {
+            // SAFETY: ptr 由调用方保证存活。
+            let header = unsafe { &*ptr };
+            let ty = header.ty();
+            // SAFETY: ty 由注册表持有。
+            if unsafe { ty.as_ref() }.name() == "frame" {
+                // SAFETY: ptr 是帧（类型名刚核过）。
+                let frame = unsafe { &*ptr.cast::<crate::Frame>() };
+                let code_name = frame
+                    .code()
+                    .map(|code| unsafe { &*code.as_ptr().cast::<crate::CodeObject>() })
+                    .map(|code| code.name().to_owned())
+                    .unwrap_or_default();
+                let wanted = std::env::var("PYAWA_WATCH_FRAME_CODE").unwrap_or_default();
+                if wanted.is_empty() || wanted == code_name {
+                    eprintln!(
+                        "[watch-frame] +1 {ptr:p} code={code_name} rc={} 现场={}\n{}",
+                        header.refcount() + 1,
+                        self.current_site(),
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+            }
+        }
         // SAFETY: 由调用方保证 ptr 有效。
         unsafe { &*ptr }.incref();
     }
