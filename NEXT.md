@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`83d6d2a`（round 200：iter(callable,sentinel) 重入耗尽口径（gh-101892）⇒ test_iter 4F/1E→3F/1E；整轮 survey 未跑完：209/397＝47 ok/36 未实现/124 运行期/2 超时，下轮拆细补跑）
+- **HEAD**：`9504248`（round 201：整轮 survey 实测 79 ok/69 未实现/244 运行期/5 超时；survey 工具加 --skip 与超时杀进程组；新发现 test_context runtime⇒unimplemented 待定位）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

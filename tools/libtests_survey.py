@@ -29,6 +29,7 @@ import collections
 import concurrent.futures
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -50,17 +51,34 @@ def _run_capture(cmd, cwd, env, timeout):
     `communicate()` 仍等管道的 EOF ⇒ **survey 驱动被挂死** ✗（实测 207-237 片被平台 SIGTERM）。
     换成临时文件：超时杀掉子进程即可立刻返回 ✓（文件描述符随进程组消亡 ✓）。"""
     with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
+        # **独立会话 + 超时杀整组**（round 201）：有的套件会派生子进程／在内存压力下卡在不可中断 IO，
+        # 只杀直接子进程的话 `subprocess.run` 仍可能在 `communicate()` 里等（实测 `test_ntpath` 在
+        # 高负载机器上把 survey 驱动挂到平台 600 s 上限 ✗）。`start_new_session=True` ＋ `killpg`
+        # ⇒ 连子进程组一起杀，驱动一定能拿回控制权 ✓。
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 cwd=cwd,
                 env=env,
                 stdout=out_file,
                 stderr=err_file,
-                timeout=timeout,
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired:
+        except OSError:
             return None, ""
+        try:
+            returncode = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            return None, ""
+        proc.returncode = returncode
         out_file.seek(0)
         err_file.seek(0)
         text = (err_file.read() + out_file.read()).decode("utf-8", "replace")
@@ -131,6 +149,10 @@ def main() -> None:
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=120.0)
+    # **按文件名跳过**（round 201）：`test_ntpath` 在这台机器的高负载下会卡在不可中断 IO（连
+    # SIGKILL 都杀不掉，实测把 survey 驱动挂到平台 600 s 上限 ✗）⇒ 允许显式跳过，结果由
+    # `libtests_survey_merge.py --extra` 按既有口径补成 timeout ✓（口径不变 ✓）。
+    ap.add_argument("--skip", action="append", default=[], metavar="FILE")
     # **可续跑**（round 132）：每轮只跑 `--seconds` 秒、进度存 `*.progress.json`；跑满 397 个文件后再汇报总数 ✓
     # （本会话单条命令 ~600 s 上限 ⇒ 一次跑不完整个 survey ✓）。
     ap.add_argument("--resume", action="store_true")
@@ -160,6 +182,10 @@ def main() -> None:
         files = files[: args.limit]
     if args.start or args.end:
         files = files[args.start : (args.end or None)]
+    # **`--skip` 在切片之后**：`--start/--end` 的**序号口径**因此不受跳过影响 ✓（与既有分片命令兼容 ✓）。
+    if args.skip:
+        skipped = set(args.skip)
+        files = [p for p in files if p.name not in skipped]
 
     rows = []
     reasons = collections.Counter()
