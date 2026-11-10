@@ -244,6 +244,15 @@ pub unsafe fn context_getattr(
         "get" => context_not_implemented_native,
         "__contains__" => context_not_implemented_native,
         "copy" => context_not_implemented_native,
+        // **`Context` 的映射面最小接线**（round 202）：参照的 `contextvars.Context` 是
+        // `collections.abc.Mapping`（`ctx[var]`／`len(ctx)`／`iter(ctx)` 都成立 ✓）。先前
+        // 只有 `get`/`__contains__`/`copy` 三个"如实拒绝" ⇒ `test_context` 里 `ctx2[c]`
+        // 走下标协议时报"下标只接线了 …这里是 'Context'"直接中止 ✗（survey 里从 runtime
+        // 退化成 unimplemented ✓）。这里补三个最小面：取值（有值返回、无值报 `KeyError`）、
+        // 长度（本层没有独立状态 ⇒ 0 ✓ 如实登记）、迭代（空迭代器 ✓ 如实登记）。
+        "__getitem__" => context_getitem_native,
+        "__len__" => context_len_native,
+        "__iter__" => context_iter_native,
         // **`run` 接线**（round 151）：单线程仿真下"当前上下文"就是全局 ⇒ 直接同步调用 ✓
         //（`threading.Thread.start` 的 `self._context.run(self.run)` 靠它 ✓）。
         "run" => context_run_native,
@@ -328,6 +337,58 @@ pub(crate) unsafe fn context_contains_native(
         == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty())
         && unsafe { &*var.as_ptr().cast::<ContextVarObject>() }.current().is_some();
     Ok(instance.new_bool(found))
+}
+#[allow(dead_code)]
+
+/// `context[var]` ✓：有值返回、无值报 `KeyError`（照 `Mapping.__getitem__` 口径 ✓）。
+pub(crate) unsafe fn context_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = bound;
+    let Some(var) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "__getitem__ 需要 1 个实参"));
+    };
+    // SAFETY: var 由调用方保证存活。
+    let is_context_var = unsafe { var.as_ref() }.ty()
+        == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty());
+    if is_context_var {
+        // SAFETY: 类型身份刚确认。
+        let object = unsafe { &*var.as_ptr().cast::<ContextVarObject>() };
+        if let Some(value) = object.current() {
+            return Ok(instance.retain(value));
+        }
+        // 参照口径：`Context[var]` 只看"本上下文里有没有值"，**不看** `var` 的默认值 ✓
+        //（`contextvars.Context()[var]` 即使 `var` 有 default 也报 `KeyError` ✓）。
+    }
+    Err(instance.raise_builtin_error("KeyError", "context 里没有这个变量"))
+}
+#[allow(dead_code)]
+
+/// `len(context)` ✓：本层没有独立状态 ⇒ **0**（如实登记 ✓）。
+pub(crate) unsafe fn context_len_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_int(0))
+}
+#[allow(dead_code)]
+
+/// `iter(context)` ✓：本层没有独立状态 ⇒ **空迭代器**（如实登记 ✓）。
+pub(crate) unsafe fn context_iter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let empty = instance.new_list(Vec::new());
+    let iterator = crate::executor::iter_value(instance, empty);
+    instance.release(empty);
+    iterator
 }
 #[allow(dead_code)]
 
