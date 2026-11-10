@@ -110,7 +110,10 @@ pub(crate) fn subscript_slice(
         }
         // `Attribute` 只有三个变体 ⇒ 上面两个 `Ok` 臂已覆盖全部 `Ok` ✓（写 `Ok(_)` 会触发
         // "unreachable pattern" 警告 ✗，而第 1 项闸门要求 0 警告 ✓）。
-        Err(_) => {}
+        Err(error) => {
+            // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
+        }
     }
     // **报错里带上类型名** ✓（第 626 轮 ✓）：没有它只能看到"尚未接线" ✗，定位要绕远路 ✓。
     Err(ExecError::Unsupported {
@@ -322,7 +325,10 @@ pub(crate) fn subscript_get_inner(
                 opcode,
             );
         }
-        Err(_) => {}
+        Err(error) => {
+            // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
+        }
     }
     Err(ExecError::Unsupported {
         opcode,
@@ -545,7 +551,10 @@ pub(crate) fn subscript_set_inner(
             )
             .map(|_| ());
         }
-        Err(_) => {}
+        Err(error) => {
+            // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
+        }
     }
     release(instance, value);
     if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {

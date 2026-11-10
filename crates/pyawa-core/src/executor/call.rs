@@ -93,7 +93,11 @@ pub(crate) fn call_dunder_method(
 ) -> Result<(), ExecError> {
     let found = match attribute_lookup(instance, object, name) {
         Ok(found) => found,
-        Err(_) => return Ok(()),
+        Err(error) => {
+            // **探针丢异常要引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
+            return Ok(());
+        }
     };
     let (callable, this) = match found {
         Attribute::Method { function, this } => (function, this),
@@ -162,7 +166,11 @@ pub(crate) fn call_object_method(
 ) -> Result<Option<NonNull<Header>>, ExecError> {
     let found = match attribute_lookup(instance, object, name) {
         Ok(found) => found,
-        Err(_) => return Ok(None),
+        Err(error) => {
+            // **探针丢异常要引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
+            return Ok(None);
+        }
     };
     let (callable, this) = match found {
         Attribute::Method { function, this } => (function, this),

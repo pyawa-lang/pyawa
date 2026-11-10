@@ -109,7 +109,11 @@ impl Instance {
             Ok(crate::executor::Attribute::Method { function, this }) => (function, Some(this)),
             Ok(crate::executor::Attribute::Value(value))
             | Ok(crate::executor::Attribute::Owned(value)) => (value, Some(object)),
-            Err(_) => return Ok(None),
+            Err(error) => {
+                // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+                crate::executor::runtime::discard_error(self, &error);
+                return Ok(None);
+            }
         };
         let result = crate::executor::call::call_callable(
             self,

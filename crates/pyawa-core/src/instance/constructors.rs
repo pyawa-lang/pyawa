@@ -802,8 +802,10 @@ impl Instance {
                 );
                 match result {
                     Ok(value) => Some(value),
-                    Err(_) => {
+                    Err(error) => {
                         // 构造失败 ⇒ 退普通 dict（如实降级 ✓；正常类不会到这里）。
+                        // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+                        crate::executor::runtime::discard_error(self, &error);
                         self.release(dict);
                         None
                     }

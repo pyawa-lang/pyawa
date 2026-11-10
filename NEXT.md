@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`b85d8ce`（round 197：attach_traceback 去重早退分支补还 previous_frame ⇒ fai2 done True、test_iter 5F/1E⇒4F/1E（free_after_iterating 转绿））
+- **HEAD**：`290ce28`（round 198：8 处探针 Err(Raised) 丢弃改 discard_error；量化：weakref 四连 skip live 1.48M，关回溯挂载后 779k；tb 差 108 ⇒ 主攻回溯挂载保留帧链）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

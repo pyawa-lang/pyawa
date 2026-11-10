@@ -137,7 +137,9 @@ pub(crate) fn format_value_with_spec(
             let args = vec![instance.new_str(spec_text)];
             crate::executor::call_callable(instance, method, Some(value), args, Vec::new(), opcode)
         }
-        Err(_) => {
+        Err(error) => {
+            // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
             let message = format!("unsupported format string passed to {class_name}.__format__");
             Err(raise_builtin(instance, "TypeError", &message))
         }

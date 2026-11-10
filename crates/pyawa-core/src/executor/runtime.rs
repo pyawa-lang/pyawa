@@ -530,6 +530,15 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
 ///
 /// 动因：`pa_exec_string` 一族的错误分支只取消息、**两份引用都不还** ✗ ⇒ 宿主每执行一次抛异常的脚本
 /// 就漏一个"异常＋回溯链＋整帧局部"（嵌入宿主长期运行会持续涨内存 ✗）。只核指针、不解引用 ✓。
+/// **丢掉一个 `ExecError`**（round 198）：「有就调用、没有就算了」一类的探针分支里，
+/// `Err(Raised)` 里那份异常引用**必须还**（否则每探一次泄漏"异常＋回溯＋帧" ✗）。
+/// 统一走 `discard_raised`（release `Err` 那份 ＋ 若 `pending` 仍是它则清槽）✓。
+pub(crate) fn discard_error(instance: &Instance, error: &ExecError) {
+    if let ExecError::Raised { exception } = error {
+        discard_raised(instance, *exception);
+    }
+}
+
 pub fn discard_raised(instance: &Instance, exception: NonNull<Header>) {
     let pointer = exception.as_ptr() as usize;
     release(instance, exception);

@@ -166,7 +166,12 @@ impl Instance {
         let method = match crate::executor::attribute::attribute_optional(self, object, "__index__") {
             Ok(Some(method)) => method,
             // 没有这个方法、或取属性出错 ⇒ 如实"不是整数" ✓（由调用方报 TypeError ✓）
-            Ok(None) | Err(_) => return Ok(None),
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+                crate::executor::runtime::discard_error(self, &error);
+                return Ok(None);
+            }
         };
         let result = crate::executor::call::call_value(self, method, &[], &[]);
         // SAFETY: method 是新引用。
@@ -178,7 +183,11 @@ impl Instance {
                 unsafe { self.release_object(value.as_ptr()) };
                 Ok(number)
             }
-            Err(_) => Ok(None),
+            Err(error) => {
+                // **调用失败也要还异常引用**（round 198 真泄漏修 ✗）。
+                crate::executor::runtime::discard_error(self, &error);
+                Ok(None)
+            }
         }
     }
 
