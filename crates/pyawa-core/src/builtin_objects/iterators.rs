@@ -519,6 +519,11 @@ impl CountIteratorObject {
         self.current.get()
     }
 
+    /// 步长（round 185：`range_iterator` 的 `__reduce__` 要按它算剩余值）。
+    pub fn step(&self) -> i64 {
+        self.step.get()
+    }
+
     /// 推进一格；超出 `i64` 给 `None`（**不静默回绕**——任意精度的口径还没裁，见 `§5.2.6`）。
     pub fn bump(&self) -> Option<i64> {
         let next = self.current.get().checked_add(self.step.get())?;
@@ -844,6 +849,155 @@ pub unsafe fn iterator_getattr(
     }
 }
 
+/// **`range_iterator`／`longrange_iterator` 的属性面**（round 185）：`__next__`／`__iter__`／
+/// `__reduce__`／`__reduce_ex__` —— 后两者是官方 `test_iter` 的 `check_pickle` 一族所需 ✓。
+///
+/// 载荷是 `ItStateObject`（与 `IteratorObject` 布局不同 ✗）⇒ **不能**走 `iterator_getattr` ✓。
+/// `__reduce__` 给 `(iter, (剩余值列表,))`：不 mutate 原迭代器 ✓（按 `Islice{position,start,stop,step}`
+/// ＋内层 `count{current,step}` **算术**推出剩余值 ✓；超 1e6 项不接（返回 Unsupported，如实 ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn range_iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // 迭代器的 `__iter__` 回自身 ✓。
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__reduce__" | "__reduce_ex__" => {
+            let handler: crate::NativeFn = range_iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, name, handler))
+        }
+        _ => None,
+    }
+}
+
+/// `range_iterator.__reduce__()`：`(iter, (剩余值列表,))` ✓（见 [`range_iterator_getattr`] 的口径）。
+fn range_iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce__() 需要迭代器实例"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let state = unsafe { &*iterator.as_ptr().cast::<ItStateObject>() };
+    let crate::builtin_objects::ItStateKind::Islice {
+        inner,
+        start,
+        position,
+        stop,
+        step,
+    } = state.kind()
+    else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "range_iterator 的状态不是 Islice",
+        ));
+    };
+    // 内层必须是 `count`（`range` 就是 `islice(count(...))` ✓；见 bootstrap 的注释 ✓）。
+    // SAFETY: inner 由本对象持有，存活；类型名先核过。
+    let inner_name = instance.type_name(instance.type_of(inner));
+    if inner_name != "count" {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("range_iterator 的内层不是 count（是 '{inner_name}'）"),
+        ));
+    }
+    // SAFETY: 类型名刚确认是 count ⇒ 载荷布局是 `CountIteratorObject` ✓。
+    let counter = unsafe { &*inner.as_ptr().cast::<CountIteratorObject>() };
+    let (current, stride) = (counter.current(), counter.step());
+    let bound = if stop < 0 { i64::MAX } else { start.max(stop) };
+    if bound.saturating_sub(position) > 1_000_000 {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range_iterator.__reduce__：剩余项超过 1e6（如实未接线）",
+        });
+    }
+    let mut remaining: Vec<NonNull<Header>> = Vec::new();
+    for index in position..bound {
+        let wanted = index >= start
+            && (stop < 0 || index < stop)
+            && (index - start) % step == 0;
+        if !wanted {
+            continue;
+        }
+        let value = current.saturating_add(index.saturating_mul(stride));
+        remaining.push(instance.new_int(value));
+    }
+    let Some(callable) = instance
+        .builtins()
+        .and_then(|builtins| instance.dict_get(builtins, "iter"))
+    else {
+        return Err(instance.raise_builtin_error("RuntimeError", "内建 iter 不可用"));
+    };
+    let list = instance.new_list(remaining);
+    let args = instance.new_tuple(vec![list]);
+    Ok(instance.new_tuple(vec![instance.retain(callable), args]))
+}
+
+/// **`callable_iterator` 的属性面**（round 185）：`__next__`／`__iter__`／`__reduce__`。
+///
+/// 参照的 reduce 形态是 `(iter, (callable, sentinel))`（**无 state** ✓）：进度状态由**被 pickle 的
+/// callable 自身**携带 ✓（`test_iter.test_iter_callable` 的 `check_pickle` ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn callable_iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__reduce__" | "__reduce_ex__" => {
+            let handler: crate::NativeFn = callable_iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, name, handler))
+        }
+        _ => None,
+    }
+}
+
+fn callable_iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce__() 需要迭代器实例"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<CallableIteratorObject>() };
+    let Some(callable) = instance
+        .builtins()
+        .and_then(|builtins| instance.dict_get(builtins, "iter"))
+    else {
+        return Err(instance.raise_builtin_error("RuntimeError", "内建 iter 不可用"));
+    };
+    let args = instance.new_tuple(vec![
+        instance.retain(object.callable()),
+        instance.retain(object.sentinel()),
+    ]);
+    Ok(instance.new_tuple(vec![instance.retain(callable), args]))
+}
+
 /// 把原生函数绑到迭代器实例上（与 `list_getattr` 同一手法 ✓）。
 #[allow(unsafe_code)]
 fn bind_iterator_method(
@@ -1082,8 +1236,40 @@ pub unsafe fn sequence_iterator_getattr(
             let handler: crate::NativeFn = sequence_iterator_setstate_native;
             Some(bind_iterator_method(instance, ptr, "__setstate__", handler))
         }
+        // **`__reduce__`／`__reduce_ex__`**（round 185）：参照 `iterator` 的形态是
+        // `(iter, (target,), index)` ✓（`test_iter` 的 seq-class pickle 用例 ✓；`__setstate__` 已在上面 ✓）。
+        "__reduce__" | "__reduce_ex__" => {
+            let handler: crate::NativeFn = sequence_iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, name, handler))
+        }
         _ => None,
     }
+}
+
+/// `sequence_iterator.__reduce__()`：`(iter, (target,), index)` ✓。
+fn sequence_iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce__() 需要迭代器实例"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<SequenceIteratorObject>() };
+    let Some(callable) = instance
+        .builtins()
+        .and_then(|builtins| instance.dict_get(builtins, "iter"))
+    else {
+        return Err(instance.raise_builtin_error("RuntimeError", "内建 iter 不可用"));
+    };
+    let args = instance.new_tuple(vec![instance.retain(object.target())]);
+    Ok(instance.new_tuple(vec![
+        instance.retain(callable),
+        args,
+        instance.new_int(object.index() as i64),
+    ]))
 }
 
 /// `it.__setstate__(state)`（序列迭代器，round 85）：负数**夹到 0**（参照行为：

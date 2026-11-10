@@ -515,6 +515,89 @@ fn call_native(
 ///
 /// 实测：`length_hint([1,2])` ⇒ `2`、`length_hint("abc")` ⇒ `3`、`length_hint(5)` ⇒ `0`、
 /// `length_hint(5, 9)` ⇒ `9`。走核心的**安全**入口 [`pyawa_core::Instance::length_of`]。
+/// **`operator.countOf(seq, value)`**（round 185）：等于 `value` 的元素个数 ✓
+/// （逐项 `==`：先走富比较（用户 `__eq__`／反射），拿不到结果再退回结构相等 ✓；
+/// **序列元素在左** ✓ —— 与 `in` 的迭代回退同口径）。
+fn operator_element_equals(
+    instance: &Instance,
+    item: NonNull<Header>,
+    target: NonNull<Header>,
+) -> Result<bool, ExecError> {
+    match pyawa_core::executor::protocol::equality_compare_result(instance, item, target, "==", 0)? {
+        Some(pyawa_core::executor::protocol::RichCompare::Value(value)) => {
+            let truth = instance.truthiness_of(value)?;
+            instance.release(value);
+            Ok(truth)
+        }
+        _ => Ok(pyawa_core::values_equal_public(instance, item, target)),
+    }
+}
+
+fn count_of_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (sequence, target) = two_arguments(instance, "countOf", args)?;
+    let iterator = pyawa_core::executor::iter::iter_value(instance, *sequence)?;
+    let mut count = 0i64;
+    loop {
+        match pyawa_core::executor::runtime::advance(instance, iterator) {
+            Ok(Some(item)) => {
+                let equal = operator_element_equals(instance, item, *target);
+                instance.release(item);
+                if equal? {
+                    count += 1;
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(instance.new_int(count))
+}
+
+/// **`operator.indexOf(seq, value)`**（round 185）：第一个等于 `value` 的下标 ✓；
+/// 找不到 ⇒ `ValueError: sequence.index(x): x not in sequence` ✓（参照文案）。
+fn index_of_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (sequence, target) = two_arguments(instance, "indexOf", args)?;
+    let iterator = pyawa_core::executor::iter::iter_value(instance, *sequence)?;
+    let mut index = 0i64;
+    loop {
+        match pyawa_core::executor::runtime::advance(instance, iterator) {
+            Ok(Some(item)) => {
+                let equal = operator_element_equals(instance, item, *target);
+                instance.release(item);
+                if equal? {
+                    instance.release(iterator);
+                    return Ok(instance.new_int(index));
+                }
+                index += 1;
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Err(instance.raise_builtin_error(
+        "ValueError",
+        "sequence.index(x): x not in sequence",
+    ))
+}
+
 fn length_hint_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -756,6 +839,8 @@ fn build_named(
         ("concat", concat_native as pyawa_core::NativeFn),
         ("call", call_native as pyawa_core::NativeFn),
         ("length_hint", length_hint_native as pyawa_core::NativeFn),
+        ("countOf", count_of_native as pyawa_core::NativeFn),
+        ("indexOf", index_of_native as pyawa_core::NativeFn),
         ("itemgetter", itemgetter_native as pyawa_core::NativeFn),
         ("attrgetter", attrgetter_native as pyawa_core::NativeFn),
         // **P3-38 S3e-2**（task-65）：参照 `operator` 还导出**双下划线别名**（`operator.__lt__` 等，

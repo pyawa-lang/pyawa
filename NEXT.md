@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`1355902`（round 184：in 的迭代回退走富比较＋用户 __iter__ 异常上抛；test_iter 8F/13E⇒7F/13E）
+- **HEAD**：`2cba3a2`（round 185：operator.countOf/indexOf ＋ 迭代器 pickle 三处 __reduce__；test_iter 8F/13E⇒11F/3E（问题总数 21⇒14））
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

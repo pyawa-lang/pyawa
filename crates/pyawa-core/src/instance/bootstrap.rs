@@ -547,7 +547,9 @@ impl Instance {
         let _longrange_iterator_type = self.alloc_type_raw(
             "longrange_iterator",
             core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
-            crate::builtin_objects::ItStateObject::slots(),
+            crate::builtin_objects::ItStateObject::slots()
+                // **属性面**（round 185）：`__next__`／`__iter__`／`__reduce__` ✓（pickle 用例 ✓）。
+                .with_getattr(crate::builtin_objects::range_iterator_getattr),
         );
 
         // **`super`** ✓（第 233 轮）：**零参**形式 ✓ —— 载荷用 `AttributeObject`（存 `__thisclass__`／`__self__` ✓），
@@ -583,7 +585,10 @@ impl Instance {
         let _range_iterator_type = self.alloc_type_raw(
             "range_iterator",
             core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
-            crate::builtin_objects::ItStateObject::slots(),
+            crate::builtin_objects::ItStateObject::slots()
+                // **属性面**（round 185）：`__next__`／`__iter__`／`__reduce__` ✓（`test_iter` 的
+                // `check_pickle` 一族：`pickle.dumps(iter(range(10)))` ✓）。
+                .with_getattr(crate::builtin_objects::range_iterator_getattr),
         );
 
         // **`FrameLocalsProxy`**（round 177）：`frame.f_locals` 对函数帧给出的**可写穿**视图
@@ -1121,7 +1126,9 @@ impl Instance {
         let callable_iterator_type = self.alloc_type_raw(
             "callable_iterator",
             core::mem::size_of::<crate::builtin_objects::CallableIteratorObject>(),
-            crate::builtin_objects::CallableIteratorObject::slots(),
+            crate::builtin_objects::CallableIteratorObject::slots()
+                // **属性面**（round 185）：`__next__`／`__iter__`／`__reduce__` ✓（pickle 用例 ✓）。
+                .with_getattr(crate::builtin_objects::callable_iterator_getattr),
         );
         assert!(
             self.register_bases(callable_iterator_type, vec![object_type]).is_some(),
