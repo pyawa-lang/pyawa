@@ -1643,26 +1643,6 @@ impl Instance {
                 "__getitem__",
                 crate::builtin_objects::dict_getitem_builtin_native as crate::NativeFn,
             ),
-            (
-                self.type_named("list").expect("list 已登记"),
-                "__contains__",
-                crate::builtin_objects::container_contains_native as crate::NativeFn,
-            ),
-            (
-                self.type_named("tuple").expect("tuple 已登记"),
-                "__contains__",
-                crate::builtin_objects::container_contains_native as crate::NativeFn,
-            ),
-            (
-                self.type_named("set").expect("set 已登记"),
-                "__contains__",
-                crate::builtin_objects::container_contains_native as crate::NativeFn,
-            ),
-            (
-                self.type_named("str").expect("str 已登记"),
-                "__contains__",
-                crate::builtin_objects::container_contains_native as crate::NativeFn,
-            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,
@@ -1670,6 +1650,19 @@ impl Instance {
                 Cell::new(function),
             ));
             self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
+        }
+        // **不可哈希容器的 `__hash__ = None`**（round 213）：`collections.abc.Hashable` 的
+        // `_check_methods` 要求 `C.__dict__["__hash__"] **is None**`（不是"有这个名字" ✓）
+        // ⇒ 直接放 **None 单例**作值 ✓（不是 native ✗）。参照里 `list`／`dict`／`set`／`bytearray`
+        // 都是这样 ✓ ⇒ `isinstance(bytearray(), Hashable)` 判 False ✓。
+        for name in ["list", "dict", "set", "bytearray"] {
+            let Some(container_type) = self.type_named(name) else {
+                continue;
+            };
+            let none = self.singletons().none();
+            // SAFETY: 单例由实例持有，字典要自己那份。
+            unsafe { self.incref_object(none.as_ptr()) };
+            self.set_type_attribute(container_type, "__hash__", none.cast::<Header>());
         }
         // **迭代器类型的"类属性面"**（round 186）：参照的 `type(iter([]))` 上**有** `__iter__`／`__next__`
         // （slot wrapper ✓）⇒ `collections.abc.Iterator` 的 `__subclasshook__`（`_check_methods(C,'__iter__')`

@@ -657,9 +657,14 @@ impl DictObject {
         }
         let mut entries = self.entries.borrow_mut();
         let mut hashes = self.hashes.borrow_mut();
+        // **容量用饱和减法**（round 213 真 panic 修 ✗）：有的 dict 是"直接搬 entries"造出来的
+        // （`mappingproxy_new` 一类 ✓，`hashes` 为空 ✓）⇒ `hashes.len() - deleted` 会**下溢**成
+        // 天文数字 ⇒ `Vec::with_capacity` 报 `capacity overflow` panic ✗（`test_collections` 的
+        // `TestNamedTuple.test_name_conflicts` 实测 ✓）。饱和减法 + 逐位置取 hash 兜底即可 ✓。
         let mut kept_entries: Vec<(NonNull<Header>, NonNull<Header>)> =
-            Vec::with_capacity(entries.len() - deleted);
-        let mut kept_hashes: Vec<u64> = Vec::with_capacity(hashes.len() - deleted);
+            Vec::with_capacity(entries.len().saturating_sub(deleted));
+        let mut kept_hashes: Vec<u64> =
+            Vec::with_capacity(hashes.len().saturating_sub(deleted));
         for (position, entry) in entries.iter().enumerate() {
             if Self::is_tombstone(entry.0) {
                 continue;

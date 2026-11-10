@@ -1212,14 +1212,23 @@ pub(crate) fn bind_arguments(
 
         let outcome = if let Some(slot) = positional_hit {
             if slot < code.posonlyargcount() {
-                // 仅位置形参不能用关键字传
-                release(instance, value);
-                release(instance, name);
-                Err(raise_builtin(
-                    instance,
-                    "TypeError",
-                    &message_positional_only(code.name(), std::slice::from_ref(&text)),
-                ))
+                // **仅位置形参不能用关键字传；但函数有 `**kwargs` ⇒ 归到 kwargs**（round 213 真 bug 修 ✗）：
+                // 参照口径 `def f(self, /, **kw): f(self=1)` ⇒ `kw['self']==1` ✓（不是 TypeError ✓）。
+                // 先前一律报错 ✗ ⇒ `Counter(self=42)` 报
+                // `__init__() got some positional-only arguments passed as keyword arguments: 'self'` ✗
+                //（`test_collections.TestCounter.test_init` ✓）。
+                if code.has_varkeywords() {
+                    collected.push((name, value));
+                    Ok(())
+                } else {
+                    release(instance, value);
+                    release(instance, name);
+                    Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        &message_positional_only(code.name(), std::slice::from_ref(&text)),
+                    ))
+                }
             } else if locals[slot].is_some() {
                 release(instance, value);
                 release(instance, name);
