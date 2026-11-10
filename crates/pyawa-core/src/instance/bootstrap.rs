@@ -1630,6 +1630,39 @@ impl Instance {
                 "union",
                 crate::builtin::set::set_union_native as crate::NativeFn,
             ),
+            // **内建容器的 `__contains__` 类型字典入口**（round 212）：`dict` 子类覆写里写
+            // `dict.__contains__(self, k)`（`test_collections` 的 `lowerdict` ✓）要有得取 ✓；
+            // 值走通用 `contains()`（与实例 `getattr` 槽同口径 ✓）。
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__contains__",
+                crate::builtin_objects::dict_contains_builtin_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__getitem__",
+                crate::builtin_objects::dict_getitem_builtin_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("list").expect("list 已登记"),
+                "__contains__",
+                crate::builtin_objects::container_contains_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "__contains__",
+                crate::builtin_objects::container_contains_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("set").expect("set 已登记"),
+                "__contains__",
+                crate::builtin_objects::container_contains_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("str").expect("str 已登记"),
+                "__contains__",
+                crate::builtin_objects::container_contains_native as crate::NativeFn,
+            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,

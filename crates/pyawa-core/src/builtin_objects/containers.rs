@@ -110,19 +110,105 @@ pub(crate) fn bound_dict(
 /// 动因：上限榜上 `AttributeError: 'frozenset' object has no attribute '__contains__'` 那一族
 /// **12** 个模块 ✓ —— 本层的 `in` 是**指令内联**的 ✓，但 `x.__contains__(y)` 这种**取属性**的路
 /// 先前只有 `bytes` 接了一个 ✓（`str_getattr` 一带 ✓）。
+/// **`dict.__contains__` 的"内建语义"入口**（round 212）：`dict` 子类覆写里会写
+/// `dict.__contains__(self, k)` ✓ —— 若这里再走 `contains()` 的协议回退会**递归**到覆写本身 ✗
+/// （`test_collections` 的 `lowerdict` 实测 `RecursionError` ✗）⇒ 这里**只走内建哈希查键** ✓。
+/// **`dict.__getitem__` 的"内建语义"入口**（round 212）：`dict` 子类覆写里写
+/// `dict.__getitem__(self, k)` ✓ —— 若走一般下标协议会**递归**到覆写本身 ✗ ⇒ 这里只做**内建查键** ✓。
+pub(crate) fn dict_getitem_builtin_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (container, rest) = match bound {
+        Some(container) => (container, args),
+        None => match args.split_first() {
+            Some((container, rest)) => (*container, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "descriptor '__getitem__' needs an argument",
+                ))
+            }
+        },
+    };
+    let Some(key) = rest.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__getitem__ expected 1 argument, got 0",
+        ));
+    };
+    crate::builtin::dict::reject_unhashable_key(instance, *key)?;
+    let position = match instance.dict_lookup_key_checked(container, *key)? {
+        Some(position) => position,
+        None => {
+            instance.retain(*key);
+            let exception = crate::executor::new_exception_with_args(
+                instance,
+                crate::executor::exception_type(instance, "KeyError"),
+                vec![*key],
+            );
+            return Err(crate::executor::runtime::raise(instance, exception));
+        }
+    };
+    // SAFETY: container 是活的 dict，position 刚查到。
+    let dict = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+    let (_, value) = dict.entry(position).expect("刚查到的位置");
+    instance.retain(value);
+    Ok(value)
+}
+
+pub(crate) fn dict_contains_builtin_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (container, rest) = match bound {
+        Some(container) => (container, args),
+        None => match args.split_first() {
+            Some((container, rest)) => (*container, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "descriptor '__contains__' needs an argument",
+                ))
+            }
+        },
+    };
+    let Some(item) = rest.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__contains__ expected 1 argument, got 0",
+        ));
+    };
+    crate::builtin::dict::reject_unhashable_key(instance, *item)?;
+    let found = instance.dict_lookup_key_checked(container, *item)?.is_some();
+    Ok(instance.new_bool(found))
+}
+
 pub(crate) fn container_contains_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(container) = bound else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "descriptor '__contains__' needs an argument",
-        ));
+    // **两种形态都认**（round 212）：实例上取是绑定（`bound` ✓）；类型上取是**未绑定**
+    // （`dict.__contains__(self, k)` ⇒ 接收者在 `args[0]` ✓，与 `dict.__getitem__` 同口径 ✓）。
+    let (container, rest) = match bound {
+        Some(container) => (container, args),
+        None => match args.split_first() {
+            Some((container, rest)) => (*container, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "descriptor '__contains__' needs an argument",
+                ))
+            }
+        },
     };
-    let Some(item) = args.first() else {
+    let Some(item) = rest.first() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "__contains__ expected 1 argument, got 0",

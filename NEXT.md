@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`afe31cf`（round 211：tuple 子类 protocol 0/1 还原形状（base=tuple、第三参数=__getnewargs__()、外层 state=None）⇒ NT.__reduce__ 与参照一致、copy/pickle(0) 成功、test_collections 16F/11E（总失败 27））
+- **HEAD**：`e8099f3`（round 212：dict 子类 __contains__/__getitem__ 覆写（快路加判据＋专用内建 native）⇒ test_collections 16F/11E→15F/11E（总数 26））
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

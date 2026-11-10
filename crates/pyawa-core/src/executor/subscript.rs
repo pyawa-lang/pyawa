@@ -228,7 +228,13 @@ pub(crate) fn subscript_get_inner(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(value);
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
+    // **`dict` 子类覆写 `__getitem__` 时走协议**（round 212 真 bug 修 ✗）：
+    // `class lowerdict(dict): def __getitem__(self,k): …`（`test_collections.TestChainMap.test_new_child`）
+    // 先前无条件走"哈希查键"快路 ⇒ `mapping['B']` 跳过覆写 ✗（ChainMap 的 `__getitem__` 靠它 ✓）。
+    let dict_getitem_override = instance.is_subtype(container_type, builtin_type(instance, "dict"))
+        && instance.type_lookup(container_type, "__getitem__")
+            != instance.type_lookup(builtin_type(instance, "dict"), "__getitem__");
+    if instance.is_subtype(container_type, builtin_type(instance, "dict")) && !dict_getitem_override {
         // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46；本层 dict 不哈希 ⇒ 必须显式拦 ✗）。
         crate::builtin::dict::reject_unhashable_key(instance, key)?;
         // SAFETY: 同上。

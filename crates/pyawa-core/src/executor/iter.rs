@@ -755,7 +755,14 @@ pub(crate) fn contains(
         }
         return Ok(false);
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
+    // **`dict` 子类若覆写 `__contains__`，必须走协议**（round 212 真 bug 修 ✗）：
+    // `class lowerdict(dict): def __contains__(self, k): …`（`test_collections.TestChainMap.test_new_child`）
+    // 先前一律走"哈希查键"快路 ☒ ⇒ 覆写被跳过 ⇒ `'B' in d` 判 False ⇒ `d.get('B',100)` 给 100 ✗。
+    // 判据：`container_type` 的 `__contains__` 与 `dict` 那份**同一可调用**才走快路 ✓。
+    let dict_contains_override = instance.is_subtype(container_type, builtin_type(instance, "dict"))
+        && instance.type_lookup(container_type, "__contains__")
+            != instance.type_lookup(builtin_type(instance, "dict"), "__contains__");
+    if instance.is_subtype(container_type, builtin_type(instance, "dict")) && !dict_contains_override {
         // 不可哈希的项 ⇒ 参照的 TypeError ✓（task-46；`[1] in d` ⇒
         // `cannot use 'list' as a dict key (unhashable type: 'list')` ✓）。
         crate::builtin::dict::reject_unhashable_key(instance, item)?;
