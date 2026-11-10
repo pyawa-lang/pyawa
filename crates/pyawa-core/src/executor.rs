@@ -1915,7 +1915,43 @@ pub fn execute<'a>(
                     &mut decoder,
                 )?;
             }
-            Err(other) => return Err(other),
+            Err(other) => {
+                // **帧错误现场**（round 205 诊断）：`PYAWA_FRAME_ERR_DEBUG=1` 时打当前帧
+                // （code 名／指令偏移／栈深）与 `f_back` 链，用来定位"哪条字节码把栈弹空" ✓。
+                {
+                    static FRAME_ERR_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                    if crate::diag::flag_cached("PYAWA_FRAME_ERR_DEBUG", &FRAME_ERR_DEBUG) {
+                        if matches!(other, ExecError::Frame(_)) {
+                            let mut names: Vec<String> = Vec::new();
+                            names.push(format!(
+                                "{}@{} stack={}",
+                                code.name(),
+                                frame.get().instruction_pointer(),
+                                frame.get().depth()
+                            ));
+                            let mut cursor = frame.get().f_back();
+                            while let Some(parent) = cursor {
+                                // SAFETY: f_back 链上的帧由各自持有者保活。
+                                let parent_frame = unsafe { &*parent.as_ptr().cast::<Frame>() };
+                                let name = parent_frame
+                                    .code()
+                                    .map(|code| unsafe {
+                                        &*code.as_ptr().cast::<crate::code::CodeObject>()
+                                    })
+                                    .map(|code| code.name().to_owned())
+                                    .unwrap_or_default();
+                                names.push(format!(
+                                    "{name}@{}",
+                                    parent_frame.instruction_pointer()
+                                ));
+                                cursor = parent_frame.f_back();
+                            }
+                            eprintln!("[frame-err] {other:?} 链={names:?}");
+                        }
+                    }
+                }
+                return Err(other);
+            }
         }
     }
     Err(ExecError::FellOffEnd)
