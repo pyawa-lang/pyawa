@@ -474,6 +474,33 @@ impl Emitter {
                     if !finally_body.is_empty() {
                         self.finally_stack.pop();
                     }
+                    // **处理块体的结束位置**（round 207 真 bug 修 ✗）：处理块段的异常表区间要在这里收尾 ✓ ——
+                    // 先前的 `segment_end` 取 `handler_cleanup_start`（＝体后那条 `POP_EXCEPT` **之前**），
+                    // 但当体以 `break` 结束时，`break` 会**把余部副本就地发出来**（`POP_EXCEPT` +
+                    // 循环后代码，例如 `raise ValueError`）⇒ 那些指令落进了 [处理块起点, handler_cleanup_start)
+                    // 区间里 ✗ ⇒ 余部副本里再抛的异常被派发到清理三连（栈只有 `[lasti, exc]` 2 格）
+                    // ⇒ `COPY 3` 栈下溢 ✗（`test_collections` 的 `Sequence.index` 就是这条 ✓）。
+                    // 参照的区间是 `PUSH_EXC_INFO` 到**体后那条 `POP_EXCEPT` 之前** ✓ ⇒ 这里记体结束位置 ✓。
+                    let handler_body_end = self.unit.code.len();
+                    // **体以 `break`／`continue`／`return` 结束时**：这些出口会**就地**发一份"余部副本"
+                    // （`POP_EXCEPT` ＋ 循环后代码）✓ —— 参照把那份副本放在处理块段**之外**（段止于
+                    // 出口那条 `POP_EXCEPT` ✓）⇒ 这里把段尾回退到**最后一条 `POP_EXCEPT`** 的位置 ✓
+                    //（否则副本里再抛的异常会落到清理三连、栈少一格 ⇒ `COPY 3` 下溢 ✗）。
+                    let handler_body_end = if block_terminates(&handler.body) {
+                        let mut cut = handler_body_end;
+                        let mut word = handler_body_end / 2;
+                        while word > segment_start / 2 {
+                            word -= 1;
+                            let op = u16::from(self.unit.code[word * 2]);
+                            if crate::opcode::opname(op) == Some("POP_EXCEPT") {
+                                cut = word * 2;
+                                break;
+                            }
+                        }
+                        cut
+                    } else {
+                        handler_body_end
+                    };
                     // **粘性位点**（实测）：体末那条之后的 `POP_EXCEPT`／`as 名字` 清理／收尾都取
                     // **上一条指令**的跨度（`except … as e` 的例子是 `(4,4,4,5)`＝名字 `y` 那段），
                     // 不是处理块语句那段的跨度
@@ -497,7 +524,7 @@ impl Emitter {
                     let segment_end = if handler.name.is_some() {
                         self.unit.code.len()
                     } else {
-                        handler_cleanup_start
+                        handler_body_end
                     };
                     self.record_handler_segment(
                         segment_start,

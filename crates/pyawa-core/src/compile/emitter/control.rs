@@ -682,6 +682,17 @@ impl Emitter {
 
     /// 把异常表条目编码成 `BC-54` 的字节串（4 个 6-bit varint／条，**码元**为单位）。
     pub(crate) fn encode_exceptiontable(&self) -> Vec<u8> {
+        if crate::diag::flag("PYAWA_DUMP_CODE") {
+            for (start, end, target, depth, lasti) in &self.exception_entries {
+                eprintln!(
+                    "[exctable] {} start={} end={} target={} depth={depth} lasti={lasti}",
+                    self.unit.name,
+                    start / 2,
+                    end / 2,
+                    target / 2
+                );
+            }
+        }
         let mut out = Vec::new();
         // **条目要按 `start` 递增排序** ✓（第 167 轮：与参照逐字节对齐后才现形 ✓ —— 内容相同但顺序相反 ✗；
         //   参照是递增 ✓，我们是记录序 ✗）。用**稳定排序** ✓，同 `start` 时保持记录序 ✓。
