@@ -319,11 +319,19 @@ impl Frame {
     /// 交换栈顶与"从栈顶往下第 `index` 项"（**1 起数**；参照实现的 `SWAP(i)`）。
     ///
     /// `index < 2` 是空操作（自己换自己）；越界报 `StackUnderflow`。
+    /// **`PYAWA_STACK_DEBUG` 的缓存开关**（round 204 性能修 ✗）：这些诊断点在 `pop`／`peek`／
+    /// `swap` 里——**每条字节码**都会走，原先每次 `std::env::var_os`（未缓存 ✗）⇒ 每个栈操作都
+    /// 两次系统调用级查找，实测 `test_userstring` 里占比可观。缓存后零成本 ✓。
+    fn stack_debug() -> bool {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        crate::diag::flag_cached("PYAWA_STACK_DEBUG", &FLAG)
+    }
+
     pub fn swap_from_top(&self, index: usize) -> Result<(), FrameError> {
         let mut stack = self.stack.borrow_mut();
         let length = stack.len();
         if index == 0 || index > length {
-            if crate::diag::flag("PYAWA_STACK_DEBUG") {
+            if Self::stack_debug() {
                 eprintln!("[stack_underflow] swap_from_top index={index} len={length}；回溯：\n{}", std::backtrace::Backtrace::force_capture());
             }
             return Err(FrameError::StackUnderflow);
@@ -334,11 +342,11 @@ impl Frame {
 
     /// **BC-43**／**BC-46**：出栈并**交出**那份引用；调用方随后必须按 `OM-20` 处理它。
     pub fn pop(&self) -> Result<NonNull<Header>, FrameError> {
-        if crate::diag::flag("PYAWA_STACK_DEBUG") {
+        if Self::stack_debug() {
             eprintln!("[pop] 弹前深={}", self.stack.borrow().len());
         }
         let popped = self.stack.borrow_mut().pop();
-        if popped.is_none() && crate::diag::flag("PYAWA_STACK_DEBUG") {
+        if popped.is_none() && Self::stack_debug() {
             eprintln!("[stack_underflow] pop() 空栈；回溯：\n{}", std::backtrace::Backtrace::force_capture());
         }
         popped.ok_or(FrameError::StackUnderflow)
@@ -347,7 +355,7 @@ impl Frame {
     /// 只看栈顶（**借用**，不转移所有权）。
     pub fn peek(&self) -> Result<NonNull<Header>, FrameError> {
         let top = self.stack.borrow().last().copied();
-        if top.is_none() && crate::diag::flag("PYAWA_STACK_DEBUG") {
+        if top.is_none() && Self::stack_debug() {
             eprintln!("[stack_underflow] peek() 空栈；回溯：\n{}", std::backtrace::Backtrace::force_capture());
         }
         top.ok_or(FrameError::StackUnderflow)
@@ -359,7 +367,7 @@ impl Frame {
     pub fn peek_from_top(&self, index: usize) -> Result<NonNull<Header>, FrameError> {
         let stack = self.stack.borrow();
         if index == 0 || index > stack.len() {
-            if crate::diag::flag("PYAWA_STACK_DEBUG") {
+            if Self::stack_debug() {
                 eprintln!("[stack_underflow] peek_from_top index={index} len={}；回溯：\n{}", stack.len(), std::backtrace::Backtrace::force_capture());
             }
             return Err(FrameError::StackUnderflow);
@@ -881,7 +889,10 @@ pub unsafe fn frame_getattr(
             // 全量回归要一轮验收）。`PYAWA_FRAME_LOCALS_PROXY=1` 打开 **`FrameLocalsProxy`** 原型
             // （写穿视图 ＋ 构造器 ＋ 映射面，round 177）✓；下一轮跑完 survey 再翻默认 ✓。
             let use_proxy = frame.namespace().is_none()
-                && crate::diag::flag("PYAWA_FRAME_LOCALS_PROXY");
+                && {
+                    static FRAME_LOCALS_PROXY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                    crate::diag::flag_cached("PYAWA_FRAME_LOCALS_PROXY", &FRAME_LOCALS_PROXY)
+                };
             if use_proxy {
                 Some(crate::builtin_objects::frame_locals_proxy(
                     instance,

@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`4412d78`（round 203：deque 下标接线＋修 dict.setdefault 槽位/快照混用 panic ⇒ test_contextlib/_async unimplemented→runtime、test_collections 不再 panic）
+- **HEAD**：`a3df0e9`（round 204：Frame 栈操作热路径诊断开关改 flag_cached => test_userstring 88-90s→86s；StackUnderflow 非来自 Frame::pop，下轮逐点打回溯）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
