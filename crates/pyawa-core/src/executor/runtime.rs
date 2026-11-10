@@ -624,6 +624,15 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
             if previous_frame == frame {
                 // SAFETY: previous 是上面探针交出的新引用。
                 unsafe { instance.release_object(previous.as_ptr()) };
+                // **恢复"最近一次抛出"槽的口径与主路径一致**（round 193 真泄漏修 ✗）：
+                // 先前这里直接 `set_pending_exception(Some(saved))` 并**丢掉返回值** ⇒ 槽里
+                // 原来那颗异常（`raise()` 刚放进去的**本颗**）**没释放** ✗ ⇒ 异常→回溯→帧链
+                // 漏一份（实测 `iter(A(0))` 之后多颗 dict／tuple／frame 成根 ✓）。
+                // 先清空（释放旧值），再把开头那份自有引用**转交**给槽 ✓。
+                if let Some(current) = instance.set_pending_exception(None) {
+                    // SAFETY: 被换下来的那份由实例槽持有。
+                    unsafe { instance.release_object(current.as_ptr()) };
+                }
                 if let Some(pointer) = saved_pending {
                     debug_assert!(instance.pending_exception().is_none());
                     instance.set_pending_exception(Some(pointer));

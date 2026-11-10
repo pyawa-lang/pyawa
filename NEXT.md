@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`db387be`（round 192：REVERSE_EXTRA＋WATCH_SITE 诊断；泄漏回溯持有链 dict→AttributeError（根），源头＝iter_value 的 __iter__ 探针；三种就地还改法均让 test_dict 偶发/必失败⇒撤回）
+- **HEAD**：`56d4411`（round 193：attach_traceback 同帧去重分支补 pending 正确交接；「iter_value 不造异常」实验做成 tb 15/15 但 test_dict 2/5 偶发⇒撤回）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
