@@ -101,7 +101,27 @@ pub(super) fn step_format<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                 }
                 "COPY" => {
                     // 参照实现：COPY(i) 把 TOS[-i] 复制一份压栈（+1）
-                    let raw = frame.get().peek_from_top(oparg)?;
+                    let raw = match frame.get().peek_from_top(oparg) {
+                        Ok(raw) => raw,
+                        Err(error) => {
+                            // **诊断**（round 206）：COPY 越界时把栈上各类型打出来（哪个函数/几条）。
+                            static COPY_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                            if crate::diag::flag_cached("PYAWA_COPY_DEBUG", &COPY_DEBUG) {
+                                let items: Vec<String> = frame
+                                    .get()
+                                    .stack_snapshot()
+                                    .iter()
+                                    .map(|value| {
+                                        // SAFETY: 栈上的项都活着。
+                                        let ty = unsafe { value.as_ref() }.ty();
+                                        unsafe { ty.as_ref() }.name().to_owned()
+                                    })
+                                    .collect();
+                                eprintln!("[copy-underflow] oparg={oparg} stack={items:?}");
+                            }
+                            return Err(error.into());
+                        }
+                    };
                     push(instance, frame.get(), raw)?;
                 }
         _ => unreachable!("step_format 只接收本族的 opcode"),

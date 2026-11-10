@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`de18f01`（round 205：PYAWA_FRAME_ERR_DEBUG 钉到 StackUnderflow 来源＝异常表 lasti 位 vs 清理三连 COPY 3；试 flip lasti 最小复现通过但全套件挂⇒撤回；下轮对齐 POP_EXCEPT/RERAISE 口径）
+- **HEAD**：`e898052`（round 206：PYAWA_COPY_DEBUG；最小复现进清理三连时栈=["int","ValueError"] 缺 prev ⇒ 真因在处理块段区间边界/目标，不在 lasti 位；下轮照参照 dis 对拍块布局）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
