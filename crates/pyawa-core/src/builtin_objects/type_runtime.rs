@@ -14,7 +14,7 @@ use super::*;
 /// **取后三个实参**当 `(name, bases, namespace)` ✓ ⇒ 两种调用形状**都合** ✓。
 pub fn type_new_native(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
+    bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
@@ -71,10 +71,88 @@ pub fn type_new_native(
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的命名空间要是 dict"));
     }
     // `mcls` 那一位：是个**类型对象**就用它当元类 ✓（`super().__new__(mcls, …)` 正是这样 ✓）。
+    // **绑定形态**（`super().__new__(mcls, cls, bases, ns)`）时 `mcls` 在 `bound` 里 ✗（不在 args[0]）
+    // ⇒ 必须并进来（round 208：否则会把"已经是被请求元类"的类又转交回 `EnumType.__new__` ⇒ 无限递归／
+    // `classdict._member_names` 在普通 dict 上炸 ✗）。
     let requested = args
         .first()
         .filter(|value| instance.is_type_object(**value))
-        .map(|value| value.cast::<crate::TypeObject>());
+        .map(|value| value.cast::<crate::TypeObject>())
+        .or_else(|| {
+            bound.filter(|value| instance.is_type_object(*value)).map(|value| value.cast::<crate::TypeObject>())
+        });
+    // **元类胜出者若不是 `type`，要交给它的 `__new__`**（round 208 真 bug 修 ✗）：
+    // `type('C', (Sequence,), {...})` 在参照里会走 `ABCMeta.__new__`（算 `__abstractmethods__` ✓）；
+    // 本层先前直接落到 `build_class_from_parts_with_keywords` ✗ ⇒ 元类 `__new__` 根本不跑 ⇒
+    // `C.__abstractmethods__` 只会**继承**基类那份（`test_collections` 的 `validate_abstract_methods`
+    // 当场"抽象类不能实例化" ✗）。这里先算**最派生元类**，非 `type` 就转交 ✓。
+    let type_type = instance.type_named("type");
+    let mut winner = requested;
+    for base in bases.iter().copied() {
+        // SAFETY: base 是存活对象；这里是"基类自己的类型"（元类）。
+        let metaclass = unsafe { base.as_ref() }.ty();
+        match winner {
+            Some(current) if instance.is_subtype(metaclass, current) => winner = Some(metaclass),
+            Some(_) => {}
+            None => winner = Some(metaclass),
+        }
+    }
+    let custom_winner = match (winner, type_type) {
+        (Some(candidate), Some(base_type)) => {
+            // **已经就是"被请求的元类"时不再转交**（`super().__new__(mcls, …)` 的路径 ✓）：
+            // 否则 `ABCMeta.__new__` 里的 `super().__new__(mcls, …)` 会再转交回自己 ⇒ 无限递归 ✗。
+            // **只转交 `ABCMeta` 一族**（round 208）：`EnumType` 的 `__new__` 期待"带 `_member_names`
+            // 的命名空间 dict"（它走 `etype(...)` 功能式 API 那条路 ✓），三参 `type(...)` 直接把普通 dict
+            // 交给它会炸；而本 bug 的靶子只有 `ABCMeta.__new__`（算 `__abstractmethods__`）✓。
+            Some(candidate) != requested
+                && Some(candidate) != Some(base_type)
+                && instance.is_subtype(candidate, base_type)
+                && instance
+                    .type_named("ABCMeta")
+                    .is_some_and(|abc_meta| instance.is_subtype(candidate, abc_meta))
+        }
+        _ => false,
+    };
+    // **只在"恰好三参、无关键字"时转交**（round 208）：带关键字的调用（如 `enum.py:1792` 的
+    // `type(cls_name, (etype,), body, boundary=…, _simple=True)`）要原样把关键字交给元类；本层
+    // 这条转交路径没有关键字通道 ⇒ 那些调用维持原状（不转交 ✓）——先只让 `type('C', (Sequence,), stubs)`
+    // 这类三参形态走对 ✓。
+    if custom_winner && kwargs.is_empty() && args.len() == 3 {
+        if std::env::var_os("PYAWA_TYPE_NEW_DEBUG").is_some() {
+            let base_names: Vec<String> = bases
+                .iter()
+                .map(|base| {
+                    // SAFETY: base 是存活对象。
+                    unsafe { base.as_ref() }.ty();
+                    instance.type_name(unsafe { base.as_ref() }.ty())
+                })
+                .collect();
+            eprintln!(
+                "[type-new] delegate name={name} args={} bound={} requested={} winner={} bases_types={base_names:?} ns_type={}",
+                args.len(),
+                bound.is_some(),
+                requested.map(|value| unsafe { value.as_ref() }.name()).unwrap_or("<none>"),
+                winner.map(|value| unsafe { value.as_ref() }.name()).unwrap_or("<none>"),
+                instance.type_name(instance.type_of(namespace))
+            );
+        }
+        let metaclass = winner.expect("刚判过非空");
+        // **有 Python 级 `__new__` 才转交**（否则仍是 `type.__new__` ⇒ 自己建 ✓）。
+        let target = instance
+            .type_lookup(metaclass, "__new__")
+            .filter(|found| Some(*found) != instance.type_lookup(type_type.expect("type 已登记"), "__new__"));
+        if target.is_some() {
+            let found = crate::executor::call::call_object_method(
+                instance,
+                metaclass.cast::<Header>(),
+                "__new__",
+                &[name_value, bases_value, namespace],
+            )?;
+            if let Some(created) = found {
+                return Ok(created);
+            }
+        }
+    }
     // **类关键字转交 `__init_subclass__`** ✓（task-24 尾件 ✓；`metaclass` 由被调方滤掉 ✓）。
     crate::classes::build_class_from_parts_with_keywords(
         instance,
