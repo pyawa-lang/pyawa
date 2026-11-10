@@ -884,9 +884,33 @@ pub(crate) fn call_callable(
             "maximum recursion depth exceeded",
         ));
     }
+    let frame_debug = std::env::var_os("PYAWA_FRAME_DROP_DEBUG").is_some();
+    if frame_debug {
+        // SAFETY: frame 刚分配，存活；code 名用于过滤。
+        let name = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() }
+            .name()
+            .to_owned();
+        eprintln!(
+            "[frame-drop] begin code={name} ptr={:p} rc={}",
+            frame.as_ptr(),
+            frame.get().header.refcount()
+        );
+    }
     let outcome = execute(instance, &frame);
     instance.leave_call();
-    match outcome {
+    if frame_debug {
+        // SAFETY: frame 仍由本函数持有。
+        let name = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() }
+            .name()
+            .to_owned();
+        eprintln!(
+            "[frame-drop] end code={name} ptr={:p} rc={}",
+            frame.as_ptr(),
+            frame.get().header.refcount()
+        );
+    }
+    let frame_rc_before_return = frame.get().header.refcount();
+    let result = match outcome {
         Ok(ExecOutcome::Returned(value)) => Ok(value_into_raw(instance, value)),
         Ok(ExecOutcome::Yielded(_)) => Err(ExecError::Unsupported {
             opcode,
@@ -903,7 +927,17 @@ pub(crate) fn call_callable(
             Err(ExecError::Raised { exception })
         }
         Err(other) => Err(other),
+    };
+    if frame_debug {
+        // SAFETY: frame 仍由本函数持有（即将 drop）。
+        eprintln!(
+            "[frame-drop] before-drop ptr={:p} rc={frame_rc_before_return}",
+            frame.as_ptr()
+        );
     }
+    // **显式落域**（round 196 诊断）：正常作用域结束也该落域；显式 `drop` 便于确认。
+    drop(frame);
+    result
 }
 
 /// **沿 MRO 继承来的 `call` 槽**（task-7）——**一处口径**：`call_callable` 的实例调用回退与
