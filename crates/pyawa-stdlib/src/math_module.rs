@@ -717,6 +717,72 @@ fn fsum_native(
     Ok(instance.new_float(sum))
 }
 
+/// **`math.prod(iterable, *, start=1)`**（round 225）：`collections.Counter.elements` 的 doctest
+/// 要 `math.prod(counter.elements())` ✓（`test_collections` 的 `elements` ✓）。整数用任意精度核心
+/// （走 `arithmetic_public` 的 `"*"` ✓，与 `sum` 同族口径 ✓）。
+fn prod_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(iterable) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "prod() takes at least 1 argument (0 given)",
+        ));
+    };
+    let mut start = instance.new_int(1);
+    for (name, value) in kwargs {
+        match instance.text_of(*name).unwrap_or_default() {
+            "start" => {
+                instance.release(start);
+                instance.retain(*value);
+                start = *value;
+            }
+            other => {
+                instance.release(start);
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("prod() got an unexpected keyword argument '{other}'"),
+                ));
+            }
+        }
+    }
+    let iterator = instance.iter_object(*iterable)?;
+    let mut product = start;
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(value)) => {
+                let outcome = pyawa_core::executor::arithmetic::arithmetic_public(
+                    instance,
+                    product,
+                    value,
+                    "*",
+                    0,
+                );
+                instance.release(value);
+                instance.release(product);
+                match outcome {
+                    Ok(result) => product = result,
+                    Err(error) => {
+                        instance.release(iterator);
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                instance.release(product);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(product)
+}
+
 /// **`math.erfc(x)`**（第 406 轮 ✓）：`statistics.py:141` 导入期就要这个名字 ✓
 /// （运行时 `_normal_dist_inv_cdf` 用它 ✓）。
 ///
@@ -882,6 +948,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("fsum", fsum_native as NativeFn),
         ("erfc", erfc_native as NativeFn),
         ("sumprod", sumprod_native as NativeFn),
+        ("prod", prod_native as NativeFn),
         // **P3-38 S3e-2**（task-65）：`test_math` 导入期/用例要 `isclose`／`nextafter` ✓
         ("isclose", isclose_native as NativeFn),
         ("nextafter", nextafter_native as NativeFn),

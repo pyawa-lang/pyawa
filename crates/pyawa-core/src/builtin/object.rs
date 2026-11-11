@@ -276,6 +276,46 @@ pub fn object_reduce_ex_native(
             }
         }
     }
+    // **`dict` 族的"可重建"形状**（round 225 真 bug 修 ✗）：参照协议 ≥2 给
+    // `(copyreg.__newobj__, (类,), None, None, iter(obj.items()))` ✓ —— `copy._reconstruct`
+    // 按第 5 项**逐对写入** ✓。先前落到通用形状（第 5 项 `None`）✗ ⇒ `copy.copy(Counter(...))`
+    // 得到**空 Counter** ✗（`test_collections.TestCounter.test_copying` ✓；`Counter` 是 dict 子类 ✓）。
+    let dict_type = instance.type_named("dict");
+    if dict_type.is_some_and(|base| instance.is_subtype(ty, base)) {
+        if let Ok(Some(copyreg)) =
+            crate::executor::import::import_through_bridge(instance, "copyreg")
+        {
+            if let Some(namespace) = crate::mounted_instance_dict(instance, copyreg) {
+                if let Some(newobj) = instance.dict_get(namespace, "__newobj__") {
+                    let class_value = instance.retain(ty.cast::<Header>());
+                    let args = instance.new_tuple(vec![class_value]);
+                    let state = instance.retain(instance.singletons().none());
+                    let listiter = instance.retain(instance.singletons().none());
+                    let items = crate::executor::call::call_object_method(
+                        instance,
+                        object,
+                        "items",
+                        &[],
+                    )?;
+                    let dictiter = match items {
+                        Some(items) => {
+                            let iterator = instance.iter_object(items)?;
+                            instance.release(items);
+                            iterator
+                        }
+                        None => instance.retain(instance.singletons().none()),
+                    };
+                    return Ok(instance.new_tuple(vec![
+                        instance.retain(newobj),
+                        args,
+                        state,
+                        listiter,
+                        dictiter,
+                    ]));
+                }
+            }
+        }
+    }
     // **`tuple` 族的"可重建"形状**（round 210 真 bug 修 ✗）：参照协议 ≥2 给
     // `(copyreg.__newobj__, (类, *self.__getnewargs__()), None, None, None)` ✓ —— 先前落到通用
     // 5 元组、参数只有 `(类,)` ✗ ⇒ `NT(1,2,3)` 的 `copy.copy` 报

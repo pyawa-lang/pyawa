@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`4d03bb5`（round 224：查明堆损坏真凶＝generic_alias_call 实参双重释放（retain+clone+再 release）⇒ 修成 move；重落 __args__ 恒 tuple；type.__module__ 原样给＋Buffer 占位 ⇒ test_collections 7F/2E→4F/2E（总失败 6））
+- **HEAD**：`43ad72c`（round 225：math.prod＋dict 子类 __reduce_ex__ 第 5 项 iter(items) ⇒ test_collections 4F/2E→2F/2E（总失败 4）；下轮：array 惰性注册 MutableSequence／type.__call__／__flags__／try 体内 await）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
