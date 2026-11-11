@@ -848,13 +848,15 @@ pub(crate) fn call_callable(
     // `CALL` **不**跑函数体，而是把挂起的帧包成对应的对象交出去
     // （实测骨架：函数体第一条是 `RETURN_GENERATOR`，恢复时才从 `POP_TOP` 继续）。
     // 两者的载荷同形（一个挂起的帧 ＋ 标志），只是类型不同：`repr` 的词、以及协程**不是迭代器**。
-    let wrapped_type = if code.flags() & 0x20 != 0 {
-        Some("generator")
+    // **判定顺序**（round 219）：异步生成器（0x200）／协程（0x80）先于普通生成器（0x20）——
+    // async 体的合成 `yield` 也会带 `0x20` 吗？规范上不带（参照 flags 0x203／0x83 ✓）；
+    // 本层编译器已按 `is_async` 清掉 `0x20`，这里保持"先特例后普通"更稳 ✓。
+    let wrapped_type = if code.flags() & 0x200 != 0 {
+        Some("async_generator")
     } else if code.flags() & 0x80 != 0 {
         Some("coroutine")
-    } else if code.flags() & 0x200 != 0 {
-        // `CO_ASYNC_GENERATOR`（实测 0x200，`async def` ＋ `yield`）
-        Some("async_generator")
+    } else if code.flags() & 0x20 != 0 {
+        Some("generator")
     } else {
         None
     };

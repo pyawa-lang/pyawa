@@ -1765,6 +1765,33 @@ impl Instance {
             }
         }
 
+        // **协程／异步生成器的"类属性面"**（round 219）：`collections.abc.Awaitable` 的
+        // `__subclasshook__` 用 `_check_methods(C, '__await__')`、`AsyncGenerator` 用
+        // `_check_methods(C, '__aiter__','__anext__','asend','athrow','aclose')` —— 都查
+        // **`C.__dict__`**（类型字典 ✓）。本层这些方法只在**实例** `getattr` 槽上 ✗ ⇒
+        // `isinstance(<coroutine>, Awaitable)`／`isinstance(<async_generator>, AsyncGenerator)`
+        // 判 False ✗（`test_collections.TestOneTrickPonyABCs` ✓）。值只用于"存在性"（非 None ✓），
+        // 实际调用仍走实例 `getattr` 槽（`generator_getattr` ✓）⇒ 行为不变 ✓。
+        for (type_name, attributes) in [
+            ("coroutine", &["__await__"][..]),
+            (
+                "async_generator",
+                &["__aiter__", "__anext__", "asend", "athrow", "aclose"][..],
+            ),
+        ] {
+            let Some(target_type) = self.type_named(type_name) else {
+                continue;
+            };
+            for attribute in attributes {
+                let native = self.alloc(BuiltinFunctionObject::new(
+                    builtin_function_type,
+                    attribute,
+                    Cell::new(crate::builtin::object::object_repr_slot_native as crate::NativeFn),
+                ));
+                self.set_type_attribute(target_type, attribute, native.into_raw().cast::<Header>());
+            }
+        }
+
         // **dict 的类级方法面**（round 118）：`dict.items(d)` 一类未绑定调用 ✓
         //（`test_container_iterator` 的 `dict.items(container)` ✓）；适配器把 args[0] 挪成接收者 ✓。
         if let Some(dict_type) = self.type_named("dict") {

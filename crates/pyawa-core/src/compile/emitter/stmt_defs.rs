@@ -32,9 +32,12 @@ impl Emitter {
                     varkw_annotation,
                     body,
                     type_params,
+                    is_async,
+                    async_generator,
                 } => self.emit_def_statement(
                     name, decorators, span, first_line, parameters, kwonly, varargs, varkw,
                     varargs_annotation, varkw_annotation, returns, returns_span, body, type_params,
+                    *is_async, *async_generator,
                 ),
                 // **`type X = <值>`**（PEP 695 别名语句 ✓，task-24 收口 ③ ✓）
                 Statement::TypeAlias {

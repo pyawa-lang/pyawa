@@ -789,6 +789,9 @@ impl Emitter {
         returns_span: &Option<Span>,
         body: &[Statement],
         type_params: &[TypeParam],
+        // **`async def`／异步生成器**（round 219）：给嵌套单元的 `co_flags` 定 0x80／0x200 ✓。
+        is_async: bool,
+        async_generator: bool,
     ) -> Result<(), CompileError> {
                 // **PEP 695**：带类型参数 ⇒ 整条 `def` 包进 `<generic parameters of f>` 外壳 ✓
                 //（普通函数照旧走下面那条老路 ✓）。
@@ -995,6 +998,16 @@ impl Emitter {
                         self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
+                }
+                // **`async def` 的 `co_flags`**（round 219）：参照里协程是
+                // `0x83`（`0x3|0x80`）、异步生成器是 `0x203`（`0x3|0x200`）——两者**都不带**
+                // `0x20` ✓。本层先前把 async 一律当生成器（`0x23`）⇒ `_collections_abc` 的
+                // `coroutine = type(_coro)` 就是 **generator 类型** ✗ ⇒
+                // `Coroutine.register(generator)` 把**所有生成器**注册成协程 ✗
+                //（`test_collections.TestOneTrickPonyABCs` 的 Awaitable／Coroutine 反例 ✓）。
+                if is_async {
+                    nested.flags &= !0x20;
+                    nested.flags |= if async_generator { 0x200 } else { 0x80 };
                 }
                 self.emit_function_object(
                     nested,

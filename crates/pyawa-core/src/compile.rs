@@ -2428,6 +2428,10 @@ enum Statement {
         body: Vec<Statement>,
         /// **PEP 695 类型参数**（task-24 ✓）：`def f[T]` 的 `[T]` ✓（同 `Class` 那一格 ✓）。
         type_params: Vec<TypeParam>,
+        /// **`async def`**（round 219）：编译器据此给 `co_flags` 置 `CO_COROUTINE`（0x80）✓。
+        is_async: bool,
+        /// **异步生成器**（`async def` ＋ 用户写的 `yield` ⇒ `CO_ASYNC_GENERATOR` 0x200）✓。
+        async_generator: bool,
     },
     /// **`a ??= b` 空合并赋值**（`BC-63`，**扩展模式**；语句形态）。
     ///

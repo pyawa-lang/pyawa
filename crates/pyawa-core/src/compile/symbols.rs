@@ -2042,7 +2042,7 @@ pub(super) fn block_terminates(statements: &[Statement]) -> bool {
 /// 前言要补 `RETURN_GENERATOR; POP_TOP` ✓、收尾要补 `CALL_INTRINSIC_1 3; RERAISE 1` ✓）。
 ///
 /// **不下探**内层 `def`／`class` 与 `lambda` ✓（它们的 `yield` 属于它们自己 ✓）。
-pub(super) fn statements_have_yield(statements: &[Statement]) -> bool {
+pub(crate) fn statements_have_yield(statements: &[Statement]) -> bool {
     statements.iter().any(|statement| match statement {
         // **`yield from` 也算让出**（第 315 轮）：漏了它 ⇒ `def g(): yield from [1,2]` 被编成
         // **普通函数** ✗ ⇒ 运行期报"非生成器函数不该让出（码元被改坏了？）" ✗。

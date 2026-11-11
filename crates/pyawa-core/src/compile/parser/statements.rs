@@ -1041,6 +1041,10 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                 // **`async def` 的体补一条 `yield`** ✓（第 185 轮）：这样它就是**生成器** ✓
                 // （`statements_have_yield` 认它 ✓）⇒ 调用返回**未启动的生成器对象** ✓、`close()` 可用 ✓。
                 let mut body = body;
+                // **异步生成器判定要在补合成 `yield` 之前**（round 219）：用户自己写了 `yield`
+                // ⇒ `CO_ASYNC_GENERATOR`（0x200）；否则是**协程**（`CO_COROUTINE` 0x80）✓。
+                let async_generator =
+                    async_def && crate::compile::symbols::statements_have_yield(&body);
                 if async_def {
                     body.push(Statement::Yield(None, span));
                 }
@@ -1059,6 +1063,8 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                     varkw_annotation,
                     body,
                     type_params,
+                    is_async: async_def,
+                    async_generator,
                 });
         }
         _ => unreachable!("parse_statement_def 只接收对应分支"),
