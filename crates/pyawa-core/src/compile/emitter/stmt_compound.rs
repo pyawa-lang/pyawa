@@ -739,13 +739,19 @@ impl Emitter {
                     // JUMP_BACKWARD_NO_INTERRUPT L_send; L_done: END_SEND; NOT_TAKEN` ✓ ——
                     // **`POP_TOP` 不存在**（恢复后的值由 `SEND` 重送 ✓；先前多弹一格 + 跳回
                     // `GET_ANEXT` ✗ ⇒ 第二次 `send` 栈错位 ✓）。
+                    // **`SEND` 的目标是"本次 await 完成"**（round 241 真 bug 修 ✗）：先前直接指向
+                    // `exhausted`（循环出口）✗ ⇒ 第一格值就跳出循环、循环体一次都不跑
+                    //（`async for i in agen(3): out.append(i)` 得 `[]` ✓）。
+                    let await_done = self.new_label();
+                    let region_start = self.unit.code.len();
                     self.mark_label(send_label);
                     self.emit_directed_jump(
                         iterable.span(),
                         opcode::opcode("SEND").expect("SEND 在表里"),
-                        exhausted,
+                        await_done,
                         false,
                     );
+                    let region_end = self.unit.code.len();
                     self.emit_at(
                         iterable.span(),
                         opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"),
@@ -763,7 +769,7 @@ impl Emitter {
                         send_label,
                         true,
                     );
-                    self.mark_label(exhausted);
+                    self.mark_label(await_done);
                     self.emit_at(
                         iterable.span(),
                         opcode::opcode("END_SEND").expect("END_SEND 在表里"),
@@ -774,6 +780,10 @@ impl Emitter {
                         opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
                         0,
                     );
+                    // **耗尽路径的异常表区间先存着**（round 241）：目标是收尾处那条
+                    // `END_ASYNC_FOR`（那时才知道偏移 ✓）；`END_ASYNC_FOR` 在参照里是
+                    // **回溯跳**（`BACKWARD_JUMPS` 含它）⇒ 用 arg 0（= 落到下一条 ✓）。
+                    self.pending_async_for.push((region_start, region_end));
                 } else {
                 if matches!(iterable, Expression::Name(name, _) if name == ".0") {
                     let slot = self.slot_of(".0");
@@ -963,17 +973,39 @@ impl Emitter {
                     );
                 }
                 self.mark_label(exhausted);
-                // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）
-                self.emit_at(
-                    iterable.span(),
-                    opcode::opcode("END_FOR").expect("END_FOR 在表里"),
-                    0,
-                );
-                self.emit_at(
-                    iterable.span(),
-                    opcode::opcode("POP_ITER").expect("POP_ITER 在表里"),
-                    0,
-                );
+                if *is_async {
+                    // **异步耗尽路径**（round 241）：`END_ASYNC_FOR` 收掉 async iterator 与异常 ✓
+                    // （arg 0 ⇒ 落到下一条 ✓；正常路径只靠体的回跳，走不到这里 ✓），
+                    // 再把它登记成 `SEND` 区间（`GET_ANEXT..SEND`）的异常处理目标 ✓
+                    //（depth 里 aiter 那格要留 ⇒ `record_exception` 传 1 ✓）。
+                    let handler = self.unit.code.len();
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("END_ASYNC_FOR").expect("END_ASYNC_FOR 在表里"),
+                        0,
+                    );
+                    if let Some((region_start, region_end)) = self.pending_async_for.pop() {
+                        self.record_exception(
+                            region_start,
+                            region_end,
+                            handler,
+                            self.handler_depth + 1,
+                            false,
+                        );
+                    }
+                } else {
+                    // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("END_FOR").expect("END_FOR 在表里"),
+                        0,
+                    );
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("POP_ITER").expect("POP_ITER 在表里"),
+                        0,
+                    );
+                }
                 // 实测：`for … else` 的 else 体紧接 `POP_ITER`（正常耗尽才走到这里）
                 if !else_body.is_empty() {
                     self.emit_block(else_body, false)?;

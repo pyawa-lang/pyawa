@@ -1111,6 +1111,7 @@ impl Emitter {
             block_depth: 0,
             block_tail: false,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
             try_depth: 0,
             with_depth: 0,
             condition_landings: Vec::new(),
@@ -1983,6 +1984,7 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
             try_depth: 0,
             with_depth: 0,
         comprehension_locals: Vec::new(),
@@ -2217,6 +2219,7 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
             try_depth: 0,
             with_depth: 0,
         comprehension_locals: Vec::new(),
