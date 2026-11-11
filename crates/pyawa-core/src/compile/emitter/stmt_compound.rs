@@ -111,6 +111,12 @@ impl Emitter {
                     //  JUMP_BACKWARD_NO_INTERRUPT <回>; <出> END_SEND` ✓ —— 与 `async for` 同一套近似 ✓
                     // （`async def` 在本层是生成器 ✓ ⇒ `SEND` 一步就把值拿到 ✓）。
                     if *is_async {
+                        // **等待循环的形状**（round 231 与 `await` 同批修正 ✗）：参照 3.14 是
+                        // `GET_AWAITABLE 1; LOAD_CONST None; L_send: SEND L_done; YIELD_VALUE 1;
+                        // RESUME 3; JUMP_BACKWARD_NO_INTERRUPT L_send; L_done: END_SEND` ✓ ——
+                        // **标签在 `SEND` 上**、**中间没有 `POP_TOP`** ✓。先前两处都不对 ✗ ⇒
+                        // `async with` 的 `__aenter__`／`__aexit__` 会多让出／栈错位 ✗
+                        //（`test_contextlib_async` 的 `AsyncContextManagerTestCase` 一族 ✓）。
                         let await_loop = self.new_label();
                         let await_done = self.new_label();
                         self.emit_at(
@@ -120,13 +126,13 @@ impl Emitter {
                         );
                         let none_index = self.intern_constant(Constant::None);
                         self.emit_indexed(context_span, "LOAD_CONST", none_index);
+                        self.mark_label(await_loop);
                         self.emit_directed_jump(
                             context_span,
                             opcode::opcode("SEND").expect("SEND 在表里"),
                             await_done,
                             false,
                         );
-                        self.mark_label(await_loop);
                         self.emit_at(
                             context_span,
                             opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"),
@@ -136,11 +142,6 @@ impl Emitter {
                             context_span,
                             opcode::opcode("RESUME").expect("RESUME 在表里"),
                             3,
-                        );
-                        self.emit_at(
-                            context_span,
-                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                            0,
                         );
                         self.emit_directed_jump(
                             context_span,
@@ -726,12 +727,19 @@ impl Emitter {
                         opcode::opcode("GET_ANEXT").expect("GET_ANEXT 在表里"),
                         0,
                     );
+                    let send_label = self.new_label();
                     // **`LOAD_CONST` 要走带 `EXTENDED_ARG` 的那条** ✓（`as u8` 会截断 ✗；
                     // 这里当场入池 ✓ —— 与原来"先 `intern_constant` 再发"同一顺序 ✓）。
                     let none_index = self.intern_constant(Constant::None);
                     self.emit_indexed(iterable.span(), "LOAD_CONST", none_index);
                     // **有内联缓存的跳转要走 `emit_directed_jump`**（第 306 轮实测：
                     // `SEND` 带 1 格缓存 ✓ ⇒ 用 `emit_jump` 落点会偏 4 字节 ✗）。
+                    // **标签落在 `SEND`**（round 231 与 `await` 同批修正 ✓）：参照 3.14 是
+                    // `GET_ANEXT; LOAD_CONST None; L_send: SEND L_done; YIELD_VALUE 1; RESUME 3;
+                    // JUMP_BACKWARD_NO_INTERRUPT L_send; L_done: END_SEND; NOT_TAKEN` ✓ ——
+                    // **`POP_TOP` 不存在**（恢复后的值由 `SEND` 重送 ✓；先前多弹一格 + 跳回
+                    // `GET_ANEXT` ✗ ⇒ 第二次 `send` 栈错位 ✓）。
+                    self.mark_label(send_label);
                     self.emit_directed_jump(
                         iterable.span(),
                         opcode::opcode("SEND").expect("SEND 在表里"),
@@ -748,21 +756,11 @@ impl Emitter {
                         opcode::opcode("RESUME").expect("RESUME 在表里"),
                         3,
                     );
-                    // **丢掉"送进来的值"**（第 306 轮，本层近似）：`RESUME` 之后栈顶是恢复时送进来的
-                    // 那个值 ✓，而下一轮的 `GET_ANEXT` 要的是**迭代器**在栈顶 ✗ ⇒ 不收走就报
-                    // `'async for' requires an object with __anext__ method, got NoneType` ✗。
-                    // 参照那一格由 `YIELD_VALUE` 的 oparg 语义处理 ✓（本层先如实按近似做 ✓）。
-                    self.emit_at(
-                        iterable.span(),
-                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                        0,
-                    );
-                    // **回跳要带方向** ✓（`emit_jump` 一律按前向算 ⇒ 实参成了 65529 ✗）。
                     self.emit_directed_jump(
                         iterable.span(),
                         opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
                             .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
-                        loop_label,
+                        send_label,
                         true,
                     );
                     self.mark_label(exhausted);

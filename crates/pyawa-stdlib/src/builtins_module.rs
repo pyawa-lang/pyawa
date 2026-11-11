@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "format", "getattr", "hasattr", "hash",
+    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "format", "getattr", "hasattr", "hash", "aiter", "anext",
     "exec", "filter", "globals", "hex", "locals", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
@@ -57,6 +57,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("any", any_native as pyawa_core::NativeFn),
         ("bin", bin_native as pyawa_core::NativeFn),
         ("callable", callable_native as pyawa_core::NativeFn),
+        // **`aiter`／`anext`**（round 231）：`Lib/contextlib.py:214/221` 的
+        // `await anext(self.gen)` 是 `AsyncContextManager` 的关键一步 ✓ —— 先前这两个内建
+        // **根本不存在** ⇒ `test_contextlib_async` 的 `AsyncContextManagerTestCase` 整族
+        // `NameError: name 'anext' is not defined` ✗。
+        ("aiter", aiter_native as pyawa_core::NativeFn),
+        ("anext", anext_native as pyawa_core::NativeFn),
         ("chr", chr_native as pyawa_core::NativeFn),
         ("hex", hex_native as pyawa_core::NativeFn),
         // **`hash()`**（task-31）：int／float／bool／str／bytes／tuple／None／complex（见下方实现块）
@@ -1590,6 +1596,49 @@ fn hex_native(
 }
 
 /// `callable(x)`：**有 `call` 槽就返回 `True`**（`OM-11`），否则 `False`。
+/// **`aiter(obj)`**（round 231）：照参照等价于 `type(obj).__aiter__(obj)` ✓。
+fn aiter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "aiter", args, 1)?;
+    let Some(method) = instance.attribute_optional_of(args[0], "__aiter__")? else {
+        let name = type_name(instance, args[0]);
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not an async iterable"),
+        ));
+    };
+    let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+    instance.release(method);
+    outcome
+}
+
+/// **`anext(iterator[, default])`**（round 231）：照参照等价于 `type(it).__anext__(it)` ✓
+/// （返回值是 **awaitable**，由调用方 `await` ✓）。
+/// **如实说** ✗：带 `default` 的那一形态目前**不拦截 `StopAsyncIteration`**（只在 await 时才抛，
+/// 本函数已经返回了 awaitable ✗）——`Lib` 里目前只有无 default 的用法（`contextlib.py` ✓）。
+fn anext_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "anext", args, 1)?;
+    let Some(method) = instance.attribute_optional_of(args[0], "__anext__")? else {
+        let name = type_name(instance, args[0]);
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not an async iterator"),
+        ));
+    };
+    let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+    instance.release(method);
+    outcome
+}
+
 fn callable_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,

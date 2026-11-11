@@ -1040,14 +1040,17 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                 let first_line = decorators_first_line.unwrap_or(first_line);
                 // **`async def` 的体补一条 `yield`** ✓（第 185 轮）：这样它就是**生成器** ✓
                 // （`statements_have_yield` 认它 ✓）⇒ 调用返回**未启动的生成器对象** ✓、`close()` 可用 ✓。
-                let mut body = body;
+                let body = body;
                 // **异步生成器判定要在补合成 `yield` 之前**（round 219）：用户自己写了 `yield`
                 // ⇒ `CO_ASYNC_GENERATOR`（0x200）；否则是**协程**（`CO_COROUTINE` 0x80）✓。
                 let async_generator =
                     async_def && crate::compile::symbols::statements_have_yield(&body);
-                if async_def {
-                    body.push(Statement::Yield(None, span));
-                }
+                // **不再给 `async def` 补合成 `yield`**（round 231 真 bug 修 ✗）：那是"把 async
+                // 编成生成器"时代的近似 —— round 219 起协程有了**真 `coroutine` 类型**（`co_flags`
+                // 0x80 ✓），调用路径自己 `suspend()` 造出挂起帧 ✓ ⇒ 合成 `yield` 反而让每个协程在
+                // 结尾**多挂起一次** ✗ ⇒ `coro.send(None)` 不再一次跑完 ✗
+                //（`test.support.run_no_yield_async_fn` 的 "coroutine did not complete" ✓）。
+                let _ = async_def;
                 statements.push(Statement::Def {
                     name,
                     decorators,
