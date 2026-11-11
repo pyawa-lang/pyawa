@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`039745f`（round 229：await 循环标签落到 SEND（参照 3.14 形状）⇒ 恢复重送而非重复 yield；g:(await h())+1 一次驱动得 3 零让出；test_collections 保持 0F/1E；下轮：try 体内 await＋CLEANUP_THROW）
+- **HEAD**：`25a9e69`（round 230：await 循环删多余 POP_TOP＋try 体内 await 真落地 ⇒ test_collections 整档转绿 OK (skipped=3)（总失败 0）；下轮：test_contextlib_async／test_asyncgen）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

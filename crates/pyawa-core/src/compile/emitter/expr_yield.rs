@@ -23,18 +23,16 @@ impl Emitter {
                     self.last_span = *span;
                     Ok(())
                 }
-                // **`await <表达式>`**（round 220）：照参照的形状 ——
-                // `<值>; GET_AWAITABLE 1; LOAD_CONST None; SEND <出>; YIELD_VALUE 1; RESUME 3;
-                //  JUMP_BACKWARD_NO_INTERRUPT <回>; <出> END_SEND` ✓（与 `async with`／`async for` 同一套 ✓）。
+                // **`await <表达式>`**（round 220 起，round 229/230 修形状）：照参照 3.14 的
+                // `<值>; GET_AWAITABLE 1; LOAD_CONST None; L_send: SEND <出>; YIELD_VALUE 1; RESUME 3;
+                //  JUMP_BACKWARD_NO_INTERRUPT L_send; <出> END_SEND` ✓ ——
+                // **循环标签在 `SEND` 上**（恢复后重送 ✓）、**中间没有 `POP_TOP`**（否则跳回时把接收者弹掉 ✗）✓。
                 Expression::Await(value, span) => {
-                    // **`try`／`with` 里的 `await` 先保持"透明"**（round 220 如实登记 ✗）：
-                    // 真等待要在异常表 `depth` 里把这些合成指令（YIELD_VALUE／RESUME）算进去；
-                    // 当前编译器在"处理块内发等待循环"时会算错 depth ⇒ 处理块展开后
-                    // `StackUnderflow` ✗（`test_collections` 的 `MinimalAGen.aclose`
-                    // ＝ `async def aclose(self): try: await self.athrow(...) ...` 实测 ✓）。
-                    // ⇒ 有 `try` 处理块时退回旧口径（透明近似 ✓，与 round 219 之前一致 ✓）；
-                    // 顶层 `await`（无处理块）走真等待 ✓。
-                    if self.handler_depth > 0 || self.try_depth > 0 {
+                    // **只剩 `except` 处理块体内那一格还是"透明"回退**（round 230 记录 ✗）：
+                    // `try` **体**里的 `await` 已经真接线并通过（`IgnoreGeneratorExit().aclose()` 的
+                    // `try: await self.athrow(...)` ⇒ `test_collections` **全绿** ✓）；处理块体内再发
+                    // 等待循环的异常表组合还没验证 ⇒ 先保持回退（不影响本轮判据 ✓）。
+                    if self.handler_depth > 0 {
                         self.emit_expression(value)?;
                         self.last_span = *span;
                         return Ok(());
@@ -61,7 +59,11 @@ impl Emitter {
                     );
                     self.emit_at(*span, opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"), 1);
                     self.emit_at(*span, opcode::opcode("RESUME").expect("RESUME 在表里"), 3);
-                    self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                    // **这里不要再 `POP_TOP`**（round 230 真 bug 修 ✗）：参照的 await 循环是
+                    // `SEND; YIELD_VALUE 1; RESUME 3; JUMP_BACKWARD_NO_INTERRUPT L_send` —— **没有**
+                    // `POP_TOP`（异步生成器挂起的那条路也不该弹）✓。先前多弹一格 ✗ ⇒ 跳回 `SEND` 时
+                    // 栈上只剩 sent、**接收者被弹掉** ⇒ `StackUnderflow` ✗
+                    //（`IgnoreGeneratorExit().aclose()` 的第二次 `send` ✓）。
                     self.emit_directed_jump(
                         *span,
                         opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
