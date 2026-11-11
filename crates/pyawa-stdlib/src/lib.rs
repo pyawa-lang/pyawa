@@ -308,6 +308,13 @@ fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<py
     // **`__name__` 必须有** ✗（第 723 轮实测）：`importlib._bootstrap._setup` 会遍历 `sys.modules`、
     // 逐个读内建模块的 `__name__` ✓ ⇒ 缺它当场 `AttributeError` ⇒ **`import importlib` 全挂** ✗
     //（实测：`_opcode` 进 `RUST_MODULES` 后 importlib 一族 7 个 ＋ `profile` 共 **8** 个模块转红 ✗）。
+    // **特化开关**（round 240）：参照的 `_opcode.ENABLE_SPECIALIZATION`／`..._FT` 是编译期常量；
+    // 本层**不做** CPython 式特化（`BC-32`）⇒ 两者都给 `0` ✓ ⇒ `test.support.requires_specialization`
+    // 的那批测试会被**跳过**（而不是 `AttributeError` 让整档导入失败 ✓，`test_dis` 正卡这 ✓）。
+    for flag in ["ENABLE_SPECIALIZATION", "ENABLE_SPECIALIZATION_FT"] {
+        let value = instance.new_int(0);
+        instance.dict_set(namespace, flag, value);
+    }
     instance.dict_set(namespace, "__name__", instance.new_str("_opcode"));
     instance.dict_set(
         namespace,

@@ -1871,9 +1871,6 @@ pub fn execute<'a>(
         }
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
-        if crate::diag::flag("PYAWA_TRACE_MAIN") && (code.name() == "main" || code.name() == "agen") {
-            eprintln!("[tr:{}] off={} op={} depth={}", code.name(), instruction.offset, instruction.opcode, frame.get().depth());
-        }
         // **本地追踪的 `'line'` 事件**（round 181）：只有 `f_trace` 被设成可调用值时
         // `trace_active` 才为真 ⇒ 未启用时只多读一个 `Cell<bool>` ✓（实测开销在噪声内）。
         if frame.get().trace_active() {

@@ -431,7 +431,7 @@ unsafe fn code_replace_native(
         .iter()
         .map(|slot| slot.map(|value| instance.retain(value)))
         .collect();
-    let positions = code.positions().to_vec();
+    let mut positions = code.positions().to_vec();
     for (key, value) in kwargs {
         let Some(field) = instance.text_of(*key) else {
             return Err(instance.raise_builtin_error(
@@ -461,6 +461,17 @@ unsafe fn code_replace_native(
             "co_flags" => flags = replace_positive(instance, field, *value)? as u32,
             "co_code" => bytecode = replace_bytes(instance, field, *value)?,
             "co_exceptiontable" => exceptiontable = replace_bytes(instance, field, *value)?,
+            // **`co_linetable`**（round 240）：本层不存行表（存的是逐指令 `positions` ✓）；
+            // 参照的 `code.replace(co_linetable=b'')` 语义是"清掉位置信息" ⇒ 这里照做：
+            // **空字节串** ⇒ 每条指令的位置全 `None` ✓（`dis`／`co_positions()` 都给 `None` ✓）；
+            // 非空则**接受但忽略**（本层没有行表编码器 ✗，如实登记 ✓，别报 unexpected keyword ✗）。
+            "co_linetable" => {
+                let table = replace_bytes(instance, field, *value)?;
+                if table.is_empty() {
+                    let instruction_count = positions.len();
+                    positions = vec![(None, None, None, None); instruction_count];
+                }
+            }
             "co_varnames" => varnames = replace_names(instance, field, *value)?,
             "co_names" => names = replace_names(instance, field, *value)?,
             "co_cellvars" => cellvars = replace_names(instance, field, *value)?,
