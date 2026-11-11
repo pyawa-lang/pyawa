@@ -248,7 +248,13 @@ pub fn instance_attribute_set(
     // 一类，写属性是 `attach_traceback` 的内部动作）会触发"报错 → 挂 traceback → 又写属性 → 又报错"
     // 的**无限递归**（实测 gdb 栈 20+ 层 `instance_attribute_set → raise_builtin → attach_traceback` ✓）。
     let type_ptr = header.ty().cast::<crate::TypeObject>();
-    if name != "__dict__" && instance.is_user_type_object(type_ptr) {
+    // **判据换成"类型命名空间里有 `__slots__`"**（round 218）：`namedtuple` 是 `type()` 三参
+    // 造的，不在"用户类"登记表里 ✗ ⇒ 先前 `is_user_type_object` 把它挡掉 ⇒ 只读属性限制失效
+    // ✗（`p.x = 5` 能成功 ✓）。内建／引擎内部对象没有 `__slots__` 名字 ⇒ 不受影响 ✓。
+    let declares_slots = instance
+        .type_namespace(type_ptr.cast())
+        .is_some_and(|namespace| instance.dict_get(namespace, "__slots__").is_some());
+    if name != "__dict__" && declares_slots {
         if let Some(in_slot) = instance.type_slot_contains(type_ptr, name) {
             if !in_slot {
                 release(instance, value);

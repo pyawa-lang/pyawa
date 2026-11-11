@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`fd90dd7`（round 217：二元运算反射优先级＝右侧「自有」反射才先问 ⇒ test_collections 13F/3E→12F/3E（总失败 15）；下轮：async def co_flags 缺 0x80/0x200 致 coroutine==generator 类型）
+- **HEAD**：`63f1b9f`（round 218：空 __slots__ 只读语义（namedtuple p.x=5 报 AttributeError）＋不可变序列 del 的参照 TypeError ⇒ test_collections 12F/3E→11F/3E（总失败 14））
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

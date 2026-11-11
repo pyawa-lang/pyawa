@@ -91,11 +91,13 @@ impl Instance {
 
     /// 登记一个类型的 `__slots__` 槽名表（round 147）。
     pub(crate) fn register_type_slots(&self, ty: NonNull<crate::TypeObject>, names: Vec<String>) {
-        if !names.is_empty() {
-            self.type_slots
-                .borrow_mut()
-                .insert(ty.as_ptr() as usize, names.into_iter().collect());
-        }
+        // **空 `__slots__` 也要登记**（round 218 真 bug 修 ✗）：`namedtuple` 的模板正是
+        // `__slots__ = ()` ✓ —— 先前"空表不登记" ⇒ `type_slot_contains` 的"整条 MRO 都没有
+        // 槽表 ⇒ 放行"那条生效 ⇒ 实例拿到实例字典 ⇒ `p.x = 5` 能成功 ✗
+        //（`test_collections.TestNamedTuple.test_readonly` 的 `AttributeError not raised` ✓）。
+        self.type_slots
+            .borrow_mut()
+            .insert(ty.as_ptr() as usize, names.into_iter().collect());
     }
 
     /// 名字在该类型的**MRO 上的槽名表**里吗？（`None` ＝整条 MRO 都没有 `__slots__` ⇒ 不限制 ✓）

@@ -1045,7 +1045,7 @@ pub fn build_class_from_parts_with_keywords(
         } else if let Some(items) = instance.tuple_items(slots_value) {
             names.extend(items.iter().filter_map(|item| instance.text_of(*item).map(|text| text.to_owned())));
         }
-        if !names.is_empty() {
+        {
             // **名字改写（`__x` → `_类名__x`）**（round 150 真 bug 修 ✗）：槽名与实例属性写入都走
             // 编译器改写后的键 ✓ ⇒ 槽表必须用同一套改写后的名字，否则 `__slots__ = ('__num',)`
             // 的类写 `self.__num` 会撞"非槽名"✗（`test_binop.Rat` 实测 8 格 error ✓）。
@@ -1057,6 +1057,9 @@ pub fn build_class_from_parts_with_keywords(
                     *slot = format!("{prefix}{slot}");
                 }
             }
+            // **空 `__slots__` 也要登记**（round 218 真 bug 修 ✗）：`__slots__ = ()` 表示
+            // "**没有**实例字典"⇒ 非槽名属性写入必须报 `AttributeError` ✓；先前空表不登记
+            // ⇒ 放行 ✗（`namedtuple` 的 `p.x = 5` ✓）。
             instance.register_type_slots(ty, names);
         }
     }

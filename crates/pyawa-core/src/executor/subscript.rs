@@ -770,6 +770,26 @@ pub fn subscript_del_inner(
         release(instance, result);
         return Ok(());
     }
+    // **不可变序列的"下标删除"要报参照的 `TypeError`**（round 218）：`del namedtuple_[0]`
+    // 在参照里是 `TypeError: 'tuple' object doesn't support item deletion` ✓；先前落到
+    // "未接线" ⇒ 整档中止 ✗（`test_collections.TestNamedTuple.test_readonly` ✓）。
+    for (type_name, shown) in [
+        ("tuple", "tuple"),
+        ("str", "str"),
+        ("bytes", "bytes"),
+        ("range", "range"),
+    ] {
+        if instance
+            .type_named(type_name)
+            .is_some_and(|base| instance.is_subtype(container_type, base))
+        {
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("'{shown}' object doesn't support item deletion"),
+            ));
+        }
+    }
     Err(ExecError::Unsupported {
         opcode,
         what: "下标删除只接线了 list／dict／bytearray（含 `__delitem__` 协议）",
