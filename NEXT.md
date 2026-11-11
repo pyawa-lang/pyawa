@@ -9,6 +9,7 @@
 - **HEAD**：`3b2fc54a`（round 245：异步生成器 PEP 479 包装（resume_generator 加 async_generator 判定＋INTRINSIC_STOPITERATION_ERROR 按 co_flags 0x200 选词）⇒ test_asyncgen 8F/69E→6F/69E；下轮：throw 穿过 await（CLEANUP_THROW 异常表）／starred 目标）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
+- **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
 - **当前主线（2026-11-12 用户口径 ✓）**：**内存安全 ＋ 执行效率**（解释器硬要求 ✓）；其余**慢慢补** ✗
   - ① 内存硬门：`tools/memdangle_survey.py` 归零 ＋ 无 abort／segfault
   - ② 执行效率：`tools/bench_hot.py` 基线入库 ＋ 禁回退（>10% 红）＋ 报 CPython 比值
