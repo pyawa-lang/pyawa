@@ -153,6 +153,16 @@ impl ExceptionObject {
     }
 
     /// `e.args` 缓存下来的那个 `tuple`（**借用**）。
+    /// **整体替换 `args` 载荷**（round 239）：返回旧的那批（**本对象交出的引用**，调用方 release ✓）。
+    pub fn replace_args(&self, values: Vec<NonNull<Header>>) -> Vec<NonNull<Header>> {
+        core::mem::replace(&mut *self.args.borrow_mut(), values)
+    }
+
+    /// **取走 `args` 元组缓存**（round 239：替换 args 时要清掉 ✓）。
+    pub fn take_args_tuple(&self) -> Option<NonNull<Header>> {
+        self.args_tuple.borrow_mut().take()
+    }
+
     pub fn args_tuple(&self) -> Option<NonNull<Header>> {
         *self.args_tuple.borrow()
     }

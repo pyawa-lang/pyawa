@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`1e69e5fb`（round 238：UnicodeError 属性面（encoding/object/start/end/reason）＋add_note 对非 list __notes__ 抛 TypeError ⇒ test_exceptions 120F/30E→117F/30E；下轮：testSyntaxErrorOffset 位点／evil str／async for）
+- **HEAD**：`0e6ffa27`（round 239：异常对象计算属性写/删校验（args 可迭代转 tuple、cause/context 类型校验、只读属性 TypeError may not be deleted）＋载荷形状核验防 SIGSEGV ⇒ test_exceptions 117F/30E→113F/30E、test_contextlib_async 13F/19E→8F/19E；下轮：SyntaxError 位点／evil str／async for）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

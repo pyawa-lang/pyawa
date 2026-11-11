@@ -159,6 +159,89 @@ pub fn instance_attribute_set(
     value: NonNull<Header>,
     opcode: u8,
 ) -> Result<(), ExecError> {
+    // **异常对象的"计算属性"写入校验**（round 239）：参照里 `args`／`__cause__`／`__context__` 都是
+    // **属性**（不是实例字典项 ✓），且各有类型校验 ✓；先前一律当普通属性写进实例字典 ✗ ⇒
+    // `e.args = 1`／`e.__cause__ = 1` 静默成功 ✗（`test_exceptions.ExceptionTests.test_invalid_setattr` ✓）。
+    // SAFETY: object 是存活对象。
+    let object_ty = unsafe { object.as_ref() }.ty();
+    if crate::executor::values::is_exception_type(instance, object_ty) {
+        // **载荷形状核验**（round 239）：只有真正的 `ExceptionObject` 布局才能碰载荷
+        //（`binascii.Error` 一类**用户建类**的异常子类可能走通用分配 ⇒ 强转读垃圾 ⇒ SIGSEGV ✗）。
+        let is_exception_payload = unsafe { object_ty.as_ref() }.instance_size()
+            == core::mem::size_of::<crate::builtin_objects::ExceptionObject>();
+        if !is_exception_payload && std::env::var_os("PYAWA_EXC_PAYLOAD_DEBUG").is_some() {
+            eprintln!("[dbg] non-payload exception name={name}");
+        }
+        if is_exception_payload {
+        match name {
+            "args" => {
+                // 参照：`args` 接受**任意可迭代对象**并转成 tuple ✓（不可迭代 ⇒ `TypeError: 'int'
+                // object is not iterable` ✓，由 `iter_object` 的原话给出 ✓）。
+                let items: Vec<NonNull<Header>> = if let Some(items) = instance.tuple_items(value) {
+                    items.iter().map(|item| instance.retain(*item)).collect()
+                } else {
+                    let iterator = instance.iter_object(value)?;
+                    let mut items = Vec::new();
+                    loop {
+                        match instance.advance_iterator(iterator) {
+                            Ok(Some(item)) => items.push(item),
+                            Ok(None) => break,
+                            Err(error) => {
+                                instance.release(iterator);
+                                return Err(error);
+                            }
+                        }
+                    }
+                    instance.release(iterator);
+                    items
+                };
+                // SAFETY: 类型身份已确认，载荷是 `ExceptionObject`。
+                let payload = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::ExceptionObject>() };
+                let old = payload.replace_args(items);
+                for item in old {
+                    instance.release(item);
+                }
+                if let Some(tuple) = payload.take_args_tuple() {
+                    instance.release(tuple);
+                }
+                return Ok(());
+            }
+            "__cause__" | "__context__" => {
+                // SAFETY: 类型身份已确认，载荷是 `ExceptionObject`。
+                let payload = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::ExceptionObject>() };
+                let is_none = value == instance.singletons().none();
+                // SAFETY: value 是存活对象。
+                let value_ty = unsafe { value.as_ref() }.ty();
+                let base = instance
+                    .type_named("BaseException")
+                    .expect("BaseException 在引导期已登记");
+                if !is_none && !instance.is_subtype(value_ty, base) {
+                    let word = if name == "__cause__" { "cause" } else { "context" };
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        &format!("exception {word} must be None or derive from BaseException"),
+                    ));
+                }
+                // 调用方给的是**借用** ⇒ payload 要自己那份。
+                // SAFETY: value 存活。
+                unsafe { instance.incref_object(value.as_ptr()) };
+                let old = if name == "__cause__" {
+                    payload.set_cause(if is_none { None } else { Some(value) })
+                } else {
+                    payload.set_context(if is_none { None } else { Some(value) })
+                };
+                if let Some(old) = old {
+                    // SAFETY: 被顶下来的那份由本函数消费。
+                    unsafe { instance.release_object(old.as_ptr()) };
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+        }
+    }
+
     // **数据描述符 `__set__`** ✓（第 192 轮）：类型 MRO 上若有 `__set__` ⇒ **调它** ✓
     //   —— 数据描述符**优先于实例字典** ✓（`__dict__` 本身另走下面那条 ✓，这里跳过 ✓）。
     if name != "__dict__" {
