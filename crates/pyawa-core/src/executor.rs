@@ -1540,6 +1540,44 @@ pub(crate) fn resume_generator(
                     }
                 };
                 let iterable_coroutine = code_flags & 0x100 != 0;
+                // **异步生成器**（round 245）：体里逃出来的 `StopIteration`／`StopAsyncIteration`
+                // 都要变成 `RuntimeError`（参照原话 `async generator raised …` ✓；
+                // `Lib/test/test_asyncgen.py` 的 exception_05／06 ✓）。
+                // SAFETY: generator 存活。
+                let is_async_generator =
+                    unsafe { generator.as_ref() }.ty() == builtin_type(instance, "async_generator");
+                if is_async_generator {
+                    let stop_async_iteration = exception_type(instance, "StopAsyncIteration");
+                    let word = if instance.is_subtype(ty, stop_iteration) {
+                        Some("StopIteration")
+                    } else if instance.is_subtype(ty, stop_async_iteration) {
+                        Some("StopAsyncIteration")
+                    } else {
+                        None
+                    };
+                    if let Some(word) = word {
+                        let message = format!("async generator raised {word}");
+                        let wrapper = crate::builtin_objects::exception_instance(
+                            instance,
+                            "RuntimeError",
+                            vec![instance.new_str(&message)],
+                        );
+                        unsafe {
+                            instance.incref_object(exception.as_ptr());
+                            instance.incref_object(exception.as_ptr());
+                        }
+                        let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
+                            instance,
+                            wrapper,
+                            Some(*exception),
+                            Some(*exception),
+                            true,
+                        );
+                        // SAFETY: 原异常那份引用由错误里持有，这里消费 ✓。
+                        unsafe { instance.release_object(exception.as_ptr()) };
+                        return Err(ExecError::Raised { exception: wrapper });
+                    }
+                }
                 if instance.is_subtype(ty, stop_iteration) && (is_coroutine || iterable_coroutine) {
                     let word = if is_coroutine { "coroutine" } else { "generator" };
                     let message = format!("{word} raised StopIteration");

@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`a61e209c`（round 244：asend 中间 await 消化（SEND 内循环＋generator_suspended_inside_await）＋异步生成器编译期禁令（yield from／带值 return）⇒ test_asyncgen 14F/69E→8F/69E；下轮：exception_* 的 throw 穿 await／starred 目标）
+- **HEAD**：`3b2fc54a`（round 245：异步生成器 PEP 479 包装（resume_generator 加 async_generator 判定＋INTRINSIC_STOPITERATION_ERROR 按 co_flags 0x200 选词）⇒ test_asyncgen 8F/69E→6F/69E；下轮：throw 穿过 await（CLEANUP_THROW 异常表）／starred 目标）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

@@ -677,12 +677,27 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let stop_iteration = instance
                             .type_named("StopIteration")
                             .expect("StopIteration 在异常层次里");
+                        // **异步生成器**（round 245）：词是 `async generator raised StopIteration` ✗
+                        //（`Lib/test/test_asyncgen.py` 的 exception_06 按参照原话断言 ✓）。
+                        let is_async_generator = {
+                            let flags = match frame.get().code() {
+                                // SAFETY: code 由帧持有，存活。
+                                Some(code) => unsafe { code.cast::<crate::CodeObject>().as_ref() }.flags(),
+                                None => 0,
+                            };
+                            flags & 0x200 != 0
+                        };
                         if instance.is_subtype(ty, stop_iteration) {
                             let original = frame.get().pop()?;
+                            let message = if is_async_generator {
+                                "async generator raised StopIteration"
+                            } else {
+                                "generator raised StopIteration"
+                            };
                             let exception = new_exception(
                                 instance,
                                 exception_type(instance, "RuntimeError"),
-                                "generator raised StopIteration",
+                                message,
                             );
                             // **PEP 479 的包装要带走 cause／context** ✓（round 64）：参照的
                             // `RuntimeError` 把原 `StopIteration` 作为 `__cause__` 与
