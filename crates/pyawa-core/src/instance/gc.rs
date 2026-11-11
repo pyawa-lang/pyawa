@@ -92,7 +92,8 @@ impl Instance {
         // `=0` 关闭 ✓）。理由：① 自动回收里做"全类型扫描＋清类字典"成本高（根集合还要扫模块表/命名空间 ✓）；
         // ② 导入期（模块已登记 `sys.modules`、类还在建）反复触发容易踩"半成品类" ✗；③ `free_after` 家族判据都显式
         // 调 `gc.collect()` ✓ ⇒ 语义不丢；④ 让自动回收回归"纯循环垃圾"，类型级清理集中到显式时机 ✓。
-        let reclaim_env = std::env::var("PYAWA_ORPHAN_RECLAIM").ok();
+        static ORPHAN_RECLAIM: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let reclaim_env = ORPHAN_RECLAIM.get_or_init(|| std::env::var("PYAWA_ORPHAN_RECLAIM").ok());
         if reclaim_env.as_deref() != Some("0")
             && !self.gc_skip_reclaim.get()
             && (self.gc_explicit.get() || reclaim_env.as_deref() == Some("1"))
@@ -107,7 +108,7 @@ impl Instance {
             self.gc_headers()
         };
         let unreachable = self.find_unreachable_in(&candidates);
-        if std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some() && !unreachable.is_empty() {
+        if crate::diag::flag_site!("PYAWA_GC_ROOTS_DEBUG") && !unreachable.is_empty() {
             let mut names: Vec<String> = Vec::new();
             for header in &unreachable {
                 // SAFETY: 候选存活。
@@ -189,7 +190,7 @@ impl Instance {
             // **诊断（round 53）**：`PYAWA_GC_AUDIT=1` 时，若"已 clear 完"的对象计数仍非 0
             // （正常应恰为 0：环内引用已互相释放；非 0 ⇒ 有**环外仍可达**的引用 ⇒ 一旦释放就是
             // 先用后放 ✗）⇒ 打印现场并**跳过释放**（宁可泄漏，先把崩溃变成可观察的诊断 ✓）。
-            if crate::diag::flag("PYAWA_GC_AUDIT") {
+            if crate::diag::flag_site!("PYAWA_GC_AUDIT") {
                 let remaining = unsafe { header.as_ref() }.refcount();
                 if remaining != 0 {
                     // SAFETY: header 尚未释放（本循环里我们会跳过它）。
@@ -240,7 +241,7 @@ impl Instance {
                 // 返回后**直接减计数**（不走释放流程）再看是否真复活 ✓。
                 // **诊断**（round 90，门控 `PYAWA_DEL_TRACE=1`）：终结前后打印计数与引用类型，
                 // 用于"帧所有权统一"实验期间定位复活判定（那次实验已撤回，见 round 90 台账 ✓）。
-                let trace = crate::diag::flag("PYAWA_DEL_TRACE");
+                let trace = crate::diag::flag_site!("PYAWA_DEL_TRACE");
                 if trace {
                     // SAFETY: ptr 是存活对象；类型对象由注册表持有 ✓。
                     let ty_name = unsafe { (*ptr.as_ptr()).ty().as_ref().name() };
@@ -320,7 +321,7 @@ impl Instance {
             }
         }
         // ③ 释放内存。（旁表条目随对象释放摘掉 ✓，round 82）
-        if std::env::var_os("PYAWA_STR_FREE_BT").is_some() {
+        if crate::diag::flag_site!("PYAWA_STR_FREE_BT") {
             // SAFETY: ty 由注册表持有。
             let ty_name = unsafe { ty.as_ref() }.name();
             if ty_name == "str" {
@@ -467,7 +468,7 @@ impl Instance {
 
         // **反向边探针**（round 165，`PYAWA_GC_REVERSE=1`）：记"谁引用了我"（首个候选父）；
         // 用来追"外部计数 >0 却找不到候选父"的对象（= 被**非候选**持有者引用）。
-        let reverse = std::env::var_os("PYAWA_GC_REVERSE").is_some();
+        let reverse = crate::diag::flag_site!("PYAWA_GC_REVERSE");
         let mut parent_of: Vec<Option<usize>> = if reverse {
             vec![None; candidates.len()]
         } else {
@@ -503,7 +504,7 @@ impl Instance {
                 let header = unsafe { candidates[*position].as_ref() };
                 let ty = header.ty();
                 let name = unsafe { ty.as_ref() }.name();
-                let reverse_all = std::env::var_os("PYAWA_GC_REVERSE_ALL").is_some();
+                let reverse_all = crate::diag::flag_site!("PYAWA_GC_REVERSE_ALL");
                 if !reverse_all && (name != "AttributeError" || shown >= 12) {
                     continue;
                 }
@@ -549,7 +550,7 @@ impl Instance {
         // **回溯/异常"是否可达"诊断**（round 192）：`PYAWA_GC_REVERSE_EXTRA=1` 时把
         // `traceback` 与异常族对象**逐个**打出：`rc`／`ext`／（反向父链）——判断泄漏的回溯
         // 到底是"根"还是"被某个根链拉住"。
-        if std::env::var_os("PYAWA_GC_REVERSE_EXTRA").is_some() && reverse {
+        if crate::diag::flag_site!("PYAWA_GC_REVERSE_EXTRA") && reverse {
             let mut shown = 0usize;
             for (position, candidate) in candidates.iter().enumerate() {
                 // SAFETY: 候选存活。
@@ -587,7 +588,7 @@ impl Instance {
             }
         }
         // **根帧诊断**（round 159）：哪些 frame 还是根（>0 外部引用）⇒ 打出 code 名。
-        if std::env::var_os("PYAWA_GC_ROOT_FRAMES").is_some() {
+        if crate::diag::flag_site!("PYAWA_GC_ROOT_FRAMES") {
             let mut shown = 0usize;
             for position in &stack {
                 // SAFETY: 候选存活。
@@ -646,7 +647,7 @@ impl Instance {
                 );
             }
         }
-        let debug_roots = std::env::var_os("PYAWA_GC_ROOTS_DEBUG").is_some();
+        let debug_roots = crate::diag::flag_site!("PYAWA_GC_ROOTS_DEBUG");
         // **只在诊断模式下建"谁标记了我"表**（默认零开销 ✓）。
         let mut marked_from: Vec<Option<usize>> = if debug_roots {
             vec![None; candidates.len()]
@@ -779,7 +780,7 @@ impl Instance {
                 }
             }
         }
-        let debug_mark = std::env::var_os("PYAWA_MARK_DEBUG").is_some();
+        let debug_mark = crate::diag::flag_site!("PYAWA_MARK_DEBUG");
         let mut marked_from: Vec<Option<usize>> = if debug_mark {
             vec![None; candidates.len()]
         } else {
@@ -999,7 +1000,7 @@ impl Instance {
         }
         // **早退**（round 110）：没有任何 `rc==1` 的用户类型 ⇒ 不可能有孤儿，别做全堆标记 ✓。
         // **诊断模式不早退**（round 119）：`PYAWA_ORPHAN_DEBUG=1` 时照常全扫，便于反查引用者 ✓。
-        if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_none()
+        if !crate::diag::flag_site!("PYAWA_ORPHAN_DEBUG")
             && !user_types.iter().any(|ty| {
                 // SAFETY: 名单里的类型都存活。
                 unsafe { ty.as_ref() }.refcount() == 1
@@ -1042,7 +1043,7 @@ impl Instance {
             // SAFETY: 名单里的类型都存活。
             let header = unsafe { ty.as_ref() };
             let reachable = unreachable.contains(&address);
-            if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+            if crate::diag::flag_site!("PYAWA_ORPHAN_DEBUG") {
                 // SAFETY: ty 存活。
                 let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
                 eprintln!(
@@ -1127,7 +1128,7 @@ impl Instance {
             if !unreachable.contains(&address) {
                 // **诊断（round 119，`PYAWA_ORPHAN_DEBUG=1`）**：类被判"可达"时，反查**谁引用它**
                 // （扫全部 gc 候选的 children ＋ 其它类型的字典），把"多余那份引用的持有者"点出来 ✓。
-                if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+                if crate::diag::flag_site!("PYAWA_ORPHAN_DEBUG") {
                     let mut referrers: Vec<String> = Vec::new();
                     for candidate in self.gc_headers() {
                         for child in self.children_of(candidate) {
@@ -1182,7 +1183,7 @@ impl Instance {
                 let instance_header = unsafe { instance.as_ref() };
                 let tracked = instance_header.has_flag(flags::GC_TRACKED);
                 let in_unreachable = unreachable.contains(&instance_address);
-                if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+                if crate::diag::flag_site!("PYAWA_ORPHAN_DEBUG") {
                     eprintln!(
                         "[orphan-instance] ty={:p} inst={instance_address:#x} rc={} tracked={}                          in_unreachable={in_unreachable}",
                         ty.as_ptr(),
@@ -1195,7 +1196,7 @@ impl Instance {
                     break;
                 }
             }
-            if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+            if crate::diag::flag_site!("PYAWA_ORPHAN_DEBUG") {
                 // SAFETY: ty 存活。
                 let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
                 eprintln!(
@@ -1213,7 +1214,7 @@ impl Instance {
         // ④ 回收：先终结活实例，再摘注册表/缓存、清字典。
         for ty in orphans {
             let address = ty.as_ptr() as usize;
-            if std::env::var_os("PYAWA_ORPHAN_DEBUG").is_some() {
+            if crate::diag::flag_site!("PYAWA_ORPHAN_DEBUG") {
                 // SAFETY: ty 存活。
                 let name = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.name();
                 eprintln!("[orphan-reclaim] {name} ptr={address:#x}");

@@ -110,7 +110,7 @@ pub(crate) fn advance_iterator(
             Ok(None) => {
                 let iterator_type = unsafe { iterator.as_ref() }.ty();
                 let name = instance.type_name(iterator_type).to_owned();
-                if crate::diag::flag("PYAWA_ITER_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_ITER_DEBUG") {
                     eprintln!(
                         "[advance_iterator] 不可迭代：type={name} site={}",
                         instance.current_site()

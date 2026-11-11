@@ -34,7 +34,7 @@ impl CellObject {
         match self.value.try_borrow() {
             Ok(value) => *value,
             Err(_) => {
-                if std::env::var_os("PYAWA_CELL_DEBUG").is_some() {
+                if crate::diag::flag_site!("PYAWA_CELL_DEBUG") {
                     let header = self as *const Self as *const Header;
                     // SAFETY: 诊断路径；调用方保证 cell 存活（若已释放，读类型名可能已不可信 ✓）。
                     let kind = unsafe { (*header).ty().as_ref() }.name().to_owned();
@@ -51,11 +51,11 @@ impl CellObject {
 
     /// 写入：返回被顶下来的旧引用，**调用方负责释放**（用 [`Instance::release_object`]）。
     pub fn replace(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
-        if std::env::var_os("PYAWA_CELL_DEBUG").is_some() {
+        if crate::diag::flag_site!("PYAWA_CELL_DEBUG") {
             eprintln!("[cell] replace 开始 addr={:p}", self as *const Self);
         }
         let outcome = core::mem::replace(&mut *self.value.borrow_mut(), value);
-        if std::env::var_os("PYAWA_CELL_DEBUG").is_some() {
+        if crate::diag::flag_site!("PYAWA_CELL_DEBUG") {
             eprintln!("[cell] replace 结束 addr={:p}", self as *const Self);
         }
         outcome

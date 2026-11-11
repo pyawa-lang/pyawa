@@ -573,7 +573,7 @@ pub(crate) fn attribute_lookup(
     let type_name = unsafe { object.as_ref().ty().as_ref() }.name();
     // **属性缺失的现场诊断** ✓（第 345 轮，门控 `PYAWA_ATTR_MISS_DEBUG=1`）：打印名字／对象的类型名／
     // 当前 Python 现场 ✓ —— **从 Rust 侧打** ✓，因为本会话已两次见到"改 Python 语句就换墙"✗（观察者效应 ✓）。
-    if crate::diag::flag("PYAWA_ATTR_MISS_DEBUG") {
+    if crate::diag::flag_site!("PYAWA_ATTR_MISS_DEBUG") {
         // **额外带上"接收者是谁"** ✓（第 725 轮）：`module` 缺属性时打它的 `__name__` ＋ 地址 ✓
         // —— 诊断"名字随堆布局变"那一类（拿到的是**哪个** module ✓）。
         let extra = if type_name == "module" {
@@ -847,7 +847,7 @@ fn attribute_lookup_specials(
         // ⇒ 落到下面"继承来的 `getattr` 槽"（`dict.update` native）✗ ⇒ `m.update(None)` 报
         // `TypeError: 'NoneType' object is not iterable` ✓）。
         let mut builtin_base: Option<NonNull<crate::TypeObject>> = None;
-        if std::env::var_os("PYAWA_NO_BUILTIN_FAMILY").is_none() {
+        if !crate::diag::flag_site!("PYAWA_NO_BUILTIN_FAMILY") {
             // **按类型指针比较**（round 246 性能）：先前对 12 个内建名逐个 `type_named`
             // ⇒ 每次属性读都付 12 次 SipHash 名字查表 ✗（实测 `attribute_read` 档的大头之一）。
             // 仍**如实**保留 `PYAWA_NO_BUILTIN_FAMILY` 这个诊断开关的语义 ✓。

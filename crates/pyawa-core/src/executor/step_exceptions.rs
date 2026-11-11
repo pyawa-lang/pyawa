@@ -54,7 +54,7 @@ fn step_exceptions_pop_except<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
     match name {
             "POP_EXCEPT" => {
                 // 栈顶是 `PUSH_EXC_INFO` 压下的"上一个异常"；把它还原成当前异常
-                if crate::diag::flag("PYAWA_POP_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_POP_DEBUG") {
                     eprintln!("[pop_except] 弹前深={} site={}", frame.get().depth(), instance.current_site());
                 }
                 let previous = frame.get().pop()?;
@@ -93,7 +93,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                 // **实测**：它**弹掉类**、压回布尔（净 0）——参照实现原话是
                 // "Pops TOS and pushes the boolean result of the test"。
                 let class_object = frame.get().pop()?;
-                if crate::diag::flag("PYAWA_EXC_MATCH_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_EXC_MATCH_DEBUG") {
                     eprintln!(
                         "[exc_match] 弹掉类之后 栈深={} site={}",
                         frame.get().depth(),

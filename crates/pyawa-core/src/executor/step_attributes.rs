@@ -77,7 +77,7 @@ pub(super) fn step_attributes<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     // 弹之前先记深度 ✓（用来看"哪条语句留了东西"✗）。
                     let depth_before = frame.get().stack.borrow().len();
                     // **弹之前的整栈转储** ✓（第 302 轮；独立成块、不动上面那两行 ✓）：看"要弹的两项" ✓。
-                    if crate::diag::flag("PYAWA_STORE_ATTR_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_STORE_ATTR_DEBUG") {
                         let items: Vec<String> = frame
                             .get()
                             .stack
@@ -94,7 +94,7 @@ pub(super) fn step_attributes<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     let value = frame.get().pop()?;
                     // **`STORE_ATTR` 的操作数诊断** ✓（第 294 轮，门控 `PYAWA_STORE_ATTR_DEBUG=1`）：
                     // 打印名字与弹出值的**类型名** ✓ —— 用来定位"接收者变成 None/str"的那类问题 ✓（零开销 ✓）。
-                    if crate::diag::flag("PYAWA_STORE_ATTR_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_STORE_ATTR_DEBUG") {
                         // SAFETY: 两个值由本帧值栈持有，存活。
                         let oname = unsafe { (&*object.as_ptr()).ty().as_ref() }.name().to_owned();
                         let vname = unsafe { (&*value.as_ptr()).ty().as_ref() }.name().to_owned();

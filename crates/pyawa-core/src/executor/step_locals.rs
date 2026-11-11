@@ -218,7 +218,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     }
                     // **`STORE_FAST` 的槽号诊断** ✓（第 305 轮，门控 `PYAWA_STORE_FAST_DEBUG=1`）：
                     // 与融合加载读到的槽号对照 ✓ ⇒ 定"写入槽 ≠ 读取槽"✓（第 304 轮的铁证 ✓）。
-                    if crate::diag::flag("PYAWA_STORE_FAST_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_STORE_FAST_DEBUG") {
                         if let Some(v) = restored {
                             // SAFETY: v 由本帧刚写入的槽持有，存活。
                             let tn = unsafe { (&*v.as_ptr()).ty().as_ref() }.name().to_owned();
@@ -278,7 +278,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     // "(第一个, 第二个)"；`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` 里 a＝0、b＝1）
                     let first = oparg >> 4;
                     let second = oparg & 0x0F;
-                    if crate::diag::flag("PYAWA_EMIT87_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_EMIT87_DEBUG") {
                         eprintln!(
                             "[run87] name={} 码元={} arg={} 高={} 低={}",
                             code.name(),
@@ -298,7 +298,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     push(instance, frame.get(), right)?;
                     // **融合加载的槽号诊断** ✓（第 304 轮，门控 `PYAWA_FUSED_LOAD_DEBUG=1`）：第 302 轮
                     // 已证"错值是这一句自己压的" ✗ ⇒ 这里看它**到底从哪两个槽取的** ✓。
-                    if crate::diag::flag("PYAWA_FUSED_LOAD_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_FUSED_LOAD_DEBUG") {
                         // SAFETY: 两个值分别由对应帧槽持有，存活。
                         let lt = unsafe { (&*left.as_ptr()).ty().as_ref() }.name().to_owned();
                         let rt = unsafe { (&*right.as_ptr()).ty().as_ref() }.name().to_owned();

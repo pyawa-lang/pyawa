@@ -139,7 +139,7 @@ impl Instance {
                     self.release(value);
                 }
                 Err(error) => {
-                    if crate::diag::flag("PYAWA_WEAKREF_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_WEAKREF_DEBUG") {
                         eprintln!("[weakref] 回调失败：{error:?}");
                     }
                 }

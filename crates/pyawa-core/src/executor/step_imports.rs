@@ -227,7 +227,7 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                 // 模块名：从模块命名空间里借读 `__name__` ✓（借用 ⇒ 不还引用 ✓）
                                 let module_name = crate::executor::module_text(instance, module, "__name__")
                                     .unwrap_or_else(|| "?".to_owned());
-                                if crate::diag::flag("PYAWA_IMPORT_DEBUG") {
+                                if crate::diag::flag_site!("PYAWA_IMPORT_DEBUG") {
                                     eprintln!("[import_debug] IMPORT_FROM name={name} module={module_name} site={}", instance.current_site());
                                 }
                                 let converted = raise_builtin(

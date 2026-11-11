@@ -587,7 +587,7 @@ impl Emitter {
                     // 方法声明的 `nonlocal count` 传不下去 ✗（`UnboundLocalError` ✓）。
                     let mut class_nonlocals: Vec<String> = Vec::new();
                     super::super::symbols::collect_nested_scope_nonlocals(body, &mut class_nonlocals);
-                    if std::env::var("PYAWA_NL_DEBUG").is_ok() {
+                    if crate::diag::flag_site!("PYAWA_NL_DEBUG") {
                         eprintln!("[cls] qualname={} nonlocals={:?} cellvars={:?} freevars={:?} varnames={:?}", self.qualname, class_nonlocals, self.unit.cellvars, self.unit.freevars, self.unit.varnames);
                     }
                     for referenced in global_load_names(&nested)

@@ -8,16 +8,34 @@ pub(crate) fn flag(name: &str) -> bool {
     std::env::var_os(name).is_some()
 }
 
+/// **每个调用点一份 `OnceLock`** 的便捷宏（round 247 性能，A2-2）：
+/// `crate::diag::flag_site!("PYAWA_X")` ≡ `flag_cached("PYAWA_X", &本调用点的槽)`。
+///
+/// 为什么要宏：热路径上的 `flag("…")` 每次走 libc `getenv`（线性扫 environ；A2-1 后实测占基线
+/// ~28%，第一热点 ✗）。`flag_cached` 需要调用点各自持有一个 `'static` 槽 ⇒ 宏把"声明槽 ＋ 查缓存"
+/// 收成一行，避免几十处样板 ✓。诊断开关本来就不需要运行期改变 ✓（与 `flag_cached` 同口径）。
+macro_rules! flag_site {
+    ($name:literal) => {{
+        static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        $crate::diag::flag_cached($name, &SLOT)
+    }};
+}
+pub(crate) use flag_site;
+
+/// `flag_off` 的**每调用点缓存**版（语义：`PYAWA_<name>` 未设置 ⇒ true）。
+macro_rules! flag_off_site {
+    ($name:literal) => {{
+        static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        !$crate::diag::flag_cached($name, &SLOT)
+    }};
+}
+pub(crate) use flag_off_site;
+
 /// **缓存版开关**（round 199 性能修 ✗）：热路径（每次 `Owned` 落域／每次清属性／每次 raise）上
 /// `std::env::var_os` 太贵（实测 `test_userstring` 86 s → 108 s ✗）⇒ 每个开关一个 `OnceLock<bool>`，
 /// 进程内只查一次环境 ✓（诊断开关本来就不需要运行期改变 ✓）。
 pub(crate) fn flag_cached(name: &'static str, slot: &'static std::sync::OnceLock<bool>) -> bool {
     *slot.get_or_init(|| std::env::var_os(name).is_some())
-}
-
-/// `PYAWA_<name>` unset => on (negated switch).
-pub(crate) fn flag_off(name: &str) -> bool {
-    std::env::var_os(name).is_none()
 }
 
 /// **毒化隔离区**开关 ✓（第 272 轮）：`PYAWA_QUARANTINE=1` ⇒ 释放时不真还给分配器 ✗，

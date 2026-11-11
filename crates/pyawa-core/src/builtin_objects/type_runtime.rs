@@ -118,7 +118,7 @@ pub fn type_new_native(
     // 这条转交路径没有关键字通道 ⇒ 那些调用维持原状（不转交 ✓）——先只让 `type('C', (Sequence,), stubs)`
     // 这类三参形态走对 ✓。
     if custom_winner && kwargs.is_empty() && args.len() == 3 {
-        if std::env::var_os("PYAWA_TYPE_NEW_DEBUG").is_some() {
+        if crate::diag::flag_site!("PYAWA_TYPE_NEW_DEBUG") {
             let base_names: Vec<String> = bases
                 .iter()
                 .map(|base| {

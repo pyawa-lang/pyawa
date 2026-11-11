@@ -177,7 +177,7 @@ impl Emitter {
 
     /// 发一条**前向跳转**（目标标签先占位、收尾时回填）。
     pub(crate) fn emit_jump(&mut self, position: Span, opcode: u16, label: usize) {
-        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] emit_jump 目标标签={label} code_len={}", self.unit.code.len());
         }
         self.emit_directed_jump(position, opcode, label, false);
@@ -186,7 +186,7 @@ impl Emitter {
     /// 发一条跳转；`backward` 为真时 oparg 是**往回**的距离
     /// （实测 `JUMP_BACKWARD` 的 oparg ＝ `当前码元 + 占用码元数 − 目标码元`，方向是 opcode 本身定的）。
     pub(crate) fn emit_directed_jump(&mut self, position: Span, opcode: u16, label: usize, backward: bool) {
-        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] emit_directed_jump 目标标签={label} 向后={backward} code_len={}", self.unit.code.len());
         }
         let argument_byte = self.unit.code.len() + 1;
@@ -222,7 +222,7 @@ impl Emitter {
     pub(crate) fn emit_at(&mut self, position: Span, opcode: u16, oparg: u8) {
         // **op87 的"码元 / arg / 位点"** ✓（第 661 轮门控 `PYAWA_EMIT87_DEBUG=1`）：与运行期的
         // **指令偏移**同一把坐标 ✓ ⇒ 两边一对就能钉死"这条融合是谁发的" ✓（前几轮在发射端猜了四处都没中 ✗）。
-        if crate::diag::flag("PYAWA_EMIT87_DEBUG") && opcode == 87 {
+        if crate::diag::flag_site!("PYAWA_EMIT87_DEBUG") && opcode == 87 {
             if opcode == 87 && self.unit.code.len() / 2 == 2561 {
                 eprintln!("[emit87-bt] 命中 2561：\n{}", std::backtrace::Backtrace::force_capture());
             }

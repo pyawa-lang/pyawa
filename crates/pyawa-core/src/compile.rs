@@ -2778,7 +2778,7 @@ pub fn instantiate_named<'a>(
         // **67 个官方套件从 runtime 变成 unimplemented 级 abort**（survey 实测 79/136/180/2 ✗）。
         // 想试真名：`PYAWA_NESTED_FILENAMES=1`（仅供后续补齐 AST 后翻默认 ✓）。
         .map(|constant| {
-            let nested = if crate::diag::flag("PYAWA_NESTED_FILENAMES") {
+            let nested = if crate::diag::flag_site!("PYAWA_NESTED_FILENAMES") {
                 Some(filename)
             } else {
                 None

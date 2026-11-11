@@ -486,7 +486,7 @@ impl Instance {
         let started = std::time::Instant::now();
         let live_before = self.live_objects();
         let freed = self.collect_inner();
-        if std::env::var_os("PYAWA_EXC_STATE_DEBUG").is_some() {
+        if crate::diag::flag_site!("PYAWA_EXC_STATE_DEBUG") {
             let pending = self.pending_exception();
             let pending_name = pending.map(|value| {
                 // SAFETY: 槽里的对象由实例保活。
@@ -507,7 +507,7 @@ impl Instance {
         self.drain_weakref_callbacks();
         // **诊断**（`PYAWA_GC_LOG=1` 才打）：回收前后存活数 ＋ 耗时（默认零输出 ✓）。
         // `PYAWA_GC_LOG=2` 另打**类型直方图 top 8**（查"GC 收不掉谁"用 ✓）。
-        if crate::diag::flag("PYAWA_GC_LOG") && std::env::var("PYAWA_GC_LOG").as_deref() == Ok("2") {
+        if crate::diag::flag_site!("PYAWA_GC_LOG") && std::env::var("PYAWA_GC_LOG").as_deref() == Ok("2") {
             let headers = self.gc_headers();
             let mut counts: std::collections::HashMap<String, usize> =
                 std::collections::HashMap::new();
@@ -527,7 +527,7 @@ impl Instance {
             eprintln!("[gc-types] {}", summary.join(" "));
         }
         // `PYAWA_GC_LOG=3`：给几种"疑似泄漏"的对象**反查持有者链**（最多 5 跳；一次性诊断 ✓）。
-        if crate::diag::flag("PYAWA_GC_LOG") && std::env::var("PYAWA_GC_LOG").as_deref() == Ok("3") {
+        if crate::diag::flag_site!("PYAWA_GC_LOG") && std::env::var("PYAWA_GC_LOG").as_deref() == Ok("3") {
             let headers = self.gc_headers();
             let mut referrers: std::collections::HashMap<usize, Vec<NonNull<Header>>> =
                 std::collections::HashMap::new();
@@ -568,7 +568,7 @@ impl Instance {
                 eprintln!("[gc-hold] {} => {}", kind, chain.join(" <- "));
             }
         }
-        if crate::diag::flag("PYAWA_GC_LOG") {
+        if crate::diag::flag_site!("PYAWA_GC_LOG") {
             eprintln!(
                 "[gc] index={} live={} live_after={} freed={} ms={} tb_created={} tb_freed={}",
                 self.gc_collections.get(),

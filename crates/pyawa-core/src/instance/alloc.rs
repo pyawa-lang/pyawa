@@ -462,7 +462,7 @@ impl Instance {
             // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
             // **开关**（第 93 轮，`PYAWA_NO_GC=1` 才跳过 ✓）：用来判定"刚造好就是垃圾"是不是
             // **这次回收**干的 ✓ —— 若关掉之后崩就没了 ✓，那病灶就在"回收与刚分配对象"的时序上 ✓。
-            if crate::diag::flag_off("PYAWA_NO_GC") {
+            if crate::diag::flag_off_site!("PYAWA_NO_GC") {
                 // **自动回收默认只收年轻代**（round 157）：`gc.set_threshold(1,1,1)` 的套件
                 // （`test_weakref` 的 `len_race`）会触发成百上千次自动回收 ⇒ 每次全量标记 2.6M
                 // live 是 O(live)✗；年轻段通常只有几十个对象 ✓。每 16 轮做一次全量兜底 ✓。

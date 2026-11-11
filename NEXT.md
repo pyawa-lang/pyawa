@@ -6,13 +6,13 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`ecfbb7a3`（本笔前；round 246（A2-1）热路径类型指针缓存 ⇒ bench_hot baseline 214×→108×；下轮 A2-2 diag flag／getenv 缓存）
+- **HEAD**：`6f730b65`（本笔前；round 247（A2-2）diag flag／getenv 缓存 ⇒ bench_hot 70/96/61/58×；下轮 A3 复测＋A4 回退闸）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
 - **当前主线（2026-11-12 用户口径 ✓）**：**内存安全 ＋ 执行效率**（解释器硬要求 ✓）；其余**慢慢补** ✗
   - ① 内存硬门：`tools/memdangle_survey.py` 归零 ＋ 无 abort／segfault
-  - ② 执行效率：`tools/bench_hot.py` 基线入库 ＋ 禁回退（>10% 红）＋ 报 CPython 比值（A2-1 后 108/139/99/84×）
+  - ② 执行效率：`tools/bench_hot.py` 基线入库 ＋ 禁回退（>10% 红）＋ 报 CPython 比值（A2-2 后 70/96/61/58×）
   - ③ 其余（日常库／冷门语义／套件 %）**排后** ✗
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
 - **内存类硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）⇒ `target/memdangle_survey.tsv`；
@@ -24,7 +24,7 @@
   - 形参所有权／引用泄漏 ✗（台账 13 处；三版方案已撤回）
   - 日常面：`json.load(f)` ✗（`StopIteration`）· `defaultdict` ✗ · `match` 同行 suite ✗ · `urllib.request` ✗
   - `P3-42` KeyError 族／特殊方法派发；`P3-35` 剩余 5 形态；`P3-29`／`P3-37` 剩余面
-- **下一条命令**：`tools/profile_hot.sh --tier baseline --iters 50000` 复核 getenv → A2-2（diag flag 全改 `flag_cached`）→ `tools/bench_hot.py` 复测
+- **下一条命令**：`tools/profile_hot.sh --tier baseline --iters 50000` 复核剩余热点 → A3 每轮复测＋A4 回退闸（基线入库）→ A2-3 等 A4 就位后再单独一轮
 
 ## 关键口径（只留项目特有的；通用规则见 `agents-rules/`）
 

@@ -1224,7 +1224,7 @@ impl AttributeObject {
     pub fn set_attributes(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
         // **探针**（第 189 轮，`PYAWA_SETATTR_DEBUG=1`）：谁把"非普通 dict"（如类命名空间 `EnumDict`）
         // 放进某个对象的**内联属性字典** ✓ —— 盯**类型**（不盯地址 ✓，第 118 轮盯地址失败过 ✓）。
-        if crate::diag::flag("PYAWA_SETATTR_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_SETATTR_DEBUG") {
             if let Some(mapping) = mapping {
                 // SAFETY: mapping 由调用方保证存活。
                 // SAFETY: mapping 由调用方保证存活；它的 ty 由注册表持有。
@@ -1234,7 +1234,7 @@ impl AttributeObject {
                 }
             }
         }
-        if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_SETDICT_DEBUG") {
             if let Some(mapping) = mapping {
                 eprintln!("[setdict] 内联属性字典 ← {:p}", mapping.as_ptr());
             }

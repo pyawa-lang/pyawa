@@ -354,7 +354,7 @@ impl Instance {
         // **按判据盯**（第 115 轮，`PYAWA_WATCH_DICT=1`）：任何 `dict` **掉到 0** 都报现场 ✓
         // —— 第 114 轮查明"死在 @540 的是**另一个类**的命名空间" ✓ ⇒ 盯一个地址不够 ✓，
         // 要用**判据**（类型＝`dict` ✓）把**第一个被打到 0 的那个**逼出来 ✓。
-        if flag("PYAWA_WATCH_DICT") && unsafe { &*ptr }.refcount() == 1 {
+        if crate::diag::flag_site!("PYAWA_WATCH_DICT") && unsafe { &*ptr }.refcount() == 1 {
             let ty = unsafe { &*ptr }.ty();
             // SAFETY: ty 由注册表持有。
             let name = unsafe { ty.as_ref() }.name();
@@ -429,7 +429,7 @@ impl Instance {
         if self.is_registered_type_address(ptr as usize) {
             // **诊断（round 98，`PYAWA_TYPE_REL_TRACE=1`）**：把"注册类型被放到 0"的**首次**现场打出来
             // （这是欠计数/多放的源头；guard 只挡住症状 ✓）。
-            if std::env::var_os("PYAWA_TYPE_REL_TRACE").is_some() {
+            if crate::diag::flag_site!("PYAWA_TYPE_REL_TRACE") {
                 // SAFETY: ptr 是注册表里的类型对象（存活）。
                 let name = unsafe { &*ptr.cast::<crate::TypeObject>() }.name();
                 eprintln!(

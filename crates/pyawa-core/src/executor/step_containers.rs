@@ -82,7 +82,7 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     // 是什么、在哪个代码对象的哪个站点 ✓ —— 用来逮"栈上残留"型错误 ✓
                     //（实测 `re` 里 `(min, max, item)` 建成了 `(len, len, item)` ✗ ⇒ 前两项被上一条
                     // `len(this)` 的残留顶掉 ✓ 的形状 ✓）。
-                    if crate::diag::flag("PYAWA_TUPLE_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_TUPLE_DEBUG") {
                         let show = |item: &NonNull<Header>| {
                             let ty = instance.type_name(instance.type_of(*item));
                             if ty == "builtin_function_or_method" {
@@ -245,7 +245,7 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                 }
                 "UNPACK_SEQUENCE" | "UNPACK_EX" => {
                     let raw = frame.get().pop()?;
-                    if crate::diag::flag("PYAWA_UNPACK_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_UNPACK_DEBUG") {
                         // SAFETY: raw 由本帧值栈持有，存活。
                         let tn = unsafe { (&*raw.as_ptr()).ty().as_ref() }.name().to_owned();
                         eprintln!("[unpack_site] opcode={opcode_number} raw_type={tn} site={}", instance.current_site());

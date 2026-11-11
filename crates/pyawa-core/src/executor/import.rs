@@ -73,7 +73,7 @@ fn locate_source(instance: &Instance, name: &str) -> Option<(String, Option<Stri
         }
     }
     let search = module_search_path(instance, sys_module)?;
-    if std::env::var_os("PYAWA_IMPORT_DEBUG").is_some() {
+    if crate::diag::flag_site!("PYAWA_IMPORT_DEBUG") {
         eprintln!("[locate_source] name={name} paths={search:?}");
     }
     for directory in search {
@@ -135,7 +135,7 @@ fn raise_syntax_error(instance: &Instance, message: &str, chunk: &str) -> ExecEr
     );
     let filename_value = instance.new_str(&file_name);
     let outcome = instance.set_attribute_value(exception, "filename", filename_value);
-    if std::env::var_os("PYAWA_SYNTAX_DEBUG").is_some() {
+    if crate::diag::flag_site!("PYAWA_SYNTAX_DEBUG") {
         eprintln!("[syntax] set filename => {outcome:?}");
     }
     // SAFETY: 上面那份引用由本函数持有。
@@ -436,7 +436,7 @@ pub(crate) fn load_module(
             (format!("{entry}/{base}.py"), None),
         ];
         for (file, package_directory) in candidates {
-        if crate::diag::flag("PYAWA_TRACE_IMPORT") {
+        if crate::diag::flag_site!("PYAWA_TRACE_IMPORT") {
             eprintln!("[载入] 试 {file}（模块 {name}）");
         }
         let Some(source) = read_file_through_fs(instance, file.as_bytes()) else {
@@ -572,12 +572,12 @@ pub(crate) fn load_module(
         let outcome = crate::execute(instance, &frame);
         // **诊断** ✓（第 197 轮）：模块**先登记**后执行 ✓ ⇒ 一旦执行出错，`sys.modules` 里会**留下半截模块** ✗。
         // 这里在**开着 `PYAWA_TRACE_IMPORT`** 时把那个错**如实打出来** ✓（默认零输出 ✓）。
-        if crate::diag::flag("PYAWA_TRACE_IMPORT") {
+        if crate::diag::flag_site!("PYAWA_TRACE_IMPORT") {
             if let Err(error) = &outcome {
                 eprintln!("[载入] 模块 {name} 执行出错：{error:?}");
             }
         }
-        if crate::diag::flag("PYAWA_TRACE_IMPORT") {
+        if crate::diag::flag_site!("PYAWA_TRACE_IMPORT") {
             // **诊断** ✓（第 200 轮）：执行完**命名空间里有多少个名字** ✓（好判断"写入是否落地" ✗）。
             let size = crate::mounted_instance_dict(instance, module)
                 .map(|dict| {

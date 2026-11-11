@@ -1128,7 +1128,7 @@ impl Emitter {
                 let inverted = self.loop_last_if
                     && else_body.is_empty()
                     && self.loops.last().is_some();
-                if crate::diag::flag("PYAWA_INVERTED_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_INVERTED_DEBUG") {
                     eprintln!(
                         "[inverted] loop_last_if={} else_empty={} loops_len={}",
                         self.loop_last_if, else_body.is_empty(), self.loops.len()

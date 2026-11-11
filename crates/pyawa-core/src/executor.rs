@@ -493,7 +493,7 @@ pub(crate) fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<S
         }
     }
     let _ = instance.fs_close(handle);
-    if crate::diag::flag("PYAWA_TRACE_IMPORT") {
+    if crate::diag::flag_site!("PYAWA_TRACE_IMPORT") {
         // **诊断** ✓（第 200 轮）：读出多少字节 ✓（好与磁盘上的大小对照 ✗）。
         let path_text = String::from_utf8_lossy(path);
         eprintln!("[读文件] {path_text} ⇒ {} 字节", bytes.len());
@@ -1052,10 +1052,16 @@ pub(crate) fn function_defaults(function: NonNull<Header>) -> (NonNull<Header>, 
 /// 按**发生顺序**打出来 ✓（句首是动作 ✓）—— 用来夹"先读后写"这类**控制流分岔** ✓
 ///（`Lib/re._parser._parse` 的槽 14 就是靠它定位 ✓）。不设这个环境变量时**零开销** ✓（只多一次查表 ✓）。
 fn slot_trace(instance: &Instance, code: &crate::CodeObject, slot: usize, action: &str) {
-    let Some(wanted) = std::env::var_os("PYAWA_SLOT_TRACE") else {
+    // **缓存**（round 247 性能，A2-2）：先前**每条 `LOAD_FAST`／`STORE_FAST`** 都走 libc `getenv`
+    // （线性扫 environ；A2-1 后实测是基线第一热点 ~28% ✗）。开关本来就不需要运行期改变 ✓。
+    static SLOT_TRACE: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    let Some(wanted) = SLOT_TRACE
+        .get_or_init(|| std::env::var_os("PYAWA_SLOT_TRACE"))
+        .as_ref()
+    else {
         return;
     };
-    let wanted = wanted.to_string_lossy().into_owned();
+    let wanted = wanted.to_string_lossy();
     let mut parts = wanted.splitn(2, ':');
     let (Some(name), Some(number)) = (parts.next(), parts.next()) else {
         return;
@@ -1419,7 +1425,7 @@ fn dispatch_raise(
     let Some(entry) = handler else {
         return Err(ExecError::Raised { exception });
     };
-    if crate::diag::flag("PYAWA_TRY_DEPTH_DEBUG") {
+    if crate::diag::flag_site!("PYAWA_TRY_DEPTH_DEBUG") {
         eprintln!("[try_depth] 展开 实际栈深={} 记账 depth={}", frame.depth(), entry.depth);
     }
     while frame.depth() > entry.depth {

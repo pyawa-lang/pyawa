@@ -12,7 +12,7 @@ pub(super) fn step_generators<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     // 用来分辨"没走到 return"✗ 与"调用机制把返回值丢了"✗（第 348 轮的设计 ✓）。
                     // **NULL 返回值诊断** ✓（第 628 轮，门控 `PYAWA_NULL_TRACE=1`）：谁把 VM 的 NULL 哨兵当值
                     // 返回了 ✓ —— 比"解包时才发现 NULL"近一步 ✓（`Lib/re/_compiler.py:541` 的 NULL 就是它 ✓）。
-                    if crate::diag::flag("PYAWA_NULL_TRACE")
+                    if crate::diag::flag_site!("PYAWA_NULL_TRACE")
                         && returned == instance.singletons().null()
                     {
                         eprintln!(
@@ -22,7 +22,7 @@ pub(super) fn step_generators<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                             std::backtrace::Backtrace::force_capture()
                         );
                     }
-                    if crate::diag::flag("PYAWA_RETURN_DEBUG") && code.name() == "_find_new_" {
+                    if crate::diag::flag_site!("PYAWA_RETURN_DEBUG") && code.name() == "_find_new_" {
                         // SAFETY: returned 由本帧值栈持有，存活。
                         let tn = unsafe { (&*returned.as_ptr()).ty().as_ref() }.name().to_owned();
                         eprintln!("[return] _find_new_ -> {tn} site={}", instance.current_site());

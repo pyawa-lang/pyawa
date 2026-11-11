@@ -193,7 +193,7 @@ pub(crate) fn set_contains(
 ) -> Option<NonNull<Header>> {
     // SAFETY: 调用方保证 set 是本实例的 `set`。
     let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
-    if std::env::var_os("PYAWA_SET_TRACE").is_some() {
+    if crate::diag::flag_site!("PYAWA_SET_TRACE") {
         // SAFETY: set/item 由调用方保证存活。
         let item_ty = instance.type_name(instance.type_of(item));
         eprintln!(
@@ -442,7 +442,7 @@ pub(crate) unsafe fn set_clear(ptr: *mut Header, instance: &Instance) {
     let values = core::mem::take(&mut *object.items.borrow_mut());
     // **诊断（round 108，`PYAWA_DANGLING=1` 时）**：集合元素里若出现**已被释放**的指针，直接点名
     // "集合地址／长度／下标／元素地址"，而不是只报一条 `set_clear` 的悬垂（那样看不出是哪个集合 ✓）。
-    if crate::diag::flag("PYAWA_DANGLING") {
+    if crate::diag::flag_site!("PYAWA_DANGLING") {
         for (index, value) in values.iter().enumerate() {
             // **注册类型不进活表**（由 `types` 注册表持有）⇒ 排除，避免误报 ✓。
             if !instance.is_live_address(*value)

@@ -169,7 +169,7 @@ pub fn instance_attribute_set(
         //（`binascii.Error` 一类**用户建类**的异常子类可能走通用分配 ⇒ 强转读垃圾 ⇒ SIGSEGV ✗）。
         let is_exception_payload = unsafe { object_ty.as_ref() }.instance_size()
             == core::mem::size_of::<crate::builtin_objects::ExceptionObject>();
-        if !is_exception_payload && std::env::var_os("PYAWA_EXC_PAYLOAD_DEBUG").is_some() {
+        if !is_exception_payload && crate::diag::flag_site!("PYAWA_EXC_PAYLOAD_DEBUG") {
             eprintln!("[dbg] non-payload exception name={name}");
         }
         if is_exception_payload {

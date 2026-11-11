@@ -471,7 +471,7 @@ pub(crate) fn unsupported_operand(
         &{
             // **句首站点** ✓（第 663 轮，门控 `PYAWA_BINOP_DEBUG=1`）：两个类型名放句首 ✓
             //（尾巴会被长消息挤掉 ✗ —— 这是这条链上反复吃过亏的地方 ✓）。
-            if crate::diag::flag("PYAWA_BINOP_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_BINOP_DEBUG") {
                 let left_show = instance
                     .object_repr(left)
                     .unwrap_or_else(|_| "<读不出>".to_owned());
@@ -598,7 +598,7 @@ pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
 /// ⇒ doctest 一比较回溯就是 `'NoneType' object has no attribute 'tb_next'` ✗。
 /// **尽力而为**（没有当前帧、或异常没有实例字典 ⇒ 如实不挂 ✓）。
 pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) {
-    if crate::diag::flag("PYAWA_NO_TRACEBACK_ATTACH") {
+    if crate::diag::flag_site!("PYAWA_NO_TRACEBACK_ATTACH") {
         return;
     }
     // **控制流异常不挂回溯**（round 159）：`unittest.SkipTest` 只携带"理由字符串"（`str(e)` ✓），

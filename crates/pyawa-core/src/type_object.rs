@@ -332,7 +332,7 @@ impl TypeObject {
 
     /// 设置类型字典（**新引用**，由类型对象接手）。
     pub fn set_dict(&self, mapping: Option<NonNull<Header>>) {
-        if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_SETDICT_DEBUG") {
             // **round 123 诊断**：带上类型名，便于把"泄漏的类字典"反查到具体类/路径 ✓。
             let name = self.name();
             match mapping {

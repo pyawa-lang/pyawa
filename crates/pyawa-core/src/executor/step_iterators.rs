@@ -236,7 +236,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     }
                 }
                 "END_ASYNC_FOR" => {
-                    if crate::diag::flag("PYAWA_AF_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_AF_DEBUG") {
                         let mut names: Vec<String> = Vec::new();
                         for value in frame.get().stack_snapshot() {
                             // SAFETY: 值栈里的项都存活。

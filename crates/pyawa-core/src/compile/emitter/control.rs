@@ -447,7 +447,7 @@ impl Emitter {
             self.loop_last_if = in_loop_body
                 && index == last_index
                 && matches!(statement, Statement::If { else_body, .. } if else_body.is_empty());
-            if crate::diag::flag("PYAWA_LOOPLASTIF_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_LOOPLASTIF_DEBUG") {
                 eprintln!(
                     "[loop_last_if] in_loop_body={in_loop_body} index={index} last={last_index} if={}",
                     matches!(statement, Statement::If { .. })
@@ -659,7 +659,7 @@ impl Emitter {
         depth: usize,
         lasti: bool,
     ) {
-        if crate::diag::flag("PYAWA_TRY_DEPTH_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_TRY_DEPTH_DEBUG") {
             eprintln!(
                 "[try_depth] 记账 depth={depth} for_depth={} handler_depth={} with_depth={}",
                 self.loops.iter().filter(|f| f.is_for).count(),
@@ -695,7 +695,7 @@ impl Emitter {
 
     /// 把异常表条目编码成 `BC-54` 的字节串（4 个 6-bit varint／条，**码元**为单位）。
     pub(crate) fn encode_exceptiontable(&self) -> Vec<u8> {
-        if crate::diag::flag("PYAWA_DUMP_CODE") {
+        if crate::diag::flag_site!("PYAWA_DUMP_CODE") {
             for (start, end, target, depth, lasti) in &self.exception_entries {
                 eprintln!(
                     "[exctable] {} start={} end={} target={} depth={depth} lasti={lasti}",

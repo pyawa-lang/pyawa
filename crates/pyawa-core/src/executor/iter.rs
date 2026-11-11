@@ -154,7 +154,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             // 真正的病根**（`mappingproxy_live` 用裸指针登记、代理地址被新 dict 复用 ⇒ 陈旧内容）。
             // 病根修掉后这里可以安全地 `discard_raised`（release `Err` 那份 ＋ 若 `pending` 仍是它则清槽）✓。
             if let crate::ExecError::Raised { exception } = lookup_error {
-                if crate::diag::flag("PYAWA_ITER_ERR_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_ITER_ERR_DEBUG") {
                     // SAFETY: 只读计数。
                     let rc = unsafe { exception.as_ref() }.refcount();
                     eprintln!("[iter-err] rc={rc}");
@@ -196,7 +196,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
                 return Ok(object.into_raw().cast::<Header>());
             }
             let name = instance.type_name(ty).to_owned();
-            if crate::diag::flag("PYAWA_ITER_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_ITER_DEBUG") {
                 eprintln!(
                     "[iter] 不可迭代：type={name} site={}\n{}",
                     instance.current_site(),
@@ -691,7 +691,7 @@ pub(crate) fn contains(
                 instance,
                 "TypeError",
                 &{
-                    if crate::diag::flag("PYAWA_BYTESLIKE_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_BYTESLIKE_DEBUG") {
                         eprintln!(
                             "[byteslike] 类型={name} 站点={}",
                             instance.current_site()

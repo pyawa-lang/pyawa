@@ -42,7 +42,7 @@ pub(crate) fn bytes_argument(
         return Err(instance.raise_builtin_error(
             "TypeError",
             &{
-                if crate::diag::flag("PYAWA_BYTESLIKE_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_BYTESLIKE_DEBUG") {
                     eprintln!(
                         "[byteslike] 类型={name} 实参={:?} 站点={}\n{}",
                         instance.object_repr(*argument).unwrap_or_else(|_| "?".to_owned()),
