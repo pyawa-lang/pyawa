@@ -186,6 +186,7 @@ impl Emitter {
                     self.kind == ScopeKind::Class,
                     // 嵌套单元的 `RESUME` 取**合成位点**（`lambda` 那一行、列 0..0；实测
                     // `def outer(): return lambda v: v` 的 lambda `RESUME` 是 `(2,2,0,0)`）
+                    false,
                     &lambda_freevars,
                     Span::new(span.line_start, span.line_start, 0, 0),
                 )?;

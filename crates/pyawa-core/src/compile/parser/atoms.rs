@@ -537,13 +537,14 @@ pub(crate) fn parse_call_suffix(
             let (argument, next) = parse_condition(lexed, cursor)?;
             // **实参位置的生成器表达式**（第 125 轮）：`f(x for x in y)` ✓ ——
             //   参照允许它**只作为唯一实参**（否则要加括号 ✓）⇒ 这里如实要求唯一 ✓。
-            if { reject_async_comprehension(lexed, next)?; matches!(lexed.lexemes.get(next), Some(Lexeme::For)) } {
+            if let Some(first_async) = comprehension_loop_is_async(lexed, next) {
+                let loop_at = next + usize::from(first_async);
                 if !arguments.is_empty() || !keywords.is_empty() || !star_arguments.is_empty() {
                     return Err(CompileError::Unsupported(
                         "生成器表达式作为实参时必须是**唯一**实参（否则要加括号 ✓）".to_owned(),
                     ));
                 }
-                let (target, after_target) = parse_comprehension_target(lexed, next + 1)?;
+                let (target, after_target) = parse_comprehension_target(lexed, loop_at + 1)?;
                 if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
                     return Err(CompileError::Syntax(
                         "生成器表达式的 `for <目标>` 后面要 `in`".to_owned(),
@@ -566,6 +567,7 @@ pub(crate) fn parse_call_suffix(
                     target,
                     iterable,
                     conditions,
+                    is_async: first_async,
                 }];
                 generators.extend(extra);
                 let comprehension = Expression::Comprehension {
@@ -866,9 +868,10 @@ fn parse_atom_leftbrace(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                 let (key, next) = parse_expression(lexed, cursor)?;
                 cursor = next;
                 // **集合推导式**：`{<元素> for <目标> in <可迭代> [if <条件>]*}`
-                if { reject_async_comprehension(lexed, cursor)?; matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) } {
+                if let Some(first_async) = comprehension_loop_is_async(lexed, cursor) {
+                let loop_at = cursor + usize::from(first_async);
 reject_comprehension_unpacking(&key)?;
-                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
+                    let (target, after_target) = parse_comprehension_target(lexed, loop_at + 1)?;
                     if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
                         return Err(CompileError::Syntax(
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),
@@ -897,6 +900,7 @@ reject_comprehension_unpacking(&key)?;
                                     target,
                                     iterable,
                                     conditions,
+                                    is_async: first_async,
                                 }];
                                 list.extend(extra);
                                 list
@@ -949,8 +953,9 @@ reject_comprehension_unpacking(&key)?;
                 let (value, next) = parse_expression(lexed, cursor)?;
                 cursor = next;
                 // **字典推导式**：`{<键>: <值> for <目标> in <可迭代> [if <条件>]*}`
-                if { reject_async_comprehension(lexed, cursor)?; matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) } {
-                    let (target, mut cursor) = parse_comprehension_target(lexed, cursor + 1)?;
+                if let Some(first_async) = comprehension_loop_is_async(lexed, cursor) {
+                let loop_at = cursor + usize::from(first_async);
+                    let (target, mut cursor) = parse_comprehension_target(lexed, loop_at + 1)?;
                     if !matches!(lexed.lexemes.get(cursor), Some(Lexeme::In)) {
                         return Err(CompileError::Syntax(
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),
@@ -980,6 +985,7 @@ reject_comprehension_unpacking(&key)?;
                                     target,
                                     iterable,
                                     conditions,
+                                    is_async: first_async,
                                 }];
                                 list.extend(extra);
                                 list
@@ -1033,10 +1039,11 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                 // **生成器表达式的元素允许裸海象**（task-45 ✓）：`(c := i + a for i in b)`
                 // 合法（官方 `test_named_expressions.py:747`）；`parse_condition` 认识裸海象 ✓。
                 if let Ok((element, after_element)) = parse_condition(lexed, cursor) {
-                    if { reject_async_comprehension(lexed, after_element)?; matches!(lexed.lexemes.get(after_element), Some(Lexeme::For)) } {
+                    if let Some(first_async) = comprehension_loop_is_async(lexed, after_element) {
+                let loop_at = after_element + usize::from(first_async);
                         reject_comprehension_unpacking(&element)?;
                         let (target, after_target) =
-                            parse_comprehension_target(lexed, after_element + 1)?;
+                            parse_comprehension_target(lexed, loop_at + 1)?;
                         if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
                             return Err(CompileError::Syntax(
                                 "生成器表达式的 `for <目标>` 后面要 `in`".to_owned(),
@@ -1060,6 +1067,7 @@ fn parse_atom_leftparen(lexed: &Lexed, cursor: usize) -> Result<(Expression, usi
                             target,
                             iterable,
                             conditions,
+                            is_async: first_async,
                         }];
                         generators.extend(extra);
                         break 'atom (Expression::Comprehension {
@@ -1192,26 +1200,6 @@ fn reject_comprehension_unpacking(element: &Expression) -> Result<(), CompileErr
     Ok(())
 }
 
-/// **`async` 推导式**（`[i async for i in aiter]` ✓ 合法 Python）⇒ 本层**如实报未接线** ✓。
-///
-/// 为什么要这一步 ✗：`async` 是硬关键字但本层词法器给的是 `Name("async")` ⇒ 列表／集合／字典／
-/// 生成器表达式在元素后面看到它时按"字面量下一项"收 ⇒ 报**语法错**"列表字面量里出现
-/// Some(Name(\"async\"))" ✗ —— 那是**把合法 Python 拒了** ✓（`MS-19` 口径不许）。
-/// 真正接线要 `GET_AITER`／`GET_ANEXT`／`END_ASYNC_FOR` 那一套（不在本批范围）⇒ 这里**明确**
-/// 报 `Unsupported`（状态 5＝未实现，不是语法错 ✓），别静默编错语义 ✓。
-fn reject_async_comprehension(lexed: &Lexed, cursor: usize) -> Result<(), CompileError> {
-    if matches!(
-        lexed.lexemes.get(cursor),
-        Some(Lexeme::Name(name)) if name == "async"
-    ) && matches!(lexed.lexemes.get(cursor + 1), Some(Lexeme::For))
-    {
-        return Err(CompileError::Unsupported(
-            "`async` 推导式尚未接线（GET_AITER／GET_ANEXT 那一套）".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 /// `parse_atom` 的 `LeftBracket` 分支（原样搬入，`break 'atom` 语义不变）。
 fn parse_atom_leftbracket(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
     let (term, cursor) = 'atom: {
@@ -1231,9 +1219,10 @@ fn parse_atom_leftbracket(lexed: &Lexed, cursor: usize) -> Result<(Expression, u
                 cursor = next;
                 // **清单推导式**（3.12+ 内联；实测骨架见发射臂）：`[<元素> for <目标> in <可迭代>
                 // [if <条件>]*]`。多重 `for` 的融合指令选择属优化器细节 ⇒ 暂如实报未接线
-                if { reject_async_comprehension(lexed, cursor)?; matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) } {
+                if let Some(first_async) = comprehension_loop_is_async(lexed, cursor) {
+                let loop_at = cursor + usize::from(first_async);
 reject_comprehension_unpacking(&first)?;
-                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
+                    let (target, after_target) = parse_comprehension_target(lexed, loop_at + 1)?;
                     // **看 `after_target`，不是 `cursor + 2`** ✗（第 281 轮真 bug 修 ✓）：
                     // 先前这里写死"目标只有一个词元" ✗ ⇒ `[a for a, b in …]`（元组目标 ✓）
                     // 与 `[a for (a, b) in …]`（带括号 ✓）**全部**误报"后面要 `in`" ✗ ——
@@ -1269,6 +1258,7 @@ reject_comprehension_unpacking(&first)?;
                                     target,
                                     iterable,
                                     conditions,
+                                    is_async: first_async,
                                 }];
                                 list.extend(extra);
                                 list

@@ -382,7 +382,20 @@ impl Emitter {
                 self.emit_indexed(span, "STORE_FAST", *slot);
             }
             self.emit_at(span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
-            self.record_exception(cleanup.region_start, cleanup.region_end, target, self.handler_depth + 2, false);
+            // **按内层异步区间分段**（round 243）：清理区间不得把异步层的 `SEND` 区间包进去 ✗ ——
+            // 一模一样的栈深度语义（同一个 `target`／`depth`），只是**拆成互不重叠的几段** ✓。
+            let mut regions = cleanup.async_regions.clone();
+            regions.sort_unstable();
+            let mut cursor = cleanup.region_start;
+            for (start, end) in regions {
+                if start > cursor {
+                    self.record_exception(cursor, start.min(cleanup.region_end), target, self.handler_depth + 2, false);
+                }
+                cursor = cursor.max(end);
+            }
+            if cursor < cleanup.region_end {
+                self.record_exception(cursor, cleanup.region_end, target, self.handler_depth + 2, false);
+            }
         }
         Ok(())
     }

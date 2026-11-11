@@ -544,6 +544,7 @@ impl AsendObject {
             .with_traverse(asend_traverse)
             .with_clear(asend_clear)
             .with_repr(asend_repr)
+            .with_getattr(asend_getattr)
     }
 
     /// 要推进的异步生成器（**借用**）。
@@ -576,6 +577,60 @@ pub(crate) unsafe fn asend_clear(ptr: *mut Header, instance: &Instance) {
     if let Some(sent) = object.sent.replace(None) {
         // SAFETY: 同上。
         unsafe { instance.release_object(sent.as_ptr()) };
+    }
+}
+
+/// **`async_generator_asend.__next__()`**（round 243）：参照的 asend 对象可以被**迭代器协议**驱动
+/// （`Lib/test/test_asyncgen.py` 的 `compare_generators` 就是 `an.__next__()` 逐次推进 ✓）。
+/// 语义：每次推进底层一次——又让出 ⇒ `StopIteration(值)`（把"await 完成"的值交出来 ✓）；
+/// 底层跑完 ⇒ `StopAsyncIteration` ✓；底层抛 ⇒ 原样透出 ✓。
+unsafe fn asend_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            unsafe fn handler(
+                instance: &Instance,
+                bound: Option<NonNull<Header>>,
+                _args: &[NonNull<Header>],
+                _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+            ) -> Result<NonNull<Header>, crate::ExecError> {
+                let Some(this) = bound else {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "descriptor '__next__' needs an argument",
+                    ));
+                };
+                // SAFETY: 槽位契约保证是本类型的存活对象。
+                let object = unsafe { &*this.as_ptr().cast::<AsendObject>() };
+                let inner = object.generator();
+                // **已跑完**：照 `__anext__` 交 `StopAsyncIteration` ✓。
+                // SAFETY: 类型身份已确认。
+                let inner_object = unsafe { &*inner.as_ptr().cast::<crate::builtin_objects::GeneratorObject>() };
+                if inner_object.finished() {
+                    return Err(crate::executor::async_generator_exhausted(instance));
+                }
+                match crate::executor::resume_generator(instance, inner, object.sent())? {
+                    crate::executor::GeneratorOutcome::Yielded(value) => {
+                        // 让出的值转成 `StopIteration(value)` 的 `args`（新引用交给异常载荷 ✓）。
+                        let exception = crate::builtin_objects::exception_instance(
+                            instance,
+                            "StopIteration",
+                            vec![value],
+                        );
+                        Err(crate::ExecError::Raised { exception })
+                    }
+                    crate::executor::GeneratorOutcome::Returned(_value) => {
+                        Err(crate::executor::async_generator_exhausted(instance))
+                    }
+                }
+            }
+            let handler: crate::NativeFn = handler;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        _ => None,
     }
 }
 

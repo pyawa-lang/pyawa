@@ -492,6 +492,7 @@ pub(super) fn analyze_cells(
             body,
             ScopeKind::Function,
             false,
+            false,
             &[],
             Span::new(*first_line, *first_line, 0, 0),
         );

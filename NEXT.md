@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`a396a659`（round 242 诊断轮：async 推导式卡点＝内联推导式 cleanup 区间与异步 SEND 区间重叠 ⇒ 派发命中 cleanup 入口（END_ASYNC_FOR 栈被换成 [None,NULL,list,exc] ⇒ 结果 NULL）；下轮：清理块按内层区间分段后重落 async 推导式）
+- **HEAD**：`cca1698c`（round 243：async 推导式落地（纯协程 RETURN_GENERATOR/POP_TOP 前言真 bug＋清理区间按异步层分段＋asend.__next__）⇒ 全形态通、test_asyncgen 从状态5到跑完 14F/69E、contextlib_async 27⇒23；下轮：asyncgen 主力族／starred 目标）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

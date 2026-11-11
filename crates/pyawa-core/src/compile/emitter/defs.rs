@@ -849,6 +849,7 @@ impl Emitter {
                     ScopeKind::Function,
                     // **类体里定义** ⇒ 方法（多置 `0x8000000`）
                     self.kind == ScopeKind::Class,
+                    is_async,
                     &[],
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
@@ -925,6 +926,7 @@ impl Emitter {
                             ScopeKind::Function,
                             // 类体里定义 ⇒ 方法（多置 `0x8000000` ✓）
                             self.kind == ScopeKind::Class,
+                            is_async,
                             &closure_freevars,
                             Span::new(*first_line, *first_line, 0, 0),
                         )?;
@@ -1791,6 +1793,7 @@ impl Emitter {
             body,
             ScopeKind::Function,
             self.kind == ScopeKind::Class,
+            false,
             &[],
             Span::new(*first_line, *first_line, 0, 0),
         )?;
@@ -1829,6 +1832,7 @@ impl Emitter {
                 self.tier,
                 body,
                 ScopeKind::Function,
+                false,
                 false,
                 &body_freevars,
                 Span::new(*first_line, *first_line, 0, 0),

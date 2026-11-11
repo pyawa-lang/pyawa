@@ -348,6 +348,7 @@ pub fn compile_interactive(
         &statements,
         ScopeKind::Module,
         false,
+        false,
         &[],
         Span::synthetic(),
     )?;
@@ -467,6 +468,7 @@ pub fn compile(
         tier,
         &statements,
         ScopeKind::Module,
+        false,
         false,
         &[],
         Span::synthetic(),
@@ -816,6 +818,9 @@ fn compile_scope(
     kind: ScopeKind,
     // `method`：**在 `class` 体里定义**（实测：方法的 `co_flags` 多一位 `0x8000000`）
     method: bool,
+    // **`async def`／异步生成器**（round 243）：前言要 `RETURN_GENERATOR; POP_TOP` ✓
+    //（纯协程没有 `yield` ⇒ `statements_have_yield` 看不到 ⇒ 必须由调用方告知 ✓）。
+    is_async_scope: bool,
     // `freevars`：本作用域的**自由变量**（外层 cell 名，按引用序）——闭包用（第 291 轮）
     freevars: &[String],
     resume_span: Span,
@@ -998,7 +1003,7 @@ fn compile_scope(
     // `None` ✓（本层 `resume_generator` 一律压 sent ⇒ 没这条就会**永久多留一格** ✗，
     // `async for` 的异常表 `depth` 当场差 1 ⇒ `END_ASYNC_FOR` 路径 `StackUnderflow` ✗）。
     if kind == ScopeKind::Function
-        && (statements_have_yield(body) || emitter.unit.flags & 0x80 != 0)
+        && (statements_have_yield(body) || is_async_scope)
     {
         emitter.emit_line_only(resume_span.line_start, "RETURN_GENERATOR", 0);
         emitter.emit_line_only(resume_span.line_start, "POP_TOP", 0);
@@ -1659,6 +1664,9 @@ struct PendingCleanup {
     scaffold: Span,
     region_start: usize,
     region_end: usize,
+    /// **异步层的 `SEND` 区间**（round 243）：清理条的区间要**绕开**它们（照参照"清理块按内层区间分段" ✓），
+    /// 否则异常派发会命中清理入口、`END_ASYNC_FOR` 拿到的栈就错了 ✗（round 242 实测 ✓）。
+    async_regions: Vec<(usize, usize)>,
     label: usize,
 }
 
@@ -1718,6 +1726,8 @@ struct Generator {
     target: ComprehensionTarget,
     iterable: Expression,
     conditions: Vec<Expression>,
+    /// **`async for` 那一层**（round 243）：`[i async for i in aiter]` ✓（`P3-35`）。
+    is_async: bool,
 }
 
 impl ComprehensionTarget {
