@@ -199,11 +199,21 @@ impl Instance {
             .cast::<Header>();
         // `set_attribute_value` 收**借用** ✓ ⇒ 不额外加减 ✓。
         let _ = self.set_attribute_value(object, "__origin__", origin);
-        // **`__args__` 原样装**（round 223 撤回 round 222 的"包一元组"改动 ✗）：那版在
-        // `test_collections` 上实测偶发 `malloc(): unaligned tcache chunk detected` ✗
-        //（同一二进制连跑 4 次有 2 次崩）⇒ 先撤回、保持旧口径（单下标时 `__args__` 就是下标本身）；
-        // 别名相等（`__eq__`／`values_equal` 分支）保留 —— 双参数别名照常可比 ✓。
-        let _ = self.set_attribute_value(object, "__args__", args);
+        // **`__args__` 恒是 `tuple`**（round 224 重落 round 222 的本体 ✓）：参照
+        // `list[int].__args__ == (int,)` ✓（`Group[int, list[int]].__args__ == (int, list[int])` ✓）；
+        // round 222 版曾被误判为"堆损坏源"撤回 —— round 224 查明真凶是
+        // `generic_alias_call` 的实参**双重释放**（见 `formatting.rs` 的注释 ✓）：
+        // 包元组只是让 `test_non_generic_subscript` 首次走到别名调用那行、从而**暴露**了它 ✓。
+        // 引用账：`new_tuple` 吃**新引用** ⇒ 先补一份；`set_attribute_value` 收借用、自己再计一份 ✓
+        // ⇒ 装完还掉构造器这份 ✓。
+        if self.tuple_items(args).is_some() {
+            let _ = self.set_attribute_value(object, "__args__", args);
+        } else {
+            unsafe { self.incref_object(args.as_ptr()) };
+            let args_tuple = self.new_tuple(vec![args]);
+            let _ = self.set_attribute_value(object, "__args__", args_tuple);
+            unsafe { self.release_object(args_tuple.as_ptr()) };
+        }
         object
     }
 

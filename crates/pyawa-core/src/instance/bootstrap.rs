@@ -1772,6 +1772,22 @@ impl Instance {
         // `isinstance(<coroutine>, Awaitable)`／`isinstance(<async_generator>, AsyncGenerator)`
         // 判 False ✗（`test_collections.TestOneTrickPonyABCs` ✓）。值只用于"存在性"（非 None ✓），
         // 实际调用仍走实例 `getattr` 槽（`generator_getattr` ✓）⇒ 行为不变 ✓。
+        // **`collections.abc.Buffer` 的判据**（round 224）：`Buffer.__subclasshook__` 查
+        // `_check_methods(C, '__buffer__')`（只看 `C.__dict__` 有没有这个名字 ✓）——
+        // `bytes`／`bytearray`／`memoryview` 的 `__buffer__` 本层尚未接线 ✗ ⇒
+        // `isinstance(b'x', Buffer)` 红 ✗（`test_collections.TestCollectionABCs.test_Buffer` ✓）。
+        // 存在性占位（值不参与调用 ✓，与协程那几项同一口径 ✓）。
+        for type_name in ["bytes", "bytearray", "memoryview"] {
+            let Some(target_type) = self.type_named(type_name) else {
+                continue;
+            };
+            let native = self.alloc(BuiltinFunctionObject::new(
+                builtin_function_type,
+                "__buffer__",
+                Cell::new(crate::builtin::object::object_repr_slot_native as crate::NativeFn),
+            ));
+            self.set_type_attribute(target_type, "__buffer__", native.into_raw().cast::<Header>());
+        }
         for (type_name, attributes) in [
             ("coroutine", &["__await__"][..]),
             (

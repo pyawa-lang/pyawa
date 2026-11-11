@@ -1029,11 +1029,18 @@ fn attribute_lookup_specials(
         // **只认 `str`** ✓（`P3-17` 之后 `function` 类型字典里也有一个 `__module__` 的
         // **可写描述符对象** ✓ —— 那是给**函数实例**用的 ✗ ⇒ `function.__module__` 这个
         // **类级**读法仍该回 `'builtins'` ✓，不能把描述符对象交出去 ✗）。
-        if let Some(own) = instance
-            .type_lookup(object.cast::<crate::TypeObject>(), "__module__")
-            .filter(|own| instance.text_of(*own).is_some())
-        {
-            return Ok(Attribute::Owned(instance.retain(own))).map(Some);
+        if let Some(own) = instance.type_lookup(object.cast::<crate::TypeObject>(), "__module__") {
+            let is_descriptor = instance
+                .type_lookup(instance.type_of(own), "__get__")
+                .is_some();
+            // **照参照原样给**（round 224 真 bug 修 ✗）：`C.__module__ = <module 对象>` 之后
+            // 读回来必须是**那个对象** ✓（`test_collections.TestNamedTuple.test_module_parameter`
+            // 的 `NT.__module__ == collections` ✓）；先前只认 `str` ✗ ⇒ 模块对象被挡掉、回
+            // `'builtins'` ✗。**描述符要挡**（`function` 类型字典里的 `__module__` 是给函数实例
+            // 用的可写描述符 ✗ ⇒ 类级读法仍回 `'builtins'` ✓）。
+            if instance.text_of(own).is_some() || !is_descriptor {
+                return Ok(Attribute::Owned(instance.retain(own))).map(Some);
+            }
         }
         return Ok(Attribute::Owned(instance.new_str("builtins"))).map(Some);
     }

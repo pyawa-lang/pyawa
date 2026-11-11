@@ -370,9 +370,13 @@ pub fn generic_alias_call(
     let Some(origin) = instance.attribute_optional_of(this, "__origin__")? else {
         return Err(instance.raise_builtin_error("TypeError", "别名没有 __origin__"));
     };
-    // **实参按"借用"处理**（round 216 真 bug 修 ✗）：`call_callable` 只借不接管 ✓；但本函数拿到的
-    // `args`／`kwargs` 是**调用方持有的引用** ✓ ⇒ 自己各 retain 一份再用、用完逐个还 ✓
-    //（先前直接把裸指针转交 ✗ ⇒ namedtuple 别名的调用会把实参提前释放 ⇒ `malloc` 崩 ✗）。
+    // **实参所有权**（round 224 真 bug 修 ✗）：`call_callable` **接管**传进去的 `Vec`
+    // 里每一项的引用（`call.rs` 的注释与实现：`take_args`／native 路径调用完逐项 release ✓）——
+    // 先前注释写成"只借不接管" ✗ ⇒ 这里 retain 一份、传 `clone()` 进去、**再 release 自己那份**
+    // ⇒ 每条实参净 **−1** ⇒ 被调用方（如 `namedtuple.__new__`）保存的引用成悬垂 ✗
+    // ⇒ 偶发 `malloc(): unaligned tcache chunk detected` ✗（`Group[int,list[int]](1,[2])` 循环 3000 次
+    // 5/5 崩 ✓；round 216 的"别名调用"首崩也是这一条 ✓，当时把方向误判成"要 retain"✓）。
+    // 正确形状与 `call.rs` 的 `call_value` 同型：retain 后把 Vec **移进去**，不要再 release。
     let retained_args: Vec<NonNull<Header>> = args
         .iter()
         .map(|value| {
@@ -381,7 +385,8 @@ pub fn generic_alias_call(
             *value
         })
         .collect();
-    let mut retained_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
+    let mut retained_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> =
+        Vec::with_capacity(kwargs.len());
     for (name, value) in kwargs {
         // SAFETY: 同上。
         unsafe {
@@ -395,21 +400,11 @@ pub fn generic_alias_call(
         instance,
         origin,
         None,
-        retained_args.clone(),
-        retained_kwargs.clone(),
+        retained_args,
+        retained_kwargs,
         0,
     );
-    for value in retained_args {
-        // SAFETY: 上面各持一份。
-        unsafe { instance.release_object(value.as_ptr()) };
-    }
-    for (name, value) in retained_kwargs {
-        // SAFETY: 同上。
-        unsafe {
-            instance.release_object(name.as_ptr());
-            instance.release_object(value.as_ptr());
-        }
-    }
+    // 不在这里 release：`call_callable` 已接管上面 retain 出来的那几份 ✓。
     // SAFETY: 上面那份新引用由本函数持有。
     unsafe { instance.release_object(origin.as_ptr()) };
     outcome
