@@ -376,7 +376,28 @@ fn binary_override(
         return Ok((None, false));
     };
     let mut had_override = false;
-    for (name, swapped) in [(dunder, false), (reflected, true)] {
+    // **子类优先**（round 217 真 bug 修 ✗）：右侧类型是左侧的严格子类 ⇒ **先问右侧的反射 dunder**
+    //（参照 `do_binary_op`／`binary_op1` 的次序 ✓）—— `ChainMap() | SubclassRor()` 里
+    // `SubclassRor.__ror__` 必须先命中 ⇒ 结果类型是 `SubclassRor` ✓；先前固定先问左侧 `__or__`
+    // ⇒ 结果成了 `ChainMap` ✗（`test_collections.TestChainMap.test_union_operators` ✓）。
+    let left_type = instance.type_of(left);
+    let right_type = instance.type_of(right);
+    // **只在右侧"自己定义了反射 dunder"时先问右侧**（round 217）：参照里
+    // `ChainMap() | Subclass()`（子类**没**覆写 `__ror__`）要得到 `ChainMap` ✓；
+    // `ChainMap() | SubclassRor()`（子类**自己**写了 `__ror__`）要得到 `SubclassRor` ✓。
+    // 判据：`type_lookup_owner(right_type, reflected)` 的 owner **就是 right_type** ✓。
+    let right_owns_reflection = instance
+        .type_lookup_owner(right_type, reflected)
+        .is_some_and(|(owner, _)| owner == right_type);
+    let right_first = right_type != left_type
+        && instance.is_subtype(right_type, left_type)
+        && right_owns_reflection;
+    let order: [(&str, bool); 2] = if right_first {
+        [(reflected, true), (dunder, false)]
+    } else {
+        [(dunder, false), (reflected, true)]
+    };
+    for (name, swapped) in order {
         let (receiver, other) = if swapped { (right, left) } else { (left, right) };
         match call_user_dunder(instance, receiver, other, name, opcode)? {
             // **没有该方法** ⇒ 继续找反射那一侧 ✓。
