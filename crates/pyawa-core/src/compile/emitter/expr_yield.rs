@@ -45,13 +45,20 @@ impl Emitter {
                     self.emit_at(*span, opcode::opcode("GET_AWAITABLE").expect("GET_AWAITABLE 在表里"), 1);
                     let none_index = self.intern_constant(Constant::None);
                     self.emit_indexed(*span, "LOAD_CONST", none_index);
+                    // **循环标签要在 `SEND` 上**（round 229 真 bug 修 ✗）：参照 3.14 的
+                    // `await` 形状是 `GET_AWAITABLE; LOAD_CONST None; L_send: SEND L_done;
+                    // YIELD_VALUE 1; RESUME 3; JUMP_BACKWARD_NO_INTERRUPT L_send; L_done: END_SEND`
+                    // ✓ —— 先前标签打在 `YIELD_VALUE` 上、跳回 `YIELD_VALUE` ✗ ⇒ 恢复后**重复 yield**
+                    // （而不是把送进去的值重送给 `SEND`）⇒ 驱动方收到多余的值／`StackUnderflow`
+                    // ✗（`test_collections.TestOneTrickPonyABCs.test_AsyncGenerator` 的
+                    // `IgnoreGeneratorExit().aclose()` ✓）。
+                    self.mark_label(await_loop);
                     self.emit_directed_jump(
                         *span,
                         opcode::opcode("SEND").expect("SEND 在表里"),
                         await_done,
                         false,
                     );
-                    self.mark_label(await_loop);
                     self.emit_at(*span, opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"), 1);
                     self.emit_at(*span, opcode::opcode("RESUME").expect("RESUME 在表里"), 3);
                     self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
