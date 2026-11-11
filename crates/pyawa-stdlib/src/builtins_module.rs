@@ -790,6 +790,27 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
             None => Err(instance.raise_builtin_error("TypeError", "weak object has gone away")),
         };
     }
+    // **`frozenset` 的哈希**（round 221）：必须与 `_collections_abc.Set._hash` **逐位一致** ✓
+    //（`test_collections.TestCollectionABCs.test_Set_hash_matches_frozenset` 用
+    // `hash(fs) == Set._hash(fs)` 钉住 ✓）。算法照抄：`MAX = sys.maxsize`、`MASK = 2*MAX+1`
+    // ＝ `u64::MAX` ⇒ 全程 `u64` 环绕，最后折成 `i64`；`-1` 特例改 `590923713` ✓。
+    if let Some(frozen) = instance.type_named("frozenset") {
+        if instance.is_subtype(ty, frozen) {
+            // 安全口径：走 `Instance::set_items`（借用视图 ✓，stdlib 禁 `unsafe` ✓）。
+            let items = instance.set_items(object).unwrap_or_default();
+            let n = items.len() as u64;
+            let mut h = 1_927_868_237u64.wrapping_mul(n + 1);
+            for item in items {
+                let hash = hash_object(instance, item)? as u64;
+                let mixed = (hash ^ (hash << 16) ^ 89869747).wrapping_mul(3_644_798_167);
+                h ^= mixed;
+            }
+            h ^= (h >> 11) ^ (h >> 25);
+            h = h.wrapping_mul(69069).wrapping_add(907_133_923);
+            let signed = h as i64;
+            return Ok(if signed == -1 { 590_923_713 } else { signed });
+        }
+    }
     // 参照明确不可哈希的内建（参照置 `__hash__ = None`）⇒ 与参照同文案。
     let name = type_name(instance, object);
     for unhashable in ["list", "dict", "set", "bytearray"] {
@@ -802,6 +823,19 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
                 &format!("unhashable type: '{name}'"),
             ));
         }
+    }
+    // **`object()` 实例的哈希**（round 221）：参照 `object.__hash__` 是**身份哈希** ✓
+    //（`hashtest` 里 `{object(), object(), object()}` 进 frozenset 要能算 ✓，
+    // `Set._hash` 与 `hash(frozenset)` 用同一个函数 ⇒ 只要**同一对象恒定**就一致 ✓）。
+    if instance
+        .type_named("object")
+        .is_some_and(|object_type| ty == object_type)
+    {
+        let address = object.as_ptr() as u64;
+        // 轮流移位（`_Py_HashPointer` 的形状 ✓）；避免 `-1` 那个哨兵 ✓。
+        let rotated = address.rotate_left(16);
+        let value = rotated as i64;
+        return Ok(if value == -1 { -2 } else { value });
     }
     // 用户类：参照走 `object.__hash__`（身份哈希）⇒ 本层调它的 `__hash__`（同一协议面）。
     let is_builtin = pyawa_core::builtin_types::BUILTIN_TYPES
