@@ -235,6 +235,20 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     }
                 }
                 "END_ASYNC_FOR" => {
+                    if crate::diag::flag("PYAWA_AF_DEBUG") {
+                        let mut names: Vec<String> = Vec::new();
+                        for value in frame.get().stack_snapshot() {
+                            // SAFETY: 值栈里的项都存活。
+                            let ty = unsafe { value.as_ref() }.ty();
+                            names.push(instance.type_name(ty).to_owned());
+                        }
+                        eprintln!(
+                            "[end-async-for] depth={} off={} target={:?} stack={names:?}",
+                            frame.get().depth(),
+                            instruction.offset,
+                            instruction.jump_target()
+                        );
+                    }
                     // 实测净 −2。栈是 `[async iterator, 异常]`（异常在 TOS）：
                     // `StopAsyncIteration` ⇒ 丢掉异常与迭代器、跳到循环之后；
                     // 其余 ⇒ 原样重抛（把异常交回派发器）。

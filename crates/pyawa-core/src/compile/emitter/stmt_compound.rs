@@ -716,11 +716,17 @@ impl Emitter {
                     // ② `async def` 在本层本就是**生成器近似**。⇒ 这一格先求"**能编译、能 import**"
                     // （上限诊断里 `asyncio`／`contextlib` 两族共 **53** 个模块压在它上面）。
                     self.emit_expression(iterable)?;
-                    self.emit_at(
-                        iterable.span(),
-                        opcode::opcode("GET_AITER").expect("GET_AITER 在表里"),
-                        0,
-                    );
+                    // **`.0` 已是 async iterator**（异步生成器表达式体内 ✓）：外层已做 `GET_AITER` ⇒
+                    // 这里不再做（与普通 `for` 的 `.0` 特例同口径 ✓）。
+                    let zero_already_aiter =
+                        matches!(iterable, Expression::Name(name, _) if name == ".0");
+                    if !zero_already_aiter {
+                        self.emit_at(
+                            iterable.span(),
+                            opcode::opcode("GET_AITER").expect("GET_AITER 在表里"),
+                            0,
+                        );
+                    }
                     self.mark_label(loop_label);
                     self.emit_at(
                         iterable.span(),
@@ -783,7 +789,8 @@ impl Emitter {
                     // **耗尽路径的异常表区间先存着**（round 241）：目标是收尾处那条
                     // `END_ASYNC_FOR`（那时才知道偏移 ✓）；`END_ASYNC_FOR` 在参照里是
                     // **回溯跳**（`BACKWARD_JUMPS` 含它）⇒ 用 arg 0（= 落到下一条 ✓）。
-                    self.pending_async_for.push((region_start, region_end));
+                    self.pending_async_for
+                        .push((region_start, region_end, self.handler_depth + 1));
                 } else {
                 if matches!(iterable, Expression::Name(name, _) if name == ".0") {
                     let slot = self.slot_of(".0");
@@ -984,14 +991,8 @@ impl Emitter {
                         opcode::opcode("END_ASYNC_FOR").expect("END_ASYNC_FOR 在表里"),
                         0,
                     );
-                    if let Some((region_start, region_end)) = self.pending_async_for.pop() {
-                        self.record_exception(
-                            region_start,
-                            region_end,
-                            handler,
-                            self.handler_depth + 1,
-                            false,
-                        );
+                    if let Some((region_start, region_end, depth)) = self.pending_async_for.pop() {
+                        self.record_exception(region_start, region_end, handler, depth, false);
                     }
                 } else {
                     // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）

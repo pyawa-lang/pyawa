@@ -215,9 +215,9 @@ pub(super) struct Emitter {
     /// 三层都补 ✓，而后面还有 `return` 时**一层都不补** ✓）。
     pub(super) block_tail: bool,
     pub(super) handler_depth: usize,
-    /// **待补的 `async for` 耗尽异常表条目**（round 241）：记录 `(region_start, region_end)`；
-    /// 收尾处发 `END_ASYNC_FOR` 时才知道目标偏移 ⇒ 那时补 `record_exception` ✓（嵌套 `async for` 用栈 ✓）。
-    pub(super) pending_async_for: Vec<(usize, usize)>,
+    /// **待补的 `async for`／异步推导式耗尽异常表条目**（round 241/242）：`(region_start, region_end, depth)`；
+    /// 收尾处发 `END_ASYNC_FOR` 时才知道目标偏移 ⇒ 那时补 `record_exception` ✓（嵌套用栈 ✓）。
+    pub(super) pending_async_for: Vec<(usize, usize, usize)>,
     /// **`try` 体里**（round 220）：`await` 的合成等待循环在异常表 `depth` 上还算不准 ⇒
     /// 这层 >0 时 `await` 退回"透明"旧口径（见 `emit_expression_yield` 的注释 ✓）。
     pub(super) try_depth: usize,
