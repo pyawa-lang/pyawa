@@ -1714,6 +1714,40 @@ fn type_matches_against(
     expected: NonNull<Header>,
     caller: &str,
 ) -> Result<bool, ExecError> {
+    // **`array.array` 的惰性虚拟子类注册**（round 226）：参照里 `array.array` 被注册成
+    // `MutableSequence` ✓（`test_collections.TestCollectionABCs.test_MutableSequence` ✓）。
+    // `array` 模块 `build` 的时机太早（`collections.abc` 是**包**，桥未接包导入 ✗）⇒
+    // 第一次被问到时补一次；失败不致命（保持"未注册"语义 ✓）。
+    if instance.type_name(subject_type) == "array" {
+        static ARRAY_REGISTER_TRIED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if ARRAY_REGISTER_TRIED.get().is_none() {
+            if let Some(target) = instance.as_type(expected) {
+                let target_name = instance
+                    .attribute_optional_of(target.cast::<Header>(), "__name__")?
+                    .and_then(|name| instance.text_of(name))
+                    .unwrap_or_default()
+                    .to_owned();
+                if target_name == "MutableSequence" {
+                    if let Some(register) =
+                        instance.attribute_optional_of(target.cast::<Header>(), "register")?
+                    {
+                        let subclass = subject_type.cast::<Header>();
+                        // SAFETY: subject_type 由注册表持有、存活。
+                        if let Ok(result) = pyawa_core::executor::call::call_value(
+                            instance,
+                            register,
+                            &[subclass],
+                            &[],
+                        ) {
+                            instance.release(result);
+                        }
+                        instance.release(register);
+                        let _ = ARRAY_REGISTER_TRIED.set(());
+                    }
+                }
+            }
+        }
+    }
     if let Some(target) = instance.as_type(expected) {
         // **元类钩子优先** ✓（第 722 轮）：参照的 `isinstance`／`issubclass` 走
         // `type(U).__instancecheck__`／`__subclasscheck__` ✓ —— `Lib/_py_abc.py:92/108` 正是 ABC 的

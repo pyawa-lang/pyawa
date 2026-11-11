@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`43ad72c`（round 225：math.prod＋dict 子类 __reduce_ex__ 第 5 项 iter(items) ⇒ test_collections 4F/2E→2F/2E（总失败 4）；下轮：array 惰性注册 MutableSequence／type.__call__／__flags__／try 体内 await）
+- **HEAD**：`2203356`（round 226：array.array 惰性注册 MutableSequence＋type.__flags__＋__abc_tpflags__ 校验 ⇒ test_collections 2F/2E→1F/1E（总失败 2）；下轮：test_Callable 的 type.__call__ 根因／try 体内 await）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

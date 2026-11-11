@@ -747,6 +747,23 @@ pub fn build_class_from_parts_with_keywords(
     // （task-24 尾件 ✓：`class X(_Final, _root=True)` 的 `_root` ✓ —— `Lib/typing.py:498` ✓）。
     class_keywords: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`__abc_tpflags__` 的合法性**（round 226）：参照的 ABCMeta 在类创建时校验这个类属性 ——
+    // 同时声明"序列"（`1<<5`）和"映射"（`1<<6`）⇒ `TypeError: a class cannot be both a mapping
+    // and a sequence` ✓。本层 ABCMeta 是 `_py_abc`（纯 Python）⇒ 没有这道校验 ✗ ⇒ 这里补 ✓
+    //（`test_collections.TestCollectionABCs.test_illegal_patma_flags` 的
+    // `class Both(Collection): __abc_tpflags__ = Sequence.__flags__ | Mapping.__flags__` ✓）。
+    if let Some(tpflags) = instance.dict_get(namespace, "__abc_tpflags__") {
+        if let Some(value) = instance.int_of(tpflags) {
+            if let Some(value) = value.to_i64() {
+                if value & (1 << 5) != 0 && value & (1 << 6) != 0 {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "a class cannot be both a mapping and a sequence",
+                    ));
+                }
+            }
+        }
+    }
     // ---- 基类与布局（`OM-14`／`AB-37`／`AB-58`）----
     //
     // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。

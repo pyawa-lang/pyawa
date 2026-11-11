@@ -1024,6 +1024,47 @@ fn attribute_lookup_specials(
     // 用户类的 `__module__` 由类体自己写进命名空间 ✓（走上面那条通用查找 ✓），内建类型没有 ✗
     // ⇒ 在这里兜底 ✓（**只兜类型对象** ✗：实例上 `(1).__module__` 参照是 `AttributeError` ✓）；
     // 实例那条由"查它自己的类"自然覆盖 ✓（`Lib/collections/__init__.py` 那一族 **31** 个模块卡在这 ✓）。
+    // **`type.__flags__`**（round 226）：参照里类对象有 `__flags__`（`tp_flags` 的整数 ✓）——
+    // `collections.abc.Sequence.__flags__`／`Mapping.__flags__` 各带一个"序列／映射"标记位 ✓
+    // （`Sequence.__flags__ | Mapping.__flags__` 就是"同时当序列和映射" ✗，参照的 ABCMeta 会拒 ✓）。
+    // `Py_TPFLAGS_SEQUENCE` ＝ `1<<5`、`Py_TPFLAGS_MAPPING` ＝ `1<<6`、`Py_TPFLAGS_HEAPTYPE` ＝ `1<<9` ✓
+    // （`test_collections.TestCollectionABCs.test_illegal_patma_flags` ✓）。
+    if name == "__flags__" && instance.is_type_object(object) {
+        let mut flags: u64 = 1 << 9;
+        // SAFETY: 刚判过它是类型对象、由注册表持有。
+        let ty = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
+        for base in ty.mro() {
+            // SAFETY: MRO 条目由注册表持有、存活。
+            let base_name = unsafe { base.as_ref() }.name();
+            if matches!(
+                base_name,
+                "Sequence"
+                    | "MutableSequence"
+                    | "ByteString"
+                    | "Collection"
+                    | "Iterable"
+                    | "Iterator"
+                    | "Reversible"
+                    | "Container"
+                    | "Sized"
+                    | "Hashable"
+                    | "Set"
+                    | "MutableSet"
+                    | "Callable"
+                    | "Awaitable"
+                    | "Coroutine"
+                    | "AsyncIterable"
+                    | "AsyncIterator"
+                    | "AsyncGenerator"
+            ) {
+                flags |= 1 << 5;
+            }
+            if matches!(base_name, "Mapping" | "MutableMapping") {
+                flags |= 1 << 6;
+            }
+        }
+        return Ok(Attribute::Owned(instance.new_int(flags as i64))).map(Some);
+    }
     if name == "__module__" && instance.is_type_object(object) {
         // 类型字典里自己写了就用它 ✓（用户类 ✓）；否则给 `builtins` ✓。
         // **只认 `str`** ✓（`P3-17` 之后 `function` 类型字典里也有一个 `__module__` 的
