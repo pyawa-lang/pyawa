@@ -392,6 +392,12 @@
 
 ### 9.4 下一阶段的开工指示（**非规范**）
 
+> **取活口径（2026-11-12 用户，覆盖此前「磨套件」口径）** ✓：**主目标＝内存安全 ＋ 执行效率**——**解释器必须满足的** ✓；**其余全能慢慢补** ✗。
+> ① **内存硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）**计数归零** ✓ ＋ 全库**无 abort／segfault／堆损坏** ✓（`AB-29`／不变量 3）。
+> ② **执行效率** ✓：`tools/bench_hot.py` 的**基线入库** ＋ **CI 禁回退**（回退 >10% 即红 ✓）；**与 CPython 的比值必须报告** ✓（目标比值待用户拍 ✗）；**禁止超线性**热点（单用例耗时上限 ✓）。
+> ③ **其余排后** ✗：日常库缺口（`json.load(f)`／`defaultdict`／`match` 同行 suite／`urllib.request`）· 冷门语义（`asyncgen`／`dis`／`traceback`／`unicode_identifiers`／PEP 646·695）· **官方套件百分比** —— **都不是判据** ✗，有空再补 ✓。
+
+
 > **已拍板 ✓（2026-10-18，A1–A4 按建议）**：`P3-29` socket 的四个拍板点 —— **A1** 新增 `CP-38`（`socketpair` 槽 ✓；
 > vtable 加槽，ABI 未发布 ⇒ 现在最便宜 ✓）· **A2** `getaddrinfo` **推迟** ✓ · **A3** 地址线 v1＝
 > **IPv4 4B ＋ 端口 2B 大端**，v1 只 **`AF_INET`／`AF_UNIX`** ✓（`CP-39`）· **A4** `fd` 沿用 `fs` 先例（`CP-31`）✓。

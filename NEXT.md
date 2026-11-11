@@ -9,6 +9,10 @@
 - **HEAD**：`3b2fc54a`（round 245：异步生成器 PEP 479 包装（resume_generator 加 async_generator 判定＋INTRINSIC_STOPITERATION_ERROR 按 co_flags 0x200 选词）⇒ test_asyncgen 8F/69E→6F/69E；下轮：throw 穿过 await（CLEANUP_THROW 异常表）／starred 目标）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
+- **当前主线（2026-11-12 用户口径 ✓）**：**内存安全 ＋ 执行效率**（解释器硬要求 ✓）；其余**慢慢补** ✗
+  - ① 内存硬门：`tools/memdangle_survey.py` 归零 ＋ 无 abort／segfault
+  - ② 执行效率：`tools/bench_hot.py` 基线入库 ＋ 禁回退（>10% 红）＋ 报 CPython 比值
+  - ③ 其余（日常库／冷门语义／套件 %）**排后** ✗
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
 - **内存类硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）⇒ `target/memdangle_survey.tsv`；
   **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
