@@ -2087,6 +2087,51 @@ pub(crate) fn statements_have_yield(statements: &[Statement]) -> bool {
     })
 }
 
+/// **作用域里有 `yield from` 吗**（round 244）：`async def` 里出现 ⇒ `SyntaxError: 'yield from' inside async function` ✓
+/// （参照在**编译期**就拒 ✗ —— 本层先前接受 ⇒ `test_asyncgen` 的 5 个语法档全红 ✗）。只看本层，不进嵌套定义 ✓。
+pub(crate) fn statements_have_yield_from(statements: &[Statement]) -> bool {
+    statements.iter().any(|statement| match statement {
+        Statement::YieldFrom(_, _) => true,
+        Statement::If { then_body, else_body, .. } => {
+            statements_have_yield_from(then_body) || statements_have_yield_from(else_body)
+        }
+        Statement::While { body, else_body, .. } | Statement::For { body, else_body, .. } => {
+            statements_have_yield_from(body) || statements_have_yield_from(else_body)
+        }
+        Statement::Try { body, handlers, else_body, finally_body, .. } => {
+            statements_have_yield_from(body)
+                || handlers.iter().any(|handler| statements_have_yield_from(&handler.body))
+                || statements_have_yield_from(else_body)
+                || statements_have_yield_from(finally_body)
+        }
+        Statement::With { body, .. } => statements_have_yield_from(body),
+        _ => false,
+    })
+}
+
+/// **作用域里有"带值的 return"吗**（round 244）：异步生成器里出现 ⇒
+/// `SyntaxError: 'return' with value in async generator` ✓。只看本层 ✓。
+pub(crate) fn statements_have_return_value(statements: &[Statement]) -> bool {
+    statements.iter().any(|statement| match statement {
+        // 裸 `return` 被解析成 `Return(Constant::None)` ⇒ 只有**非常量 None**才算"带值" ✓
+        Statement::Return(value, _) => !matches!(value, crate::compile::Expression::Constant(crate::compile::Constant::None, _)),
+        Statement::If { then_body, else_body, .. } => {
+            statements_have_return_value(then_body) || statements_have_return_value(else_body)
+        }
+        Statement::While { body, else_body, .. } | Statement::For { body, else_body, .. } => {
+            statements_have_return_value(body) || statements_have_return_value(else_body)
+        }
+        Statement::Try { body, handlers, else_body, finally_body, .. } => {
+            statements_have_return_value(body)
+                || handlers.iter().any(|handler| statements_have_return_value(&handler.body))
+                || statements_have_return_value(else_body)
+                || statements_have_return_value(finally_body)
+        }
+        Statement::With { body, .. } => statements_have_return_value(body),
+        _ => false,
+    })
+}
+
 /// 递归找 `break`（保守：只要出现就当"可能跳出" ✓）。
 fn contains_break(statements: &[Statement]) -> bool {
     statements.iter().any(|statement| match statement {

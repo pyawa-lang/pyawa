@@ -992,6 +992,22 @@ fn compile_scope(
         // **`MAKE_CELL` 也没有位点**（实测全 `None` ＝ `BC-4` 扩的对齐点 ✓）
         emitter.emit_none(opcode::opcode("MAKE_CELL").expect("MAKE_CELL 在表里"), slot);
     }
+    // **异步生成器的编译期禁令**（round 244，照参照原文案 ✓）：
+    //   `yield from` ⇒ `SyntaxError: 'yield from' inside async function` ✓；
+    //   带值的 `return` ⇒ `SyntaxError: 'return' with value in async generator` ✓
+    //（`Lib/test/test_asyncgen.py` 的 5 个语法档靠这两条 ✓；先前本层接受 ⇒ 全红 ✗）。
+    if is_async_scope && statements_have_yield(body) {
+        if crate::compile::symbols::statements_have_yield_from(body) {
+            return Err(CompileError::Syntax(
+                "'yield from' inside async function".to_owned(),
+            ));
+        }
+        if crate::compile::symbols::statements_have_return_value(body) {
+            return Err(CompileError::Syntax(
+                "'return' with value in async generator".to_owned(),
+            ));
+        }
+    }
     // **生成器前言**（第 124 轮实测）：`RETURN_GENERATOR` ＋ `POP_TOP`，位点＝`(def 行, def 行, None, None)` ✓
     // **生成器还要一条异常表条目** ✓（第 167 轮定案）：参照的生成器体**整段受保护** ✓
     //（`(start=2, len=7, target=9, depth=0, lasti=True)` 码元 ✓），处理块落在收尾那条

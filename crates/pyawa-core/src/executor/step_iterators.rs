@@ -459,17 +459,36 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                             }
                             return Ok(Step::Continue);
                         }
-                        match resume_generator(instance, inner, carried)? {
-                            GeneratorOutcome::Yielded(value) => {
-                                // **一步完成**：`await asend` 的语义就是"推进一次并把值交出来"
-                                // （实测 `asend.send(None)` ⇒ `StopIteration(值)`），所以这里走
-                                // "耗尽"那一支——压值并跳到 `END_SEND`，**不**让出去。
-                                frame.get().push(value)?;
-                                decoder.set_position(target);
-                            }
-                            GeneratorOutcome::Returned(value) => {
-                                frame.get().push(value)?;
-                                decoder.set_position(target);
+                        // **中间 await 的让出要"内循环"消化**（round 244）：异步生成器体里的
+                        // `await` 也走 `YIELD_VALUE`（`SEND; YIELD_VALUE 1; RESUME 3; …` ✓）——
+                        // 那些让出**不是**生成器的值 ✗，要原样再驱动下去；只有**生成器语句的 `yield`**
+                        // 才是"`await asend` 完成"的那一刻 ✓（`test_asyncgen` 的
+                        // `test_async_gen_iteration_01`：`await awaitable()` 让出的 `('result',)`
+                        // 先前被当成值交出去 ⇒ 列表里混进 `('result',)` ✗）。
+                        let mut carried_value = carried;
+                        loop {
+                            match resume_generator(instance, inner, carried_value)? {
+                                GeneratorOutcome::Yielded(value) => {
+                                    if generator_suspended_inside_await(inner) {
+                                        // 中间让出：丢掉让出值（外层的驱动者会看到 `None` 以外的
+                                        // 值后再送 `None` —— 本层的 `async for`／`run_until_complete`
+                                        // 都送 `None` ✓，如实按 `None` 继续 ✓）。
+                                        release(instance, value);
+                                        carried_value = Some(instance.singletons().none());
+                                        continue;
+                                    }
+                                    // **一步完成**：`await asend` 的语义就是"推进一次并把值交出来"
+                                    // （实测 `asend.send(None)` ⇒ `StopIteration(值)`），所以这里走
+                                    // "耗尽"那一支——压值并跳到 `END_SEND`，**不**让出去。
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                    break;
+                                }
+                                GeneratorOutcome::Returned(value) => {
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                    break;
+                                }
                             }
                         }
                         return Ok(Step::Continue);
@@ -530,4 +549,37 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
         _ => unreachable!("step_iterators 只接收本族的 opcode"),
     }
     Ok(Step::Continue)
+}
+
+/// **生成器是不是停在 `await` 的 `SEND` 循环里**（round 244）：帧的指令指针指向
+/// `SEND; YIELD_VALUE 1; RESUME 3` 那条回边的 `RESUME` 处时，前一条是 `YIELD_VALUE`、
+/// 再往前（跳过 `SEND` 的那格内联缓存）是 `SEND` ⇒ 这次让出是**中间 await**，不是
+/// 生成器语句的 `yield` ✓（判据实测：`async def g(): await x` 与 `async def g(): yield 1`
+/// 的让出位点同形，唯一区别是前者前面有 `SEND` ✓）。
+pub(crate) fn generator_suspended_inside_await(generator: NonNull<Header>) -> bool {
+    // SAFETY: 调用方保证 generator 是本实例里存活的生成器。
+    let object = unsafe { &*generator.as_ptr().cast::<crate::builtin_objects::GeneratorObject>() };
+    let frame_header = object.frame();
+    // SAFETY: 帧由生成器持有，存活。
+    let frame = unsafe { &*frame_header.as_ptr().cast::<crate::frame::Frame>() };
+    let Some(code_header) = frame.code() else {
+        return false;
+    };
+    // SAFETY: code 由帧持有，存活。
+    let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+    let bytes = code.code();
+    let ip = frame.instruction_pointer();
+    // 让出后恢复点＝`RESUME`（1 码元）；前一条 `YIELD_VALUE`（1 码元）；再前是 `SEND`（2 码元）。
+    if ip < 3 {
+        return false;
+    }
+    let opcode_at = |unit: usize| -> u16 {
+        if unit * 2 + 1 < bytes.len() {
+            u16::from(bytes[unit * 2])
+        } else {
+            0
+        }
+    };
+    // `RESUME`(128) 前是 `YIELD_VALUE`(120)；再往前跳过 `SEND`(106) 的内联缓存（1 格）。
+    opcode_at(ip) == 128 && opcode_at(ip - 1) == 120 && opcode_at(ip - 3) == 106
 }

@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`cca1698c`（round 243：async 推导式落地（纯协程 RETURN_GENERATOR/POP_TOP 前言真 bug＋清理区间按异步层分段＋asend.__next__）⇒ 全形态通、test_asyncgen 从状态5到跑完 14F/69E、contextlib_async 27⇒23；下轮：asyncgen 主力族／starred 目标）
+- **HEAD**：`a61e209c`（round 244：asend 中间 await 消化（SEND 内循环＋generator_suspended_inside_await）＋异步生成器编译期禁令（yield from／带值 return）⇒ test_asyncgen 14F/69E→8F/69E；下轮：exception_* 的 throw 穿 await／starred 目标）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
