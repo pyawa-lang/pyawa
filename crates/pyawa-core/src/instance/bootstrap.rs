@@ -113,6 +113,14 @@ impl Instance {
         );
         // SAFETY: metatype 刚分配、尚未交给任何其他代码；写入自指后它才被引用。
         unsafe { metatype.as_ref().header.set_ty(metatype) };
+        // **元类型恒有"实例字典"位**（round 228 真 bug 修 ✗）：类型对象（`type` 及其子类的实例）
+        // 的"实例字典"就是 `TypeObject.dict`（命名空间 ✓，`instance_attributes` 走它 ✓）⇒ 这一位
+        // 必须**一开始就置** ✓。先前没有 ✗，只是靠"某条路径碰巧先调了 `type_namespace`（它顺手置位）"
+        // 才正常；round 227 装 `type.__call__` 时 `set_type_attribute` **先**把 `type` 的命名空间
+        // 惰性建出来（那条路不置位 ✗）⇒ 后续所有"类型对象的实例字典"判断失败 ✗ ⇒ 类属性删除
+        // （dataclass 的 `delattr(cls, field)`）报 `'type' object has no attribute 'x'` ✗
+        // ⇒ `import unittest` 红 ✓（`Callable` 检查也需要 `type.__dict__['__call__']` ✓）。
+        unsafe { metatype.as_ref() }.mark_external_instance_dict();
         this.metatype.set(Some(metatype));
 
         this.bootstrap_builtin_types();
@@ -1682,7 +1690,16 @@ impl Instance {
                 "__call__",
                 crate::builtin_objects::dunder_call_native as crate::NativeFn,
             ),
-            // **`type.__call__` 不装**（round 227 复核后仍不装 ✓）：装上后 `import unittest` 立刻红
+            (
+                self.type_named("type").expect("type 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
+            // **`type.__call__`**（round 228 真因修后装上 ✓）：round 227 装上后 `import unittest` 红
+            //（`'type' object has no attribute 'argparse'`）—— 真因是 `set_type_attribute` 惰性建
+            // `type` 命名空间时**漏置** `HAS_INSTANCE_DICT` ✗ ⇒ 类属性删除（dataclass 的
+            // `delattr(cls, field)`）失败 ✗；round 228 修好那一位后再装 ✓（`Callable.__subclasshook__`
+            // 查 `type.__dict__` 要有 `__call__` ✓）。：装上后 `import unittest` 立刻红
             //（`AttributeError: 'type' object has no attribute 'argparse'`，排查确认不是属性读路径的
             // 普通缺名 ⇒ 另有隐情，见台账）✗。`Callable.__subclasshook__` 查 `type.__dict__` 这条
             // 差额**如实登记**在台账（`test_Callable` 的 `isinstance(type, Callable)` ✓）。
