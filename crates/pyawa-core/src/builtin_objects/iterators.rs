@@ -34,8 +34,13 @@ py_object! {
     pub struct AsendObject {
         /// 要推进的异步生成器（**本对象持有一份引用**）。
         generator: NonNull<Header>,
-        /// `asend(值)` 送进去的值（`__anext__()` 时为 `None`）。
+        /// `asend(值)`／`athrow(异常)` 带进去的值（`__anext__()`／`aclose()` 时为 `None`）。
         sent: RefCell<Option<NonNull<Header>>>,
+        {
+            /// **操作模式**（round 233）：`0` 正常推进（`asend`／`__anext__` ✓）、`1` `aclose()`、
+            /// `2` `athrow(exc)`（异常对象放在 `sent` ✓）。
+            mode: core::cell::Cell<u8>
+        }
     }
 }
 
@@ -655,6 +660,35 @@ pub(crate) unsafe fn async_generator_asend_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let generator = bound.expect("asend 是绑定方法，必须有 self");
     make_asend(instance, generator, args.first().copied())
+}
+
+/// `async_generator.aclose()`：交出一个 `AsendObject`（mode=1），`await` 时按
+/// `GeneratorExit` 推进到底并吞掉 `GeneratorExit`／`StopAsyncIteration` ✓（round 233）。
+pub(crate) unsafe fn async_generator_aclose_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("aclose 是绑定方法，必须有 self");
+    let object = make_asend(instance, generator, None)?;
+    // SAFETY: 刚造的 AsendObject。
+    unsafe { &*object.as_ptr().cast::<AsendObject>() }.mode.set(1);
+    Ok(object)
+}
+
+/// `async_generator.athrow(exc)`：交出一个 `AsendObject`（mode=2，异常放 `sent`）✓（round 233）。
+pub(crate) unsafe fn async_generator_athrow_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("athrow 是绑定方法，必须有 self");
+    let object = make_asend(instance, generator, args.first().copied())?;
+    // SAFETY: 刚造的 AsendObject。
+    unsafe { &*object.as_ptr().cast::<AsendObject>() }.mode.set(2);
+    Ok(object)
 }
 
 /// 造一个 `AsendObject`（**新引用**）。

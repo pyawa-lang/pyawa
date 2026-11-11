@@ -375,7 +375,76 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         let asend = unsafe { &*receiver.as_ptr().cast::<AsendObject>() };
                         let inner = asend.generator();
                         let carried = asend.sent();
+                        let mode = asend.mode.get();
                         release(instance, sent);
+                        // **`aclose()`**（round 233）：把 `GeneratorExit` 抛进底层并**推进到底**，
+                        // 吞掉 `GeneratorExit`／`StopAsyncIteration`，`await` 结果是 `None` ✓。
+                        if mode == 1 {
+                            let generator_exit_type = instance
+                                .type_named("GeneratorExit")
+                                .expect("GeneratorExit 在引导期已登记");
+                            let exception = crate::executor::format::new_exception(
+                                instance,
+                                generator_exit_type,
+                                "",
+                            );
+                            let mut outcome = resume_generator_with_raise(instance, inner, exception);
+                            loop {
+                                match outcome {
+                                    Ok(GeneratorOutcome::Yielded(value)) => {
+                                        release(instance, value);
+                                        let exception = crate::executor::format::new_exception(
+                                            instance,
+                                            generator_exit_type,
+                                            "",
+                                        );
+                                        outcome =
+                                            resume_generator_with_raise(instance, inner, exception);
+                                    }
+                                    Ok(GeneratorOutcome::Returned(value)) => {
+                                        release(instance, value);
+                                        break;
+                                    }
+                                    Err(ExecError::Raised { exception }) => {
+                                        // SAFETY: exception 是存活对象。
+                                        let ty = unsafe { exception.as_ref() }.ty();
+                                        let is_swallowed = instance
+                                            .type_named("GeneratorExit")
+                                            .is_some_and(|base| instance.is_subtype(ty, base))
+                                            || instance
+                                                .type_named("StopAsyncIteration")
+                                                .is_some_and(|base| instance.is_subtype(ty, base));
+                                        if is_swallowed {
+                                            crate::discard_raised(instance, exception);
+                                            break;
+                                        }
+                                        return Err(ExecError::Raised { exception });
+                                    }
+                                    Err(other) => return Err(other),
+                                }
+                            }
+                            push(instance, frame.get(), instance.singletons().none())?;
+                            decoder.set_position(target);
+                            return Ok(Step::Continue);
+                        }
+                        // **`athrow(exc)`**（round 233）：把 `carried` 里的异常抛进底层 ✓；
+                        // 让出的值照 `asend` 的"一步完成"口径交出去 ✓。
+                        if mode == 2 {
+                            let exception = carried.ok_or(()).map_err(|_| {
+                                instance.raise_builtin_error("TypeError", "athrow 缺少异常对象")
+                            })?;
+                            match resume_generator_with_raise(instance, inner, exception)? {
+                                GeneratorOutcome::Yielded(value) => {
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                }
+                                GeneratorOutcome::Returned(value) => {
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                }
+                            }
+                            return Ok(Step::Continue);
+                        }
                         match resume_generator(instance, inner, carried)? {
                             GeneratorOutcome::Yielded(value) => {
                                 // **一步完成**：`await asend` 的语义就是"推进一次并把值交出来"

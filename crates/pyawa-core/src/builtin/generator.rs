@@ -10,7 +10,7 @@ use crate::executor::ExecError;
 use core::ptr::NonNull;
 use crate::header::Header;
 use crate::instance::Instance;
-use crate::builtin_objects::{async_generator_anext_native, async_generator_asend_native, exception_instance, resume_with_sent, thrown_exception};
+use crate::builtin_objects::{async_generator_aclose_native, async_generator_anext_native, async_generator_asend_native, async_generator_athrow_native, exception_instance, resume_with_sent, thrown_exception};
 
 
 pub unsafe fn generator_getattr(
@@ -36,19 +36,21 @@ pub unsafe fn generator_getattr(
                 unsafe { instance.incref_object(ptr) };
                 return Some(owner);
             }
-            // `__anext__()` 交出 awaitable（我们的 `AsendObject`）；`asend(v)` 同形、带值
-            "__anext__" | "asend" => {
+            // `__anext__()` 交出 awaitable（我们的 `AsendObject`）；`asend(v)` 同形、带值；
+            // `aclose()`／`athrow(e)` 也走这一层（round 233：mode 不同 ✓）。
+            "__anext__" | "asend" | "aclose" | "athrow" => {
                 let method_type = instance
                     .type_named("builtin_function_or_method")
                     .expect("引导期已登记");
-                let handler: NativeFn = if name == "asend" {
-                    async_generator_asend_native
-                } else {
-                    async_generator_anext_native
+                let (handler, method_name): (NativeFn, &'static str) = match name {
+                    "asend" => (async_generator_asend_native, "asend"),
+                    "aclose" => (async_generator_aclose_native, "aclose"),
+                    "athrow" => (async_generator_athrow_native, "athrow"),
+                    _ => (async_generator_anext_native, "async_generator"),
                 };
                 let native = instance.alloc(BuiltinFunctionObject::new(
                     method_type,
-                    "async_generator",
+                    method_name,
                     Cell::new(handler),
                 ));
                 let native_raw = native.into_raw().cast::<Header>();
