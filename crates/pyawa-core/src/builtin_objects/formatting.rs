@@ -343,8 +343,9 @@ pub fn generic_alias_mro_entries(
     let origin = instance
         .attribute_optional_of(this, "__origin__")?
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "别名没有 __origin__"))?;
-    // **新引用** ✓（`new_tuple` 接管 ✓）。
-    Ok(instance.new_tuple(vec![instance.retain(origin)]))
+    // **新引用** ✓：`origin` 本身就是新引用 ⇒ 直接交给 `new_tuple`（它接新引用 ✓）——
+    // 先前又 `retain` 一次 ⇒ 每次 `__mro_entries__` 漏一份 ✗（round 227 修 ✓）。
+    Ok(instance.new_tuple(vec![origin]))
 }
 
 /// **`GenericAlias.__getattr__`** ✓（task-24 尾件）：别名上缺的属性**转给 `__origin__`** ✓
@@ -490,7 +491,10 @@ pub fn generic_alias_getattr(
     if name != "__getattr__" {
         if let Some(origin) = instance.attribute_optional_of(this, "__origin__")? {
             // `attribute_optional_of` 走完整属性通道 ✓（对**别名**会再落到本函数 ⇒ 逐层转发 ✓）。
-            if let Some(found) = instance.attribute_optional_of(origin, &name)? {
+            let found = instance.attribute_optional_of(origin, &name);
+            // **origin 是新引用** ⇒ 不论转不转得出去都要还 ✓（round 227 修泄漏 ✗）。
+            instance.release(origin);
+            if let Some(found) = found? {
                 return Ok(found);
             }
         }

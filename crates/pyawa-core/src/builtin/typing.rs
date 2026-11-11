@@ -507,12 +507,13 @@ pub fn generic_init_subclass_native(
     } else if let Some(original) = instance.dict_get(namespace, "__orig_bases__") {
         for base in instance.tuple_items(original).unwrap_or_default() {
             if let Ok(Some(args)) = instance.attribute_optional_of(base, "__args__") {
-                // **`__args__` 可能不是元组** ✓（如实：本层的 `GenericAlias` 单参下标存的是**那个参数本身** ✓
-                // —— 参照恒为元组 ✓）：元组就摊开 ✓，否则当成一个参数 ✓。
+                // **`__args__` 可能不是元组** ✓：元组就摊开 ✓，否则当成一个参数 ✓。
                 match instance.tuple_items(args) {
                     Some(items) => params.extend(items),
                     None => params.push(args),
                 }
+                // **`args` 是新引用** ⇒ 拷完指针就还 ✓（round 227 修泄漏 ✗）。
+                instance.release(args);
             }
         }
     }

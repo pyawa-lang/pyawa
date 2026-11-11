@@ -131,7 +131,36 @@ pub(crate) fn dunder_call_native(
             }
         },
     };
-    crate::executor::call::call_callable(instance, receiver, None, rest.to_vec(), kwargs.to_vec(), 0)
+    // **实参所有权**（round 227 真 bug 修 ✗）：`call_callable` 是**转移语义**（接管传入 `Vec`
+    // 每项的引用、调用完逐项 release ✓）—— 先前直接 `rest.to_vec()`／`kwargs.to_vec()` 把
+    // **借来的**指针交出去 ✗ ⇒ 每条实参净 −1 ✗（与 round 216 的 `generic_alias_call` 同一个坑 ✓）。
+    // 正确形状：先逐项 retain，再把 Vec 移进去，不再自己 release ✓。
+    let retained_args: Vec<NonNull<Header>> = rest
+        .iter()
+        .map(|value| {
+            // SAFETY: 实参由调用方保证存活。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            *value
+        })
+        .collect();
+    let mut retained_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> =
+        Vec::with_capacity(kwargs.len());
+    for (name, value) in kwargs {
+        // SAFETY: 同上。
+        unsafe {
+            instance.incref_object(name.as_ptr());
+            instance.incref_object(value.as_ptr());
+        }
+        retained_kwargs.push((*name, *value));
+    }
+    crate::executor::call::call_callable(
+        instance,
+        receiver,
+        None,
+        retained_args,
+        retained_kwargs,
+        0,
+    )
 }
 
 /// **内建容器的 `__getitem__` 类型字典入口**（round 214）：`tuple.__getitem__`／`list.__getitem__` 一类

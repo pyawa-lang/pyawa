@@ -1682,6 +1682,10 @@ impl Instance {
                 "__call__",
                 crate::builtin_objects::dunder_call_native as crate::NativeFn,
             ),
+            // **`type.__call__` 不装**（round 227 复核后仍不装 ✓）：装上后 `import unittest` 立刻红
+            //（`AttributeError: 'type' object has no attribute 'argparse'`，排查确认不是属性读路径的
+            // 普通缺名 ⇒ 另有隐情，见台账）✗。`Callable.__subclasshook__` 查 `type.__dict__` 这条
+            // 差额**如实登记**在台账（`test_Callable` 的 `isinstance(type, Callable)` ✓）。
             // **集合的四个二元运算符类型字典项**（round 216）：`Counter` 的 multiset 测试直接取
             // `set.__sub__`／`__or__`／`__and__` 当参照 ✓。
             (
