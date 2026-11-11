@@ -377,6 +377,15 @@ pub(crate) fn super_lookup(
                         this: bound,
                     }));
                 }
+                // **`__new__` 是 staticmethod 语义**（round 235 真 bug 修 ✗）：参照的
+                // `object.__new__`／`type.__new__` 在类字典里是**静态**的 ⇒ `super().__new__(cls)`
+                // 只传 `cls` 一个实参 ✓。先前走下面那条"内建方法一律绑 self"✗ ⇒ 多绑一份
+                // ⇒ `object.__new__()` 收到 `(this, cls)` 两个 ⇒
+                // `TypeError: object.__new__() takes exactly one argument …，实际给了 1 个`（原文计数也错 ✗；
+                // `test_abc.TestABC.test_all_new_methods_are_called` 的 `super().__new__(cls)` ✓）。
+                if name == "__new__" && found_type == builtin_type(instance, "builtin_function_or_method") {
+                    return Ok(Some(Attribute::Value(found)));
+                }
                 if found_type == builtin_type(instance, "function")
                     || found_type == builtin_type(instance, "builtin_function_or_method")
                 {
@@ -1862,6 +1871,9 @@ pub fn execute<'a>(
         }
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
+        if crate::diag::flag("PYAWA_TRACE_MAIN") && code.name() == "main" {
+            eprintln!("[tr] off={} op={} depth={}", instruction.offset, instruction.opcode, frame.get().depth());
+        }
         // **本地追踪的 `'line'` 事件**（round 181）：只有 `f_trace` 被设成可调用值时
         // `trace_active` 才为真 ⇒ 未启用时只多读一个 `Cell<bool>` ✓（实测开销在噪声内）。
         if frame.get().trace_active() {

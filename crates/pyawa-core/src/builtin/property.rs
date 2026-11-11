@@ -354,6 +354,16 @@ pub unsafe fn property_getattr(
             unsafe { instance.incref_object(object.fdel().as_ptr()) };
             return Some(object.fdel());
         }
+        // **`__isabstractmethod__` 委托 `fget`**（round 235）：参照 `property.__isabstractmethod__`
+        // 就是 `fget.__isabstractmethod__`（没有给 `False` ✓）——`Lib/abc.py` 的 `abstractproperty`
+        // 靠它判抽象 ✓（`test_abc.test_abstractproperty_basics` ✓）。
+        "__isabstractmethod__" => {
+            let found = instance
+                .attribute_optional_of(object.fget(), "__isabstractmethod__")
+                .ok()
+                .flatten();
+            return Some(found.unwrap_or_else(|| instance.retain(instance.singletons().boolean(false))));
+        }
         "getter" | "setter" | "deleter" => {}
         _ => return None,
     }

@@ -520,6 +520,17 @@ pub unsafe fn classmethod_getattr(
     let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
     match name {
         "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        // **`__isabstractmethod__` 委托底层函数**（round 235）：参照 3.10+ 的
+        // `classmethod.__isabstractmethod__` 就是 `__func__.__isabstractmethod__`（没有给 `False` ✓）——
+        // `Lib/abc.py` 的 `abstractclassmethod` 一族靠它判抽象 ✓；先前没有这个属性 ✗
+        //（`test_abc.test_abstractclassmethod_basics` 的 `foo.__isabstractmethod__` ✓）。
+        "__isabstractmethod__" => Some(
+            instance
+                .attribute_optional_of(object.function(), "__isabstractmethod__")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| instance.retain(instance.singletons().boolean(false))),
+        ),
         _ => wrapper_delegate(instance, object.function(), name),
     }
 }
@@ -665,6 +676,14 @@ pub unsafe fn staticmethod_getattr(
     let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
     match name {
         "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        // **`__isabstractmethod__` 委托底层函数**（round 235；与 `classmethod` 同口径 ✓）。
+        "__isabstractmethod__" => Some(
+            instance
+                .attribute_optional_of(object.function(), "__isabstractmethod__")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| instance.retain(instance.singletons().boolean(false))),
+        ),
         _ => wrapper_delegate(instance, object.function(), name),
     }
 }
