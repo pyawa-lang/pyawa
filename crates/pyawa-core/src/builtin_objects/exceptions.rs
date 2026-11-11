@@ -397,6 +397,37 @@ pub unsafe fn exception_getattr(
                 None => instance.new_none(),
             })
         }
+        // **`UnicodeError` 一族的属性面**（round 238）：`UnicodeDecodeError(encoding, object, start,
+        // end, reason)` 的五个字段在参照里是**只读属性** ✓；先前一个都没有 ✗ ⇒
+        // `e.encoding`／`e.object`／`e.start`／`e.end`／`e.reason` 全 `AttributeError` ✗。
+        "encoding" | "object" | "start" | "end" | "reason" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            let ty = unsafe { (*ptr).ty() };
+            let is_unicode_error = instance
+                .type_named("UnicodeError")
+                .is_some_and(|base| instance.is_subtype(ty, base));
+            if !is_unicode_error {
+                return None;
+            }
+            let arguments = object.args();
+            // 注意：`UnicodeDecodeError`／`UnicodeEncodeError`／`UnicodeTranslateError` 的
+            // `args` 布局同形（encoding, object, start, end, reason ✓）；纯 `UnicodeError` 只有
+            // 一个 str 实参 ⇒ 属性一律 `None` ✓（照参照的宽松口径 ✓）。
+            if arguments.len() < 5 {
+                return Some(instance.new_none());
+            }
+            let index = match name {
+                "encoding" => 0,
+                "object" => 1,
+                "start" => 2,
+                "end" => 3,
+                _ => 4,
+            };
+            let value = arguments[index];
+            // SAFETY: 值由本对象持有，这里新增一份交给调用方 ✓。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            Some(value)
+        }
         // **`filename`**（round 237）：两种异常都有它 —— `SyntaxError` 取第二项元组第 0 格 ✓；
         // 其余按 `OSError` 口径取 `args[2]` ✓（两边都要，避免同一个 match 里出现两条 `"filename"` 臂
         // ⇒ 编译器 "unreachable pattern" 警告 ✗）。
@@ -696,6 +727,19 @@ unsafe fn add_note_native(
             "add_note() argument must be str, not str",
         ));
     };
+    // **`__notes__` 被用户改成非 list ⇒ `add_note` 要 `TypeError`**（round 238，照参照原话）：
+    // `e.__notes__ = 42; e.add_note("x")` ⇒ `TypeError: Cannot add note: __notes__ is not a list` ✓
+    //（`test_exceptions.ExceptionTests.test_notes` ✓；先前静默重建 list ✗）。
+    if let Some(memory) = crate::executor::protocol::mounted_instance_dict(instance, this) {
+        if let Some(existing) = instance.dict_get(memory, "__notes__") {
+            if instance.list_items(existing).is_none() {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "Cannot add note: __notes__ is not a list",
+                ));
+            }
+        }
+    }
     add_exception_note(instance, this, &text);
     Ok(instance.new_none())
 }
