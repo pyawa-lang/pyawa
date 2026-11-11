@@ -991,7 +991,13 @@ fn compile_scope(
     // `CALL_INTRINSIC_1 3; RERAISE 1` ✓ —— 我们先前**整张表是空的** ✗。**体的起点**＝前言之后、
     // `RESUME` 之前 ✓（此处 ✓），右端在收尾那里取 ✓。
     let mut generator_body_start: Option<usize> = None;
-    if kind == ScopeKind::Function && statements_have_yield(body) {
+    // **协程也有同一条前言**（round 236）：参照的 `async def`（不带 `yield` 的纯协程）反汇编也是
+    // `RETURN_GENERATOR; POP_TOP; RESUME 0` ✓ —— `POP_TOP` 吃掉首次 `send(None)` 压进来的那个
+    // `None` ✓（本层 `resume_generator` 一律压 sent ⇒ 没这条就会**永久多留一格** ✗，
+    // `async for` 的异常表 `depth` 当场差 1 ⇒ `END_ASYNC_FOR` 路径 `StackUnderflow` ✗）。
+    if kind == ScopeKind::Function
+        && (statements_have_yield(body) || emitter.unit.flags & 0x80 != 0)
+    {
         emitter.emit_line_only(resume_span.line_start, "RETURN_GENERATOR", 0);
         emitter.emit_line_only(resume_span.line_start, "POP_TOP", 0);
         generator_body_start = Some(emitter.unit.code.len());

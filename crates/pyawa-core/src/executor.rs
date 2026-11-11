@@ -1871,8 +1871,8 @@ pub fn execute<'a>(
         }
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
-        if crate::diag::flag("PYAWA_TRACE_MAIN") && code.name() == "main" {
-            eprintln!("[tr] off={} op={} depth={}", instruction.offset, instruction.opcode, frame.get().depth());
+        if crate::diag::flag("PYAWA_TRACE_MAIN") && (code.name() == "main" || code.name() == "agen") {
+            eprintln!("[tr:{}] off={} op={} depth={}", code.name(), instruction.offset, instruction.opcode, frame.get().depth());
         }
         // **本地追踪的 `'line'` 事件**（round 181）：只有 `f_trace` 被设成可调用值时
         // `trace_active` 才为真 ⇒ 未启用时只多读一个 `Cell<bool>` ✓（实测开销在噪声内）。
@@ -1894,7 +1894,7 @@ pub fn execute<'a>(
             "RESUME" | "NOP" | "POP_TOP" | "NOT_TAKEN" | "LOAD_SMALL_INT" | "CACHE" => return step_misc::step_misc(instance, frame, oparg, name),
             "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" | "CHECK_ASSIGNMENT" => return step_checks::step_checks(instance, frame, oparg, opcode_number, name),
             "LOAD_COMMON_CONSTANT" | "LOAD_NAME" | "LOAD_GLOBAL" | "STORE_GLOBAL" | "DELETE_GLOBAL" | "STORE_NAME" | "DELETE_NAME" => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
-            "COPY_FREE_VARS" | "MAKE_CELL" | "LOAD_LOCALS" | "STORE_DEREF" | "LOAD_DEREF" | "LOAD_FROM_DICT_OR_DEREF" | "LOAD_FROM_DICT_OR_GLOBALS" | "LOAD_CONST" | "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" | "STORE_FAST" | "DELETE_FAST" | "LOAD_FAST_AND_CLEAR" | "STORE_FAST_LOAD_FAST" | "LOAD_FAST_LOAD_FAST" | "LOAD_FAST_BORROW_LOAD_FAST_BORROW" | "STORE_FAST_STORE_FAST" => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name),
+            "COPY_FREE_VARS" | "MAKE_CELL" | "LOAD_LOCALS" | "STORE_DEREF" | "DELETE_DEREF" | "LOAD_DEREF" | "LOAD_FROM_DICT_OR_DEREF" | "LOAD_FROM_DICT_OR_GLOBALS" | "LOAD_CONST" | "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" | "STORE_FAST" | "DELETE_FAST" | "LOAD_FAST_AND_CLEAR" | "STORE_FAST_LOAD_FAST" | "LOAD_FAST_LOAD_FAST" | "LOAD_FAST_BORROW_LOAD_FAST_BORROW" | "STORE_FAST_STORE_FAST" => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name),
             "TO_BOOL" | "UNARY_NOT" | "UNARY_NEGATIVE" | "UNARY_INVERT" | "CONTAINS_OP" | "IS_OP" | "COMPARE_OP" | "BINARY_OP" => return step_operators::step_operators(instance, frame, oparg, opcode_number, name),
             "JUMP_FORWARD" | "JUMP_BACKWARD" | "JUMP_BACKWARD_NO_INTERRUPT" | "POP_JUMP_IF_TRUE" | "POP_JUMP_IF_FALSE" | "POP_JUMP_IF_NONE" | "POP_JUMP_IF_NOT_NONE" => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
             "BUILD_TUPLE" | "BUILD_LIST" | "BUILD_SET" | "BUILD_SLICE" | "BINARY_SLICE" | "BUILD_MAP" | "BUILD_STRING" | "UNPACK_SEQUENCE" | "UNPACK_EX" | "LIST_APPEND" | "SET_ADD" | "MAP_ADD" | "LIST_EXTEND" | "SET_UPDATE" | "GET_LEN" | "STORE_SUBSCR" | "STORE_SLICE" | "DELETE_SUBSCR" => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),

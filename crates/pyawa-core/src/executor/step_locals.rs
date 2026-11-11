@@ -84,6 +84,27 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                         release(instance, old);
                     }
                 }
+                "DELETE_DEREF" => {
+                    // **`del <自由变量／cell 名>`**（round 236）：净 0 —— 把 cell 槽第 `oparg` 格
+                    // 那个 cell 的**内容清空**（cell 还在、只是没有值 ✓）；参照删完再读给
+                    // `NameError`／`UnboundLocalError`，本层由 `load_deref_value` 那条路报 ✓。
+                    let slot = oparg as usize;
+                    let cell = match frame.get().cell(slot) {
+                        Ok(cell) => cell,
+                        Err(error) => return Err(ExecError::Frame(error)),
+                    };
+                    let Some(cell) = cell else {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "`DELETE_DEREF` 的 cell 槽是空的（`MAKE_CELL` 没跑过）",
+                        });
+                    };
+                    // SAFETY: cell 由帧的 cell 槽持有，存活。
+                    let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+                    if let Some(old) = object.replace(None) {
+                        release(instance, old);
+                    }
+                }
                 "LOAD_DEREF" => {
                     // 净 +1：压 cell 槽第 `oparg` 格那个 cell 的值
                     let value = load_deref_value(instance, frame.get(), code, oparg)?;

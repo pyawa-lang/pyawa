@@ -123,6 +123,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         pyawa_core::cache_builtin_iterator_function(name, function);
         instance.dict_set(namespace, name, function);
     }
+    // **`__debug__`**（round 236）：参照的解释器常量，值恒 `True`（`-O` 除外 ✓；本层还没有 `-O` 语义
+    // ⇒ 恒 `True` ✓）——`Lib/test/test_exceptions.py` 等一大片一导入就 `NameError: name '__debug__'` ✗。
+    instance.dict_set(namespace, "__debug__", instance.singletons().boolean(true));
     // **`object`**（第 132 轮）：参照里它是所有类的根 ✓（`class X(object)` 是很常见的写法 ✓，
     // `_bootstrap.py` 里就有 ✓）。类型对象在引导期已登记 ✓ ⇒ 按名字取出来放进名字空间 ✓。
     // 注意：`int`／`str` 等**内建类型名**本层目前是 native 函数（不是类型对象 ✗）⇒

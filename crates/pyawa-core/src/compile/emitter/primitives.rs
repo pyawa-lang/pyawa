@@ -69,11 +69,19 @@ impl Emitter {
         if self.global_names.iter().any(|item| item == name) {
             let index = self.intern_name(name);
             self.emit_indexed(span, "DELETE_GLOBAL", index);
-        } else if self.kind == ScopeKind::Function
-            && self.unit.varnames.iter().any(|item| item == name)
-        {
-            let slot = self.slot_of(name);
-            self.emit_indexed(span, "DELETE_FAST", slot);
+        } else if self.kind == ScopeKind::Function {
+            if self.unit.varnames.iter().any(|item| item == name) {
+                let slot = self.slot_of(name);
+                self.emit_indexed(span, "DELETE_FAST", slot);
+            } else if let Some(slot) = self.deref_slot(name) {
+                self.emit_indexed(span, "DELETE_DEREF", slot);
+            } else {
+                // **函数里删"全局名"是 `DELETE_GLOBAL`**（round 236 真 bug 修 ✗）：参照只把
+                // `DELETE_NAME` 用在**模块／类体**（要命名空间帧 ✓）；先前函数里落到 `DELETE_NAME` ✗
+                // ⇒ 执行器报"`DELETE_NAME` 需要命名空间帧"✗（`test_exceptions` 里 `del` 一个全局名 ✓）。
+                let index = self.intern_name(name);
+                self.emit_indexed(span, "DELETE_GLOBAL", index);
+            }
         } else {
             let index = self.intern_name(name);
             self.emit_indexed(span, "DELETE_NAME", index);
