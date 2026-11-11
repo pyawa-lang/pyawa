@@ -415,6 +415,54 @@ pub fn generic_alias_call(
     outcome
 }
 
+/// **`GenericAlias.__eq__`**（round 222）：参照里 `list[int] == list[int]` 为真 ✓（比
+/// `__origin__` 与 `__args__`）。先前别名没有相等比较 ⇒ 走身份 ⇒ 两个独立别名不等 ✗
+/// （`test_collections.TestNamedTuple.test_non_generic_subscript` 的
+/// `(Group[int, list[int]].__args__ == (int, list[int]))` ✓）。
+pub fn generic_alias_eq(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Ok(instance.not_implemented());
+    };
+    let Some(other) = args.first().copied() else {
+        return Ok(instance.not_implemented());
+    };
+    // 对方也是别名（有 `__origin__`／`__args__`）才比 ✓；否则 `NotImplemented`（让 Python 回退身份 ✓）。
+    let (Some(our_origin), Some(our_args)) = (
+        instance.attribute_optional_of(this, "__origin__")?,
+        instance.attribute_optional_of(this, "__args__")?,
+    ) else {
+        return Ok(instance.not_implemented());
+    };
+    let (Some(their_origin), Some(their_args)) = (
+        instance.attribute_optional_of(other, "__origin__")?,
+        instance.attribute_optional_of(other, "__args__")?,
+    ) else {
+        return Ok(instance.not_implemented());
+    };
+    let origins_equal = crate::executor::values::values_equal_public(instance, our_origin, their_origin);
+    let items = instance.tuple_items(our_args);
+    let their_items = instance.tuple_items(their_args);
+    let equal = origins_equal
+        && match (items, their_items) {
+            (Some(items), Some(their_items)) => {
+                items.len() == their_items.len()
+                    && items
+                        .iter()
+                        .zip(their_items.iter())
+                        .all(|(left, right)| {
+                            crate::executor::values::values_equal_public(instance, *left, *right)
+                        })
+            }
+            _ => false,
+        };
+    Ok(instance.new_bool(equal))
+}
+
 pub fn generic_alias_getattr(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

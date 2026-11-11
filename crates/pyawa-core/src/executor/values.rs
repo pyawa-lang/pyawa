@@ -162,6 +162,46 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         });
     }
 
+    // **`GenericAlias` 按值比**（round 222）：参照里 `list[int] == list[int]` 为真 ✓
+    //（比 `__origin__` 与 `__args__`）；本层别名没有原生 `richcompare` ⇒ 落到"身份" ✗
+    //（`test_collections.TestNamedTuple.test_non_generic_subscript` 的
+    // `(int, list[int]) == (int, list[int])` ✓）。
+    let is_generic_alias = |ty: NonNull<crate::TypeObject>| instance.type_name(ty) == "GenericAlias";
+    if is_generic_alias(left_type) && is_generic_alias(right_type) {
+        let attribute = |object: NonNull<Header>, name: &str| {
+            instance
+                .attribute_optional_of(object, name)
+                .ok()
+                .flatten()
+        };
+        let (Some(our_origin), Some(our_args), Some(their_origin), Some(their_args)) = (
+            attribute(left, "__origin__"),
+            attribute(left, "__args__"),
+            attribute(right, "__origin__"),
+            attribute(right, "__args__"),
+        ) else {
+            return false;
+        };
+        let origins_equal = values_equal(instance, our_origin, their_origin);
+        let items = instance.tuple_items(our_args);
+        let their_items = instance.tuple_items(their_args);
+        let equal = origins_equal
+            && match (items, their_items) {
+                (Some(items), Some(their_items)) => {
+                    items.len() == their_items.len()
+                        && items
+                            .iter()
+                            .zip(their_items.iter())
+                            .all(|(left, right)| values_equal(instance, *left, *right))
+                }
+                _ => false,
+            };
+        for value in [our_origin, our_args, their_origin, their_args] {
+            instance.release(value);
+        }
+        return equal;
+    }
+
     // **`dict` 按值比**（实测）：长度相等 ＋ 每个键在右边**按键值相等**找到、且对应值递归相等。
     if subtype_of(left_type, "dict") && subtype_of(right_type, "dict") {
         // SAFETY: 类型身份已确认。

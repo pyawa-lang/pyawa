@@ -483,6 +483,11 @@ pub fn dir_new(
         }
     } else {
         let object = args[0];
+        // **`__class__` 恒在**（round 222）：参照 `dir(x)` 对**任何**对象都含 `__class__` ✓
+        //（`dir(list)`／`dir(1)` 都是 ✓）——本层先前缺 ⇒ `dir(UserList)` 比 `dir(list)` 少一个名字 ✗
+        //（`test_collections.TestUserObjects.test_list_protocol` 的"UserList should have all the
+        // methods of list" ✓）。
+        names.insert("__class__".to_owned());
         if instance.is_type_object(object) {
             collect_type_mro_names(instance, object.cast(), &mut names);
             // **内建 `list` 的参照名字面**（round 152）：`list` 的方法大多在 `getattr` 槽里、

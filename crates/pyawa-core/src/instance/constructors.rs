@@ -148,6 +148,20 @@ impl Instance {
             // **`__getattr__` 也随第一次造别名装上** ✓（task-24 尾件 ✓）：别名缺属性转给
             // `__origin__` ✓（参照 `_GenericAlias` ✓）—— `Lib/typing.py` 的 `_ProtocolMeta.__new__`
             // 读 `base.__name__` 靠它 ✓。
+            // **`__eq__`**（round 222）：`list[int] == list[int]` ✓（比 `__origin__`／`__args__`）。
+            if self.dict_get(namespace, "__eq__").is_none() {
+                let function_type = self
+                    .type_named("builtin_function_or_method")
+                    .expect("builtin_function_or_method 在引导期已登记");
+                let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    function_type,
+                    "__eq__",
+                    core::cell::Cell::new(
+                        crate::builtin_objects::generic_alias_eq as crate::NativeFn,
+                    ),
+                ));
+                self.dict_set(namespace, "__eq__", function.into_raw().cast::<Header>());
+            }
             // **`__call__` 也随第一次造别名装上**（round 216）：`Group[int, list[int]](1,[2])` ✓。
             if self.dict_get(namespace, "__call__").is_none() {
                 let function_type = self
@@ -185,7 +199,20 @@ impl Instance {
             .cast::<Header>();
         // `set_attribute_value` 收**借用** ✓ ⇒ 不额外加减 ✓。
         let _ = self.set_attribute_value(object, "__origin__", origin);
-        let _ = self.set_attribute_value(object, "__args__", args);
+        // **`__args__` 恒是 `tuple`**（round 222 真 bug 修 ✗）：参照的 `GenericAlias` 让
+        // `list[int].__args__ == (int,)` ✓（`Group[int, list[int]].__args__ == (int, list[int])` ✓）；
+        // 先前直接把**下标键**装进去 ⇒ 单参数时 `__args__` 是 `int` 本身 ✗
+        //（`test_collections.TestNamedTuple.test_non_generic_subscript` 的元组相等 ✓）。
+        let args_tuple = if self.tuple_items(args).is_some() {
+            // 已经是 tuple：自己持一份（下面统一 release ✓）。
+            unsafe { self.incref_object(args.as_ptr()) };
+            args
+        } else {
+            unsafe { self.incref_object(args.as_ptr()) };
+            self.new_tuple(vec![args])
+        };
+        let _ = self.set_attribute_value(object, "__args__", args_tuple);
+        unsafe { self.release_object(args_tuple.as_ptr()) };
         object
     }
 

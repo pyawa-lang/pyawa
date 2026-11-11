@@ -47,6 +47,18 @@ pub fn arithmetic_public(
         return Ok(result);
     }
     if had_override {
+        // **左侧用户覆写返回 `NotImplemented` ⇒ 先问右侧的"原生反射"**（round 222 真 bug 修 ✗）：
+        // 参照的 `binary_op1` 在左槽 NotImpl 后仍会调**右操作数的槽**（反序）✓ ——
+        // `Counter.update` 的 `Evil + 1`（`Evil(int)` 的 `__add__` 返回 NotImplemented）⇒ 参照落
+        // `int.__radd__` 得 `1` ✓；先前直接报"unsupported operand" ✗
+        //（`test_collections.TestCounter.test_update_reentrant_add_clears_counter` ✓）。
+        // 只在右侧**不是用户类**时试（两侧都用户类且都 NotImpl ⇒ 照旧报错 ✓，round 67 口径 ✓）。
+        let right_type = instance.type_of(right);
+        if !instance.is_user_type_object(right_type) {
+            if let Ok(result) = arithmetic_public(instance, right, left, symbol, opcode) {
+                return Ok(result);
+            }
+        }
         // **双方都返回 `NotImplemented`** ⇒ 参照报 `unsupported operand type(s) for <op>: 'A' and 'B'` ✓
         //（round 67：`DummyIntegral.__truediv__` 返回 `NotImplemented`、本层先前悄悄退回原生 int 除法 ✗
         // ⇒ `test_numeric_tower.test_fractions` 的 `assertRaises(TypeError)` 红 ✓）。
