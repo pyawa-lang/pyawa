@@ -1080,6 +1080,27 @@ fn iterator_setstate_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// **内建 `iter`／`reversed` 的进程级缓存**（round 232 真 bug 修 ✗）：`it.__reduce__()` 要交出的
+/// **就是内建那个函数对象** ✓ —— 参照在 C 层直接持有 ✓，用户把 `builtins.iter` 换成别的对象也**不影响**
+/// ✓（`test_iter.test_reduce_mutating_builtins_iter` 正是这个用例 ✓）。先前每次去 `builtins` 字典**按名查**
+/// ✗ ⇒ 被换掉后拿到假对象／查不到 ⇒ `RuntimeError: 内建 iter／reversed 不可用` ✗。
+/// 引导期由 stdlib 侧把**造好的原生函数**登记进来（借用指针，函数对象与内建字典同寿 ✓）。
+static CACHED_ITER_BUILTIN: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+/// 见 [`CACHED_ITER_BUILTIN`]。
+static CACHED_REVERSED_BUILTIN: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// 登记内建 `iter`／`reversed` 的函数对象（**借用指针**，调用方保证与内建字典同寿 ✓）。
+pub fn cache_builtin_iterator_function(name: &str, function: NonNull<Header>) {
+    let slot = match name {
+        "iter" => &CACHED_ITER_BUILTIN,
+        "reversed" => &CACHED_REVERSED_BUILTIN,
+        _ => return,
+    };
+    slot.store(function.as_ptr() as usize, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// `it.__reduce__()`：返回 `(iter|reversed, (target,), state)` ✓（形状照参照实测 ✓）。
 #[allow(unsafe_code)]
 fn iterator_reduce_native(
@@ -1099,14 +1120,27 @@ fn iterator_reduce_native(
     let type_name = instance.type_name(instance.type_of(iterator));
     let reverse = matches!(type_name.as_str(), "list_reverseiterator" | "reversed");
     let callable_name = if reverse { "reversed" } else { "iter" };
-    let Some(callable) = instance
-        .builtins()
-        .and_then(|builtins| instance.dict_get(builtins, callable_name))
-    else {
-        return Err(instance.raise_builtin_error(
-            "RuntimeError",
-            "内建 iter／reversed 不可用",
-        ));
+    // **优先用引导期缓存的那一份** ✓（用户换掉 `builtins.iter` 也不影响 ✓）；没有缓存（单测里
+    // 手工建 Instance 的情形）再回退到按名查 ✓。
+    let cached = if reverse {
+        CACHED_REVERSED_BUILTIN.load(core::sync::atomic::Ordering::Relaxed)
+    } else {
+        CACHED_ITER_BUILTIN.load(core::sync::atomic::Ordering::Relaxed)
+    };
+    let callable = if cached != 0 {
+        // SAFETY: 登记时约定与内建字典同寿、非空。
+        unsafe { NonNull::new_unchecked(cached as *mut Header) }
+    } else {
+        let Some(callable) = instance
+            .builtins()
+            .and_then(|builtins| instance.dict_get(builtins, callable_name))
+        else {
+            return Err(instance.raise_builtin_error(
+                "RuntimeError",
+                "内建 iter／reversed 不可用",
+            ));
+        };
+        callable
     };
     // **耗尽形态**照参照：`(iter|reversed, ([],))` —— **二**元组、参数是**空列表**、没有状态 ✓
     //（实测 `reversed([...])` 耗尽后 `__reduce__()` ⇒ `(<class 'reversed'>, ([],))` ✓；正反向同款 ✓）。

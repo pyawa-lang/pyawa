@@ -118,6 +118,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     ];
     for (name, handler) in natives {
         let function = make_native(instance, name, *handler);
+        // **`iter`／`reversed` 的函数对象缓存**（round 232）：`it.__reduce__()` 要交出**内建那个
+        // 函数**（用户换掉 `builtins.iter` 也不影响 ✓）⇒ 引导期登记一份借用指针 ✓。
+        pyawa_core::cache_builtin_iterator_function(name, function);
         instance.dict_set(namespace, name, function);
     }
     // **`object`**（第 132 轮）：参照里它是所有类的根 ✓（`class X(object)` 是很常见的写法 ✓，

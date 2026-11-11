@@ -45,6 +45,8 @@ pub use builtin_objects::{
     weakref_store_key_hash, weakref_target,
 };
 pub use builtin_objects::reversed_new;
+/// **内建 `iter`／`reversed` 函数对象的引导期缓存**（round 232；`it.__reduce__()` 用 ✓）。
+pub use builtin_objects::cache_builtin_iterator_function;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::dir_new;
 pub use builtin_objects::enumerate_new;

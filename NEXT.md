@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`29bd9fc`（round 231：aiter/anext 内建＋async with/for 等待循环修正＋async def 不再补合成 yield ⇒ test_contextlib_async 总失败 47→34；test_collections 保持整档绿；下轮：async 推导式／contextlib_async 剩余族）
+- **HEAD**：`90dba4f`（round 232：it.__reduce__ 的内建 iter/reversed 函数缓存 ⇒ test_iter 3F/1E→4F/0E（错误清零）；下轮：async 推导式／reduce 耗尽形态）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
