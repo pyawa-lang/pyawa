@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`4d6d7ab`（round 236：纯协程 RETURN_GENERATOR/POP_TOP 前言＋del 名字作用域（DELETE_GLOBAL/DELETE_DEREF）＋__debug__ 内建 ⇒ test_exceptions 从导入即错推进到跑约半数；既有绿档无回归；下轮：SyntaxError 属性面／async for）
+- **HEAD**：`7025e9d`（round 237：SyntaxError 属性面（msg/filename/lineno/offset/text/end_lineno/end_offset）⇒ test_exceptions 完整跑 107 测试（此前中途 AttributeError 中止）；test_collections/test_dict 仍绿；下轮：exceptions 非子进程失败族／async for）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

@@ -297,6 +297,44 @@ pub unsafe fn exception_getattr(
             unsafe { instance.incref_object(tuple.as_ptr()) };
             Some(tuple)
         }
+        // **`SyntaxError` 的属性面**（round 237）：参照的 `SyntaxError(msg, (filename, lineno,
+        // offset, text, end_lineno, end_offset))` 会把第二项元组**摊进属性** ✓；先前一个都没有 ✗
+        // ⇒ `sys.__excepthook__(*sys.exc_info())` 读 `exc.filename` 当场 AttributeError ✗
+        //（`test_exceptions.test_subclass` 的 `MySyntaxError("bad bad", ("bad.py", 1, 2, "abcdefg", 1, 7))` ✓）。
+        "msg" | "lineno" | "offset" | "text" | "end_lineno" | "end_offset" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            let ty = unsafe { (*ptr).ty() };
+            let is_syntax_error = instance
+                .type_named("SyntaxError")
+                .is_some_and(|syntax| instance.is_subtype(ty, syntax));
+            if !is_syntax_error {
+                return None;
+            }
+            let arguments = object.args();
+            let value = if matches!(name, "msg") {
+                arguments.first().copied()
+            } else {
+                let details = arguments.get(1).copied();
+                let items = details.and_then(|details| instance.tuple_items(details));
+                let index = match name {
+                    "filename" => 0,
+                    "lineno" => 1,
+                    "offset" => 2,
+                    "text" => 3,
+                    "end_lineno" => 4,
+                    _ => 5,
+                };
+                items.and_then(|items| items.get(index).copied())
+            };
+            Some(match value {
+                Some(value) => {
+                    // SAFETY: 值由本对象持有，这里新增一份交给调用方 ✓。
+                    unsafe { instance.incref_object(value.as_ptr()) };
+                    value
+                }
+                None => instance.new_none(),
+            })
+        }
         "__cause__" => Some(match object.cause() {
             Some(value) => {
                 // SAFETY: 由本对象持有。
@@ -359,11 +397,49 @@ pub unsafe fn exception_getattr(
                 None => instance.new_none(),
             })
         }
+        // **`filename`**（round 237）：两种异常都有它 —— `SyntaxError` 取第二项元组第 0 格 ✓；
+        // 其余按 `OSError` 口径取 `args[2]` ✓（两边都要，避免同一个 match 里出现两条 `"filename"` 臂
+        // ⇒ 编译器 "unreachable pattern" 警告 ✗）。
+        "filename" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            let ty = unsafe { (*ptr).ty() };
+            let arguments = object.args();
+            let is_syntax_error = instance
+                .type_named("SyntaxError")
+                .is_some_and(|syntax| instance.is_subtype(ty, syntax));
+            let value = if is_syntax_error {
+                arguments
+                    .get(1)
+                    .copied()
+                    .and_then(|details| instance.tuple_items(details))
+                    .and_then(|items| items.first().copied())
+            } else {
+                let is_os_error = instance
+                    .type_named("OSError")
+                    .is_some_and(|os_error| instance.is_subtype(ty, os_error));
+                if !is_os_error {
+                    return None;
+                }
+                if arguments.len() > 2 {
+                    arguments.get(2).copied()
+                } else {
+                    None
+                }
+            };
+            Some(match value {
+                Some(value) => {
+                    // SAFETY: 值由本对象持有，这里新增一份交给调用方 ✓。
+                    unsafe { instance.incref_object(value.as_ptr()) };
+                    value
+                }
+                None => instance.new_none(),
+            })
+        }
         // **`OSError` 一族的属性面**（round 108）：`errno`／`strerror`／`filename`／`filename2` ✓
         // —— 参照里它们就是 `args` 的前四项（`OSError(errno, strerror, filename, filename2)` ✓）；
         // 先前完全取不到 ✗ ⇒ `except FileNotFoundError as e: e.filename` 当场 AttributeError ✗
         //（官方 `test_unicode_file_functions`／`test_unicode_file` 一族 ✓）。
-        "errno" | "strerror" | "filename" | "filename2" => {
+        "errno" | "strerror" | "filename2" => {
             // SAFETY: ptr 是本类型的存活对象。
             let ty = unsafe { (*ptr).ty() };
             let is_os_error = instance
