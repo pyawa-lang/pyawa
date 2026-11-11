@@ -314,7 +314,9 @@ impl Emitter {
                 if !finally_body.is_empty() {
                     self.finally_stack.push(finally_body.clone());
                 }
+                self.try_depth += 1;
                 self.emit_block(body, false)?;
+                self.try_depth -= 1;
                 if !finally_body.is_empty() {
                     self.finally_stack.pop();
                 }

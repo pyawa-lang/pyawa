@@ -740,6 +740,11 @@ fn collect_names_in_expression_raw(expression: &Expression, out: &mut Vec<String
             collect_names_in_expression_raw(rest, out);
         }
         Expression::ChainSubject(_) => {}
+        // **`await <表达式>`**（round 220）：里面的名字照常收 ✓ —— 特别是"推导式作为
+        // `await` 调用的实参"（`await staggered.staggered_race((... for ...), ...)` ✓）：
+        // 漏收 ⇒ 外层 `self` 不会被标成 cell ⇒ emitter 的推导式闭包分析报
+        // "cell／自由变量槽缺失" ✗（`import asyncio` 实测 ✓）。
+        Expression::Await(value, _) => collect_names_in_expression_raw(value, out),
         _ => {}
     }
 }
@@ -1779,6 +1784,8 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             }
         }
         Expression::YieldFrom(value, _) => pre_intern_expression(emitter, value),
+        // **`await <表达式>`**（round 220）：值那一半照样要**预登记**名字 ✓。
+        Expression::Await(value, _) => pre_intern_expression(emitter, value),
         Expression::Int(_, _)
         | Expression::BigInt(_, _)
         | Expression::Float(_, _)

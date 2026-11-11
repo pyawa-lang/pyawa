@@ -170,7 +170,12 @@ impl Emitter {
                             let Some(slot) = self.deref_slot(free) else {
                                 return Err(CompileError::Unsupported(
                                     format!(
-                                        "生成器表达式引用「{free}」：cell／自由变量槽缺失（见台账 round 161/162）"
+                                        "生成器表达式引用「{free}」：cell／自由变量槽缺失（见台账 round 161/162；qualname={} 行={} freevars={:?} cellvars={:?} varnames={:?}）",
+                                        self.qualname,
+                                        span.line_start,
+                                        self.unit.freevars,
+                                        self.unit.cellvars,
+                                        self.unit.varnames
                                     ),
                                 ));
                             };

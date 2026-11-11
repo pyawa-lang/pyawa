@@ -215,6 +215,9 @@ pub(super) struct Emitter {
     /// 三层都补 ✓，而后面还有 `return` 时**一层都不补** ✓）。
     pub(super) block_tail: bool,
     pub(super) handler_depth: usize,
+    /// **`try` 体里**（round 220）：`await` 的合成等待循环在异常表 `depth` 上还算不准 ⇒
+    /// 这层 >0 时 `await` 退回"透明"旧口径（见 `emit_expression_yield` 的注释 ✓）。
+    pub(super) try_depth: usize,
     /// **`with` 体在值栈上留下的格数**（＝ `2 × items.len()`：上下文 ＋ `__exit__`）。
     ///
     /// **为什么与 `handler_depth` 分开**：两者都是异常表 `depth` 要加上的额外格数，但
@@ -270,7 +273,7 @@ impl Emitter {
             Expression::Comprehension { .. } => self.emit_expression_comprehensions(expression),
             Expression::FString { .. } => self.emit_expression_fstrings(expression),
             Expression::NullCoalesce (..) | Expression::SafeChain { .. } | Expression::ChainedCompare { .. } | Expression::Conditional { .. } | Expression::Compare (..) | Expression::BoolOp { .. } | Expression::Not (..) | Expression::Binary (..) | Expression::Unary (..) => self.emit_expression_operators(expression),
-            Expression::Yield (..) | Expression::YieldFrom (..) => self.emit_expression_yield(expression),
+            Expression::Yield (..) | Expression::YieldFrom (..) | Expression::Await (..) => self.emit_expression_yield(expression),
         }
     }
 }

@@ -598,6 +598,7 @@ fn compile_class_scope(
         handler_stack: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            try_depth: 0,
             with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
@@ -876,6 +877,7 @@ fn compile_scope(
         handler_stack: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            try_depth: 0,
             with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
@@ -1385,6 +1387,9 @@ enum Expression {
     /// ⇒ 再见到 `[` 就按**下标**解析 ⇒ 报"``[`` 之后要 `]`，实际 `Some(For)`" ✗
     /// （`Lib/traceback.py:1258` 正卡它，那一族 **15** 个模块 ✓）。
     YieldFrom(Box<Expression>, Span),
+    /// **`await <表达式>`**（round 220）：真接线（`GET_AWAITABLE` ＋ `SEND` 等待循环 ✓）；
+    /// 先前"透明"近似（`await X` 直接当 `X`）✗ —— 有了 `coroutine` 类型后必须等 ✓。
+    Await(Box<Expression>, Span),
     /// **列表字面量**（`[]`／`[1, 2]`）。实测发射：元素按序先发，再 `BUILD_LIST <个数>`
     /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
     List(Vec<Expression>, Span),
@@ -1605,6 +1610,7 @@ impl Expression {
             | Expression::Bytes(_, span)
             | Expression::Yield(_, span)
             | Expression::YieldFrom(_, span)
+            | Expression::Await(_, span)
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
             | Expression::List(_, span)
@@ -1873,6 +1879,9 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
         // **`yield`／`yield from`**：里面的表达式也在本层求值 ✓。
         Expression::Yield(Some(value), _) => find_lambda_demands(value, out),
         Expression::YieldFrom(value, _) => find_lambda_demands(value, out),
+        // **`await <表达式>`**（round 220）：里面可能有 lambda／genexpr 作为实参
+        //（`await staggered.staggered_race((... for ...), …)` ✓）⇒ 必须往下走 ✓。
+        Expression::Await(value, _) => find_lambda_demands(value, out),
         Expression::Binary(_, left, right, _)
         | Expression::Compare(left, _, right, _)
         | Expression::Subscript(left, right, _) => {
@@ -2455,6 +2464,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Yield(..) => Ok(None),
         Expression::YieldFrom(..) => Ok(None),
+        Expression::Await(..) => Ok(None),
         Expression::Comprehension { .. } => Ok(None),
         Expression::ChainedCompare { .. } => Ok(None),
         Expression::Conditional { .. } => Ok(None),
@@ -2619,6 +2629,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Yield(..) => None,
         Expression::YieldFrom(..) => None,
+        Expression::Await(..) => None,
         Expression::Comprehension { .. } => None,
         Expression::ChainedCompare { .. } => None,
         Expression::Conditional { .. } => None,

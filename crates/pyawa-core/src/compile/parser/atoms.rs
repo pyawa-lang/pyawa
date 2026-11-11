@@ -253,7 +253,13 @@ pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         //（与 `async def` 编成生成器是**同一族近似** ✓，口径已随它一起登记 ✓）。
         // 只吃**原子**那一半 ✓ ⇒ 后面的 `.meth(...)`／下标由**后缀层**接着处理 ✓
         //（`await self.asend(None)` ⇒ 正是这个形状 ✓）。
-        Some(Lexeme::Name(name)) if name == "await" => parse_atom(lexed, cursor + 1)?,
+        // **`await <表达式>`**（round 220）：**真接线**（先前透明近似 ✓ 已不够 —— 有了
+        // `coroutine` 类型后必须发 `GET_AWAITABLE` ＋ `SEND` 等待 ✓）。
+        Some(Lexeme::Name(name)) if name == "await" => {
+            let (inner, next) = parse_atom(lexed, cursor + 1)?;
+            let await_span = span.to(inner.span());
+            (Expression::Await(Box::new(inner), await_span), next)
+        }
         Some(Lexeme::Name(name)) => {
             // **硬关键字不能当名字**（round 64；`test_keyword` 钉住 ✓）。
             if is_hard_keyword(name) {

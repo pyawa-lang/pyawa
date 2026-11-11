@@ -1111,6 +1111,7 @@ impl Emitter {
             block_depth: 0,
             block_tail: false,
             handler_depth: 0,
+            try_depth: 0,
             with_depth: 0,
             condition_landings: Vec::new(),
             collect_condition_exits: false,
@@ -1982,6 +1983,7 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            try_depth: 0,
             with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
@@ -2215,6 +2217,7 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            try_depth: 0,
             with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
