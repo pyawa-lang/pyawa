@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`4fe8ae8`（round 222：算术原生反射回退＋dir 恒含 __class__＋GenericAlias.__args__ 包 tuple＋别名相等 ⇒ test_collections 8F/3E→6F/2E（总失败 8））
+- **HEAD**：`8e4c45a`（round 223：撤回 GenericAlias.__args__ 包一元组（偶发 malloc 堆损坏）＋修 alias __eq__ 漏还 ⇒ test_collections 连跑 4 次全稳，7F/2E；下轮查该版真因再重落）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）

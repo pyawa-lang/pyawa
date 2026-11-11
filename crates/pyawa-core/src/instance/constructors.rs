@@ -199,20 +199,11 @@ impl Instance {
             .cast::<Header>();
         // `set_attribute_value` 收**借用** ✓ ⇒ 不额外加减 ✓。
         let _ = self.set_attribute_value(object, "__origin__", origin);
-        // **`__args__` 恒是 `tuple`**（round 222 真 bug 修 ✗）：参照的 `GenericAlias` 让
-        // `list[int].__args__ == (int,)` ✓（`Group[int, list[int]].__args__ == (int, list[int])` ✓）；
-        // 先前直接把**下标键**装进去 ⇒ 单参数时 `__args__` 是 `int` 本身 ✗
-        //（`test_collections.TestNamedTuple.test_non_generic_subscript` 的元组相等 ✓）。
-        let args_tuple = if self.tuple_items(args).is_some() {
-            // 已经是 tuple：自己持一份（下面统一 release ✓）。
-            unsafe { self.incref_object(args.as_ptr()) };
-            args
-        } else {
-            unsafe { self.incref_object(args.as_ptr()) };
-            self.new_tuple(vec![args])
-        };
-        let _ = self.set_attribute_value(object, "__args__", args_tuple);
-        unsafe { self.release_object(args_tuple.as_ptr()) };
+        // **`__args__` 原样装**（round 223 撤回 round 222 的"包一元组"改动 ✗）：那版在
+        // `test_collections` 上实测偶发 `malloc(): unaligned tcache chunk detected` ✗
+        //（同一二进制连跑 4 次有 2 次崩）⇒ 先撤回、保持旧口径（单下标时 `__args__` 就是下标本身）；
+        // 别名相等（`__eq__`／`values_equal` 分支）保留 —— 双参数别名照常可比 ✓。
+        let _ = self.set_attribute_value(object, "__args__", args);
         object
     }
 

@@ -460,6 +460,11 @@ pub fn generic_alias_eq(
             }
             _ => false,
         };
+    // 四个属性各是新引用 ⇒ 比完逐个还 ✓（先前漏还 ⇒ 每次别名比较漏 4 份 ✗，round 222 实测
+    // 在 `test_collections` 里累积到 `malloc(): unaligned tcache chunk detected` ✗）。
+    for value in [our_origin, our_args, their_origin, their_args] {
+        instance.release(value);
+    }
     Ok(instance.new_bool(equal))
 }
 
