@@ -4,6 +4,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -16,7 +17,7 @@ impl Instance {
                     return Some((true, value as f64));
                 }
             }
-            if self.type_named("float") == Some(ty) {
+            if self.hot_type(HotId::Float) == Some(ty) {
                 return Some((false, self.float_value(object)?));
             }
             None
@@ -43,7 +44,7 @@ impl Instance {
                     _ => return None,
                 }
             }
-            let ty = self.type_named("bytearray")?;
+            let ty = self.hot_type(HotId::ByteArray)?;
             return Some(
                 self.alloc(crate::builtin_objects::BytearrayObject::new(
                     ty,
@@ -133,8 +134,7 @@ impl Instance {
         // `GenericAlias` 类型 ✗ ⇒ 这里**幂等**补 ✓（`class T(Mapping[str, str])` 靠它换基类 ✓）。
         if let Some(namespace) = self.type_namespace(alias_type.cast()) {
             if self.dict_get(namespace, "__mro_entries__").is_none() {
-                let function_type = self
-                    .type_named("builtin_function_or_method")
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("builtin_function_or_method 在引导期已登记");
                 let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
                     function_type,
@@ -150,8 +150,7 @@ impl Instance {
             // 读 `base.__name__` 靠它 ✓。
             // **`__eq__`**（round 222）：`list[int] == list[int]` ✓（比 `__origin__`／`__args__`）。
             if self.dict_get(namespace, "__eq__").is_none() {
-                let function_type = self
-                    .type_named("builtin_function_or_method")
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("builtin_function_or_method 在引导期已登记");
                 let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
                     function_type,
@@ -164,8 +163,7 @@ impl Instance {
             }
             // **`__call__` 也随第一次造别名装上**（round 216）：`Group[int, list[int]](1,[2])` ✓。
             if self.dict_get(namespace, "__call__").is_none() {
-                let function_type = self
-                    .type_named("builtin_function_or_method")
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("builtin_function_or_method 在引导期已登记");
                 let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
                     function_type,
@@ -177,8 +175,7 @@ impl Instance {
                 self.dict_set(namespace, "__call__", function.into_raw().cast::<Header>());
             }
             if self.dict_get(namespace, "__getattr__").is_none() {
-                let function_type = self
-                    .type_named("builtin_function_or_method")
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("builtin_function_or_method 在引导期已登记");
                 let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
                     function_type,
@@ -225,7 +222,7 @@ impl Instance {
     pub fn new_repeat_iterator(&self, value: NonNull<Header>, remaining: i64) -> NonNull<Header> {
         // SAFETY: 调用方按 `OM-16` 保证 value 存活。
         unsafe { self.incref_object(value.as_ptr()) };
-        let ty = self.type_named("repeat").expect("引导期已登记 repeat 类型");
+        let ty = self.hot_type(HotId::Repeat).expect("引导期已登记 repeat 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Repeat {
@@ -251,7 +248,7 @@ impl Instance {
     ) -> NonNull<Header> {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self.type_named("islice").expect("引导期已登记 islice 类型");
+        let ty = self.hot_type(HotId::Islice).expect("引导期已登记 islice 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Islice {
@@ -312,8 +309,7 @@ impl Instance {
             self.incref_object(data.as_ptr());
             self.incref_object(selectors.as_ptr());
         }
-        let ty = self
-            .type_named("compress")
+        let ty = self.hot_type(HotId::Compress)
             .expect("引导期已登记 compress 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -364,7 +360,7 @@ impl Instance {
         // SAFETY: 调用方保证 pools 存活。
         unsafe { self.incref_object(pools.as_ptr()) };
         let indices = self.new_list(Vec::new());
-        let ty = self.type_named("product").expect("引导期已登记 product 类型");
+        let ty = self.hot_type(HotId::Product).expect("引导期已登记 product 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Product {
@@ -383,8 +379,7 @@ impl Instance {
         // SAFETY: 调用方保证 pool 存活。
         unsafe { self.incref_object(pool.as_ptr()) };
         let indices = self.new_list(Vec::new());
-        let ty = self
-            .type_named("permutations")
+        let ty = self.hot_type(HotId::Permutations)
             .expect("引导期已登记 permutations 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -407,7 +402,7 @@ impl Instance {
     pub fn new_zip_iterator(&self, iterators: NonNull<Header>) -> NonNull<Header> {
         // SAFETY: 调用方保证 iterators 存活。
         unsafe { self.incref_object(iterators.as_ptr()) };
-        let ty = self.type_named("zip").expect("引导期已登记 zip 类型");
+        let ty = self.hot_type(HotId::Zip).expect("引导期已登记 zip 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Zip { iterators }),
@@ -429,7 +424,7 @@ impl Instance {
             self.incref_object(function.as_ptr());
             self.incref_object(iterators.as_ptr());
         }
-        let ty = self.type_named("map").expect("引导期已登记 map 类型");
+        let ty = self.hot_type(HotId::Map).expect("引导期已登记 map 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Map {
@@ -452,7 +447,7 @@ impl Instance {
             self.incref_object(predicate.as_ptr());
             self.incref_object(inner.as_ptr());
         }
-        let ty = self.type_named("filter").expect("引导期已登记 filter 类型");
+        let ty = self.hot_type(HotId::Filter).expect("引导期已登记 filter 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Filter {
@@ -474,8 +469,7 @@ impl Instance {
             self.incref_object(iterators.as_ptr());
             self.incref_object(fillvalue.as_ptr());
         }
-        let ty = self
-            .type_named("zip_longest")
+        let ty = self.hot_type(HotId::ZipLongest)
             .expect("引导期已登记 zip_longest 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -492,8 +486,7 @@ impl Instance {
     pub fn new_pairwise_iterator(&self, inner: NonNull<Header>) -> NonNull<Header> {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self
-            .type_named("pairwise")
+        let ty = self.hot_type(HotId::Pairwise)
             .expect("引导期已登记 pairwise 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -510,8 +503,7 @@ impl Instance {
     pub fn new_batched_iterator(&self, inner: NonNull<Header>, size: i64) -> NonNull<Header> {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self
-            .type_named("batched")
+        let ty = self.hot_type(HotId::Batched)
             .expect("引导期已登记 batched 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -530,7 +522,7 @@ impl Instance {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
         let cache = self.new_list(Vec::new());
-        let ty = self.type_named("cycle").expect("引导期已登记 cycle 类型");
+        let ty = self.hot_type(HotId::Cycle).expect("引导期已登记 cycle 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Cycle {
@@ -557,8 +549,7 @@ impl Instance {
                 self.incref_object(value.as_ptr());
             }
         }
-        let ty = self
-            .type_named("accumulate")
+        let ty = self.hot_type(HotId::Accumulate)
             .expect("引导期已登记 accumulate 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -583,8 +574,7 @@ impl Instance {
             self.incref_object(inner.as_ptr());
             self.incref_object(function.as_ptr());
         }
-        let ty = self
-            .type_named("starmap")
+        let ty = self.hot_type(HotId::Starmap)
             .expect("引导期已登记 starmap 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -604,7 +594,7 @@ impl Instance {
     pub fn new_chain_iterator(&self, outer: NonNull<Header>) -> NonNull<Header> {
         // SAFETY: 调用方保证 outer 存活。
         unsafe { self.incref_object(outer.as_ptr()) };
-        let ty = self.type_named("chain").expect("引导期已登记 chain 类型");
+        let ty = self.hot_type(HotId::Chain).expect("引导期已登记 chain 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Chain {
@@ -620,7 +610,7 @@ impl Instance {
     ///
     /// `current` 是**下一个**要吐的值。只含整数 ⇒ 不持对象引用。
     pub fn new_count_iterator(&self, current: i64, step: i64) -> NonNull<Header> {
-        let ty = self.type_named("count").expect("引导期已登记 count 类型");
+        let ty = self.hot_type(HotId::Count).expect("引导期已登记 count 类型");
         self.alloc(crate::builtin_objects::CountIteratorObject::new(
             ty,
             core::cell::Cell::new(current),
@@ -689,7 +679,7 @@ pub unsafe fn mappingproxy_new(
         .cast::<Header>();
     // **记来源类型**（round 114）：`copy()`／`repr` 要还原（`OrderedDict`／`dict`）✓。
     let source_type = instance.type_of(source);
-    if Some(source_type) != instance.type_named("dict") {
+    if Some(source_type) != instance.hot_type(HotId::Dict) {
         instance.register_mappingproxy_source(proxy, source_type);
     }
     Ok(proxy)
@@ -722,8 +712,7 @@ impl Instance {
         callable: NonNull<Header>,
         sentinel: NonNull<Header>,
     ) -> NonNull<Header> {
-        let ty = self
-            .type_named("callable_iterator")
+        let ty = self.hot_type(HotId::CallableIterator)
             .expect("callable_iterator 在引导期已登记");
         // SAFETY: 调用方保证两者存活；本对象各持一份。
         unsafe {
@@ -780,8 +769,7 @@ impl Instance {
     pub fn sync_mappingproxy(&self, proxy: NonNull<Header>) {
         // **只对真的是 `mappingproxy` 的对象同步**（round 195；调用点在 `==` 上，操作数可能是普通 dict
         // ⇒ 陈旧地址登记会把普通 dict 当成活视图 ✗）。
-        let is_proxy = self
-            .type_named("mappingproxy")
+        let is_proxy = self.hot_type(HotId::MappingProxy)
             .is_some_and(|proxy_type| self.type_of(proxy) == proxy_type);
         if !is_proxy {
             return;
@@ -859,7 +847,7 @@ impl Instance {
     /// **把一份 dict 包成 `mappingproxy`**（round 112；`type.__dict__` 那条读法用 ✓）：
     /// 载荷是**复制**的条目（本层如实登记为快照 ✓）。
     pub fn mappingproxy_of(&self, source: NonNull<Header>) -> Option<NonNull<Header>> {
-        let class = self.type_named("mappingproxy")?;
+        let class = self.hot_type(HotId::MappingProxy)?;
         let entries = self.dict_entries(source)?;
         let copied: Vec<(NonNull<Header>, NonNull<Header>)> = entries
             .into_iter()
@@ -924,8 +912,7 @@ pub unsafe fn mappingproxy_getattr(
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
     if name == "copy" {
-        let method_type = instance
-            .type_named("builtin_function_or_method")
+        let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("builtin_function_or_method 已登记");
         let native = instance.alloc(BuiltinFunctionObject::new(
             method_type,
@@ -936,7 +923,7 @@ pub unsafe fn mappingproxy_getattr(
         // SAFETY: 方法对象要自己那份 self。
         unsafe { instance.incref_object(ptr) };
         let bound = instance.alloc(crate::MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             native_raw,
             unsafe { NonNull::new_unchecked(ptr) },
         ));

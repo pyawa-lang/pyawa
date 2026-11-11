@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -86,7 +87,7 @@ impl Instance {
             self.raise_builtin_error("SyntaxError", &format!("eval: {error:?}"))
         })?;
         let code = crate::compile::instantiate(self, &unit);
-        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+        let frame_type = self.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "eval：`frame` 类型未登记",
         })?;
@@ -124,7 +125,7 @@ impl Instance {
             self.raise_builtin_error("SyntaxError", &format!("exec: {error:?}"))
         })?;
         let code = crate::compile::instantiate(self, &unit);
-        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+        let frame_type = self.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "exec：`frame` 类型未登记",
         })?;
@@ -353,7 +354,7 @@ impl Instance {
     /// `object` 是不是 **`str` 或其子类**（`str` 的值语义对子类同样成立 ✓）。
     fn is_str_like(&self, object: NonNull<Header>) -> bool {
         let ty = self.type_of(object);
-        self.type_named("str")
+        self.hot_type(HotId::Str)
             .is_some_and(|base| ty == base || self.is_subtype(ty, base))
     }
 
@@ -537,8 +538,7 @@ impl Instance {
     ///
     /// 回**新引用** ✓（`Owned`／原生返回值的契约 ✓）。
     pub fn annotations_of(&self, target: NonNull<Header>) -> Option<NonNull<Header>> {
-        let is_module = self
-            .type_named("module")
+        let is_module = self.hot_type(HotId::Module)
             .is_some_and(|module| self.is_subtype(self.type_of(target), module));
         let namespace = if self.is_type_object(target) {
             self.type_namespace(target)

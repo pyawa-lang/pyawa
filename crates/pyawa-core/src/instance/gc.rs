@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -34,7 +35,7 @@ impl Instance {
             // 大整数不能看 `i64` 那个快路径（`int_value` 对它给 `None` ⇒ 会被当成 0＝假）
             return self.int_of(object).map(|value| !value.is_zero()).unwrap_or(false);
         }
-        if self.type_named("float") == Some(ty) {
+        if self.hot_type(HotId::Float) == Some(ty) {
             return self.float_value(object).unwrap_or(0.0) != 0.0;
         }
         if ty == self.singletons().str_type() {
@@ -1241,6 +1242,8 @@ impl Instance {
             self.types
                 .borrow_mut()
                 .retain(|entry| entry.as_ptr() as usize != address);
+            // **地址表同步摘掉**（round 246）：否则 `release_object` 会把已退休类型仍当注册类型 ✗。
+            self.unregister_type_address(address);
             // **名字索引同步摘掉**（round 142）：否则 `type_named` 会返回已退休的类型 ✗。
             self.types_by_name.borrow_mut().retain(|_, entry| entry.as_ptr() as usize != address);
             self.user_types
@@ -1290,7 +1293,7 @@ impl Instance {
     /// `weakrefs` 注册表／`types`／`user_types`／`retired_types`）里有没有它 ⇒ 命中就说明
     /// 这个对象被"GC 图之外的引擎结构"强引用（那才是"rc>0 却找不到候选父"的来源 ✓）。
     fn instance_name_is_exception(&self, ty: &crate::TypeObject) -> bool {
-        let base = match self.type_named("BaseException") {
+        let base = match self.hot_type(HotId::BaseException) {
             Some(base) => base,
             None => return false,
         };

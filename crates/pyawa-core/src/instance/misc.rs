@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -14,8 +15,7 @@ impl Instance {
         if let Some(cached) = self.not_implemented_singleton.get() {
             return cached;
         }
-        let ty = self
-            .type_named("NotImplementedType")
+        let ty = self.hot_type(HotId::NotImplementedType)
             .unwrap_or_else(|| self.new_attribute_type("NotImplementedType"));
         let object = self
             .alloc(crate::builtin_objects::AttributeObject::new(
@@ -115,7 +115,7 @@ impl Instance {
         }
         // SAFETY: 类型由注册表持有、MRO 条目都存活。
         let mro = unsafe { ty.as_ref() }.mro();
-        let object_type = self.type_named("object");
+        let object_type = self.hot_type(HotId::Object);
         let mut contains = false;
         for entry in mro {
             let entry_ty = entry.cast::<crate::TypeObject>();

@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -148,8 +149,7 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                 instance.incref_object(this.as_ptr());
                             }
                             let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
-                                instance
-                                    .type_named("method")
+                                instance.hot_type(HotId::Method)
                                     .expect("`method` 类型已登记"),
                                 function,
                                 this,
@@ -162,7 +162,7 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                             // `cannot import name 'x' from 'm'` ✓ —— 上游 `Lib/io.py:93` 的
                             // `try: from _io import _WindowsConsoleIO / except ImportError: pass` 正是靠它 ✓；
                             // 先前直接抛 `AttributeError` ✗ ⇒ 那个 `try` **接不住** ✗ ⇒ 整个 `io` 导入失败 ✓。
-                            let attribute_error = builtin_type(instance, "AttributeError");
+                            let attribute_error = instance.hot_type(HotId::AttributeError).expect("AttributeError 已登记");
                             let is_missing = match &error {
                                 ExecError::Raised { exception } => {
                                     // SAFETY: 抛出的异常由实例持有，存活。

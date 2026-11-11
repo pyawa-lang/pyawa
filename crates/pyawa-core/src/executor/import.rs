@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`execute`、`mounted_instance_dict`、`raise_builtin`、`read_file_through_fs`、`release`、`str_matches_public` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::executor::{mounted_instance_dict, read_file_through_fs, release, str_matches_public};
 use crate::executor::Attribute;
 use crate::builtin_objects::DictObject;
@@ -21,7 +22,7 @@ use crate::executor::attribute::attribute_lookup;
 fn module_search_path(instance: &Instance, sys_module: NonNull<Header>) -> Option<Vec<String>> {
     match attribute_lookup(instance, sys_module, "path") {
         Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
-            let list_type = instance.type_named("list").expect("list 在引导期已登记");
+            let list_type = instance.hot_type(HotId::List).expect("list 在引导期已登记");
             if instance.type_of(path) != list_type {
                 return None;
             }
@@ -203,7 +204,7 @@ pub fn exec_module_into_namespace(
         }
     };
     let code = crate::compile::instantiate(instance, &unit);
-    let frame_type = instance.type_named("frame").ok_or(ExecError::Unsupported {
+    let frame_type = instance.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
         opcode: 0,
         what: "引导期没有登记 frame 类型",
     })?;
@@ -402,7 +403,7 @@ pub(crate) fn load_module(
             ))?;
             match attribute_lookup(instance, parent_module, "__path__") {
                 Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
-                    let list_type = instance.type_named("list").expect("list 在引导期已登记");
+                    let list_type = instance.hot_type(HotId::List).expect("list 在引导期已登记");
                     if instance.type_of(path) != list_type {
                         return Err(unsupported("父包的 `__path__` 不是列表"));
                     }
@@ -490,8 +491,7 @@ pub(crate) fn load_module(
             instance.dict_set(namespace, "__path__", path_list);
         }
         // 模块对象：`AttributeObject` ＋ 名字空间（`module` 类型缺就建 ✓）
-        let module_type = instance
-            .type_named("module")
+        let module_type = instance.hot_type(HotId::Module)
             .unwrap_or_else(|| instance.new_attribute_type("module"));
         let module = instance
             .alloc(crate::builtin_objects::AttributeObject::new(
@@ -564,7 +564,7 @@ pub(crate) fn load_module(
         // **先登记再执行**（环状导入要能看到半成品 ✓，与参照一致）
         instance.dict_set(modules, name, module);
         let code = crate::compile::instantiate(instance, &unit);
-        let frame_type = instance.type_named("frame").ok_or(unsupported("引导期没有 `Frame` 类型"))?;
+        let frame_type = instance.hot_type(HotId::Frame).ok_or(unsupported("引导期没有 `Frame` 类型"))?;
         // SAFETY: `namespace` 由模块对象持有，存活。
         unsafe { instance.incref_object(namespace.as_ptr()) };
         let frame = instance

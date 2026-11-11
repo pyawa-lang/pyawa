@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`attribute_lookup`、`bind_arguments`、`builtin_type`、`execute`、`function_closure`、`function_defaults`、`is_type_object`、`own_code`、`push`、`raise_builtin`、`release`、`value_into_raw` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::executor::{attribute::attribute_lookup_swallowing, attribute_lookup, bind_arguments, builtin_type, execute, function_closure, function_defaults, own_code, raise_builtin, release, value_into_raw};
 use crate::executor::Attribute;
 use crate::builtin_objects::BuiltinFunctionObject;
@@ -63,7 +64,7 @@ pub(crate) fn call_init_subclass(
     };
     // `__init_subclass__` 是**隐式类方法** ✓：显式 `classmethod(...)` 形态要拆出内层函数 ✓
     //（`Generic.__init_subclass__ = classmethod(_generic_init_subclass)` ✓ `Lib/typing.py:2131` ✓）。
-    let callable = if Some(unsafe { entry.as_ref() }.ty()) == instance.type_named("classmethod") {
+    let callable = if Some(unsafe { entry.as_ref() }.ty()) == instance.hot_type(HotId::ClassMethod) {
         // SAFETY: 类型身份刚确认。
         unsafe { &*entry.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>() }.function()
     } else {
@@ -130,7 +131,7 @@ pub fn call_value(
     if kwargs.is_empty() {
         // SAFETY: callable 由调用方保证存活。
         let callable_type = unsafe { callable.as_ref() }.ty();
-        if callable_type == builtin_type(instance, "builtin_function_or_method") {
+        if callable_type == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记") {
             // SAFETY: 类型身份刚确认。
             let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
             let function = native.function();
@@ -281,10 +282,10 @@ pub(crate) fn call_callable(
         return result;
     }
 
-    let callable_type_ok = ty == builtin_type(instance, "function")
+    let callable_type_ok = ty == instance.hot_type(HotId::Function).expect("function 已登记")
         || instance.is_type_object(callable)
-        || ty == builtin_type(instance, "method")
-        || ty == builtin_type(instance, "builtin_function_or_method");
+        || ty == instance.hot_type(HotId::Method).expect("method 已登记")
+        || ty == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记");
     // **`__call__`**（第 593 轮真缺口 ✓）：参照的调用协议里，**实例**只要有 `__call__` 就可调用 ✓
     // （先前 core 里**一处都没有** ✗ ⇒ 任何带 `__call__` 的用户类都报
     // `TypeError: 'X' object is not callable` ✗；`_sre.template` 要返回的**模板可调用对象**也压在这上面 ✓）。
@@ -396,21 +397,20 @@ pub(crate) fn call_callable(
         // **`list(...)` 一族的关键字**（round 110）：参照 `list() takes no keyword arguments` ✓
         //（`test_list.test_keyword_args`／`test_keywords_in_subclass` 钉住：普通子类同罪；
         // 子类若**自己**定义了 `__init__`／`__new__`，关键字归用户代码 ⇒ 不在这一档拒绝 ✓）。
-        let list_like = instance
-            .type_named("list")
+        let list_like = instance.hot_type(HotId::List)
             .is_some_and(|list_type| instance.is_subtype(class, list_type));
         let user_constructor = instance
             .type_lookup_owner(class, "__init__")
             .map(|(owner, _)| {
-                Some(owner) != instance.type_named("object")
-                    && Some(owner) != instance.type_named("list")
+                Some(owner) != instance.hot_type(HotId::Object)
+                    && Some(owner) != instance.hot_type(HotId::List)
             })
             .unwrap_or(false)
             || instance
                 .type_lookup_owner(class, "__new__")
                 .map(|(owner, _)| {
-                    Some(owner) != instance.type_named("object")
-                        && Some(owner) != instance.type_named("list")
+                    Some(owner) != instance.hot_type(HotId::Object)
+                        && Some(owner) != instance.hot_type(HotId::List)
                 })
                 .unwrap_or(false);
         if list_like && !kwargs.is_empty() && !user_constructor {
@@ -609,8 +609,7 @@ pub(crate) fn call_callable(
         // **默认的 `object.__init__` 不算"有 `__init__`"**（第 310 轮）：它是本轮才挂上去的
         // （为了"在类型对象上取 dunder" ✓）⇒ 若不排除，`class C: pass` 的 `C(1)` 就会走"调
         // `__init__`"这条路 ⇒ **不再**报 `C() takes no arguments` ✗（`type_call` 那道测试当场变红 ✓）。
-        let default_init = instance
-            .type_named("object")
+        let default_init = instance.hot_type(HotId::Object)
             .and_then(|object| instance.type_lookup(object, "__init__"));
         let initializer = instance
             .type_lookup(class, "__init__")
@@ -660,8 +659,7 @@ pub(crate) fn call_callable(
             // 类型（如 `module` ✓ —— 它的 `new` 槽是 `attribute_new` ✓）**允许**多余实参 ✓。
             // 先前一律按"通用分配"报错 ✗ ⇒ `types.ModuleType("x")` 报
             // `TypeError: module() takes no arguments` ✗（`Lib/` 里造模块对象的写法就断在这 ✓）。
-            let overrides_new = instance
-                .type_named("module")
+            let overrides_new = instance.hot_type(HotId::Module)
                 .map(|module_type| module_type.cast::<crate::TypeObject>() == class)
                 .unwrap_or(false);
             // **参照语义**（第 247 轮补 ✓）：`module("名字")` 走的是"覆盖了 `__new__`"这条路 ✓
@@ -679,8 +677,7 @@ pub(crate) fn call_callable(
                     );
                 }
             }
-            let exception_subclass = instance
-                .type_named("BaseException")
+            let exception_subclass = instance.hot_type(HotId::BaseException)
                 .is_some_and(|base| instance.is_subtype(class, base));
             if generic_allocation
                 && !overrides_new
@@ -727,7 +724,7 @@ pub(crate) fn call_callable(
     // 方法对象自带 `this` ✓，再塞一份会把 receiver 重复传进去 ✗（实测 `range` 迭代当场
     // `TypeError: range indices must be integers or slices, not range` ✗）。
     // SAFETY: callable 是存活对象。
-    let method_type = builtin_type(instance, "method");
+    let method_type = instance.hot_type(HotId::Method).expect("method 已登记");
     let caller_bound_self = bound_self;
     let mut callable = callable;
     let mut args = args;
@@ -757,7 +754,7 @@ pub(crate) fn call_callable(
     // **原生可调用对象**（`AB-24`：宿主函数与内建函数的落点）：实参以**借用视图**递进去，
     // 返回值是**新引用**。绑定方法形态在这里剥掉绑定并当第一个位置实参。
     // SAFETY: callable 是存活对象。
-    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "builtin_function_or_method") {
+    if unsafe { callable.as_ref() }.ty() == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记") {
         // SAFETY: 类型身份已确认。
         let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
         let function = native.function();
@@ -793,7 +790,7 @@ pub(crate) fn call_callable(
     // **`__globals__`**：函数帧的全局映射取自函数自己（`BC-57`）；`MAKE_FUNCTION` 时捕获。
     let function_globals = {
         // SAFETY: callable 是存活对象。
-        let is_function = unsafe { callable.as_ref() }.ty() == builtin_type(instance, "function");
+        let is_function = unsafe { callable.as_ref() }.ty() == instance.hot_type(HotId::Function).expect("function 已登记");
         if is_function {
             // SAFETY: 类型身份已确认。
             unsafe { &*callable.as_ptr().cast::<FunctionObject>() }.globals()
@@ -815,8 +812,7 @@ pub(crate) fn call_callable(
     let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;
 
     // **帧类型是"内部"类型** ✓（不进探测表 ✓）⇒ 这里必须用 `type_named` ✗（用 `builtin_type` 会 panic ✓）。
-    let frame_type = instance
-        .type_named("frame")
+    let frame_type = instance.hot_type(HotId::Frame)
         .expect("引导期已登记 frame 类型（内部类型 ✓）");
     let frame = instance.alloc(Frame::for_code(frame_type, &own_code(instance, code_header)));
     if let Some(mapping) = function_globals {

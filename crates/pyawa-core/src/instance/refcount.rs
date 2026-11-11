@@ -425,12 +425,8 @@ impl Instance {
         // （`PYAWA_DANGLING=1` 下 `import_posixpath` 的 SIGSEGV 就是这个 ✓）。
         // **如实说** ✗：这一道**挡住的是症状** ✓ —— 真正要查的是"**谁多放了一份**" ✓（欠计数 ✓），
         // 已记进 `P3-19` 与第 284 轮台账 ✓。
-        if self
-            .types
-            .borrow()
-            .iter()
-            .any(|ty| ty.as_ptr() as usize == ptr as usize)
-        {
+        // **round 246 性能**：判定改成升序地址表的二分（先前是**每次释放线性扫**一遍类型表 ✗）。
+        if self.is_registered_type_address(ptr as usize) {
             // **诊断（round 98，`PYAWA_TYPE_REL_TRACE=1`）**：把"注册类型被放到 0"的**首次**现场打出来
             // （这是欠计数/多放的源头；guard 只挡住症状 ✓）。
             if std::env::var_os("PYAWA_TYPE_REL_TRACE").is_some() {

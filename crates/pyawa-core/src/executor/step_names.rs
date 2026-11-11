@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -17,12 +18,11 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                                 .expect("AssertionError 在内建表里"),
                         ),
                         1 => instance.type_value(
-                            instance
-                                .type_named("NotImplementedError")
+                            instance.hot_type(HotId::NotImplementedError)
                                 .expect("NotImplementedError 在内建表里"),
                         ),
                         2 => instance.type_value(
-                            instance.type_named("tuple").expect("tuple 在内建表里"),
+                            instance.hot_type(HotId::Tuple).expect("tuple 在内建表里"),
                         ),
                         3 | 4 => {
                             let name = if oparg == 3 { "all" } else { "any" };
@@ -116,8 +116,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                             // （含异常吞掉）⇒ 全脚本变慢（实测 `test_collections` 60 s ⇒ 110 s ✗）。
                             // 类型不是 `dict` 才走这条路（`eval(code, MyGlobals())` 的子类 ✓）。
                             let mapping_type = instance.type_of(mapping);
-                            let plain_dict = instance
-                                .type_named("dict")
+                            let plain_dict = instance.hot_type(HotId::Dict)
                                 .is_some_and(|dict| dict == mapping_type);
                             if !plain_dict {
                                 if let Some(hook) = instance.type_lookup(mapping_type, "__missing__") {
@@ -257,7 +256,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     // ⇒ `enum` 收不到成员（`TypeError: 'NoneType' object is not iterable` ✓）⇒ 整包 `unittest` 进不来 ✓。
                     // 依据：`NEXT.md`（R2 闸门）＋ `PYAWA_NS_DEBUG` 探针（类体赋值从不打 `setitem`）。
                     let ns_type = unsafe { namespace.as_ref() }.ty();
-                    let dict_setitem = instance.type_lookup(builtin_type(instance, "dict"), "__setitem__");
+                    let dict_setitem = instance.type_lookup(instance.hot_type(HotId::Dict).expect("dict 已登记"), "__setitem__");
                     let overrides_setitem = instance
                         .type_lookup(ns_type, "__setitem__")
                         .is_some_and(|found| Some(found) != dict_setitem);

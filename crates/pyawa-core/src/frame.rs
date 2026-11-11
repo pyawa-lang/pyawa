@@ -7,6 +7,7 @@
 //! 本层只做**布局与托管**：值栈的进出、局部槽与 cell 槽、指令指针与异常表游标、可挂起状态。
 //! 指令的**语义**由执行器（下一步）按 `BC-49` 的起步指令集实现。
 
+use crate::HotId;
 use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
@@ -934,8 +935,7 @@ pub unsafe fn frame_getattr(
         }),
         // **`frame.clear()`**（round 126）：清掉局部/值栈/cell/回溯点（保留 code/globals/内建 ✓）。
         "clear" => {
-            let method_type = instance
-                .type_named("builtin_function_or_method")
+            let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                 .expect("引导期已登记");
             let native = instance
                 .alloc(BuiltinFunctionObject::new(method_type, "clear", Cell::new(frame_clear_native)));
@@ -943,7 +943,7 @@ pub unsafe fn frame_getattr(
             // SAFETY: ptr 是本类型的存活对象（槽位契约）。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 // SAFETY: ptr 由槽位契约保证非空（是本类型的存活对象）。
                 unsafe { NonNull::new_unchecked(ptr) },

@@ -1,10 +1,11 @@
 //! **`values` 族** —— 从 `builtin_objects.rs` **原样搬来** ✓（纯移动 ✓、零逻辑改动 ✓）。
 //!
 //! * 派发表 `values_method_native` **不搬** ✓（族之间的粘合层 ✓）；
-//! * 仍在原处的被引用项：`ITERATOR_TYPE_NAMES`、`builtin_type`、`exception_type`、`integer_payload`、`numeric_payload` ✓；
+//! * 仍在原处的被引用项：`integer_payload`、`numeric_payload` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{ITERATOR_TYPE_NAMES, builtin_type, exception_type, integer_payload, numeric_payload};
+use crate::executor::{integer_payload, numeric_payload};
+use crate::HotId;
 use crate::builtin_objects::BytesObject;
 use crate::builtin_objects::DictObject;
 use crate::header::Header;
@@ -91,7 +92,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
     let subtype_of_bytes = |ty: NonNull<crate::TypeObject>| {
         instance
-            .type_named("bytes")
+            .hot_type(HotId::Bytes)
             .is_some_and(|base| instance.is_subtype(ty, base))
     };
     if subtype_of_bytes(left_type) && subtype_of_bytes(right_type) {
@@ -112,16 +113,16 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     // **子类也按值比** ✓（task-14 真 bug 修 ✗）：先前按**恰好**是 list／tuple／dict 判 ✗
     // ⇒ `namedtuple` 实例 `Point(1,2) == (1,2)` 实测 **False** ✗（参照 True ✓）。
     // 参照口径 ✓：tuple（含子类）与 tuple（含子类）逐项比 ✓；list 与 tuple **不同族**不等 ✓。
-    let subtype_of = |ty: NonNull<crate::TypeObject>, name: &str| {
+    let subtype_of = |ty: NonNull<crate::TypeObject>, id: HotId| {
         instance
-            .type_named(name)
+            .hot_type(id)
             .is_some_and(|base| instance.is_subtype(ty, base))
     };
-    let is_list = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "list");
-    let is_tuple = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "tuple");
+    let is_list = |ty: NonNull<crate::TypeObject>| subtype_of(ty, HotId::List);
+    let is_tuple = |ty: NonNull<crate::TypeObject>| subtype_of(ty, HotId::Tuple);
     // **`deque` 按值比**（round 86）：参照的 `deque.__eq__` 逐项比 ✓；同一对象已在函数开头
     // 用身份短路 ✓（`test_contains.test_nonreflexive` 的 `nan`／`NEVER_EQ` 依赖它 ✓）。
-    if subtype_of(left_type, "deque") && subtype_of(right_type, "deque") {
+    if subtype_of(left_type, HotId::Deque) && subtype_of(right_type, HotId::Deque) {
         // SAFETY: 类型身份已确认，两侧载荷同为 `DequeObject` ✓。
         let (a, b) = unsafe {
             (
@@ -203,7 +204,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     }
 
     // **`dict` 按值比**（实测）：长度相等 ＋ 每个键在右边**按键值相等**找到、且对应值递归相等。
-    if subtype_of(left_type, "dict") && subtype_of(right_type, "dict") {
+    if subtype_of(left_type, HotId::Dict) && subtype_of(right_type, HotId::Dict) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe {
             (
@@ -235,7 +236,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     // 先前落到最后那条 `false`（按身份）⇒ `Lib/_weakrefset.py` 的 `WeakSet` **不去重** ✓：
     // `weakref.WeakSet.add` 每次真的塞一条 ⇒ `_abc_cache` 一次 `isinstance` 长一条 ⇒ 成员查询
     // 线性扫、越查越慢 ⇒ **O(n²)**（实测 `test_userstring` 的 6.5 万次循环 >900 s ✗）。
-    let weakref_type = instance.type_named("weakref");
+    let weakref_type = instance.hot_type(HotId::WeakRef);
     let is_weakref = |ty: NonNull<crate::TypeObject>| {
         weakref_type.is_some_and(|base| instance.is_subtype(ty, base))
     };
@@ -258,8 +259,8 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     }
     // **`set`／`frozenset`**：同族（含跨 `set`／`frozenset`——Python 允许，`{1} == frozenset({1})`
     // 为真）时"长度相等 ＋ 左的每一项在右里找得到"（双向包含由长度 ＋ 单向包含推出）。
-    let set_type = instance.type_named("set");
-    let frozen_type = instance.type_named("frozenset");
+    let set_type = instance.hot_type(HotId::Set);
+    let frozen_type = instance.hot_type(HotId::FrozenSet);
     let left_is_set = Some(left_type) == set_type || Some(left_type) == frozen_type;
     let right_is_set = Some(right_type) == set_type || Some(right_type) == frozen_type;
     if left_is_set && right_is_set {
@@ -458,12 +459,14 @@ pub(crate) fn key_hash_checked(
         }
     }
     // 不可哈希的容器（参照 `dict` 也拒它们当键）⇒ `None`（线性兜底；正常路径到不了 ✓）。
-    let unhashable = ["list", "dict", "set", "bytearray"];
-    if unhashable.iter().any(|name| {
-        instance
-            .type_named(name)
-            .is_some_and(|base| instance.is_subtype(ty, base))
-    }) {
+    if [HotId::List, HotId::Dict, HotId::Set, HotId::ByteArray]
+        .into_iter()
+        .any(|id| {
+            instance
+                .hot_type(id)
+                .is_some_and(|base| instance.is_subtype(ty, base))
+        })
+    {
         return Ok(None);
     }
     // **用户 `__hash__`**（round 70）：参照的容器哈希就是 `hash(对象)` ✓ —— 先前"其余按身份" ✗
@@ -473,13 +476,11 @@ pub(crate) fn key_hash_checked(
     // 返回 `None` 表示不可哈希 ⇒ `None` ✓。结果用**原始位模式**（不 mix）—— 与本函数对
     // `str`／`int` 的口径必须**一致**：`hash('halibut')` 走本文件的 `hash_text` ⇒ 同一条路径 ✓。
     let object_hash = instance
-        .type_named("object")
+        .hot_type(HotId::Object)
         .and_then(|object_type| instance.type_lookup(object_type, "__hash__"));
     let own_hash = instance.type_lookup(ty, "__hash__");
     if let Some(hasher) = own_hash.filter(|found| Some(*found) != object_hash) {
-        // SAFETY: ty 由注册表持有。
-        let ty_object = unsafe { ty.as_ref() };
-        if ty_object.name() == "type" {
+        if instance.hot_type_is(HotId::Type, ty) {
             // 类型对象的 `__hash__` 是**元类**的 —— 交给身份兜底（与既有行为一致 ✓）。
         } else {
             // SAFETY: hasher 由类型字典持有。
@@ -516,10 +517,11 @@ pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u
 }
 
 /// 一个对象是不是本层接线的迭代器。
+///
+/// **round 246 性能**：先前对 36 个内建名逐个 `type_named`（每个 `FOR_ITER` 一遍 ✗）；
+/// 现在只比缓存里的类型指针 ✓（见 [`crate::instance::HotTypes`]）。
 pub(crate) fn is_iterator_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    ITERATOR_TYPE_NAMES
-        .iter()
-        .any(|name| instance.type_named(name) == Some(ty))
+    instance.hot_is_iterator_type(ty)
 }
 
 /// **相等性**（本层的临时口径，随 `richcompare` 槽位收口）：给宿主面用。
@@ -533,10 +535,14 @@ pub fn values_equal_public(
 
 /// 这个类型是不是异常类（MRO 里有 `BaseException`）。
 pub(crate) fn is_exception_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    instance.is_subtype(ty, exception_type(instance, "BaseException"))
+    instance
+        .hot_type(HotId::BaseException)
+        .is_some_and(|base| instance.is_subtype(ty, base))
 }
 
 /// 这个类型是不是"类型对象"（`type` 及其子类，`TS-41` 的层次说了算）。
 pub(crate) fn is_type_object(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    instance.is_subtype(ty, builtin_type(instance, "type"))
+    instance
+        .hot_type(HotId::Type)
+        .is_some_and(|base| instance.is_subtype(ty, base))
 }

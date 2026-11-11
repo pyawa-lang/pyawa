@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_attributes<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -48,7 +49,7 @@ pub(super) fn step_attributes<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                                     instance.incref_object(this.as_ptr());
                                 }
                                 let bound = instance.alloc(MethodObject::new(
-                                    builtin_type(instance, "method"),
+                                    instance.hot_type(HotId::Method).expect("method 已登记"),
                                     function,
                                     this,
                                 ));

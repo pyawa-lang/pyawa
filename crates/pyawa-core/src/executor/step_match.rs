@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -12,8 +13,8 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                     // SAFETY: subject 在帧值栈上，存活。
                     let ty = unsafe { subject.as_ref() }.ty();
                     // 参照实测：`list`／`tuple` 的**子类**也算序列 ✓（`str`／`dict`／`set` 不算 ✓）。
-                    let truth = instance.is_subtype(ty, builtin_type(instance, "list"))
-                        || instance.is_subtype(ty, builtin_type(instance, "tuple"));
+                    let truth = instance.is_subtype(ty, instance.hot_type(HotId::List).expect("list 已登记"))
+                        || instance.is_subtype(ty, instance.hot_type(HotId::Tuple).expect("tuple 已登记"));
                     let raw = instance.singletons().boolean(truth);
                     push(instance, frame.get(), raw)?;
                 }
@@ -23,7 +24,7 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                     // SAFETY: subject 在帧值栈上，存活。
                     // 参照实测：`dict` 的**子类**也算映射 ✓（`collections.UserDict` 那种 ABC 面本层未接 ✓）。
                     let truth = instance
-                        .is_subtype(unsafe { subject.as_ref() }.ty(), builtin_type(instance, "dict"));
+                        .is_subtype(unsafe { subject.as_ref() }.ty(), instance.hot_type(HotId::Dict).expect("dict 已登记"));
                     let raw = instance.singletons().boolean(truth);
                     push(instance, frame.get(), raw)?;
                 }
@@ -34,7 +35,7 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                     let subject = frame.get().peek_from_top(2)?;
                     // SAFETY: 两个都在帧值栈上，存活。
                     let keys_type = unsafe { keys.as_ref() }.ty();
-                    if keys_type != builtin_type(instance, "tuple") {
+                    if keys_type != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
                         return Err(ExecError::Unsupported {
                             opcode: opcode_number,
                             what: "MATCH_KEYS 的键必须是 tuple（编译器保证）",
@@ -44,7 +45,7 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                     let key_items = unsafe { &*keys.as_ptr().cast::<TupleObject>() };
                     // SAFETY: subject 是存活对象。
                     let subject_type = unsafe { subject.as_ref() }.ty();
-                    if subject_type != builtin_type(instance, "dict") {
+                    if subject_type != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                         let none = instance.singletons().none();
                         push(instance, frame.get(), none)?;
                         return Ok(Step::Continue);
@@ -99,7 +100,7 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                     let subject = frame.get().pop()?;
                     // SAFETY: class_object 是刚出栈的存活对象。
                     let class_type = unsafe { class_object.as_ref() }.ty();
-                    if class_type != builtin_type(instance, "type") {
+                    if class_type != instance.hot_type(HotId::Type).expect("type 已登记") {
                         release(instance, names);
                         release(instance, class_object);
                         release(instance, subject);
@@ -150,7 +151,7 @@ pub(super) fn step_match<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                             Some(attributes) => {
                                 // SAFETY: attributes 由类型字典持有，存活。
                                 let attributes_type = unsafe { attributes.as_ref() }.ty();
-                                if attributes_type != builtin_type(instance, "tuple") {
+                                if attributes_type != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
                                     let got = instance.type_name(attributes_type);
                                     release(instance, names);
                                     release(instance, subject);

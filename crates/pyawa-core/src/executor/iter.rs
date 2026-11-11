@@ -3,6 +3,7 @@
 //! * 派发表 `iter_method_native` **不搬** ✓（族之间的粘合层 ✓）；
 //! * 仍在原处的被引用项：（无） ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
+use crate::HotId;
 use crate::builtin_objects::BoolObject;
 use crate::builtin_objects::BytesObject;
 use core::cell::Cell;
@@ -19,7 +20,6 @@ use core::ptr::NonNull;
 use crate::builtin_objects::SetObject;
 use crate::builtin_objects::TupleObject;
 use crate::executor::arithmetic_public;
-use crate::executor::builtin_type;
 use crate::executor::call_value;
 use crate::executor::is_iterator_type;
 use crate::executor::iterator_type_for;
@@ -46,7 +46,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
     // SAFETY: iterable 由调用方保证存活。
     let ty = unsafe { iterable.as_ref() }.ty();
     // 迭代器（含生成器）就是它自己的迭代器（实测 `iter(c) is c`）
-    if ty == builtin_type(instance, "generator") || is_iterator_type(instance, ty) {
+    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") || is_iterator_type(instance, ty) {
         // SAFETY: 同上。
         unsafe { instance.incref_object(iterable.as_ptr()) };
         return Ok(iterable);
@@ -54,8 +54,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
     // **`deque` 的迭代**（round 86，参照 `collections.deque`）：直接按 `items` 物化成一个 `list`
     // 再交给现成的 `list_iterator` ✓（**如实记**：不是参照的 `_deque_iterator`，是**快照** ✓ ——
     // 迭代中修改 deque 的语义与参照可能不同 ✗；`test_contains`／`in` 这类只读用法完全等价 ✓）。
-    if instance
-        .type_named("deque")
+    if instance.hot_type(HotId::Deque)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // SAFETY: iterable 由调用方保证存活、类型刚确认是 deque 族（载荷同构 ✓）。
@@ -186,8 +185,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             {
                 // SAFETY: iterable 由调用方保证存活；迭代器要自己那份引用。
                 unsafe { instance.incref_object(iterable.as_ptr()) };
-                let iterator_type = instance
-                    .type_named("iterator")
+                let iterator_type = instance.hot_type(HotId::Iterator)
                     .expect("iterator 在引导期已登记");
                 let object = instance.alloc(crate::builtin_objects::SequenceIteratorObject::new(
                     iterator_type,
@@ -224,7 +222,7 @@ fn ensure_iterator_result(
 ) -> Result<NonNull<Header>, ExecError> {
     let ty = unsafe { iterator.as_ref() }.ty();
     let has_next = is_iterator_type(instance, ty)
-        || ty == builtin_type(instance, "generator")
+        || ty == instance.hot_type(HotId::Generator).expect("generator 已登记")
         || instance
             .type_lookup(ty, "__next__")
             .is_some();
@@ -265,43 +263,37 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, _opcode: u8)
     // **内建容器的真假**（`OM-11` 的 `__bool__` 槽位接线前，按参照的**内建**规则 ✓）：
     // 空 `str`／`bytes`／`list`／`tuple`／`dict` ⇒ 假；`float` ⇒ `0.0`／`-0.0` 为假（`nan` 为真 ✓）。
     // 第 101 轮实测的触发器：`assert "x"`（上游 `importlib`／`site.py` 里满是这样用 ✓）。
-    if instance
-        .type_named("str")
+    if instance.hot_type(HotId::Str)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // P3-38 S2a-2：真值按"码点/字节是否为空"（两分支一致 ✓；合法 UTF-8 结果不变 ✓）。
         return Ok(!instance.str_is_empty(raw).unwrap_or(false));
     }
-    if instance
-        .type_named("bytes")
+    if instance.hot_type(HotId::Bytes)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // SAFETY: 同上。
         return Ok(!unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().is_empty());
     }
-    if instance
-        .type_named("list")
+    if instance.hot_type(HotId::List)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // SAFETY: 同上。
         return Ok(!unsafe { &*raw.as_ptr().cast::<ListObject>() }.items().is_empty());
     }
-    if instance
-        .type_named("tuple")
+    if instance.hot_type(HotId::Tuple)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // SAFETY: 同上。
         return Ok(!unsafe { &*raw.as_ptr().cast::<TupleObject>() }.items().is_empty());
     }
-    if instance
-        .type_named("dict")
+    if instance.hot_type(HotId::Dict)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len() != 0);
     }
-    if instance
-        .type_named("float")
+    if instance.hot_type(HotId::Float)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // SAFETY: 同上。
@@ -319,8 +311,7 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, _opcode: u8)
     // **默认为真** ✗ ⇒ 空 deque 恒真 ✗ ⇒ `Lib/contextlib.py` 的 `ExitStack.__exit__`
     //（`while self._exit_callbacks: …`）死循环 ✗ ⇒ `patch().stop()` 报
     // `pop from an empty deque` ✓（实测复现：`bool(deque())` 与参照相反 ✓）。
-    if instance
-        .type_named("deque")
+    if instance.hot_type(HotId::Deque)
         .is_some_and(|base| instance.is_subtype(ty, base))
     {
         // SAFETY: 类型身份已确认是 deque 族。
@@ -643,7 +634,7 @@ pub(crate) fn contains(
     // —— `1.0 in range(3)` ⇒ True、`'a' in range(3)` ⇒ False、`range(3) in range(3)` ⇒ False ✓。
     // 先前没有这一档 ✗ ⇒ 落进"不是容器"的 TypeError ✗（`test_genexps` 的
     // `... if j in range(n)` ✓）。
-    if Some(container_type) == instance.type_named("range") {
+    if Some(container_type) == instance.hot_type(HotId::Range) {
         // SAFETY: 类型身份已确认，载荷布局是 `RangeObject`。
         let range = unsafe { &*container.as_ptr().cast::<RangeObject>() };
         // 只认整数（含 `bool`／`int` 子类）与**整值浮点**（参照对 `1.0` 也判 True ✓）。
@@ -674,14 +665,13 @@ pub(crate) fn contains(
     // `300 in b"ab"`／`(-1) in b"ab"` ⇒ `ValueError: byte must be in range(0, 256)` ✓、
     // `"a" in b"ab"` ⇒ `TypeError: a bytes-like object is required, not 'str'` ✓
     //（`Lib/` 里 `codecs`／`base64_codec` 一族真的会 `b in bytes` 判字节 ✓）。
-    if Some(container_type) == instance.type_named("bytes") {
+    if Some(container_type) == instance.hot_type(HotId::Bytes) {
         let value = instance.bytes_value(container).unwrap_or_default().to_vec();
         // **认 `int` 及其子类** ✓（第 681 轮真 bug 修 ✗）：先前用 `type_of(item) == int` ✗ ⇒
         // `re._constants` 的 `_NamedIntConstant`（**`int` 的子类** ✓）落不进这一档 ✓ ⇒ 明明给的是整数，
         // 却报 `TypeError: a bytes-like object is required, not 'int'` ✗（`_optimize_charset` 里
         // `x in b"…"` 一族当场踩到 ✓；`bool` 也是 `int` 的子类 ✓，参照口径一致 ✓）。
-        if instance
-            .type_named("int")
+        if instance.hot_type(HotId::Int)
             .is_some_and(|int_type| instance.is_subtype(instance.type_of(item), int_type))
         {
             // 超出 `i64` 的整数一定不在 0..256 ✓（参照给的是同一条 `ValueError` ✓）
@@ -716,7 +706,7 @@ pub(crate) fn contains(
         }
         return Ok(value.windows(needle.len()).any(|window| window == needle.as_slice()));
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::List).expect("list 已登记")) {
         // **富比较协议**（round 110）：`in` 对序列必须逐项走 `==`（含用户 `__eq__`／反射／
         // `NotImplemented` 回退 ✓，并按**顺序**短路 ✓，异常原样传播 ✓）—— 先前用只认内建值的
         // `values_equal` ✗ ⇒ `ALWAYS_EQ in [1]` 判 False ✗、`StopCompares` 的异常被吞 ✗
@@ -744,7 +734,7 @@ pub(crate) fn contains(
         }
         return Ok(false);
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Tuple).expect("tuple 已登记")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
         for index in 0..object.len() {
@@ -759,10 +749,10 @@ pub(crate) fn contains(
     // `class lowerdict(dict): def __contains__(self, k): …`（`test_collections.TestChainMap.test_new_child`）
     // 先前一律走"哈希查键"快路 ☒ ⇒ 覆写被跳过 ⇒ `'B' in d` 判 False ⇒ `d.get('B',100)` 给 100 ✗。
     // 判据：`container_type` 的 `__contains__` 与 `dict` 那份**同一可调用**才走快路 ✓。
-    let dict_contains_override = instance.is_subtype(container_type, builtin_type(instance, "dict"))
+    let dict_contains_override = instance.is_subtype(container_type, instance.hot_type(HotId::Dict).expect("dict 已登记"))
         && instance.type_lookup(container_type, "__contains__")
-            != instance.type_lookup(builtin_type(instance, "dict"), "__contains__");
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) && !dict_contains_override {
+            != instance.type_lookup(instance.hot_type(HotId::Dict).expect("dict 已登记"), "__contains__");
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Dict).expect("dict 已登记")) && !dict_contains_override {
         // 不可哈希的项 ⇒ 参照的 TypeError ✓（task-46；`[1] in d` ⇒
         // `cannot use 'list' as a dict key (unhashable type: 'list')` ✓）。
         crate::builtin::dict::reject_unhashable_key(instance, item)?;
@@ -776,8 +766,8 @@ pub(crate) fn contains(
     //（第 283 轮修 ✗：先前只认 `set` ✗ ⇒ `1 in frozenset([1, 2])` 报
     //  `TypeError: argument of type 'frozenset' is not a container or iterable` ✗ ——
     //  `collections` 那一族 **12** 个模块压在它上面 ✓）。
-    if instance.is_subtype(container_type, builtin_type(instance, "set"))
-        || Some(container_type) == instance.type_named("frozenset")
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Set).expect("set 已登记"))
+        || Some(container_type) == instance.hot_type(HotId::FrozenSet)
     {
         // **哈希索引**（round 70）：先前逐元素线性扫 ⇒ `name in seen` 在 8000 项集合上
         // 2.5 s ⇒ O(n²) ✗（`test_collections.test_large_size` 因此超时）；走
@@ -829,8 +819,7 @@ pub(crate) fn contains(
             // 只有**`TypeError`**（"不可迭代"那一档）才吞掉、落到本函数末尾统一报 ✓。
             // SAFETY: exception 是存活对象。
             let raised = unsafe { exception.as_ref() }.ty();
-            let type_error = instance
-                .type_named("TypeError")
+            let type_error = instance.hot_type(HotId::TypeError)
                 .expect("TypeError 在引导期已登记");
             if instance.is_subtype(raised, type_error) {
                 crate::discard_raised(instance, exception);
@@ -974,8 +963,7 @@ pub fn concat_public(
                 joined.extend(data.value().iter().copied());
             }
         }
-        let ty = instance
-            .type_named("bytearray")
+        let ty = instance.hot_type(HotId::ByteArray)
             .expect("引导期已登记 bytearray 类型");
         return Ok(instance
             .alloc(crate::builtin_objects::BytearrayObject::new(
@@ -1001,8 +989,7 @@ pub fn concat_public(
     //（官方 `test_xml_dom_minicompat` 的 `NodeList + list`／`list + NodeList` ✓；结果给**普通 list** ✓
     // —— 除非子类自己覆写了 `__add__` ✓，那条在 `binary_override` 已先走 ✓）。
     let is_list_type = |ty: NonNull<crate::TypeObject>| {
-        instance
-            .type_named("list")
+        instance.hot_type(HotId::List)
             .is_some_and(|base| instance.is_subtype(ty, base))
     };
     if is_list_type(left_type) && is_list_type(right_type) {
@@ -1032,8 +1019,7 @@ pub fn concat_public(
     }
     // 同上：**tuple 子类**也按 `tuple.__add__` 拼接 ✓（结果给普通 tuple ✓）。
     let is_tuple_type = |ty: NonNull<crate::TypeObject>| {
-        instance
-            .type_named("tuple")
+        instance.hot_type(HotId::Tuple)
             .is_some_and(|base| instance.is_subtype(ty, base))
     };
     if is_tuple_type(left_type) && is_tuple_type(right_type) {

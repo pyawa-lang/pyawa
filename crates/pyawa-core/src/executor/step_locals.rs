@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -22,8 +23,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     // 现在把局部那份**取走**（`set_local(slot, None)` 返回旧值 ✓）⇒ 所有权只剩一份 ✓。
                     // 类体的 `nlocals` 是 0 ⇒ 这一步给 `None` ✓（与先前一致 ✓）。
                     let initial = frame.get().set_local(slot, None).unwrap_or(None);
-                    let cell_type = instance
-                        .type_named("cell")
+                    let cell_type = instance.hot_type(HotId::Cell)
                         .expect("引导期已登记 cell 类型");
                     let cell = instance
                         .alloc(crate::cell::CellObject::new(cell_type, RefCell::new(initial)))

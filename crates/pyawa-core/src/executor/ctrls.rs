@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`MAX_REPEAT_BYTES`、`MAX_REPEAT_ITEMS`、`builtin_type`、`opcode_of`、`push` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::executor::{MAX_REPEAT_BYTES, MAX_REPEAT_ITEMS, builtin_type, opcode_of};
 use crate::builtin_objects::BytesObject;
 use crate::executor::ExecError;
@@ -31,7 +32,7 @@ pub(crate) fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Opti
     }
     // SAFETY: 调用方保证 raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
-    if ty == builtin_type(instance, "float") {
+    if ty == instance.hot_type(HotId::Float).expect("float 已登记") {
         // SAFETY: 类型身份已确认。
         return Some(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value());
     }
@@ -55,7 +56,7 @@ pub(crate) fn sequence_items(
         value
     };
 
-    if ty == builtin_type(instance, "tuple") {
+    if ty == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         // SAFETY: 类型身份已确认。
         return Ok(unsafe { &*raw.as_ptr().cast::<TupleObject>() }
             .items()
@@ -64,7 +65,7 @@ pub(crate) fn sequence_items(
             .map(owned)
             .collect());
     }
-    if ty == builtin_type(instance, "list") {
+    if ty == instance.hot_type(HotId::List).expect("list 已登记") {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<ListObject>() }
             .items()
@@ -72,7 +73,7 @@ pub(crate) fn sequence_items(
             .map(owned)
             .collect());
     }
-    if ty == builtin_type(instance, "set") {
+    if ty == instance.hot_type(HotId::Set).expect("set 已登记") {
         // **集合**也走这里：`SET_UPDATE` 的源是折叠出来的 `frozenset` 常量（第 249 轮），
         // 解包一个集合在参照里本来也合法 ⇒ 元素序照集合内部序（观测面只比集合语义）
         // SAFETY: 类型身份已确认。
@@ -312,12 +313,12 @@ pub(crate) fn sequence_repeat(
     let right_type = unsafe { right.as_ref() }.ty();
     let is_text_left = left_type == instance.singletons().str_type();
     let is_text_right = right_type == instance.singletons().str_type();
-    let is_bytes_left = Some(left_type) == instance.type_named("bytes");
-    let is_bytes_right = Some(right_type) == instance.type_named("bytes");
+    let is_bytes_left = Some(left_type) == instance.hot_type(HotId::Bytes);
+    let is_bytes_right = Some(right_type) == instance.hot_type(HotId::Bytes);
     // **子类也算**（round 106）：参照 `list.__mul__`／`tuple.__mul__` 对子类同样成立 ✓
     //（官方 `test_list.test_mul` 的 `class subclass(list)` ✓）；结果给**普通** list／tuple ✓。
-    let list_base = builtin_type(instance, "list");
-    let tuple_base = builtin_type(instance, "tuple");
+    let list_base = instance.hot_type(HotId::List).expect("list 已登记");
+    let tuple_base = instance.hot_type(HotId::Tuple).expect("tuple 已登记");
     let is_list_left = instance.is_subtype(left_type, list_base);
     let is_list_right = instance.is_subtype(right_type, list_base);
     let is_tuple_left = instance.is_subtype(left_type, tuple_base);
@@ -362,7 +363,7 @@ pub(crate) fn sequence_repeat(
             .map(Some)
             .ok_or_else(|| instance.raise_builtin_error("MemoryError", "string repetition too large"));
     }
-    if Some(sequence_type) == instance.type_named("bytes") {
+    if Some(sequence_type) == instance.hot_type(HotId::Bytes) {
         // SAFETY: 同上。
         let value = unsafe { &*sequence.as_ptr().cast::<BytesObject>() }.value().to_vec();
         if value.len().saturating_mul(count) > MAX_REPEAT_BYTES {

@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`advance_iterator`、`ascii_escape`、`float_digits`、`integer_digits`、`localsplus_name`、`new_exception`、`pad_number`、`pad_text`、`release` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::executor::{advance_iterator, ascii_escape, float_digits, integer_digits, localsplus_name, new_exception, pad_number, pad_text, release};
 use crate::executor::ExecError;
 use crate::frame::Frame;
@@ -127,11 +128,9 @@ pub(crate) fn percent_format(
     // ⇒ 生成类的 `__repr__`（`repr_fmt % self` ✓）**自递归** ✓（实测 `RecursionError` ✓）。
     // 参照口径 ✓：`%` 的右操作数是 tuple **或 tuple 子类** ⇒ 位置实参 ✓；dict **或子类** ⇒ 映射 ✓。
     let right_type = instance.type_of(right);
-    let is_tuple_like = instance
-        .type_named("tuple")
+    let is_tuple_like = instance.hot_type(HotId::Tuple)
         .is_some_and(|tuple| instance.is_subtype(right_type, tuple));
-    let is_dict_like = instance
-        .type_named("dict")
+    let is_dict_like = instance.hot_type(HotId::Dict)
         .is_some_and(|dict| instance.is_subtype(right_type, dict));
     let items: Option<Vec<NonNull<Header>>> =
         if is_tuple_like { instance.tuple_items(right) } else { None };
@@ -737,8 +736,7 @@ pub fn uncaught_system_exit(
 ) -> Option<ExitDisposition> {
     // SAFETY: exception 由调用方保证存活。
     let ty = unsafe { exception.as_ref() }.ty();
-    let is_system_exit = instance
-        .type_named("SystemExit")
+    let is_system_exit = instance.hot_type(HotId::SystemExit)
         .is_some_and(|base| instance.is_subtype(ty, base));
     // SAFETY: ty 由注册表持有。
     if !is_system_exit

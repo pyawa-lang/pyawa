@@ -4,7 +4,8 @@
 //! * 仍在原处的被引用项：`advance`、`builtin_type`、`exception_type`、`instance_attribute_set`、`instance_attributes`、`is_type_object`、`mounted_instance_dict`、`raise_builtin`、`release`、`str_matches_public`、`super_lookup` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, exception_type, instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, release, super_lookup};
+use crate::HotId;
+use crate::executor::{exception_type, instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, release, super_lookup};
 use crate::executor::Attribute;
 use crate::executor::ExecError;
 use crate::header::Header;
@@ -161,7 +162,7 @@ pub(crate) fn attribute_lookup(
         if !instance.is_type_object(object) && !instance.getattribute_dispatching() {
             let object_type = unsafe { object.as_ref() }.ty();
             if let Some((owner, hook)) = instance.type_lookup_owner(object_type, "__getattribute__") {
-                let object_default = instance.type_named("object");
+                let object_default = instance.hot_type(HotId::Object);
                 if !object_default.is_some_and(|default| default == owner) {
                     let name_object = instance.new_str(name);
                     instance.set_getattribute_dispatching(true);
@@ -194,8 +195,7 @@ pub(crate) fn attribute_lookup(
         //（实测就是 `executor.rs` 那行的 misaligned panic ✗）。不是 dict 就跳过这一支 ✓。
         // **按类型指针比较**（round 175 热路径）：`type_name()` 会**每次都分配一个 `String`** ✗
         // （所有属性读的公共税）；`type_named("dict")` 是 O(1) 名字索引、零分配 ✓。
-        let is_dict = instance
-            .type_named("dict")
+        let is_dict = instance.hot_type(HotId::Dict)
             .is_some_and(|dict| instance.type_of(mapping) == dict);
         // **哈希索引**（round 73 性能真 bug 修 ✗）：先前把实例字典 `entries()` **整份克隆**后线性找
         // ✗ ⇒ 每次属性读一次分配＋扫描（实测空类实例属性读 4.4 µs ✗，全部脚本的公共税）。
@@ -265,7 +265,7 @@ pub(crate) fn attribute_lookup(
                 let registered = instance.type_named(&instance.type_name(lookup)) == Some(lookup);
                 let from_object = instance
                     .type_lookup_owner(lookup, name)
-                    .is_some_and(|(owner, _)| Some(owner) == instance.type_named("object"));
+                    .is_some_and(|(owner, _)| Some(owner) == instance.hot_type(HotId::Object));
                 // **不再要求 `registered`**（round 113）：用户子类（`class dict2(dict)`）也要与
                 // "声明 repr 槽的基类"共用同一个 `__repr__` 对象 ✓（`registered` 对用户类名
                 // 的登记口径不稳 ⇒ 先前直接退回 object 的包装器 ⇒ `dict2.__repr__ is dict.__repr__`
@@ -312,7 +312,7 @@ pub(crate) fn attribute_lookup(
         }
         // SAFETY: found 由类型字典持有。
         let found_ty = unsafe { found.as_ref() }.ty();
-        if found_ty == builtin_type(instance, "function") {
+        if found_ty == instance.hot_type(HotId::Function).expect("function 已登记") {
             // **类访问 ⇒ 不绑定** ✗（第 192 轮真 bug 修复 ✓）：参照实测 `D.deco`（沿**类自己的 MRO**
             // 取到的普通函数 ✓）给的是 `<function D.deco at …>` ✓ —— **不绑定** ✓；本层先前一律绑成
             // `<bound method D.deco of <class 'D'>>` ✗ ⇒ 于是 `@D.deco` 那条**类装饰器**把宿主 `D`
@@ -337,7 +337,7 @@ pub(crate) fn attribute_lookup(
         // - `classmethod` ⇒ 走内部"绑定方法"形态 ✓，`this` ＝ **那个类** ✓
         //   （`Q.c()` ⇒ `c(Q)` ✓，等价于参照的 `classmethod.__get__` ✓；
         //    第 298 轮 `__prepare__` 那处手工取 `ClassMethodObject::function` 的绕行可留可换 ✓）。
-        if Some(found_ty) == instance.type_named("staticmethod") {
+        if Some(found_ty) == instance.hot_type(HotId::StaticMethod) {
             // SAFETY: 类型身份刚确认 ⇒ `StaticMethodObject` 载荷；借出的函数由它持有。
             let inner =
                 unsafe { &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>() }
@@ -346,7 +346,7 @@ pub(crate) fn attribute_lookup(
             unsafe { instance.incref_object(inner.as_ptr()) };
             return Ok(Attribute::Value(inner));
         }
-        if Some(found_ty) == instance.type_named("classmethod") {
+        if Some(found_ty) == instance.hot_type(HotId::ClassMethod) {
             // SAFETY: 类型身份刚确认 ⇒ `ClassMethodObject` 载荷。
             let inner =
                 unsafe { &*found.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>() }
@@ -364,7 +364,7 @@ pub(crate) fn attribute_lookup(
         // **绑定方法（`method`）的 dunder 转发给它的函数**（第 312 轮）：`C().m.__module__`
         // 参照给的是**函数**的那个值 ✓ ⇒ 这里把 `__module__`／`__qualname__`／`__name__` 一类
         // 直接转给 `MethodObject.function` ✓（`Lib/_collections_abc.py` 一族要它 ✓）。
-        if instance.type_of(object) == builtin_type(instance, "method")
+        if instance.type_of(object) == instance.hot_type(HotId::Method).expect("method 已登记")
             && matches!(name, "__module__" | "__qualname__" | "__name__" | "__doc__" | "__code__" | "__defaults__")
         {
             // SAFETY: 类型身份刚确认 ⇒ `MethodObject` 载荷。
@@ -381,7 +381,7 @@ pub(crate) fn attribute_lookup(
         // **类型字典里的原生方法在实例上要绑定**（第 309 轮）：`C().__hash__()` 先前拿到的是
         // **未绑定**的原生 ✗ ⇒ 调用报 `descriptor '__hash__' needs an argument` ✗。
         // 与函数那条同款 ✓（类型访问仍不绑定 ✓ —— `C.__hash__` 给的就是未绑定的那个 ✓）。
-        if found_ty == builtin_type(instance, "builtin_function_or_method")
+        if found_ty == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记")
             && !instance.is_type_object(object)
         {
             return Ok(Attribute::Method {
@@ -393,7 +393,7 @@ pub(crate) fn attribute_lookup(
         //   （`C().x` ⇒ `__get__(实例, C)` ✓；`C.x` ⇒ `__get__(None, C)` ✓）。
         //   **函数不走这里** ✗（上面那支已处理绑定 ✓）；`builtin_function_or_method` 同理 ✗
         //   —— `Lib/` 里方法遍地都是 ✓，别把它们的绑定路径抢了 ✗。
-        if found_ty != builtin_type(instance, "builtin_function_or_method") {
+        if found_ty != instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记") {
             if let Some(get) = instance.type_lookup(found_ty, "__get__") {
                 // `self` 实参：实例给**实例本身** ✓；类型对象给 `None` ✓（参照口径 ✓）。
                 let this = if instance.is_type_object(object) {
@@ -423,8 +423,7 @@ pub(crate) fn attribute_lookup(
     // `type.__prepare__()` 给空 `dict` ✓（`test_metaclass` 的 doctest 钉住；元类里
     // `super().__prepare__(*args, **kwds)` 也走它 ✓）。参数一律忽略 ✓（参照同款 ✓）。
     if name == "__prepare__" && instance.is_type_object(object) {
-        let method_type = instance
-            .type_named("builtin_function_or_method")
+        let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("builtin_function_or_method 在引导期已登记");
         let native = instance
             .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
@@ -437,7 +436,7 @@ pub(crate) fn attribute_lookup(
         // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
         unsafe { instance.incref_object(object.as_ptr()) };
         let bound = instance.alloc(MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             native,
             object,
         ));
@@ -462,8 +461,7 @@ pub(crate) fn attribute_lookup(
                 });
             }
         }
-        let method_type = instance
-            .type_named("builtin_function_or_method")
+        let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("builtin_function_or_method 在引导期已登记");
         let native = instance
             .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
@@ -479,7 +477,7 @@ pub(crate) fn attribute_lookup(
         // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
         unsafe { instance.incref_object(object.as_ptr()) };
         let bound = instance.alloc(MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             native,
             object,
         ));
@@ -490,8 +488,7 @@ pub(crate) fn attribute_lookup(
     //（先前缺 ⇒ `issubclass`／`isinstance` 一旦走 ABC 元类钩子就 `AttributeError` ⇒
     //  **ABC 虚拟子类注册**整条失效 ✓）。做法：按**直接基类**反查注册表 ✓。
     if name == "__subclasses__" && instance.is_type_object(object) {
-        let method_type = instance
-            .type_named("builtin_function_or_method")
+        let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("builtin_function_or_method 在引导期已登记");
         let native = instance
             .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
@@ -504,7 +501,7 @@ pub(crate) fn attribute_lookup(
         // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
         unsafe { instance.incref_object(object.as_ptr()) };
         let bound = instance.alloc(MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             native,
             object,
         ));
@@ -519,7 +516,7 @@ pub(crate) fn attribute_lookup(
         let object_type = instance.type_of(object);
         if let Some(found) = instance.type_lookup(object_type, name) {
             // 元类型上的**函数** ⇒ 绑到**类本身** ✓（`self` ＝ 那个类 ✓，与实例方法同款 ✓）。
-            if instance.type_of(found) == builtin_type(instance, "function") {
+            if instance.type_of(found) == instance.hot_type(HotId::Function).expect("function 已登记") {
                 return Ok(Attribute::Method {
                     function: found,
                     this: object,
@@ -530,8 +527,8 @@ pub(crate) fn attribute_lookup(
             // ①.1.5 处理 ✓，这里兜住"只有 `__get__`、没有 `__set__`"的形态 ✓）。
             // SAFETY: found 由类型字典持有。
             let found_ty = unsafe { found.as_ref() }.ty();
-            if found_ty != builtin_type(instance, "builtin_function_or_method")
-                && found_ty != builtin_type(instance, "function")
+            if found_ty != instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记")
+                && found_ty != instance.hot_type(HotId::Function).expect("function 已登记")
             {
                 if let Some(get) = instance.type_lookup(found_ty, "__get__") {
                     // 同 `type_getattro`：`__get__(类本身, 元类)` ✓。
@@ -616,10 +613,9 @@ pub(crate) fn attribute_lookup(
     // （实例可绑 ✓、类型对象取不到 ✗）⇒ 这里对**注册的 `list` 类型**造一个"未绑定描述符"
     // （名字带 `descriptor:` 前缀，`call_callable` 会把首参当 `self` ✓）。
     if instance.is_type_object(object) {
-        if instance.type_named("list").is_some_and(|list_type| list_type.cast::<Header>() == object) {
+        if instance.hot_type(HotId::List).is_some_and(|list_type| list_type.cast::<Header>() == object) {
             if let Some(handler) = crate::builtin::list::list_method_handler(name) {
-                let method_type = instance
-                    .type_named("builtin_function_or_method")
+                let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("builtin_function_or_method 在引导期已登记");
                 let display: &'static str =
                     Box::leak(format!("descriptor:list.{name}").into_boxed_str());
@@ -665,7 +661,7 @@ pub fn attribute_read(
                 instance.incref_object(this.as_ptr());
             }
             let bound = instance.alloc(MethodObject::new(
-                builtin_type(instance, "method"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 function,
                 this,
             ));
@@ -752,7 +748,7 @@ pub(crate) fn maintain_frame_trace(
     if name != "f_trace" {
         return;
     }
-    let Some(frame_type) = instance.type_named("frame") else {
+    let Some(frame_type) = instance.hot_type(HotId::Frame) else {
         return;
     };
     if instance.type_of(object) != frame_type {
@@ -824,8 +820,7 @@ fn attribute_lookup_specials(
         if let Some(signature) = instance.type_text_signature(object) {
             return Ok(Some(Attribute::Owned(instance.new_str(signature))));
         }
-        let is_object = instance
-            .type_named("object")
+        let is_object = instance.hot_type(HotId::Object)
             .is_some_and(|object_type| object_type.cast::<Header>() == object);
         return Ok(Some(if is_object {
             Attribute::Owned(instance.new_str("()"))
@@ -835,7 +830,7 @@ fn attribute_lookup_specials(
     }
 
     let object_type = unsafe { object.as_ref() }.ty();
-    if name == "__annotations__" && object_type == builtin_type(instance, "function") {
+    if name == "__annotations__" && object_type == instance.hot_type(HotId::Function).expect("function 已登记") {
         return crate::builtin::function::function_annotations(instance, object.as_ptr())
             .map(Attribute::Owned).map(Some);
     }
@@ -853,11 +848,15 @@ fn attribute_lookup_specials(
         // `TypeError: 'NoneType' object is not iterable` ✓）。
         let mut builtin_base: Option<NonNull<crate::TypeObject>> = None;
         if std::env::var_os("PYAWA_NO_BUILTIN_FAMILY").is_none() {
-            for name in [
-                "dict", "list", "tuple", "set", "frozenset", "deque", "int", "str", "float",
-                "bytes", "bytearray", "bool",
+            // **按类型指针比较**（round 246 性能）：先前对 12 个内建名逐个 `type_named`
+            // ⇒ 每次属性读都付 12 次 SipHash 名字查表 ✗（实测 `attribute_read` 档的大头之一）。
+            // 仍**如实**保留 `PYAWA_NO_BUILTIN_FAMILY` 这个诊断开关的语义 ✓。
+            for id in [
+                HotId::Dict, HotId::List, HotId::Tuple, HotId::Set, HotId::FrozenSet,
+                HotId::Deque, HotId::Int, HotId::Str, HotId::Float, HotId::Bytes,
+                HotId::ByteArray, HotId::Bool,
             ] {
-                if let Some(base) = instance.type_named(name) {
+                if let Some(base) = instance.hot_type(id) {
                     if object_type != base && instance.is_subtype(object_type, base) {
                         builtin_base = Some(base);
                         break;
@@ -871,8 +870,8 @@ fn attribute_lookup_specials(
                 // （`dict.update` 这种）留给下面的 `getattr` 槽（走快路 ✓、语义相同 ✓）。
                 if owner == object_type || owner != base {
                     let value_type = unsafe { value.as_ref() }.ty();
-                    let callable_like = Some(value_type) == instance.type_named("function")
-                        || Some(value_type) == instance.type_named("builtin_function_or_method");
+                    let callable_like = Some(value_type) == instance.hot_type(HotId::Function)
+                        || Some(value_type) == instance.hot_type(HotId::BuiltinFunctionOrMethod);
                     if callable_like {
                         return Ok(Attribute::Method {
                             function: value,
@@ -900,7 +899,7 @@ fn attribute_lookup_specials(
     //（`ABCMeta.__new__` 里的 `super().__new__(…)` 正是这一支 ✓）。
     // **注意**：这里要与**类型对象**比 ✗ —— `builtin_type(instance, …)` 取的是**命名空间**里那个名字 ✓，
     // 而 `super` 这个名字**绑的是 native** ✓ ⇒ 拿它比会**永远不等** ✗（本轮实测踩到 ✓）。
-    if Some(object_type) == instance.type_named("super") {
+    if Some(object_type) == instance.hot_type(HotId::Super) {
         if let Some(found) = super_lookup(instance, object, name)? {
             return Ok(found).map(Some);
         }
@@ -921,7 +920,7 @@ fn attribute_lookup_specials(
             // （它的 `__set__` 方法面还没挂 ✗，但参照里它就是数据描述符 ✓）。
             let data_descriptor = instance.type_lookup(found_ty, "__set__").is_some()
                 || instance.type_lookup(found_ty, "__delete__").is_some()
-                || Some(found_ty) == instance.type_named("property");
+                || Some(found_ty) == instance.hot_type(HotId::Property);
             if data_descriptor {
                 if let Some(get) = instance.type_lookup(found_ty, "__get__") {
                     // 参照 `type_getattro`：元类数据描述符的调用是
@@ -1093,7 +1092,7 @@ fn attribute_lookup_specials(
         //   `types.py` 的 `type(type.__dict__)`／`dict.__dict__['fromkeys']` 正是靠它 ✓。
         //   CPython 给的是 **mappingproxy** ✓，本层给**那个命名空间本身** ✗ ⇒ **已登记的偏差** ✓。
         // **用类型表里的 `type`** ✓（`builtin_type` 取的是**命名空间**里那个名字 ✗ —— 它可能是 native ✗）。
-        let object_is_type = Some(unsafe { object.as_ref() }.ty()) == instance.type_named("type");
+        let object_is_type = Some(unsafe { object.as_ref() }.ty()) == instance.hot_type(HotId::Type);
         if object_is_type {
             // 命名空间字典的**惰性挂载**在 [`crate::Instance::type_namespace`]（**一处真相** ✓）。
             if let Some(namespace) = instance.type_namespace(object) {

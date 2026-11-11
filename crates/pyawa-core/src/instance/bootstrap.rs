@@ -25,6 +25,8 @@ impl Instance {
             retired_types: RefCell::new(std::collections::HashSet::new()),
             types_by_name: RefCell::new(std::collections::HashMap::new()),
             types_generation: Cell::new(0),
+            hot_types: RefCell::new(None),
+            type_addresses: RefCell::new(Vec::new()),
             dedicated_iterator_types: RefCell::new(None),
             iterable_source_kinds: RefCell::new(std::collections::HashMap::new()),
             type_slots: RefCell::new(std::collections::HashMap::new()),

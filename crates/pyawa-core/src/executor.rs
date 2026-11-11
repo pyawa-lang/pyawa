@@ -21,6 +21,7 @@
 
 pub(crate) use core::cell::{Cell, RefCell};
 pub(crate) use core::ptr::NonNull;
+pub(crate) use crate::HotId;
 
 pub(crate) use crate::code::CodeObject;
 pub(crate) use crate::bigint::IntValue;
@@ -276,8 +277,7 @@ pub(crate) fn super_lookup(
         if after {
             let entry_name = unsafe { entry.as_ref() }.name();
             let resolved_new = instance.type_lookup(entry, name);
-            let object_default_new = instance
-                .type_named("object")
+            let object_default_new = instance.hot_type(HotId::Object)
                 .and_then(|ty| instance.type_lookup(ty, "__new__"));
             // 判据（第 608 轮修 ✓）：**该条目自己有 `new` 槽** ✓ 且（查不到 ✓ 或查到的就是 `object` 层默认 ✓）
             // ⇒ 用**该条目**的槽 ✓；**排除 `object`／`type`** ✗（对它们桥接会波及元类建类 ✓ —— 第 607 轮那条红的来源 ✓）。
@@ -316,12 +316,10 @@ pub(crate) fn super_lookup(
                 // 不该在这里被桥接 ✗ —— 那正是第 607/608 轮把 `meta_path_shapes` 打红的那条路 ✓。
                 if name == "__new__"
                     && (Some(found)
-                        == instance
-                            .type_named("object")
+                        == instance.hot_type(HotId::Object)
                             .and_then(|ty| instance.type_lookup(ty, "__new__"))
                         || Some(found)
-                            == instance
-                                .type_named("type")
+                            == instance.hot_type(HotId::Type)
                                 .and_then(|ty| instance.type_lookup(ty, "__new__")))
                     && instance.is_type_object(this)
                 {
@@ -351,7 +349,7 @@ pub(crate) fn super_lookup(
                 // ⇒ 类字典里存的是**包装对象** ✓，参照的 `super().__getattribute__` 走 `__get__` 解包 ✓
                 //（先前一律按元类 MRO 查、走不到这一格 ⇒ 漏着没暴露；真 `_collections_abc` 的
                 // `_DeprecateByteStringMeta.__new__` 当场报 `'staticmethod' object is not callable` ✗）。
-                if Some(found_type) == instance.type_named("staticmethod") {
+                if Some(found_type) == instance.hot_type(HotId::StaticMethod) {
                     // SAFETY: 类型身份刚确认 ⇒ 载荷是 `StaticMethodObject`。
                     let inner = unsafe {
                         &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>()
@@ -360,7 +358,7 @@ pub(crate) fn super_lookup(
                     // `staticmethod.__get__` 不绑 `self` ⇒ 交**裸函数**（`LOAD_ATTR` 的方法位会补 NULL 槽）。
                     return Ok(Some(Attribute::Value(inner)));
                 }
-                if Some(found_type) == instance.type_named("classmethod") {
+                if Some(found_type) == instance.hot_type(HotId::ClassMethod) {
                     // SAFETY: 类型身份刚确认 ⇒ 载荷是 `ClassMethodObject`。
                     let inner = unsafe {
                         &*found.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>()
@@ -383,11 +381,11 @@ pub(crate) fn super_lookup(
                 // ⇒ `object.__new__()` 收到 `(this, cls)` 两个 ⇒
                 // `TypeError: object.__new__() takes exactly one argument …，实际给了 1 个`（原文计数也错 ✗；
                 // `test_abc.TestABC.test_all_new_methods_are_called` 的 `super().__new__(cls)` ✓）。
-                if name == "__new__" && found_type == builtin_type(instance, "builtin_function_or_method") {
+                if name == "__new__" && found_type == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记") {
                     return Ok(Some(Attribute::Value(found)));
                 }
-                if found_type == builtin_type(instance, "function")
-                    || found_type == builtin_type(instance, "builtin_function_or_method")
+                if found_type == instance.hot_type(HotId::Function).expect("function 已登记")
+                    || found_type == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记")
                 {
                     return Ok(Some(Attribute::Method {
                         function: found,
@@ -431,8 +429,7 @@ pub(crate) fn super_lookup(
         //（`test_metaclass` 的 doctest 钉住 ✓）。这里补一格：走到内建 `type` 条目时交回
         // **默认实现**（参数忽略、给空 dict ✓）。
         if name == "__prepare__" && unsafe { entry.as_ref() }.name() == "type" {
-            let method_type = instance
-                .type_named("builtin_function_or_method")
+            let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                 .expect("builtin_function_or_method 在引导期已登记");
             let native = instance
                 .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
@@ -597,7 +594,7 @@ pub fn unary_public(
     // **浮点的一元面**（第 318 轮）：`-1.5`／`+1.5`／`abs(-1.5)` —— 先前落到最后那条
     // `bad operand type for unary -: 'float'` ✗（`Lib/` 里浮点遍地都是 ✓）。
     // SAFETY: operand 由调用方保证存活。
-    if unsafe { operand.as_ref() }.ty() == builtin_type(instance, "float") {
+    if unsafe { operand.as_ref() }.ty() == instance.hot_type(HotId::Float).expect("float 已登记") {
         // SAFETY: 类型身份刚确认 ⇒ `FloatObject` 载荷。
         let value = unsafe { &*operand.as_ptr().cast::<FloatObject>() }.value();
         let result = match symbol {
@@ -647,7 +644,7 @@ pub fn unary_public(
                 instance.incref_object(this.as_ptr());
             }
             let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
-                builtin_type(instance, "method"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 function,
                 this,
             ));
@@ -759,7 +756,7 @@ pub(crate) fn set_operation(
 /// **取集合元素** ✓（第 205 轮）：`set` 与 `frozenset` **同一载荷** ✓（第 236 轮 ✓）⇒ 两边都认 ✓。
 pub(crate) fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
     let ty = instance.type_of(object);
-    let is_set = Some(ty) == instance.type_named("set") || Some(ty) == instance.type_named("frozenset");
+    let is_set = Some(ty) == instance.hot_type(HotId::Set) || Some(ty) == instance.hot_type(HotId::FrozenSet);
     if !is_set {
         return None;
     }
@@ -780,20 +777,20 @@ pub(crate) fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Opti
 pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> String {
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
-    if label_type == builtin_type(instance, "str") {
+    if label_type == instance.hot_type(HotId::Str).expect("str 已登记") {
         // P3-38 S2c：标签文本走安全口径（内部标签是合法 ASCII ⇒ 旧输出不变；代理 ⇒ 有损，不 panic ✓）
         return instance.text_value(label).unwrap_or_default();
     }
     if is_type_object(instance, label_type) {
         return type_name_of(instance, label.cast::<TypeObject>());
     }
-    if label_type == builtin_type(instance, "tuple") {
+    if label_type == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         // SAFETY: 类型身份刚确认。
         let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
         // `TS-46`／`BC-24`：union 标签 ⇒ `Union[成员, 成员]`（成员用同一函数递归渲染）。
         if let Some(head) = parts.item(0) {
             // SAFETY: 元组元素存活。
-            let head_is_union_marker = unsafe { head.as_ref() }.ty() == builtin_type(instance, "str")
+            let head_is_union_marker = unsafe { head.as_ref() }.ty() == instance.hot_type(HotId::Str).expect("str 已登记")
                 // P3-38 S2c：合法视图比较（WTF-8 不等于内部 ASCII 标签 ✓，不 panic ✓）
                 && instance.text_of(head) == Some("Union");
             if head_is_union_marker {
@@ -845,7 +842,7 @@ fn union_args_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<Non
     }
     let mapping = mounted_instance_dict(instance, object)?;
     let args = instance.dict_get(mapping, "__args__")?;
-    if instance.type_of(args) != builtin_type(instance, "tuple") {
+    if instance.type_of(args) != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         return None;
     }
     // SAFETY: 上面刚确认过是 `tuple`。
@@ -967,8 +964,7 @@ pub fn exception_uncaught_text(instance: &Instance, exception: NonNull<Header>) 
     // SAFETY: ty 由注册表持有。
     let type_object = unsafe { ty.as_ref() };
     let type_name = type_object.name();
-    let is_exception = instance
-        .type_named("BaseException")
+    let is_exception = instance.hot_type(HotId::BaseException)
         .is_none_or(|base| instance.is_subtype(ty, base));
     if !is_exception
         || type_object.instance_size()
@@ -1381,7 +1377,7 @@ pub(crate) fn bind_arguments(
             return Err(raise_builtin(instance, "TypeError", &message));
         }
         let dict = instance.alloc(DictObject::new(
-            builtin_type(instance, "dict"),
+            instance.hot_type(HotId::Dict).expect("dict 已登记"),
             RefCell::new(collected),
         ));
         locals[slot] = Some(dict.into_raw().cast::<Header>());
@@ -1528,7 +1524,7 @@ pub(crate) fn resume_generator(
                 let stop_iteration = exception_type(instance, "StopIteration");
                 // SAFETY: generator 是本实例里存活的对象。
                 let is_coroutine =
-                    unsafe { generator.as_ref() }.ty() == builtin_type(instance, "coroutine");
+                    unsafe { generator.as_ref() }.ty() == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
                 let code_flags = {
                     let frame_header = object.frame();
                     // SAFETY: 帧由生成器持有，存活。
@@ -1545,7 +1541,7 @@ pub(crate) fn resume_generator(
                 // `Lib/test/test_asyncgen.py` 的 exception_05／06 ✓）。
                 // SAFETY: generator 存活。
                 let is_async_generator =
-                    unsafe { generator.as_ref() }.ty() == builtin_type(instance, "async_generator");
+                    unsafe { generator.as_ref() }.ty() == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
                 if is_async_generator {
                     let stop_async_iteration = exception_type(instance, "StopAsyncIteration");
                     let word = if instance.is_subtype(ty, stop_iteration) {

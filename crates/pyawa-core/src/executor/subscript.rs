@@ -4,7 +4,8 @@
 //! * 仍在原处的被引用项：`builtin_type`、`exception_type`、`index_payload`、`is_type_object`、`new_exception_with_args`、`normalize_index`、`push`、`raise`、`raise_builtin`、`release`、`sequence_items`、`slice_bounds`、`slice_positions`、`values_equal` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, exception_type, new_exception_with_args, normalize_index, raise, raise_builtin, release, scalar_index, sequence_items, slice_bounds, slice_positions};
+use crate::HotId;
+use crate::executor::{exception_type, new_exception_with_args, normalize_index, raise, raise_builtin, release, scalar_index, sequence_items, slice_bounds, slice_positions};
 use crate::builtin_objects::{BytearrayObject, BytesObject};
 use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
@@ -26,8 +27,8 @@ pub(crate) fn subscript_slice(
     let container_type = unsafe { container.as_ref() }.ty();
     // **`bytes`／`bytearray`（含子类）**（round 102）：先前 `bytes_value` 只认精确 `bytes` ✗
     // ⇒ 子类切片得到**空** bytes ✗（`test_xml_etree` 的 `BadElementPath` 是 str 子类，同类问题 ✓）。
-    if instance.is_subtype(container_type, builtin_type(instance, "bytes"))
-        || instance.is_subtype(container_type, builtin_type(instance, "bytearray"))
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Bytes).expect("bytes 已登记"))
+        || instance.is_subtype(container_type, instance.hot_type(HotId::ByteArray).expect("bytearray 已登记"))
     {
         let value = instance.bytes_like_value(container).unwrap_or_default();
         let (start, stop, step) = slice_bounds(instance, key, value.len())?;
@@ -37,7 +38,7 @@ pub(crate) fn subscript_slice(
             .collect();
         return Ok(instance.new_bytes(&picked));
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::List).expect("list 已登记")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
         let (start, stop, step) = slice_bounds(instance, key, object.len())?;
@@ -51,7 +52,7 @@ pub(crate) fn subscript_slice(
         }
         return Ok(instance.new_list(items));
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Tuple).expect("tuple 已登记")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
         let (start, stop, step) = slice_bounds(instance, key, object.len())?;
@@ -184,11 +185,11 @@ pub(crate) fn subscript_get_inner(
     let container_type = unsafe { container.as_ref() }.ty();
 
     // **切片**（`P1-12`）：键是 `slice` 时走切片路径（四个序列类型共用一套边界规则）
-    if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+    if Some(unsafe { key.as_ref() }.ty()) == instance.hot_type(HotId::Slice) {
         return subscript_slice(instance, container, key, opcode);
     }
 
-    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Tuple).expect("tuple 已登记")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
         let index = scalar_index(instance, key, "tuple")?;
@@ -201,7 +202,7 @@ pub(crate) fn subscript_get_inner(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(value);
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::List).expect("list 已登记")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
         let index = scalar_index(instance, key, "list")?;
@@ -215,7 +216,7 @@ pub(crate) fn subscript_get_inner(
         return Ok(value);
     }
     // **`deque` 的下标读**（round 203）：参照 `collections.deque` 支持 `d[i]`（负下标照旧归一 ✓）。
-    if instance.is_subtype(container_type, builtin_type(instance, "deque")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Deque).expect("deque 已登记")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DequeObject>() };
         let index = scalar_index(instance, key, "deque")?;
@@ -231,10 +232,10 @@ pub(crate) fn subscript_get_inner(
     // **`dict` 子类覆写 `__getitem__` 时走协议**（round 212 真 bug 修 ✗）：
     // `class lowerdict(dict): def __getitem__(self,k): …`（`test_collections.TestChainMap.test_new_child`）
     // 先前无条件走"哈希查键"快路 ⇒ `mapping['B']` 跳过覆写 ✗（ChainMap 的 `__getitem__` 靠它 ✓）。
-    let dict_getitem_override = instance.is_subtype(container_type, builtin_type(instance, "dict"))
+    let dict_getitem_override = instance.is_subtype(container_type, instance.hot_type(HotId::Dict).expect("dict 已登记"))
         && instance.type_lookup(container_type, "__getitem__")
-            != instance.type_lookup(builtin_type(instance, "dict"), "__getitem__");
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) && !dict_getitem_override {
+            != instance.type_lookup(instance.hot_type(HotId::Dict).expect("dict 已登记"), "__getitem__");
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Dict).expect("dict 已登记")) && !dict_getitem_override {
         // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46；本层 dict 不哈希 ⇒ 必须显式拦 ✗）。
         crate::builtin::dict::reject_unhashable_key(instance, key)?;
         // SAFETY: 同上。
@@ -248,7 +249,7 @@ pub(crate) fn subscript_get_inner(
                 // 缺键时调它 ✓（参照语义 ✓；`test_dict.test_missing` 的 `D[2] ⇒ 42` ✓）。
                 let has_missing = instance
                     .type_lookup_owner(container_type, "__missing__")
-                    .is_some_and(|(owner, _)| Some(owner) != instance.type_named("dict"));
+                    .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Dict));
                 if has_missing {
                     if let Some(found) =
                         crate::executor::call::call_object_method(instance, container, "__missing__", &[key])?
@@ -294,7 +295,7 @@ pub(crate) fn subscript_get_inner(
         return Ok(instance.new_str_code_point(points[position]));
     }
     // `bytes`：整数下标给**整数**（`b'abc'[0] == 97`，实测）；切片随 `slice` 类型（M3+）再接线
-    if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Bytes).expect("bytes 已登记")) {
         // SAFETY: 类型身份已确认。
         let value = unsafe { &*container.as_ptr().cast::<BytesObject>() }.value().to_vec();
         let index = scalar_index(instance, key, "byte")?;
@@ -399,13 +400,13 @@ pub(crate) fn subscript_set_inner(
     // SAFETY: 三个都是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
 
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::List).expect("list 已登记")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
 
         // **切片写**（`a[i:j] = …`）：键是 `slice` 时替换那一整段（长度可与原段不同；
         // 带步长的"扩展切片"要求长度相等——消息照参照实测）
-        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+        if Some(unsafe { key.as_ref() }.ty()) == instance.hot_type(HotId::Slice) {
             // **先物化右值、再按"当前"列表算切片边界**（round 112 真 bug 修 ✗）：参照的字节码
             // 次序是 `LOAD 右值 → LOAD 目标/切片 → STORE_SUBSCR` ✓ —— 扩展切片赋值的长度检查发生在
             // **右值完全求值之后** ✓。先前先 `slice_bounds`（缓存旧长度）✗ ⇒ 右值的迭代把列表清空后
@@ -486,7 +487,7 @@ pub(crate) fn subscript_set_inner(
         return Ok(());
     }
     // **`deque` 的下标写**（round 203）：参照 `d[i] = v`（负下标照旧归一 ✓；越界 `IndexError`）。
-    if instance.is_subtype(container_type, builtin_type(instance, "deque")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Deque).expect("deque 已登记")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DequeObject>() };
         let index = match scalar_index(instance, key, "deque") {
@@ -512,12 +513,12 @@ pub(crate) fn subscript_set_inner(
         }
         return Ok(());
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict"))
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Dict).expect("dict 已登记"))
         // **只有"用的就是 `dict` 自己那份 `__setitem__`"才走快路** ✓（第 702 轮 ✗ 修）：
         // `dict` 的**子类**若覆盖了 `__setitem__` ✓（上游 `enum._EnumDict` 就是 ✓）⇒ 必须交给它 ✓
         // —— 先前一律走内建快路 ✗ ⇒ 覆盖版的副作用被吞掉 ✓（实测 `nsdict.py` ✓）。
         && instance.type_lookup(container_type, "__setitem__")
-            == instance.type_lookup(builtin_type(instance, "dict"), "__setitem__")
+            == instance.type_lookup(instance.hot_type(HotId::Dict).expect("dict 已登记"), "__setitem__")
     {
         // 不可哈希的键 ⇒ 参照的 `TypeError` ✓（task-46）；`value` 的接管契约在错误路上要还掉 ✓。
         if let Err(error) = crate::builtin::dict::reject_unhashable_key(instance, key) {
@@ -604,7 +605,7 @@ pub(crate) fn subscript_set_inner(
         }
     }
     release(instance, value);
-    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Tuple).expect("tuple 已登记")) {
         // **要抛真正的 `TypeError`** ✓（第 668 轮修 ✗）：先前报 `ExecError::Unsupported` ✗ ⇒
         // 参照的 `try: t[0] = 1 / except TypeError` **抓不住** ✓（`Lib/re` 一族遍地是这种写法 ✓）；
         // 消息照参照 ✓（`'tuple' object does not support item assignment` ✓）。
@@ -649,13 +650,13 @@ pub fn subscript_del_inner(
     // SAFETY: 两个都是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
 
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::List).expect("list 已登记")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
         // **切片删除**（第 311 轮）：`del x[a:b]`／`del x[a:b:c]` —— 参照与**切片写**同一套边界口径 ✓
         //（`Lib/asyncio/base_events.py:173` 的 `del addrinfos_lists[0][:first - 1]` 正卡在这，
         // 那一族 **35** 个模块 ✓）。先前落到"下标必须是整数"那条 ✗。
-        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+        if Some(unsafe { key.as_ref() }.ty()) == instance.hot_type(HotId::Slice) {
             let (start, stop, step) = slice_bounds(instance, key, object.len())?;
             if step == 1 {
                 let count = (stop - start).max(0) as usize;
@@ -693,7 +694,7 @@ pub fn subscript_del_inner(
         }
         return Ok(());
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::Dict).expect("dict 已登记")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         // **按哈希索引查**（`P3-41` round 42）。
@@ -721,7 +722,7 @@ pub fn subscript_del_inner(
     //（实测：`del "abc"[1:2]`／`del (1, 2)[0]` ✓）。用户类那条（`__delitem__`）随后补 ✓。
     // **文案两档**（本机 3.14.4 实测）：整数下标 ⇒ `doesn't support item deletion`；
     // **切片** ⇒ `does not support item deletion` ✗（同一族内 CPython 也不一致 ⇒ 逐字照抄 ✓）。
-    let slice_delete = Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice");
+    let slice_delete = Some(unsafe { key.as_ref() }.ty()) == instance.hot_type(HotId::Slice);
     for name in ["str", "tuple", "bytes", "int", "float", "bool", "NoneType", "frozenset"] {
         if Some(container_type) == instance.type_named(name) {
             let type_name = instance.type_name(container_type);
@@ -734,11 +735,11 @@ pub fn subscript_del_inner(
         }
     }
     // **`bytearray` 的删除**（`P3-35`）：`del ba[i]`／`del ba[a:b:c]` ✓（它就是"可变 bytes"）。
-    if instance.is_subtype(container_type, builtin_type(instance, "bytearray")) {
+    if instance.is_subtype(container_type, instance.hot_type(HotId::ByteArray).expect("bytearray 已登记")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<BytearrayObject>() };
         let mut value = object.value();
-        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+        if Some(unsafe { key.as_ref() }.ty()) == instance.hot_type(HotId::Slice) {
             let picks = crate::executor::ctrls::slice_pick_public(instance, key, value.len())?;
             for position in picks.into_iter().rev() {
                 value.remove(position);

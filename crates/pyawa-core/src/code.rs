@@ -4,6 +4,7 @@
 //! `co_positions()`／`_varname_from_oparg()`… 见 `SPEC-bytecode.md` §2.4）随编译管线一起补——
 //! 那需要值表示与容器，现在写会替 `SPEC-object-model.md` §12 做主。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::header::Header;
@@ -295,8 +296,7 @@ pub unsafe fn code_getattr(
                 co_lines_native
             };
             let native = instance.alloc(crate::BuiltinFunctionObject::new(
-                instance
-                    .type_named("builtin_function_or_method")
+                instance.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("引导期已登记"),
                 "code",
                 core::cell::Cell::new(handler),
@@ -305,7 +305,7 @@ pub unsafe fn code_getattr(
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象，这里新增一份给方法对象。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(crate::MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 // SAFETY: 同上，ptr 非空。
                 unsafe { NonNull::new_unchecked(ptr) },
@@ -361,8 +361,7 @@ pub unsafe fn code_getattr(
         // **`replace()`**（第 409 轮，task-17 ✓）：**仅关键字**，缺省＝原值，返回**新** code object ✓。
         "replace" => {
             let native = instance.alloc(crate::BuiltinFunctionObject::new(
-                instance
-                    .type_named("builtin_function_or_method")
+                instance.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("引导期已登记"),
                 "code",
                 core::cell::Cell::new(code_replace_native),
@@ -371,7 +370,7 @@ pub unsafe fn code_getattr(
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象，这里新增一份给方法对象。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(crate::MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 // SAFETY: 同上，ptr 非空。
                 unsafe { NonNull::new_unchecked(ptr) },
@@ -518,8 +517,7 @@ unsafe fn code_replace_native(
             "code: co_nlocals != len(co_varnames)",
         ));
     }
-    let code_type = instance
-        .type_named("CodeObject")
+    let code_type = instance.hot_type(HotId::CodeObject)
         .expect("CodeObject 在引导期已登记");
     // `co_name` 内部是 `&'static str`（历史形态 ✗）⇒ 替换时泄露一份（与 `instantiate` 同款 ✓）
     let static_name: &'static str = Box::leak(name.into_boxed_str());

@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 /// **字典键查找（带用户 `__eq__`）**（round 70）：与 `MAP_ADD` 的去重同口径 ——
@@ -53,7 +54,7 @@ fn not_iterable_type_name(
     let ExecError::Raised { exception } = error else {
         return None;
     };
-    let type_error = instance.type_named("TypeError")?;
+    let type_error = instance.hot_type(HotId::TypeError)?;
     if !instance.is_subtype(instance.type_of(*exception), type_error) {
         return None;
     }
@@ -110,14 +111,14 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         "BUILD_LIST" => push_container(
                             instance,
                             frame.get(),
-                            ListObject::new(builtin_type(instance, "list"), RefCell::new(items)),
+                            ListObject::new(instance.hot_type(HotId::List).expect("list 已登记"), RefCell::new(items)),
                         )?,
                         _ => {
                             // set：按**值相等**查重，保留**先出现**的那个（与参照实现一致）。
                             // **哈希索引**（round 70）：逐项线性扫 ⇒ O(n²) ✗（15 万项集合让
                             // `test_collections.test_large_size` 超时）⇒ 走 `set_insert` ✓。
                             let set = instance.alloc(SetObject::new(
-                                builtin_type(instance, "set"),
+                                instance.hot_type(HotId::Set).expect("set 已登记"),
                                 RefCell::new(Vec::new()),
                             ));
                             let set_header = set.into_raw().cast::<Header>();
@@ -164,7 +165,7 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     items.reverse();
 
                     let dict = instance.alloc(DictObject::new(
-                        builtin_type(instance, "dict"),
+                        instance.hot_type(HotId::Dict).expect("dict 已登记"),
                         RefCell::new(Vec::new()),
                     ));
                     let dict_header = dict.into_raw().cast::<Header>();
@@ -306,7 +307,7 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                         let total = items.len();
                         let middle = items[before..total - after].to_vec();
                         let middle_list = instance.alloc(ListObject::new(
-                            builtin_type(instance, "list"),
+                            instance.hot_type(HotId::List).expect("list 已登记"),
                             RefCell::new(middle),
                         ));
                         let middle_raw = middle_list.into_raw().cast::<Header>();
@@ -335,10 +336,10 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     let container = frame.get().peek_from_top(oparg)?;
                     // SAFETY: container 在帧的值栈上，存活。
                     let ty = unsafe { container.as_ref() }.ty();
-                    if name == "LIST_APPEND" && ty == builtin_type(instance, "list") {
+                    if name == "LIST_APPEND" && ty == instance.hot_type(HotId::List).expect("list 已登记") {
                         // SAFETY: 类型身份已确认。
                         unsafe { &*container.as_ptr().cast::<ListObject>() }.append(value);
-                    } else if name == "SET_ADD" && ty == builtin_type(instance, "set") {
+                    } else if name == "SET_ADD" && ty == instance.hot_type(HotId::Set).expect("set 已登记") {
                         // **哈希索引插入**（round 70）：`set_insert` 自己查重 ✓。
                         crate::builtin::set::set_insert(instance, container, value)?;
                     } else {
@@ -391,7 +392,7 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     let container = frame.get().peek_from_top(oparg)?;
                     // SAFETY: container 在帧的值栈上，存活。
                     let ty = unsafe { container.as_ref() }.ty();
-                    if ty != builtin_type(instance, "dict") {
+                    if ty != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                         release(instance, key);
                         release(instance, value);
                         return Err(ExecError::Unsupported {
@@ -458,10 +459,10 @@ pub(super) fn step_containers<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
 
                     // SAFETY: container 在帧的值栈上，存活。
                     let ty = unsafe { container.as_ref() }.ty();
-                    if name == "LIST_EXTEND" && ty == builtin_type(instance, "list") {
+                    if name == "LIST_EXTEND" && ty == instance.hot_type(HotId::List).expect("list 已登记") {
                         // SAFETY: 类型身份已确认。
                         unsafe { &*container.as_ptr().cast::<ListObject>() }.extend(items);
-                    } else if name == "SET_UPDATE" && ty == builtin_type(instance, "set") {
+                    } else if name == "SET_UPDATE" && ty == instance.hot_type(HotId::Set).expect("set 已登记") {
                         for item in items {
                             // **哈希索引**（round 70）：同 `BUILD_SET` ✓。
                             crate::builtin::set::set_insert(instance, container, item)?;

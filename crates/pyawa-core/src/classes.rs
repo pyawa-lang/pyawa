@@ -13,6 +13,7 @@
 //! **尚未接线**：`metaclass=`（非 `type` 的元类）、`__prepare__`、`__set_name__`
 //! （要描述符）、`__mro_entries__`（`AB-37` 的宿主类型继承那一侧）。
 
+use crate::HotId;
 use core::cell::Cell;
 use core::ptr::NonNull;
 
@@ -77,8 +78,7 @@ pub unsafe fn build_class_native(
                 //   认两种写法 ✓（`type` 的类型对象 ✓／内建里那个 `type` 名 ✓ —— 本层 `type()` 是 native ✓）；
                 //   其余元类仍**如实报未接线** ✗（不静默当默认元类 ✓）。
                 let wanted = _value.cast::<Header>();
-                let default_type = instance
-                    .type_named("type")
+                let default_type = instance.hot_type(HotId::Type)
                     .map(|ty| ty.cast::<Header>())
                     .is_some_and(|ty| ty == wanted);
                 let builtin_type = instance
@@ -134,8 +134,7 @@ pub unsafe fn build_class_native(
     // 动因：`Lib/enum.py` 的 `EnumType.__prepare__` 返回 `EnumDict`（`dict` 的子类 ✓），
     // `EnumType.__new__` 头一句 `classdict._member_names` 全指望它 ✓ —— 先前只造普通 `dict` ✗
     // ⇒ 报 `AttributeError: 'dict' object has no attribute '_member_names'` ✗（那一族 **42** 个模块 ✓）。
-    let default_prepare = instance
-        .type_named("type")
+    let default_prepare = instance.hot_type(HotId::Type)
         .and_then(|ty| instance.type_lookup(ty, "__prepare__"));
     // **取"真正可调"的那个 `__prepare__`** ✓：`type_lookup` 给的是**未绑定**的描述符 ✗ ——
     // `@classmethod` 直接调会报 `'classmethod' object is not callable` ✗（实测 ✓）⇒
@@ -229,8 +228,7 @@ pub unsafe fn build_class_native(
                 // SAFETY: ty 由注册表持有。
                 let instance_size = unsafe { ty.as_ref() }.instance_size();
                 let dict_size = core::mem::size_of::<DictObject>();
-                let is_dict = instance
-                    .type_named("dict")
+                let is_dict = instance.hot_type(HotId::Dict)
                     .map(|dict| instance.is_subtype(ty, dict))
                     .unwrap_or(false);
                 // SAFETY: prepared 由调用方保证存活。
@@ -249,8 +247,7 @@ pub unsafe fn build_class_native(
         }
         None => instance
             .alloc(DictObject::new(
-                instance
-                    .type_named("dict")
+                instance.hot_type(HotId::Dict)
                     .expect("dict 在引导期已登记"),
                 core::cell::RefCell::new(Vec::new()),
             ))
@@ -301,11 +298,9 @@ pub unsafe fn build_class_native(
     if let Some(metaclass) = requested_metaclass {
         // **自带 `__new__`／`__init__` 才调** ✓：默认那两个（我们挂在 `type` 命名空间里的 ✓）
         // 要跳过 ✗，否则**自己调自己** ⇒ 死循环 ✓。
-        let default_new = instance
-            .type_named("type")
+        let default_new = instance.hot_type(HotId::Type)
             .and_then(|ty| instance.type_lookup(ty, "__new__"));
-        let default_init = instance
-            .type_named("type")
+        let default_init = instance.hot_type(HotId::Type)
             .and_then(|ty| instance.type_lookup(ty, "__init__"));
         // **元类自己的 `__new__` 也被包成了 `staticmethod`** ✓（第 411 轮，task-22 ✓）⇒ 剥开再调 ✓
         // （否则 `call_value` 拿到包装体报 `'staticmethod' object is not callable` ✗）。
@@ -438,8 +433,7 @@ pub unsafe fn build_class_native(
 #[allow(dead_code)] // 引导期用等价的一份；这里留给测试与将来的 `builtins`
 pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
     let object = instance.alloc(BuiltinFunctionObject::new(
-        instance
-            .type_named("builtin_function_or_method")
+        instance.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("引导期已登记"),
         "__build_class__",
         Cell::new(build_class_native as NativeFn),
@@ -459,7 +453,7 @@ fn requalified_method(
     key: NonNull<Header>,
     value: NonNull<Header>,
 ) -> Option<NonNull<Header>> {
-    let function_type = instance.type_named("function")?;
+    let function_type = instance.hot_type(HotId::Function)?;
     // SAFETY: 调用方保证 key／value 存活。
     if unsafe { value.as_ref() }.ty() != function_type {
         return None;
@@ -588,8 +582,7 @@ pub(crate) fn class_body_frame(
     globals: Option<NonNull<Header>>,
     closure: &[NonNull<Header>],
 ) -> NonNull<Frame> {
-    let frame_type = instance
-        .type_named("frame")
+    let frame_type = instance.hot_type(HotId::Frame)
         .expect("Frame 在引导期已登记");
     // `Owned::new` 收的是**新引用**（`OM-16`：守卫的 `Drop` 会释放它）⇒ 这里必须自己新增一份。
     // 少了这一步，守卫析构时会释放**函数自己那份** code 引用（症状：随机时刻
@@ -823,7 +816,7 @@ pub fn build_class_from_parts_with_keywords(
         base_types.push(base.cast::<TypeObject>());
     }
     if base_types.is_empty() {
-        base_types.push(instance.type_named("object").expect("object 已登记"));
+        base_types.push(instance.hot_type(HotId::Object).expect("object 已登记"));
     }
     // 冗余基类去掉（`class X(Sub, Base)` 合法；`Base` 已被 `Sub` 覆盖）
     let mut pruned: Vec<NonNull<TypeObject>> = Vec::new();
@@ -1099,7 +1092,7 @@ pub fn build_class_from_parts_with_keywords(
         None => {
             let mapping = instance
                 .alloc(DictObject::new(
-                    instance.type_named("dict").expect("dict 已登记"),
+                    instance.hot_type(HotId::Dict).expect("dict 已登记"),
                     core::cell::RefCell::new(Vec::new()),
                 ))
                 .into_raw()
@@ -1160,8 +1153,7 @@ pub fn build_class_from_parts_with_keywords(
         let value = if instance.text_value(key).is_some_and(|text| text == "__new__")
             && instance.type_name(instance.type_of(value)) == "function"
         {
-            let static_type = instance
-                .type_named("staticmethod")
+            let static_type = instance.hot_type(HotId::StaticMethod)
                 .expect("staticmethod 在引导期已登记");
             instance.retain(value);
             instance

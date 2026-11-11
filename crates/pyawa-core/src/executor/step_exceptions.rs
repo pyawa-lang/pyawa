@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_exceptions<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -104,7 +105,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                 let class_type = unsafe { class_object.as_ref() }.ty();
                 // SAFETY: exception 在帧值栈上，存活。
                 let exception_type = unsafe { exception.as_ref() }.ty();
-                let truth = if class_type == builtin_type(instance, "type") {
+                let truth = if class_type == instance.hot_type(HotId::Type).expect("type 已登记") {
                     let class = class_object.cast::<TypeObject>();
                     if !is_exception_type(instance, class) {
                         release(instance, class_object);
@@ -117,7 +118,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                     let matched = instance.is_subtype(exception_type, class);
                     release(instance, class_object);
                     matched
-                } else if Some(class_type) == instance.type_named("tuple") {
+                } else if Some(class_type) == instance.hot_type(HotId::Tuple) {
                     // `except (A, B)`：**任一命中即匹配**（实测）。
                     //
                     // 元组里放**非类**、放**嵌套元组**、或放不是 `BaseException` 子类的类
@@ -130,7 +131,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                         let item = items.item(index).expect("下标在范围内");
                         // SAFETY: item 由元组持有，存活。
                         let item_type = unsafe { item.as_ref() }.ty();
-                        if item_type != builtin_type(instance, "type") {
+                        if item_type != instance.hot_type(HotId::Type).expect("type 已登记") {
                             release(instance, class_object);
                             return Err(raise_builtin(
                                 instance,
@@ -276,7 +277,7 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
 
                         let exception = if is_exception_type(instance, operand_type) {
                             operand // 已经是异常实例
-                        } else if operand_type == builtin_type(instance, "type") {
+                        } else if operand_type == instance.hot_type(HotId::Type).expect("type 已登记") {
                             // 是类型对象：必须是异常类，实例化它（`raise ValueError`）
                             let class = operand.cast::<TypeObject>();
                             if !is_exception_type(instance, class) {
@@ -357,7 +358,7 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                             // SAFETY: cause 是刚出栈的新引用。
                             let cause_type = unsafe { cause.as_ref() }.ty();
                             // 起因可以是**异常实例**，也可以是**异常类**（实测 `raise ValueError from TypeError` 合法）
-                            let cause_is_class = cause_type == builtin_type(instance, "type")
+                            let cause_is_class = cause_type == instance.hot_type(HotId::Type).expect("type 已登记")
                                 && is_exception_type(instance, cause.cast::<TypeObject>());
                             if cause_type == instance.singletons().none_type() {
                                 // `raise X from None`：抑制上下文，但没有 __cause__

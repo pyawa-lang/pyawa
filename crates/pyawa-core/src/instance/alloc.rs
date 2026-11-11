@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -23,8 +24,7 @@ impl Instance {
 
     /// 造一个浮点（**新引用**）。
     pub fn new_float(&self, value: f64) -> NonNull<Header> {
-        let float_type = self
-            .type_named("float")
+        let float_type = self.hot_type(HotId::Float)
             .expect("float 在引导期已登记（OM-13）");
         self.alloc(FloatObject::new(float_type, value))
             .into_raw()
@@ -37,8 +37,7 @@ impl Instance {
     /// 载荷为 [`crate::builtin_objects::ComplexObject`]。`task-29` 的 `LOAD_CONST` 实例化
     /// （字面量／常量）与 `task-31` 的构造器都调这里 ✓。
     pub fn new_complex(&self, real: f64, imag: f64) -> NonNull<Header> {
-        let complex_type = self
-            .type_named("complex")
+        let complex_type = self.hot_type(HotId::Complex)
             .expect("complex 在引导期已登记（OM-13）");
         self.alloc(crate::builtin_objects::ComplexObject::new(
             complex_type,
@@ -52,7 +51,7 @@ impl Instance {
     /// 造一个 `list`（**接手**一批新引用，`CM-4` 的 stdlib 要用）。
     pub fn new_list(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
         let object = self.alloc(ListObject::new(
-            self.type_named("list").expect("list 在引导期已登记"),
+            self.hot_type(HotId::List).expect("list 在引导期已登记"),
             core::cell::RefCell::new(items),
         ));
         object.into_raw().cast::<Header>()
@@ -61,7 +60,7 @@ impl Instance {
     /// 造一个 `set`（**新引用**）。
     pub fn new_set(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
         let object = self.alloc(SetObject::new(
-            self.type_named("set").expect("set 在引导期已登记"),
+            self.hot_type(HotId::Set).expect("set 在引导期已登记"),
             core::cell::RefCell::new(items),
         ));
         object.into_raw().cast::<Header>()
@@ -69,7 +68,7 @@ impl Instance {
 
     /// 造一个 `slice`（**新引用**）——给切片路径与测试用。
     pub fn new_slice(&self, start: Option<i64>, stop: Option<i64>, step: Option<i64>) -> NonNull<Header> {
-        let slice_type = self.type_named("slice").expect("slice 在引导期已登记");
+        let slice_type = self.hot_type(HotId::Slice).expect("slice 在引导期已登记");
         self.alloc(SliceObject::new(slice_type, start, stop, step))
             .into_raw()
             .cast::<Header>()
@@ -77,8 +76,7 @@ impl Instance {
 
     /// 造一个 `bytes`（**新引用**）——给编译产物的常量池（`P1-12`）与构造路径用。
     pub fn new_bytes(&self, value: &[u8]) -> NonNull<Header> {
-        let bytes_type = self
-            .type_named("bytes")
+        let bytes_type = self.hot_type(HotId::Bytes)
             .expect("bytes 在引导期已登记");
         self.alloc(BytesObject::new(bytes_type, value.to_vec()))
             .into_raw()
@@ -87,8 +85,7 @@ impl Instance {
 
     /// 建一个空 `dict`（**新引用**）——给 stdlib 模块建命名空间用（`CM-4` 的 Python 面）。
     pub fn new_dict(&self) -> NonNull<Header> {
-        let dict_type = self
-            .type_named("dict")
+        let dict_type = self.hot_type(HotId::Dict)
             .expect("dict 在引导期已登记（OM-13）");
         self.alloc(DictObject::new(dict_type, RefCell::new(Vec::new())))
             .into_raw()
@@ -182,8 +179,7 @@ impl Instance {
     /// `tb_next`／`tb_lineno`／`tb_lasti` 先给 `None`／`0`／`0` ✓ —— **如实说** ✗：行号与链式 `tb_next`
     /// **尚未接线** ✓（`DIV-6` 仍留着 ✓，等 `BC-60` 的完整面 ✓）。
     pub fn new_traceback(&self, frame: NonNull<Header>) -> NonNull<Header> {
-        let traceback_type = self
-            .type_named("traceback")
+        let traceback_type = self.hot_type(HotId::Traceback)
             .unwrap_or_else(|| self.new_attribute_type("traceback"));
         self.traceback_created.set(self.traceback_created.get() + 1);
         static TB_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -317,8 +313,7 @@ impl Instance {
         if let Some(ptr) = self.tuple_pool.borrow_mut().pop() {
             return self.reuse_tuple(ptr, items);
         }
-        let tuple_type = self
-            .type_named("tuple")
+        let tuple_type = self.hot_type(HotId::Tuple)
             .expect("tuple 在引导期已登记");
         self.alloc(TupleObject::new(tuple_type, items))
             .into_raw()
@@ -338,8 +333,7 @@ impl Instance {
         if let Some(found) = self.type_dunders.borrow().get(&key) {
             return self.retain(*found);
         }
-        let function_type = self
-            .type_named("builtin_function_or_method")
+        let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("builtin_function_or_method 在引导期已登记");
         let native = self.alloc(crate::BuiltinFunctionObject::new(
             function_type,
@@ -359,7 +353,7 @@ impl Instance {
         ptr: NonNull<Header>,
         items: Vec<NonNull<Header>>,
     ) -> NonNull<Header> {
-        let tuple_type = self.type_named("tuple").expect("tuple 在引导期已登记");
+        let tuple_type = self.hot_type(HotId::Tuple).expect("tuple 在引导期已登记");
         let value = TupleObject::new(tuple_type, items);
         // SAFETY: ptr 来自本实例的 `release_one` 池（内存仍是那次的 `TupleObject` 布局 ✓，
         // 旧值已 clear 且未释放 ⇒ 这里直接覆盖 ✓）。
@@ -391,8 +385,7 @@ impl Instance {
     ) -> NonNull<TypeObject> {
         let ty = self.alloc_type_raw(name, instance_size, slots);
         // CPython 里"没写基类"的类继承 `object`；MRO 仍由 C3 算（OM-13）
-        let object_type = self
-            .type_named("object")
+        let object_type = self.hot_type(HotId::Object)
             .expect("object 在 Instance::new 的引导期就已登记");
         assert!(
             self.register_bases(ty, vec![object_type]).is_some(),
@@ -569,6 +562,8 @@ impl Instance {
         self.bytes_allocated
             .set(self.bytes_allocated.get() + core::mem::size_of::<TypeObject>());
         self.types.borrow_mut().push(ptr);
+        // **地址表**（round 246 性能）：`release_object` 判"是不是类型对象"从线性扫改成 O(log n) ✓。
+        self.register_type_address(ptr.as_ptr() as usize);
         // **名字索引**（round 142）：先登记者优先（与 `type_named` 旧线性扫口径一致 ✓）。
         self.types_by_name
             .borrow_mut()

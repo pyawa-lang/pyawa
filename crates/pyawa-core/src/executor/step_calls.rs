@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_calls<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -27,7 +28,7 @@ fn mapping_entries(
     source: NonNull<Header>,
 ) -> Result<Vec<(NonNull<Header>, NonNull<Header>)>, ExecError> {
     let source_type = unsafe { source.as_ref() }.ty();
-    if source_type == builtin_type(instance, "dict") {
+    if source_type == instance.hot_type(HotId::Dict).expect("dict 已登记") {
         // SAFETY: 类型身份已确认。
         let dict = unsafe { &*source.as_ptr().cast::<DictObject>() };
         let mut entries = Vec::new();
@@ -126,9 +127,9 @@ fn callee_display(instance: &Instance, callable: NonNull<Header>) -> Option<Stri
         return Some(format!("{name}()"));
     }
     let callable_type = unsafe { callable.as_ref() }.ty();
-    let function_type = builtin_type(instance, "function");
-    let method_type = instance.type_named("method");
-    let builtin_type_obj = instance.type_named("builtin_function_or_method");
+    let function_type = instance.hot_type(HotId::Function).expect("function 已登记");
+    let method_type = instance.hot_type(HotId::Method);
+    let builtin_type_obj = instance.hot_type(HotId::BuiltinFunctionOrMethod);
     let underlying = if callable_type == function_type {
         Some(callable)
     } else if Some(callable_type) == method_type {
@@ -188,7 +189,7 @@ fn step_calls_dict_merge<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
                 let source = frame.get().pop()?;
                 let destination = frame.get().peek()?;
                 // SAFETY: destination 在帧值栈上，存活。
-                if unsafe { destination.as_ref() }.ty() != builtin_type(instance, "dict") {
+                if unsafe { destination.as_ref() }.ty() != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                     // SAFETY: source 是新引用。
                     unsafe { instance.release_object(source.as_ptr()) };
                     return Err(ExecError::Unsupported {
@@ -306,7 +307,7 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 // ⇒ 先认下这一种，再走后面的通用路 ✓。
                 if argument_source == null {
                     // 空实参 ⇒ 什么也不用做 ✓（`args` 已是空表 ✓）
-                } else if argument_type == builtin_type(instance, "tuple") {
+                } else if argument_type == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
                     // SAFETY: 类型身份已确认。
                     let arguments = unsafe { &*argument_source.as_ptr().cast::<TupleObject>() };
                     args.reserve(arguments.len());
@@ -364,7 +365,7 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 if keyword_source != null {
                     // SAFETY: 类型身份检查在下面。
                     let keyword_type = unsafe { keyword_source.as_ref() }.ty();
-                    if keyword_type != builtin_type(instance, "dict") {
+                    if keyword_type != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                         for value in args {
                             release(instance, value);
                         }
@@ -442,7 +443,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         // **浮点也要过**（第 318 轮）：`+1.5` 参照给 `1.5` ✓ —— 先前只接
                         // 整数／布尔 ✗ ⇒ `f(+1.5)` 报"只接线了整数／布尔" ✗。
                         if ty != instance.singletons().int_type()
-                            && ty != builtin_type(instance, "float")
+                            && ty != instance.hot_type(HotId::Float).expect("float 已登记")
                         {
                             // **实例走 `__pos__`**（第 220 轮；`MS-19`：能力缺口必须修 ✓）：
                             // 参照对**没有** `__pos__` 的对象报
@@ -482,8 +483,8 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let mut use_all = false;
                         if let Some(exported) = exported {
                             let exported_type = instance.type_of(exported);
-                            let tuple_type = builtin_type(instance, "tuple");
-                            let list_type = builtin_type(instance, "list");
+                            let tuple_type = instance.hot_type(HotId::Tuple).expect("tuple 已登记");
+                            let list_type = instance.hot_type(HotId::List).expect("list 已登记");
                             // **元组与列表分开取** ✗（第 413 轮）：先前把两种类型塞进同一个
                             // `if`，再**只**试 `tuple_items` ✗ ⇒ list 形态（`__all__ = ["x"]` ✓）
                             // 取不到 ⇒ 退回"全部公开名"✗（`from moda import *` 把 `y`／`os` 也搬进来 ✓）。
@@ -577,7 +578,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let value = frame.get().pop()?;
                         // SAFETY: value 是刚出栈的存活对象。
                         let ty = unsafe { value.as_ref() }.ty();
-                        if ty != builtin_type(instance, "list") {
+                        if ty != instance.hot_type(HotId::List).expect("list 已登记") {
                             release(instance, value);
                             return Err(ExecError::Unsupported {
                                 opcode: opcode_number,
@@ -634,7 +635,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         // `TypeAliasType` 实例 ✓（`__value__` 惰性 ✓）。
                         let tuple = frame.get().pop()?;
                         // SAFETY: tuple 是帧值栈上的存活对象。
-                        let is_tuple = unsafe { tuple.as_ref() }.ty() == builtin_type(instance, "tuple");
+                        let is_tuple = unsafe { tuple.as_ref() }.ty() == instance.hot_type(HotId::Tuple).expect("tuple 已登记");
                         if !is_tuple {
                             release(instance, tuple);
                             return Err(ExecError::Unsupported {
@@ -674,8 +675,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let value = frame.get().peek()?;
                         // SAFETY: value 在帧值栈上，存活。
                         let ty = unsafe { value.as_ref() }.ty();
-                        let stop_iteration = instance
-                            .type_named("StopIteration")
+                        let stop_iteration = instance.hot_type(HotId::StopIteration)
                             .expect("StopIteration 在异常层次里");
                         // **异步生成器**（round 245）：词是 `async generator raised StopIteration` ✗
                         //（`Lib/test/test_asyncgen.py` 的 exception_06 按参照原话断言 ✓）。
@@ -894,10 +894,9 @@ fn step_calls_make_function<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>
                 let code_header = frame.get().pop()?;
                 // SAFETY: code_header 是本实例的存活对象（由常量表持有）。
                 let code_type_ok = unsafe { code_header.as_ref() }.ty();
-                let code_object_type = instance
-                    .type_named("CodeObject")
+                let code_object_type = instance.hot_type(HotId::CodeObject)
                     .map(|ty| ty)
-                    .unwrap_or_else(|| builtin_type(instance, "object"));
+                    .unwrap_or_else(|| instance.hot_type(HotId::Object).expect("object 已登记"));
                 if code_type_ok != code_object_type {
                     release(instance, code_header);
                     return Err(ExecError::Unsupported {
@@ -913,7 +912,7 @@ fn step_calls_make_function<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>
                     unsafe { instance.incref_object(mapping.as_ptr()) };
                 }
                 let object = instance.alloc(FunctionObject::new(
-                    builtin_type(instance, "function"),
+                    instance.hot_type(HotId::Function).expect("function 已登记"),
                     code_header,
                     Vec::new(),
                     None,
@@ -936,7 +935,7 @@ fn step_calls_set_function_attribute<'a>(instance: &'a Instance, frame: &Owned<'
                 let function = frame.get().pop()?;
                 let attribute = frame.get().pop()?;
                 // SAFETY: function 是帧值栈上的存活对象。
-                if unsafe { function.as_ref() }.ty() != builtin_type(instance, "function") {
+                if unsafe { function.as_ref() }.ty() != instance.hot_type(HotId::Function).expect("function 已登记") {
                     release(instance, attribute);
                     release(instance, function);
                     return Err(ExecError::Unsupported {
@@ -955,7 +954,7 @@ fn step_calls_set_function_attribute<'a>(instance: &'a Instance, frame: &Owned<'
                     }
                     2 => {
                         // kwdefaults：一个 dict（实测）
-                        if unsafe { attribute.as_ref() }.ty() != builtin_type(instance, "dict") {
+                        if unsafe { attribute.as_ref() }.ty() != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                             release(instance, attribute);
                             release(instance, function);
                             return Err(ExecError::Unsupported {
@@ -1020,7 +1019,7 @@ fn step_calls_call<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: 
                 let keyword_count = match names {
                     Some(names) => {
                         // SAFETY: names 是帧值栈上的存活对象。
-                        if unsafe { names.as_ref() }.ty() != builtin_type(instance, "tuple") {
+                        if unsafe { names.as_ref() }.ty() != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
                             release(instance, names);
                             return Err(ExecError::Unsupported {
                                 opcode: opcode_number,
@@ -1099,7 +1098,7 @@ fn step_calls_call<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: 
                 let mut bound_self = bound_self;
                 if let Some(self_object) = bound_self {
                     // SAFETY: callable 是帧值栈上的存活对象。
-                    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "method") {
+                    if unsafe { callable.as_ref() }.ty() == instance.hot_type(HotId::Method).expect("method 已登记") {
                         args.insert(0, self_object);
                         bound_self = None;
                     }

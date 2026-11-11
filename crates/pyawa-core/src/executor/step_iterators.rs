@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, decoder: &mut Decoder, instruction: &Instruction, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -29,7 +30,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let iterator = frame.get().peek()?;
                     // SAFETY: iterator 在帧值栈上，存活。
                     let ty = unsafe { iterator.as_ref() }.ty();
-                    if ty == builtin_type(instance, "generator") {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") {
                         // 生成器：`FOR_ITER` 的"取下一个"就是**恢复生成器的帧**（驱动实测骨架
                         // `CALL → GET_ITER → FOR_ITER`）；让出就压让出的值，跑完就走耗尽路径。
                         // SAFETY: 类型身份已确认。
@@ -109,7 +110,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let iterable = frame.get().pop()?;
                     // SAFETY: iterable 是刚出栈的存活对象。
                     let ty = unsafe { iterable.as_ref() }.ty();
-                    if ty == builtin_type(instance, "generator") || is_iterator_type(instance, ty) {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") || is_iterator_type(instance, ty) {
                         frame.get().push(iterable)?;
                     } else {
                         // **回退走 `iter_value`**（与 `GET_ITER` **同一处实现** ✓）：`iterator_type_for`
@@ -140,12 +141,12 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     // **本层的 `async def` 编成生成器**（已登记的近似）⇒ `async for` 也得认它 ✓
                     // （第 306 轮）：否则 `async for` 一到运行期就报
                     // `'async for' requires an object with __aiter__ method, got generator` ✗。
-                    if ty == builtin_type(instance, "generator") {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") {
                         push(instance, frame.get(), value)?;
                         release(instance, value);
                         return Ok(Step::Continue);
                     }
-                    if ty == builtin_type(instance, "async_generator") {
+                    if ty == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记") {
                         push(instance, frame.get(), value)?;
                         release(instance, value);
                     } else {
@@ -191,7 +192,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     // **本层的 `async def` 编成生成器**（已登记的近似）⇒ 异步迭代时把它自己当 awaitable
                     // 压上去（与 `async_generator` 同一条路 ✓，第 306 轮）—— 否则 `async for` 报
                     // `'async for' requires an object with __anext__ method, got generator` ✗。
-                    if ty == builtin_type(instance, "generator") {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") {
                         // SAFETY: iterator 由帧值栈持有，这里新增一份交给新压上的那一格。
                         unsafe { instance.incref_object(iterator.as_ptr()) };
                         push(instance, frame.get(), iterator)?;
@@ -255,8 +256,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let exception = frame.get().pop()?;
                     // SAFETY: exception 是存活对象。
                     let ty = unsafe { exception.as_ref() }.ty();
-                    let stop_async_iteration = instance
-                        .type_named("StopAsyncIteration")
+                    let stop_async_iteration = instance.hot_type(HotId::StopAsyncIteration)
                         .expect("异常层次在引导期已登记");
                     if instance.is_subtype(ty, stop_async_iteration) {
                         crate::discard_raised(instance, exception);
@@ -276,8 +276,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let exception = frame.get().pop()?;
                     // SAFETY: exception 是存活对象。
                     let ty = unsafe { exception.as_ref() }.ty();
-                    let stop_iteration = instance
-                        .type_named("StopIteration")
+                    let stop_iteration = instance.hot_type(HotId::StopIteration)
                         .expect("异常层次在引导期已登记");
                     if instance.is_subtype(ty, stop_iteration) {
                         // SAFETY: 类型身份已确认。
@@ -308,11 +307,11 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let value = frame.get().pop()?;
                     // SAFETY: value 是帧值栈上的存活对象。
                     let ty = unsafe { value.as_ref() }.ty();
-                    let is_coroutine = ty == builtin_type(instance, "coroutine");
-                    let is_async_generator = ty == builtin_type(instance, "async_generator");
+                    let is_coroutine = ty == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
+                    let is_async_generator = ty == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
                     // `async_generator.__anext__()` 交出的 awaitable：它**就是** awaitable
                     let is_asend = ty == builtin_type(instance, "async_generator_asend");
-                    let is_generator = ty == builtin_type(instance, "generator");
+                    let is_generator = ty == instance.hot_type(HotId::Generator).expect("generator 已登记");
                     let iterable_coroutine = is_generator && {
                         // SAFETY: 类型身份已确认。
                         let object = unsafe { &*value.as_ptr().cast::<GeneratorObject>() };
@@ -378,9 +377,9 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     // SAFETY: receiver 在帧值栈上，存活。
                     let receiver_type = unsafe { receiver.as_ref() }.ty();
                     // 生成器与协程走**同一条**恢复路径（载荷同形）；协程的 `throw`／`close` 也一样
-                    let is_generator = receiver_type == builtin_type(instance, "generator");
-                    let is_coroutine = receiver_type == builtin_type(instance, "coroutine");
-                    let is_async_generator = receiver_type == builtin_type(instance, "async_generator");
+                    let is_generator = receiver_type == instance.hot_type(HotId::Generator).expect("generator 已登记");
+                    let is_coroutine = receiver_type == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
+                    let is_async_generator = receiver_type == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
                     let is_asend = receiver_type == builtin_type(instance, "async_generator_asend");
                     if is_asend {
                         // `await agen.__anext__()`：推进**底层**异步生成器一次。
@@ -394,8 +393,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         // **`aclose()`**（round 233）：把 `GeneratorExit` 抛进底层并**推进到底**，
                         // 吞掉 `GeneratorExit`／`StopAsyncIteration`，`await` 结果是 `None` ✓。
                         if mode == 1 {
-                            let generator_exit_type = instance
-                                .type_named("GeneratorExit")
+                            let generator_exit_type = instance.hot_type(HotId::GeneratorExit)
                                 .expect("GeneratorExit 在引导期已登记");
                             let exception = crate::executor::format::new_exception(
                                 instance,
@@ -422,11 +420,9 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                                     Err(ExecError::Raised { exception }) => {
                                         // SAFETY: exception 是存活对象。
                                         let ty = unsafe { exception.as_ref() }.ty();
-                                        let is_swallowed = instance
-                                            .type_named("GeneratorExit")
+                                        let is_swallowed = instance.hot_type(HotId::GeneratorExit)
                                             .is_some_and(|base| instance.is_subtype(ty, base))
-                                            || instance
-                                                .type_named("StopAsyncIteration")
+                                            || instance.hot_type(HotId::StopAsyncIteration)
                                                 .is_some_and(|base| instance.is_subtype(ty, base));
                                         if is_swallowed {
                                             crate::discard_raised(instance, exception);

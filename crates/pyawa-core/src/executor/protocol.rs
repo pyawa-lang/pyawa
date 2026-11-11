@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`line_at_offset`、`render_label`、`set_items_of`、`type_name_of` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::executor::{line_at_offset, render_label, set_items_of, type_name_of};
 use crate::executor::Attribute;
 use crate::builtin_objects::AttributeObject;
@@ -21,7 +22,6 @@ use crate::builtin_objects::TupleObject;
 use crate::type_object::TypeObject;
 use crate::executor::arithmetic_public;
 use crate::executor::attribute_lookup;
-use crate::executor::builtin_type;
 use crate::executor::call_callable;
 use crate::executor::call_object_method;
 use crate::executor::concat_public;
@@ -57,7 +57,7 @@ pub(crate) fn build_slice(
     arguments: &[NonNull<Header>],
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
-    let slice_type = builtin_type(instance, "slice");
+    let slice_type = instance.hot_type(HotId::Slice).expect("slice 已登记");
     let callable = instance.type_value(slice_type);
     match crate::executor::call_value(instance, callable, arguments, &[]) {
         Ok(slice) => Ok(slice),
@@ -134,7 +134,7 @@ pub fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Op
     }
     let created = instance
         .alloc(DictObject::new(
-            builtin_type(instance, "dict"),
+            instance.hot_type(HotId::Dict).expect("dict 已登记"),
             RefCell::new(Vec::new()),
         ))
         .into_raw()
@@ -212,8 +212,7 @@ pub fn instance_attribute_set(
                 let is_none = value == instance.singletons().none();
                 // SAFETY: value 是存活对象。
                 let value_ty = unsafe { value.as_ref() }.ty();
-                let base = instance
-                    .type_named("BaseException")
+                let base = instance.hot_type(HotId::BaseException)
                     .expect("BaseException 在引导期已登记");
                 if !is_none && !instance.is_subtype(value_ty, base) {
                     let word = if name == "__cause__" { "cause" } else { "context" };
@@ -271,7 +270,7 @@ pub fn instance_attribute_set(
     // **类型对象**：属性写进它的**命名空间** ✓（与 `instance_attributes` 同款口径 ✓，**一处真相** ✓）。
     if instance.is_type_object(object) {
         if name == "__dict__" {
-            if unsafe { value.as_ref() }.ty() != builtin_type(instance, "dict") {
+            if unsafe { value.as_ref() }.ty() != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                 unsafe { instance.release_object(value.as_ptr()) };
                 // SAFETY: value 是存活对象。
                 let value_type = unsafe { value.as_ref() }.ty();
@@ -352,7 +351,7 @@ pub fn instance_attribute_set(
     // **`obj.__dict__ = {…}`**（实测）：**整体替换**挂载的字典；值不是字典就是实测那条
     // `TypeError: __dict__ must be set to a dictionary, not a 'int'`。
     if name == "__dict__" && has_instance_dict {
-        let is_dict = unsafe { value.as_ref() }.ty() == builtin_type(instance, "dict");
+        let is_dict = unsafe { value.as_ref() }.ty() == instance.hot_type(HotId::Dict).expect("dict 已登记");
         if !is_dict {
             // SAFETY: value 是调用方交出的新引用，这里消费掉。
             unsafe { instance.release_object(value.as_ptr()) };
@@ -454,7 +453,7 @@ fn instance_attribute_delete_inner(
     if !skip_user_hook && name != "__delattr__" {
         // SAFETY: object 是存活对象。
         let object_type = unsafe { object.as_ref() }.ty();
-        let object_default = instance.type_named("object");
+        let object_default = instance.hot_type(HotId::Object);
         if let Some((owner, hook)) = instance.type_lookup_owner(object_type, "__delattr__") {
             let is_object_default = object_default.is_some_and(|default| default == owner);
             if !is_object_default {
@@ -581,7 +580,7 @@ pub(crate) fn inplace_add(
     // （`l = list('spam'); l += UserList('eggs')` ⇒ 结果类型 **UserList** ✓、`l += 'eggs'` ⇒ TypeError ✓；
     // 先前统一先调 `list.__iadd__`（收任意可迭代）⇒ 就地扩展、类型仍是 list ✗）。
     let left_ty = unsafe { left.as_ref() }.ty();
-    let list_ty = instance.type_named("list");
+    let list_ty = instance.hot_type(HotId::List);
     let builtin_list_iadd = list_ty.is_some_and(|list_ty| {
         instance.is_subtype(left_ty, list_ty)
             && match instance.type_lookup_owner(left_ty, "__iadd__") {
@@ -594,8 +593,7 @@ pub(crate) fn inplace_add(
     if builtin_list_iadd {
         let right_ty = unsafe { right.as_ref() }.ty();
         let is_list = list_ty.is_some_and(|list_ty| instance.is_subtype(right_ty, list_ty));
-        let is_tuple = instance
-            .type_named("tuple")
+        let is_tuple = instance.hot_type(HotId::Tuple)
             .is_some_and(|tuple_ty| instance.is_subtype(right_ty, tuple_ty));
         // **右侧自带用户 `__radd__` ⇒ 走 `+` 的反射协议**（参照实测：`list += UserList("x")`／
         // `list += R()`（R 有 `__radd__`）⇒ **反射结果胜出**；没有 `__radd__` 的可迭代 ⇒ 就地扩展 ✓）。
@@ -616,7 +614,7 @@ pub(crate) fn inplace_add(
     if let Some(result) = inplace_dunder(instance, left, right, "__iadd__")? {
         return Ok(result);
     }
-    if Some(unsafe { left.as_ref() }.ty()) == instance.type_named("list") {
+    if Some(unsafe { left.as_ref() }.ty()) == instance.hot_type(HotId::List) {
         let items = sequence_items(instance, right, opcode)?;
         // SAFETY: 类型身份已确认，且 left 是帧值栈上的存活对象。
         let list = unsafe { &*left.as_ptr().cast::<ListObject>() };
@@ -895,7 +893,7 @@ pub(crate) fn inplace_arithmetic(
 fn type_has_own_dunder(instance: &Instance, object: NonNull<Header>, name: &str) -> bool {
     let ty = instance.type_of(object);
     match instance.type_lookup_owner(ty, name) {
-        Some((owner, _)) => Some(owner) != instance.type_named("object"),
+        Some((owner, _)) => Some(owner) != instance.hot_type(HotId::Object),
         None => false,
     }
 }
@@ -970,7 +968,7 @@ pub fn equality_compare_result(
             let operand_type = instance.type_of(operand);
             let has_own_eq = instance
                 .type_lookup_owner(operand_type, "__eq__")
-                .is_some_and(|(owner, _)| Some(owner) != instance.type_named("object"));
+                .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Object));
             if has_own_eq {
                 return Ok(None);
             }
@@ -999,7 +997,7 @@ pub fn equality_compare_result(
             let operand_type = instance.type_of(operand);
             let has_own_eq = instance
                 .type_lookup_owner(operand_type, "__eq__")
-                .is_some_and(|(owner, _)| Some(owner) != instance.type_named("object"));
+                .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Object));
             if has_own_eq {
                 attempted = true;
                 if let Some(result) = call_object_method(instance, operand, "__eq__", &[other])? {
@@ -1096,7 +1094,7 @@ pub fn order_compare_result(
 fn overrides_compare(instance: &Instance, object: NonNull<Header>, name: &str) -> bool {
     let ty = instance.type_of(object);
     let owner = match instance.type_lookup_owner(ty, name) {
-        Some((owner, _)) if Some(owner) != instance.type_named("object") => owner,
+        Some((owner, _)) if Some(owner) != instance.hot_type(HotId::Object) => owner,
         _ => return false,
     };
     // 内建容器自己的 `__eq__`（`dict_eq_native` 等）走我们自己的容器递归路 ✓；**用户子类覆写**
@@ -1109,8 +1107,7 @@ fn overrides_compare(instance: &Instance, object: NonNull<Header>, name: &str) -
 /// 这个值**自己**覆写了 `__eq__`（不是 `object` 的默认实现）吗？（round 66：容器去重要按参照的
 /// **完整相等协议**走用户 `__eq__` ✓ —— 只在覆写时才走可失败路径 ✓，纯内建值仍走快路 ✓）。
 pub(crate) fn has_custom_eq(instance: &Instance, value: NonNull<Header>) -> bool {
-    let object_eq = instance
-        .type_named("object")
+    let object_eq = instance.hot_type(HotId::Object)
         .and_then(|object| instance.type_lookup(object, "__eq__"));
     instance
         .type_lookup(instance.type_of(value), "__eq__")
@@ -1222,7 +1219,7 @@ pub(crate) fn equality_public(
         // **`dict`**：键用结构查（用户键的 `__eq__` 属 P3-42 后续格），**值**递归（`__eq__` 生效 ✓）。
         if subtype(left_ty, "dict") && subtype(right_ty, "dict") {
             // **活视图代理先同步快照**（round 125）；**只对 `mappingproxy` 操作数调**（round 195 真 bug 修 ✗）。
-            let proxy_type = instance.type_named("mappingproxy");
+            let proxy_type = instance.hot_type(HotId::MappingProxy);
             if proxy_type.is_some_and(|proxy| instance.type_of(left) == proxy) {
                 instance.sync_mappingproxy(left);
             }
@@ -1356,7 +1353,7 @@ pub fn compare_public(
                 let operand_type = instance.type_of(operand);
                 let has_own_eq = instance
                     .type_lookup_owner(operand_type, "__eq__")
-                    .is_some_and(|(owner, _)| Some(owner) != instance.type_named("object"));
+                    .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Object));
                 if !has_own_eq {
                     continue;
                 }
@@ -1678,7 +1675,7 @@ pub(crate) fn call_special_method(
         return Ok(None);
     };
     // `type`／`object` 上的是**属性面**（不是格式化覆写 ✓，与 `override_text` 同口径 ✓）
-    if Some(owner) == instance.type_named("type") || Some(owner) == instance.type_named("object") {
+    if Some(owner) == instance.hot_type(HotId::Type) || Some(owner) == instance.hot_type(HotId::Object) {
         return Ok(None);
     }
     let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
@@ -1725,7 +1722,7 @@ pub(crate) fn override_text(
     // **`object` 自己那条不算覆写** ✓（第 211 轮 ✗）：`object.__str__`／`object.__repr__` 是本层新挂的
     // **属性面**（`Lib/types.py` 的 `type(object.__str__)` 要它 ✓）⇒ 若当覆写 ⇒ **每个**对象都会命中
     // 它 ⇒ 把 `str`／`int` 自带的 `str` 槽带跑 ✗（实测 `f"{x}"` 给 `\'1\'` ✗、四条 f-string 语料红 ✓）。
-    if Some(owner) == instance.type_named("object") {
+    if Some(owner) == instance.hot_type(HotId::Object) {
         return Ok(None);
     }
     match call_special_method(instance, object, name, &[])? {
@@ -1869,7 +1866,7 @@ pub(crate) fn boundary_check(
     })?;
     // SAFETY: 常量由常量表持有，存活。
     let signature_type = unsafe { signature.as_ref() }.ty();
-    if signature_type != builtin_type(instance, "tuple") {
+    if signature_type != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         return Err(ExecError::Unsupported {
             opcode,
             what: "边界检查的签名条目必须是标签元组（编译器保证）",
@@ -1949,7 +1946,7 @@ pub(crate) fn assignment_check(
     })?;
     // SAFETY: 常量由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
-    if label_type != builtin_type(instance, "tuple") {
+    if label_type != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         return Err(ExecError::Unsupported {
             opcode,
             what: "赋值检查的标签常量必须是单标签元组（编译器保证）",
@@ -1994,14 +1991,14 @@ pub(crate) fn assignment_check(
 fn union_members<'a>(instance: &Instance, label: NonNull<Header>) -> Option<&'a TupleObject> {
     // SAFETY: label 由常量表／栈持有，存活；返回的引用只在本次判定内使用。
     let label_type = unsafe { label.as_ref() }.ty();
-    if label_type != builtin_type(instance, "tuple") {
+    if label_type != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         return None;
     }
     // SAFETY: 类型身份刚确认。
     let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
     let head = parts.item(0)?;
     // SAFETY: 元组元素存活。
-    if unsafe { head.as_ref() }.ty() != builtin_type(instance, "str") {
+    if unsafe { head.as_ref() }.ty() != instance.hot_type(HotId::Str).expect("str 已登记") {
         return None;
     }
     // P3-38 S2c：内部标签名比较走**合法视图**（WTF-8 ⇒ `None` ⇒ 不等于 ASCII 常量 ⇒ 安全返回 ✓）
@@ -2018,7 +2015,7 @@ pub(crate) fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, lab
     let actual_type = unsafe { actual.as_ref() }.ty();
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
-    if label_type == builtin_type(instance, "str") {
+    if label_type == instance.hot_type(HotId::Str).expect("str 已登记") {
         // P3-38 S2c：WTF-8 标签不可能是内部 ASCII 标签 ⇒ 合法视图比较即安全 ✓
         return instance.text_of(label) == Some("Any");
     }
@@ -2035,7 +2032,7 @@ pub(crate) fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, lab
         let expected = label.cast::<TypeObject>();
         return instance.is_subtype(actual_type, expected);
     }
-    if label_type == builtin_type(instance, "tuple") {
+    if label_type == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         // SAFETY: 类型身份刚确认。
         let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
         if parts.len() != 2 {
@@ -2065,7 +2062,7 @@ pub(crate) fn elements_accepted(
     actual_type: NonNull<TypeObject>,
     inner: NonNull<Header>,
 ) -> bool {
-    if actual_type == builtin_type(instance, "list") {
+    if actual_type == instance.hot_type(HotId::List).expect("list 已登记") {
         // SAFETY: 类型身份刚确认。
         let list = unsafe { &*actual.as_ptr().cast::<crate::ListObject>() };
         return (0..list.len()).all(|index| {
@@ -2074,7 +2071,7 @@ pub(crate) fn elements_accepted(
                 .unwrap_or(true)
         });
     }
-    if actual_type == builtin_type(instance, "tuple") {
+    if actual_type == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         // SAFETY: 同上。
         let tuple = unsafe { &*actual.as_ptr().cast::<TupleObject>() };
         return (0..tuple.len()).all(|index| {
@@ -2116,8 +2113,7 @@ fn descriptor_native(
     name: &'static str,
     handler: crate::NativeFn,
 ) -> NonNull<Header> {
-    let ty = instance
-        .type_named("builtin_function_or_method")
+    let ty = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     instance
         .alloc(crate::BuiltinFunctionObject::new(
@@ -2149,7 +2145,7 @@ fn install_type_method(
 /// **function 的四个可写属性**：把 `getset` 数据描述符装进 `function` 的类型字典 ✓
 /// （`f.__name__ = …` 走 `instance_attribute_set` 的数据描述符分支 ⇒ 调这里的 `__set__` ✓）。
 fn install_function_attribute_descriptors(instance: &Instance) {
-    let Some(function_type) = instance.type_named("function") else {
+    let Some(function_type) = instance.hot_type(HotId::Function) else {
         return;
     };
     // 幂等哨兵：`function` **自己的**命名空间里已经有 `__name__` 就不再装 ✓。
@@ -2216,7 +2212,7 @@ fn install_function_attribute_descriptors(instance: &Instance) {
 
 /// **property 的数据描述符面**：`__set__`／`__delete__`（`__get__` 若 stdlib 已装则不重复 ✓）。
 fn install_property_descriptors(instance: &Instance) {
-    let Some(property_type) = instance.type_named("property") else {
+    let Some(property_type) = instance.hot_type(HotId::Property) else {
         return;
     };
     install_type_method(
@@ -2242,7 +2238,7 @@ fn install_property_descriptors(instance: &Instance) {
 /// **staticmethod／classmethod 的 `__get__`**（`Lib/abc.py` 的
 /// `class abstractclassmethod(classmethod)` 靠 classmethod 的类型字典项经 MRO 继承 ✓）。
 fn install_static_and_classmethod_descriptors(instance: &Instance) {
-    if let Some(ty) = instance.type_named("staticmethod") {
+    if let Some(ty) = instance.hot_type(HotId::StaticMethod) {
         install_type_method(
             instance,
             ty,
@@ -2250,7 +2246,7 @@ fn install_static_and_classmethod_descriptors(instance: &Instance) {
             crate::builtin_objects::staticmethod_descriptor_get as crate::NativeFn,
         );
     }
-    if let Some(ty) = instance.type_named("classmethod") {
+    if let Some(ty) = instance.hot_type(HotId::ClassMethod) {
         // **补齐基类**（`P3-17` 顺带修的真缺口 ✓）：`classmethod` 类型在引导期是
         // `alloc_type_raw` 建的，**漏了** `register_bases` ✗ ⇒ MRO 为空 ⇒
         // `type_lookup(classmethod, "__get__")` 连**自己**的命名空间都看不到 ✗
@@ -2258,7 +2254,7 @@ fn install_static_and_classmethod_descriptors(instance: &Instance) {
         // 修复放在**本安装器**里（不动引导期代码 ✓）：只在 MRO 为空时补一次 ✓，幂等 ✓。
         let mro_is_empty = unsafe { ty.as_ref() }.mro().is_empty();
         if mro_is_empty {
-            if let Some(object_type) = instance.type_named("object") {
+            if let Some(object_type) = instance.hot_type(HotId::Object) {
                 instance.register_bases(ty, vec![object_type]);
             }
         }

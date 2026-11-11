@@ -21,6 +21,10 @@ mod path;
 
 mod refcount;
 
+// **热路径类型指针缓存**（round 246 性能，A2-1）：注册表按名字查表 → 分派处指针比较 ✓。
+mod hot_types;
+pub(crate) use hot_types::HotId;
+
 mod util;
 mod misc;
 mod bootstrap;
@@ -134,6 +138,14 @@ pub struct Instance {
     /// [`Instance::is_dedicated_iterator_type`] 的集合）在代数变化时**重建** ✓（惰性建的迭代器
     /// 类型在首次推进之后才出现时，缓存不能过期 ✗）。
     types_generation: Cell<usize>,
+    /// **热路径类型指针缓存**（round 246 性能，A2-1；见 [`hot_types`]）：把"按名字查类型"从每条
+    /// 指令的热路径拿掉 —— 分派处只比较 [`NonNull<TypeObject>`](core::ptr::NonNull)，字符串名只留
+    /// 在缓存重建的边界 ✓。按 `types_generation` 失效 ✓。
+    hot_types: RefCell<Option<hot_types::HotTypes>>,
+    /// **注册表里全部类型对象的地址（升序）**（round 246 性能）：`release_object` 每次真正释放都要
+    /// 判"这个地址是不是类型对象"——先前是**线性扫 `types`**（类型一多就是每次释放几百次比较 ✗）；
+    /// 这里维护一份升序表，判定改成 O(log n) ✓（登记/退休时同步增删 ✓）。
+    type_addresses: RefCell<Vec<usize>>,
     /// **"有专用推进分支"的迭代器类型地址集合**（round 145 性能）：`advance_iterator` 先前对
     /// **每个**步进都比 20+ 个内建名 ✗（`for` 循环每轮一次 ⇒ 热路径大头）；这里按代数缓存一份
     /// 集合，普通迭代器（`list_iterator`／`range_iterator` 等）**一次哈希查**就跳过整条链 ✓。

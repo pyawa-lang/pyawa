@@ -1,10 +1,11 @@
 //! **`arithmetic` 族** —— 从 `builtin_objects.rs` **原样搬来** ✓（纯移动 ✓、零逻辑改动 ✓）。
 //!
 //! * 派发表 `arithmetic_method_native` **不搬** ✓（族之间的粘合层 ✓）；
-//! * 仍在原处的被引用项：`builtin_type`、`inplace_arithmetic`、`numeric_payload`、`percent_format`、`raise`、`sequence_repeat`、`set_operation`、`unsupported_operand` ✓；
+//! * 仍在原处的被引用项：`inplace_arithmetic`、`numeric_payload`、`percent_format`、`raise`、`sequence_repeat`、`set_operation`、`unsupported_operand` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, numeric_payload, percent_format, sequence_repeat, set_operation, unsupported_operand};
+use crate::executor::{numeric_payload, percent_format, sequence_repeat, set_operation, unsupported_operand};
+use crate::HotId;
 use crate::executor::ExecError;
 use crate::header::Header;
 use crate::instance::Instance;
@@ -83,9 +84,9 @@ pub fn arithmetic_public(
     // 认的是**子类型** ✓（`frozenset` 也算 ✓）；结果一律**新的 `set`** ✓（照参照 ✓）。
     if matches!(symbol, "&" | "|" | "-" | "^") {
         let is_set = |ty: NonNull<TypeObject>| {
-            ["set", "frozenset"].iter().any(|name| {
+            [HotId::Set, HotId::FrozenSet].into_iter().any(|id| {
                 instance
-                    .type_named(name)
+                    .hot_type(id)
                     .is_some_and(|base| instance.is_subtype(ty, base))
             })
         };
@@ -100,7 +101,7 @@ pub fn arithmetic_public(
     // 导入链（`P3-32` 框架门槛）的最后一格之一 ✓。
     // 非 dict 的对侧**不在这里接** ✓（照旧落到文件末尾"一处真相"的 `unsupported_operand` ✓）；
     // `dict |= dict` 走 `protocol::inplace_dict_merge` ✓（那条行为不动 ✓）。
-    let dict_type = instance.type_named("dict");
+    let dict_type = instance.hot_type(HotId::Dict);
     let is_dict = |value: NonNull<Header>| {
         dict_type.is_some_and(|base| instance.is_subtype(instance.type_of(value), base))
     };
@@ -162,7 +163,7 @@ pub fn arithmetic_public(
     // **浮点四则**（第 318 轮，参照口径）：**任一侧是 float ⇒ 结果就是 float** ✓
     //（`1 + 2.0 == 3.0` ✓）。先前这条整段缺失 ⇒ `1.5 + 0.5` 报
     // `unsupported operand type(s) for +: 'float' and 'float'` ✗（`Lib/` 里浮点遍地都是 ✓）。
-    let float_type = builtin_type(instance, "float");
+    let float_type = instance.hot_type(HotId::Float).expect("float 已登记");
     // SAFETY: 两个指针都由调用方保证存活。
     let float_involved = unsafe { left.as_ref() }.ty() == float_type
         || unsafe { right.as_ref() }.ty() == float_type;
@@ -326,7 +327,7 @@ pub fn int_add_descriptor(
             "descriptor '__add__' of 'int' object needs an argument",
         ));
     };
-    let int_type = instance.type_named("int").expect("int 已登记");
+    let int_type = instance.hot_type(HotId::Int).expect("int 已登记");
     if !instance.is_subtype(instance.type_of(owner), int_type) {
         return Err(instance.raise_builtin_error(
             "TypeError",
