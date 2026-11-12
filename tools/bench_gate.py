@@ -107,12 +107,14 @@ def main() -> int:
     # `--inherit-env` 时全部用继承环境（调试用）。
     def sample(index: int) -> dict[str, float]:
         env = None if args.inherit_env or index % 2 == 1 else clean
+        return measure(binary, env)
+
+    # **负载守门**（round 262 教训）：并发测量无效 ⇒ 高负载下不判（不误红 ✗，也绝不假装通过 ✓）
     load, cores = machine_load()
     if load > cores * 0.7:
         print(f"⚠ 机器负载 {load:.2f}／{cores} 核 ⇒ **跳过判定**（bench 对负载敏感、并发测量无效；"
               f"强制判会误红 ✗）。请空载时重跑 ✓")
         return 0
-        return measure(binary, env)
 
     now = sample(0)
     if len(now) < len(TIERS):
