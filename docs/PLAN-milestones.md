@@ -408,7 +408,10 @@
 > 2. **B3-3 收口**：`dunder_call_native` 的双重释放族（round 224／227 同类）逐项归还 ＋ 异常路径整改。
 > 3. **形参所有权老账（13 处）**：只修**有最小复现**的；无复现记档 ✗（不做无靶子重构）。
 > 4. **`test_weakref` 的 GC 保活**（169 s ✗ → <120 s）：根因＝traceback 帧把被测局部保活 ✓。
-> 5. **C1 日常面四连**：`json.load(open(f))` ✗／`defaultdict` ✗／`match` 同行 suite ✗／`urllib.request` ✗。
+> 5. **C1 日常面四连**：`json.load(open(f))` ✗／`defaultdict` ✗／`match` 同行 suite ✗／`urllib.request` ✗。**（2026-11-13 已全部转绿 ✓）**
+> 5b. **真实脚本冒烟抓到的 3 个库缺口**（2026-11-13，10 个真实脚本 7/10 ✗）：① `pathlib.Path.write_text/read_text` ✗（走 `io.open`，`_io` 真文件面未接线）；② `csv` 模块缺 ✗（`CM-` 尾）；③ `subprocess` 的真执行 ✗（`_posixsubprocess.fork_exec` 未接线、`capture_output` 的 fd 处理报 `open: path should be string`）。
+>   —— 语言面已无问题 ✓（`match`／`except*`／`\N{…}`／socketpair／argparse／re 全过 ✓）；**这些是库面长尾** ✗，按 `CM-14` fan-in 取。
+
 > 6. **C2 冷门语义**：`\N{…}`／`except*`／async 推导式／PEP 695／`import *`／下标删除 —— 按 `MS-19` 判据补充**必须修** ✗。
 > 7. **全量内存棘轮**（阶段边界做一次）：全量 valgrind（分批）＋ 全量套件 memdangle ⇒ 记基线 ＋ 「不得更差」。
 > 8. **ABI 发布** ＝ **用户决定** ✗（到点先报，不自行发布）。
