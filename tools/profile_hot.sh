@@ -10,15 +10,22 @@
 #   ＋ **libc `getenv` 2.18%（未缓存的 diag flag）**
 #
 # 用法：
-#   tools/profile_hot.sh                       # perf 采样，四档全跑（debug 二进制带符号）
+#   tools/profile_hot.sh                       # perf 采样，四档全跑（**release 二进制**，带符号）
 #   tools/profile_hot.sh --iters 50000         # 更小更快（形状不变）
 #   tools/profile_hot.sh --tier baseline       # 只跑 baseline 档（最干净）
 #   tools/profile_hot.sh --callgrind           # 强制 callgrind（指令级、慢 ~50×）
+#   tools/profile_hot.sh --bin <路径>          # 指定别的二进制（仍受"陈旧检查"约束）
+#   tools/profile_hot.sh --allow-stale         # 明确允许拿陈旧二进制出数（**不推荐** ✗）
 #
 # 产出：`target/hotprofile.txt`（排序表）＋ `target/hot.data`（perf）或 `target/callgrind.out.*`
+#
+# **为什么默认 release（round 248 修 ✗）**：`tools/bench_hot.py` 量的是 release；debug 二进制的
+# 成本形状不同（内联／检查全不消），更糟的是 `target/debug/pyawa` **不随 `cargo build` 自动更新**
+# ⇒ 曾经拿 2026-11-08 的陈旧 debug 二进制"复剖析"，把 A2 之前的旧热点当成现状 ✗。现在默认
+# release，并在出数前检查**源码是否比二进制新** ⇒ 陈旧就报错退出，不再静默出错误证据 ✗。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ITERS=200000; TIER=""; TOP=25; BIN="$ROOT/target/debug/pyawa"; MODE=auto
+ITERS=200000; TIER=""; TOP=25; BIN="$ROOT/target/release/pyawa"; MODE=auto; ALLOW_STALE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --iters) ITERS="$2"; shift 2 ;;
@@ -26,10 +33,20 @@ while [ $# -gt 0 ]; do
     --top) TOP="$2"; shift 2 ;;
     --bin) BIN="$2"; shift 2 ;;
     --callgrind) MODE=callgrind; shift ;;
+    --allow-stale) ALLOW_STALE=1; shift ;;
     *) echo "未知参数：$1" >&2; exit 2 ;;
   esac
 done
 [ -x "$BIN" ] || { echo "找不到 CLI：$BIN" >&2; exit 2; }
+# **陈旧检查**（round 248）：源码比二进制新 ⇒ 拒绝对陈旧二进制出数（防止把旧热点当现状 ✗）。
+if [ "$ALLOW_STALE" = "0" ]; then
+  NEWER="$(find "$ROOT/crates" -name '*.rs' -newer "$BIN" -print -quit 2>/dev/null)"
+  if [ -n "$NEWER" ]; then
+    echo "  ✗ 二进制比源码旧（例：$NEWER）" >&2
+    echo "    ⇒ 先 cargo build --release -p pyawa-runtime --bin pyawa；确要看陈旧数就加 --allow-stale ✗" >&2
+    exit 2
+  fi
+fi
 
 PROBE=$(mktemp /tmp/hotprobe.XXXX.py)
 python3 "$ROOT/tools/bench_hot.py" --emit | sed "s/2000000/$ITERS/g" > "$PROBE"
