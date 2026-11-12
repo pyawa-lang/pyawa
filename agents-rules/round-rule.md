@@ -25,14 +25,14 @@
 
 - **快档**（轮内反复用）：`tools/quickcheck.sh`（编译 ＋ 编译期用例 ＋ 关键护栏 ＋ 可选探针）。
 - **提交前快档**（`tools/fastcheck.sh`）：`cargo check --all-targets` 0 警告 ＋ 逐字节 ＋ `tests/ci/check.py` ＋ 夹具 ＋ 语料下限 ＋ 少量"必须保持绿"的官方套件烟测（含基线计数断言，不放松判定）。
-- **慢档**（`tools/roundcheck.sh`）：十项 `&&` 闸门（`cargo check --workspace --all-targets` 0 警告／逐字节／`tests/ci/check.py`／`stability.py`／`heap_and_concurrency.py`／对拍普通与 `PYAWA_DANGLING=1`／语料下限 182／夹具 490）＋ 官方全量 survey，**两者并行**跑（闸门内 ③ 由 ⑤ 覆盖、⑨⑩ 并行；survey 默认 `--jobs 4` 让核）。
+- **慢档**（`tools/roundcheck.sh`）：十一项 `&&` 闸门（`cargo check --workspace --all-targets` 0 警告／逐字节／`tests/ci/check.py`／`stability.py`／`heap_and_concurrency.py`／对拍普通与 `PYAWA_DANGLING=1`／语料下限 182／夹具 490）＋ 官方全量 survey，**两者并行**跑（闸门内 ③ 由 ⑤ 覆盖、⑨⑩ 并行；survey 默认 `--jobs 4` 让核）。
 - **分档节奏（2026-11-09 用户批准提速）**：
-  - **行为变更轮**（改动默认路径／运行时语义）：提交前必须 `tools/roundcheck.sh` 全绿（十项 ＋ survey）；
+  - **行为变更轮**（改动默认路径／运行时语义）：提交前必须 `tools/roundcheck.sh` 全绿（十一项 ＋ survey）；
   - **纯诊断轮／默认零输出轮**：`tools/fastcheck.sh` 全绿即可提交；但**每两轮至少一次** `tools/roundcheck.sh`，且下一次行为变更轮必须补；
   - survey 同节奏：行为变更轮必跑；诊断轮可并到"每两轮一次"的整轮验收里。
 - **环境上限下的等价分块**（round 132 起；DSH 会话单条命令约 **600 s** 被 `SIGTERM` 时）：
   `tools/roundcheck.sh` 整体（gate 800+ s）与完整 survey 都跑不完 ⇒ 用
-  `tools/gate_chunk.sh small|stability|heap|conformance` **四块**分别跑（合起来＝十项，各块日志
+  `tools/gate_chunk.sh small|stability|heap|conformance` **四块**分别跑（合起来＝十一项，各块日志
   `target/roundcheck/chunk-*.log`），survey 用 `python3 tools/libtests_survey.py --release --resume --seconds 420`
   **多次续跑**直至跑满 397 文件（进度 `target/libtests_survey.progress.json`，`--timeout` 口径不变）。
   四块全绿 ＋ survey 跑满 ⇒ 视为**慢档等价通过** ✓（台账里写明分块数字）。
@@ -59,7 +59,7 @@
 
 ## 6. 先易后难（取活顺序）
 
-1. **能过十项闸门的增量**优先（解析器／语义修复、收账）；
+1. **能过十一项闸门的增量**优先（解析器／语义修复、收账）；
 2. **需要新载荷类型／新环境**的活**整体推迟**，不拿轮次去磨；
 3. 取活按"**阻塞最多模块的报错签名**"队列，而不是按 fan-in 想象；
 4. 收账后**必须**两道必检：**逐个导入** ＋ **无关脚本 `startup ok`**（`tools/find_syncable.py` 的"通过"不足以证明可入 `Lib/`）。

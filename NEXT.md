@@ -36,4 +36,4 @@
 - **判据①**：`tools/lib_import_ratio.py`（先重建 conformance 二进制；±1 报区间；禁止 `| tail`）
 - **ABI**：`PA_ABI_VERSION`＝**1.4**（round 34 `fs.pipe` 表尾追加；`AB-41`）；指令集版本 **2**
 - **编号现最大**：`BC-65`／`TS-50`／`T-BC-22`／`CP-39`／`CX-22`／`P3-42`（新增前先查已定义；墓碑算定义）
-- **闸门**：`&&` 只看 exit code；`git commit -F - -- <显式路径>`；slowcheck 十项全绿才提交
+- **闸门**：`&&` 只看 exit code；`git commit -F - -- <显式路径>`；slowcheck 十一项全绿才提交

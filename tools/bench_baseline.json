@@ -1,0 +1,13 @@
+{
+  "machine": "AMD Ryzen 5 7640HS (12 逻辑核) / 18 GB / Linux",
+  "binary": "/home/xcc/Coding/Pyawa/target/release/pyawa",
+  "commit": "e66aba11",
+  "date": "2026-11-12",
+  "tolerance": 0.1,
+  "tiers": {
+    "baseline": 0.591,
+    "attribute_read": 0.968,
+    "attribute_write": 0.618,
+    "builtin_call": 1.099
+  }
+}
