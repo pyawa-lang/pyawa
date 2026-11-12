@@ -131,7 +131,8 @@ fi
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 
 if [ "$PROFILE" = "release" ]; then
-step "python3 tools/bench_gate.py（基准回退闸：>10% 即红）" python3 tools/bench_gate.py || true
+step "基准闸：性能回退（bench_gate）＋ 内存 memcheck 子集（20 例）" \
+  bash -c 'python3 tools/bench_gate.py && tools/memcheck.sh --limit 20' || true
 
   echo "slowcheck: OK ✓（十一项全绿）  墙钟 $(( $(date +%s) - START ))s  [profile=release]"
 else
