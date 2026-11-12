@@ -127,6 +127,70 @@ impl<'a> Borrowed<'a> {
     }
 }
 
+/// **转移语义的调用入参表**（B3-3，round 254）：借用视图 → 逐项 `retain` → `Vec<NewRef>`。
+///
+/// `call_callable` 是**转移语义**（接管 `Vec` 里每一项的引用、调用完逐项 release ✓）；
+/// 而 `NativeFn` 交给我们的实参是**借用视图**（`AB-16`）⇒ 把借用直接 `to_vec()` 交出去就是
+/// **双重释放** ✗（round 224 的 `generic_alias_call`、round 227 的 `dunder_call_native` 都是这个坑；
+/// round 254 又抓到 `context_run_native` 的 `kwargs.to_vec()` 同款 ✗）。
+///
+/// 本类型把"借用 → 转移"钉成一步：构造时逐项 `retain` 并包成 [`NewRef`]；`Drop` 会逐项归还
+/// ⇒ 中途任何早退（校验失败／异常）都**不会漏**；只有 [`TransferredCallArgs::into_raw`] 才把
+/// 所有权交给 `call_callable` ✓。
+pub(crate) struct TransferredCallArgs<'a> {
+    args: Vec<NewRef<'a>>,
+    kwargs: Vec<(NewRef<'a>, NewRef<'a>)>,
+}
+
+impl<'a> TransferredCallArgs<'a> {
+    /// 从**借用视图**造一份转移语义的入参表（逐项 `retain`，`Drop` 负责归还）。
+    pub(crate) fn from_borrowed(
+        instance: &'a Instance,
+        args: &[NonNull<Header>],
+        kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Self {
+        let mut owned_args = Vec::with_capacity(args.len());
+        for argument in args {
+            // SAFETY: 调用方保证实参在本次调用期间存活（NativeFn 借用视图契约）。
+            unsafe { instance.incref_object(argument.as_ptr()) };
+            // SAFETY: 上面刚取的这份新引用由本类型接管。
+            owned_args.push(unsafe { NewRef::from_new(instance, *argument) });
+        }
+        let mut owned_kwargs = Vec::with_capacity(kwargs.len());
+        for (name, value) in kwargs {
+            // SAFETY: 同上（键／值都是调用方保证存活的借用）。
+            unsafe {
+                instance.incref_object(name.as_ptr());
+                instance.incref_object(value.as_ptr());
+            }
+            // SAFETY: 上面刚取的两份新引用由本类型接管。
+            owned_kwargs.push(unsafe {
+                (NewRef::from_new(instance, *name), NewRef::from_new(instance, *value))
+            });
+        }
+        Self {
+            args: owned_args,
+            kwargs: owned_kwargs,
+        }
+    }
+
+    /// 交出裸入参表（**转移所有权**给 `call_callable`）；本类型之后为空 ⇒ `Drop` 不再归还 ✓。
+    pub(crate) fn into_raw(
+        mut self,
+    ) -> (
+        Vec<NonNull<Header>>,
+        Vec<(NonNull<Header>, NonNull<Header>)>,
+    ) {
+        let args = self.args.drain(..).map(NewRef::into_raw).collect();
+        let kwargs = self
+            .kwargs
+            .drain(..)
+            .map(|(name, value)| (name.into_raw(), value.into_raw()))
+            .collect();
+        (args, kwargs)
+    }
+}
+
 /// 调用边的 canary 记录：抓调用前的实参计数，调用后核对（`OM-19`：借用视图不得被消费）。
 pub(crate) struct ArgCanary<'a> {
     /// 被调原生函数的名字（诊断输出用；`None` 时不抓）。
@@ -265,6 +329,71 @@ pub(crate) unsafe fn call_builtin_borrowed<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `TransferredCallArgs`：构造时逐项 retain，`Drop` 时逐项归还（异常路径不漏 ✓）。
+    #[test]
+    fn transferred_args_drop_returns_every_reference() {
+        let instance = crate::instance::Instance::new();
+        let first = instance.new_str("b3-transferred-1");
+        let second = instance.new_str("b3-transferred-2");
+        let name = instance.new_str("kw");
+        let value = instance.new_str("b3-transferred-3");
+        // SAFETY: 四个对象都由本测试持有（新引用）。
+        let before: Vec<u32> = [first, second, name, value]
+            .iter()
+            .map(|object| unsafe { &*object.as_ptr() }.refcount())
+            .collect();
+        let borrowed_args = [first, second];
+        let borrowed_kwargs = [(name, value)];
+        // SAFETY: 上面四个对象在本次调用期间存活。
+        let transferred = TransferredCallArgs::from_borrowed(
+            &instance,
+            &borrowed_args,
+            &borrowed_kwargs,
+        );
+        for (object, old) in [first, second, name, value].iter().zip(&before) {
+            // SAFETY: 对象存活。
+            assert_eq!(unsafe { &*object.as_ptr() }.refcount(), old + 1, "构造时逐项 retain");
+        }
+        drop(transferred);
+        for (object, old) in [first, second, name, value].iter().zip(&before) {
+            // SAFETY: 对象存活。
+            assert_eq!(unsafe { &*object.as_ptr() }.refcount(), *old, "Drop 逐项归还");
+        }
+        for object in [first, second, name, value] {
+            // SAFETY: 归还本测试持有的那份。
+            unsafe { instance.release_object(object.as_ptr()) };
+        }
+    }
+
+    /// `into_raw` 把所有权交出去：计数保持 +1，调用方随后自己归还 ✓。
+    #[test]
+    fn transferred_args_into_raw_moves_ownership() {
+        let instance = crate::instance::Instance::new();
+        let value = instance.new_str("b3-transferred-raw");
+        let name = instance.new_str("kw");
+        // SAFETY: 两个对象由本测试持有。
+        let before = unsafe { &*value.as_ptr() }.refcount();
+        let borrowed = [value];
+        let names = [(name, value)];
+        // SAFETY: 对象在本次调用期间存活。
+        let transferred = TransferredCallArgs::from_borrowed(&instance, &borrowed, &names);
+        let (args, kwargs) = transferred.into_raw();
+        assert_eq!(args.len(), 1);
+        assert_eq!(kwargs.len(), 1);
+        let (raw_name, raw_value) = kwargs[0];
+        assert_eq!(raw_name, name);
+        assert_eq!(raw_value, value);
+        // SAFETY: 对象仍由交出的那两份引用保活。
+        assert_eq!(unsafe { &*value.as_ptr() }.refcount(), before + 2, "实参 + 关键字值各一份");
+        // SAFETY: 归还交出去的四份引用（实参、键、值、以及 name 的测试持有份）。
+        unsafe {
+            instance.release_object(args[0].as_ptr());
+            instance.release_object(raw_name.as_ptr());
+            instance.release_object(raw_value.as_ptr());
+            instance.release_object(name.as_ptr());
+        }
+    }
 
     /// `NewRef::from_new` 不增减计数；`drop` 恰好归还一份（用单例核计数，避免悬垂读 ✗）。
     #[test]

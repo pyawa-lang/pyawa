@@ -413,13 +413,13 @@ pub(crate) unsafe fn context_run_native(
     let Some((callable, rest)) = args.split_first() else {
         return Err(instance.raise_builtin_error("TypeError", "run() missing required argument 'callable' (pos 1)"));
     };
-    let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(rest.len());
-    for argument in rest {
-        // SAFETY: 实参由调用方持有 ⇒ 新增一份交给调用 ✓。
-        unsafe { instance.incref_object(argument.as_ptr()) };
-        call_args.push(*argument);
-    }
-    crate::executor::call::call_callable(instance, *callable, None, call_args, kwargs.to_vec(), 0)
+    // **双重释放真 bug 修**（round 254 B3-3；与 round 224／227 同族 ✗）：先前 `kwargs.to_vec()`
+    // 把**借来的**键／值直接交给 `call_callable`（转移语义 ⇒ 它会逐项 release ✗）⇒ 每次
+    // `ctx.run(f, k=obj)` 给 `obj` 净 −1 ✗（实测 `sys.getrefcount` 变成垃圾值）。
+    // 统一走 `TransferredCallArgs`（逐项 retain、`into_raw` 转移、`Drop` 兜异常路径 ✓）。
+    let (call_args, call_kwargs) =
+        crate::call_edge::TransferredCallArgs::from_borrowed(instance, rest, kwargs).into_raw();
+    crate::executor::call::call_callable(instance, *callable, None, call_args, call_kwargs, 0)
 }
 
 /// **`locals()`**（round 74）：返回**当前帧**的局部名快照字典 ✓（参照：模块层 `locals() is globals()`，
@@ -465,4 +465,68 @@ pub fn locals_native(
         instance.dict_set(mapping, name, value);
     }
     Ok(mapping)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一个**不保留实参**的原生函数（测试用：返回 `None` 的新引用）。
+    ///
+    /// # Safety
+    ///
+    /// 遵守 `NativeFn` 契约（借用视图 ＋ 新引用返回值）。
+    unsafe fn passthrough_native(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        _args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, ExecError> {
+        // SAFETY: 单例由实例持有。
+        Ok(instance.retain(instance.singletons().none()))
+    }
+
+    fn make_native(instance: &Instance) -> NonNull<Header> {
+        let function_type = instance
+            .hot_type(crate::HotId::BuiltinFunctionOrMethod)
+            .expect("builtin_function_or_method 已登记");
+        instance
+            .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                function_type,
+                "b3_target",
+                core::cell::Cell::new(passthrough_native),
+            ))
+            .into_raw()
+            .cast::<Header>()
+    }
+
+    /// **B3-3 回归锁**：`context_run_native` 的 `kwargs` 以前是 `kwargs.to_vec()`（借来的指针
+    /// 交给转移语义的 `call_callable` ⇒ 每次净 −1 ✗；实测 `sys.getrefcount` 变垃圾值）；
+    /// 现在走 `TransferredCallArgs` ⇒ 调用后实参计数**回到原值** ✓。
+    #[test]
+    fn run_kwargs_do_not_double_release() {
+        let instance = Instance::new();
+        let callable = make_native(&instance);
+        let key = instance.new_str("k");
+        let value = instance.new_str("v");
+        // SAFETY: 三个对象都由本测试持有。
+        let before_key = unsafe { (&*key.as_ptr()).refcount() };
+        let before_value = unsafe { (&*value.as_ptr()).refcount() };
+        let args = [callable, value];
+        let kwargs = [(key, value)];
+        // SAFETY: 实参在调用期间存活（本测试持有）。
+        let result = unsafe { context_run_native(&instance, None, &args, &kwargs) }
+            .expect("context.run 的转发调用应成功");
+        // SAFETY: 调用来回后对象仍由本测试持有。
+        assert_eq!(unsafe { (&*key.as_ptr()).refcount() }, before_key, "kwargs 键被多放／少放 ✗");
+        assert_eq!(
+            unsafe { (&*value.as_ptr()).refcount() },
+            before_value,
+            "kwargs 值（同时是位置实参）被多放／少放 ✗"
+        );
+        instance.release(result);
+        instance.release(callable);
+        instance.release(key);
+        instance.release(value);
+    }
 }

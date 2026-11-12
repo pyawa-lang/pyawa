@@ -131,28 +131,13 @@ pub(crate) fn dunder_call_native(
             }
         },
     };
-    // **实参所有权**（round 227 真 bug 修 ✗）：`call_callable` 是**转移语义**（接管传入 `Vec`
-    // 每项的引用、调用完逐项 release ✓）—— 先前直接 `rest.to_vec()`／`kwargs.to_vec()` 把
-    // **借来的**指针交出去 ✗ ⇒ 每条实参净 −1 ✗（与 round 216 的 `generic_alias_call` 同一个坑 ✓）。
-    // 正确形状：先逐项 retain，再把 Vec 移进去，不再自己 release ✓。
-    let retained_args: Vec<NonNull<Header>> = rest
-        .iter()
-        .map(|value| {
-            // SAFETY: 实参由调用方保证存活。
-            unsafe { instance.incref_object(value.as_ptr()) };
-            *value
-        })
-        .collect();
-    let mut retained_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> =
-        Vec::with_capacity(kwargs.len());
-    for (name, value) in kwargs {
-        // SAFETY: 同上。
-        unsafe {
-            instance.incref_object(name.as_ptr());
-            instance.incref_object(value.as_ptr());
-        }
-        retained_kwargs.push((*name, *value));
-    }
+    // **实参所有权**（round 227 真 bug 修 ✗；round 254 B3-3 **类型化**）：`call_callable` 是
+    // **转移语义**（接管传入 `Vec` 每项的引用、调用完逐项 release ✓）—— 先前直接 `rest.to_vec()`／
+    // `kwargs.to_vec()` 把**借来的**指针交出去 ✗ ⇒ 每条实参净 −1 ✗（round 224 的 `generic_alias_call`
+    // 同一个坑 ✓）。现在用 `TransferredCallArgs`：构造时逐项 retain、`Drop` 兜住任何早退，
+    // `into_raw` 才把所有权交给 `call_callable` ✓。
+    let (retained_args, retained_kwargs) =
+        crate::call_edge::TransferredCallArgs::from_borrowed(instance, rest, kwargs).into_raw();
     crate::executor::call::call_callable(
         instance,
         receiver,
@@ -1147,4 +1132,75 @@ pub(crate) unsafe fn dict_clear(ptr: *mut Header, instance: &Instance) {
     object.entries.borrow_mut().clear();
     object.hashes.borrow_mut().clear();
     object.deleted.set(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一个**不保留实参**的原生函数（测试用：返回 `None` 的新引用）。
+    ///
+    /// # Safety
+    ///
+    /// 遵守 `NativeFn` 契约（借用视图 ＋ 新引用返回值）。
+    unsafe fn passthrough_native(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        _args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, crate::ExecError> {
+        // SAFETY: 单例由实例持有。
+        Ok(instance.retain(instance.singletons().none()))
+    }
+
+    fn make_native(instance: &Instance) -> NonNull<Header> {
+        let function_type = instance
+            .hot_type(crate::HotId::BuiltinFunctionOrMethod)
+            .expect("builtin_function_or_method 已登记");
+        instance
+            .alloc(BuiltinFunctionObject::new(
+                function_type,
+                "b3_target",
+                core::cell::Cell::new(passthrough_native),
+            ))
+            .into_raw()
+            .cast::<Header>()
+    }
+
+    /// **B3-3 回归锁**：`dunder_call_native`（`f.__call__(...)` 的落点）的实参／关键字
+    /// 走 `TransferredCallArgs` ⇒ 调用后计数回到原值 ✓。
+    #[test]
+    fn dunder_call_native_restores_argument_refcounts() {
+        let instance = crate::instance::Instance::new();
+        let callable = make_native(&instance);
+        let positional = instance.new_str("pos");
+        let key = instance.new_str("k");
+        let value = instance.new_str("v");
+        // SAFETY: 三个对象都由本测试持有。
+        let before_positional = unsafe { (&*positional.as_ptr()).refcount() };
+        let before_key = unsafe { (&*key.as_ptr()).refcount() };
+        let before_value = unsafe { (&*value.as_ptr()).refcount() };
+        let args = [callable, positional, value];
+        let kwargs = [(key, value)];
+        // SAFETY: 实参在调用期间存活（本测试持有）。
+        let result = dunder_call_native(&instance, None, &args, &kwargs)
+            .expect("dunder_call_native 应成功");
+        // SAFETY: 调用来回后对象仍由本测试持有。
+        assert_eq!(
+            unsafe { (&*positional.as_ptr()).refcount() },
+            before_positional,
+            "位置实参被多放／少放 ✗"
+        );
+        assert_eq!(unsafe { (&*key.as_ptr()).refcount() }, before_key, "kwargs 键被多放／少放 ✗");
+        assert_eq!(
+            unsafe { (&*value.as_ptr()).refcount() },
+            before_value,
+            "kwargs 值被多放／少放 ✗"
+        );
+        instance.release(result);
+        instance.release(callable);
+        instance.release(positional);
+        instance.release(key);
+        instance.release(value);
+    }
 }
