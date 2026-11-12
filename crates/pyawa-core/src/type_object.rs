@@ -449,6 +449,7 @@ impl TypeObject {
     ///
     /// 热路径的"MRO 遍历"一律走这个：先前 `mro()` 每次返回**克隆的 `Vec`** ⇒ 类型查找／属性查找／
     /// 二元运算的 dunder 查找每查一次都付一次分配 ✗（perf：`type_lookup_owner`＋malloc/免费 共 ≈5%）。
+    #[inline]
     pub fn with_mro<R>(&self, f: impl FnOnce(&[NonNull<TypeObject>]) -> R) -> R {
         f(&self.mro.borrow())
     }

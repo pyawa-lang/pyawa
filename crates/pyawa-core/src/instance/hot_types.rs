@@ -220,23 +220,4 @@ impl Instance {
         unsafe { ty.as_ref() }.is_iterator_kind()
     }
 
-    /// 地址是不是**注册表里的类型对象**（`release_object` 每次释放一次：O(log n)，不再线性扫 ✓）。
-    pub(crate) fn is_registered_type_address(&self, address: usize) -> bool {
-        self.type_addresses.borrow().binary_search(&address).is_ok()
-    }
-
-    /// 登记一个类型的地址（`alloc_type_raw` 里调用：保持 `type_addresses` 升序 ✓）。
-    pub(crate) fn register_type_address(&self, address: usize) {
-        let mut addresses = self.type_addresses.borrow_mut();
-        if let Err(index) = addresses.binary_search(&address) {
-            addresses.insert(index, address);
-        }
-    }
-
-    /// 摘掉一个类型的地址（孤儿回收 retire 时调用 ✓）。
-    pub(crate) fn unregister_type_address(&self, address: usize) {
-        self.type_addresses
-            .borrow_mut()
-            .retain(|entry| *entry != address);
-    }
 }

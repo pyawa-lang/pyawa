@@ -36,6 +36,15 @@ impl Drop for Instance {
             // SAFETY: 每个地址都由本实例分配且尚未释放；类型对象在下一段之前一直存活。
             unsafe { Self::force_free(header) };
         }
+        // **复用池里的内存**（round 251，A2-6）：不在活表里，但仍是本实例分配的内存 ⇒ 这里还掉 ✓。
+        for ptr in core::mem::take(&mut *self.tuple_pool.borrow_mut()) {
+            // SAFETY: 池里的对象都是本实例分配、尚未 dealloc 的 ✓。
+            unsafe { Self::force_free(ptr) };
+        }
+        for ptr in core::mem::take(&mut *self.int_pool.borrow_mut()) {
+            // SAFETY: 同上。
+            unsafe { Self::force_free(ptr) };
+        }
 
         let types = core::mem::take(&mut *self.types.borrow_mut());
         for ty in types {

@@ -333,7 +333,7 @@ impl Instance {
         let size = unsafe { ty.as_ref() }.instance_size;
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
         // **小元组进复用池**（round 96）：参照 tuple freelist ✓（`test_genexps` 的 id 复用 doctest ✓）。
-        if !quarantine_mode() && !leak_mode() && self.pool_tuple(ptr, ty) {
+        if !quarantine_mode() && !leak_mode() && (self.pool_int(ptr, ty) || self.pool_tuple(ptr, ty)) {
             return;
         }
         // **实验（第 238 轮）**：暂不真释放 ✓ ⇒ 崩溃消失即证明"释放后仍被用／写" ✗。
@@ -368,7 +368,7 @@ impl Instance {
         crate::instance::poison_refcount(header);
         self.unlink(header);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
-        if !quarantine_mode() && !leak_mode() && self.pool_tuple(header, ty) {
+        if !quarantine_mode() && !leak_mode() && (self.pool_int(header, ty) || self.pool_tuple(header, ty)) {
             return;
         }
         if quarantine_mode() {
@@ -379,11 +379,31 @@ impl Instance {
         }
     }
 
+    /// **把已释放的 `int` 放进复用池**（round 251 性能，A2-6；上限 64）：载荷重置成小值
+    /// ⇒ 不钉住大整数的堆 ✓（赋值会 drop 旧 `IntValue` ✓）。
+    #[inline]
+    fn pool_int(&self, ptr: NonNull<Header>, ty: NonNull<crate::TypeObject>) -> bool {
+        if !self.hot_type_is(HotId::Int, ty) {
+            return false;
+        }
+        let mut pool = self.int_pool.borrow_mut();
+        if pool.len() >= 64 {
+            return false;
+        }
+        // SAFETY: ptr 是刚释放的对象（内存仍有效、尚未 dealloc ✓），类型刚确认是 `int` ✓。
+        unsafe {
+            (*ptr.cast::<crate::builtin_objects::IntObject>().as_ptr()).value =
+                crate::bigint::IntValue::Small(0);
+        }
+        pool.push(ptr);
+        true
+    }
+
     /// **把已释放的 `tuple` 放进复用池**（round 96；上限 20，参照 freelist 同量级 ✓）。
     /// 返回 `true` ⇒ 调用方**不要**再调 `dealloc`（内存留在池里 ✓）。
+    #[inline]
     fn pool_tuple(&self, ptr: NonNull<Header>, ty: NonNull<crate::TypeObject>) -> bool {
-        // SAFETY: ty 由注册表持有；ptr 是刚释放的对象（内存仍有效 ✓）。
-        if unsafe { ty.as_ref() }.name() != "tuple" {
+        if !self.hot_type_is(HotId::Tuple, ty) {
             return false;
         }
         let mut pool = self.tuple_pool.borrow_mut();
@@ -1243,8 +1263,6 @@ impl Instance {
             self.types
                 .borrow_mut()
                 .retain(|entry| entry.as_ptr() as usize != address);
-            // **地址表同步摘掉**（round 246）：否则 `release_object` 会把已退休类型仍当注册类型 ✗。
-            self.unregister_type_address(address);
             // **名字索引同步摘掉**（round 142）：否则 `type_named` 会返回已退休的类型 ✗。
             self.types_by_name.borrow_mut().retain(|_, entry| entry.as_ptr() as usize != address);
             self.user_types

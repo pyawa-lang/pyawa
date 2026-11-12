@@ -442,10 +442,42 @@ impl Instance {
     /// `new_int` 与 `new_int_value` **不能互相调**（非单例值会来回递归到爆栈——
     /// 第 200 轮实测踩过：`300` 一路 `new_int` ↔ `new_int_value`）。
     pub(crate) fn alloc_int(&self, value: IntValue) -> NonNull<Header> {
+        // **复用池**（round 251 性能，A2-6；CPython PyLong freelist 同款）：
+        // `n += 1` 这类循环每轮造/丢一个 `IntObject` ⇒ 不再每次 `malloc`／`free` ✓。
+        let reused = self.int_pool.borrow_mut().pop();
+        if let Some(ptr) = reused {
+            // **复用也记一次分配**（GC 节奏与真分配一致 ✓）。
+            self.note_allocation();
+            return self.reuse_int(ptr, value);
+        }
         let int_type = self.singletons().int_type();
         self.alloc(IntObject::new(int_type, value))
             .into_raw()
             .cast::<Header>()
+    }
+
+    /// **复用池里的 `IntObject` 内存**（round 251 性能，A2-6）：旧载荷先 drop（释放大整数堆 ✓）、
+    /// 再整体覆写并**重新登记**（活表／字节计数 ✓；`int` 不成环 ⇒ 不进 GC 链 ✓）。
+    fn reuse_int(&self, ptr: NonNull<Header>, value: IntValue) -> NonNull<Header> {
+        let int_type = self.singletons().int_type();
+        let fresh = IntObject::new(int_type, value);
+        // SAFETY: ptr 来自本实例的 `int_pool`（内存仍是 `IntObject` 布局、refcount 已归零且未 dealloc ✓）。
+        unsafe {
+            let slot = ptr.cast::<IntObject>().as_ptr();
+            core::ptr::drop_in_place(slot);
+            slot.write(fresh);
+        }
+        let ty = int_type.cast::<crate::TypeObject>();
+        // SAFETY: ty 由注册表持有，存活。
+        let size = unsafe { ty.as_ref() }.instance_size;
+        if self.zombie_trace.get() {
+            self.freed_sites
+                .borrow_mut()
+                .remove(&(ptr.as_ptr() as usize));
+        }
+        self.live.borrow_mut().insert(ptr.as_ptr() as usize);
+        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        ptr
     }
 
     /// 在**本实例**的堆上分配一个对象，返回**新引用**（**OM-16**）。
@@ -455,6 +487,13 @@ impl Instance {
     /// **OM-26**：分配计数达阈值时自动触发一次回收。
     pub fn alloc<'a, T: PyObject>(&'a self, value: T) -> Owned<'a, T> {
         let ptr = self.adopt(value);
+        self.note_allocation();
+        Owned::new(ptr, self)
+    }
+
+    /// **一次"分配"的 GC 记账**（round 251 抽取）：`alloc` 与 `int` 复用池共用 ⇒ 复用池
+    /// **不改变 GC 触发节奏** ✓（否则 `gc.set_threshold` 系列用例的可观察行为会漂 ✗）。
+    fn note_allocation(&self) {
         self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
         // **强制全量的请求要"立刻"生效**（round 158）：`gc.set_threshold` 之后 `next_collect` 可能是
         // "live 级"的大数（2.6M）⇒ 等阈值要再分配几百万个对象，垃圾会拖累一串后续用例 ✗。
@@ -474,8 +513,6 @@ impl Instance {
             self.gc_next_collect
                 .set(self.gc_alloc_count.get().saturating_add(step));
         }
-
-        Owned::new(ptr, self)
     }
 
     /// 把一个已构造好的对象交给本实例托管（记账 ＋ 入链 ＋ 标 `GC_TRACKED`），
@@ -562,13 +599,15 @@ impl Instance {
         );
         let ptr = NonNull::from(Box::leak(Box::new(object)));
         // SAFETY: ptr 刚分配、由注册表持有（存活）。
-        unsafe { ptr.as_ref() }.set_type_id(type_id);
+        let type_object = unsafe { ptr.as_ref() };
+        type_object.set_type_id(type_id);
+        // **类型对象标志**（round 251 性能，A2-6）：释放路径一次位测就能认出类型对象（不复制、
+        // 不由通用路径释放 ✓）。**不**用 `IMMORTAL`：`OM-24`／`DESIGN` §13-5 已决"不实现 immortal" ✓。
+        type_object.header.set_flag(crate::flags::TYPE_OBJECT);
         // 类型对象也走同一本账（OM-3），但由注册表持有：不进 `live`，销毁时统一释放（OM-2）。
         self.bytes_allocated
             .set(self.bytes_allocated.get() + core::mem::size_of::<TypeObject>());
         self.types.borrow_mut().push(ptr);
-        // **地址表**（round 246 性能）：`release_object` 判"是不是类型对象"从线性扫改成 O(log n) ✓。
-        self.register_type_address(ptr.as_ptr() as usize);
         // **名字索引**（round 142）：先登记者优先（与 `type_named` 旧线性扫口径一致 ✓）。
         // **round 249（A2-4）**：**首个登记**顺手标"迭代器类型／专用迭代器类型"**能力位**
         // （热路径一次位测；"首个登记"与 `type_named` 的先登记者优先口径一致 ✓）。

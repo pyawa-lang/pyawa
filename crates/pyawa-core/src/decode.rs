@@ -144,12 +144,19 @@ pub fn parse_exception_table(table: &[u8]) -> Result<Vec<ExceptionEntry>, Decode
 pub struct Decoder<'a> {
     code: &'a [u8],
     position: usize,
+    /// **`EXTENDED_ARG` 的编号**（round 251 性能，A2-6）：每个解码器只查一次（不再每条指令一次
+    /// `OnceLock` 读 ✗）。
+    extended_arg: u8,
 }
 
 impl<'a> Decoder<'a> {
     /// `code` 是 `co_code` 的字节串（`BC-33`：每码元 2 字节，含 cache 槽）。
     pub fn new(code: &'a [u8]) -> Self {
-        Self { code, position: 0 }
+        Self {
+            code,
+            position: 0,
+            extended_arg: extended_arg_opcode(),
+        }
     }
 
     /// 当前游标（**码元**单位）。
@@ -173,36 +180,57 @@ impl<'a> Decoder<'a> {
 
     /// 取下一条指令；序列耗尽返回 `Ok(None)`。
     pub fn next_instruction(&mut self) -> Result<Option<Instruction>, DecodeError> {
-        if self.position * 2 >= self.code.len() {
-            return Ok(None);
+        let start = self.position;
+        let byte_index = start * 2;
+        // **快路**（round 251 性能，A2-6）：绝大多数指令**没有 `EXTENDED_ARG`** ⇒ 一次定长取指＋
+        // 一次 cache 槽表查直接返回；`oparg` 即单字节（不必走 `*256` 循环 ✗）。
+        if byte_index + 1 >= self.code.len() {
+            if byte_index >= self.code.len() {
+                return Ok(None);
+            }
+            return Err(DecodeError::TruncatedCodeUnit { offset: start });
+        }
+        let opcode = self.code[byte_index];
+        let raw_oparg = self.code[byte_index + 1];
+        if opcode != self.extended_arg {
+            let cache_units = inline_cache_entries(u16::from(opcode));
+            let size = 1 + cache_units as usize;
+            if (start + size) * 2 > self.code.len() {
+                return Err(DecodeError::MissingCacheSlots {
+                    offset: start,
+                    opcode,
+                    expected: cache_units,
+                    found: self.code.len() / 2 - (start + 1),
+                });
+            }
+            self.position = start + size;
+            return Ok(Some(Instruction {
+                offset: start,
+                opcode,
+                oparg: u32::from(raw_oparg),
+                size,
+            }));
         }
 
-        let start = self.position;
-        let extended_arg = extended_arg_opcode();
-        let mut oparg: u32 = 0;
-        let mut saw_extended = false;
-
+        // **慢路**：`EXTENDED_ARG` 前缀（罕见；按大端拼 oparg ✓）。
+        let mut oparg: u32 = u32::from(raw_oparg);
+        self.position = start + 1;
         loop {
             let (opcode, raw_oparg) = match self.read_unit(self.position) {
                 Ok(unit) => unit,
-                Err(DecodeError::TruncatedCodeUnit { .. }) if saw_extended => {
+                Err(DecodeError::TruncatedCodeUnit { .. }) => {
                     return Err(DecodeError::DanglingExtendedArg { offset: start });
                 }
                 Err(error) => return Err(error),
             };
             self.position += 1;
-
             oparg = oparg
                 .checked_mul(256)
                 .and_then(|value| value.checked_add(u32::from(raw_oparg)))
                 .ok_or(DecodeError::OpargOverflow { offset: start })?;
-
-            if opcode == extended_arg {
-                saw_extended = true;
+            if opcode == self.extended_arg {
                 continue;
             }
-
-            // BC-35：带 cache 的指令，其后留等宽零填充槽（这里只跳过，零填充由 validate 查）
             let cache_units = inline_cache_entries(u16::from(opcode));
             let size = self.position - start + cache_units as usize;
             if (start + size) * 2 > self.code.len() {
@@ -214,7 +242,6 @@ impl<'a> Decoder<'a> {
                 });
             }
             self.position += cache_units as usize;
-
             return Ok(Some(Instruction {
                 offset: start,
                 opcode,

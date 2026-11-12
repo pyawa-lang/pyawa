@@ -3,6 +3,41 @@
 //! Each `PYAWA_*` switch is read in exactly one place here; hot paths only call
 //! these helpers instead of touching `env` directly.
 
+/// **释放路径**诊断开关的位（round 251 性能，A2-6）：每实例在建实例时快照一次（`Cell<u32>`），
+/// `release_object` 热路径一次位测就能跳过整片诊断检查（先前每次释放要 5+ 次 `OnceLock` 原子读 ✗）。
+pub(crate) const RELEASE_DIAG_WATCH_FRAME: u32 = 1 << 0;
+/// `PYAWA_WATCH_DICT`（dict 掉到 0 时打现场）。
+pub(crate) const RELEASE_DIAG_WATCH_DICT: u32 = 1 << 1;
+/// 任一种引用跟踪（`PYAWA_REF_TRACE`／`PYAWA_REF_TRACE_CLASS`）。
+pub(crate) const RELEASE_DIAG_REF_TRACE: u32 = 1 << 2;
+/// `PYAWA_REFCOUNT_CANARY`（毒值检查）。
+pub(crate) const RELEASE_DIAG_CANARY: u32 = 1 << 3;
+/// `PYAWA_DANGLING`（活表检查）。
+pub(crate) const RELEASE_DIAG_DANGLING: u32 = 1 << 4;
+
+/// 进程环境 ⇒ 释放路径诊断位图（**每实例一次**；开关本来就不需要运行期改变 ✓）。
+pub(crate) fn release_diag_bits() -> u32 {
+    let mut bits = 0;
+    if std::env::var_os("PYAWA_WATCH_FRAME").is_some() {
+        bits |= RELEASE_DIAG_WATCH_FRAME;
+    }
+    if std::env::var_os("PYAWA_WATCH_DICT").is_some() {
+        bits |= RELEASE_DIAG_WATCH_DICT;
+    }
+    if std::env::var_os("PYAWA_REF_TRACE").is_some()
+        || std::env::var_os("PYAWA_REF_TRACE_CLASS").is_some()
+    {
+        bits |= RELEASE_DIAG_REF_TRACE;
+    }
+    if std::env::var_os("PYAWA_REFCOUNT_CANARY").is_some() {
+        bits |= RELEASE_DIAG_CANARY;
+    }
+    if std::env::var_os("PYAWA_DANGLING").is_some() {
+        bits |= RELEASE_DIAG_DANGLING;
+    }
+    bits
+}
+
 /// `PYAWA_<name>=1` => on.
 pub(crate) fn flag(name: &str) -> bool {
     std::env::var_os(name).is_some()

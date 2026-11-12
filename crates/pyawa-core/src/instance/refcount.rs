@@ -326,6 +326,17 @@ impl Instance {
     }
 
     pub unsafe fn release_object(&self, ptr: *mut Header) {
+        // **快路**（round 251 性能，A2-6）：没有释放诊断开着时（常见），只做两步：
+        // ① 永生对象直接返回（计数不增减）；② `decref` 非 0 直接返回。
+        // 先前每次释放都要过 5+ 处 `OnceLock` 原子读＋若干分支 ✗（perf：release_object 10–15%）。
+        if self.diag_bits.get() == 0 && self.watch.get() == 0 {
+            // SAFETY: 调用方保证 ptr 有效。
+            if unsafe { &*ptr }.decref() != 0 {
+                return;
+            }
+            self.release_zero(ptr);
+            return;
+        }
         // SAFETY: 由调用方保证 ptr 有效。
         // SAFETY: 调用方保证 ptr 有效；**先查活表** ✓（第 273 轮诊断）。
         if self.watch.get() == ptr as usize {
@@ -427,15 +438,17 @@ impl Instance {
             return;
         }
 
-        // **注册过的类型对象不在这里释放** ✓（第 284 轮）：类型对象**不记活表** ✓、由 `self.types`
-        // 注册表持有、**销毁实例时统一释放** ✓（见 `Instance` 的销毁段 ✓）。先前没有这一道 ⇒
-        // 一旦某处把**最后一份计数**放掉 ✗（实测：`abc.py` 的类体帧槽就持有 `ABC` 那个类对象 ✓）
-        // ⇒ 通用释放路径**当场把注册表里的类型对象释放掉** ✗ ⇒ 之后谁再碰它谁段错误 ✓
-        // （`PYAWA_DANGLING=1` 下 `import_posixpath` 的 SIGSEGV 就是这个 ✓）。
-        // **如实说** ✗：这一道**挡住的是症状** ✓ —— 真正要查的是"**谁多放了一份**" ✓（欠计数 ✓），
-        // 已记进 `P3-19` 与第 284 轮台账 ✓。
-        // **round 246 性能**：判定改成升序地址表的二分（先前是**每次释放线性扫**一遍类型表 ✗）。
-        if self.is_registered_type_address(ptr as usize) {
+        self.release_zero(ptr);
+    }
+
+    /// **计数归零之后的统一处理**（round 251 从 `release_object` **原样抽出** ✓）：
+    /// 注册类型守卫（不在这里释放）→ GC 冻结窗口 → 入待处理栈 → 重放（`release_one`）。
+    #[inline(never)]
+    fn release_zero(&self, ptr: *mut Header) {
+        // **类型对象不在这里释放**（第 284 轮的守卫）：类型对象由注册表持有、绝不走通用释放 ✗。
+        // round 251 性能（A2-6）：判据从"升序地址表**二分**"改成**对象头位测**（建类型时置
+        // `TYPE_OBJECT` 位 ✓）——先前每次释放都要二分，perf 里 `release_zero` 曾占 ~10% ✗。
+        if unsafe { &*ptr }.has_flag(crate::flags::TYPE_OBJECT) {
             // **诊断（round 98，`PYAWA_TYPE_REL_TRACE=1`）**：把"注册类型被放到 0"的**首次**现场打出来
             // （这是欠计数/多放的源头；guard 只挡住症状 ✓）。
             if crate::diag::flag_site!("PYAWA_TYPE_REL_TRACE") {
@@ -460,15 +473,16 @@ impl Instance {
         }
 
         // SAFETY: ptr 非空（调用方保证）。
-        self.pending
-            .borrow_mut()
-            .push(unsafe { NonNull::new_unchecked(ptr) });
+        let object = unsafe { NonNull::new_unchecked(ptr) };
 
         if self.draining.get() {
             // 已经在清空栈里：交给最外层那次调用处理。
+            self.pending.borrow_mut().push(object);
             return;
         }
+        // **非重入的常见路径**（round 251 性能，A2-6）：直接释放本对象，不先 push 再 pop ✗。
         self.draining.set(true);
+        self.release_one(object);
         loop {
             let next = self.pending.borrow_mut().pop();
             let Some(object) = next else { break };

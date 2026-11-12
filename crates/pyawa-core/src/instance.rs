@@ -149,10 +149,6 @@ pub struct Instance {
     hot_types_generation: Cell<usize>,
     /// **类型 id 计数器**（round 249 性能，A2-4）：`alloc_type_raw` 每次 +1 ⇒ `is_subtype` 用 id 位图 ✓。
     next_type_id: Cell<u32>,
-    /// **注册表里全部类型对象的地址（升序）**（round 246 性能）：`release_object` 每次真正释放都要
-    /// 判"这个地址是不是类型对象"——先前是**线性扫 `types`**（类型一多就是每次释放几百次比较 ✗）；
-    /// 这里维护一份升序表，判定改成 O(log n) ✓（登记/退休时同步增删 ✓）。
-    type_addresses: RefCell<Vec<usize>>,
     /// **被迭代源类型 → 布局种类缓存**（round 146 性能，`iter.rs::source_kind` 用）：避免每个元素都做
     /// 7 次 `type_is_subtype_of`（`type_named` ＋ MRO 线性扫 ✗）。类型布局与实例无关 ⇒ 只存 `u8` 小码 ✓。
     iterable_source_kinds: RefCell<crate::fast_hash::FastMap<usize, u8>>,
@@ -356,6 +352,12 @@ pub struct Instance {
     /// 复用时要**重新登记**（活表／GC 链／字节计数／`GC_TRACKED` ✓，见 `Instance::reuse_tuple`）。
     /// `PYAWA_QUARANTINE`／`PYAWA_NO_GC` 的实测模式**不进池** ✓（保持诊断语义 ✓）。
     tuple_pool: RefCell<Vec<NonNull<Header>>>,
+    /// **`int` 复用池**（round 251 性能，A2-6；CPython PyLong freelist 同款）：`n += 1` 这类
+    /// 每轮都造/丢一个 `IntObject` 的循环不再每次 `malloc`／`free`（perf：`cfree` ~3–4% ✗）。
+    /// 只放**已 clear 过、内存还在**的 `IntObject`（载荷已重置成小值 ⇒ 不钉住大整数堆 ✓）。
+    int_pool: RefCell<Vec<NonNull<Header>>>,
+    /// **释放路径诊断位快照**（round 251 性能，A2-6）：见 `diag::release_diag_bits`。
+    diag_bits: Cell<u32>,
     /// **`OM-11` 的 `repr` 递归守卫**（`CX-3`：按实例存）：正在生成 `repr` 的对象地址。
     repr_guard: RefCell<Vec<usize>>,
     /// **`CP-22`：实例 cwd**（`SPEC-capabilities.md`；`os.chdir` 的落点）。
