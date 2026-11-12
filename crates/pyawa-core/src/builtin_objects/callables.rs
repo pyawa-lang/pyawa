@@ -502,7 +502,7 @@ fn wrapper_delegate(
     // `attribute_optional_of` 交的是**新引用**（与 `Attribute::Owned` 同款 ✓）；
     // 取不到（被包对象没有这个名字）⇒ `None` ⇒ 外层照旧报 `AttributeError` ✓
     //（参照此时报的是**被包对象**那句 `'int' object has no attribute …` —— 如实记偏差 ✓）。
-    instance.attribute_optional_of(inner, name).ok().flatten()
+    instance.attribute_optional_discarding(inner, name)
 }
 
 /// **`classmethod`／`staticmethod` 的属性面**（第 346 轮：`__func__` 与 `__wrapped__` ✓；

@@ -263,7 +263,7 @@ pub fn getset_descriptor_get(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let kind = bound
-        .and_then(|this| instance.attribute_optional_of(this, "_kind").ok().flatten())
+        .and_then(|this| instance.attribute_optional_discarding(this, "_kind"))
         .and_then(|value| instance.text_of(value))
         .unwrap_or("annotations")
         .to_owned();

@@ -65,6 +65,8 @@ impl Instance {
             tuple_pool: RefCell::new(Vec::new()),
             int_pool: RefCell::new(Vec::new()),
             diag_bits: Cell::new(crate::diag::release_diag_bits()),
+            releasing: Cell::new(0),
+            gc_deferred: Cell::new(false),
             type_dunders: RefCell::new(crate::fast_hash::FastMap::default()),
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),

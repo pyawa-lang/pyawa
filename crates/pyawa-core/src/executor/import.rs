@@ -285,7 +285,14 @@ fn frozen_importer_class(instance: &Instance) -> Option<NonNull<Header>> {
     let modules = instance.modules()?;
     let machinery = match instance.dict_get(modules, "importlib.machinery") {
         Some(found) => found,
-        None => import_through_bridge(instance, "importlib.machinery").ok().flatten()?,
+        None => match import_through_bridge(instance, "importlib.machinery") {
+            Ok(found) => found?,
+            Err(error) => {
+                // **探测失败要还异常**（round 256 真泄漏修 ✗）。
+                crate::executor::runtime::discard_error(instance, &error);
+                return None;
+            }
+        },
     };
     let namespace = crate::mounted_instance_dict(instance, machinery)?;
     instance

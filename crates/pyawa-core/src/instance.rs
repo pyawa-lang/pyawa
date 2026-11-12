@@ -358,6 +358,14 @@ pub struct Instance {
     int_pool: RefCell<Vec<NonNull<Header>>>,
     /// **释放路径诊断位快照**（round 251 性能，A2-6）：见 `diag::release_diag_bits`。
     diag_bits: Cell<u32>,
+    /// **正在 `release_one` 里的深度**（round 256 内存安全修）：终结器／弱引用回调在
+    /// `release_one` 中途可能重入调用 `gc.collect()` ✗ —— 此时目标对象计数已是 0、但仍挂在
+    /// GC 链上 ⇒ 回收器会把它再清一遍 ⇒ 双重释放 ✗（实测 `test_weakref.ReferencesTestCase
+    /// .test_callback_gcs` 段错误）。深度 > 0 时 `collect` **推迟**（`gc_deferred`），等整条
+    /// 释放链排空后由 `release_zero` 补跑 ✓。
+    releasing: Cell<u32>,
+    /// 释放链里被推迟的回收请求（见 `releasing`）。
+    gc_deferred: Cell<bool>,
     /// **`OM-11` 的 `repr` 递归守卫**（`CX-3`：按实例存）：正在生成 `repr` 的对象地址。
     repr_guard: RefCell<Vec<usize>>,
     /// **`CP-22`：实例 cwd**（`SPEC-capabilities.md`；`os.chdir` 的落点）。

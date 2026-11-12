@@ -502,7 +502,15 @@ pub(crate) fn module_getattr_missing(
     // `call_value` 自己给实参新增引用 ✓ ⇒ 我们这份用完即还 ✓。
     let outcome = crate::executor::call::call_value(instance, hook, &[name_object], &[]);
     instance.release(name_object);
-    outcome.ok()
+    match outcome {
+        Ok(value) => Some(value),
+        Err(error) => {
+            // **回退调用失败要还异常**（round 256 真泄漏修 ✗）：调用方拿 `None` 后照常报
+            // `AttributeError`，这份 `Err(Raised)` 不还就每探一次漏一颗 ✓。
+            crate::executor::runtime::discard_error(instance, &error);
+            None
+        }
+    }
 }
 
 /// **经 `fs` 域把一个文件读成文本**（`IM-15`：I/O 一律走能力域 ✓，本层不碰平台 ✓ `CX-4`）。

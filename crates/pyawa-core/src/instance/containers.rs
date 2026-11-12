@@ -365,9 +365,18 @@ impl Instance {
     pub fn dict_remove_key(&self, mapping: NonNull<Header>, key: NonNull<Header>) -> bool {
         // SAFETY: mapping 由调用方保证是本实例的 dict（`dict_entries` 口径 ✓）。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        let position = dict.find_live_position(|candidate| {
-            crate::executor::values::values_equal_public(self, candidate, key)
-        });
+        // **按哈希索引删**（round 256 性能真 bug 修 ✗）：先前这里走 `find_live_position`
+        // （**线性扫**）✗ —— `_weakref._remove_dead_weakref` 对**每一个死引用**调一次 ⇒
+        // `WeakValueDictionary` 批量失效是 O(n²)（实测 70k 条目的 copy 测试 **154 s** ✗）。
+        // 有哈希就查索引（与 `dict_lookup_key` 同口径 ✓），取不到哈希（不可哈希的怪键）才回退线性 ✓。
+        let position = match crate::executor::values::key_hash(self, key) {
+            Some(hash) => self.dict_lookup_hashed(mapping, hash, |candidate| {
+                crate::executor::values::values_equal_public(self, candidate, key)
+            }),
+            None => dict.find_live_position(|candidate| {
+                crate::executor::values::values_equal_public(self, candidate, key)
+            }),
+        };
         let Some(position) = position else {
             return false;
         };

@@ -449,6 +449,13 @@ impl Instance {
             // 终结器／clear 里又触发了一次回收：本次让路，交给外层那次。
             return 0;
         }
+        if self.releasing.get() > 0 {
+            // **释放链中途的回收要推迟**（round 256 内存安全修）：正在 `release_one` 的对象
+            // 计数已是 0、但仍挂在 GC 链上 ⇒ 直接收会双重释放 ✗（实测 `test_weakref.
+            // test_callback_gcs` 段错误）。记下请求，`release_zero` 排空待处理栈后补跑 ✓。
+            self.gc_deferred.set(true);
+            return 0;
+        }
         self.gc_running.set(true);
         self.gc_collections.set(self.gc_collections.get() + 1);
         let started = std::time::Instant::now();

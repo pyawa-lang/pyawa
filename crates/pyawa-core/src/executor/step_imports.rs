@@ -199,9 +199,7 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                 // `test_pdb.load_tests` 第一句 ✓）报 `cannot import name 'test_pdb'
                                 // from 'test'` ✗。判据：模块有 `__path__`（包 ✓）。
                                 let is_package = instance
-                                    .attribute_optional_of(module, "__path__")
-                                    .ok()
-                                    .flatten()
+                                    .attribute_optional_discarding(module, "__path__")
                                     .is_some();
                                 if is_package {
                                     if let Some(modules) = instance.modules() {
@@ -209,16 +207,24 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                             module_text(instance, module, "__name__")
                                         {
                                             let full = format!("{module_name}.{name}");
-                                            if let Ok(loaded) = crate::executor::import::load_module(
+                                            match crate::executor::import::load_module(
                                                 instance,
                                                 modules,
                                                 &full,
                                                 opcode_number,
                                             ) {
-                                                // `loaded` 是模块表持着的**借用** ⇒ `push` 会留一份 ✓。
-                                                frame.get().push(module)?;
-                                                push(instance, frame.get(), loaded)?;
-                                                return Ok(Step::Continue);
+                                                Ok(loaded) => {
+                                                    // `loaded` 是模块表持着的**借用** ⇒ `push` 会留一份 ✓。
+                                                    frame.get().push(module)?;
+                                                    push(instance, frame.get(), loaded)?;
+                                                    return Ok(Step::Continue);
+                                                }
+                                                Err(error) => {
+                                                    // **失败异常要还**（round 256 真泄漏修 ✗）：
+                                                    // 这里只是"试试子模块"的探测路 ⇒ 丢弃它，落到
+                                                    // 下面的 ImportError ✓（先前 `if let Ok` 直接丢 ✗）。
+                                                    crate::executor::runtime::discard_error(instance, &error);
+                                                }
                                             }
                                         }
                                     }

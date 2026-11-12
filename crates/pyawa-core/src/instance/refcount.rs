@@ -501,6 +501,11 @@ impl Instance {
             self.release_one(object);
         }
         self.draining.set(false);
+        // **补跑被推迟的回收**（round 256）：释放链里的终结器／弱引用回调请求过 `gc.collect()`，
+        // 现在对象已经不在"释放中"状态 ⇒ 安全执行 ✓。
+        if self.gc_deferred.replace(false) {
+            self.collect();
+        }
     }
 
 }

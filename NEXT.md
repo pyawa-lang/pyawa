@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`2bb960cc`（本笔前；round 255（工单第 3 项）形参所有权 9 形态探针全 0 delta ⇒ 13 处老账无复现、关闭；下轮第 4 项 test_weakref GC 保活）
+- **HEAD**：`9bea846a`（本笔前；round 256（工单第 4 项）test_weakref **169 s ⇒ 17.3 s**（O(n²) 弱引用删除＋释放链重入 GC 双放修）；下轮第 5 项 C1 日常面四连）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
@@ -21,7 +21,7 @@
 - **未修 bug ＋ 判据**（如实 ✓）：
   - **编译器**：推导式内嵌生成器表达式引用推导变量 **round 162 已接线**（隐藏形参法 ✓；判据见台账 round 162 §2）
   - **iter_value 丢异常**（round 171 撤回）：`f(*Plain())` ×2 万仍漏 AttributeError/TypeError 各 2 万；三种修法都会让 test_dict.test_constructor 间歇失败 ⇒ 下一轮先定位 pending 槽副作用链
-  - `test_weakref` **169 s** ✗（唯一超时；已修：dict 删除 O(1)、SkipTest 不挂回溯、分代 GC；剩因＝被吞 AttributeError 泄漏 +1（已修 __getattr__ 回退一族：writeln 40k⇒0、四连 skip 3957⇒216）；**还剩 216 颗**（TestLoader.loadTestsFromName@71/_compile@178/_isnotsuite@8/EnumType.__new__@294 等）⇒ 下一轮同法逐个钉）
+  - `test_weakref`：round 256 已收口 **17.3 s（<120 s ✓）**——真根因是 `_remove_dead_weakref`→`dict_remove_key` 线性扫（70k 批量死引用 O(n²)），已改哈希索引；另修「释放链里 gc.collect 重入」双放（`test_callback_gcs`）。剩余 26F/9E 是功能缺口
   - 形参所有权老账：round 255 探针 9 形态全 0 delta ⇒ 无最小复现、关闭 ✓；残留 `iter_value` 丢异常（有复现，三种修法已撤回 ⇒ 按 3 轮规则停手）· traceback 帧保活 ⇒ 工单第 4 项
   - 日常面：`json.load(f)` ✗（`StopIteration`）· `defaultdict` ✗ · `match` 同行 suite ✗ · `urllib.request` ✗
   - `P3-42` KeyError 族／特殊方法派发；`P3-35` 剩余 5 形态；`P3-29`／`P3-37` 剩余面

@@ -5,6 +5,24 @@
 use crate::HotId;
 use super::*;
 
+/// `release_one` 的"正在释放"深度守卫（round 256）：Drop 时把深度减回去（嵌套释放也正确 ✓）。
+struct ReleasingGuard<'a> {
+    instance: &'a Instance,
+}
+
+impl<'a> ReleasingGuard<'a> {
+    fn new(instance: &'a Instance) -> Self {
+        instance.releasing.set(instance.releasing.get() + 1);
+        Self { instance }
+    }
+}
+
+impl Drop for ReleasingGuard<'_> {
+    fn drop(&mut self) {
+        self.instance.releasing.set(self.instance.releasing.get() - 1);
+    }
+}
+
 impl Instance {
     /// **新增一份引用**并交回同一对象（给"按原样返回实参"的原生函数用，`OM-16`）。
     pub fn retain(&self, object: NonNull<Header>) -> NonNull<Header> {
@@ -210,6 +228,9 @@ impl Instance {
 
     /// **OM-20**：单个对象的释放三步（正常引用计数路径）。
     pub(crate) fn release_one(&self, ptr: NonNull<Header>) {
+        // **释放中标记**（round 256 内存安全修）：终结器／弱引用回调里重入的 `gc.collect()`
+        // 必须等这条释放链排空（见 `Instance::releasing` 的注释）。
+        let _releasing_guard = ReleasingGuard::new(self);
         let ty = unsafe { ptr.as_ref() }.ty();
         self.unregister_user_instance(ty, ptr);
         // **终结延迟判定的重放**（round 82）：`release_one` 正常情况下只在计数 0 时被调用；
@@ -551,10 +572,11 @@ impl Instance {
                 let pointer = candidates[*position].as_ptr() as usize;
                 if reverse_all {
                     eprintln!(
-                        "[gc-reverse] {name} rc={} ext={} parents={chain:?} holders={:?}",
+                        "[gc-reverse] {name} rc={} ext={} parents={chain:?} holders={:?} site={:?}",
                         header.refcount(),
                         external[*position],
                         self.debug_holder_of(pointer),
+                        self.exception_site_of(candidates[*position]),
                     );
                 } else {
                     eprintln!(

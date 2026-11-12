@@ -358,6 +358,26 @@ impl Instance {
     ) -> Result<Option<NonNull<Header>>, ExecError> {
         crate::executor::attribute::attribute_optional(self, object, name)
     }
+
+    /// **可选属性探针（探测失败即当"没有"）**：探针抛出的异常**当场丢弃并归还引用** ✓。
+    ///
+    /// 动因（round 256 真泄漏修 ✗；round 77／170 同族）：先前大量站点写
+    /// `attribute_optional_of(...).ok().flatten()` ✗ —— `Err(Raised)` 那份异常引用被丢掉
+    /// ⇒ 每探一次漏一颗（其回溯链再钉住整帧；`test_weakref` 的 live 增长/超时由此累积）。
+    /// **一处真相**：需要"可选"语义都走这里，不再手写 `.ok()` ✓。
+    pub fn attribute_optional_discarding(
+        &self,
+        object: NonNull<Header>,
+        name: &str,
+    ) -> Option<NonNull<Header>> {
+        match self.attribute_optional_of(object, name) {
+            Ok(found) => found,
+            Err(error) => {
+                crate::executor::runtime::discard_error(self, &error);
+                None
+            }
+        }
+    }
 }
 
 /// **`cp437` 表**（第 726 轮 ✓）：由参照本机 `bytes(range(256)).decode('cp437')` 生成 ✓

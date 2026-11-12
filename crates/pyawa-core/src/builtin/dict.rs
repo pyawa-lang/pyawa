@@ -1051,8 +1051,15 @@ fn mapping_keys(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Result<Option<Vec<NonNull<Header>>>, crate::ExecError> {
-    let Ok(found) = crate::executor::attribute_lookup(instance, object, "keys") else {
-        return Ok(None);
+    // **探测失败要还异常**（round 256 真泄漏修 ✗；round 77 同族）：`attribute_lookup` 失败时
+    // `Err(Raised)` 持有一份异常引用（`pending_exception` 槽另有一份）—— 这里先前 `let Ok(...) else`
+    // 直接丢掉 ✗ ⇒ 每次探测失败漏一颗 `AttributeError`（其回溯链再钉住整帧）。统一 `discard_error` ✓。
+    let found = match crate::executor::attribute_lookup(instance, object, "keys") {
+        Ok(found) => found,
+        Err(error) => {
+            crate::executor::runtime::discard_error(instance, &error);
+            return Ok(None);
+        }
     };
     let view = match found {
         crate::executor::Attribute::Method { function, this } => {

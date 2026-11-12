@@ -557,9 +557,14 @@ pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
     let Some(warnings) = instance.dict_get(modules, "warnings") else {
         return;
     };
-    let Ok(Some(warn)) = crate::executor::attribute::attribute_optional(instance, warnings, "warn")
-    else {
-        return;
+    let warn = match crate::executor::attribute::attribute_optional(instance, warnings, "warn") {
+        Ok(Some(warn)) => warn,
+        Ok(None) => return,
+        Err(error) => {
+            // **探针失败要还异常**（round 256 真泄漏修 ✗）。
+            discard_error(instance, &error);
+            return;
+        }
     };
     let text = instance.new_str(message);
     let category = instance.type_value(
@@ -627,7 +632,7 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
     // 本层会再走一次 `raise()` ⇒ 先前给**同一个帧**又接一节 tb ✗（`__init__` 会出现两节 ✓ 参照只一节 ✗）。
     // 若已有回溯的第一节就是当前帧 ⇒ 不新建、直接沿用（更深的链原样保留 ✓）。
     if let Some(previous) = previous {
-        if let Ok(Some(previous_frame)) = instance.attribute_optional_of(previous, "tb_frame") {
+        if let Some(previous_frame) = instance.attribute_optional_discarding(previous, "tb_frame") {
             if previous_frame == frame {
                 // **探针交出的 `previous_frame` 也要还**（round 197 真泄漏修 ✗）：它来自
                 // `attribute_optional_of`（**新引用**）；先前这个早退分支只还了 `previous`（回溯对象），

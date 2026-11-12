@@ -156,9 +156,17 @@ impl Instance {
         // `tcache_thread_shutdown(): unaligned tcache chunk detected` ✓）／**内部指针** ✗。
         // 注意：地址会被复用 ✓ ⇒ 所以判据是"**摘除时**在不在表里" ✓（不在 ⇒ 一定放多了 ✓），不会假阳性 ✓。
         if !self.live.borrow_mut().remove(&(header.as_ptr() as usize)) {
+            // **诊断增强（round 256）**：把"最早那次释放的类型＋现场"一起打出来 ✓
+            //（`PYAWA_ZOMBIE_TRACE=1` 时 `freed_sites` 才记账；`PYAWA_REF_TRACE` 也记）。
+            let first = self
+                .freed_sites
+                .borrow()
+                .get(&(header.as_ptr() as usize))
+                .cloned();
             eprintln!(
-                "[野释放] {:#x} 不在活表里 ✗ —— 重复释放／内部指针／从未分配（见 PLAN 第 183 轮 ✓）",
-                header.as_ptr() as usize
+                "[野释放] {:#x} 不在活表里 ✗ —— 重复释放／内部指针／从未分配（见 PLAN 第 183 轮 ✓）\n  最早释放={first:?}\n  当前现场={}",
+                header.as_ptr() as usize,
+                self.current_site()
             );
             std::process::abort();
         }

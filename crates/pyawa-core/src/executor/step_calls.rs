@@ -142,9 +142,8 @@ fn callee_display(instance: &Instance, callable: NonNull<Header>) -> Option<Stri
     };
     if let Some(underlying) = underlying {
         let attribute = |name: &str| -> Option<String> {
-            attribute_optional(instance, underlying, name)
-                .ok()
-                .flatten()
+            instance
+                .attribute_optional_discarding(underlying, name)
                 .and_then(|value| {
                     let text = instance.text_of(value).map(|text| text.to_owned());
                     // SAFETY: 刚取到的新引用。
@@ -537,9 +536,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                                     crate::executor::module_text(instance, module, "__name__")
                                 {
                                     let is_package = instance
-                                        .attribute_optional_of(module, "__path__")
-                                        .ok()
-                                        .flatten()
+                                        .attribute_optional_discarding(module, "__path__")
                                         .is_some();
                                     if is_package {
                                         if let Some(modules) = instance.modules() {

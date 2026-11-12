@@ -209,11 +209,10 @@ fn reject_abstract_instantiation(
     class: NonNull<crate::TypeObject>,
     class_name: &str,
 ) -> Result<(), ExecError> {
-    let Some(value) = instance
-        .attribute_optional_of(class.cast::<Header>(), "__abstractmethods__")
-        .ok()
-        .flatten()
-    else {
+    let Some(value) = instance.attribute_optional_discarding(
+        class.cast::<Header>(),
+        "__abstractmethods__",
+    ) else {
         return Ok(());
     };
     let items = match instance.iterable_items(value) {
