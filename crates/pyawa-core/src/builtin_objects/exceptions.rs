@@ -343,6 +343,46 @@ pub unsafe fn exception_getattr(
                 None => instance.new_none(),
             })
         }
+        // **`BaseExceptionGroup` 的属性面**（C2 冷门语义，PEP 654 的前置）：参照里
+        // `eg.message`＝`args[0]`、`eg.exceptions`＝**元组**（构造时传 list 也转成 tuple ✓）。
+        // 先前两者都没有 ⇒ `except*` 之外连普通属性读都 AttributeError ✗。
+        "message" | "exceptions" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            let ty = unsafe { (*ptr).ty() };
+            let is_group = instance
+                .type_named("BaseExceptionGroup")
+                .is_some_and(|group| instance.is_subtype(ty, group));
+            if !is_group {
+                return None;
+            }
+            let arguments = object.args();
+            if name == "message" {
+                return Some(match arguments.first().copied() {
+                    Some(value) => {
+                        // SAFETY: 值由本对象持有，这里新增一份交给调用方 ✓。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        value
+                    }
+                    None => instance.new_none(),
+                });
+            }
+            let Some(second) = arguments.get(1).copied() else {
+                return Some(instance.new_tuple(Vec::new()));
+            };
+            let items = instance
+                .tuple_items(second)
+                .or_else(|| instance.list_items(second))
+                .unwrap_or_default();
+            let copied: Vec<NonNull<Header>> = items
+                .into_iter()
+                .map(|item| {
+                    // SAFETY: 子异常由 `args[1]` 持有，这里新增一份给新元组 ✓。
+                    unsafe { instance.incref_object(item.as_ptr()) };
+                    item
+                })
+                .collect();
+            Some(instance.new_tuple(copied))
+        }
         "__cause__" => Some(match object.cause() {
             Some(value) => {
                 // SAFETY: 由本对象持有。

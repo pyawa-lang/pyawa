@@ -193,6 +193,75 @@ fn sleep_native(
     }
 }
 
+
+/// **`time.get_clock_info(clock)`**（C2 冷门语义）：返回 `types.SimpleNamespace`
+/// （`implementation`／`monotonic`／`adjustable`／`resolution` ✓）。
+///
+/// 动因：`Lib/asyncio/base_events.py` 导入期就调 `time.get_clock_info('monotonic')` ✗
+/// ⇒ 先前 `asyncio.run(...)`（异步推导式的唯一跑法）当场 `AttributeError` ✗。
+/// 值照参照 3.14.4 的 Linux 口径（**过程内时钟都单调、不可调**；分辨率按 `clock_getres` 量级给 1 ns）✓。
+fn get_clock_info_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "get_clock_info() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "get_clock_info() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let Some(clock) = instance.text_of(args[0]) else {
+        let name = instance.type_name(instance.type_of(args[0]));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("get_clock_info() argument must be str, not {name}"),
+        ));
+    };
+    let (implementation, monotonic, adjustable) = match clock {
+        "time" => ("clock_gettime(CLOCK_REALTIME)", false, true),
+        "monotonic" | "perf_counter" => ("clock_gettime(CLOCK_MONOTONIC)", true, false),
+        "process_time" => ("clock_gettime(CLOCK_PROCESS_CPUTIME_ID)", true, false),
+        "thread_time" => ("clock_gettime(CLOCK_THREAD_CPUTIME_ID)", true, false),
+        other => {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!("unknown clock: {other}"),
+            ))
+        }
+    };
+    let implementation_value = instance.new_str(implementation);
+    let monotonic_value = instance.new_bool(monotonic);
+    let adjustable_value = instance.new_bool(adjustable);
+    let resolution_value = instance.new_float(1e-09);
+    let namespace = pyawa_core::make_simple_namespace(
+        instance,
+        &[
+            ("implementation", implementation_value),
+            ("monotonic", monotonic_value),
+            ("adjustable", adjustable_value),
+            ("resolution", resolution_value),
+        ],
+    );
+    instance.release(implementation_value);
+    instance.release(monotonic_value);
+    instance.release(adjustable_value);
+    instance.release(resolution_value);
+    namespace.ok_or_else(|| {
+        instance.raise_builtin_error("RuntimeError", "get_clock_info：SimpleNamespace 建不出来")
+    })
+}
+
 /// 建 `time` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -211,6 +280,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("asctime", asctime_native as NativeFn),
         ("ctime", ctime_native as NativeFn),
         ("mktime", mktime_native as NativeFn),
+        ("get_clock_info", get_clock_info_native as NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

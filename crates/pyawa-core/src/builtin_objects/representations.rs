@@ -383,6 +383,30 @@ pub unsafe fn exception_str(ptr: *mut Header, instance: &Instance) -> Result<Str
     // **`OSError` 一族的 `str`**（round 108）：参照格式
     // `[Errno {errno}] {strerror}[: {filename!r}[: {filename2!r}]]` ✓ —— 先前多实参按元组 repr 打 ✗
     // ⇒ `str(FileNotFoundError(...))` 与参照不符（`test_unicode_file_functions` 的 `%a` 格式化 ✓）。
+    // **异常组的 `str`**（C2 冷门语义，PEP 654 形状）：参照口径
+    // `str(ExceptionGroup('m', [ValueError('v')]))` ⇒ `'m (1 sub-exception)'`（复数 `sub-exceptions` ✓）。
+    // 先前落到"多实参 ⇒ 元组 repr"⇒ `"('m', [ValueError('v')])"` ✗。
+    let is_exception_group = instance
+        .type_named("BaseExceptionGroup")
+        .is_some_and(|group| instance.is_subtype(header.ty(), group));
+    if is_exception_group {
+        let message = match args.first().copied() {
+            Some(value) => instance.object_str(value)?,
+            None => String::new(),
+        };
+        let count = args
+            .get(1)
+            .copied()
+            .and_then(|exceptions| {
+                instance
+                    .list_items(exceptions)
+                    .or_else(|| instance.tuple_items(exceptions))
+            })
+            .map(|items| items.len())
+            .unwrap_or(0);
+        let plural = if count == 1 { "" } else { "s" };
+        return Ok(format!("{message} ({count} sub-exception{plural})"));
+    }
     let is_os_error = match instance.hot_type(HotId::OSError) {
         // SAFETY: 类型对象由注册表持有。
         Some(os_error) => instance.is_subtype(header.ty(), os_error),

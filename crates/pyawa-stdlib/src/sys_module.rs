@@ -392,6 +392,59 @@ fn clear_type_descriptors_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// **`sys.get_asyncgen_hooks()`**（C2 冷门语义）：本层没有异步生成器终结钩子 ⇒ 恒 `(None, None)` ✓
+/// `Lib/asyncio/base_events.py` 在 `_run_forever_setup` 里取旧钩子、结束再 `set_asyncgen_hooks(*old)`
+/// ⇒ 只要形状是**二元可解包**就行 ✓（参照给的是 `AsyncGenHooks` 具名元组）。
+fn get_asyncgen_hooks_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let none = instance.new_none();
+    let second = instance.new_none();
+    Ok(instance.new_tuple(vec![none, second]))
+}
+
+/// **`sys.set_asyncgen_hooks(firstiter=None, finalizer=None)`**：只收形状、**不接线** ✓
+/// （本层没有异步生成器终结阶段 ⇒ 钩子无处触发；照 `CM-6` 如实登记为"形状面"✓）。
+fn set_asyncgen_hooks_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("set_asyncgen_hooks() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    for (key, _) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            return Err(instance.raise_builtin_error("TypeError", "keywords must be strings"));
+        };
+        if !matches!(name, "firstiter" | "finalizer") {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("set_asyncgen_hooks() got an unexpected keyword argument '{name}'"),
+            ));
+        }
+    }
+    Ok(instance.new_none())
+}
+
+/// **`sys.is_finalizing()`**（C2 冷门语义）：解释器销毁期尚未接线 ⇒ 一律 `False` ✓
+/// （`Lib/asyncio/base_events.py` 导入期就问它 ⇒ 缺了 `asyncio.run()` 直接 AttributeError ✗）。
+fn is_finalizing_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    Ok(instance.new_bool(false))
+}
+
 /// **`sys.getrecursionlimit()`** ✓（task-20 第 3 轮 ✓）：给当前**有效**上限 ✓（默认 64 ✓）。
 fn getrecursionlimit_native(
     instance: &Instance,
@@ -1464,6 +1517,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "setrecursionlimit", set_recursionlimit);
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
+    // `sys.is_finalizing()`（C2：`asyncio` 导入期需要）
+    let is_finalizing = make_native(instance, "is_finalizing", is_finalizing_native);
+    instance.dict_set(namespace, "is_finalizing", is_finalizing);
+    // **异步生成器钩子两口**（C2：`asyncio` base_events 的 `_run_forever_setup` 需要）
+    let get_hooks = make_native(instance, "get_asyncgen_hooks", get_asyncgen_hooks_native);
+    instance.dict_set(namespace, "get_asyncgen_hooks", get_hooks);
+    let set_hooks = make_native(instance, "set_asyncgen_hooks", set_asyncgen_hooks_native);
+    instance.dict_set(namespace, "set_asyncgen_hooks", set_hooks);
 
     // **`sys.audit(event, *args)`** ✓（`P3-29` 侦察 B2）：无 hook 注册通道 ⇒ 真语义 no-op（如实：
     // 审计机制未实现，见函数注释）；`http.client` 建连前会调它（`Lib/http/client.py:1031`）。
