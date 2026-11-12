@@ -96,6 +96,7 @@ pub mod opcode_metadata;
 mod refcount;
 mod singleton;
 mod type_object;
+mod unicode_names;
 mod value;
 
 pub use builtin_objects::{

@@ -144,7 +144,11 @@ pub(super) struct Lexed {
 pub(super) fn lex_string_escape(
     characters: &[char],
     position: usize,
+    literal_start: usize,
+    literal_end: usize,
 ) -> Result<(Vec<u8>, usize), CompileError> {
+    // `\N{…}` 的错误位置按参照是**相对字面量内容起点**的下标 ✓（`position` 是源码绝对下标）。
+    let relative = position.saturating_sub(literal_start);
     let Some(next) = characters.get(position + 1).copied() else {
         return Err(CompileError::Syntax("反斜杠后面没有字符".to_owned()));
     };
@@ -219,10 +223,57 @@ pub(super) fn lex_string_escape(
             push_escaped_code_point(&mut out, u32::from(value))?;
             1 + consumed
         }
+        // **`\N{…}` 具名转义**（C2 冷门语义）：查 `crate::unicode_names`（1.56 MB 生成数据，
+        // `tools/gen_unicode_names.py` 生成；大小写不敏感、含别名与 CJK 算法名字 ✓）。
+        // 错误消息照参照 CPython 3.14.4：位置是**反斜杠相对字面量内容起点**的下标区间 ✓
+        //（`"\N"` ⇒ 0-1、`"\N{}"` ⇒ 0-2、`"\N{BULLET"` ⇒ 0-8、`"\N{nope}"` ⇒ 0-7）。
         'N' => {
-            return Err(CompileError::Unsupported(
-                "`\\N{…}` 具名转义要整张 Unicode 名字表（与 M3 的 `Lib/`／数据面绑定）".to_owned(),
-            ))
+            let malformed = || CompileError::Syntax(format!(
+                "(unicode error) 'unicodeescape' codec can't decode bytes in position {relative}-{}: malformed \\N character escape",
+                relative + 1,
+            ));
+            // 下一个必须是 `{`；不是 ⇒ 只消费 `\N`（位置 0-1 ✓）。
+            if characters.get(position + 2) != Some(&'{') {
+                return Err(malformed());
+            }
+            // `\N{}` ⇒ 位置 0-2（消费到 `{` 为止 ✓）。
+            if characters.get(position + 3) == Some(&'}') {
+                return Err(CompileError::Syntax(format!(
+                    "(unicode error) 'unicodeescape' codec can't decode bytes in position {relative}-{}: malformed \\N character escape",
+                    relative + 2,
+                )));
+            }
+            let name_start = position + 3;
+            let mut cursor = name_start;
+            while let Some(&character) = characters.get(cursor) {
+                if character == '}' {
+                    break;
+                }
+                cursor += 1;
+            }
+            if characters.get(cursor) != Some(&'}') {
+                // 扫到字符流末尾都没遇到 `}` ⇒ 消费到末尾（如 `"\N{BULLET"` ⇒ 0-8 ✓）。
+                return Err(CompileError::Syntax(format!(
+                    "(unicode error) 'unicodeescape' codec can't decode bytes in position {relative}-{}: malformed \\N character escape",
+                    literal_end
+                        .saturating_sub(literal_start)
+                        .saturating_sub(1),
+                )));
+            }
+            let name: String = characters[name_start..cursor].iter().collect();
+            let consumed = cursor - position + 1;
+            match crate::unicode_names::lookup(&name) {
+                Some(character) => {
+                    push_escaped_code_point(&mut out, character as u32)?;
+                    consumed
+                }
+                None => {
+                    return Err(CompileError::Syntax(format!(
+                        "(unicode error) 'unicodeescape' codec can't decode bytes in position {relative}-{}: unknown Unicode character name",
+                        relative + consumed - 1,
+                    )))
+                }
+            }
         }
         other => {
             out.push(b'\\');
@@ -335,6 +386,9 @@ pub(super) fn lex_bytes_escape(characters: &[char], position: usize) -> Result<(
             }
             Ok((code as u8, 1 + digits.chars().count()))
         }
+        // **bytes 里的 `\N`**：参照 3.14.4 把它**原样留下**（`b"\\N{BULLET}"` ⇒ `b'\\\\N{BULLET}'`，
+        // 只给一条 `SyntaxWarning: "\N" is an invalid escape sequence`）；本层不出 warning，如实记 ✓。
+        Some('N') => Ok((b'\\', 1)),
         Some(other) => Err(CompileError::Unsupported(format!(
             "bytes 字面量里的转义 \\{other} 尚未接线"
         ))),
@@ -722,6 +776,28 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                 // P3-38 S2b：按 **WTF-8 字节**累积（`\ud800` 一类孤立代理也收 ✓）；扫描结束后
                 // 是合法 UTF-8 仍产出旧同形的 `Lexeme::Str(String)`（夹具零变化 ✓），否则 `StrWtf8`。
                 let mut text: Vec<u8> = Vec::new();
+                // 字面量**内容起点**（错误位置相对它算 ✓）。
+                let content_start = index;
+                // **内容终点**（收尾引号的位置；转义里的引号不算 ✓）——只给 `\N{…}` 的
+                // "扫到内容末尾还没遇到 `}`"错误用（位置要相对内容起点 ✓）。
+                let content_end = {
+                    let mut at = content_start;
+                    loop {
+                        match characters.get(at) {
+                            None => break at,
+                            Some(character)
+                                if *character == quote
+                                    && (!triple
+                                        || (characters.get(at + 1) == Some(&quote)
+                                            && characters.get(at + 2) == Some(&quote))) =>
+                            {
+                                break at;
+                            }
+                            Some('\\') => at += 2,
+                            Some(_) => at += 1,
+                        }
+                    }
+                };
                 loop {
                     match characters.get(index) {
                         Some(character)
@@ -735,7 +811,7 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
                         }
                         // **字符串转义**（解码逻辑在 `lex_string_escape`，一处真相；返回 WTF-8 字节 ✓）
                         Some('\\') => {
-                            let (decoded, consumed) = lex_string_escape(&characters, index)?;
+                            let (decoded, consumed) = lex_string_escape(&characters, index, content_start, content_end)?;
                             text.extend_from_slice(&decoded);
                             // 消费掉的换行（行继续／`\r\n`）⇒ 行号与行首索引要跟上
                             for offset in 0..consumed {
