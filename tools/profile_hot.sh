@@ -58,7 +58,7 @@ if [ "$MODE" != "callgrind" ] && command -v perf >/dev/null 2>&1 \
     echo "# hotprofile —— perf（$ITERS 次/档 ${TIER:+；$TIER}）$("$BIN" --version 2>/dev/null | head -1)"
     echo "# 读法：Overhead 最高的符号＝病态成本候选"
     perf report --stdio -i "$PERF_DATA" --no-children --sort dso,symbol --percent-limit 0.5 2>/dev/null \
-      | grep -vE '^#$' | head -"$TOP"
+      | grep -E '^ *[0-9]+\.[0-9]+%' | head -"$TOP"
   } > "$OUT"
   echo "  报告 → $OUT"; sed -n '1,18p' "$OUT" | cut -c1-120
   rm -f "$PROBE"; exit 0
