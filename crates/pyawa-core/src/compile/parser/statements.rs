@@ -2039,17 +2039,26 @@ fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fu
                 let (body, next) = parse_colon_suite(lexed, *cursor, depth, in_function)?;
                 *cursor = next;
                 let mut handlers = Vec::new();
+                // **`except*`（PEP 654）**：本轮接线（C2 收口②）——解析期**降糖**成普通
+                // `try/except BaseException` + `ExceptionGroup.split()` 链（见 `desugar_except_star`）✓。
+                // 同一 `try` 里**不许混用** `except`／`except*`（参照实测同文 ✓）。
+                let mut star_mode: Option<bool> = None;
                 while tokens.get(*cursor) == Some(&Lexeme::Name("except".to_owned())) {
                     let handler_span = lexed.spans[*cursor];
                     *cursor += 1;
-                    // **`except*`（PEP 654）如实报未接线**（task-42 ✓ 的诊断面）：它要
-                    // `CHECK_EG_MATCH` 指令＋`ExceptionGroup` 拆分语义（执行器还没接 ✓）。
-                    // 先前词法上把 `*` 留给**处理块类型表达式** ⇒ 报"表达式里出现 Some(Star)" ✗
-                    //（对读者是误导：这是**未实现**，不是语法错；官方 `test_except_star.py` 一族 6 个文件）。
-                    if tokens.get(*cursor) == Some(&Lexeme::Star) {
-                        return Err(CompileError::Unsupported(
-                            "`except*`（PEP 654 异常组匹配）尚未接线".to_owned(),
-                        ));
+                    let is_star = tokens.get(*cursor) == Some(&Lexeme::Star);
+                    if is_star {
+                        *cursor += 1;
+                    }
+                    match star_mode {
+                        None => star_mode = Some(is_star),
+                        Some(previous) if previous != is_star => {
+                            return Err(CompileError::Syntax(
+                                "cannot have both 'except' and 'except*' on the same 'try'"
+                                    .to_owned(),
+                            ));
+                        }
+                        _ => {}
                     }
                     let type_ = if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                         None
@@ -2076,6 +2085,21 @@ fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fu
                             Some(Expression::TupleLiteral(types, first_span.to(last_span)))
                         }
                     };
+                    // **裸 `except*:` 是语法错**（参照：`expected one or more exception types`）；
+                    // `except* as e:` 同样语法错（`invalid syntax`）。
+                    if is_star {
+                        if type_.is_none() {
+                            return Err(CompileError::Syntax(
+                                "expected one or more exception types".to_owned(),
+                            ));
+                        }
+                        if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as")
+                            && tokens.get(*cursor + 1) != Some(&Lexeme::Name("as".to_owned()))
+                        {
+                            // `except* E as e:` 合法；这里只在 `type_` 解析**没吃掉 `as`** 时走到，
+                            // 而 `except* as e:` 会让 `parse_expression` 先失败 ⇒ 兜底同文。
+                        }
+                    }
                     let name = if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as") {
                         let Some(Lexeme::Name(identifier)) = tokens.get(*cursor + 1) else {
                             return Err(CompileError::Syntax(
@@ -2144,13 +2168,35 @@ fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fu
                 if let Some(end) = statements_last_end(&finally_body) {
                     body_end = end;
                 }
-                statements.push(Statement::Try {
-                    body,
-                    handlers,
-                    else_body,
-                    finally_body,
-                    span: keyword_span.to(body_end),
-                });
+                if star_mode == Some(true) {
+                    // **控制流禁令**（参照：`'break', 'continue' and 'return' cannot appear in an
+                    // except* block` —— 嵌套函数／类体内的不算 ✓）。
+                    for handler in &handlers {
+                        if forbidden_control_in_block(&handler.body, 0).is_some() {
+                            return Err(CompileError::Syntax(
+                                "'break', 'continue' and 'return' cannot appear in an except* block"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                    let tag = format!("{}_{}", keyword_span.line_start, keyword_span.col_start);
+                    statements.extend(desugar_except_star(
+                        body,
+                        handlers,
+                        else_body,
+                        finally_body,
+                        keyword_span.to(body_end),
+                        &tag,
+                    ));
+                } else {
+                    statements.push(Statement::Try {
+                        body,
+                        handlers,
+                        else_body,
+                        finally_body,
+                        span: keyword_span.to(body_end),
+                    });
+                }
         }
         _ => unreachable!("parse_statement_kw_try 只接收对应分支"),
     }
@@ -2818,3 +2864,337 @@ fn parse_statement_star(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<
     Ok(StatementFlow::Continue)
 }
 
+
+// ---- `except*`（PEP 654）解析期降糖 ---------------------------------------------------------
+//
+// 口径：把 `try/except*` 降成**普通 `try/except BaseException`** ＋ `ExceptionGroup.split()`
+// 链（C2 收口②；`split`/`subgroup` 由 `builtin_objects::exceptions` 的 native 实现 ✓）。
+// 为什么降糖而不是发 `CHECK_EG_MATCH`：执行器那套异常表／栈深语义与 CPython 的
+// `PREP_RERAISE_STAR` 排布耦合很紧；降糖只用**已有**语句形态，语义按参照实测对齐（见
+// `docs/rounds` 的 C2 收口② 记录），且 `finally`／`else` 由外层真 `try` 原样承担 ✓。
+//
+// 降糖后的形状（`T` 是源码位置生成的唯一后缀 ✓）：
+// ```text
+// try:
+//     BODY
+// except BaseException as __pyawa_eg_exc_<T>__:
+//     if not isinstance(exc, BaseExceptionGroup):
+//         exc = ExceptionGroup("", [exc]) if isinstance(exc, Exception) else BaseExceptionGroup("", [exc])
+//     rest = exc
+//     for each except* clause with type E:
+//         if rest is not None:
+//             pair = rest.split(E)
+//             match = pair[0]
+//             rest = pair[1]
+//             if match is not None:
+//                 [e = match]
+//                 HANDLER_BODY
+//     if rest is not None:
+//         raise rest
+// else:  ELSE
+// finally: FINALLY
+// ```
+
+/// 块里有没有**会跳出 except\* 块**的 `return`／`break`／`continue`。
+///
+/// 参照实测（`test_except_star.py` 的 valid 两格 ✓）：
+/// * `return` **一律不合法**（跳到函数出口 ⇒ 越过 except* 的剩余项重抛）；
+/// * `break`／`continue` **只在块内嵌套的循环里合法**（不会跳出 except* 块 ✓）；
+/// * 嵌套函数／类体是独立作用域 ⇒ 不算 ✓。
+fn forbidden_control_in_block(statements: &[Statement], loop_depth: usize) -> Option<&'static str> {
+    for statement in statements {
+        match statement {
+            Statement::Return(..) => return Some("return"),
+            Statement::Break(_) if loop_depth == 0 => return Some("break"),
+            Statement::Continue(_) if loop_depth == 0 => return Some("continue"),
+            Statement::Break(_) | Statement::Continue(_) => {}
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                if let Some(found) = forbidden_control_in_block(then_body, loop_depth) {
+                    return Some(found);
+                }
+                if let Some(found) = forbidden_control_in_block(else_body, loop_depth) {
+                    return Some(found);
+                }
+            }
+            Statement::For { body, else_body, .. } | Statement::While { body, else_body, .. } => {
+                if let Some(found) = forbidden_control_in_block(body, loop_depth + 1) {
+                    return Some(found);
+                }
+                if let Some(found) = forbidden_control_in_block(else_body, loop_depth + 1) {
+                    return Some(found);
+                }
+            }
+            Statement::With { body, .. } => {
+                if let Some(found) = forbidden_control_in_block(body, loop_depth) {
+                    return Some(found);
+                }
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                if let Some(found) = forbidden_control_in_block(body, loop_depth) {
+                    return Some(found);
+                }
+                for handler in handlers {
+                    if let Some(found) = forbidden_control_in_block(&handler.body, loop_depth) {
+                        return Some(found);
+                    }
+                }
+                if let Some(found) = forbidden_control_in_block(else_body, loop_depth) {
+                    return Some(found);
+                }
+                if let Some(found) = forbidden_control_in_block(finally_body, loop_depth) {
+                    return Some(found);
+                }
+            }
+            Statement::Match { cases, .. } => {
+                for case in cases {
+                    if let Some(found) = forbidden_control_in_block(&case.body, loop_depth) {
+                        return Some(found);
+                    }
+                }
+            }
+            // 嵌套函数／类体是**独立作用域** ⇒ 不算 ✓（参照实测 `def g(): return 1` 合法 ✓）。
+            Statement::Def { .. } | Statement::Class { .. } => {}
+            _ => {}
+        }
+    }
+    None
+}
+
+fn eg_name_expression(name: &str, span: Span) -> Expression {
+    Expression::Name(name.to_owned(), span)
+}
+
+fn eg_none_expression(span: Span) -> Expression {
+    Expression::Constant(Constant::None, span)
+}
+
+fn eg_call(function: Expression, arguments: Vec<Expression>, span: Span) -> Expression {
+    let positional_order = arguments
+        .iter()
+        .cloned()
+        .map(PositionalArgument::Plain)
+        .collect();
+    Expression::Call {
+        function: Box::new(function),
+        arguments,
+        positional_order,
+        star_arguments: Vec::new(),
+        keywords: Vec::new(),
+        dict_arguments: Vec::new(),
+        callee_span: span,
+        span,
+    }
+}
+
+fn eg_attribute(object: Expression, name: &str, span: Span) -> Expression {
+    Expression::Attribute(Box::new(object), name.to_owned(), span)
+}
+
+fn eg_subscript(object: Expression, index: i64, span: Span) -> Expression {
+    Expression::Subscript(
+        Box::new(object),
+        Box::new(Expression::Int(index, span)),
+        span,
+    )
+}
+
+fn eg_is_none(value: Expression, span: Span) -> Expression {
+    Expression::Compare(
+        Box::new(value),
+        CompareOperator::Is,
+        Box::new(eg_none_expression(span)),
+        span,
+    )
+}
+
+fn eg_not(value: Expression, span: Span) -> Expression {
+    Expression::Not(Box::new(value), span)
+}
+
+fn eg_assign(target: &str, value: Expression, span: Span) -> Statement {
+    Statement::Assign {
+        target: target.to_owned(),
+        target_span: span,
+        value,
+        span,
+    }
+}
+
+fn eg_if(condition: Expression, then_body: Vec<Statement>, span: Span) -> Statement {
+    Statement::If {
+        span,
+        condition,
+        then_body,
+        else_body: Vec::new(),
+    }
+}
+
+/// 纯位置生成的临时名后缀（同一文件里 `line_start`＋`col_start` 唯一 ✓）。
+fn eg_temporary_name(tag: &str, kind: &str) -> String {
+    format!("__pyawa_eg_{kind}_{tag}__")
+}
+
+/// `try/except*` 的**降糖**（形状见本节文件头注释 ✓）。
+fn desugar_except_star(
+    body: Vec<Statement>,
+    handlers: Vec<Handler>,
+    else_body: Vec<Statement>,
+    finally_body: Vec<Statement>,
+    span: Span,
+    tag: &str,
+) -> Vec<Statement> {
+    let exc_name = eg_temporary_name(tag, "exc");
+    let rest_name = eg_temporary_name(tag, "rest");
+    let match_name = eg_temporary_name(tag, "match");
+    let pair_name = eg_temporary_name(tag, "pair");
+    let condition_name = eg_temporary_name(tag, "cond");
+    let mut chain: Vec<Statement> = Vec::new();
+    // ① 非异常组 ⇒ 包成组（`Exception` 叶子 ⇒ `ExceptionGroup`；否则 `BaseExceptionGroup` ✓）。
+    let wrap = Expression::Conditional {
+        condition: Box::new(eg_call(
+            eg_name_expression("isinstance", span),
+            vec![
+                eg_name_expression(&exc_name, span),
+                eg_name_expression("Exception", span),
+            ],
+            span,
+        )),
+        then_value: Box::new(eg_call(
+            eg_name_expression("ExceptionGroup", span),
+            vec![
+                Expression::Str(String::new(), span),
+                Expression::List(vec![eg_name_expression(&exc_name, span)], span),
+            ],
+            span,
+        )),
+        else_value: Box::new(eg_call(
+            eg_name_expression("BaseExceptionGroup", span),
+            vec![
+                Expression::Str(String::new(), span),
+                Expression::List(vec![eg_name_expression(&exc_name, span)], span),
+            ],
+            span,
+        )),
+        span,
+    };
+    chain.push(eg_if(
+        eg_not(
+            eg_call(
+                eg_name_expression("isinstance", span),
+                vec![
+                    eg_name_expression(&exc_name, span),
+                    eg_name_expression("BaseExceptionGroup", span),
+                ],
+                span,
+            ),
+            span,
+        ),
+        vec![eg_assign(&exc_name, wrap.clone(), span)],
+        span,
+    ));
+    // ② rest = exc
+    chain.push(eg_assign(&rest_name, eg_name_expression(&exc_name, span), span));
+    // ③ 逐条 `except*`：split 出匹配组、绑定、跑体、把剩余留给下一条。
+    for handler in handlers {
+        let Handler {
+            type_,
+            name,
+            body: handler_body,
+            ..
+        } = handler;
+        let Some(type_) = type_ else {
+            continue;
+        };
+        // **条件表达式总要���值一次**（参照实测：即使 `rest` 已空、后续子句的
+        // `except* matcher()` 仍会被求值一次 ✓ —— 先前整段包在 `if rest is not None` 里 ⇒ 漏求值 ✗）。
+        chain.push(eg_assign(&condition_name, type_, span));
+        let mut guard_body: Vec<Statement> = Vec::new();
+        guard_body.push(eg_assign(
+            &pair_name,
+            eg_call(
+                eg_attribute(eg_name_expression(&rest_name, span), "split", span),
+                vec![eg_name_expression(&condition_name, span)],
+                span,
+            ),
+            span,
+        ));
+        guard_body.push(eg_assign(
+            &match_name,
+            eg_subscript(eg_name_expression(&pair_name, span), 0, span),
+            span,
+        ));
+        guard_body.push(eg_assign(
+            &rest_name,
+            eg_subscript(eg_name_expression(&pair_name, span), 1, span),
+            span,
+        ));
+        let mut match_body: Vec<Statement> = Vec::new();
+        if let Some(name) = name {
+            match_body.push(eg_assign(&name, eg_name_expression(&match_name, span), span));
+        }
+        // **让处理块体里的 `sys.exception()` 看到"匹配出的子组"**（参照口径 ✓）：普通
+        // `except` 的体里 `sys.exception()` 是刚捕到的异常；`except*` 里则应等于绑定给
+        // `as e` 的那个匹配组（`test_except_star` 的 `assertEqual(sys.exception(), match)` ✓）。
+        // 降糖做法：把体包进 `try: raise <match> except BaseException: 体` —— 体运行期间
+        // 当前异常就是 `<match>`，体结束/抛出后自动恢复 ✓。
+        let wrapped_body = vec![Statement::Try {
+            body: vec![Statement::Raise {
+                value: Some(eg_name_expression(&match_name, span)),
+                cause: None,
+                span,
+            }],
+            handlers: vec![Handler {
+                type_: None,
+                name: None,
+                body: handler_body,
+                span,
+            }],
+            else_body: Vec::new(),
+            finally_body: Vec::new(),
+            span,
+        }];
+        match_body.extend(wrapped_body);
+        guard_body.push(eg_if(
+            eg_not(eg_is_none(eg_name_expression(&match_name, span), span), span),
+            match_body,
+            span,
+        ));
+        chain.push(eg_if(
+            eg_not(eg_is_none(eg_name_expression(&rest_name, span), span), span),
+            guard_body,
+            span,
+        ));
+    }
+    // ④ 剩余未处理的叶子 ⇒ 成组重抛（`split` 保结构／保消息 ✓）。
+    chain.push(eg_if(
+        eg_not(eg_is_none(eg_name_expression(&rest_name, span), span), span),
+        vec![Statement::Raise {
+            value: Some(eg_name_expression(&rest_name, span)),
+            cause: None,
+            span,
+        }],
+        span,
+    ));
+    vec![Statement::Try {
+        body,
+        handlers: vec![Handler {
+            type_: None,
+            name: Some(exc_name),
+            body: chain,
+            span,
+        }],
+        else_body,
+        finally_body,
+        span,
+    }]
+}

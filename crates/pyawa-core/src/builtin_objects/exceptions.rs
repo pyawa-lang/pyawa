@@ -4,6 +4,7 @@
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
 use crate::HotId;
+use crate::TypeObject;
 use super::prelude::*;
 use super::*;
 
@@ -275,6 +276,270 @@ impl ExceptionObject {
 /// # Safety
 ///
 /// 契约见 `GetAttrFn`：返回**新引用**或 `None`。
+
+/// **异常组的方法绑定**（`subgroup`／`split`／`derive`，C2 冷门语义 PEP 654）：
+/// 造一个原生函数再包一层 `MethodObject` 绑到本实例（与 `add_note`／`with_traceback` 同款 ✓）。
+fn bind_group_method(
+    instance: &Instance,
+    owner: NonNull<Header>,
+    name: &'static str,
+    handler: NativeFn,
+) -> NonNull<Header> {
+    let method_type = instance
+        .hot_type(HotId::BuiltinFunctionOrMethod)
+        .expect("builtin_function_or_method 在引导期已登记");
+    let native = instance
+        .alloc(BuiltinFunctionObject::new(method_type, name, Cell::new(handler)))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(owner.as_ptr()) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.hot_type(HotId::Method).expect("method 已登记"),
+        native,
+        owner,
+    ));
+    bound.into_raw().cast::<Header>()
+}
+
+/// 是不是 `BaseExceptionGroup` 的实例（异常组判据的唯一入口 ✓）。
+fn is_exception_group(instance: &Instance, object: NonNull<Header>) -> bool {
+    instance
+        .type_named("BaseExceptionGroup")
+        .is_some_and(|base| instance.is_subtype(instance.type_of(object), base))
+}
+
+/// 异常组的**直接子项**（借用视图；构造时 `args[1]` 是 list ✓，兼容 tuple ✓）。
+fn group_children(instance: &Instance, group: NonNull<Header>) -> Vec<NonNull<Header>> {
+    // SAFETY: group 是存活的异常实例（调用方保证）。
+    let object = unsafe { &*group.as_ptr().cast::<ExceptionObject>() };
+    object
+        .args()
+        .get(1)
+        .copied()
+        .and_then(|exceptions| {
+            instance
+                .list_items(exceptions)
+                .or_else(|| instance.tuple_items(exceptions))
+        })
+        .unwrap_or_default()
+}
+
+/// 异常组的消息（`args[0]` 借用；没有就 `None`）。
+fn group_message(instance: &Instance, group: NonNull<Header>) -> Option<NonNull<Header>> {
+    let _ = instance;
+    // SAFETY: 同上。
+    unsafe { &*group.as_ptr().cast::<ExceptionObject>() }.args().first().copied()
+}
+
+/// 子树里有没有**非 `Exception`** 的叶子（决定结果组的类：`BaseExceptionGroup` vs `ExceptionGroup` ✓）。
+fn group_subtree_is_base(instance: &Instance, object: NonNull<Header>) -> bool {
+    if is_exception_group(instance, object) {
+        return group_children(instance, object)
+            .into_iter()
+            .any(|child| group_subtree_is_base(instance, child));
+    }
+    let is_exception = instance
+        .type_named("Exception")
+        .is_some_and(|exception| instance.is_subtype(instance.type_of(object), exception));
+    !is_exception
+}
+
+/// 造一个新异常组（类按子树定 ✓；**不碰空组** —— 空组照参照在 `split` 里返回 `None` ✓）。
+fn new_exception_group(
+    instance: &Instance,
+    message: NonNull<Header>,
+    children: Vec<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    let base = children
+        .iter()
+        .any(|child| group_subtree_is_base(instance, *child));
+    let type_name = if base { "BaseExceptionGroup" } else { "ExceptionGroup" };
+    let Some(group_type) = instance.type_named(type_name) else {
+        return Err(instance.raise_builtin_error(
+            "RuntimeError",
+            &format!("{type_name} 类型没登记"),
+        ));
+    };
+    // `new_list` **接管**引用 ✓（子项引用由调用方转交）。
+    let exceptions = instance.new_list(children);
+    let type_value = instance.type_value(group_type);
+    let result = crate::executor::call::call_value(instance, type_value, &[message, exceptions], &[]);
+    instance.release(exceptions);
+    instance.release(type_value);
+    result
+}
+
+/// 条件匹配：**类型**／**类型元组**／**可调用**（PEP 654 的 `split(condition)` 三种都收 ✓）。
+fn group_condition_matches(
+    instance: &Instance,
+    leaf: NonNull<Header>,
+    condition: NonNull<Header>,
+) -> Result<bool, ExecError> {
+    if let Some(items) = instance.tuple_items(condition) {
+        for item in items {
+            if group_condition_matches(instance, leaf, item)? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    if instance.is_type_object(condition) {
+        return Ok(instance.is_subtype(
+            instance.type_of(leaf),
+            condition.cast::<TypeObject>(),
+        ));
+    }
+    let result = crate::executor::call::call_value(instance, condition, &[leaf], &[])?;
+    let truth = crate::executor::truthiness_public(instance, result, 0)?;
+    instance.release(result);
+    Ok(truth)
+}
+
+/// **递归拆分**：返回 `(匹配组, 剩余组)`；某一侧为空 ⇒ `None` ✓（结构照参照保留：整棵子树全中／
+/// 全不中时整段搬走，部分命中时在**那一层**造新组 ✓）。
+fn split_exception_group(
+    instance: &Instance,
+    group: NonNull<Header>,
+    condition: NonNull<Header>,
+) -> Result<(Option<NonNull<Header>>, Option<NonNull<Header>>), ExecError> {
+    let message = group_message(instance, group);
+    let children = group_children(instance, group);
+    let mut matched: Vec<NonNull<Header>> = Vec::new();
+    let mut rest: Vec<NonNull<Header>> = Vec::new();
+    for child in children {
+        if is_exception_group(instance, child) {
+            let (child_matched, child_rest) = split_exception_group(instance, child, condition)?;
+            if let Some(child_matched) = child_matched {
+                matched.push(child_matched);
+            }
+            if let Some(child_rest) = child_rest {
+                rest.push(child_rest);
+            }
+        } else if group_condition_matches(instance, child, condition)? {
+            // 借用项 ⇒ 给新组添一份引用（`new_list` 会接管 ✓）。
+            // SAFETY: child 由 group 持有，group 存活。
+            unsafe { instance.incref_object(child.as_ptr()) };
+            matched.push(child);
+        } else {
+            // SAFETY: 同上。
+            unsafe { instance.incref_object(child.as_ptr()) };
+            rest.push(child);
+        }
+    }
+    let matched_group = if matched.is_empty() {
+        None
+    } else {
+        Some(new_exception_group(instance, message.unwrap_or_else(|| instance.new_none()), matched)?)
+    };
+    let rest_group = if rest.is_empty() {
+        None
+    } else {
+        Some(new_exception_group(instance, message.unwrap_or_else(|| instance.new_none()), rest)?)
+    };
+    Ok((matched_group, rest_group))
+}
+
+/// **`BaseExceptionGroup.split(condition)`**（PEP 654）：返回 `(匹配组, 剩余组)`，空的一侧是
+/// `None` ✓。
+unsafe fn group_split_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'split' needs an argument",
+        ));
+    };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "split() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("split() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let (matched, rest) = split_exception_group(instance, this, args[0])?;
+    let matched = matched.unwrap_or_else(|| instance.new_none());
+    let rest = rest.unwrap_or_else(|| instance.new_none());
+    Ok(instance.new_tuple(vec![matched, rest]))
+}
+
+/// **`BaseExceptionGroup.subgroup(condition)`**：只回匹配的一半（空 ⇒ `None`）✓。
+unsafe fn group_subgroup_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'subgroup' needs an argument",
+        ));
+    };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "subgroup() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("subgroup() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let (matched, _rest) = split_exception_group(instance, this, args[0])?;
+    Ok(matched.unwrap_or_else(|| instance.new_none()))
+}
+
+/// **`BaseExceptionGroup.derive(exceptions)`**：同一消息、同一类的新组 ✓。
+unsafe fn group_derive_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'derive' needs an argument",
+        ));
+    };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "derive() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("derive() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let children = instance
+        .list_items(args[0])
+        .or_else(|| instance.tuple_items(args[0]))
+        .unwrap_or_default();
+    let mut retained: Vec<NonNull<Header>> = Vec::with_capacity(children.len());
+    for child in children {
+        // SAFETY: child 由传入序列持有，序列存活到调用结束。
+        unsafe { instance.incref_object(child.as_ptr()) };
+        retained.push(child);
+    }
+    let message = group_message(instance, this).unwrap_or_else(|| instance.new_none());
+    new_exception_group(instance, message, retained)
+}
+
 pub unsafe fn exception_getattr(
     ptr: *mut Header,
     name: &str,
@@ -617,6 +882,19 @@ pub unsafe fn exception_getattr(
             Some(match stored {
                 Some(value) => instance.retain(value),
                 None => instance.new_none(),
+            })
+        }
+        // **异常组方法**（C2/PEP 654）：`subgroup`／`split`／`derive` —— 只对异常组给 ✓。
+        "subgroup" | "split" | "derive" => {
+            // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+            let owner = unsafe { NonNull::new_unchecked(ptr) };
+            if !is_exception_group(instance, owner) {
+                return None;
+            }
+            Some(match name {
+                "subgroup" => bind_group_method(instance, owner, "subgroup", group_subgroup_native),
+                "split" => bind_group_method(instance, owner, "split", group_split_native),
+                _ => bind_group_method(instance, owner, "derive", group_derive_native),
             })
         }
         _ => None,

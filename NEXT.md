@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`c86987a1`（本笔前；round 259（C2 收口①）`\N{…}` 真接线：1.56 MB 生成名字表（14.9 万条）与 CPython 1217 例 0 差异；`except*` 待收口②）
+- **HEAD**：`895a2731`（本笔前；round 260（C2 收口②）`except*` 接线：降糖＋split/subgroup/derive，行为对照逐字节一致、官方 test 60 项跑起来（27F/13E 记档）；下轮第 7 项全量内存棘轮）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
@@ -24,7 +24,7 @@
   - `test_weakref`：round 256 已收口 **17.3 s（<120 s ✓）**——真根因是 `_remove_dead_weakref`→`dict_remove_key` 线性扫（70k 批量死引用 O(n²)），已改哈希索引；另修「释放链里 gc.collect 重入」双放（`test_callback_gcs`）。剩余 26F/9E 是功能缺口
   - 形参所有权老账：round 255 探针 9 形态全 0 delta ⇒ 无最小复现、关闭 ✓；残留 `iter_value` 丢异常（有复现，三种修法已撤回 ⇒ 按 3 轮规则停手）· traceback 帧保活 ⇒ 工单第 4 项
   - 日常面：round 257 已收 `json.load`／`match` 行内 suite＋`as` 守卫／`defaultdict` copy·`|`·`==`／`urllib.request` import·file://；**HTTP 体读**未接（缺 `RawIOBase.read`／`recv_into` 面）✗
-  - `P3-42` KeyError 族／特殊方法派发；`P3-35` 剩余 5 形态；`P3-29`／`P3-37` 剩余面；C2 待收 `except*`（CHECK_EG_MATCH＋组拆分；`\N{…}` 已收）
+  - `P3-42` KeyError 族／特殊方法派发；`P3-35` 剩余 5 形态；`P3-29`／`P3-37` 剩余面；C2 剩余记档：组 traceback 格式／`sys.exception()` 多层恢复／组子类化／空组与单例细节
 - **下一条命令**：`tools/profile_hot.sh --tier baseline --iters 100000`（**默认 release ✓**）→ 按新头部取 release_one／next_instruction／with_mro 热点 → A4 回退闸（基线入库）
 
 ## 关键口径（只留项目特有的；通用规则见 `agents-rules/`）
