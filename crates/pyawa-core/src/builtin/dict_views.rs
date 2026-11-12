@@ -10,6 +10,7 @@
 //! **如实登记** ✗：视图是**快照**式实现（每次操作按当前字典内容重建 ✓；引用映射对象 ✓，
 //! 但迭代器本身不检测字典变动 ✓ —— 官方用例不查这一档）。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::py_object;
 use core::ptr::NonNull;
@@ -65,8 +66,7 @@ pub(crate) unsafe fn view_clear(ptr: *mut Header, instance: &Instance) {
 }
 
 fn make_native(instance: &Instance, name: &'static str, handler: NativeFn) -> NonNull<Header> {
-    let ty = instance
-        .type_named("builtin_function_or_method")
+    let ty = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     instance
         .alloc(BuiltinFunctionObject::new(ty, name, Cell::new(handler)))
@@ -89,9 +89,11 @@ fn view_type(instance: &Instance, kind: u8) -> Option<NonNull<TypeObject>> {
         core::mem::size_of::<DictViewObject>(),
         DictViewObject::slots(),
     );
-    if let Some(object_type) = instance.type_named("object") {
+    if let Some(object_type) = instance.hot_type(HotId::Object) {
         let _ = instance.register_bases(ty, vec![object_type]);
     }
+    // 命名空间里会写 `__module__` ⇒ 二元运算的用户-dunder 预筛位置上（round 248 性能，A2-3 ✓）。
+    instance.mark_dunder_capable(ty);
     let namespace = instance.type_namespace(ty.cast())?;
     let module = instance.new_str("builtins");
     instance.dict_set(namespace, "__module__", module);
@@ -206,7 +208,7 @@ fn view_iter_native(
         // ⇒ 会尊重映射类型的 `__iter__` 覆写 ✗ ⇒ `dict.keys(self)` 返回的视图在
         // `__iter__ = keys` 的 dict 子类上**自我递归** ✗（`test_dict.test_dict_copy_order` 的
         // `CustomReversedDict` ✓）。视图的键迭代照参照就是**底层 dict 的键迭代器** ✓。
-        let Some(iterator_type) = instance.type_named("dict_keyiterator") else {
+        let Some(iterator_type) = instance.hot_type(HotId::DictKeyIterator) else {
             return Err(instance.raise_builtin_error("RuntimeError", "dict_keyiterator 不可用"));
         };
         // 迭代器要自己那份字典引用 ✓。
@@ -258,7 +260,7 @@ fn view_iterator_type(instance: &Instance, name: &'static str) -> Option<NonNull
         crate::builtin_objects::IteratorObject::slots()
             .with_getattr(crate::builtin_objects::iterator_getattr),
     );
-    if let Some(object_type) = instance.type_named("object") {
+    if let Some(object_type) = instance.hot_type(HotId::Object) {
         let _ = instance.register_bases(ty, vec![object_type]);
     }
     // **不往 `builtins` 命名空间塞惰性迭代器类型**（round 87，理由同上 ✓）：pickle 的
@@ -308,25 +310,22 @@ fn view_contains_native(
 /// 把任何操作数转成 `set`（视图／集合／可迭代 ✓；返回**新引用**）。
 fn operand_to_set(instance: &Instance, value: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
     let ty = instance.type_of(value);
-    let is_set = instance
-        .type_named("set")
+    let is_set = instance.hot_type(HotId::Set)
         .is_some_and(|base| instance.is_subtype(ty, base))
-        || Some(ty) == instance.type_named("frozenset");
+        || Some(ty) == instance.hot_type(HotId::FrozenSet);
     if is_set {
         return Ok(instance.retain(value));
     }
-    if instance
-        .type_named("dict_keys")
+    if instance.hot_type(HotId::DictKeys)
         .is_some_and(|base| instance.is_subtype(ty, base))
-        || instance
-            .type_named("dict_items")
+        || instance.hot_type(HotId::DictItems)
             .is_some_and(|base| instance.is_subtype(ty, base))
     {
         let elements = view_elements(instance, value)?;
         return Ok(instance.new_set(elements));
     }
     // 其余：交给 `set(可迭代)` 构造 ✓（类型对象当可调用；`call_value` 借用实参 ✓）。
-    let Some(set_type) = instance.type_named("set") else {
+    let Some(set_type) = instance.hot_type(HotId::Set) else {
         return Err(instance.raise_builtin_error("RuntimeError", "set 未登记"));
     };
     let result = pyawa_core_call_value(instance, set_type.cast::<Header>(), &[value])?;
@@ -354,11 +353,9 @@ fn view_compare_elements(
     other: NonNull<Header>,
 ) -> Result<(Vec<NonNull<Header>>, Vec<NonNull<Header>>), ExecError> {
     let left = view_elements(instance, view)?;
-    let right = if instance
-        .type_named("dict_keys")
+    let right = if instance.hot_type(HotId::DictKeys)
         .is_some_and(|base| instance.is_subtype(instance.type_of(other), base))
-        || instance
-            .type_named("dict_items")
+        || instance.hot_type(HotId::DictItems)
             .is_some_and(|base| instance.is_subtype(instance.type_of(other), base))
     {
         view_elements(instance, other)?
@@ -681,8 +678,7 @@ fn view_reversed_native(
     let elements = view_elements(instance, view)?;
     let snapshot = instance.new_list(elements);
     let length = instance.list_items(snapshot).map(|items| items.len()).unwrap_or(0);
-    let iterator_type = instance
-        .type_named("list_reverseiterator")
+    let iterator_type = instance.hot_type(HotId::ListReverseIterator)
         .expect("list_reverseiterator 已登记");
     // 迭代器要自己那份列表引用 ✓（快照本函数持有 ✓）。
     unsafe { instance.incref_object(snapshot.as_ptr()) };

@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -98,8 +99,7 @@ pub unsafe fn tuple_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -110,7 +110,7 @@ pub unsafe fn tuple_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -136,7 +136,7 @@ pub(crate) fn tuple_receiver(
             }
         },
     };
-    let tuple_type = instance.type_named("tuple").expect("tuple 已登记");
+    let tuple_type = instance.hot_type(HotId::Tuple).expect("tuple 已登记");
     // SAFETY: this 由调用方保证存活。
     let this_type = unsafe { this.as_ref() }.ty();
     if !instance.is_subtype(this_type, tuple_type) {
@@ -326,7 +326,7 @@ pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Result<Strin
     // ⇒ `memory allocation of 8386098843153034355 bytes failed` ✗）。这里先判类型 ✓。
     // SAFETY: function 由方法对象持有。
     let function_type = unsafe { function.as_ref() }.ty();
-    let qualname = if Some(function_type) == instance.type_named("function") {
+    let qualname = if Some(function_type) == instance.hot_type(HotId::Function) {
         // SAFETY: 刚确认是 Python 函数。
         let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
         // SAFETY: 函数持有 code object 的一份引用。
@@ -375,7 +375,7 @@ pub unsafe fn exception_str(ptr: *mut Header, instance: &Instance) -> Result<Str
     // `KeyError` 是**唯一**在单实参上改口径的：`str(KeyError('k'))` == `"'k'"`（实参的 repr）。
     // 实测：0 个实参仍是 `''`、≥2 个仍是实参元组的 repr（与基类同）⇒ 只改单实参那一格。
     // 子类继承（参照实现也继承）。
-    let key_error_style = match instance.type_named("KeyError") {
+    let key_error_style = match instance.hot_type(HotId::KeyError) {
         // SAFETY: 类型对象由注册表持有。
         Some(key_error) => instance.is_subtype(header.ty(), key_error),
         None => false,
@@ -383,7 +383,7 @@ pub unsafe fn exception_str(ptr: *mut Header, instance: &Instance) -> Result<Str
     // **`OSError` 一族的 `str`**（round 108）：参照格式
     // `[Errno {errno}] {strerror}[: {filename!r}[: {filename2!r}]]` ✓ —— 先前多实参按元组 repr 打 ✗
     // ⇒ `str(FileNotFoundError(...))` 与参照不符（`test_unicode_file_functions` 的 `%a` 格式化 ✓）。
-    let is_os_error = match instance.type_named("OSError") {
+    let is_os_error = match instance.hot_type(HotId::OSError) {
         // SAFETY: 类型对象由注册表持有。
         Some(os_error) => instance.is_subtype(header.ty(), os_error),
         None => false,

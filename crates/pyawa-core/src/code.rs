@@ -733,8 +733,8 @@ unsafe fn co_lines_native(
 fn iterator_over(instance: &Instance, container: NonNull<Header>) -> NonNull<Header> {
     // 迭代器类型照探测表取（`TS-42` 的 M2）；容器是 `list` ⇒ 用 `list_iterator`
     let iterator_type = instance
-        .type_named("list_iterator")
-        .or_else(|| instance.type_named("tuple_iterator"))
+        .hot_type(HotId::ListIterator)
+        .or_else(|| instance.hot_type(HotId::TupleIterator))
         .unwrap_or_else(|| instance.type_of(container));
     instance
         .alloc(crate::IteratorObject::new(

@@ -8,7 +8,7 @@ use util::{ruler_on, str_matches};
 use crate::diag::{dangling_mode, flag, leak_mode, quarantine_mode};
 use core::ptr;
 use core::ptr::NonNull;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::flags;
 
@@ -129,11 +129,14 @@ pub struct Instance {
     /// **已回收类型的地址登记**（round 130）：孤儿回收把类型从 `types`/`user_types` 摘掉后，**类型本体**
     /// 仍被 `Box::leak` 保留（裸 `ty` 指针仍有效 ✓）；登记在这里让 `assert_live` 认得它 ⇒ 仍在别处的
     /// 计数引用将来释放它时不会被当野指针 ✓（round 129 曾因此悬垂）。
-    retired_types: RefCell<std::collections::HashSet<usize>>,
+    retired_types: RefCell<crate::fast_hash::FastSet<usize>>,
     /// **类型名 → 类型对象索引**（round 142 真性能修 ✗）：`type_named` 先前是**对 `types` 线性扫**
     /// （每次 `builtin_type(instance, …)` 都扫一遍 ⇒ 套件里类型一多就**每次 Python 调用**吃几微秒 ✓）；
     /// 现在 O(1) 哈希查找 ✓（`or_insert` 保持"先登记者优先"，与线性扫的旧口径一致 ✓）。
     types_by_name: RefCell<std::collections::HashMap<String, NonNull<TypeObject>>>,
+    /// **未命中的类型名（负缓存）**（round 248 性能，A2-3）：`(代数, 名字集合)` —— 未命中的名字
+    /// 在同一代数内**不再线性扫全表** ✓；`types_generation` 变化（登记新类型）时整体失效 ✓。
+    types_missing: RefCell<(usize, std::collections::HashSet<String>)>,
     /// **类型注册代数**（round 145）：每登记一个类型 +1 ⇒ 依据"全部内建名"算出来的缓存（如
     /// [`Instance::is_dedicated_iterator_type`] 的集合）在代数变化时**重建** ✓（惰性建的迭代器
     /// 类型在首次推进之后才出现时，缓存不能过期 ✗）。
@@ -149,20 +152,20 @@ pub struct Instance {
     /// **"有专用推进分支"的迭代器类型地址集合**（round 145 性能）：`advance_iterator` 先前对
     /// **每个**步进都比 20+ 个内建名 ✗（`for` 循环每轮一次 ⇒ 热路径大头）；这里按代数缓存一份
     /// 集合，普通迭代器（`list_iterator`／`range_iterator` 等）**一次哈希查**就跳过整条链 ✓。
-    dedicated_iterator_types: RefCell<Option<(usize, std::collections::HashSet<usize>)>>,
+    dedicated_iterator_types: RefCell<Option<(usize, crate::fast_hash::FastSet<usize>)>>,
     /// **被迭代源类型 → 布局种类缓存**（round 146 性能，`iter.rs::source_kind` 用）：避免每个元素都做
     /// 7 次 `type_is_subtype_of`（`type_named` ＋ MRO 线性扫 ✗）。类型布局与实例无关 ⇒ 只存 `u8` 小码 ✓。
-    iterable_source_kinds: RefCell<std::collections::HashMap<usize, u8>>,
+    iterable_source_kinds: RefCell<crate::fast_hash::FastMap<usize, u8>>,
     /// **`__slots__` 声明的槽名**（round 147）：键是类型地址、值是槽名表。当前实现：实例仍用普通
     /// 属性字典**存值**（槽就是字典键 ✓），但**写非槽名**要按参照报
     /// `'X' object has no attribute 'y' and no __dict__ for setting new attributes` ✓
     /// （`test_descrtut` 的 tut2 钉这一条 ✓）。完整"无实例字典"语义（`__dict__` 不存在）随后收。
-    type_slots: RefCell<std::collections::HashMap<usize, std::collections::HashSet<String>>>,
+    type_slots: RefCell<crate::fast_hash::FastMap<usize, crate::fast_hash::FastSet<String>>>,
     /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
-    user_type_set: RefCell<std::collections::HashSet<usize>>,
+    user_type_set: RefCell<crate::fast_hash::FastSet<usize>>,
     /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**
     /// 才能"先跑终结器、再清类型字典"（round 118 的教训：只扫 `gc_headers` 会漏非跟踪布局的实例 ✗）。
-    user_instances: RefCell<std::collections::HashMap<usize, std::collections::HashSet<usize>>>,
+    user_instances: RefCell<crate::fast_hash::FastMap<usize, crate::fast_hash::FastSet<usize>>>,
     /// **动态（用户）类类型的"孤儿回收"名单**（round 99）：`class`/`type()` 造出的类型 —— 参照里类型是
     /// GC 对象；本层**不释放类型 Box**（`alloc_type_raw` 的 `Box::leak` 与 `AttributeObject::slots().dealloc`
     /// 不同构 ⇒ 真释放会 invalid free ✗），改为**保守孤儿回收**：`rc == 1`（只剩注册表）× 没有活对象以它
@@ -192,15 +195,15 @@ pub struct Instance {
     builtin_text_signatures: RefCell<std::collections::HashMap<usize, &'static str>>,
     /// **`mappingproxy` 的活视图来源**（round 125）：键/值/项视图的 `.mapping` 要是**源字典的活视图** ✓
     /// ⇒ 按代理地址记源 dict 指针；等价比较等入口先同步快照 ✓（`test_dict.test_views_mapping` ✓）。
-    mappingproxy_live: RefCell<std::collections::HashMap<usize, NonNull<Header>>>,
+    mappingproxy_live: RefCell<crate::fast_hash::FastMap<usize, NonNull<Header>>>,
     /// **`mappingproxy` 的来源类型**（round 114）：`MappingProxyType(OrderedDict(...))` 的
     /// `.copy()`／`repr` 要还原**底层映射类型** ✓ ⇒ 按代理对象地址记一份来源类型 ✓
     /// （类型对象活到实例销毁 ⇒ 不会悬垂 ✓；条目随代理存活而累积，量小如实登记）。
-    mappingproxy_sources: RefCell<std::collections::HashMap<usize, NonNull<TypeObject>>>,
+    mappingproxy_sources: RefCell<crate::fast_hash::FastMap<usize, NonNull<TypeObject>>>,
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
-    live: RefCell<HashSet<usize>>,
+    live: RefCell<crate::fast_hash::FastSet<usize>>,
     /// **盯住的地址**（第 113 轮，`PYAWA_NS_DEBUG` 下由建类那处设 ✓）：0 ＝ 关 ✓。
     /// 对它**每一次 incref／decref 都报现场与计数** ✓ —— 不看地址归因 ✗、只看**计数与现场** ✓，
     /// 用来解释"`rc=2` 进去、内部归零" ✓（上限榜那一族的内存缺陷 ✓，见第 107～112 轮台账 ✓）。
@@ -212,7 +215,7 @@ pub struct Instance {
     zombie_trace: Cell<bool>,
     /// **弱引用登记**（round 59）：目标地址 ⇒ 指向它的弱引用对象（**不持有引用** ✓）。
     /// 目标释放时逐个置死并调用回调 ✓（`invalidate_weakrefs`）；弱引用对象自己释放时摘除 ✓。
-    weakrefs: RefCell<std::collections::HashMap<usize, Vec<NonNull<Header>>>>,
+    weakrefs: RefCell<crate::fast_hash::FastMap<usize, Vec<NonNull<Header>>>>,
     /// **`isinstance` 的 ABC 快存**（round 73）：`(类, 实例类型, _abc_invalidation_counter)` ⇒ 结果 ✓。
     ///
     /// 为什么 ✗：`collections.abc` 的 `__instancecheck__` 是纯 Python（两个 `WeakSet` 查缓存 ＋
@@ -221,7 +224,7 @@ pub struct Instance {
     /// `test_userstring` 因此从 round 44 的 42 s 涨到 ~90 s（survey 120 s 阈值上临界漂移 ✗）。
     /// **失效**：ABC 的注册表变更会令 `ABCMeta._abc_invalidation_counter` ＋1，键里带上它就天然失效 ✓；
     /// 只对**元类恰是 `ABCMeta`** 的类启用 ✓（用户自定义元类的 `__instancecheck__` 可能有副作用 ⇒ 不缓存 ✗）。
-    isinstance_cache: RefCell<std::collections::HashMap<(usize, usize, u64), bool>>,
+    isinstance_cache: RefCell<crate::fast_hash::FastMap<(usize, usize, u64), bool>>,
     /// **GC 回收路径延后执行的弱引用回调**（round 59）：`free_garbage` 阶段只登记，
     /// 等整个回收循环结束后统一调（那时 `gc_running` 已复位 ✓）。
     pending_weakref_callbacks: RefCell<Vec<(NonNull<Header>, NonNull<Header>)>>,
@@ -316,7 +319,7 @@ pub struct Instance {
     /// 自动／手动回收的**实际执行次数**（诊断面；`gc.get_stats` 的口径底座）。
     gc_collections: Cell<usize>,
     /// 回收进行中：这些对象只减计数、由本次回收统一释放（见 [`Instance::collect`]）。
-    gc_frozen: RefCell<HashSet<usize>>,
+    gc_frozen: RefCell<crate::fast_hash::FastSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
     gc_running: Cell<bool>,
     /// **显式** `gc.collect()` 正在跑（round 110）：孤儿用户类回收只在显式回收或每 N 次自动回收时做 ✓
@@ -344,7 +347,7 @@ pub struct Instance {
     /// （实测：任意 list 被当成 deque 交给 `_pprint_deque` ⇒ `'list' object has no attribute
     /// 'maxlen'` ✗，官方 `test_pkg`／`test_rlcompleter` 的收尾都卡在这 ✓）。
     /// 缓存键 `(类型对象地址, 名字)` ✓；值由本实例持有（随实例释放 ✓）。
-    type_dunders: RefCell<std::collections::HashMap<(usize, &'static str), NonNull<Header>>>,
+    type_dunders: RefCell<crate::fast_hash::FastMap<(usize, &'static str), NonNull<Header>>>,
     /// **小元组复用池**（round 96）：参照的 `tuple` freelist ✓ —— 生成器表达式每轮产的
     /// `(i, i)` 如果**立刻被丢弃**，下一轮会拿到**同一地址** ⇒ 官方 `test_genexps` 的
     /// 「Verify re-use of tuples」doctest 要求 `max(id)-min(id)==0` ✓（先前每次新分配 ⇒ 非 0 ✗）。

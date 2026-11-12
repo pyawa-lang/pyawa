@@ -13,8 +13,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     // **不是** `co_consts`／`co_names`。前三个是**类型对象**，后两个取 builtins 里的函数。
                     let value = match oparg {
                         0 => instance.type_value(
-                            instance
-                                .type_named("AssertionError")
+                            instance.hot_type(HotId::AssertionError)
                                 .expect("AssertionError 在内建表里"),
                         ),
                         1 => instance.type_value(

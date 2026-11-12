@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -26,12 +27,12 @@ impl Instance {
             unsafe { self.incref_object(value.as_ptr()) };
             value
         };
-        if self.type_named("list") == Some(ty) {
+        if self.hot_type(HotId::List) == Some(ty) {
             // SAFETY: 类型身份已确认。
             let list = unsafe { &*object.as_ptr().cast::<ListObject>() };
             return Ok(Some(list.items().into_iter().map(owned).collect()));
         }
-        if self.type_named("tuple") == Some(ty) {
+        if self.hot_type(HotId::Tuple) == Some(ty) {
             // SAFETY: 同上。
             let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
             return Ok(Some(tuple.items().iter().copied().map(owned).collect()));
@@ -48,13 +49,13 @@ impl Instance {
                     .collect(),
             ));
         }
-        if Some(ty) == self.type_named("dict") {
+        if Some(ty) == self.hot_type(HotId::Dict) {
             // SAFETY: 同上。
             let dict = unsafe { &*object.as_ptr().cast::<DictObject>() };
             return Ok(Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect()));
         }
         // **`frozenset` 与 `set` 同载荷** ✓（第 236 轮）⇒ 迭代这条也一并认 ✓。
-        if Some(ty) == self.type_named("set") || Some(ty) == self.type_named("frozenset") {
+        if Some(ty) == self.hot_type(HotId::Set) || Some(ty) == self.hot_type(HotId::FrozenSet) {
             // SAFETY: 同上。
             let set = unsafe { &*object.as_ptr().cast::<SetObject>() };
             return Ok(Some(set.items().into_iter().map(owned).collect()));
@@ -193,8 +194,7 @@ impl Instance {
 
     /// 读浮点载荷（`float` 才算；别的给 `None`）。
     pub fn float_value(&self, object: NonNull<Header>) -> Option<f64> {
-        if self.type_of(object) == self
-            .type_named("float")
+        if self.type_of(object) == self.hot_type(HotId::Float)
             .expect("float 已登记")
         {
             // SAFETY: 类型身份已确认。
@@ -207,7 +207,7 @@ impl Instance {
     ///
     /// 与 [`Self::float_value`]／[`Self::int_of`] 同一口径（恰类型；Python 子类的载荷面另说 ✓）。
     pub fn complex_value(&self, object: NonNull<Header>) -> Option<(f64, f64)> {
-        if self.type_of(object) == self.type_named("complex").expect("complex 已登记") {
+        if self.type_of(object) == self.hot_type(HotId::Complex).expect("complex 已登记") {
             // SAFETY: 类型身份已确认 ⇒ 载荷是 `ComplexObject`（`TS-43` 布局自选 ✓）。
             let value = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::ComplexObject>() };
             return Some((value.real(), value.imag()));
@@ -293,7 +293,7 @@ impl Instance {
                 }
             }
             if let Some(value) = self.float_value(object) {
-                if ty == self.type_named("float")? {
+                if ty == self.hot_type(HotId::Float)? {
                     return Some(value);
                 }
             }

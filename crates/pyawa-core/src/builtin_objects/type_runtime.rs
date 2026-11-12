@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -55,7 +56,7 @@ pub fn type_new_native(
     let Some(name) = instance.text_of(name_value) else {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的名字要是 str"));
     };
-    if Some(instance.type_of(bases_value)) != instance.type_named("tuple") {
+    if Some(instance.type_of(bases_value)) != instance.hot_type(HotId::Tuple) {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的基类要是 tuple"));
     }
     // SAFETY: 类型身份刚确认。
@@ -64,8 +65,7 @@ pub fn type_new_native(
     // **命名空间只要是 `dict` 的**子类**就收** ✓（第 507 轮真 bug 修 ✗）：先前按**类型身份**比较 ✗
     // ⇒ `Lib/enum.py` 把 `_EnumDict`（`dict` 子类 ✓）**本身**交给 `super().__new__` ✓ ⇒ 我们当场报
     // `type.__new__ 的命名空间要是 dict` ✗，参照给 `D-ok` ✓。参照的口径是"映射"而非"恰好是 dict" ✓。
-    let namespace_is_dict = instance
-        .type_named("dict")
+    let namespace_is_dict = instance.hot_type(HotId::Dict)
         .is_some_and(|dict| instance.is_subtype(instance.type_of(namespace), dict));
     if !namespace_is_dict {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的命名空间要是 dict"));
@@ -86,7 +86,7 @@ pub fn type_new_native(
     // 本层先前直接落到 `build_class_from_parts_with_keywords` ✗ ⇒ 元类 `__new__` 根本不跑 ⇒
     // `C.__abstractmethods__` 只会**继承**基类那份（`test_collections` 的 `validate_abstract_methods`
     // 当场"抽象类不能实例化" ✗）。这里先算**最派生元类**，非 `type` 就转交 ✓。
-    let type_type = instance.type_named("type");
+    let type_type = instance.hot_type(HotId::Type);
     let mut winner = requested;
     for base in bases.iter().copied() {
         // SAFETY: base 是存活对象；这里是"基类自己的类型"（元类）。
@@ -107,8 +107,7 @@ pub fn type_new_native(
             Some(candidate) != requested
                 && Some(candidate) != Some(base_type)
                 && instance.is_subtype(candidate, base_type)
-                && instance
-                    .type_named("ABCMeta")
+                && instance.hot_type(HotId::ABCMeta)
                     .is_some_and(|abc_meta| instance.is_subtype(candidate, abc_meta))
         }
         _ => false,
@@ -227,24 +226,24 @@ fn class_dict_value_has_code(
     value: NonNull<Header>,
     code: NonNull<Header>,
 ) -> bool {
-    let Some(function_type) = instance.type_named("function") else {
+    let Some(function_type) = instance.hot_type(HotId::Function) else {
         return false;
     };
     let value_type = instance.type_of(value);
     if value_type == function_type {
         return function_has_code(instance, value, function_type, code);
     }
-    if Some(value_type) == instance.type_named("staticmethod") {
+    if Some(value_type) == instance.hot_type(HotId::StaticMethod) {
         // SAFETY: 类型身份刚确认 ⇒ 载荷是 `StaticMethodObject`。
         let inner = unsafe { &*value.as_ptr().cast::<StaticMethodObject>() }.function();
         return function_has_code(instance, inner, function_type, code);
     }
-    if Some(value_type) == instance.type_named("classmethod") {
+    if Some(value_type) == instance.hot_type(HotId::ClassMethod) {
         // SAFETY: 类型身份刚确认 ⇒ 载荷是 `ClassMethodObject`。
         let inner = unsafe { &*value.as_ptr().cast::<ClassMethodObject>() }.function();
         return function_has_code(instance, inner, function_type, code);
     }
-    if Some(value_type) == instance.type_named("property") {
+    if Some(value_type) == instance.hot_type(HotId::Property) {
         // SAFETY: 类型身份刚确认 ⇒ 载荷是 `PropertyObject`（`fset`／`fdel` 可能是 `None` 单例，下面按类型滤）。
         let property = unsafe { &*value.as_ptr().cast::<PropertyObject>() };
         return [property.fget(), property.fset(), property.fdel()]
@@ -321,7 +320,7 @@ pub fn super_new(
     let this = frame.local(0).ok().flatten().ok_or_else(|| {
         instance.raise_builtin_error("RuntimeError", "super(): 当前帧没有第一个实参")
     })?;
-    let super_type = instance.type_named("super").ok_or(crate::ExecError::Unsupported {
+    let super_type = instance.hot_type(HotId::Super).ok_or(crate::ExecError::Unsupported {
         opcode: 0,
         what: "super 类型未登记",
     })?;
@@ -492,7 +491,7 @@ pub fn dir_new(
             collect_type_mro_names(instance, object.cast(), &mut names);
             // **内建 `list` 的参照名字面**（round 152）：`list` 的方法大多在 `getattr` 槽里、
             // 不在类型字典 ⇒ `dir(list)` 会少名字 ✗ ⇒ 补一张参照表面表 ✓（tut3 逐项钉住 ✓）。
-            if instance.type_named("list").is_some_and(|list_type| list_type.cast::<Header>() == object) {
+            if instance.hot_type(HotId::List).is_some_and(|list_type| list_type.cast::<Header>() == object) {
                 for name in crate::builtin::list::LIST_TYPE_DIR_NAMES {
                     names.insert((*name).to_owned());
                 }
@@ -501,8 +500,7 @@ pub fn dir_new(
             // 看得到、而 `dir(<普通类>)` **看不到** ✓（实测 `'mro' in dir(int)` 为 False ✓）。
             // 本层 `type.mro` 是 `getattr` 动态给的、字典里没有 ⇒ 这里**只给 `dir(type)` 补名** ✓
             // （`rlcompleter` 的 `CompleteMe.mro()` 是经 `get_class_members(type)` 拿到的 ✓）。
-            if instance
-                .type_named("type")
+            if instance.hot_type(HotId::Type)
                 .is_some_and(|type_type| type_type.cast::<Header>() == object)
             {
                 // 参照 `dir(type)` 里由 `getattr` 动态给的那几个名字（本层没进 `type` 的类型字典 ✓）。
@@ -778,7 +776,7 @@ pub fn reversed_new(
             .map(|(key, _)| instance.retain(*key))
             .collect();
         let list = instance.new_list(items);
-        let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
+        let ty = instance.hot_type(HotId::Reversed).ok_or(crate::ExecError::Unsupported {
             opcode: 0,
             what: "reversed 类型未登记",
         })?;
@@ -802,7 +800,7 @@ pub fn reversed_new(
             &format!("'{name}' object is not reversible"),
         ));
     };
-    let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
+    let ty = instance.hot_type(HotId::Reversed).ok_or(crate::ExecError::Unsupported {
         opcode: 0,
         what: "reversed 类型未登记",
     })?;

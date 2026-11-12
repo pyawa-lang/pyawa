@@ -5,7 +5,7 @@
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
 use crate::HotId;
-use crate::executor::{exception_type, instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, release, super_lookup};
+use crate::executor::{instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, release, super_lookup};
 use crate::executor::Attribute;
 use crate::executor::ExecError;
 use crate::header::Header;
@@ -713,7 +713,7 @@ pub fn attribute_optional(
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 是存活对象。
             let ty = unsafe { exception.as_ref() }.ty();
-            if instance.is_subtype(ty, exception_type(instance, "AttributeError")) {
+            if instance.is_subtype(ty, instance.hot_type(HotId::AttributeError).expect("AttributeError 已登记")) {
                 // **`pending_exception` 槽那份一并摘掉**（round 80 真泄漏修 ✗）：`raise()` 给
                 // "最近一次抛出"槽加过一份保活；探针吞掉异常时只放 `Err` 那份 ⇒ 槽里那份把
                 // **异常＋回溯＋帧**永久钉住 ✗（`hasattr` 一族探针每探一次漏一组）。只核指针、不解引用 ✓。

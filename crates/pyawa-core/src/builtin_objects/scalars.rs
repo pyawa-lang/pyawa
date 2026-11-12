@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -279,15 +280,14 @@ pub unsafe fn bytes_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(method_type, "bytes", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: 方法对象要自己那份 self。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -403,7 +403,7 @@ pub fn bytearray_new(
         None => Vec::new(),
         Some(value) => {
             let ty = instance.type_of(value);
-            if Some(ty) == instance.type_named("int") || ty == instance.singletons().bool_type() {
+            if Some(ty) == instance.hot_type(HotId::Int) || ty == instance.singletons().bool_type() {
                 let count = instance.index_value(value)?.unwrap_or(0);
                 let Some(count) = usize::try_from(count).ok().filter(|count| *count <= 1 << 30) else {
                     return Err(instance.raise_builtin_error(
@@ -524,15 +524,14 @@ pub unsafe fn bytearray_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(method_type, "bytearray", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -835,8 +834,7 @@ pub unsafe fn str_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -847,7 +845,7 @@ pub unsafe fn str_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));

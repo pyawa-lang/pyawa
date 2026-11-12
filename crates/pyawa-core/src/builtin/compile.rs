@@ -15,6 +15,7 @@
 //! 与 `exec()`／`eval()` 的接口：`exec_code_public`／`eval_code_public`（stdlib 的 `exec`／`eval`
 //! 内置在第一个实参是 code 对象时调它们 ✓）。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::CodeObject;
@@ -29,8 +30,7 @@ const EVAL_RESULT_NAME: &str = "__pyawa_compile_eval_result__";
 
 /// 这个值是不是本层的 **code 对象**（stdlib 的 `exec`／`eval` 用它分流 ✓；不碰载荷布局 ✓）。
 pub fn is_code_object(instance: &Instance, value: NonNull<Header>) -> bool {
-    instance
-        .type_named("CodeObject")
+    instance.hot_type(HotId::CodeObject)
         .is_some_and(|code_type| instance.type_of(value) == code_type)
 }
 
@@ -105,7 +105,7 @@ fn syntax_error(
         instance.retain(end_lineno_value),
         instance.retain(end_offset_value),
     ]);
-    let Some(syntax_type) = instance.type_named("SyntaxError") else {
+    let Some(syntax_type) = instance.hot_type(HotId::SyntaxError) else {
         return instance.raise_builtin_error("SyntaxError", message);
     };
     let exception = crate::executor::format::new_exception_with_args(
@@ -141,8 +141,7 @@ fn code_with_filename(
     filename: &str,
 ) -> NonNull<Header> {
     let source = template.get();
-    let code_type = instance
-        .type_named("CodeObject")
+    let code_type = instance.hot_type(HotId::CodeObject)
         .expect("CodeObject 在引导期已登记");
     let mut names: Vec<String> = Vec::new();
     let mut index = 0usize;
@@ -204,7 +203,7 @@ fn execute_code(
             what: "exec／eval：第一个实参不是本层的 code 对象",
         });
     }
-    let frame_type = instance.type_named("frame").ok_or(ExecError::Unsupported {
+    let frame_type = instance.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
         opcode: 0,
         what: "exec／eval：`frame` 类型未登记",
     })?;

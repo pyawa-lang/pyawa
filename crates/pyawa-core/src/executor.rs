@@ -835,7 +835,7 @@ enum OrOperand {
 
 /// 是 `types.UnionType` 实例 ⇒ 取 `__args__` 的成员表（**借用**，不增减引用）；否则 `None`。
 fn union_args_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-    let union_type = instance.type_named("UnionType")?;
+    let union_type = instance.hot_type(HotId::UnionType)?;
     // SAFETY: object 是存活对象；类型身份下面刚比过。
     if unsafe { object.as_ref() }.ty() != union_type {
         return None;
@@ -883,8 +883,7 @@ fn push_union_member(
 
 /// 造一个 `types.UnionType` 实例：成员表按给定顺序进 `__args__`（成员是**新引用**，由本函数接手）。
 fn new_union_of(instance: &Instance, members: Vec<NonNull<Header>>) -> NonNull<Header> {
-    let union_type = instance
-        .type_named("UnionType")
+    let union_type = instance.hot_type(HotId::UnionType)
         .unwrap_or_else(|| instance.new_attribute_type("UnionType"));
     let object = instance
         .alloc(crate::builtin_objects::AttributeObject::new(
@@ -1527,7 +1526,7 @@ pub(crate) fn resume_generator(
             if let ExecError::Raised { exception } = &error {
                 // SAFETY: exception 是存活对象。
                 let ty = unsafe { exception.as_ref() }.ty();
-                let stop_iteration = exception_type(instance, "StopIteration");
+                let stop_iteration = instance.hot_type(HotId::StopIteration).expect("StopIteration 已登记");
                 // SAFETY: generator 是本实例里存活的对象。
                 let is_coroutine =
                     unsafe { generator.as_ref() }.ty() == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
@@ -1549,7 +1548,7 @@ pub(crate) fn resume_generator(
                 let is_async_generator =
                     unsafe { generator.as_ref() }.ty() == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
                 if is_async_generator {
-                    let stop_async_iteration = exception_type(instance, "StopAsyncIteration");
+                    let stop_async_iteration = instance.hot_type(HotId::StopAsyncIteration).expect("StopAsyncIteration 已登记");
                     let word = if instance.is_subtype(ty, stop_iteration) {
                         Some("StopIteration")
                     } else if instance.is_subtype(ty, stop_async_iteration) {

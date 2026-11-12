@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`bound_int`、`bytes_getattr`、`digit_limit_message`、`parse_decimal` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::bigint::{BigInt, IntValue};
 use crate::builtin_objects::{BuiltinFunctionObject, Decimal, IntObject, MethodObject, NativeFn};
 use crate::executor::{attribute_lookup, call_callable, Attribute, ExecError};
@@ -137,8 +138,7 @@ pub unsafe fn int_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -149,7 +149,7 @@ pub unsafe fn int_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -285,7 +285,7 @@ pub(crate) fn int_dunder_new_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let int_type = instance.type_named("int").expect("int 已登记");
+    let int_type = instance.hot_type(HotId::Int).expect("int 已登记");
     let (class, rest) = match args.first().copied() {
         Some(first) if instance.is_type_object(first) => (first.cast::<crate::TypeObject>(), &args[1..]),
         _ => (int_type, args),
@@ -464,7 +464,7 @@ pub unsafe fn int_new(
     // **`int.__new__(bool, 0)` ⇒ TypeError** ✓（round 47；参照原文
     // `int.__new__(bool) is not safe, use bool.__new__()` ✓，`test_bool.test_subclass` 钉住）。
     // `bool` 有自己的构造槽（真值语义）⇒ 拿 `int.__new__` 去建 `bool` 是"不安全"的。
-    if Some(class) == instance.type_named("bool") {
+    if Some(class) == instance.hot_type(HotId::Bool) {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "int.__new__(bool) is not safe, use bool.__new__()",

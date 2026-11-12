@@ -294,6 +294,12 @@ pub(crate) fn hash_text(text: &str) -> u64 {
     if text.is_empty() {
         return 0;
     }
+    // **ASCII 快路（round 248 性能，A2-3）**：先前**每个字符串哈希都先分配一个 `Vec<u8>`** ✗
+    // （perf 里 `Vec<u8> from_iter` ≈6%；属性名／dunder 名每次查字典都付一遍）⇒ ASCII 的
+    // `chars() as u8` 与 `as_bytes()` **逐字节相同** ✓ ⇒ 直接哈希，零分配（哈希值与旧口径一致 ✓）。
+    if text.is_ascii() {
+        return hash_bytes(text.as_bytes());
+    }
     let mut largest = 0u32;
     for character in text.chars() {
         largest = largest.max(character as u32);

@@ -573,8 +573,7 @@ pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
     };
     let text = instance.new_str(message);
     let category = instance.type_value(
-        instance
-            .type_named("DeprecationWarning")
+        instance.hot_type(HotId::DeprecationWarning)
             .expect("DeprecationWarning 已登记"),
     );
     let outcome = crate::executor::call::call_value(instance, warn, &[text, category], &[]);

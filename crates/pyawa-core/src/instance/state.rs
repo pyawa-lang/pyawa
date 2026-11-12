@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -57,7 +58,7 @@ impl Instance {
             None => {
                 let mapping = self
                     .adopt(DictObject::new(
-                        self.type_named("dict").expect("dict 已在引导期登记"),
+                        self.hot_type(HotId::Dict).expect("dict 已在引导期登记"),
                         RefCell::new(Vec::new()),
                     ))
                     .cast::<Header>();
@@ -125,7 +126,7 @@ impl Instance {
                     // 绑定成方法对象 ✓（与属性通道同一口径 ✓）。
                     unsafe { self.incref_object(object.as_ptr()) };
                     self.alloc(crate::builtin_objects::MethodObject::new(
-                        self.type_named("method").expect("method 已登记"),
+                        self.hot_type(HotId::Method).expect("method 已登记"),
                         function,
                         this,
                     ))
@@ -180,7 +181,7 @@ impl Instance {
             let object_type = unsafe { object.as_ref() }.ty();
             let own = self.type_lookup(object_type, "__setattr__");
             let default = self.type_lookup(
-                self.type_named("object").expect("object 在引导期已登记"),
+                self.hot_type(HotId::Object).expect("object 在引导期已登记"),
                 "__setattr__",
             );
             if own.is_some() && own != default {

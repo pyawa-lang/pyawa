@@ -16,6 +16,7 @@
 //! 其余（`repr`／`copy`／`__eq__`／`__or__`／`__missing__` 覆写语义／`isinstance(d, dict)` ✓ 等）
 //! 未接 ✓ —— 撞上再补 ✓。
 
+use crate::HotId;
 use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
@@ -30,8 +31,7 @@ const DATA: &str = "_data";
 
 /// 造一个原生可调用对象（**新引用** ✓；与 `collections_module`／`typing.rs` 同一做法 ✓）。
 fn make_native(instance: &Instance, name: &'static str, handler: NativeFn) -> NonNull<Header> {
-    let ty = instance
-        .type_named("builtin_function_or_method")
+    let ty = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     let object = instance.alloc(BuiltinFunctionObject::new(ty, name, Cell::new(handler)));
     object.into_raw().cast::<Header>()
@@ -39,7 +39,7 @@ fn make_native(instance: &Instance, name: &'static str, handler: NativeFn) -> No
 
 /// 取实例字典里的**私有**属性（**借用** ✓；不是 `defaultdict` 实例或没建字典 ⇒ `None` ✓）。
 fn private_attr(instance: &Instance, this: NonNull<Header>, key: &str) -> Option<NonNull<Header>> {
-    let expected = instance.type_named("defaultdict")?;
+    let expected = instance.hot_type(HotId::DefaultDict)?;
     // SAFETY: 调用方保证 this 是存活对象；类型身份查注册表。
     if unsafe { this.as_ref() }.ty() != expected {
         return None;
@@ -370,7 +370,7 @@ pub unsafe fn defaultdict_clear(
 
 /// 取／建 `defaultdict` 类型（**幂等** ✓；`_collections` 装配时调用 ✓）。
 pub fn build_defaultdict_type(instance: &Instance) -> NonNull<TypeObject> {
-    if let Some(existing) = instance.type_named("defaultdict") {
+    if let Some(existing) = instance.hot_type(HotId::DefaultDict) {
         return existing;
     }
     let ty = instance.alloc_type_raw(
@@ -380,12 +380,14 @@ pub fn build_defaultdict_type(instance: &Instance) -> NonNull<TypeObject> {
             .with_new(defaultdict_new)
             .with_getattr(defaultdict_getattr),
     );
-    if let Some(object_type) = instance.type_named("object") {
+    if let Some(object_type) = instance.hot_type(HotId::Object) {
         assert!(
             instance.register_bases(ty, vec![object_type]).is_some(),
             "OM-13：defaultdict 的 MRO 应当可线性化"
         );
     }
+    // 命名空间里会写 `__module__` ⇒ 二元运算的用户-dunder 预筛位置上（round 248 性能，A2-3 ✓）。
+    instance.mark_dunder_capable(ty);
     if let Some(namespace) = instance.type_namespace(ty.cast()) {
         let methods: [(&'static str, NativeFn); 11] = [
             ("__getitem__", defaultdict_getitem),

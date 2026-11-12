@@ -2,12 +2,13 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
     /// 元组的元素（**借用视图**；不是元组给 `None`）。
     pub fn tuple_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        if !self.type_named("tuple").is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
+        if !self.hot_type(HotId::Tuple).is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -17,7 +18,7 @@ impl Instance {
 
     /// 摊开一个 `list` 的元素（**借用**一份拷贝；不是 `list` 给 `None`）。
     pub fn list_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        if !self.type_named("list").is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
+        if !self.hot_type(HotId::List).is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -29,7 +30,7 @@ impl Instance {
         &self,
         object: NonNull<Header>,
     ) -> Option<Vec<(NonNull<Header>, NonNull<Header>)>> {
-        if !self.type_named("dict").is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
+        if !self.hot_type(HotId::Dict).is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -39,11 +40,8 @@ impl Instance {
     /// 摊开一个 `set` 的元素。
     pub fn set_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
         // **`frozenset` 也算** ✓（第 236 轮）。
-        let _ty = self.type_of(object);
-        if !["set", "frozenset"].iter().any(|name| {
-            self.type_named(name)
-                .is_some_and(|base| self.is_subtype(self.type_of(object), base))
-        }) {
+        let ty = self.type_of(object);
+        if !self.hot_subtype_of_any(ty, &[HotId::Set, HotId::FrozenSet]) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -141,8 +139,7 @@ impl Instance {
 
     pub fn length_of(&self, object: NonNull<Header>) -> Option<usize> {
         let ty = self.type_of(object);
-        if self
-            .type_named("str")
+        if self.hot_type(HotId::Str)
             .is_some_and(|base| self.is_subtype(ty, base))
         {
             // **按码点数** ✓（task-19 第 2 轮真 bug ✗ 修的就是"UTF-8 字节数"；P3-38 S2a-2 批 2 起
@@ -150,7 +147,7 @@ impl Instance {
             // **孤立代理也各算 1** ✓，且不再经 `value()`（那对 WTF-8 表示会守卫 panic）✓。
             return self.str_code_point_len(object);
         }
-        if self.type_named("bytearray").is_some_and(|base| {
+        if self.hot_type(HotId::ByteArray).is_some_and(|base| {
             self.type_of(object) == base || self.is_subtype(self.type_of(object), base)
         }) {
             // SAFETY: 类型身份已确认。
@@ -158,15 +155,13 @@ impl Instance {
                 .value()
                 .len());
         }
-        if self
-            .type_named("bytes")
+        if self.hot_type(HotId::Bytes)
             .is_some_and(|base| self.is_subtype(ty, base))
         {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value().len());
         }
-        if self
-            .type_named("deque")
+        if self.hot_type(HotId::Deque)
             .is_some_and(|base| self.is_subtype(ty, base))
         {
             // SAFETY: 类型身份已确认。
@@ -175,8 +170,7 @@ impl Instance {
         // **按子类型判**（第 99 轮真 bug 修 ✗）：先前是**精确类型**比较 ✗ ⇒ `class D(dict)` 这种
         // **内建类型的子类**一律落空 ✓（两行复现：`class D(dict)` ⇒ `len(D())` 报
         // `TypeError: object of type 'D' has no len()` ✗，参照给 0 ✓）。
-        if self
-            .type_named("dict")
+        if self.hot_type(HotId::Dict)
             .is_some_and(|base| self.is_subtype(ty, base))
         {
             // SAFETY: 同上。
@@ -184,22 +178,17 @@ impl Instance {
         }
         // **`set`／`frozenset` 按自己的载荷读** ✓（第 236 轮顺手修 ✗）：先前这里把 `set` **当 `DictObject`** 读 ✗
         // ⇒ 长度靠"两种载荷碰巧同布局"歪打正着 ✓；现在明写 ✓。
-        if ["set", "frozenset"].iter().any(|name| {
-            self.type_named(name)
-                .is_some_and(|base| self.is_subtype(ty, base))
-        }) {
+        if self.hot_subtype_of_any(ty, &[HotId::Set, HotId::FrozenSet]) {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().len());
         }
-        if self
-            .type_named("list")
+        if self.hot_type(HotId::List)
             .is_some_and(|base| self.is_subtype(ty, base))
         {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<ListObject>() }.len());
         }
-        if self
-            .type_named("tuple")
+        if self.hot_type(HotId::Tuple)
             .is_some_and(|base| self.is_subtype(ty, base))
         {
             // SAFETY: 同上。
@@ -210,7 +199,7 @@ impl Instance {
 
     /// **`bytes` 的载荷**（**借用**；不是 `bytes` 给 `None`）。
     pub fn bytes_value(&self, object: NonNull<Header>) -> Option<&[u8]> {
-        if Some(self.type_of(object)) == self.type_named("bytes") {
+        if Some(self.type_of(object)) == self.hot_type(HotId::Bytes) {
             // SAFETY: 类型身份已确认。
             return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value());
         }
@@ -225,8 +214,8 @@ impl Instance {
         // **零分配的类型判据**（round 100 性能修 ✗）：热路径是 `==`／`<`，不能每次造 `String`
         // （`type_name` 会 ✓）。用类型指针＋`is_subtype`（MRO 指针扫 ✓）判 `bytes`／`bytearray` 族 ✓。
         let ty = unsafe { object.as_ref() }.ty();
-        let bytes_type = self.type_named("bytes")?;
-        let bytearray_type = self.type_named("bytearray")?;
+        let bytes_type = self.hot_type(HotId::Bytes)?;
+        let bytearray_type = self.hot_type(HotId::ByteArray)?;
         let family = |candidate: NonNull<crate::TypeObject>| {
             candidate == bytes_type
                 || candidate == bytearray_type
@@ -253,7 +242,7 @@ impl Instance {
     /// 返回 `false` ＝ **不是 `bytearray`** ✓ 或**越界** ✓ —— 调用方据此如实报
     /// `TypeError`／`ValueError` ✓（与参照的"只收可写 buffer"口径同向 ✓）。
     pub fn write_bytearray_at(&self, object: NonNull<Header>, offset: usize, bytes: &[u8]) -> bool {
-        if Some(self.type_of(object)) != self.type_named("bytearray") {
+        if Some(self.type_of(object)) != self.hot_type(HotId::ByteArray) {
             return false;
         }
         // SAFETY: 类型身份刚确认（`bytearray` 的载荷就是 `BytearrayObject` ✓）。

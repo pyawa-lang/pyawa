@@ -13,7 +13,15 @@ impl Instance {
     ) -> Option<Vec<NonNull<TypeObject>>> {
         let mro = self.linearize(ty, &bases)?;
         // SAFETY: ty 由本实例的注册表持有。
-        unsafe { ty.as_ref() }.set_bases(bases, mro.clone());
+        let type_object = unsafe { ty.as_ref() };
+        // **round 248 性能（A2-3）**：基类可能命中"用户覆写 dunder" ⇒ 子类也可命中（继承这个能力位 ✓）。
+        if bases
+            .iter()
+            .any(|base| unsafe { base.as_ref() }.is_dunder_capable())
+        {
+            type_object.mark_dunder_capable();
+        }
+        type_object.set_bases(bases, mro.clone());
         Some(mro)
     }
 
@@ -45,10 +53,33 @@ impl Instance {
         if let Some(found) = self.types_by_name.borrow().get(name) {
             return Some(*found);
         }
+        // **负缓存**（round 248 性能，A2-3）：**未命中的名字也 O(1)** —— 先前每次 miss 都要
+        // **线性扫全表** ✗（`HotTypes` 重建时每个未登记名字都扫一遍；`Iter<NonNull<TypeObject>>`
+        // 那条热点正是这里）。按 `types_generation` 失效：登记新类型后清空 ⇒ 后补的名字仍能查到 ✓。
+        {
+            let generation = self.types_generation.get();
+            let mut missing = self.types_missing.borrow_mut();
+            if missing.0 != generation {
+                *missing = (generation, std::collections::HashSet::new());
+            }
+            if missing.1.contains(name) {
+                return None;
+            }
+        }
         let found = self.types.borrow().iter().copied().find(|ty| {
             // SAFETY: 注册表里的类型都存活。
             unsafe { ty.as_ref() }.name() == name
-        })?;
+        });
+        let Some(found) = found else {
+            // 记进负缓存（同一代数内不再扫表 ✓）；`types_generation` 变化时整体失效 ✓。
+            let generation = self.types_generation.get();
+            let mut missing = self.types_missing.borrow_mut();
+            if missing.0 != generation {
+                *missing = (generation, std::collections::HashSet::new());
+            }
+            missing.1.insert(name.to_owned());
+            return None;
+        };
         self.types_by_name
             .borrow_mut()
             .entry(name.to_owned())
@@ -66,6 +97,18 @@ impl Instance {
         }
         // SAFETY: 两个类型都由本实例的注册表持有。
         unsafe { subtype.as_ref() }.mro().contains(&supertype)
+    }
+
+    /// **round 248 性能（A2-3）**：这个类型的命名空间可能命中"用户覆写 dunder"吗？（一次位测 ✓）
+    pub(crate) fn dunder_capable(&self, ty: NonNull<TypeObject>) -> bool {
+        // SAFETY: 类型对象由注册表持有、实例存活期间一直有效。
+        unsafe { ty.as_ref() }.is_dunder_capable()
+    }
+
+    /// **round 248 性能（A2-3）**：把"命名空间里挂了 `__module__`"上报成类型标志（原生类型用 ✓）。
+    pub fn mark_dunder_capable(&self, ty: NonNull<TypeObject>) {
+        // SAFETY: 类型对象由注册表持有、实例存活期间一直有效。
+        unsafe { ty.as_ref() }.mark_dunder_capable();
     }
 
     /// **OM-23**：本实例的单例表。

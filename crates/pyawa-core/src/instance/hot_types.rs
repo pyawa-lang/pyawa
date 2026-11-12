@@ -67,6 +67,33 @@ hot_ids! {
     WeakRef => "weakref",
     MappingProxy => "mappingproxy",
     NotImplementedType => "NotImplementedType",
+    NoneType => "NoneType",
+    Ellipsis => "ellipsis",
+    MemoryView => "memoryview",
+    GetSetDescriptor => "getset_descriptor",
+    MemberDescriptor => "member_descriptor",
+    // 视图／映射／容器族（`dict` 的 keys/items/values 视图类型是按需建的）
+    DictKeys => "dict_keys",
+    DictItems => "dict_items",
+    DictValues => "dict_values",
+    DefaultDict => "defaultdict",
+    SetIterator => "set_iterator",
+    // 线程／上下文／typing 面
+    Lock => "lock",
+    ThreadHandle => "_ThreadHandle",
+    TypeVar => "TypeVar",
+    Generic => "Generic",
+    UnionType => "UnionType",
+    GenericAlias => "GenericAlias",
+    Token => "Token",
+    ContextVar => "ContextVar",
+    Context => "Context",
+    FrameLocalsProxy => "FrameLocalsProxy",
+    SimpleNamespace => "SimpleNamespace",
+    NoDefaultType => "NoDefaultType",
+    TypeAliasType => "TypeAliasType",
+    Asend => "async_generator_asend",
+    ABCMeta => "ABCMeta",
     // 调用／帧／生成器面
     Function => "function",
     BuiltinFunctionOrMethod => "builtin_function_or_method",
@@ -100,12 +127,19 @@ hot_ids! {
     NotImplementedError => "NotImplementedError",
     NameError => "NameError",
     ImportError => "ImportError",
+    SyntaxError => "SyntaxError",
+    OSError => "OSError",
+    UnicodeError => "UnicodeError",
+    DeprecationWarning => "DeprecationWarning",
+    AssertionError => "AssertionError",
     // 迭代器协议（含 `itertools` 的专用推进分支）
     Iterator => "iterator",
     CallableIterator => "callable_iterator",
     DictKeyIterator => "dict_keyiterator",
     DictValueIterator => "dict_valueiterator",
     DictItemIterator => "dict_itemiterator",
+    ListIterator => "list_iterator",
+    TupleIterator => "tuple_iterator",
     ListReverseIterator => "list_reverseiterator",
     Reversed => "reversed",
     Count => "count",
@@ -200,6 +234,17 @@ impl Instance {
     /// `ty` 是不是 `id` 指的那个内建类型（**指针比较**，热路径 ✓）。
     pub(crate) fn hot_type_is(&self, id: HotId, ty: NonNull<TypeObject>) -> bool {
         self.hot_type(id) == Some(ty)
+    }
+
+    /// `ty` 是不是 `ids` 里**任一**内建类型（**精确**比较；热路径指针比较 ✓）。
+    pub(crate) fn hot_type_is_any(&self, ty: NonNull<TypeObject>, ids: &[HotId]) -> bool {
+        ids.iter().any(|id| self.hot_type_is(*id, ty))
+    }
+
+    /// `ty` 是不是 `ids` 里**任一**内建类型（**含子类**；指针表 + MRO 指针扫，无字符串名 ✓）。
+    pub(crate) fn hot_subtype_of_any(&self, ty: NonNull<TypeObject>, ids: &[HotId]) -> bool {
+        ids.iter()
+            .any(|id| self.hot_type(*id).is_some_and(|base| self.is_subtype(ty, base)))
     }
 
     /// 这个类型是不是本层接线的**迭代器类型**（`FOR_ITER` 每轮一次：指针比较，不再查 36 次名字 ✓）。

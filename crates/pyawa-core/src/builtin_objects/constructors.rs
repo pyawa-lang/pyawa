@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -123,7 +124,7 @@ pub unsafe fn bool_dunder_new_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let bool_type = instance.type_named("bool").expect("bool 已登记");
+    let bool_type = instance.hot_type(HotId::Bool).expect("bool 已登记");
     let (class, rest) = match args.first().copied() {
         Some(first) if instance.is_type_object(first) => (first.cast::<crate::TypeObject>(), &args[1..]),
         _ => (bool_type, args),
@@ -161,7 +162,7 @@ pub unsafe fn tuple_new(
     // **子类布局** ✓（第 728 轮）：`class P(tuple)` 的实例要**真的是 `P`** ✓ ——
     // 载荷同构（`TupleObject` ✓），只是**类型槽位**用请求的类 ✓（照 `make_str` 的口径 ✓）；
     // `class` 就是 `tuple` 本身时走老路（含 `tuple() is ()` 的单例 ✓）。
-    let tuple_type = instance.type_named("tuple").unwrap_or(class);
+    let tuple_type = instance.hot_type(HotId::Tuple).unwrap_or(class);
     // **`tuple()`**：**OM-23** 要求给**空元组单例**（`tuple() is ()` 必须为真 ✓）。
     let Some(source) = args.first() else {
         if class == tuple_type {

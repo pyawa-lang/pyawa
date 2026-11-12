@@ -9,6 +9,7 @@
 //! 口径：载荷 `AttributeObject`（实例属性字典 ✓）；`new` 无位置实参、`__init__` 收关键字并写进
 //! 属性字典 ✓；`repr` 照参照 `namespace(k=v, …)`（子类用子类名 ✓）；空实例 ⇒ `namespace()` ✓。
 
+use crate::HotId;
 use core::cell::RefCell;
 use core::ptr::NonNull;
 
@@ -18,8 +19,7 @@ use crate::{Header, Instance, TypeObject};
 
 /// 造一个原生可调用对象（**新引用** ✓；与 `defaultdict.rs` 同一做法 ✓）。
 fn make_native(instance: &Instance, name: &'static str, handler: NativeFn) -> NonNull<Header> {
-    let ty = instance
-        .type_named("builtin_function_or_method")
+    let ty = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     instance
         .alloc(BuiltinFunctionObject::new(ty, name, core::cell::Cell::new(handler)))
@@ -37,7 +37,7 @@ fn attributes_of(instance: &Instance, object: NonNull<Header>) -> Option<NonNull
 
 /// **`types.SimpleNamespace` 的类型对象**（每实例一个 ✓）。
 pub fn build_simple_namespace_type(instance: &Instance) -> NonNull<TypeObject> {
-    if let Some(existing) = instance.type_named("SimpleNamespace") {
+    if let Some(existing) = instance.hot_type(HotId::SimpleNamespace) {
         return existing;
     }
     let ty = instance.alloc_type_raw(
@@ -47,12 +47,14 @@ pub fn build_simple_namespace_type(instance: &Instance) -> NonNull<TypeObject> {
             .with_new(namespace_new)
             .with_repr(namespace_repr),
     );
-    if let Some(object_type) = instance.type_named("object") {
+    if let Some(object_type) = instance.hot_type(HotId::Object) {
         let _ = instance.register_bases(ty, vec![object_type]);
     }
     // **实例字典外挂**（`OM-14`）：与用户类一致 ✓（见 `attributes_of` 的注释 ✓）。
     // SAFETY: ty 刚建、由注册表持有。
     unsafe { ty.as_ref() }.mark_external_instance_dict();
+    // 命名空间里会写 `__module__` ⇒ 二元运算的用户-dunder 预筛位置上（round 248 性能，A2-3 ✓）。
+    instance.mark_dunder_capable(ty);
     if let Some(namespace) = instance.type_namespace(ty.cast()) {
         let module = instance.new_str("types");
         instance.dict_set(namespace, "__module__", module);

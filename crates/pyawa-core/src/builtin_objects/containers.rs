@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -76,8 +77,7 @@ pub unsafe fn dict_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -88,7 +88,7 @@ pub unsafe fn dict_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -261,7 +261,7 @@ pub(crate) fn dict_getitem_builtin_native(
             instance.retain(*key);
             let exception = crate::executor::new_exception_with_args(
                 instance,
-                crate::executor::exception_type(instance, "KeyError"),
+                instance.hot_type(HotId::KeyError).expect("KeyError 已登记"),
                 vec![*key],
             );
             return Err(crate::executor::runtime::raise(instance, exception));
@@ -393,7 +393,7 @@ py_object! {
             /// **删除只需从桶里摘掉那一个地址** ✓、下标无关 ✓。
             /// 用 `usize` 而非 `NonNull` 存 ✓：索引里的条目是**非持有引用**（`items` 才是所有权所在 ✓）
             /// ⇒ 不应被 `traverse` 当成子引用计数（`OM-40` 的 GC 字段覆盖检查也会误报 ✗）。
-            index: RefCell<Option<std::collections::HashMap<u64, Vec<usize>>>>,
+            index: RefCell<Option<crate::fast_hash::FastMap<u64, Vec<usize>>>>,
         }
     }
 }
@@ -428,7 +428,7 @@ py_object! {
         entries: RefCell<Vec<(NonNull<Header>, NonNull<Header>)>>,
         {
             /// 查找索引；`None` ⇒ 还没建／已作废。
-            index: RefCell<Option<std::collections::HashMap<u64, Vec<usize>>>>,
+            index: RefCell<Option<crate::fast_hash::FastMap<u64, Vec<usize>>>>,
             /// **键集版本号**（`P3-41` round 42）：改键（插入／删除）时 +1 ⇒ 迭代器据此报
             /// `RuntimeError: dictionary changed size during iteration` ✓（只改值不算 ✓，照参照）。
             version: Cell<u64>,
@@ -634,8 +634,8 @@ impl SetObject {
         if self.index.borrow().is_some() {
             return;
         }
-        let mut built: std::collections::HashMap<u64, Vec<usize>> =
-            std::collections::HashMap::new();
+        let mut built: crate::fast_hash::FastMap<u64, Vec<usize>> =
+            crate::fast_hash::FastMap::default();
         {
             let items = self.items.borrow();
             for item in items.iter() {
@@ -825,8 +825,8 @@ impl DictObject {
         let built = {
             let entries = self.entries.borrow();
             let hashes = self.hashes.borrow();
-            let mut map: std::collections::HashMap<u64, Vec<usize>> =
-                std::collections::HashMap::new();
+            let mut map: crate::fast_hash::FastMap<u64, Vec<usize>> =
+                crate::fast_hash::FastMap::default();
             for (position, (key, _)) in entries.iter().enumerate() {
                 if Self::is_tombstone(*key) {
                     continue;

@@ -606,7 +606,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                     // - `INTRINSIC_TYPEALIAS`（11）：**只注册编号** ✓（轮 2 落语义 ✓，如实报未接线 ✓）。
                     "INTRINSIC_TYPEVAR" => {
                         let name = frame.get().pop()?;
-                        let Some(typevar_type) = instance.type_named("TypeVar") else {
+                        let Some(typevar_type) = instance.hot_type(HotId::TypeVar) else {
                             release(instance, name);
                             return Err(ExecError::Unsupported {
                                 opcode: opcode_number,
@@ -621,8 +621,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                     }
                     "INTRINSIC_SUBSCRIPT_GENERIC" => {
                         let params = frame.get().pop()?;
-                        let generic = instance
-                            .type_named("Generic")
+                        let generic = instance.hot_type(HotId::Generic)
                             .unwrap_or_else(|| instance.new_attribute_type("Generic"));
                         let base = instance.new_generic_alias(generic.cast(), params);
                         release(instance, params);
@@ -696,7 +695,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                             };
                             let exception = new_exception(
                                 instance,
-                                exception_type(instance, "RuntimeError"),
+                                instance.hot_type(HotId::RuntimeError).expect("RuntimeError 已登记"),
                                 message,
                             );
                             // **PEP 479 的包装要带走 cause／context** ✓（round 64）：参照的
@@ -766,7 +765,7 @@ fn step_calls_call_intrinsic_2<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                     "INTRINSIC_TYPEVAR_WITH_BOUND" => {
                         let thunk = frame.get().pop()?;
                         let name = frame.get().pop()?;
-                        let Some(typevar_type) = instance.type_named("TypeVar") else {
+                        let Some(typevar_type) = instance.hot_type(HotId::TypeVar) else {
                             release(instance, thunk);
                             release(instance, name);
                             return Err(ExecError::Unsupported {

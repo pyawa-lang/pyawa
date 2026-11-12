@@ -86,19 +86,20 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
         instance
             .type_lookup_owner(ty, "__iter__")
             .map(|(owner, _)| {
-                ![
-                    "list",
-                    "tuple",
-                    "dict",
-                    "set",
-                    "frozenset",
-                    "str",
-                    "bytes",
-                    "bytearray",
-                    "range",
-                ]
-                .iter()
-                .any(|name| Some(owner) == instance.type_named(name))
+                !instance.hot_type_is_any(
+                    owner,
+                    &[
+                        HotId::List,
+                        HotId::Tuple,
+                        HotId::Dict,
+                        HotId::Set,
+                        HotId::FrozenSet,
+                        HotId::Str,
+                        HotId::Bytes,
+                        HotId::ByteArray,
+                        HotId::Range,
+                    ],
+                )
             })
             .unwrap_or(false)
     };
@@ -926,25 +927,27 @@ pub fn concat_public(
     // **`bytearray` 拼接** ✓（第 643 轮）：任一操作数是 `bytearray` ⇒ 结果给 **`bytearray`** ✓（参照口径 ✓）；
     // 另一侧要是 `bytes`／`bytearray` ✓。`re._compiler` 的 `data += chunk` 正需要它 ✓
     //（先前报 `unsupported operand type(s) for +: 'bytearray' and 'bytes'` ✗）。
-    let is_byte_like = |object: NonNull<Header>| {
-        matches!(
-            instance.type_name(instance.type_of(object)).as_str(),
-            "bytes" | "bytearray" | "memoryview"
-        )
+    // **round 248 性能（A2-3）**：这里先前的 `type_name(...)` 比较会**每次二元运算分配两个
+    // `String`** ✗（`+=` 的公共税；perf 里 `Vec<u8> from_iter` ≈3% 就是它）⇒ 改**类型指针比较** ✓。
+    // 口径与原实现一致：按**精确类型**认（`bytes`／`bytearray`／`memoryview`）。
+    let is_byte_like = |ty: NonNull<crate::TypeObject>| {
+        [HotId::Bytes, HotId::ByteArray, HotId::MemoryView]
+            .iter()
+            .any(|id| instance.hot_type_is(*id, ty))
     };
-    if (instance.type_name(left_type) == "bytearray"
-        || instance.type_name(right_type) == "bytearray")
-        && is_byte_like(left)
-        && is_byte_like(right)
+    if (instance.hot_type_is(HotId::ByteArray, left_type)
+        || instance.hot_type_is(HotId::ByteArray, right_type))
+        && is_byte_like(left_type)
+        && is_byte_like(right_type)
     {
         let mut joined: Vec<u8> = Vec::new();
         for side in [left, right] {
-            let side_type = instance.type_name(instance.type_of(side));
-            if side_type == "bytearray" {
+            let side_type = instance.type_of(side);
+            if instance.hot_type_is(HotId::ByteArray, side_type) {
                 // SAFETY: 类型身份已确认，载荷就是 `BytearrayObject`。
                 let data = unsafe { &*side.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() };
                 joined.extend(data.value().iter().copied());
-            } else if side_type == "memoryview" {
+            } else if instance.hot_type_is(HotId::MemoryView, side_type) {
                 // **`bytearray += memoryview`**（round 91，性能修 ✗）：`Lib/_pyio.py` 的
                 // `BufferedWriter.write` 是 `self._write_buf += memoryview(b)` ✓ —— 先前这一档
                 // 落进通用迭代（逐个元素走 Python 协议）⇒ 100 KB 要 0.27 s ✗（`test_bufio`

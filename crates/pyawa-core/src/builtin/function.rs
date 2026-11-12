@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：（无） ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::builtin_objects::{FunctionObject, TupleObject};
 use crate::executor::ExecError;
 use core::ptr::NonNull;
@@ -69,15 +70,14 @@ pub fn function_descriptor_get(
         ));
     };
     // `f.__get__(None, owner)` ⇒ 未绑定（就是 f 本身 ✓）
-    if Some(instance.type_of(this)) == instance.type_named("NoneType") {
+    if Some(instance.type_of(this)) == instance.hot_type(HotId::NoneType) {
         // 调用方要一份新引用
         // SAFETY: function 由调用方借用，存活。
         unsafe { instance.incref_object(function.as_ptr()) };
         return Ok(function);
     }
     // 其余 ⇒ 绑成方法 ✓（与属性通道给的那种对象同形 ✓）
-    let method_type = instance
-        .type_named("method")
+    let method_type = instance.hot_type(HotId::Method)
         .expect("method 在引导期已登记");
     // SAFETY: function（借用）与 this（实参）都存活；方法对象要各持一份。
     unsafe {
@@ -131,8 +131,7 @@ fn bind_native_to(
     handler: crate::NativeFn,
     target: NonNull<Header>,
 ) -> NonNull<Header> {
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     let native = instance.alloc(crate::BuiltinFunctionObject::new(
         method_type,
@@ -144,7 +143,7 @@ fn bind_native_to(
     unsafe { instance.incref_object(target.as_ptr()) };
     instance
         .alloc(crate::MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             native_raw,
             target,
         ))
@@ -747,8 +746,7 @@ pub(crate) unsafe fn function_attribute_descriptor_set(
         // tuple or None` ✓）。tuple ⇒ 每项各留一份交给函数字段 ✓。
         FunctionAttributeKind::Defaults => {
             let is_none = value == instance.singletons().none();
-            let is_tuple = instance
-                .type_named("tuple")
+            let is_tuple = instance.hot_type(HotId::Tuple)
                 .is_some_and(|tuple_ty| instance.type_of(value) == tuple_ty);
             if !is_none && !is_tuple {
                 return Err(instance.raise_builtin_error(
@@ -785,8 +783,7 @@ pub(crate) unsafe fn function_attribute_descriptor_set(
         // dict or None` ✓）。只换字段持有那份 ✓。
         FunctionAttributeKind::Kwdefaults => {
             let is_none = value == instance.singletons().none();
-            let is_dict = instance
-                .type_named("dict")
+            let is_dict = instance.hot_type(HotId::Dict)
                 .is_some_and(|dict_ty| instance.is_subtype(instance.type_of(value), dict_ty));
             if !is_none && !is_dict {
                 return Err(instance.raise_builtin_error(

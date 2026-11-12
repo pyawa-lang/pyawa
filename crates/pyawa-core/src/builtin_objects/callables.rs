@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 
 
@@ -144,8 +145,7 @@ pub unsafe fn classmethod_new(
 
 /// **造一个 `classmethod` 包装对象**（**新引用**；round 122 给 `dict.fromkeys` 类级绑定用 ✓）。
 pub fn new_classmethod(instance: &Instance, function: NonNull<Header>) -> NonNull<Header> {
-    let ty = instance
-        .type_named("classmethod")
+    let ty = instance.hot_type(HotId::ClassMethod)
         .expect("classmethod 在引导期已登记");
     instance.retain(function);
     instance
@@ -295,7 +295,7 @@ pub unsafe fn classmethod_descriptor_get(
     instance.retain(this);
     Ok(instance
         .alloc(MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             inner,
             this,
         ))
@@ -355,8 +355,7 @@ pub unsafe fn builtin_function_getattr(
     // 迭代器 `__reduce__` 元的第一个元素正是内建 `iter`／`reversed` ✓，`test_iterator_pickle` 卡在这 ✓）。
     if name == "__reduce__" {
         let handler: crate::NativeFn = builtin_function_reduce_native;
-        let builtin_type = instance
-            .type_named("builtin_function_or_method")
+        let builtin_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("引导期已登记");
         let native = instance.alloc(BuiltinFunctionObject::new(
             builtin_type,
@@ -367,7 +366,7 @@ pub unsafe fn builtin_function_getattr(
         // SAFETY: 方法对象要自己那份 self（`OM-16`）；ptr 是本类型的存活对象。
         unsafe { instance.incref_object(ptr) };
         let bound = instance.alloc(MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             native_raw,
             unsafe { NonNull::new_unchecked(ptr) },
         ));
@@ -616,13 +615,12 @@ pub unsafe fn method_getattr(
             // 函数对象（名字 `generator` ✓、绑定实例是 generator ✓）⇒ 按这条判据给参照文案 ✓。
             if name == "__doc__" {
                 let function_type = unsafe { function.as_ref() }.ty();
-                if Some(function_type) == instance.type_named("builtin_function_or_method") {
+                if Some(function_type) == instance.hot_type(HotId::BuiltinFunctionOrMethod) {
                     // SAFETY: 类型身份刚确认。
                     let builtin = unsafe { &*function.as_ptr().cast::<BuiltinFunctionObject>() };
                     if builtin.name() == "__next__" {
                         let this_type = unsafe { object.this().as_ref() }.ty();
-                        if instance
-                            .type_named("generator")
+                        if instance.hot_type(HotId::Generator)
                             .is_some_and(|generator| instance.is_subtype(this_type, generator))
                         {
                             return Some(instance.new_str("Implement next(self)."));
@@ -632,7 +630,7 @@ pub unsafe fn method_getattr(
             }
             // SAFETY: function 由方法对象持有。
             let function_type = unsafe { function.as_ref() }.ty();
-            if Some(function_type) == instance.type_named("function") {
+            if Some(function_type) == instance.hot_type(HotId::Function) {
                 // **`P3-17` 之后函数类型字典里也有了这几格（数据描述符对象 ✓）** ⇒ 不能像先前那样
                 // `type_lookup` 直接交出去（会把**描述符对象**当值交出去 ✗）⇒ 走 `function_getattr`
                 // 的**值**面（覆盖字段优先 ✓ —— 与 `f.__name__` 同一处真相 ✓）。
@@ -651,7 +649,7 @@ pub unsafe fn method_getattr(
             let function = object.function();
             // SAFETY: function 由方法对象持有。
             let function_type = unsafe { function.as_ref() }.ty();
-            if Some(function_type) == instance.type_named("function") {
+            if Some(function_type) == instance.hot_type(HotId::Function) {
                 // SAFETY: 刚确认是 Python 函数。
                 let from_getattr = unsafe {
                     crate::builtin::function::function_getattr(function.as_ptr(), name, instance)
@@ -800,7 +798,7 @@ pub fn weakref_hash_state(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Option<Option<i64>> {
-    let base = instance.type_named("weakref")?;
+    let base = instance.hot_type(HotId::WeakRef)?;
     if !instance.is_subtype(instance.type_of(object), base) {
         return None;
     }
@@ -810,7 +808,7 @@ pub fn weakref_hash_state(
 
 /// 记下弱引用的哈希（round 59）。
 pub fn weakref_store_hash(instance: &Instance, object: NonNull<Header>, value: i64) {
-    let Some(base) = instance.type_named("weakref") else {
+    let Some(base) = instance.hot_type(HotId::WeakRef) else {
         return;
     };
     if !instance.is_subtype(instance.type_of(object), base) {
@@ -827,7 +825,7 @@ pub fn weakref_key_hash_state(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Option<Option<u64>> {
-    let base = instance.type_named("weakref")?;
+    let base = instance.hot_type(HotId::WeakRef)?;
     if !instance.is_subtype(instance.type_of(object), base) {
         return None;
     }
@@ -837,7 +835,7 @@ pub fn weakref_key_hash_state(
 
 /// 记下字典键哈希缓存 ✓。
 pub fn weakref_store_key_hash(instance: &Instance, object: NonNull<Header>, value: u64) {
-    let Some(base) = instance.type_named("weakref") else {
+    let Some(base) = instance.hot_type(HotId::WeakRef) else {
         return;
     };
     if !instance.is_subtype(instance.type_of(object), base) {
@@ -855,7 +853,7 @@ pub fn weakref_state(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Option<Option<NonNull<Header>>> {
-    let base = instance.type_named("weakref")?;
+    let base = instance.hot_type(HotId::WeakRef)?;
     if !instance.is_subtype(instance.type_of(object), base) {
         return None;
     }
@@ -1280,7 +1278,7 @@ pub(crate) fn new_bridge_function(instance: &Instance) -> Option<NonNull<Header>
             return NonNull::new(pointer as *mut Header);
         }
     }
-    let function_type = instance.type_named("builtin_function_or_method")?;
+    let function_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)?;
     let object = instance
         .alloc(BuiltinFunctionObject::new(
             function_type,

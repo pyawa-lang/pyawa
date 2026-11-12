@@ -12,6 +12,7 @@
 //! **如实登记的缺口**：`Mapping` 的 isinstance／`|`／`|=`（PEP 584）与 `reversed` 走底层 Mapping 协议，
 //! 需要先把本类型在 `collections.abc.Mapping` 里注册（下一轮）。
 
+use crate::HotId;
 use core::cell::Cell;
 use core::ptr::NonNull;
 
@@ -252,8 +253,7 @@ fn frame_locals_with_class(
 
 /// `frame.f_locals` 用（登记类型）。
 pub fn frame_locals_proxy(instance: &Instance, frame: NonNull<Header>) -> NonNull<Header> {
-    let ty = instance
-        .type_named("FrameLocalsProxy")
+    let ty = instance.hot_type(HotId::FrameLocalsProxy)
         .expect("FrameLocalsProxy 在引导期已登记");
     frame_locals_with_class(instance, ty, frame)
 }
@@ -267,8 +267,7 @@ unsafe fn frame_locals_new(
     let Some(frame) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "FrameLocalsProxy(frame) 需要帧实参"));
     };
-    let is_frame = instance
-        .type_named("frame")
+    let is_frame = instance.hot_type(HotId::Frame)
         .is_some_and(|frame_type| instance.type_of(frame) == frame_type);
     if !is_frame {
         return Err(instance.raise_builtin_error(
@@ -286,8 +285,7 @@ fn bind_proxy_method(
     name: &str,
     handler: NativeFn,
 ) -> NonNull<Header> {
-    let builtin_type = instance
-        .type_named("builtin_function_or_method")
+    let builtin_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(crate::BuiltinFunctionObject::new(
         builtin_type,
@@ -298,7 +296,7 @@ fn bind_proxy_method(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(proxy.as_ptr()) };
     let bound = instance.alloc(crate::MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         unsafe { NonNull::new_unchecked(proxy.as_ptr()) },
     ));
@@ -545,8 +543,7 @@ fn proxy_update_native(
     let proxy = proxy_of(bound)?;
     if let Some(other) = args.first().copied() {
         // `dict` 在参照里会先取 `keys()`（“可映射”形态）；不可映射又不可迭代 ⇒ TypeError ✓
-        let is_mapping = instance
-            .type_named("dict")
+        let is_mapping = instance.hot_type(HotId::Dict)
             .is_some_and(|dict| instance.type_of(other) == dict)
             || crate::executor::attribute::attribute_lookup_swallowing(instance, other, "keys")
                 .is_some();

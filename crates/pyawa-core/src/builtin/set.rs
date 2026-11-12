@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`bound_set`、`container_contains_native`、`tuple_clear`、`tuple_traverse` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, DictObject, ListObject, MethodObject, NativeFn, SetObject, TupleObject};
 use crate::executor::ExecError;
@@ -163,8 +164,7 @@ pub unsafe fn set_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -175,7 +175,7 @@ pub unsafe fn set_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -535,8 +535,8 @@ pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, 
     // 精确的 `set`／`frozenset` 保持原来的形式 ✓（`set()`／`frozenset()`）。
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let class = unsafe { &*ptr }.ty();
-    let exact_set = Some(class) == instance.type_named("set");
-    let exact_frozenset = Some(class) == instance.type_named("frozenset");
+    let exact_set = Some(class) == instance.hot_type(HotId::Set);
+    let exact_frozenset = Some(class) == instance.hot_type(HotId::FrozenSet);
     let class_text = instance.type_name(class).to_owned();
     let items = object.items();
     if items.is_empty() {
@@ -719,11 +719,10 @@ pub(crate) fn set_union_native(
     }
     // `frozenset.union` 的结果仍是 frozenset ✓（参照实测）；其余给 set ✓。
     let receiver_type = instance.type_of(this);
-    let result_is_frozen = instance
-        .type_named("frozenset")
+    let result_is_frozen = instance.hot_type(HotId::FrozenSet)
         .is_some_and(|frozen| instance.is_subtype(receiver_type, frozen));
     if result_is_frozen {
-        let frozen_type = instance.type_named("frozenset").expect("frozenset 在引导期已登记");
+        let frozen_type = instance.hot_type(HotId::FrozenSet).expect("frozenset 在引导期已登记");
         let object = instance.alloc(SetObject::new(
             frozen_type,
             core::cell::RefCell::new(accumulated),

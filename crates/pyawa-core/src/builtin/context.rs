@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`copy_context_value` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::{Cell, RefCell};
 use crate::builtin_objects::{BuiltinFunctionObject, ContextObject, ContextVarObject, MethodObject, NativeFn, TokenObject};
 use crate::executor::ExecError;
@@ -114,8 +115,7 @@ pub unsafe fn context_var_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -126,7 +126,7 @@ pub unsafe fn context_var_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -191,8 +191,7 @@ pub(crate) unsafe fn context_var_set_native(
     object.push_value(*value);
     // SAFETY: owner 由方法对象持有 ⇒ Token 要自己那份 ✓。
     unsafe { instance.incref_object(owner.as_ptr()) };
-    let token_type = instance
-        .type_named("Token")
+    let token_type = instance.hot_type(HotId::Token)
         .expect("Token 在引导期已登记");
     let token = instance.alloc(TokenObject::new(token_type, owner, old));
     Ok(token.into_raw().cast::<Header>())
@@ -212,7 +211,7 @@ pub(crate) unsafe fn context_var_reset_native(
         return Err(instance.raise_builtin_error("TypeError", "reset() takes exactly one argument (0 given)"));
     };
     // SAFETY: token 由调用方保证存活。
-    if unsafe { token.as_ref() }.ty() != instance.type_named("Token").unwrap_or(unsafe { token.as_ref() }.ty()) {
+    if unsafe { token.as_ref() }.ty() != instance.hot_type(HotId::Token).unwrap_or(unsafe { token.as_ref() }.ty()) {
         return Err(instance.raise_builtin_error("ValueError", "Token was created in a different Context"));
     }
     // SAFETY: 类型身份刚确认。
@@ -259,8 +258,7 @@ pub unsafe fn context_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -271,7 +269,7 @@ pub unsafe fn context_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -304,7 +302,7 @@ pub(crate) unsafe fn context_get_native(
         return Err(instance.raise_builtin_error("TypeError", "get() takes at least 1 argument"));
     };
     // SAFETY: var 由调用方保证存活。
-    if unsafe { var.as_ref() }.ty() == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty()) {
+    if unsafe { var.as_ref() }.ty() == instance.hot_type(HotId::ContextVar).unwrap_or(unsafe { var.as_ref() }.ty()) {
         // SAFETY: 类型身份刚确认。
         let object = unsafe { &*var.as_ptr().cast::<ContextVarObject>() };
         if let Some(value) = object.current() {
@@ -334,7 +332,7 @@ pub(crate) unsafe fn context_contains_native(
         return Err(instance.raise_builtin_error("TypeError", "__contains__ 需要 1 个实参"));
     };
     let found = unsafe { var.as_ref() }.ty()
-        == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty())
+        == instance.hot_type(HotId::ContextVar).unwrap_or(unsafe { var.as_ref() }.ty())
         && unsafe { &*var.as_ptr().cast::<ContextVarObject>() }.current().is_some();
     Ok(instance.new_bool(found))
 }
@@ -353,7 +351,7 @@ pub(crate) unsafe fn context_getitem_native(
     };
     // SAFETY: var 由调用方保证存活。
     let is_context_var = unsafe { var.as_ref() }.ty()
-        == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty());
+        == instance.hot_type(HotId::ContextVar).unwrap_or(unsafe { var.as_ref() }.ty());
     if is_context_var {
         // SAFETY: 类型身份刚确认。
         let object = unsafe { &*var.as_ptr().cast::<ContextVarObject>() };

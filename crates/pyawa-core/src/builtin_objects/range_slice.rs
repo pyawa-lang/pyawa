@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -88,8 +89,7 @@ impl RangeObject {
 
 /// 造一个 `range` 实例 ✓（类型就是 `range` ✓ —— 迭代器另造 ✓）。
 pub(crate) fn new_range(instance: &Instance, start: i64, stop: i64, step: i64, long_range: bool) -> NonNull<Header> {
-    let ty = instance
-        .type_named("range")
+    let ty = instance.hot_type(HotId::Range)
         .expect("引导期已登记 range 类型");
     instance
         .alloc(RangeObject::new(ty, start, stop, step, long_range))
@@ -99,7 +99,7 @@ pub(crate) fn new_range(instance: &Instance, start: i64, stop: i64, step: i64, l
 
 /// 取 `range` 载荷 ✓（**先验类型** ✓ —— 这条通道只会拿到 `range` 实例 ✓，仍如实挡住别的 ✓）。
 pub(crate) fn range_payload<'a>(instance: &Instance, object: NonNull<Header>) -> Option<&'a RangeObject> {
-    if Some(instance.type_of(object)) != instance.type_named("range") {
+    if Some(instance.type_of(object)) != instance.hot_type(HotId::Range) {
         return None;
     }
     // SAFETY: 上面确认过类型是 `range` ⇒ 载荷就是 `RangeObject` ✓。
@@ -309,15 +309,14 @@ pub unsafe fn range_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(method_type, "range", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -442,7 +441,7 @@ pub unsafe fn slice_new(
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let field = |argument: &NonNull<Header>| -> Result<Option<i64>, crate::ExecError> {
-        if Some(instance.type_of(*argument)) == instance.type_named("NoneType") {
+        if Some(instance.type_of(*argument)) == instance.hot_type(HotId::NoneType) {
             return Ok(None);
         }
         // **超出 `i64` 的整数按方向饱和**（`P3-42` round 44）：`'abc'[sys.maxsize + 1:]` ⇒ `''` ✓

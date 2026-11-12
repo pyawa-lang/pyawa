@@ -153,7 +153,7 @@ impl Instance {
         } else {
             unreachable
         };
-        let garbage: HashSet<usize> = unreachable.iter().map(|h| h.as_ptr() as usize).collect();
+        let garbage: crate::fast_hash::FastSet<usize> = unreachable.iter().map(|h| h.as_ptr() as usize).collect();
 
         // 复活的对象要清掉 FINALIZING，之后它再次死亡时还能再终结一次（OM-20）。
         for header in self.gc_headers() {

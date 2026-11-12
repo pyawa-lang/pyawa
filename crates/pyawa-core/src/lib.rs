@@ -64,6 +64,8 @@ pub use builtin::thread::thread_get_ident_native;
 pub use builtin::function::function_code_native;
 pub use builtin::function::function_globals_native;
 mod diag;
+/// **内部集合的快速哈希**（round 248 性能，A2-3）：见模块文档。
+pub(crate) mod fast_hash;
 pub mod argdecode;
 pub mod bigint;
 pub mod host_env;

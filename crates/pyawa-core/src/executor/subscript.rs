@@ -5,7 +5,7 @@
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
 use crate::HotId;
-use crate::executor::{exception_type, new_exception_with_args, normalize_index, raise, raise_builtin, release, scalar_index, sequence_items, slice_bounds, slice_positions};
+use crate::executor::{new_exception_with_args, normalize_index, raise, raise_builtin, release, scalar_index, sequence_items, slice_bounds, slice_positions};
 use crate::builtin_objects::{BytearrayObject, BytesObject};
 use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
@@ -139,16 +139,10 @@ fn user_overrides_subscript(instance: &Instance, ty: NonNull<crate::TypeObject>,
     let Some((owner, _)) = instance.type_lookup_owner(ty, name) else {
         return false;
     };
-    ![
-        "list",
-        "tuple",
-        "dict",
-        "str",
-        "bytes",
-        "bytearray",
-    ]
-    .iter()
-    .any(|candidate| instance.type_named(candidate) == Some(owner))
+    !instance.hot_type_is_any(
+        owner,
+        &[HotId::List, HotId::Tuple, HotId::Dict, HotId::Str, HotId::Bytes, HotId::ByteArray],
+    )
 }
 
 /// `obj[key]` 的**公开入口**（`BINARY_SUBSCR`）：先派发用户覆写 `__getitem__`，再进内建快路 ✓。
@@ -261,7 +255,7 @@ pub(crate) fn subscript_get_inner(
                 unsafe { instance.incref_object(key.as_ptr()) };
                 let exception = new_exception_with_args(
                     instance,
-                    exception_type(instance, "KeyError"),
+                    instance.hot_type(HotId::KeyError).expect("KeyError 已登记"),
                     vec![key],
                 );
                 return Err(raise(instance, exception));
@@ -705,7 +699,7 @@ pub fn subscript_del_inner(
                 unsafe { instance.incref_object(key.as_ptr()) };
                 let exception = new_exception_with_args(
                     instance,
-                    exception_type(instance, "KeyError"),
+                    instance.hot_type(HotId::KeyError).expect("KeyError 已登记"),
                     vec![key],
                 );
                 return Err(raise(instance, exception));

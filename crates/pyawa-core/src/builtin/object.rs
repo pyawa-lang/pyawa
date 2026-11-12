@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`attribute_new`、`container_receiver` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::ptr::NonNull;
 use crate::header::Header;
 use crate::instance::Instance;
@@ -232,11 +233,9 @@ pub fn object_reduce_ex_native(
             .type_named(name)
             .is_some_and(|base| instance.is_subtype(ty, base))
     });
-    let callable_like = instance
-        .type_named("builtin_function_or_method")
+    let callable_like = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .is_some_and(|base| instance.is_subtype(ty, base))
-        || instance
-            .type_named("method")
+        || instance.hot_type(HotId::Method)
             .is_some_and(|base| instance.is_subtype(ty, base));
     if iterator_like || callable_like {
         if let Some(result) = crate::executor::call::call_object_method(
@@ -253,7 +252,7 @@ pub fn object_reduce_ex_native(
     // ⇒ `copy.copy(list 子类)`／`deepcopy` 得到**空列表** ✗（官方 `test_xml_dom_minicompat` 的
     // `test_nodelist_copy`／`test_nodelist_deepcopy` ✓）。`copy._reconstruct` 按 5 元组的第 4 项
     // 逐个 `append` ✓。
-    let list_type = instance.type_named("list");
+    let list_type = instance.hot_type(HotId::List);
     if list_type.is_some_and(|base| instance.is_subtype(ty, base)) {
         if let Ok(Some(copyreg)) =
             crate::executor::import::import_through_bridge(instance, "copyreg")
@@ -280,7 +279,7 @@ pub fn object_reduce_ex_native(
     // `(copyreg.__newobj__, (类,), None, None, iter(obj.items()))` ✓ —— `copy._reconstruct`
     // 按第 5 项**逐对写入** ✓。先前落到通用形状（第 5 项 `None`）✗ ⇒ `copy.copy(Counter(...))`
     // 得到**空 Counter** ✗（`test_collections.TestCounter.test_copying` ✓；`Counter` 是 dict 子类 ✓）。
-    let dict_type = instance.type_named("dict");
+    let dict_type = instance.hot_type(HotId::Dict);
     if dict_type.is_some_and(|base| instance.is_subtype(ty, base)) {
         if let Ok(Some(copyreg)) =
             crate::executor::import::import_through_bridge(instance, "copyreg")
@@ -325,7 +324,7 @@ pub fn object_reduce_ex_native(
         .copied()
         .and_then(|value| instance.int_of(value).and_then(|number| number.to_i64()))
         .unwrap_or(0);
-    let tuple_type = instance.type_named("tuple");
+    let tuple_type = instance.hot_type(HotId::Tuple);
     if protocol >= 2
         && tuple_type.is_some_and(|base| instance.is_subtype(ty, base))
         && Some(ty) != tuple_type
@@ -419,14 +418,13 @@ pub fn object_reduce_ex_native(
                     let class_value = instance.retain(ty.cast::<Header>());
                     // **`tuple` 子类**（round 211）：参照给 `(cls, tuple, self.__getnewargs__())` ✓ ——
                     // `_reconstructor` 再 `tuple.__new__(cls, state)` 重建成员 ✓（本层这条静态调用已成立 ✓）。
-                    let tuple_base = instance.type_named("tuple");
+                    let tuple_base = instance.hot_type(HotId::Tuple);
                     let is_tuple_subclass = tuple_base
                         .is_some_and(|base| instance.is_subtype(ty, base) && Some(ty) != tuple_base);
                     let base_value = if is_tuple_subclass {
                         instance.retain(tuple_base.expect("刚判过").cast::<Header>())
                     } else {
-                        instance
-                            .type_named("object")
+                        instance.hot_type(HotId::Object)
                             .map(|object_ty| instance.retain(object_ty.cast::<Header>()))
                             .unwrap_or_else(|| instance.retain(instance.singletons().none()))
                     };
@@ -636,8 +634,7 @@ pub fn object_new_native(
         // 参照的规矩 ✓：**多给了实参**时，若本类**覆写了 `__init__`** ⇒ 忽略它们 ✓；
         // 否则报 `TypeError: object.__new__() takes exactly one argument …` ✓。
         // `object` 命名空间里那个默认 `__init__` ✓（第 210 轮挂的 ✓）⇒ 与它不同 ⇒ 本类**覆写**了 ✓。
-        let default_init = instance
-            .type_named("object")
+        let default_init = instance.hot_type(HotId::Object)
             .and_then(|ty| instance.type_namespace(ty.cast()))
             .and_then(|namespace| instance.dict_get(namespace, "__init__"));
         let init_overridden = instance

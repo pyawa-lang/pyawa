@@ -399,9 +399,14 @@ fn binary_override(
     // `ChainMap() | Subclass()`（子类**没**覆写 `__ror__`）要得到 `ChainMap` ✓；
     // `ChainMap() | SubclassRor()`（子类**自己**写了 `__ror__`）要得到 `SubclassRor` ✓。
     // 判据：`type_lookup_owner(right_type, reflected)` 的 owner **就是 right_type** ✓。
-    let right_owns_reflection = instance
-        .type_lookup_owner(right_type, reflected)
-        .is_some_and(|(owner, _)| owner == right_type);
+    // **round 248 性能（A2-3）**：只有"命名空间里挂 `__module__`"的类型（用户类／带模块标记的
+    // 原生类型／它们的子类）才可能命中用户 dunder ✓ ⇒ 用**类型标志位**（建类型时定死）预筛，
+    // 省掉每条 `BINARY_OP` 的 MRO 走查＋字典查表＋字符串哈希（perf 合计 ≈10% ✗）。
+    // 默认路径（`int + int`）一次位测就直接走原生算术 ✓。
+    let right_owns_reflection = instance.dunder_capable(right_type)
+        && instance
+            .type_lookup_owner(right_type, reflected)
+            .is_some_and(|(owner, _)| owner == right_type);
     let right_first = right_type != left_type
         && instance.is_subtype(right_type, left_type)
         && right_owns_reflection;
@@ -433,6 +438,11 @@ fn call_user_dunder(
     opcode: u8,
 ) -> Result<Option<Option<NonNull<Header>>>, ExecError> {
     let receiver_type = instance.type_of(receiver);
+    // **round 248 性能（A2-3）**：能力位为假 ⇒ 该类型（及其 MRO）的命名空间里没有 `__module__`
+    // ⇒ 下面那条 `__module__` 判据必然失败 ✓ ⇒ 一次位测跳过整条查表 ✓（语义不变 ✓）。
+    if !instance.dunder_capable(receiver_type) {
+        return Ok(None);
+    }
     let Some((owner, _)) = instance.type_lookup_owner(receiver_type, name) else {
         return Ok(None);
     };

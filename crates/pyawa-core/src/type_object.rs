@@ -214,6 +214,14 @@ pub const FINAL_TYPE: u32 = 1 << 3;
 /// 内建类型（`ValueError('x')` 一类）的 `new` 槽是自己实现的，**不**该吃这条规则。
 pub const GENERIC_ALLOCATION: u32 = 1 << 2;
 
+/// **内部**类型标志：这个类型的**命名空间里挂了 `__module__`**（用户类，或带模块标记的原生类型）。
+///
+/// 凭什么有用（round 248 性能，A2-3）：二元运算的"**用户覆写 dunder**"判据是"定义者自己的字典里有
+/// `__module__`"（见 `arithmetic::call_user_dunder`）⇒ 每条 `BINARY_OP` 都要走 MRO + 字典查表 ✗。
+/// 这个位让**常见路径（内建操作数）**一次位测就跳过整条链 ✓，而"谁可能命中"在**建类型时**就定死
+/// （用户类 / 带模块标记的原生类型 / 它们的子类）⇒ 语义不变 ✓。
+pub const DUNDER_CAPABLE: u32 = 1 << 4;
+
 /// **内部**类型标志：这个类型的实例把属性字典**内联在载荷里**（载荷是 [`crate::AttributeObject`]）。
 ///
 /// 用户类的实例走这条；宿主／固定布局的实例（例如 `list` 的子类）**没有**这一位，
@@ -271,6 +279,16 @@ impl TypeObject {
     /// 槽位表（只读副本；槽位表在类型创建后不再改动）。
     pub fn slots(&self) -> Slots {
         self.slots
+    }
+
+    /// **round 248 性能（A2-3）**：这个类型的命名空间可能命中"用户覆写 dunder"（见 [`DUNDER_CAPABLE`]）。
+    pub fn mark_dunder_capable(&self) {
+        self.type_flags.set(self.type_flags.get() | DUNDER_CAPABLE);
+    }
+
+    /// 同上的**只读**版（热路径：一次位测 ✓）。
+    pub fn is_dunder_capable(&self) -> bool {
+        self.type_flags.get() & DUNDER_CAPABLE != 0
     }
 
     /// 是不是**定长宿主布局**（`OM-14`／`AB-58`：载荷紧跟在头部之后、由 VM 分配）。

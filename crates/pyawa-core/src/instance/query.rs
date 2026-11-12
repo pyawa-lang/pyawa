@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -38,9 +39,9 @@ impl Instance {
         // `PicklingError: first item … must be callable, not abc.ABCMeta` ✓）。
         self.is_type_object(object)
             || ty == self.metatype()
-            || Some(ty) == self.type_named("function")
-            || Some(ty) == self.type_named("builtin_function_or_method")
-            || Some(ty) == self.type_named("method")
+            || Some(ty) == self.hot_type(HotId::Function)
+            || Some(ty) == self.hot_type(HotId::BuiltinFunctionOrMethod)
+            || Some(ty) == self.hot_type(HotId::Method)
             // **`__call__`**（第 593 轮 ✓）：实例只要 MRO 里有 `__call__` 就可调用 ✓
             // —— 调用侧已在 `call_callable` 里接上 ✓，这里让 `callable()` 的口径与之一致 ✓
             //（否则 `callable(带 __call__ 的实例)` 报 `False` ✗ 而调用却成功 ✗ ⇒ 口径分叉 ✓）。

@@ -130,7 +130,7 @@ fn raise_syntax_error(instance: &Instance, message: &str, chunk: &str) -> ExecEr
     }
     let exception = crate::executor::format::new_exception(
         instance,
-        crate::executor::exception_type(instance, "SyntaxError"),
+        instance.hot_type(HotId::SyntaxError).expect("SyntaxError 已登记"),
         &base,
     );
     let filename_value = instance.new_str(&file_name);

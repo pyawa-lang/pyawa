@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：（无） ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, FloatObject, MethodObject, NativeFn};
 use crate::executor::ExecError;
@@ -38,8 +39,7 @@ pub unsafe fn float_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -50,7 +50,7 @@ pub unsafe fn float_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));

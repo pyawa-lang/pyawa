@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -38,8 +39,7 @@ pub(crate) fn thrown_exception(
 ) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: value 是存活对象。
     let ty = unsafe { value.as_ref() }.ty();
-    let base_exception = instance
-        .type_named("BaseException")
+    let base_exception = instance.hot_type(HotId::BaseException)
         .expect("异常层次在引导期已登记");
     if let Some(class) = instance.as_type(value) {
         if !instance.is_subtype(class, base_exception) {
@@ -89,7 +89,7 @@ pub(crate) fn exception_instance(
 ) -> NonNull<Header> {
     let ty = instance
         .type_named(class)
-        .unwrap_or_else(|| instance.type_named("Exception").expect("异常层次已登记"));
+        .unwrap_or_else(|| instance.hot_type(HotId::Exception).expect("异常层次已登记"));
     let object = instance.alloc(ExceptionObject::new(
         ty,
         RefCell::new(args),
@@ -110,8 +110,7 @@ pub(crate) fn exception_instance(
 
 /// 造一个 `StopIteration`（可选带返回值——参照实现把它放进 `.value`）。
 pub(crate) fn stop_iteration(instance: &Instance, value: Option<NonNull<Header>>) -> ExecError {
-    let ty = instance
-        .type_named("StopIteration")
+    let ty = instance.hot_type(HotId::StopIteration)
         .expect("异常层次在引导期已登记");
     let args: Vec<NonNull<Header>> = match value {
         Some(value) => vec![value],
@@ -222,7 +221,7 @@ impl ExceptionObject {
         // SAFETY: 调用方保证 exception 存活；先核形状再读载荷 ✓。
         let ty = unsafe { exception.as_ref() }.ty();
         let type_object = unsafe { ty.as_ref() };
-        if let Some(base) = instance.type_named("BaseException") {
+        if let Some(base) = instance.hot_type(HotId::BaseException) {
             if !instance.is_subtype(ty, base) {
                 return false;
             }
@@ -314,8 +313,7 @@ pub unsafe fn exception_getattr(
         "msg" | "lineno" | "offset" | "text" | "end_lineno" | "end_offset" => {
             // SAFETY: ptr 是本类型的存活对象。
             let ty = unsafe { (*ptr).ty() };
-            let is_syntax_error = instance
-                .type_named("SyntaxError")
+            let is_syntax_error = instance.hot_type(HotId::SyntaxError)
                 .is_some_and(|syntax| instance.is_subtype(ty, syntax));
             if !is_syntax_error {
                 return None;
@@ -368,8 +366,7 @@ pub unsafe fn exception_getattr(
         "code" => {
             // SAFETY: ptr 是本类型的存活对象。
             let ty = unsafe { (*ptr).ty() };
-            let is_system_exit = instance
-                .type_named("SystemExit")
+            let is_system_exit = instance.hot_type(HotId::SystemExit)
                 .is_some_and(|system_exit| instance.is_subtype(ty, system_exit));
             if !is_system_exit {
                 return None;
@@ -389,11 +386,9 @@ pub unsafe fn exception_getattr(
         "value" => {
             // SAFETY: ptr 是本类型的存活对象。
             let ty = unsafe { (*ptr).ty() };
-            let is_stop = instance
-                .type_named("StopIteration")
+            let is_stop = instance.hot_type(HotId::StopIteration)
                 .is_some_and(|stop| instance.is_subtype(ty, stop))
-                || instance
-                    .type_named("StopAsyncIteration")
+                || instance.hot_type(HotId::StopAsyncIteration)
                     .is_some_and(|stop| instance.is_subtype(ty, stop));
             if !is_stop {
                 return None;
@@ -413,8 +408,7 @@ pub unsafe fn exception_getattr(
         "encoding" | "object" | "start" | "end" | "reason" => {
             // SAFETY: ptr 是本类型的存活对象。
             let ty = unsafe { (*ptr).ty() };
-            let is_unicode_error = instance
-                .type_named("UnicodeError")
+            let is_unicode_error = instance.hot_type(HotId::UnicodeError)
                 .is_some_and(|base| instance.is_subtype(ty, base));
             if !is_unicode_error {
                 return None;
@@ -445,8 +439,7 @@ pub unsafe fn exception_getattr(
             // SAFETY: ptr 是本类型的存活对象。
             let ty = unsafe { (*ptr).ty() };
             let arguments = object.args();
-            let is_syntax_error = instance
-                .type_named("SyntaxError")
+            let is_syntax_error = instance.hot_type(HotId::SyntaxError)
                 .is_some_and(|syntax| instance.is_subtype(ty, syntax));
             let value = if is_syntax_error {
                 arguments
@@ -455,8 +448,7 @@ pub unsafe fn exception_getattr(
                     .and_then(|details| instance.tuple_items(details))
                     .and_then(|items| items.first().copied())
             } else {
-                let is_os_error = instance
-                    .type_named("OSError")
+                let is_os_error = instance.hot_type(HotId::OSError)
                     .is_some_and(|os_error| instance.is_subtype(ty, os_error));
                 if !is_os_error {
                     return None;
@@ -483,8 +475,7 @@ pub unsafe fn exception_getattr(
         "errno" | "strerror" | "filename2" => {
             // SAFETY: ptr 是本类型的存活对象。
             let ty = unsafe { (*ptr).ty() };
-            let is_os_error = instance
-                .type_named("OSError")
+            let is_os_error = instance.hot_type(HotId::OSError)
                 .is_some_and(|os_error| instance.is_subtype(ty, os_error));
             if !is_os_error {
                 return None;
@@ -517,8 +508,7 @@ pub unsafe fn exception_getattr(
             // gh-97591 用例直接调它）。与 `with_traceback` 同一「绑到本实例」的做法 ✓。
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
             let owner = unsafe { NonNull::new_unchecked(ptr) };
-            let method_type = instance
-                .type_named("builtin_function_or_method")
+            let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                 .expect("引导期已登记");
             let native = instance.alloc(BuiltinFunctionObject::new(
                 method_type,
@@ -529,7 +519,7 @@ pub unsafe fn exception_getattr(
             // SAFETY: 方法对象要自己那份 self（`OM-16`）。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 owner,
             ));
@@ -538,8 +528,7 @@ pub unsafe fn exception_getattr(
         "with_traceback" => {
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
             let owner = unsafe { NonNull::new_unchecked(ptr) };
-            let method_type = instance
-                .type_named("builtin_function_or_method")
+            let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                 .expect("引导期已登记");
             let native = instance.alloc(BuiltinFunctionObject::new(
                 method_type,
@@ -550,7 +539,7 @@ pub unsafe fn exception_getattr(
             // SAFETY: 方法对象要自己那份 self（`OM-16`）。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 owner,
             ));
@@ -561,8 +550,7 @@ pub unsafe fn exception_getattr(
             // （`test_subclassinit` 的 `__set_name__` 失败路径要读它 ✓）。
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
             let owner = unsafe { NonNull::new_unchecked(ptr) };
-            let method_type = instance
-                .type_named("builtin_function_or_method")
+            let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                 .expect("引导期已登记");
             let native = instance.alloc(BuiltinFunctionObject::new(
                 method_type,
@@ -573,7 +561,7 @@ pub unsafe fn exception_getattr(
             // SAFETY: 方法对象要自己那份 self（`OM-16`）。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 owner,
             ));
@@ -798,7 +786,7 @@ unsafe fn with_traceback_native(
 /// [`Instance::new_traceback`] 按需惰性建 ✓）。
 fn is_traceback_object(instance: &Instance, object: NonNull<Header>) -> bool {
     let ty = instance.type_of(object);
-    match instance.type_named("traceback") {
+    match instance.hot_type(HotId::Traceback) {
         Some(traceback_type) => instance.is_subtype(ty, traceback_type),
         // 还没建过这个类型 ⇒ 按名字兜底（`new_traceback` 用的就是同名类型 ✓）。
         None => instance.type_name(ty) == "traceback",

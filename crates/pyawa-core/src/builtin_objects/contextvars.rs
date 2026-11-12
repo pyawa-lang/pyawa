@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 
 
@@ -162,8 +163,7 @@ pub unsafe fn token_getattr(
 
 /// `copy_context()` ✓。
 pub fn copy_context_value(instance: &Instance) -> NonNull<Header> {
-    let context_type = instance
-        .type_named("Context")
+    let context_type = instance.hot_type(HotId::Context)
         .expect("Context 在引导期已登记");
     let mapping = instance.new_dict();
     let object = instance.alloc(ContextObject::new(context_type, mapping));

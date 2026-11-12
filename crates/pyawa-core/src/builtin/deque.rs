@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`iterator_traverse`、`set_clear`、`set_getattr`、`set_traverse` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::{Cell, RefCell};
 use crate::builtin_objects::{BuiltinFunctionObject, DequeObject, MethodObject, NativeFn};
 use crate::executor::ExecError;
@@ -146,8 +147,7 @@ pub unsafe fn deque_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -158,7 +158,7 @@ pub unsafe fn deque_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -455,8 +455,7 @@ pub(crate) unsafe fn deque_copy_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let (object, _) = deque_self!(instance, bound, _args, "copy");
     let items = object.items();
-    let deque_type = instance
-        .type_named("deque")
+    let deque_type = instance.hot_type(HotId::Deque)
         .expect("deque 在引导期已登记");
     let copy = instance.alloc(DequeObject::new(
         deque_type,
@@ -552,7 +551,7 @@ fn deque_iter_native(
 /// **把 `deque.__init__` 挂进类型命名空间**（round 114）：必须等 `builtin_function_or_method`
 /// 登记之后（引导段太早 ✗）⇒ 由 `collections` 模块建 `deque` 时调用 ✓。
 pub fn install_deque_init(instance: &Instance) {
-    let Some(deque_type) = instance.type_named("deque") else {
+    let Some(deque_type) = instance.hot_type(HotId::Deque) else {
         return;
     };
     let Some(namespace) = instance.type_namespace(deque_type.cast()) else {
@@ -565,8 +564,7 @@ pub fn install_deque_init(instance: &Instance) {
 
 /// 造 `deque.__init__` 的原生可调用对象（**新引用** ✓）。
 pub fn make_deque_init_native(instance: &Instance) -> NonNull<Header> {
-    let ty = instance
-        .type_named("builtin_function_or_method")
+    let ty = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     instance
         .alloc(BuiltinFunctionObject::new(

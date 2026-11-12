@@ -109,8 +109,7 @@ impl Instance {
     /// 同样用"`AttributeObject` ＋ 实例字典"那一档惰性建出 ✓，装 `__args__`＝两元的 `tuple` ✓。
     /// **如实说** ✗：联合目前只是"**装得下**" ✓（不参与 `isinstance`／匹配 ✓，随 `P3-*` 再接 ✓）。
     pub fn new_union_type(&self, left: NonNull<Header>, right: NonNull<Header>) -> NonNull<Header> {
-        let union_type = self
-            .type_named("UnionType")
+        let union_type = self.hot_type(HotId::UnionType)
             .unwrap_or_else(|| self.new_attribute_type("UnionType"));
         let object = self
             .alloc(crate::builtin_objects::AttributeObject::new(
@@ -127,8 +126,7 @@ impl Instance {
     }
 
     pub fn new_generic_alias(&self, origin: NonNull<Header>, args: NonNull<Header>) -> NonNull<Header> {
-        let alias_type = self
-            .type_named("GenericAlias")
+        let alias_type = self.hot_type(HotId::GenericAlias)
             .unwrap_or_else(|| self.new_attribute_type("GenericAlias"));
         // **`__mro_entries__` 随第一次造别名装上** ✓（task-20 第 2 轮 ✓）：引导期那遍可能还没建
         // `GenericAlias` 类型 ✗ ⇒ 这里**幂等**补 ✓（`class T(Mapping[str, str])` 靠它换基类 ✓）。

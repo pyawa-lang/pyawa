@@ -220,7 +220,7 @@ impl Instance {
             None => true,
         };
         if stale {
-            let mut set = std::collections::HashSet::with_capacity(DEDICATED.len());
+            let mut set = crate::fast_hash::FastSet::with_capacity_and_hasher(DEDICATED.len(), Default::default());
             for name in DEDICATED {
                 if let Some(found) = self.type_named(name) {
                     set.insert(found.as_ptr() as usize);
@@ -245,6 +245,10 @@ impl Instance {
 
     /// **登记动态（用户）类类型**（round 99）：参与"孤儿类型回收" ✓。
     pub(crate) fn register_user_type(&self, ty: NonNull<Header>) {
+        // **用户类**的命名空间一定有 `__module__`（编译器在类体里写 ✓）⇒ 二元运算的"用户 dunder"
+        // 预筛位置上（round 248 性能，A2-3）。
+        // SAFETY: 调用方传入的是刚建好、由注册表持有的类型对象。
+        unsafe { ty.cast::<crate::TypeObject>().as_ref() }.mark_dunder_capable();
         let mut list = self.user_types.borrow_mut();
         if !list.iter().any(|entry| entry.as_ptr() == ty.as_ptr()) {
             list.push(ty);

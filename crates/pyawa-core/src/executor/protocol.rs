@@ -600,11 +600,20 @@ pub(crate) fn inplace_add(
         let user_radd = instance
             .type_lookup_owner(right_ty, "__radd__")
             .is_some_and(|(owner, _)| {
-                ![
-                    "int", "bool", "float", "complex", "str", "bytes", "list", "tuple", "dict",
-                ]
-                .iter()
-                .any(|candidate| instance.type_named(candidate) == Some(owner))
+                !instance.hot_type_is_any(
+                    owner,
+                    &[
+                        HotId::Int,
+                        HotId::Bool,
+                        HotId::Float,
+                        HotId::Complex,
+                        HotId::Str,
+                        HotId::Bytes,
+                        HotId::List,
+                        HotId::Tuple,
+                        HotId::Dict,
+                    ],
+                )
             });
         if !is_list && !is_tuple && user_radd {
             return concat_public(instance, left, right, opcode);
@@ -1099,9 +1108,19 @@ fn overrides_compare(instance: &Instance, object: NonNull<Header>, name: &str) -
     };
     // 内建容器自己的 `__eq__`（`dict_eq_native` 等）走我们自己的容器递归路 ✓；**用户子类覆写**
     // 才优先（`class D(dict): def __eq__…` ✓）。
-    !["list", "tuple", "dict", "set", "frozenset", "str", "bytes", "bytearray"]
-        .iter()
-        .any(|name| instance.type_named(name) == Some(owner))
+    !instance.hot_type_is_any(
+        owner,
+        &[
+            HotId::List,
+            HotId::Tuple,
+            HotId::Dict,
+            HotId::Set,
+            HotId::FrozenSet,
+            HotId::Str,
+            HotId::Bytes,
+            HotId::ByteArray,
+        ],
+    )
 }
 
 /// 这个值**自己**覆写了 `__eq__`（不是 `object` 的默认实现）吗？（round 66：容器去重要按参照的

@@ -16,6 +16,7 @@
 //! **如实说** ✗：`complex` 的**字符串解析**（`complex("1+2j")`）归 stdlib 的 `__new__`（task-31）；
 //! 本文件的构造槽只收**数字面**（0／1／2 实参，含 `__complex__` 协议 ✓）。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -96,7 +97,7 @@ pub unsafe fn complex_new(
         [] => Ok(allocate(0.0, 0.0)),
         [only] => {
             // 参照：1 参且**恰是** `complex` ⇒ 原对象（`complex(z) is z` 为真 ✓）。
-            if instance.type_of(*only) == instance.type_named("complex").expect("complex 已登记") {
+            if instance.type_of(*only) == instance.hot_type(HotId::Complex).expect("complex 已登记") {
                 return Ok(instance.retain(*only));
             }
             if let Some(number) = number_to_f64(instance, *only)? {
@@ -230,8 +231,7 @@ fn bind_native(
     ptr: *mut Header,
     handler: NativeFn,
 ) -> NonNull<Header> {
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(method_type, "complex", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
@@ -240,7 +240,7 @@ fn bind_native(
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));

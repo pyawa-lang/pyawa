@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 /// **`OM-11`**：`repr` 递归守卫的进入结果（见 [`Instance::enter_repr`]）。
@@ -42,11 +43,11 @@ impl Instance {
         object: NonNull<Header>,
     ) -> Result<Vec<NonNull<Header>>, ExecError> {
         let ty = self.type_of(object);
-        if Some(ty) == self.type_named("list") {
+        if Some(ty) == self.hot_type(HotId::List) {
             // SAFETY: 类型身份已确认。
             return Ok(unsafe { &*object.as_ptr().cast::<ListObject>() }.items().to_vec());
         }
-        if Some(ty) == self.type_named("tuple") {
+        if Some(ty) == self.hot_type(HotId::Tuple) {
             // SAFETY: 同上。
             let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
             return Ok((0..tuple.len())
@@ -57,7 +58,7 @@ impl Instance {
         // `_ALWAYS_SAFE_BYTES = bytes(_ALWAYS_SAFE)`（`_ALWAYS_SAFE` 是 `frozenset` ✓）
         // 在**导入期**就调它 ✗ ⇒ 先前那条"只接线了 list／tuple"把 `urllib.parse`
         // ⇒ `email.utils` 一串压在下面 ✓。元素是**借用** ✓（与上面两支同口径 ✓）。
-        if Some(ty) == self.type_named("set") || Some(ty) == self.type_named("frozenset") {
+        if Some(ty) == self.hot_type(HotId::Set) || Some(ty) == self.hot_type(HotId::FrozenSet) {
             // SAFETY: 类型身份已确认。
             return Ok(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().to_vec());
         }
@@ -154,7 +155,7 @@ impl Instance {
         let ty = unsafe { object.as_ref() }.ty();
         // SAFETY: ty 由注册表持有。
         let type_object = unsafe { ty.as_ref() };
-        if let Some(base) = self.type_named("BaseException") {
+        if let Some(base) = self.hot_type(HotId::BaseException) {
             if !self.is_subtype(ty, base) {
                 return None;
             }

@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`async_generator_anext_native`、`async_generator_asend_native`、`exception_instance`、`resume_with_sent`、`stop_iteration`、`thrown_exception` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, ExceptionObject, GeneratorObject, MethodObject, NativeFn};
 use crate::executor::ExecError;
@@ -39,8 +40,7 @@ pub unsafe fn generator_getattr(
             // `__anext__()` 交出 awaitable（我们的 `AsendObject`）；`asend(v)` 同形、带值；
             // `aclose()`／`athrow(e)` 也走这一层（round 233：mode 不同 ✓）。
             "__anext__" | "asend" | "aclose" | "athrow" => {
-                let method_type = instance
-                    .type_named("builtin_function_or_method")
+                let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("引导期已登记");
                 let (handler, method_name): (NativeFn, &'static str) = match name {
                     "asend" => (async_generator_asend_native, "asend"),
@@ -57,7 +57,7 @@ pub unsafe fn generator_getattr(
                 // SAFETY: ptr 由槽位契约保证存活，方法对象要自己那份 self。
                 unsafe { instance.incref_object(ptr) };
                 let bound = instance.alloc(MethodObject::new(
-                    instance.type_named("method").expect("method 已登记"),
+                    instance.hot_type(HotId::Method).expect("method 已登记"),
                     native_raw,
                     owner,
                 ));
@@ -119,8 +119,7 @@ pub unsafe fn generator_getattr(
         "close" => generator_close_native,
         _ => return None,
     };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     // 方法对象要自己持有函数与 self 各一份引用
     // **方法名照参照**（round 96）：先前一律叫 `generator` ✗ ⇒ `repr`／`__name__` 与 `__doc__` 都分不开
@@ -137,7 +136,7 @@ pub unsafe fn generator_getattr(
     // SAFETY: ptr 是本类型的存活对象（槽位契约）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         // SAFETY: ptr 由槽位契约保证非空（是本类型的存活对象）。
         unsafe { NonNull::new_unchecked(ptr) },
@@ -274,8 +273,7 @@ pub(crate) unsafe fn generator_close_native(
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 是存活对象。
             let ty = unsafe { exception.as_ref() }.ty();
-            let generator_exit = instance
-                .type_named("GeneratorExit")
+            let generator_exit = instance.hot_type(HotId::GeneratorExit)
                 .expect("异常层次在引导期已登记");
             if instance.is_subtype(ty, generator_exit) {
                 // SAFETY: 这一份由本函数持有。

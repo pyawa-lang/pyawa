@@ -4,11 +4,12 @@
 //! * 依赖的 `bound_text`／`text_argument`／`text_prefixes` 仍留在 `builtin_objects.rs`（已放宽到 `pub(crate)` ✓）；
 //! * `NativeFn` 的定义也在 `builtin_objects.rs:49` ✓（`pub type` ✓）⇒ 这里 import ✓。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::builtin_objects::{bound_text, text_argument, text_prefixes, MethodObject};
 use crate::executor::{
-    attribute_lookup_with_getattr, builtin_type, format_value_with_spec, subscript_read, Attribute,
+    attribute_lookup_with_getattr, format_value_with_spec, subscript_read, Attribute,
 };
 use crate::header::Header;
 use crate::instance::Instance;
@@ -2113,7 +2114,7 @@ fn format_getattr(
                 instance.incref_object(this.as_ptr());
             }
             let bound = instance.alloc(MethodObject::new(
-                builtin_type(instance, "method"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 function,
                 this,
             ));

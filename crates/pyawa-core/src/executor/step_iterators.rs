@@ -310,7 +310,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let is_coroutine = ty == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
                     let is_async_generator = ty == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
                     // `async_generator.__anext__()` 交出的 awaitable：它**就是** awaitable
-                    let is_asend = ty == builtin_type(instance, "async_generator_asend");
+                    let is_asend = ty == instance.hot_type(HotId::Asend).expect("async_generator_asend 已登记");
                     let is_generator = ty == instance.hot_type(HotId::Generator).expect("generator 已登记");
                     let iterable_coroutine = is_generator && {
                         // SAFETY: 类型身份已确认。
@@ -380,7 +380,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let is_generator = receiver_type == instance.hot_type(HotId::Generator).expect("generator 已登记");
                     let is_coroutine = receiver_type == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
                     let is_async_generator = receiver_type == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
-                    let is_asend = receiver_type == builtin_type(instance, "async_generator_asend");
+                    let is_asend = receiver_type == instance.hot_type(HotId::Asend).expect("async_generator_asend 已登记");
                     if is_asend {
                         // `await agen.__anext__()`：推进**底层**异步生成器一次。
                         // 送进去的值以包装对象里记着的为准（`__anext__()` 是 `None`）。

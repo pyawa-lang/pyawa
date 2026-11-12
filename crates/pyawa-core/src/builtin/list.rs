@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`bound_list`、`container_contains_native`、`str_getattr`、`tuple_clear`、`tuple_traverse` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, DictObject, ListObject, MethodObject, NativeFn, SetObject, TupleObject};
 use crate::executor::ExecError;
@@ -441,8 +442,7 @@ pub unsafe fn list_getattr(
     let handler: NativeFn = list_method_handler(name)?;
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -453,7 +453,7 @@ pub unsafe fn list_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -544,8 +544,7 @@ fn list_dunder_reversed(
     // ① 类型名给 `list_iterator` ✗；② 快照看不到之后对原列表的修改 ✗
     //（`test_reversed_pickle`：反序列化后 `a[:] = data` 期望反向迭代反映新数据 ✓）。
     let length = instance.list_items(list).map(|items| items.len()).unwrap_or(0);
-    let iterator_type = instance
-        .type_named("list_reverseiterator")
+    let iterator_type = instance.hot_type(HotId::ListReverseIterator)
         .expect("list_reverseiterator 已登记");
     // 迭代器要自己那份原列表引用 ✓。
     unsafe { instance.incref_object(list.as_ptr()) };
@@ -719,7 +718,7 @@ pub(crate) fn list_append_descriptor(
             "unbound method list.append() needs an argument",
         ));
     };
-    let list_type = instance.type_named("list").expect("list 已登记");
+    let list_type = instance.hot_type(HotId::List).expect("list 已登记");
     if !instance.is_subtype(instance.type_of(owner), list_type) {
         return Err(instance.raise_builtin_error(
             "TypeError",
@@ -956,7 +955,7 @@ pub unsafe fn list_new(
                 .type_lookup_owner(source_type, "__iter__")
                 .map(|(owner, _)| {
                     Some(owner) == instance.type_named(base)
-                        || Some(owner) == instance.type_named("object")
+                        || Some(owner) == instance.hot_type(HotId::Object)
                 })
                 .unwrap_or(true)
         };

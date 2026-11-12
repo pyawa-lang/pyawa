@@ -90,6 +90,7 @@
 //! 制表符缩进、嵌套函数定义、负数常量、字符串转义、任意精度整数（`i64` 溢出）、
 //! `EXTENDED_ARG`（`oparg > 255`）、位置表（`BC-18`）、扩展模式的边界检查指令（`BC-23`…`BC-28`）。
 
+use crate::HotId;
 use crate::opcode;
 
 /// 编译模式（`BC-14`：**显式入参**，禁止从全局或环境推断）。
@@ -2767,8 +2768,7 @@ pub fn instantiate_named<'a>(
     unit: &CompiledUnit,
     filename: &str,
 ) -> crate::Owned<'a, crate::CodeObject> {
-    let code_type = instance
-        .type_named("CodeObject")
+    let code_type = instance.hot_type(HotId::CodeObject)
         .expect("CodeObject 在引导期已登记");
     let consts: Vec<Option<core::ptr::NonNull<crate::Header>>> = unit
         .constants

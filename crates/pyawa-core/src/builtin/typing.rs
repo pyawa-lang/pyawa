@@ -14,6 +14,7 @@
 //! **如实范围** ✗（轮 1 只到"装得下"）：`__repr__`／`__or__`／`__typing_subst__` 等 `TypeVar` 的
 //! 方法面未接 ✓；`Generic` 的 `__class_getitem__`／`__init_subclass__` 参数收集在轮 3 ✓。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::builtin_objects::{AttributeObject, BuiltinFunctionObject};
@@ -238,7 +239,7 @@ fn finish_typevar(
 /// `_typing.NoDefault` 单例（**惰性**挂在 `NoDefaultType` 的类型命名空间里 ✓ —— 与 `memoryview`
 /// 的 `__mro_entries__` 同款 ✓）。
 pub fn no_default_singleton(instance: &Instance) -> NonNull<Header> {
-    let Some(no_default_type) = instance.type_named("NoDefaultType") else {
+    let Some(no_default_type) = instance.hot_type(HotId::NoDefaultType) else {
         return instance.singletons().none();
     };
     if let Some(namespace) = instance.type_namespace(no_default_type.cast()) {
@@ -354,7 +355,7 @@ pub fn typealias_from_parts(
     params: NonNull<Header>,
     thunk: NonNull<Header>,
 ) -> Result<NonNull<Header>, ExecError> {
-    let Some(alias_type) = instance.type_named("TypeAliasType") else {
+    let Some(alias_type) = instance.hot_type(HotId::TypeAliasType) else {
         return Err(instance.raise_builtin_error("RuntimeError", "TypeAliasType 还没有登记"));
     };
     let object = instance
@@ -528,7 +529,7 @@ pub fn generic_init_subclass_native(
         let class_name = unsafe { cls.cast::<TypeObject>().as_ref() }.name().to_owned();
         let metaclass_name = instance.type_name(unsafe { cls.as_ref() }.ty());
         // 直接基类里有**裸 `Generic`** 吗？（按引导期注册的类型身份比 ✓）
-        let generic = instance.type_named("Generic");
+        let generic = instance.hot_type(HotId::Generic);
         let bases = instance.tuple_items(
             instance
                 .attribute_optional_of(cls, "__bases__")
@@ -621,8 +622,7 @@ pub fn placeholder_type(instance: &Instance, name: &'static str) -> NonNull<Type
 
 /// 供 stdlib 模块装配用：把 `_idfunc` 包成 `builtin_function_or_method` ✓。
 pub fn make_function(instance: &Instance, name: &'static str, handler: crate::NativeFn) -> NonNull<Header> {
-    let function_type = instance
-        .type_named("builtin_function_or_method")
+    let function_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     let object = instance.alloc(BuiltinFunctionObject::new(
         function_type,

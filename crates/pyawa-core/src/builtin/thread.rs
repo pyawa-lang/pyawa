@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`MAIN_THREAD_IDENT`、`bound_lock`、`copy_context_value`、`lock_is_recursive` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, MethodObject, NativeFn, ThreadHandleObject, ThreadLockObject, TupleObject};
 use crate::executor::ExecError;
@@ -43,8 +44,7 @@ pub unsafe fn thread_lock_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -55,7 +55,7 @@ pub unsafe fn thread_lock_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -69,8 +69,7 @@ pub unsafe fn thread_allocate_lock_native(
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let ty = instance
-        .type_named("lock")
+    let ty = instance.hot_type(HotId::Lock)
         .expect("引导期已登记 `lock` 类型");
     let object = instance.alloc(ThreadLockObject::new(ty, Cell::new(0), Cell::new(0)));
     Ok(object.into_raw().cast::<Header>())
@@ -261,7 +260,7 @@ pub(crate) unsafe fn thread_lock_exit(
 /// 给 stdlib 的 `_thread._make_thread_handle` 用 ✓（**类型本身不必公开** ✓ —— 与
 /// [`copy_context_value`] 同一手法：公开的是"入口"而不是内部类型 ✓）。
 pub fn thread_handle_new(instance: &Instance) -> Result<NonNull<Header>, ExecError> {
-    let ty = instance.type_named("_ThreadHandle").ok_or(ExecError::Unsupported {
+    let ty = instance.hot_type(HotId::ThreadHandle).ok_or(ExecError::Unsupported {
         opcode: 0,
         what: "`_ThreadHandle` 尚未登记（引导期）",
     })?;
@@ -337,8 +336,7 @@ pub unsafe fn thread_handle_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
         method_type,
@@ -349,7 +347,7 @@ pub unsafe fn thread_handle_getattr(
     // SAFETY: 绑定方法要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));

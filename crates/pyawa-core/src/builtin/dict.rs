@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`bound_dict`、`container_receiver`、`object_init_native` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::builtin_objects::{DictObject, ListObject, SetObject, TupleObject};
 use core::ptr::NonNull;
 use crate::header::Header;
@@ -32,8 +33,7 @@ pub(crate) fn unhashable_key_type(
         }
     }
     // tuple 的哈希是递归的 ⇒ 元素不可哈希时整键也不可哈希 ✓（`([1],)` ⇒ 'list' ✗）。
-    if instance
-        .type_named("tuple")
+    if instance.hot_type(HotId::Tuple)
         .is_some_and(|base| instance.is_subtype(key_type, base))
     {
         // SAFETY: tuple 子类沿用 tuple 布局（`AB-58` 族）。
@@ -468,7 +468,7 @@ pub(crate) fn dict_pop_native(
             unsafe { instance.incref_object(key.as_ptr()) };
             let exception = crate::executor::new_exception_with_args(
                 instance,
-                crate::executor::exception_type(instance, "KeyError"),
+                instance.hot_type(HotId::KeyError).expect("KeyError 已登记"),
                 vec![*key],
             );
             Err(crate::executor::raise(instance, exception))
@@ -678,7 +678,7 @@ pub(crate) fn dict_or_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__or__ expected 2 arguments"));
     };
-    let Some(dict_type) = instance.type_named("dict") else {
+    let Some(dict_type) = instance.hot_type(HotId::Dict) else {
         return Ok(instance.retain(instance.not_implemented()));
     };
     if !instance.is_subtype(instance.type_of(*right), dict_type) {
@@ -698,7 +698,7 @@ pub(crate) fn dict_ror_native(
     let (Some(right_dict), Some(left)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__ror__ expected 2 arguments"));
     };
-    let Some(dict_type) = instance.type_named("dict") else {
+    let Some(dict_type) = instance.hot_type(HotId::Dict) else {
         return Ok(instance.retain(instance.not_implemented()));
     };
     if !instance.is_subtype(instance.type_of(*left), dict_type) {
@@ -745,13 +745,13 @@ pub fn dict_eq_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
     };
-    let Some(dict_type) = instance.type_named("dict") else {
+    let Some(dict_type) = instance.hot_type(HotId::Dict) else {
         return Ok(instance.retain(instance.not_implemented()));
     };
     // **活视图代理先同步快照**（round 125）：`.mapping` 是源字典的活视图 ✓。
     // **只对 `mappingproxy` 操作数调**（round 195 真 bug 修 ✗）：先前无条件对两个操作数调 ⇒ 普通 dict 若
     // 复用了已释放代理的地址，会被"陈旧登记"当成活视图而**被写入老源的条目** ✗（`{} != {'foo':'bar'}`）。
-    let proxy_type = instance.type_named("mappingproxy");
+    let proxy_type = instance.hot_type(HotId::MappingProxy);
     if proxy_type.is_some_and(|proxy| instance.type_of(left) == proxy) {
         instance.sync_mappingproxy(left);
     }
@@ -868,7 +868,7 @@ pub fn dict_init_native(
         // （`test_graphlib` 的 `os.environ.copy()` 先前落进"可迭代对"分支 ✗ ⇒
         // `ValueError: dictionary update sequence element does not have length 2` ✓）。
         // 精确 `dict` 仍走 entries 快路 ✓。
-        let exact_dict = Some(instance.type_of(source)) == instance.type_named("dict");
+        let exact_dict = Some(instance.type_of(source)) == instance.hot_type(HotId::Dict);
         let mapping_source = if exact_dict {
             None
         } else {
@@ -1022,7 +1022,7 @@ pub fn dict_fromkeys_native(
     // **走正常实例化**（`call_value`：`cls(...)`，`__new__`／`__init__` 覆写都生效 ✓）。
     let class_header = match bound.and_then(|value| instance.as_type(value)) {
         Some(ty) => ty.cast::<Header>(),
-        None => match instance.type_named("dict") {
+        None => match instance.hot_type(HotId::Dict) {
             Some(ty) => ty.cast::<Header>(),
             None => return Err(instance.raise_builtin_error("RuntimeError", "dict 类型不可用")),
         },

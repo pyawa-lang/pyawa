@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -752,7 +753,7 @@ pub(crate) fn make_asend(
     generator: NonNull<Header>,
     sent: Option<NonNull<Header>>,
 ) -> Result<NonNull<Header>, ExecError> {
-    let asend_type = instance.type_named("async_generator_asend").expect("引导期已登记");
+    let asend_type = instance.hot_type(HotId::Asend).expect("引导期已登记");
     // SAFETY: generator 由调用方保证存活，本对象要自己那份。
     unsafe { instance.incref_object(generator.as_ptr()) };
     let sent_reference = match sent {
@@ -1095,8 +1096,7 @@ fn bind_iterator_method(
     name: &str,
     handler: crate::NativeFn,
 ) -> NonNull<Header> {
-    let builtin_type = instance
-        .type_named("builtin_function_or_method")
+    let builtin_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(crate::BuiltinFunctionObject::new(
         builtin_type,
@@ -1107,7 +1107,7 @@ fn bind_iterator_method(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(crate::MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         unsafe { NonNull::new_unchecked(ptr) },
     ));
