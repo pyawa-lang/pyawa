@@ -47,6 +47,19 @@ def canonical_env() -> dict[str, str]:
     return env
 
 
+def machine_load() -> tuple[float, int]:
+    """当前 1 分钟负载与可用核数（并发测量无效 ⇒ 高负载下不判 ✓）。"""
+    try:
+        load = float(pathlib.Path("/proc/loadavg").read_text().split()[0])
+    except Exception:  # noqa: BLE001
+        return 0.0, 1
+    try:
+        cores = len(os.sched_getaffinity(0))
+    except Exception:  # noqa: BLE001
+        cores = os.cpu_count() or 1
+    return load, cores
+
+
 def measure(binary: pathlib.Path, env: dict[str, str] | None = None) -> dict[str, float]:
     proc = subprocess.run(
         [str(binary), str(ROOT / "tools/bench_hot.py")],
@@ -94,6 +107,11 @@ def main() -> int:
     # `--inherit-env` 时全部用继承环境（调试用）。
     def sample(index: int) -> dict[str, float]:
         env = None if args.inherit_env or index % 2 == 1 else clean
+    load, cores = machine_load()
+    if load > cores * 0.7:
+        print(f"⚠ 机器负载 {load:.2f}／{cores} 核 ⇒ **跳过判定**（bench 对负载敏感、并发测量无效；"
+              f"强制判会误红 ✗）。请空载时重跑 ✓")
+        return 0
         return measure(binary, env)
 
     now = sample(0)
