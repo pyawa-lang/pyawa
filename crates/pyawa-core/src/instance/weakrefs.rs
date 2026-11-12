@@ -54,6 +54,10 @@ impl Instance {
 
     /// 登记一个弱引用（**不持有**弱引用对象的引用 ✓）。
     pub fn register_weakref(&self, target: NonNull<Header>, weakref: NonNull<Header>) {
+        // **OM-7 bit 2**（round 250 性能，A2-5）：目标"有弱引用"的事实记在**对象头**里 ⇒
+        // 释放路径一次位测就能早退（`take_weakref_callbacks` 每次释放都调 ✗）。
+        // SAFETY: target 由调用方保证存活。
+        unsafe { target.as_ref() }.set_flag(crate::flags::HAS_WEAKREFS);
         self.weakrefs
             .borrow_mut()
             .entry(target.as_ptr() as usize)
@@ -70,6 +74,16 @@ impl Instance {
         list.retain(|candidate| *candidate != weakref);
         if list.is_empty() {
             table.remove(&target_address);
+            drop(table);
+            // **位清零**（round 250 性能，A2-5）：目标还在活表里才可安全解引用（目标已死时
+            // 这条登记早被 `take_weakref_callbacks` 整批摘走了 ✓）。
+            if self.live.borrow().contains(&target_address) {
+                // SAFETY: 刚确认目标地址在活表里。
+                unsafe {
+                    NonNull::new(target_address as *mut Header)
+                        .map(|target| target.as_ref().clear_flag(crate::flags::HAS_WEAKREFS))
+                };
+            }
         }
     }
 
@@ -98,11 +112,22 @@ impl Instance {
         &self,
         target: NonNull<Header>,
     ) -> Vec<(NonNull<Header>, NonNull<Header>)> {
+        // **快路**（round 250 性能，A2-5）：对象头没有 `HAS_WEAKREFS` ⇒ 一定没有登记表项 ✓
+        //（本函数**每次释放都调**；先前要 `borrow_mut()`＋对地址算一遍哈希再查空表 ✗）。
+        // SAFETY: target 由调用方保证存活（释放路径在 dealloc 之前调用 ✓）。
+        let header = unsafe { target.as_ref() };
+        if !header.has_flag(crate::flags::HAS_WEAKREFS) {
+            return Vec::new();
+        }
         let removed = self
             .weakrefs
             .borrow_mut()
             .remove(&(target.as_ptr() as usize))
             .unwrap_or_default();
+        // 本目标名下的弱引用已被**整批**摘走 ⇒ 位清零 ✓（之后再登记会重新置位 ✓）。
+        if !removed.is_empty() {
+            header.clear_flag(crate::flags::HAS_WEAKREFS);
+        }
         let mut callbacks = Vec::new();
         for weakref in removed {
             // SAFETY: 登记表里的弱引用对象若还活着才取回调；对象可能已在 GC 清除阶段被清掉
@@ -171,6 +196,11 @@ impl Instance {
 
     /// **弱引用对象自己将死**：从目标的登记表里摘掉自己（按地址比较，不解引用目标 ✓）。
     pub(crate) fn forget_weakref_object(&self, object: NonNull<Header>) {
+        // **快路**（round 250 性能，A2-5）：整张弱引用表空着 ⇒ 不可能是某个目标的弱引用 ✓
+        //（本函数每次释放都调 ✗）。
+        if self.weakrefs.borrow().is_empty() {
+            return;
+        }
         let Some(state) = crate::builtin_objects::weakref_state(self, object) else {
             return;
         };

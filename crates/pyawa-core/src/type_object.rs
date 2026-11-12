@@ -233,6 +233,16 @@ pub const IS_ITERATOR_TYPE: u32 = 1 << 5;
 /// round 249 性能（A2-4）：`advance_iterator` 每轮一次的"专用类型集合"哈希查改成一次位测 ✓。
 pub const DEDICATED_ITERATOR_TYPE: u32 = 1 << 6;
 
+/// **内部**类型标志：`__slots__` 声明**查过**（round 250 性能，A2-5）。
+///
+/// 属性写每次都要问"这个类型声明了 `__slots__` 吗"（`type_namespace`＋`dict_get` ✗）；答案在
+/// 类型创建后不变（参照里类创建后写 `__slots__` 也不生效 ✓）⇒ 查一次记在类型位上 ✓。
+pub const SLOTS_CHECKED: u32 = 1 << 7;
+
+/// **内部**类型标志：`__slots__` 声明确实存在（与 [`SLOTS_CHECKED`] 一起用：0＝没查，
+/// `SLOTS_CHECKED`＝查过且没有，两位都有＝查过且有 ✓）。
+pub const SLOTS_DECLARED: u32 = 1 << 8;
+
 /// **内部**类型标志：这个类型的实例把属性字典**内联在载荷里**（载荷是 [`crate::AttributeObject`]）。
 ///
 /// 用户类的实例走这条；宿主／固定布局的实例（例如 `list` 的子类）**没有**这一位，
@@ -312,6 +322,7 @@ impl TypeObject {
     }
 
     /// **round 249 性能（A2-4）**：本类型的实例内 id（元类型＝0，随后按登记顺序递增）。
+    #[inline]
     pub fn type_id(&self) -> u32 {
         self.type_id.get()
     }
@@ -323,6 +334,7 @@ impl TypeObject {
 
     /// **round 249 性能（A2-4）**：按 id 位图判"`super_id` 在不在本类型的 MRO 里"。
     /// `None` ＝位图还没建（调用方回退线性扫 ✓）；一次 `RefCell` 借用＋一次位测 ✓。
+    #[inline]
     pub fn mro_bitmap_contains(&self, super_id: u32) -> Option<bool> {
         let bits = self.mro_ids.borrow();
         if bits.is_empty() {
@@ -349,6 +361,24 @@ impl TypeObject {
             bits[id / 64] |= 1u64 << (id % 64);
         }
         *self.mro_ids.borrow_mut() = bits;
+    }
+
+    /// **round 250 性能（A2-5）**：`__slots__` 检查状态（`None` ＝还没查；`Some(bool)` ＝查过）。
+    pub(crate) fn slots_declaration(&self) -> Option<bool> {
+        let flags = self.type_flags.get();
+        if flags & SLOTS_CHECKED == 0 {
+            return None;
+        }
+        Some(flags & SLOTS_DECLARED != 0)
+    }
+
+    /// 记下 `__slots__` 检查结果 ✓。
+    pub(crate) fn mark_slots_declaration(&self, declared: bool) {
+        let mut flags = self.type_flags.get() | SLOTS_CHECKED;
+        if declared {
+            flags |= SLOTS_DECLARED;
+        }
+        self.type_flags.set(flags);
     }
 
     /// **round 249 性能（A2-4）**：标成"本层接线的迭代器类型"（建类型时按名字定死 ✓）。

@@ -5,7 +5,7 @@
 use crate::HotId;
 use super::*;
 
-pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
+pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str, slot_trace_on: bool) -> Result<Step<'a>, ExecError> {
     match name {
                 "COPY_FREE_VARS" => {
                     // **3.11+ 是 no-op**：自由变量在建帧阶段由函数的闭包装入（`Frame::install_closure`）。
@@ -178,7 +178,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                 // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
                 // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
                 "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
-                    slot_trace(instance, &code, oparg as usize, "读");                                match frame.get().local(oparg) {
+                    if slot_trace_on { slot_trace(instance, &code, oparg as usize, "读"); }                                match frame.get().local(oparg) {
                         Ok(Some(raw)) => push(instance, frame.get(), raw)?,
                         Ok(None) => return Err(unbound_local_error(instance, frame.get(), oparg)),
                         // **cell 在参照实现里也是"快速局部槽"**：类体的 `__classdict__` 只有 cell 槽
@@ -203,7 +203,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     }
                 }
                 "STORE_FAST" => {
-                    slot_trace(instance, &code, oparg as usize, "写");
+                    if slot_trace_on { slot_trace(instance, &code, oparg as usize, "写"); }
                     let value = frame.get().pop()?;
                     // **NULL 哨兵＝"未绑定"**（第 234 轮）：推导式的 `LOAD_FAST_AND_CLEAR` 在外层同名局部
                     // **本来就没有**时会压那个哨兵，收尾的 `STORE_FAST` 要把它还原成"清空槽"而不是存一个
@@ -250,8 +250,8 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     let value = frame.get().pop()?;
                     let store_slot = oparg >> 4;
                     let load_slot = oparg & 0x0F;
-                    slot_trace(instance, &code, store_slot, "写(融合113高)");
-                    slot_trace(instance, &code, load_slot, "读(融合113低)");
+                    if slot_trace_on { slot_trace(instance, &code, store_slot, "写(融合113高)"); }
+                    if slot_trace_on { slot_trace(instance, &code, load_slot, "读(融合113低)"); }
                     // **被覆盖槽的旧值要归还**（round 103 真 bug 修 ✗）：`set_local` 返回旧值，先前
                     // 直接丢掉 ⇒ 每次融合存取漏一份旧值引用（常见于 `a = b = …`／`while` 的融合形态）。
                     match frame.get().set_local(store_slot, Some(value)) {

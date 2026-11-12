@@ -328,6 +328,18 @@ impl Instance {
     /// **按"已算好的哈希 ＋ 匹配谓词"查字典**（`P3-41` round 42 的内部口）：命中给条目下标 ✓。
     ///
     /// 索引惰性建（第一问时 O(n)，之后 O(1)；改键的操作会作废它 ✓）。
+    /// 按名字定位（**哈希索引** ✓）：`dict_get`／属性读写／全局名查都走它。
+    fn dict_position_by_name(
+        &self,
+        mapping: NonNull<Header>,
+        name: &str,
+        hash: u64,
+    ) -> Option<usize> {
+        self.dict_lookup_hashed(mapping, hash, |existing| {
+            self.text_of(existing) == Some(name)
+        })
+    }
+
     fn dict_lookup_hashed(
         &self,
         mapping: NonNull<Header>,
@@ -438,12 +450,78 @@ impl Instance {
 
     /// 按**字符串**键读 `dict`（**借用**；不存在给 `None`）。
     pub fn dict_get(&self, mapping: NonNull<Header>, key: &str) -> Option<NonNull<Header>> {
-        let position = self.dict_lookup_hashed(mapping, crate::executor::values::hash_text(key), |existing| {
-            self.text_of(existing) == Some(key)
-        })?;
+        self.dict_get_hashed(mapping, key, crate::executor::values::hash_text(key))
+    }
+
+    /// 按**已算好的哈希**读字符串键（round 250 性能，A2-5）：调用方手里有 `co_names` 的预计算
+    /// 哈希时（`LOAD_ATTR`／`LOAD_GLOBAL` 一族）不必再每轮 `hash_text` 一遍 ✓。
+    pub fn dict_get_hashed(
+        &self,
+        mapping: NonNull<Header>,
+        key: &str,
+        hash: u64,
+    ) -> Option<NonNull<Header>> {
+        let position = self.dict_position_by_name(mapping, key, hash)?;
         // SAFETY: 调用方保证 mapping 存活。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
         dict.entry(position).map(|(_, value)| value)
+    }
+
+    /// 按**名字**写 `dict`（**接管** `value` 那份引用；已存在 ⇒ 原位替换并释放旧值 ✓）。
+    ///
+    /// round 250 性能（A2-5）：先前属性／命名空间写走 `find_live_position` **线性扫**（每次写
+    /// 都要遍历整个命名空间 ✗）⇒ 这里走哈希索引；新键用 `insert_hashed`（**增量维护索引** ✓，
+    /// 不再 `insert_raw` 把索引整体作废 ✗）。插入顺序语义与旧口径一致（新键在末尾 ✓）。
+    pub fn dict_set_owned_by_name(&self, mapping: NonNull<Header>, name: &str, value: NonNull<Header>) {
+        self.zombie_probe(mapping);
+        // **小字典线性、大字典哈希**（round 250 性能，A2-5）：实例属性字典常只有几个键 ⇒
+        // 哈希路径的"建索引＋桶 `Vec` 分配"反而更贵（attr_write 档实测回退 ✗）；命名空间/全局表
+        // 很大 ⇒ 哈希索引收益明显 ✓。小字典路径**不算哈希** ✓。
+        const SMALL_DICT: usize = 8;
+        // SAFETY: 调用方保证 mapping 是本实例的 dict。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        if dict.len() < SMALL_DICT {
+            if let Some(position) =
+                dict.find_live_position(|existing| self.text_of(existing) == Some(name))
+            {
+                if let Some(old) = dict.replace_value(position, value) {
+                    // SAFETY: 旧值由字典持有，替换后交回本函数。
+                    unsafe { self.release_object(old.as_ptr()) };
+                }
+                return;
+            }
+            let key = self.new_str(name);
+            dict.insert_raw(key, value);
+            return;
+        }
+        let hash = crate::executor::values::hash_text(name);
+        if let Some(position) = self.dict_position_by_name(mapping, name, hash) {
+            if let Some(old) = dict.replace_value(position, value) {
+                // SAFETY: 旧值由字典持有，替换后交回本函数。
+                unsafe { self.release_object(old.as_ptr()) };
+            }
+            return;
+        }
+        let key = self.new_str(name);
+        dict.insert_hashed(key, value, hash);
+    }
+
+    /// 按**名字**从 `dict` 里摘一项（哈希索引 ✓；返回被摘下的键值引用，调用方负责释放）。
+    pub fn dict_remove_by_name(
+        &self,
+        mapping: NonNull<Header>,
+        name: &str,
+    ) -> Option<(NonNull<Header>, NonNull<Header>)> {
+        /// 小字典线性找（不建索引、不算哈希 ✓）。
+        const SMALL_DICT: usize = 8;
+        // SAFETY: 调用方保证 mapping 是本实例的 dict。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let position = if dict.len() < SMALL_DICT {
+            dict.find_live_position(|existing| self.text_of(existing) == Some(name))?
+        } else {
+            self.dict_position_by_name(mapping, name, crate::executor::values::hash_text(name))?
+        };
+        dict.remove(position)
     }
 
     /// **`DESIGN.md` §9 第 20 条**：注入平台相关**只读常量**（`errno` 一类）。

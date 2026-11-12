@@ -17,7 +17,6 @@ use crate::instance::Instance;
 use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
 use core::cell::RefCell;
-use crate::builtin_objects::StrObject;
 use crate::builtin_objects::TupleObject;
 use crate::type_object::TypeObject;
 use crate::executor::arithmetic_public;
@@ -33,7 +32,6 @@ use crate::executor::raise_builtin;
 use crate::executor::release;
 use crate::executor::sequence_items;
 use crate::executor::set_operation;
-use crate::executor::str_matches_public;
 use crate::executor::subscript_get;
 use crate::executor::unsupported_operand;
 use crate::executor::values_equal_public;
@@ -75,11 +73,9 @@ pub(crate) fn lookup_in_mapping(
     mapping: NonNull<Header>,
     name: &str,
 ) -> Option<NonNull<Header>> {
-    // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
-    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-    let position = dict
-        .find_live_position(|existing| str_matches_public(instance, existing, name))?;
-    let (_, value) = dict.entry(position)?;
+    // **哈希索引查**（round 250 性能，A2-5）：先前 `find_live_position` 对**每个**全局/内建名
+    // 都线性扫整个映射 ✗（`str_matches_public` 因此进热榜）。`dict_get` 走 `hash_text`＋桶 ✓。
+    let value = instance.dict_get(mapping, name)?;
     // **借用**：value 由字典持有 ✓（`P3-41` round 43 修 ✗）：先前这里 **incref** 而
     // 调用点一律 `push(instance, frame, value)`（`push` 自己会 `own()` 再加一份 ✓）⇒
     // **每次名字加载漏一份引用** ⇒ 对象永不释放（实测 `c = a` 循环 100 次 ⇒ `a` 的 refcount +100；
@@ -294,24 +290,8 @@ pub fn instance_attribute_set(
             release(instance, value);
             return Err(raise_builtin(instance, "TypeError", "类型对象没有命名空间"));
         };
-        // SAFETY: namespace 是本实例里的 dict。
-        let dict = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
-        let position = dict
-            .find_live_position(|existing| str_matches_public(instance, existing, name));
-        match position {
-            Some(slot) => {
-                if let Some(old) = dict.replace_value(slot, value) {
-                    release(instance, old);
-                }
-            }
-            None => {
-                let key = instance
-                    .alloc(StrObject::new(instance.singletons().str_type(), name.to_owned()))
-                    .into_raw()
-                    .cast::<Header>();
-                dict.insert_raw(key, value);
-            }
-        }
+        // **哈希索引写**（round 250 性能，A2-5）：接管 `value`、原位替换/末尾插入 ✓。
+        instance.dict_set_owned_by_name(namespace, name, value);
         let _ = opcode;
         return Ok(());
     }
@@ -333,9 +313,21 @@ pub fn instance_attribute_set(
     // **判据换成"类型命名空间里有 `__slots__`"**（round 218）：`namedtuple` 是 `type()` 三参
     // 造的，不在"用户类"登记表里 ✗ ⇒ 先前 `is_user_type_object` 把它挡掉 ⇒ 只读属性限制失效
     // ✗（`p.x = 5` 能成功 ✓）。内建／引擎内部对象没有 `__slots__` 名字 ⇒ 不受影响 ✓。
-    let declares_slots = instance
-        .type_namespace(type_ptr.cast())
-        .is_some_and(|namespace| instance.dict_get(namespace, "__slots__").is_some());
+    // SAFETY: type_ptr 由注册表持有、存活。
+    let type_ref = unsafe { type_ptr.as_ref() };
+    // **`__slots__` 检查缓存**（round 250 性能，A2-5）：答案在类型创建后不变 ⇒ 查一次记类型位 ✓
+    //（先前**每次属性写**都要 `type_namespace`＋`dict_get("__slots__")`：哈希＋桶分配 ✗）。
+    let declares_slots = match type_ref.slots_declaration() {
+        Some(declared) => declared,
+        None => {
+            // **保留 `type_namespace` 的惰性创建副作用**（与旧口径一致 ✓）。
+            let declared = instance
+                .type_namespace(type_ptr.cast())
+                .is_some_and(|namespace| instance.dict_get(namespace, "__slots__").is_some());
+            type_ref.mark_slots_declaration(declared);
+            declared
+        }
+    };
     if name != "__dict__" && declares_slots {
         if let Some(in_slot) = instance.type_slot_contains(type_ptr, name) {
             if !in_slot {
@@ -387,24 +379,8 @@ pub fn instance_attribute_set(
     }
     // **`OM-14`**：取或惰性创建（一处真相——`obj.__dict__` 一读就要给出 `{}`）
     let mapping = mounted_instance_dict(instance, object).expect("上面确认过这个类型带实例字典");
-    // SAFETY: mapping 由对象或本函数持有。
-    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-    let position = dict
-        .find_live_position(|existing| str_matches_public(instance, existing, name));
-    match position {
-        Some(slot) => {
-            if let Some(old) = dict.replace_value(slot, value) {
-                release(instance, old);
-            }
-        }
-        None => {
-            let key = instance
-                .alloc(StrObject::new(instance.singletons().str_type(), name.to_owned()))
-                .into_raw()
-                .cast::<Header>();
-            dict.insert_raw(key, value);
-        }
-    }
+    // **哈希索引写**（round 250 性能，A2-5）：属性写不再线性扫实例字典 ✓。
+    instance.dict_set_owned_by_name(mapping, name, value);
     let _ = opcode;
     Ok(())
 }
@@ -498,15 +474,10 @@ fn instance_attribute_delete_inner(
         }
     }
     let mapping = instance_attributes(instance, object).ok_or_else(missing)?;
-    // SAFETY: mapping 是属性字典（dict）。
-    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-    let position = dict
-        .find_live_position(|key| str_matches_public(instance, key, name))
-        .ok_or_else(missing)?;
-    if let Some((key, value)) = dict.remove(position) {
-        release(instance, key);
-        release(instance, value);
-    }
+    // **哈希索引删**（round 250 性能，A2-5）：不再线性扫 ✓。
+    let (key, value) = instance.dict_remove_by_name(mapping, name).ok_or_else(missing)?;
+    release(instance, key);
+    release(instance, value);
     Ok(())
 }
 

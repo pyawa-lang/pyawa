@@ -189,12 +189,14 @@ impl Instance {
     /// 内建类型的**缓存指针**（热路径分派用；未登记 ⇒ `None`）。
     ///
     /// 只在**边界**（缓存重建）用字符串名；热路径只读一次 `Cell` ✓。
+    #[inline]
     pub(crate) fn hot_type(&self, id: HotId) -> Option<NonNull<TypeObject>> {
         self.ensure_hot_types();
         self.hot_type_slots[id as usize].get()
     }
 
     /// `ty` 是不是 `id` 指的那个内建类型（**指针比较**，热路径 ✓）。
+    #[inline]
     pub(crate) fn hot_type_is(&self, id: HotId, ty: NonNull<TypeObject>) -> bool {
         self.hot_type(id) == Some(ty)
     }
@@ -212,6 +214,7 @@ impl Instance {
 
     /// 这个类型是不是本层接线的**迭代器类型**（`FOR_ITER` 每轮一次：**一次能力位测** ✓；
     /// 能力位在建类型时按"首个登记"名字定死 —— 与旧口径（`type_named` 比 36 个名字）等价 ✓）。
+    #[inline]
     pub(crate) fn hot_is_iterator_type(&self, ty: NonNull<TypeObject>) -> bool {
         // SAFETY: 类型对象由注册表持有、在实例存活期间一直有效。
         unsafe { ty.as_ref() }.is_iterator_kind()

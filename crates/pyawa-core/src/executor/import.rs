@@ -5,9 +5,8 @@
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
 use crate::HotId;
-use crate::executor::{mounted_instance_dict, read_file_through_fs, release, str_matches_public};
+use crate::executor::{mounted_instance_dict, read_file_through_fs, release};
 use crate::executor::Attribute;
-use crate::builtin_objects::DictObject;
 use crate::executor::ExecError;
 use crate::frame::Frame;
 use crate::header::Header;
@@ -221,12 +220,8 @@ pub fn exec_module_into_namespace(
 ///
 /// 返回被删掉的值（**借用** —— 引用已归还，调用方不得再用 ✗）。
 fn remove_module_entry(instance: &Instance, modules: NonNull<Header>, name: &str) -> Option<NonNull<Header>> {
-    // SAFETY: modules 由实例持有、存活，且按契约是 dict。
-    let mapping = unsafe { &*modules.as_ptr().cast::<crate::builtin_objects::DictObject>() };
-    let position = mapping
-        .find_live_position(|key| crate::executor::str_matches_public(instance, key, name));
-    let position = position?;
-    let (key, value) = mapping.remove(position)?;
+    // **哈希索引删**（round 250 性能，A2-5）：不再线性扫模块表 ✓。
+    let (key, value) = instance.dict_remove_by_name(modules, name)?;
     instance.release(key);
     instance.release(value);
     Some(value)
@@ -800,15 +795,11 @@ pub(crate) fn module_value(
 ) -> Option<NonNull<Header>> {
     let namespace = mounted_instance_dict(instance, module)?;
     // **只有真的是 `dict` 才能按 `DictObject` 取项** ✓（第 185 轮的教训同款 ✗）
-    if instance.type_name(instance.type_of(namespace)) != "dict" {
+    if !instance.hot_type_is(HotId::Dict, instance.type_of(namespace)) {
         return None;
     }
-    // SAFETY: 上面刚确认 namespace 的类型是 `dict`。
-    let entries = unsafe { &*namespace.as_ptr().cast::<DictObject>() }.entries();
-    entries
-        .into_iter()
-        .find(|(key, _)| str_matches_public(instance, *key, name))
-        .map(|(_, value)| value)
+    // **哈希索引查**（round 250 性能，A2-5）：先前把 `entries()` 摊开线性找 ✗。
+    instance.dict_get(namespace, name)
 }
 
 /// 从模块命名空间里读一个**字符串**属性（读不到 ⇒ `None`）。

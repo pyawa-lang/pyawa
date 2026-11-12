@@ -94,6 +94,7 @@ impl Instance {
     ///
     /// 走 **MRO**（**OM-13** 的 C3 产物）——所以 `bool ⊂ int`、任何类型 `⊂ object` 都自动成立。
     /// `__subclasshook__`／ABC 注册（`numbers.Integral` 一类）随后补。
+    #[inline]
     pub fn is_subtype(&self, subtype: NonNull<TypeObject>, supertype: NonNull<TypeObject>) -> bool {
         if subtype == supertype {
             return true;
@@ -103,11 +104,20 @@ impl Instance {
         let super_id = unsafe { supertype.as_ref() }.type_id();
         // **O(1) 位图**（round 249 性能，A2-4）：先前每次判定都 `mro()` **clone 一个 Vec** 再线性扫 ✗
         //（perf 里 `is_subtype` ≈7.6%，其中分配占了不小一块）。位图在 `register_bases` 时建好 ✓。
-        if let Some(contains) = subtype_ref.mro_bitmap_contains(super_id) {
-            return contains;
+        // 回退分支挪到 `#[cold]`（round 250，A2-5）：热路径代码更小、更易内联 ✓。
+        match subtype_ref.mro_bitmap_contains(super_id) {
+            Some(contains) => contains,
+            None => self.is_subtype_cold(subtype, supertype),
         }
-        // 位图没建（引导期／未登记基类）⇒ 回退线性扫（冷路径 ✓）。
-        subtype_ref.mro().contains(&supertype)
+    }
+
+    /// 位图未建时的冷回退（引导期／未登记基类；不再 clone Vec —— 只借用 MRO ✓）。
+    #[cold]
+    #[inline(never)]
+    fn is_subtype_cold(&self, subtype: NonNull<TypeObject>, supertype: NonNull<TypeObject>) -> bool {
+        // SAFETY: 两个类型都由本实例的注册表持有。
+        unsafe { subtype.as_ref() }
+            .with_mro(|mro| mro.contains(&supertype))
     }
 
     /// **round 248 性能（A2-3）**：这个类型的命名空间可能命中"用户覆写 dunder"吗？（一次位测 ✓）

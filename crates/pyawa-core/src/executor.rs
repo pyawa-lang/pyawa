@@ -1080,9 +1080,17 @@ pub(crate) fn function_defaults(function: NonNull<Header>) -> (NonNull<Header>, 
 /// **槽级追踪** ✓（第 653 轮，门控 `PYAWA_SLOT_TRACE="函数名:槽号"`）：把某函数某槽的**每一次读／写**
 /// 按**发生顺序**打出来 ✓（句首是动作 ✓）—— 用来夹"先读后写"这类**控制流分岔** ✓
 ///（`Lib/re._parser._parse` 的槽 14 就是靠它定位 ✓）。不设这个环境变量时**零开销** ✓（只多一次查表 ✓）。
+/// **`PYAWA_SLOT_TRACE` 是否启用**（round 250 性能，A2-5）：`execute` 入口查**一次**，
+/// 之后 `LOAD_FAST`／`STORE_FAST` 只判一个 `bool` ✓（先前每条指令都要 `OnceLock::get_or_init` ✗）。
+fn slot_trace_enabled() -> bool {
+    static SLOT_TRACE: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    SLOT_TRACE
+        .get_or_init(|| std::env::var_os("PYAWA_SLOT_TRACE"))
+        .is_some()
+}
+
 fn slot_trace(instance: &Instance, code: &crate::CodeObject, slot: usize, action: &str) {
-    // **缓存**（round 247 性能，A2-2）：先前**每条 `LOAD_FAST`／`STORE_FAST`** 都走 libc `getenv`
-    // （线性扫 environ；A2-1 后实测是基线第一热点 ~28% ✗）。开关本来就不需要运行期改变 ✓。
+    // 只有 `slot_trace_enabled()` 为真才会进来 ✓（环境变量进程内只读一次 ✓）。
     static SLOT_TRACE: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
     let Some(wanted) = SLOT_TRACE
         .get_or_init(|| std::env::var_os("PYAWA_SLOT_TRACE"))
@@ -2139,6 +2147,7 @@ pub fn execute<'a>(
     // **`throw`／`close`**：恢复点上有"待抛异常"就先按本帧的异常表派发它
     // （所以生成器体里的 `try/except` 能接住，与参照实现"抛在挂起点"一致）。
     let mut forced_raise = frame.get().take_pending_raise();
+    let slot_trace = slot_trace_enabled();
     let mut decoder = Decoder::new(code.code());
     decoder.set_position(frame.get().instruction_pointer());
     while let Some(instruction) = decoder.next_instruction()? {
@@ -2181,7 +2190,7 @@ pub fn execute<'a>(
             OpGroup::Misc => return step_misc::step_misc(instance, frame, oparg, name),
             OpGroup::Checks => return step_checks::step_checks(instance, frame, oparg, opcode_number, name),
             OpGroup::Names => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
-            OpGroup::Locals => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Locals => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name, slot_trace),
             OpGroup::Operators => return step_operators::step_operators(instance, frame, oparg, opcode_number, name),
             OpGroup::Jumps => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
             OpGroup::Containers => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),

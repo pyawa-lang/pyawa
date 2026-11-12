@@ -47,16 +47,6 @@ pub(crate) fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObjec
         .unwrap_or_else(|| panic!("TS-41：{name} 应当已注册"))
 }
 
-/// 一个 `str` 对象的内容是否等于给定的 Rust 字符串。
-pub(crate) fn str_matches_public(instance: &Instance, raw: NonNull<Header>, expected: &str) -> bool {
-    // SAFETY: 调用方保证 raw 是存活对象。
-    if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
-        return false;
-    }
-    // P3-38 S2c：内部**合法 ASCII** 名字比较走合法视图（WTF-8 ⇒ false，不 panic ✓）
-    instance.text_of(raw) == Some(expected)
-}
-
 /// **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测先撞上的是
 /// `codecs.py` 的 `raise SystemError('… %s' % e)` ✓（`encodings.*` 那一族因此全红 ✗）。
 ///
