@@ -680,6 +680,44 @@ predicate!(isfinite_native, "isfinite", |value| value.is_finite());
 
 /// `math.fsum(iterable)` ✓（本层按**普通求和** ✓ —— 参照用 Neumaier 补偿求和 ✗，
 /// 极端情形下末位会不同 ✓，如实登记在台账里 ✓）。
+/// **`math.modf(x)`**（C1 日常面）：返回 `(小数部分, 整数部分)` 两个 `float`（都带 x 的符号）✓。
+///
+/// 动因：`Lib/_pydatetime.py` 的 `fromtimestamp` 用它（`email.utils.formatdate` →
+/// `datetime.fromtimestamp`）⇒ 先前缺 `modf` ⇒ `urllib.request` 打开 `file://` 直接
+/// `AttributeError: 'module' object has no attribute 'modf'` ✗。
+fn modf_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "modf() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("modf() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let value = real_argument(instance, args[0])?;
+    // 参照 3.14.4 实测：`modf(inf)` ⇒ `(0.0, inf)`、`modf(-inf)` ⇒ `(-0.0, -inf)`、
+    // `modf(nan)` ⇒ `(nan, nan)`；有限值 ⇒ `(fract, trunc)`（两者都带 x 的符号 ✓）。
+    let (fraction, integral) = if value.is_nan() {
+        (f64::NAN, f64::NAN)
+    } else if value.is_infinite() {
+        (0.0f64.copysign(value), value)
+    } else {
+        (value.fract(), value.trunc())
+    };
+    let fraction_object = instance.new_float(fraction);
+    let integral_object = instance.new_float(integral);
+    Ok(instance.new_tuple(vec![fraction_object, integral_object]))
+}
+
 fn fsum_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -946,6 +984,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("isinf", isinf_native as NativeFn),
         ("isfinite", isfinite_native as NativeFn),
         ("fsum", fsum_native as NativeFn),
+        ("modf", modf_native as NativeFn),
         ("erfc", erfc_native as NativeFn),
         ("sumprod", sumprod_native as NativeFn),
         ("prod", prod_native as NativeFn),

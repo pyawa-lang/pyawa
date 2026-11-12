@@ -642,6 +642,12 @@ fn buffered_call(
     let method = match instance.attribute_optional_of(raw, name) {
         Ok(Some(method)) => method,
         Ok(None) => {
+            // **raw 没有 `readline` ⇒ 用 `read(1)` 合成**（C1 日常面，见 `raw_readline`）。
+            if name == "readline" {
+                let result = raw_readline(instance, raw);
+                instance.release(raw);
+                return result;
+            }
             instance.release(raw);
             return Err(instance.raise_builtin_error(
                 "AttributeError",
@@ -657,6 +663,49 @@ fn buffered_call(
     instance.release(method);
     instance.release(raw);
     result
+}
+
+/// **raw 流没有 `readline()` 时用 `read(1)` 合成**（C1 日常面）：参照里 `SocketIO` 继承
+/// `io.RawIOBase` ⇒ `readline` 由 C 基类给 ✓；本层 `Lib/socket.py` 的 `SocketIO` 没有它 ✗
+/// ⇒ `http.client.HTTPResponse` 读状态行时（`self.fp.readline()` → `BufferedReader` 转给 raw）
+/// 报 `'raw stream' object has no attribute 'readline'` ✗。逐字节读到换行符即可（每日 HTTP
+/// 响应头/状态行都是短行 ✓；不追求缓冲性能 —— 真缓冲已由 `BufferedReader` 外层承担）。
+fn raw_readline(instance: &Instance, raw: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
+    let Some(read) = instance.attribute_optional_of(raw, "read")? else {
+        return Err(instance.raise_builtin_error(
+            "AttributeError",
+            "'raw stream' object has no attribute 'read'",
+        ));
+    };
+    let mut bytes: Vec<u8> = Vec::new();
+    let outcome = loop {
+        let one = instance.new_int(1);
+        let chunk = pyawa_core::executor::call::call_value(instance, read, &[one], &[]);
+        instance.release(one);
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                instance.release(read);
+                return Err(error);
+            }
+        };
+        let Some(piece) = instance.bytes_like_value(chunk) else {
+            instance.release(chunk);
+            instance.release(read);
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "readline() 的底层 read() 必须给 bytes ✓",
+            ));
+        };
+        let empty = piece.is_empty();
+        bytes.extend_from_slice(&piece);
+        instance.release(chunk);
+        if empty || bytes.last() == Some(&b'\n') {
+            break Ok(instance.new_bytes(&bytes));
+        }
+    };
+    instance.release(read);
+    outcome
 }
 
 fn buffered_init(

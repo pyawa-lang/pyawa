@@ -38,9 +38,20 @@ impl Emitter {
                     //    而且守卫不过时**主语还留在栈上** ✓ ⇒ 下一条 `case` 照常判 ✓）；
                     // ② 再判**守卫**（本层没有 `TO_BOOL` ✓ ⇒ 直接 `POP_JUMP_IF_FALSE` 取真值 ✓，语义相同 ✓）；
                     // ③ 最后把主语 `POP_TOP` 掉 ✓（命中后栈上不留东西 ✓）。
-                    if let Pattern::Capture(name, name_span) = &case.pattern {
-                        self.emit_named(*name_span, "COPY", 1);
-                        self.emit_store_name(*name_span, name);
+                    match &case.pattern {
+                        // 顶层捕获：`COPY 1; STORE 名字`（守卫看得见、主语留在栈上 ✓）
+                        Pattern::Capture(name, name_span) => {
+                            self.emit_named(*name_span, "COPY", 1);
+                            self.emit_store_name(*name_span, name);
+                        }
+                        // **顶层 `as` 模式**（C1 日常面修 ✗）：`emit_pattern_test` 只测内层、不绑定
+                        // （内层成功会跳 `matched` ⇒ 在模式测试里绑会**被跳过** ✗）⇒ 在这里统一绑：
+                        // 与 `Capture` 同口径 `COPY 1; STORE 名字` ✓（`case int() as n if n > 10` 于是能看见 n）。
+                        Pattern::As(_, name, name_span) => {
+                            self.emit_named(*name_span, "COPY", 1);
+                            self.emit_store_name(*name_span, name);
+                        }
+                        _ => {}
                     }
                     if let Some(guard) = &case.guard {
                         self.emit_expression(guard)?;

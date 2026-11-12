@@ -47,10 +47,25 @@ impl Instance {
         ty: NonNull<TypeObject>,
         name: &str,
     ) -> Option<(NonNull<TypeObject>, NonNull<Header>)> {
+        // **先查类型自己的命名空间**（C1 日常面修 ✗）：占位类型（`_io._IOBase` 一族，走
+        // `new_bare_type`）**没有登记基类** ⇒ `mro()` 是**空表** ✗ ⇒ 先前的纯 MRO 循环连它
+        // **自己**的字典都查不到（`super().close` 在 `class A(io.IOBase)` 里实测
+        // `AttributeError: 'super' object has no attribute 'close'` ✗；普通类型无影响 —— 它们
+        // 的 `mro()[0]` 就是自己 ✓，下面循环里跳过重复项 ✓）。
+        // SAFETY: ty 由注册表持有。
+        if let Some(mapping) = unsafe { ty.as_ref() }.dict() {
+            if let Some(value) = self.dict_get(mapping, name) {
+                return Some((ty, value));
+            }
+        }
         // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
         // **不 clone MRO**（round 249 性能，A2-4）：先前 `mro()` 返回克隆 `Vec` ⇒ 每次查找一次分配 ✗。
         unsafe { ty.as_ref() }.with_mro(|mro| {
             for entry in mro {
+                // 自己刚查过 ⇒ 跳过（普通类型的 `mro()[0]` 就是自己 ✓）。
+                if *entry == ty {
+                    continue;
+                }
                 // SAFETY: 同上。
                 let mapping = unsafe { (*entry.as_ptr()).dict() };
                 let Some(mapping) = mapping else { continue };

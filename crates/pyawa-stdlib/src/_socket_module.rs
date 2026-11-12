@@ -216,7 +216,7 @@ const FUNCTIONS: &[(&str, Arity, NativeFn, Unwired)] = &[
     ("CMSG_SPACE", Arity::DigitExactly(1), cmsg_space_stub, Unwired::Pure),
     ("close", Arity::PrefixExactlyOne, close_stub, Unwired::Capability),
     ("dup", Arity::PrefixExactlyOne, dup_stub, Unwired::Capability),
-    ("getaddrinfo", Arity::Getaddrinfo, getaddrinfo_stub, Unwired::Capability),
+    ("getaddrinfo", Arity::Getaddrinfo, getaddrinfo_native, Unwired::Capability),
     ("getdefaulttimeout", Arity::PrefixNoArgs, getdefaulttimeout_stub, Unwired::Capability),
     ("gethostbyaddr", Arity::DigitExactly(1), gethostbyaddr_stub, Unwired::Capability),
     ("gethostbyname", Arity::DigitExactly(1), gethostbyname_stub, Unwired::Capability),
@@ -632,6 +632,144 @@ fn check_getaddrinfo(
     Ok(())
 }
 
+
+/// **`_socket.getaddrinfo`（日常面最小面）** ✓：只支持**数字 IPv4** 与 `"localhost"`（→`127.0.0.1`）
+/// —— 这两类走 `AI_NUMERICHOST` 口径的**纯计算**（不查 DNS、不发 socket 系统调用 ⇒ 不碰 `CM-8`
+/// 的"真 I/O 属能力域"边界 ✓）。其它主机名**如实**报 `NotImplementedError`（DNS 仍属能力域缺口 ✗）。
+///
+/// 动因（C1 日常面）：`urllib.request` → `http.client` 的 `create_connection` 一进门就调
+/// `getaddrinfo(host, port, 0, SOCK_STREAM)` ⇒ 先前一律 `NotImplementedError` ✗ ⇒ 连
+/// `http://127.0.0.1:port/` 都打不开 ✗。补齐后本机／局域网数字地址的 HTTP 走通 ✓。
+fn getaddrinfo_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    check_arity(instance, "getaddrinfo", Arity::Getaddrinfo, args, kwargs)?;
+    let mut host_value = args.first().copied();
+    let mut port_value = args.get(1).copied();
+    let mut family: i64 = 0;
+    let mut sock_type: i64 = 0;
+    let mut proto: i64 = 0;
+    let mut flags: i64 = 0;
+    for (index, item) in args.iter().enumerate().skip(2) {
+        let number = instance.int_of(*item).and_then(|value| value.to_i64()).unwrap_or(0);
+        match index {
+            2 => family = number,
+            3 => sock_type = number,
+            4 => proto = number,
+            5 => flags = number,
+            _ => {}
+        }
+    }
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        let number = instance.int_of(*value).and_then(|number| number.to_i64()).unwrap_or(0);
+        match name {
+            "host" => host_value = Some(*value),
+            "port" => port_value = Some(*value),
+            "family" => family = number,
+            "type" => sock_type = number,
+            "proto" => proto = number,
+            "flags" => flags = number,
+            _ => {}
+        }
+    }
+    let _ = flags;
+    let Some(host_value) = host_value else {
+        return Err(type_error(
+            instance,
+            "getaddrinfo() missing required argument 'host' (pos 1)".to_owned(),
+        ));
+    };
+    // host：str（或 bytes，按 ASCII 文本看）；别的类型照参照报 TypeError。
+    let host = instance
+        .text_of(host_value)
+        .map(str::to_owned)
+        .or_else(|| {
+            instance
+                .bytes_like_value(host_value)
+                .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+        })
+        .ok_or_else(|| {
+            type_error(
+                instance,
+                "getaddrinfo() argument 1 must be string or bytes".to_owned(),
+            )
+        })?;
+    // port：整数；字符串按十进制解析（服务名解析属 DNS 族，未接线 ⇒ 报错）。
+    let port = match port_value {
+        Some(value) => match instance.int_of(value).and_then(|number| number.to_i64()) {
+            Some(number) => number,
+            None => match instance.text_of(value).and_then(|text| text.parse::<i64>().ok()) {
+                Some(number) => number,
+                None => {
+                    return Err(instance.raise_builtin_error(
+                        "NotImplementedError",
+                        "`_socket.getaddrinfo`：服务名（非数字 port）解析未接线；请用数字端口 ✓",
+                    ))
+                }
+            },
+        },
+        None => 0,
+    };
+    // 数字 IPv4／localhost ⇒ 纯计算；其它主机名 ⇒ 如实报 DNS 未接线。
+    let literal = if host == "localhost" {
+        Some("127.0.0.1".to_owned())
+    } else if is_ipv4_literal(&host) {
+        Some(host.clone())
+    } else {
+        None
+    };
+    let Some(ipv4) = literal else {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket.getaddrinfo`：DNS 解析属网络能力域（CM-8）尚未接线；目前只支持数字 IPv4 与 `localhost`（纯计算，不发 socket 系统调用）✗",
+        ));
+    };
+    let af_inet = i64::from(constant("AF_INET"));
+    if family != 0 && family != i64::from(constant("AF_UNSPEC")) && family != af_inet {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket.getaddrinfo`：目前只支持 AF_INET（IPv6／其它族未接线）✗",
+        ));
+    }
+    let candidates = [
+        (i64::from(constant("SOCK_STREAM")), i64::from(constant("IPPROTO_TCP"))),
+        (i64::from(constant("SOCK_DGRAM")), i64::from(constant("IPPROTO_UDP"))),
+    ];
+    let mut entries: Vec<NonNull<Header>> = Vec::new();
+    for (kind, default_proto) in candidates {
+        if sock_type != 0 && sock_type != kind {
+            continue;
+        }
+        if proto != 0 && proto != default_proto {
+            continue;
+        }
+        let sockaddr = instance.new_tuple(vec![instance.new_str(&ipv4), instance.new_int(port)]);
+        let canonical = instance.new_str("");
+        let entry = instance.new_tuple(vec![
+            instance.new_int(af_inet),
+            instance.new_int(kind),
+            instance.new_int(default_proto),
+            canonical,
+            sockaddr,
+        ]);
+        entries.push(entry);
+    }
+    Ok(instance.new_list(entries))
+}
+
+/// 是否**数字 IPv4 字面量**（四段十进制 0..=255 ✓；不做任何名字解析 ✓）。
+fn is_ipv4_literal(host: &str) -> bool {
+    let parts: Vec<&str> = host.split('.').collect();
+    parts.len() == 4
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.parse::<u16>().is_ok_and(|value| value <= 255))
+}
+
 // ---- 未接线的如实报错（**不返回假值、不假装成功** ✓） ---------------------------------
 
 fn not_wired(instance: &Instance, name: &str, unwired: Unwired) -> pyawa_core::ExecError {
@@ -685,7 +823,6 @@ socket_stub_fn!(cmsg_len_stub, "CMSG_LEN", Arity::DigitExactly(1), Unwired::Pure
 socket_stub_fn!(cmsg_space_stub, "CMSG_SPACE", Arity::DigitExactly(1), Unwired::Pure);
 socket_stub_fn!(close_stub, "close", Arity::PrefixExactlyOne, Unwired::Capability);
 socket_stub_fn!(dup_stub, "dup", Arity::PrefixExactlyOne, Unwired::Capability);
-socket_stub_fn!(getaddrinfo_stub, "getaddrinfo", Arity::Getaddrinfo, Unwired::Capability);
 socket_stub_fn!(getdefaulttimeout_stub, "getdefaulttimeout", Arity::PrefixNoArgs, Unwired::Capability);
 socket_stub_fn!(gethostbyaddr_stub, "gethostbyaddr", Arity::DigitExactly(1), Unwired::Capability);
 socket_stub_fn!(gethostbyname_stub, "gethostbyname", Arity::DigitExactly(1), Unwired::Capability);
@@ -1464,19 +1601,38 @@ fn socket_settimeout_native(
             ),
         ));
     };
-    if !is_none_value(instance, value) && instance.float_value(value).is_none() {
-        let name = instance.type_name(instance.type_of(value));
-        return Err(type_error(
-            instance,
-            format!("'{name}' object cannot be interpreted as an integer"),
-        ));
-    }
-    instance.set_attribute_value(this, "_timeout", value)?;
     if is_none_value(instance, value) {
-        let none = instance.new_bool(false);
-        instance.set_attribute_value(this, "_blocking", none)?;
-        instance.release(none);
+        instance.set_attribute_value(this, "_timeout", value)?;
+        let blocking = instance.new_bool(false);
+        instance.set_attribute_value(this, "_blocking", blocking)?;
+        instance.release(blocking);
+        return Ok(instance.retain(instance.singletons().none()));
     }
+    // **int 也收**（C1 日常面修 ✗）：先前只认 `float` ⇒ `sock.settimeout(5)`（`http.client`
+    // 传的就是 int ✓）报 `'int' object cannot be interpreted as an integer` ✗ —— 参照里
+    // `settimeout` 收 int／float，值按 `float` 存（`gettimeout()` 回 `5.0` ✓）。
+    let number = match instance.float_value(value) {
+        Some(number) => number,
+        None => match instance.int_of(value).and_then(|number| number.to_i64()) {
+            Some(integer) => integer as f64,
+            None => {
+                let name = instance.type_name(instance.type_of(value));
+                return Err(type_error(
+                    instance,
+                    format!("'{name}' object cannot be interpreted as an integer"),
+                ));
+            }
+        },
+    };
+    if number < 0.0 {
+        return Err(instance.raise_builtin_error("ValueError", "Timeout value out of range"));
+    }
+    let stored = instance.new_float(number);
+    instance.set_attribute_value(this, "_timeout", stored)?;
+    instance.release(stored);
+    let blocking = instance.new_bool(number > 0.0);
+    instance.set_attribute_value(this, "_blocking", blocking)?;
+    instance.release(blocking);
     Ok(instance.retain(instance.singletons().none()))
 }
 

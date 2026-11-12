@@ -190,7 +190,10 @@ verdict("pure-htons", lambda: _socket.htons(1))
 verdict("pure-inet_aton", lambda: _socket.inet_aton("127.0.0.1"))
 verdict("pure-CMSG_LEN", lambda: _socket.CMSG_LEN(4))
 verdict("cap-gethostname", lambda: _socket.gethostname())
+# C1 日常面：数字 IPv4／localhost 走**纯计算**（不查 DNS）⇒ 已接线；主机名仍如实未接线
 verdict("cap-getaddrinfo", lambda: _socket.getaddrinfo("127.0.0.1", 80))
+verdict("cap-getaddrinfo-localhost", lambda: _socket.getaddrinfo("localhost", 80, 0, _socket.SOCK_STREAM))
+verdict("cap-getaddrinfo-dns", lambda: _socket.getaddrinfo("example.com", 80))
 
 # round 37：这一族**已真接线**（不再报未实现）——构造出真 socket，socketpair 出两个真 socket
 verdict("cap-socketpair", lambda: _socket.socketpair())
@@ -203,7 +206,9 @@ const HONEST_EXPECTED: &str = r#"pure-htons !! NotImplementedError True
 pure-inet_aton !! NotImplementedError True
 pure-CMSG_LEN !! NotImplementedError True
 cap-gethostname => returned str
-cap-getaddrinfo !! NotImplementedError True
+cap-getaddrinfo => returned list
+cap-getaddrinfo-localhost => returned list
+cap-getaddrinfo-dns !! NotImplementedError True
 cap-socketpair => returned tuple
 cls-construct => returned socket
 wire-construct => returned socket

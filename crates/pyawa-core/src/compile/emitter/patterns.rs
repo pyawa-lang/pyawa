@@ -166,14 +166,12 @@ impl Emitter {
                 "`*` 项只能出现在序列模式里（第 {} 行）",
                 span.line_start
             ))),
-            // **`as` 模式**（task-45 ✓）：照参照实测形状 —— 先 `COPY 1` 一份给子模式测，
-            // 子模式命中后再把**主语**绑到名字（`STORE` 弹掉那份 copy ✓）。
-            Pattern::As(inner, name, span) => {
-                self.emit_named(*span, "COPY", 1);
-                self.emit_pattern_test(inner, next_case, matched)?;
-                self.store_target(*span, name);
-                Ok(())
-            }
+            // **`as` 模式**（task-45；C1 日常面修 ✗）：**绑定交给 `emit_statement_match`**
+            // （与 `Capture` 同口径：命中后 `COPY 1; STORE 名字` ⇒ 守卫看得见名字、主语仍留在栈上 ✓）。
+            // 先前在这里 `COPY 1; <子模式>; store_target` ✗ —— 子模式成功会 `JUMP matched`，
+            // **跳过**后面的 `store_target` ⇒ 名字永远没绑（`case int() as n if n > 10` 实测
+            // `UnboundLocalError` ✗）。
+            Pattern::As(inner, _name, _span) => self.emit_pattern_test(inner, next_case, matched),
             // 捕获与通配**一定命中** ✓（没有判定指令 ✓）
             Pattern::Capture(_, _) | Pattern::Wildcard(_) => Ok(()),
             Pattern::Or(alternatives, span) => {
@@ -239,9 +237,10 @@ impl Emitter {
             none_path,
         );
         self.emit_named(*span, "NOT_TAKEN", 0);
-        if total > 0 {
-            self.emit_indexed(*span, "UNPACK_SEQUENCE", total);
-        }
+        // **总是发**（C1 日常面修 ✗）：`case int() as n` 的参照字节码里就有 `UNPACK_SEQUENCE 0`
+        // （把 `MATCH_CLASS` 的结果元组收掉 ✓）；先前 total==0 跳过 ⇒ 结果元组留栈 ⇒
+        // `as` 绑定拿到的是 `()`、嵌套空类模式也会把残渣留给下一条 case ✗。
+        self.emit_indexed(*span, "UNPACK_SEQUENCE", total);
         // 逐个测：第 k 个子模式失败时，栈上还剩 `total - k - 1` 个已展开值，外加**待测值本身** ✓
         let mut sub_patterns: Vec<&Pattern> = positional.iter().collect();
         sub_patterns.extend(keywords.iter().map(|(_, sub)| sub));
@@ -327,11 +326,14 @@ impl Emitter {
                 self.emit_named(*span, "NOT_TAKEN", 0);
                 Ok(())
             }
-            // **`as` 模式**（task-45 ✓）：栈顶是待测值 ⇒ 先 `COPY 1` 给子模式，命中后
-            // 把原值 `STORE` 绑定 ✓。
+            // **`as` 模式**（task-45；C1 日常面修 ✗）：栈顶是待测值 ⇒ `COPY 1` 给子模式测，
+            // **子模式成功要先落到本地标签**再绑定 ✓ —— 先前直接把 `on_match` 传进去 ✗
+            // ⇒ 内层成功跳 `on_match` 会跳过 `store_target`（顶层 `case ... as n if` 的真 bug 同源）。
             Pattern::As(inner, name, span) => {
                 self.emit_named(*span, "COPY", 1);
-                self.emit_subpattern_test(inner, failure, on_match)?;
+                let bound = self.new_label();
+                self.emit_subpattern_test(inner, failure, bound)?;
+                self.mark_label(bound);
                 self.store_target(*span, name);
                 Ok(())
             }

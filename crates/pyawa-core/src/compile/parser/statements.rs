@@ -539,38 +539,6 @@ pub(crate) fn parse_body_after_colon(
     Ok(body)
 }
 
-pub(crate) fn parse_suite(
-    lexed: &Lexed,
-    cursor: usize,
-    depth: usize,
-    in_function: bool,
-) -> Result<(Vec<Statement>, usize), CompileError> {
-    let tokens = &lexed.lexemes;
-    let mut cursor = cursor;
-    if tokens.get(cursor) != Some(&Lexeme::Colon) {
-        return Err(CompileError::Syntax(format!(
-            "这里要冒号，实际 {:?}（第 {} 行，列 {}-{}）",
-            tokens.get(cursor),
-            lexed.spans[cursor].line_start,
-            lexed.spans[cursor].col_start,
-            lexed.spans[cursor].col_end
-        )));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Newline) {
-        return Err(CompileError::Syntax("冒号后面要换行".to_owned()));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Indent) {
-        return Err(CompileError::Syntax("体要缩进".to_owned()));
-    }
-    cursor += 1;
-    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
-    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
-        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
-    }
-    Ok((body, cursor + 1))
-}
 
 /// **冒号之后的套件**（task-25 ✓）：缩进块或**行内简单语句**，`cursor` 指着冒号。
 ///
