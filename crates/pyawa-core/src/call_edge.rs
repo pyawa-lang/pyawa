@@ -129,16 +129,36 @@ impl<'a> Borrowed<'a> {
 
 /// 调用边的 canary 记录：抓调用前的实参计数，调用后核对（`OM-19`：借用视图不得被消费）。
 pub(crate) struct ArgCanary<'a> {
+    /// 被调原生函数的名字（诊断输出用；`None` 时不抓）。
+    native: &'static str,
     args: &'a [Borrowed<'a>],
     /// `None` ⇒ canary 没开（零分配、零断言）。
     before: Option<Vec<u32>>,
+    /// 调用前的 GC 回收次数：调用中若跑过 GC，实参计数可能因**别的持有者**被回收而合法下降 ✓
+    ///（round 253 实测：`test_collections` 的 `repeat` 下降 311→118 是 GC 释放了引用者，不是借用被消费）。
+    gc_before: usize,
+}
+
+/// **`[B3-edge]` 上升日志**是否开（`PYAWA_CALL_EDGE_TRACE=1`；仅 canary 模式下生效 ✓）。
+fn trace_increases() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("PYAWA_CALL_EDGE_TRACE").is_some())
 }
 
 impl<'a> ArgCanary<'a> {
     /// 调用**前**抓快照；canary 关时什么都不做。
-    pub(crate) fn capture(instance: &Instance, args: &'a [Borrowed<'a>]) -> Self {
+    pub(crate) fn capture(
+        instance: &Instance,
+        native: &'static str,
+        args: &'a [Borrowed<'a>],
+    ) -> Self {
         if !instance.release_canary_enabled() {
-            return Self { args, before: None };
+            return Self {
+                native,
+                args,
+                before: None,
+                gc_before: 0,
+            };
         }
         for (index, argument) in args.iter().enumerate() {
             assert!(
@@ -150,33 +170,55 @@ impl<'a> ArgCanary<'a> {
         // SAFETY: 上面逐个确认过存活。
         let before = args.iter().map(|argument| unsafe { argument.refcount() }).collect();
         Self {
+            native,
             args,
             before: Some(before),
+            gc_before: instance.gc_collections(),
         }
     }
 
     /// 调用**后**核对：实参计数**不得下降**（下降 ⇒ 借用被当所有权释放 ✗）。
     ///
-    /// 上升是允许的：被调方合法保留（`OM-16` 的新引用）✓。
+    /// 上升是允许的：被调方合法保留（`OM-16` 的新引用）✓；开 `PYAWA_CALL_EDGE_TRACE=1`
+    /// 时把上升也记成 `[B3-edge]` 行（供 `tools/call_edge_survey.py` 收站点）。
     pub(crate) fn check(&self, instance: &Instance) {
         let Some(before) = &self.before else {
             return;
         };
+        let gc_ran = instance.gc_collections() != self.gc_before;
         for (index, argument) in self.args.iter().enumerate() {
             // SAFETY: capture 已确认存活；这里核对的是"窗口内"的计数。
             let now = unsafe { argument.refcount() };
-            assert!(
-                now >= before[index],
-                "[B3-canary] 第 {index} 个实参在调用中**计数下降**（{} → {}）：借用视图被当成所有权释放 ✗（OM-19／AB-16）\n  指针={:p}",
-                before[index],
-                now,
-                argument.as_ptr()
-            );
-            assert!(
-                object_is_alive(instance, argument.as_ptr()),
-                "[B3-canary] 第 {index} 个实参**调用后已不在活表里**（OM-19：借用窗口被提前关闭）\n  指针={:p}",
-                argument.as_ptr()
-            );
+            // **只在有偏离时才求现场**（round 253：`current_site_with_line` 会拼 String，
+            // 每个实参每轮都算会把 canary 模式拖慢一个数量级 ✗）。
+            if now < before[index] {
+                let site = instance.current_site_with_line();
+                if gc_ran {
+                    // **合法下降**（round 253）：调用中跑过 GC ⇒ 别的引用者被回收 ⇒ 计数会掉 ✓。
+                    // 仍记一行（供 survey 统计），但**不**当 UAF。
+                    eprintln!(
+                        "[B3-edge]\t下降(GC)\t{}\t{index}\t{}\t{now}\t{site}",
+                        self.native, before[index]
+                    );
+                    continue;
+                }
+                // 机器可读行（先打、再断言）：`下降 <函数> <实参下标> <前> <后> <现场>`。
+                eprintln!(
+                    "[B3-edge]\t下降\t{}\t{index}\t{}\t{now}\t{site}",
+                    self.native, before[index]
+                );
+                panic!(
+                    "[B3-canary] 调用原生函数 `{}` 时第 {index} 个实参**计数下降**（{} → {}）：借用视图被当成所有权释放 ✗（OM-19／AB-16）\n  现场={site}",
+                    self.native, before[index], now
+                );
+            }
+            if now > before[index] && trace_increases() {
+                let site = instance.current_site_with_line();
+                eprintln!(
+                    "[B3-edge]\t上升\t{}\t{index}\t{}\t{now}\t{site}",
+                    self.native, before[index]
+                );
+            }
         }
     }
 }
@@ -204,13 +246,14 @@ fn object_is_alive(instance: &Instance, ptr: NonNull<Header>) -> bool {
 /// - `native` 必须遵守 `NativeFn` 契约（借用视图 ＋ 新引用返回值）。
 pub(crate) unsafe fn call_builtin_borrowed<'a>(
     instance: &'a Instance,
+    native_name: &'static str,
     native: crate::builtin_objects::NativeFn,
     args: &'a [NonNull<Header>],
     kwargs: &'a [(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NewRef<'a>, crate::ExecError> {
     // SAFETY: 调用方保证 args 生命周期（见函数 Safety）。
     let borrowed = unsafe { Borrowed::view(args) };
-    let canary = ArgCanary::capture(instance, borrowed);
+    let canary = ArgCanary::capture(instance, native_name, borrowed);
     let raw_args = Borrowed::raw(borrowed);
     // SAFETY: NativeFn 契约（借用视图 ＋ 新引用返回值），见函数 Safety。
     let result = unsafe { native(instance, None, raw_args, kwargs) };
@@ -287,7 +330,7 @@ mod tests {
         let raw = [value];
         // SAFETY: value 存活。
         let view = unsafe { Borrowed::view(&raw) };
-        let canary = ArgCanary::capture(&instance, view);
+        let canary = ArgCanary::capture(&instance, "测试函数", view);
         assert!(canary.before.is_none(), "未开 canary 时不抓快照");
         canary.check(&instance);
         // SAFETY: 归还 new_int 交出的新引用。

@@ -140,7 +140,7 @@ pub fn call_value(
             // "入参计数不下降／返回值活着"（`OM-16`／`OM-19`／`AB-15`／`AB-16`）。
             // SAFETY: `NativeFn` 契约＝借用视图 ＋ 新引用返回值（本轮试点只覆盖这一条快路 ✓）。
             let result = unsafe {
-                crate::call_edge::call_builtin_borrowed(instance, function, args, kwargs)
+                crate::call_edge::call_builtin_borrowed(instance, native.name(), function, args, kwargs)
             }?;
             return Ok(result.into_raw());
         }

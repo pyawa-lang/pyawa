@@ -52,10 +52,10 @@ if [ "$PROFILE" = "release" ]; then
   begin=$(date +%s)
   if cargo build --release -p pyawa-runtime --bin pyawa >"$LOGDIR/0.log" 2>&1; then
     end=$(date +%s)
-    [ "$QUIET" = "0" ] && printf ' 0/10 ✓ %-58s %3ds\n' "cargo build --release -p pyawa-runtime --bin pyawa（步骤 0）" "$((end - begin))"
+    [ "$QUIET" = "0" ] && printf ' 0/11 ✓ %-58s %3ds\n' "cargo build --release -p pyawa-runtime --bin pyawa（步骤 0）" "$((end - begin))"
   else
     end=$(date +%s)
-    printf ' 0/10 ✗ %-58s %3ds  （日志 %s）\n' "cargo build --release -p pyawa-runtime --bin pyawa（步骤 0）" "$((end - begin))" "$LOGDIR/0.log"
+    printf ' 0/11 ✗ %-58s %3ds  （日志 %s）\n' "cargo build --release -p pyawa-runtime --bin pyawa（步骤 0）" "$((end - begin))" "$LOGDIR/0.log"
     tail -20 "$LOGDIR/0.log"
     echo "slowcheck: 红 ✗（步骤 0：release 构建失败）  墙钟 $(( $(date +%s) - START ))s"
     exit 1
@@ -78,6 +78,15 @@ step() {
   FAILED=1
   return 1
 }
+
+# **第 1 项（release 档）＝基准闸＋内存子集**（round 253 从末尾**前移**：11 项重活跑完后 CPU 降频
+# 会把 `bench_hot` 读数抬高 → 假红 ✗；放在构建之后量最接近真实能力 ✓）。判定口径不变：退出码非 0 即红 ✓。
+if [ "$PROFILE" = "release" ]; then
+  step "基准闸：性能回退（bench_gate）＋ 内存 memcheck 子集（20 例）" \
+    bash -c 'python3 tools/bench_gate.py && tools/memcheck.sh --limit 20' || true
+  if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项：见上）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
+fi
+
 
 # ① 编译（0 警告） ✗ ② 逐字节 ✗ ③ 全量测试（含关键护栏） ✗ ④～⑥ CI 三件 ✗ ⑦⑧ 语料下限与夹具 ✗ ⑨⑩ 对拍（普通 ＋ 悬垂哨兵 ✓）
 step "cargo check --workspace --all-targets（0 警告）" \
@@ -131,9 +140,6 @@ fi
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 
 if [ "$PROFILE" = "release" ]; then
-step "基准闸：性能回退（bench_gate）＋ 内存 memcheck 子集（20 例）" \
-  bash -c 'python3 tools/bench_gate.py && tools/memcheck.sh --limit 20' || true
-
   echo "slowcheck: OK ✓（十一项全绿）  墙钟 $(( $(date +%s) - START ))s  [profile=release]"
 else
   echo "slowcheck: OK ✓（十一项全绿）  墙钟 $(( $(date +%s) - START ))s"
