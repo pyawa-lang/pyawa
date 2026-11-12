@@ -135,8 +135,14 @@ pub fn call_value(
             // SAFETY: 类型身份刚确认。
             let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
             let function = native.function();
-            // SAFETY: 签名契约见 `NativeFn`（借用视图 ＋ 新引用返回值）。
-            return unsafe { function(instance, None, args, kwargs) };
+            // **调用边类型化**（B3 试点，round 252）：实参是 `Borrowed` 借用视图、返回值是
+            // `NewRef` 新引用；canary（`PYAWA_REFCOUNT_CANARY=1`）在边界上核对
+            // "入参计数不下降／返回值活着"（`OM-16`／`OM-19`／`AB-15`／`AB-16`）。
+            // SAFETY: `NativeFn` 契约＝借用视图 ＋ 新引用返回值（本轮试点只覆盖这一条快路 ✓）。
+            let result = unsafe {
+                crate::call_edge::call_builtin_borrowed(instance, function, args, kwargs)
+            }?;
+            return Ok(result.into_raw());
         }
     }
     let mut owned_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());

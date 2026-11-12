@@ -44,6 +44,13 @@ static REF_TRACKED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashS
     std::sync::OnceLock::new();
 
 impl Instance {
+    /// **B3 试点**（round 252）：调用边 canary 是否开 —— 与释放路径**同一快照位**
+    /// （`Instance::new` 时从 `PYAWA_REFCOUNT_CANARY` 采；见 `diag::release_diag_bits`）。
+    #[inline]
+    pub(crate) fn release_canary_enabled(&self) -> bool {
+        self.diag_bits.get() & crate::diag::RELEASE_DIAG_CANARY != 0
+    }
+
     /// 归还一份引用（[`Self::retain`] 的配对）。
     ///
     /// 与 `retain` 一样是**安全函数**：契约（"这份引用确实是你持有的"）由调用方保证——

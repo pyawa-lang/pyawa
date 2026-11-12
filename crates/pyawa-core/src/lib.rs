@@ -73,6 +73,7 @@ pub mod host_env;
 pub mod wtf8;
 mod builtin;
 mod builtin_objects;
+mod call_edge;
 mod cell;
 mod classes;
 mod code;
