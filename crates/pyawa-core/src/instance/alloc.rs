@@ -540,6 +540,9 @@ impl Instance {
         instance_size: usize,
         slots: Slots,
     ) -> NonNull<TypeObject> {
+        // **类型 id**（round 249 性能，A2-4）：本实例内单调递增 ⇒ `is_subtype` 用 id 位图 O(1) ✓。
+        let type_id = self.next_type_id.get();
+        self.next_type_id.set(type_id.wrapping_add(1));
         // 引导期（元类型自身）还没有类型可指，先用悬垂但非空的指针占位；随后立刻写回自指。
         let ty = self
             .metatype
@@ -558,6 +561,8 @@ impl Instance {
             Cell::new(None),
         );
         let ptr = NonNull::from(Box::leak(Box::new(object)));
+        // SAFETY: ptr 刚分配、由注册表持有（存活）。
+        unsafe { ptr.as_ref() }.set_type_id(type_id);
         // 类型对象也走同一本账（OM-3），但由注册表持有：不进 `live`，销毁时统一释放（OM-2）。
         self.bytes_allocated
             .set(self.bytes_allocated.get() + core::mem::size_of::<TypeObject>());
@@ -565,10 +570,28 @@ impl Instance {
         // **地址表**（round 246 性能）：`release_object` 判"是不是类型对象"从线性扫改成 O(log n) ✓。
         self.register_type_address(ptr.as_ptr() as usize);
         // **名字索引**（round 142）：先登记者优先（与 `type_named` 旧线性扫口径一致 ✓）。
-        self.types_by_name
-            .borrow_mut()
-            .entry(name.to_owned())
-            .or_insert(ptr);
+        // **round 249（A2-4）**：**首个登记**顺手标"迭代器类型／专用迭代器类型"**能力位**
+        // （热路径一次位测；"首个登记"与 `type_named` 的先登记者优先口径一致 ✓）。
+        let first_registration = {
+            let mut index = self.types_by_name.borrow_mut();
+            match index.entry(name.to_owned()) {
+                std::collections::hash_map::Entry::Occupied(_) => false,
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(ptr);
+                    true
+                }
+            }
+        };
+        if first_registration {
+            // SAFETY: ptr 刚由 Box::leak 分配、由注册表持有（存活）。
+            let type_object = unsafe { ptr.as_ref() };
+            if crate::executor::ITERATOR_TYPE_NAMES.contains(&name) {
+                type_object.mark_iterator_type();
+            }
+            if crate::executor::DEDICATED_ITERATOR_TYPE_NAMES.contains(&name) {
+                type_object.mark_dedicated_iterator();
+            }
+        }
         // **代数 +1**（round 145）：让"按名字算出来"的缓存（专用迭代器类型集合）在惰性类型
         // 出现后自动重建 ✓。
         self.types_generation.set(self.types_generation.get() + 1);

@@ -12,9 +12,12 @@
 //! 它们的首个类型在引导期定死、且**不会被退休**（退休只发生在用户动态类上）⇒ 缓存命中后
 //! 不必再回查 ✓。惰性创建的内建类型（如 `range_iterator`）出现在 `types_generation` 变化之后
 //! ⇒ 缓存重建时自动补上 ✓（已经命中的名字不重查，重建成本与"缺多少"成正比 ✓）。
+//!
+//! **round 249（A2-4）**：槽位改成 `[Cell<Option<NonNull<TypeObject>>>]`（每查一次只读一次
+//! `Cell`，不再 `RefCell` 借用 ✗）；"迭代器类型／专用迭代器类型"改**类型能力位**（建类型时定死），
+//! 不再维护指针集合 ✓。
 
 use super::*;
-use crate::executor::ITERATOR_TYPE_NAMES;
 use crate::type_object::TypeObject;
 
 /// 热路径分派用的类型名（**枚举值 = 缓存下标**；`name` 只在重建缓存时出现 ✓）。
@@ -167,68 +170,28 @@ hot_ids! {
     Chain => "chain",
 }
 
-/// 一份**按 `types_generation` 重建**的类型指针缓存。
-pub(crate) struct HotTypes {
-    /// 建立这份缓存时的 [`Instance::types_generation`]。
-    generation: usize,
-    /// `HotId` 下标 → 类型指针（名字当时未登记 ⇒ `None`，下次重建再试）。
-    pointers: [Option<NonNull<TypeObject>>; HotId::COUNT],
-    /// `ITERATOR_TYPE_NAMES` 下标 → 类型指针（同上）。
-    iterator_pointers: [Option<NonNull<TypeObject>>; ITERATOR_TYPE_NAMES.len()],
-}
-
-impl HotTypes {
-    /// 重建：已命中的名字**不重查**（内建类型的首个登记不会变 ✓）；只补还缺的那些 ✓。
-    fn build(instance: &Instance, generation: usize, previous: Option<HotTypes>) -> Self {
-        let previous = previous.as_ref();
-        let mut pointers = [None; HotId::COUNT];
-        for (index, id) in HotId::ALL.iter().enumerate() {
-            pointers[index] = previous
-                .and_then(|cache| cache.pointers[index])
-                .or_else(|| instance.type_named(id.name()));
-        }
-        let mut iterator_pointers = [None; ITERATOR_TYPE_NAMES.len()];
-        for (index, name) in ITERATOR_TYPE_NAMES.iter().enumerate() {
-            iterator_pointers[index] = previous
-                .and_then(|cache| cache.iterator_pointers[index])
-                .or_else(|| instance.type_named(name));
-        }
-        Self {
-            generation,
-            pointers,
-            iterator_pointers,
-        }
-    }
-}
-
 impl Instance {
-    /// 缓存过期（按 [`Instance::types_generation`]）就重建；否即是空操作。
+    /// 热类型槽过期（按 [`Instance::types_generation`]）就重建；否即是空操作（只读一次 `Cell` ✓）。
     fn ensure_hot_types(&self) {
         let generation = self.types_generation.get();
-        let fresh = {
-            let cache = self.hot_types.borrow();
-            cache
-                .as_ref()
-                .is_some_and(|cache| cache.generation == generation)
-        };
-        if fresh {
+        if self.hot_types_generation.get() == generation {
             return;
         }
-        // **先取出旧缓存再重建**（`type_named` 里不碰本缓存 ⇒ 不会重入 ✓）。
-        let previous = self.hot_types.borrow_mut().take();
-        let rebuilt = HotTypes::build(self, generation, previous);
-        *self.hot_types.borrow_mut() = Some(rebuilt);
+        // **已命中的名字不重查**（内建名的首个登记不会变 ✓）；只补还缺的 ✓。
+        for (index, id) in HotId::ALL.iter().enumerate() {
+            if self.hot_type_slots[index].get().is_none() {
+                self.hot_type_slots[index].set(self.type_named(id.name()));
+            }
+        }
+        self.hot_types_generation.set(generation);
     }
 
     /// 内建类型的**缓存指针**（热路径分派用；未登记 ⇒ `None`）。
     ///
-    /// 只在**边界**（缓存重建）用字符串名；调用方拿它做指针比较 ✓。
+    /// 只在**边界**（缓存重建）用字符串名；热路径只读一次 `Cell` ✓。
     pub(crate) fn hot_type(&self, id: HotId) -> Option<NonNull<TypeObject>> {
         self.ensure_hot_types();
-        self.hot_types
-            .borrow()
-            .as_ref()
-            .and_then(|cache| cache.pointers[id as usize])
+        self.hot_type_slots[id as usize].get()
     }
 
     /// `ty` 是不是 `id` 指的那个内建类型（**指针比较**，热路径 ✓）。
@@ -247,16 +210,11 @@ impl Instance {
             .any(|id| self.hot_type(*id).is_some_and(|base| self.is_subtype(ty, base)))
     }
 
-    /// 这个类型是不是本层接线的**迭代器类型**（`FOR_ITER` 每轮一次：指针比较，不再查 36 次名字 ✓）。
+    /// 这个类型是不是本层接线的**迭代器类型**（`FOR_ITER` 每轮一次：**一次能力位测** ✓；
+    /// 能力位在建类型时按"首个登记"名字定死 —— 与旧口径（`type_named` 比 36 个名字）等价 ✓）。
     pub(crate) fn hot_is_iterator_type(&self, ty: NonNull<TypeObject>) -> bool {
-        self.ensure_hot_types();
-        self.hot_types.borrow().as_ref().is_some_and(|cache| {
-            cache
-                .iterator_pointers
-                .iter()
-                .flatten()
-                .any(|candidate| *candidate == ty)
-        })
+        // SAFETY: 类型对象由注册表持有、在实例存活期间一直有效。
+        unsafe { ty.as_ref() }.is_iterator_kind()
     }
 
     /// 地址是不是**注册表里的类型对象**（`release_object` 每次释放一次：O(log n)，不再线性扫 ✓）。

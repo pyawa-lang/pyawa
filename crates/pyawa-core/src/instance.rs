@@ -122,7 +122,7 @@ pub struct Instance {
     /// ⇒ 用旁表 ✓；对象释放时同步摘除（地址复用不会串味 ✓）。
     /// 只对**用户类的 `__del__`**（`python_level_finalize`）生效；宿主终结器槽保持 `OM-20` 的
     /// "复活后再死可再终结"语义（`object_model` 的用例钉住 ✓）。
-    python_finalized: RefCell<std::collections::HashSet<usize>>,
+    python_finalized: RefCell<crate::fast_hash::FastSet<usize>>,
     /// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点。core 不能依赖
     /// stdlib（分层）⇒ 由 `_ast` 模块在引导期登记一个函数指针 ✓（未登记时 compile 照旧报未接线 ✓）。
     ast_parser: Cell<Option<crate::AstParserFn>>,
@@ -141,18 +141,18 @@ pub struct Instance {
     /// [`Instance::is_dedicated_iterator_type`] 的集合）在代数变化时**重建** ✓（惰性建的迭代器
     /// 类型在首次推进之后才出现时，缓存不能过期 ✗）。
     types_generation: Cell<usize>,
-    /// **热路径类型指针缓存**（round 246 性能，A2-1；见 [`hot_types`]）：把"按名字查类型"从每条
-    /// 指令的热路径拿掉 —— 分派处只比较 [`NonNull<TypeObject>`](core::ptr::NonNull)，字符串名只留
-    /// 在缓存重建的边界 ✓。按 `types_generation` 失效 ✓。
-    hot_types: RefCell<Option<hot_types::HotTypes>>,
+    /// **热路径类型指针槽**（round 246 性能，A2-1；round 249 改直接 Sip 槽）：把"按名字查类型"
+    /// 从每条指令的热路径拿掉 —— 分派处只读一次 `Cell` ✓（不再 `RefCell` 借用 ✓）。
+    /// 按 `types_generation` 失效（`hot_types_generation` 记录建槽时的代数 ✓）。
+    hot_type_slots: [Cell<Option<NonNull<TypeObject>>>; hot_types::HotId::COUNT],
+    /// 热类型槽建立时的 `types_generation`（不等就重建 ✓）。
+    hot_types_generation: Cell<usize>,
+    /// **类型 id 计数器**（round 249 性能，A2-4）：`alloc_type_raw` 每次 +1 ⇒ `is_subtype` 用 id 位图 ✓。
+    next_type_id: Cell<u32>,
     /// **注册表里全部类型对象的地址（升序）**（round 246 性能）：`release_object` 每次真正释放都要
     /// 判"这个地址是不是类型对象"——先前是**线性扫 `types`**（类型一多就是每次释放几百次比较 ✗）；
     /// 这里维护一份升序表，判定改成 O(log n) ✓（登记/退休时同步增删 ✓）。
     type_addresses: RefCell<Vec<usize>>,
-    /// **"有专用推进分支"的迭代器类型地址集合**（round 145 性能）：`advance_iterator` 先前对
-    /// **每个**步进都比 20+ 个内建名 ✗（`for` 循环每轮一次 ⇒ 热路径大头）；这里按代数缓存一份
-    /// 集合，普通迭代器（`list_iterator`／`range_iterator` 等）**一次哈希查**就跳过整条链 ✓。
-    dedicated_iterator_types: RefCell<Option<(usize, crate::fast_hash::FastSet<usize>)>>,
     /// **被迭代源类型 → 布局种类缓存**（round 146 性能，`iter.rs::source_kind` 用）：避免每个元素都做
     /// 7 次 `type_is_subtype_of`（`type_named` ＋ MRO 线性扫 ✗）。类型布局与实例无关 ⇒ 只存 `u8` 小码 ✓。
     iterable_source_kinds: RefCell<crate::fast_hash::FastMap<usize, u8>>,

@@ -197,6 +197,36 @@ pub(crate) const ITERATOR_TYPE_NAMES: [&str; 36] = [
     "product",
 ];
 
+/// **有专用推进分支的迭代器类型名**（round 249 性能，A2-4；从 `instance::misc` 移来 ⇒ 一处真相）：
+/// 建类型时按"首个登记"名字标能力位 `DEDICATED_ITERATOR_TYPE` ⇒ `advance_iterator` 每轮一次位测 ✓。
+pub(crate) const DEDICATED_ITERATOR_TYPE_NAMES: &[&str] = &[
+    "list_reverseiterator",
+    "reversed",
+    "count",
+    "repeat",
+    "islice",
+    "range_iterator",
+    "longrange_iterator",
+    "product",
+    "permutations",
+    "compress",
+    "combinations",
+    "combinations_with_replacement",
+    "zip",
+    "map",
+    "filter",
+    "zip_longest",
+    "pairwise",
+    "batched",
+    "cycle",
+    "accumulate",
+    "starmap",
+    "takewhile",
+    "dropwhile",
+    "filterfalse",
+    "chain",
+];
+
 /// 属性查找的结果。
 pub(crate) enum Attribute {
     /// 一个**新引用**（`OM-11` 的 `getattr` 槽交出来的，直接压栈即可）。
@@ -1856,6 +1886,225 @@ fn trace_line_event<'a>(
     }
 }
 
+/// 指令**分派组**（round 249 性能，A2-4；`BC-50`：仍**按名字**分派 —— 表用名字建）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpGroup {
+    Calls,
+    Misc,
+    Checks,
+    Names,
+    Locals,
+    Operators,
+    Jumps,
+    Containers,
+    Iterators,
+    Match,
+    Format,
+    Exceptions,
+    Imports,
+    Attributes,
+    Generators,
+}
+
+/// 分派组表：名字 → `OpGroup`（唯一真相在 `execute` 的旧 `match name` 语义里，逐条照搬 ✓）。
+const DISPATCH_GROUPS: &[(OpGroup, &[&str])] = &[
+    (
+        OpGroup::Calls,
+        &[
+            "DICT_MERGE",
+            "DICT_UPDATE",
+            "CALL_FUNCTION_EX",
+            "CALL_INTRINSIC_1",
+            "CALL_INTRINSIC_2",
+            "LOAD_BUILD_CLASS",
+            "LOAD_SPECIAL",
+            "PUSH_NULL",
+            "MAKE_FUNCTION",
+            "SET_FUNCTION_ATTRIBUTE",
+            "CALL",
+            "CALL_KW",
+        ],
+    ),
+    (
+        OpGroup::Misc,
+        &[
+            "RESUME",
+            "NOP",
+            "POP_TOP",
+            "NOT_TAKEN",
+            "LOAD_SMALL_INT",
+            "CACHE",
+        ],
+    ),
+    (
+        OpGroup::Checks,
+        &["CHECK_BOUNDARY_IN", "CHECK_BOUNDARY_OUT", "CHECK_ASSIGNMENT"],
+    ),
+    (
+        OpGroup::Names,
+        &[
+            "LOAD_COMMON_CONSTANT",
+            "LOAD_NAME",
+            "LOAD_GLOBAL",
+            "STORE_GLOBAL",
+            "DELETE_GLOBAL",
+            "STORE_NAME",
+            "DELETE_NAME",
+        ],
+    ),
+    (
+        OpGroup::Locals,
+        &[
+            "COPY_FREE_VARS",
+            "MAKE_CELL",
+            "LOAD_LOCALS",
+            "STORE_DEREF",
+            "DELETE_DEREF",
+            "LOAD_DEREF",
+            "LOAD_FROM_DICT_OR_DEREF",
+            "LOAD_FROM_DICT_OR_GLOBALS",
+            "LOAD_CONST",
+            "LOAD_FAST",
+            "LOAD_FAST_CHECK",
+            "LOAD_FAST_BORROW",
+            "STORE_FAST",
+            "DELETE_FAST",
+            "LOAD_FAST_AND_CLEAR",
+            "STORE_FAST_LOAD_FAST",
+            "LOAD_FAST_LOAD_FAST",
+            "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+            "STORE_FAST_STORE_FAST",
+        ],
+    ),
+    (
+        OpGroup::Operators,
+        &[
+            "TO_BOOL",
+            "UNARY_NOT",
+            "UNARY_NEGATIVE",
+            "UNARY_INVERT",
+            "CONTAINS_OP",
+            "IS_OP",
+            "COMPARE_OP",
+            "BINARY_OP",
+        ],
+    ),
+    (
+        OpGroup::Jumps,
+        &[
+            "JUMP_FORWARD",
+            "JUMP_BACKWARD",
+            "JUMP_BACKWARD_NO_INTERRUPT",
+            "POP_JUMP_IF_TRUE",
+            "POP_JUMP_IF_FALSE",
+            "POP_JUMP_IF_NONE",
+            "POP_JUMP_IF_NOT_NONE",
+        ],
+    ),
+    (
+        OpGroup::Containers,
+        &[
+            "BUILD_TUPLE",
+            "BUILD_LIST",
+            "BUILD_SET",
+            "BUILD_SLICE",
+            "BINARY_SLICE",
+            "BUILD_MAP",
+            "BUILD_STRING",
+            "UNPACK_SEQUENCE",
+            "UNPACK_EX",
+            "LIST_APPEND",
+            "SET_ADD",
+            "MAP_ADD",
+            "LIST_EXTEND",
+            "SET_UPDATE",
+            "GET_LEN",
+            "STORE_SUBSCR",
+            "STORE_SLICE",
+            "DELETE_SUBSCR",
+        ],
+    ),
+    (
+        OpGroup::Iterators,
+        &[
+            "GET_ITER",
+            "FOR_ITER",
+            "END_FOR",
+            "POP_ITER",
+            "GET_YIELD_FROM_ITER",
+            "GET_AITER",
+            "GET_ANEXT",
+            "END_ASYNC_FOR",
+            "CLEANUP_THROW",
+            "GET_AWAITABLE",
+            "SEND",
+            "END_SEND",
+        ],
+    ),
+    (
+        OpGroup::Match,
+        &["MATCH_SEQUENCE", "MATCH_MAPPING", "MATCH_KEYS", "MATCH_CLASS"],
+    ),
+    (
+        OpGroup::Format,
+        &[
+            "FORMAT_SIMPLE",
+            "CONVERT_VALUE",
+            "FORMAT_WITH_SPEC",
+            "SWAP",
+            "COPY",
+        ],
+    ),
+    (
+        OpGroup::Exceptions,
+        &[
+            "PUSH_EXC_INFO",
+            "POP_EXCEPT",
+            "CHECK_EXC_MATCH",
+            "RERAISE",
+            "WITH_EXCEPT_START",
+            "RAISE_VARARGS",
+        ],
+    ),
+    (
+        OpGroup::Imports,
+        &["IMPORT_NAME", "IMPORT_FROM"],
+    ),
+    (
+        OpGroup::Attributes,
+        &["LOAD_ATTR", "STORE_ATTR", "DELETE_ATTR"],
+    ),
+    (
+        OpGroup::Generators,
+        &["RETURN_VALUE", "YIELD_VALUE", "RETURN_GENERATOR"],
+    ),
+];
+
+/// **每条指令一次查表**（round 249 性能，A2-4）：编号 → `(分派组, 名字)`。
+///
+/// 表在**首次执行**时由 `DISPATCH_GROUPS` × `opcode::opcode(名字)` 建（名字是唯一真相 ⇒
+/// 仍满足 `BC-50` 的"一律按名字分派、不依赖具体编号"✓）。热路径只剩：一次 `OnceLock` 读＋
+/// 一次数组下标 ⇒ 不再 `opcode::opname()` ＋ 对 ~200 个字符串做 match ✗。
+fn instruction_term(opcode_number: u8) -> Option<(OpGroup, &'static str)> {
+    static TERMS: std::sync::OnceLock<[Option<(OpGroup, &'static str)>; 256]> =
+        std::sync::OnceLock::new();
+    let terms = TERMS.get_or_init(|| {
+        let mut table: [Option<(OpGroup, &'static str)>; 256] = [None; 256];
+        for (group, names) in DISPATCH_GROUPS {
+            for name in *names {
+                if let Some(number) = crate::opcode::opcode(name) {
+                    if let Some(slot) = table.get_mut(number as usize) {
+                        *slot = Some((*group, name));
+                    }
+                }
+            }
+        }
+        table
+    });
+    terms.get(opcode_number as usize).copied().flatten()
+}
+
+
 pub fn execute<'a>(
     instance: &'a Instance,
     frame: &Owned<'a, Frame>,
@@ -1917,31 +2166,32 @@ pub fn execute<'a>(
         }
         let oparg = instruction.oparg as usize;
 
-        // BC-50：一律按名字分派，**禁止**依赖具体编号
-        let Some(name) = opcode::opname(u16::from(opcode_number)) else {
+        // **BC-50：仍按名字分派，禁止依赖具体编号** —— 但每条指令只做一次**静态表查**：
+        // 编号 → (分派组, 名字)（表由名字建 ✓）；不再 `opname()` ＋ 对 ~200 个名字做字符串 match ✗
+        //（round 249 性能，A2-4）。
+        let Some((group, name)) = instruction_term(opcode_number) else {
             return Err(ExecError::NotImplemented { opcode: opcode_number });
         };
 
         // 把"一条指令"的执行包进闭包：这样异常能被这里接住并派发到处理块（BC-60 ①）。
         // 闭包返回 `Option<Value>`：`Some` 表示这条指令结束了整个执行（`RETURN_VALUE`）。
         let outcome = (|| -> Result<Step<'a>, ExecError> {
-        match name {
-            "DICT_MERGE" | "DICT_UPDATE" | "CALL_FUNCTION_EX" | "CALL_INTRINSIC_1" | "CALL_INTRINSIC_2" | "LOAD_BUILD_CLASS" | "LOAD_SPECIAL" | "PUSH_NULL" | "MAKE_FUNCTION" | "SET_FUNCTION_ATTRIBUTE" | "CALL" | "CALL_KW" => return step_calls::step_calls(instance, frame, oparg, opcode_number, name),
-            "RESUME" | "NOP" | "POP_TOP" | "NOT_TAKEN" | "LOAD_SMALL_INT" | "CACHE" => return step_misc::step_misc(instance, frame, oparg, name),
-            "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" | "CHECK_ASSIGNMENT" => return step_checks::step_checks(instance, frame, oparg, opcode_number, name),
-            "LOAD_COMMON_CONSTANT" | "LOAD_NAME" | "LOAD_GLOBAL" | "STORE_GLOBAL" | "DELETE_GLOBAL" | "STORE_NAME" | "DELETE_NAME" => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
-            "COPY_FREE_VARS" | "MAKE_CELL" | "LOAD_LOCALS" | "STORE_DEREF" | "DELETE_DEREF" | "LOAD_DEREF" | "LOAD_FROM_DICT_OR_DEREF" | "LOAD_FROM_DICT_OR_GLOBALS" | "LOAD_CONST" | "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" | "STORE_FAST" | "DELETE_FAST" | "LOAD_FAST_AND_CLEAR" | "STORE_FAST_LOAD_FAST" | "LOAD_FAST_LOAD_FAST" | "LOAD_FAST_BORROW_LOAD_FAST_BORROW" | "STORE_FAST_STORE_FAST" => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name),
-            "TO_BOOL" | "UNARY_NOT" | "UNARY_NEGATIVE" | "UNARY_INVERT" | "CONTAINS_OP" | "IS_OP" | "COMPARE_OP" | "BINARY_OP" => return step_operators::step_operators(instance, frame, oparg, opcode_number, name),
-            "JUMP_FORWARD" | "JUMP_BACKWARD" | "JUMP_BACKWARD_NO_INTERRUPT" | "POP_JUMP_IF_TRUE" | "POP_JUMP_IF_FALSE" | "POP_JUMP_IF_NONE" | "POP_JUMP_IF_NOT_NONE" => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
-            "BUILD_TUPLE" | "BUILD_LIST" | "BUILD_SET" | "BUILD_SLICE" | "BINARY_SLICE" | "BUILD_MAP" | "BUILD_STRING" | "UNPACK_SEQUENCE" | "UNPACK_EX" | "LIST_APPEND" | "SET_ADD" | "MAP_ADD" | "LIST_EXTEND" | "SET_UPDATE" | "GET_LEN" | "STORE_SUBSCR" | "STORE_SLICE" | "DELETE_SUBSCR" => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),
-            "GET_ITER" | "FOR_ITER" | "END_FOR" | "POP_ITER" | "GET_YIELD_FROM_ITER" | "GET_AITER" | "GET_ANEXT" | "END_ASYNC_FOR" | "CLEANUP_THROW" | "GET_AWAITABLE" | "SEND" | "END_SEND" => return step_iterators::step_iterators(instance, frame, &mut decoder, &instruction, opcode_number, name),
-            "MATCH_SEQUENCE" | "MATCH_MAPPING" | "MATCH_KEYS" | "MATCH_CLASS" => return step_match::step_match(instance, frame, oparg, opcode_number, name),
-            "FORMAT_SIMPLE" | "CONVERT_VALUE" | "FORMAT_WITH_SPEC" | "SWAP" | "COPY" => return step_format::step_format(instance, frame, oparg, opcode_number, name),
-            "PUSH_EXC_INFO" | "POP_EXCEPT" | "CHECK_EXC_MATCH" | "RERAISE" | "WITH_EXCEPT_START" | "RAISE_VARARGS" => return step_exceptions::step_exceptions(instance, frame, oparg, opcode_number, name),
-            "IMPORT_NAME" | "IMPORT_FROM" => return step_imports::step_imports(instance, frame, code, oparg, opcode_number, name),
-            "LOAD_ATTR" | "STORE_ATTR" | "DELETE_ATTR" => return step_attributes::step_attributes(instance, frame, code, oparg, opcode_number, name),
-            "RETURN_VALUE" | "YIELD_VALUE" | "RETURN_GENERATOR" => return step_generators::step_generators(instance, frame, code, &instruction, name),
-            _ => return Err(ExecError::NotImplemented { opcode: opcode_number }),
+        match group {
+            OpGroup::Calls => return step_calls::step_calls(instance, frame, oparg, opcode_number, name),
+            OpGroup::Misc => return step_misc::step_misc(instance, frame, oparg, name),
+            OpGroup::Checks => return step_checks::step_checks(instance, frame, oparg, opcode_number, name),
+            OpGroup::Names => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Locals => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Operators => return step_operators::step_operators(instance, frame, oparg, opcode_number, name),
+            OpGroup::Jumps => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
+            OpGroup::Containers => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Iterators => return step_iterators::step_iterators(instance, frame, &mut decoder, &instruction, opcode_number, name),
+            OpGroup::Match => return step_match::step_match(instance, frame, oparg, opcode_number, name),
+            OpGroup::Format => return step_format::step_format(instance, frame, oparg, opcode_number, name),
+            OpGroup::Exceptions => return step_exceptions::step_exceptions(instance, frame, oparg, opcode_number, name),
+            OpGroup::Imports => return step_imports::step_imports(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Attributes => return step_attributes::step_attributes(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Generators => return step_generators::step_generators(instance, frame, code, &instruction, name),
         }
         })();
 

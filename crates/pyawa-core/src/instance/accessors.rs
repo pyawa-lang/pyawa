@@ -48,19 +48,22 @@ impl Instance {
         name: &str,
     ) -> Option<(NonNull<TypeObject>, NonNull<Header>)> {
         // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
-        for entry in unsafe { ty.as_ref() }.mro() {
-            // SAFETY: 同上。
-            let mapping = unsafe { entry.as_ref() }.dict();
-            let Some(mapping) = mapping else { continue };
+        // **不 clone MRO**（round 249 性能，A2-4）：先前 `mro()` 返回克隆 `Vec` ⇒ 每次查找一次分配 ✗。
+        unsafe { ty.as_ref() }.with_mro(|mro| {
+            for entry in mro {
+                // SAFETY: 同上。
+                let mapping = unsafe { (*entry.as_ptr()).dict() };
+                let Some(mapping) = mapping else { continue };
             // **走哈希索引**（round 72 真性能 bug 修 ✗）：先前把类型字典**摊成 `entries()` 线性找** ✗
             // ⇒ 类属性越多每次查越慢（150k 字段的 `namedtuple` 每个 `getattr` 都扫全表 ⇒
             // `test_collections.test_large_size` 的 getattr 循环要 >200 s ✗）。`dict_get` 是
             // **按字符串键的哈希索引** ✓（非字符串键本来就匹配不上旧口径的 `str_matches` ⇒ 语义不变 ✓）。
-            if let Some(value) = self.dict_get(mapping, name) {
-                return Some((entry, value));
+                if let Some(value) = self.dict_get(mapping, name) {
+                    return Some((*entry, value));
+                }
             }
-        }
-        None
+            None
+        })
     }
 
 

@@ -182,56 +182,14 @@ impl Instance {
             .insert(ty.as_ptr() as usize, kind);
     }
 
-    /// 这个迭代器类型**有没有专用推进分支**（round 145 性能）：`advance_iterator` 的 20+ 个
-    /// 内建名比较只对链表里的类型有意义；普通迭代器（`list_iterator`／`range_iterator` 等）一次
-    /// 哈希查即可跳到通用路径 ✓。集合按 `types_generation` 缓存（惰性类型后建 ⇒ 自动重建 ✓）。
+    /// 这个迭代器类型**有没有专用推进分支**（round 145 性能；round 249 改**类型能力位**）：
+    /// 建类型时按"首个登记"的名字在 `DEDICATED_ITERATOR_TYPE_NAMES` 里定死 ⇒ 热路径一次位测 ✓
+    /// （先前按 `types_generation` 重建哈希集合、每轮一次哈希查 ✗）。
     pub(crate) fn is_dedicated_iterator_type(&self, ty: NonNull<crate::TypeObject>) -> bool {
-        const DEDICATED: &[&str] = &[
-            "list_reverseiterator",
-            "reversed",
-            "count",
-            "repeat",
-            "islice",
-            "range_iterator",
-            "longrange_iterator",
-            "product",
-            "permutations",
-            "compress",
-            "combinations",
-            "combinations_with_replacement",
-            "zip",
-            "map",
-            "filter",
-            "zip_longest",
-            "pairwise",
-            "batched",
-            "cycle",
-            "accumulate",
-            "starmap",
-            "takewhile",
-            "dropwhile",
-            "filterfalse",
-            "chain",
-        ];
-        let generation = self.types_generation.get();
-        let mut cache = self.dedicated_iterator_types.borrow_mut();
-        let stale = match cache.as_ref() {
-            Some((cached, _)) => *cached != generation,
-            None => true,
-        };
-        if stale {
-            let mut set = crate::fast_hash::FastSet::with_capacity_and_hasher(DEDICATED.len(), Default::default());
-            for name in DEDICATED {
-                if let Some(found) = self.type_named(name) {
-                    set.insert(found.as_ptr() as usize);
-                }
-            }
-            *cache = Some((generation, set));
-        }
-        cache
-            .as_ref()
-            .is_some_and(|(_, set)| set.contains(&(ty.as_ptr() as usize)))
+        // SAFETY: 类型对象由注册表持有、在实例存活期间一直有效。
+        unsafe { ty.as_ref() }.is_dedicated_iterator_kind()
     }
+
 
     /// 是否是**用户定义类**的类型对象（round 135：迭代器协议的错误口径按它分档 ✓）。
     pub(crate) fn is_user_type(&self, ty: NonNull<Header>) -> bool {
@@ -407,7 +365,13 @@ impl Instance {
 
     /// 对象释放时摘掉旁表条目（round 82，地址复用安全 ✓）。
     pub(crate) fn forget_python_finalized(&self, pointer: usize) {
-        self.python_finalized.borrow_mut().remove(&pointer);
+        // **空集合早退**（round 249 性能，A2-4）：`release_one` **每次释放**都调这里 ⇒ 绝大多数
+        // 实例里这张表是空的 ✓；先前每次都要对地址算一遍哈希再查（perf 里它是剩余 SipHash 的大头 ✗）。
+        let mut finalized = self.python_finalized.borrow_mut();
+        if finalized.is_empty() {
+            return;
+        }
+        finalized.remove(&pointer);
     }
 
     /// **OM-26**：回收阈值三元组。默认值见 [`DEFAULT_GC_THRESHOLD`]。

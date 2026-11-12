@@ -127,6 +127,15 @@ impl Instance {
     /// （round 99）另按**类型对象自己的名字**跟踪（盯"类对象本身"而不是它的实例 ✓）。
     /// 默认零输出（`OnceLock` 缓存环境变量 ✓）。
     pub(crate) fn ref_trace_matches(&self, ptr: *mut Header) -> bool {
+        // **快路**（round 249 性能，A2-4）：两个跟踪开关都没开时，一次原子读直接返回 ✓
+        //（本函数**每次 incref／release 都调**；先前要读两个 `OnceLock` 再判空 ✗）。
+        static ANY_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*ANY_ENABLED.get_or_init(|| {
+            std::env::var_os("PYAWA_REF_TRACE").is_some()
+                || std::env::var_os("PYAWA_REF_TRACE_CLASS").is_some()
+        }) {
+            return false;
+        }
         static TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
         static CLASS_TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
         // **按类自己的名字**：目标是注册表里的类型对象 ⇒ 用 `TypeObject::name` ✓。
@@ -442,8 +451,12 @@ impl Instance {
         }
 
         // 回收进行中：不可达对象由本次 `collect` 统一释放，这里只减计数（OM-27 ④）。
-        if !self.gc_frozen.borrow().is_empty() && self.gc_frozen.borrow().contains(&(ptr as usize)) {
-            return;
+        {
+            // **一次借用**（round 249 性能，A2-4）：先前 `is_empty()` 与 `contains()` 各借一次 ✗。
+            let frozen = self.gc_frozen.borrow();
+            if !frozen.is_empty() && frozen.contains(&(ptr as usize)) {
+                return;
+            }
         }
 
         // SAFETY: ptr 非空（调用方保证）。

@@ -22,6 +22,9 @@ impl Instance {
             type_object.mark_dunder_capable();
         }
         type_object.set_bases(bases, mro.clone());
+        // **建 MRO 成员 id 位图**（round 249 性能，A2-4）⇒ `is_subtype` 之后是 O(1) 位测 ✓
+        //（MRO 在类型创建后不再变化 ✓）。
+        type_object.rebuild_mro_bitmap();
         Some(mro)
     }
 
@@ -95,8 +98,16 @@ impl Instance {
         if subtype == supertype {
             return true;
         }
-        // SAFETY: 两个类型都由本实例的注册表持有。
-        unsafe { subtype.as_ref() }.mro().contains(&supertype)
+        // SAFETY: 两个类型都由本实例的注册表持有（实例存活期间一直有效）。
+        let subtype_ref = unsafe { subtype.as_ref() };
+        let super_id = unsafe { supertype.as_ref() }.type_id();
+        // **O(1) 位图**（round 249 性能，A2-4）：先前每次判定都 `mro()` **clone 一个 Vec** 再线性扫 ✗
+        //（perf 里 `is_subtype` ≈7.6%，其中分配占了不小一块）。位图在 `register_bases` 时建好 ✓。
+        if let Some(contains) = subtype_ref.mro_bitmap_contains(super_id) {
+            return contains;
+        }
+        // 位图没建（引导期／未登记基类）⇒ 回退线性扫（冷路径 ✓）。
+        subtype_ref.mro().contains(&supertype)
     }
 
     /// **round 248 性能（A2-3）**：这个类型的命名空间可能命中"用户覆写 dunder"吗？（一次位测 ✓）

@@ -222,6 +222,17 @@ pub const GENERIC_ALLOCATION: u32 = 1 << 2;
 /// （用户类 / 带模块标记的原生类型 / 它们的子类）⇒ 语义不变 ✓。
 pub const DUNDER_CAPABLE: u32 = 1 << 4;
 
+/// **内部**类型标志：本类型是**本层接线的迭代器类型**（`ITERATOR_TYPE_NAMES` 里名字的"首个登记"）。
+///
+/// round 249 性能（A2-4）：先前每个 `FOR_ITER` 要拿 36 个名字的缓存指针逐个比 ✗；现在建类型时
+/// 一次名字比对就定死，热路径一次位测 ✓（"首个登记"与 `type_named` 的"先登记者优先"口径一致 ✓）。
+pub const IS_ITERATOR_TYPE: u32 = 1 << 5;
+
+/// **内部**类型标志：本类型有**专用推进分支**（`advance_dedicated` 的 25 个名字之一，"首个登记"）。
+///
+/// round 249 性能（A2-4）：`advance_iterator` 每轮一次的"专用类型集合"哈希查改成一次位测 ✓。
+pub const DEDICATED_ITERATOR_TYPE: u32 = 1 << 6;
+
 /// **内部**类型标志：这个类型的实例把属性字典**内联在载荷里**（载荷是 [`crate::AttributeObject`]）。
 ///
 /// 用户类的实例走这条；宿主／固定布局的实例（例如 `list` 的子类）**没有**这一位，
@@ -252,6 +263,15 @@ py_object! {
         host_dealloc: Cell<Option<HostDealloc>>,
         /// **`OM-14`** 宿主类型：宿主提供的 `traverse`（`OM-36`：列出全部直接引用）。
         host_traverse: Cell<Option<HostTraverse>>,
+        {
+            /// **类型 ID**（round 249 性能，A2-4）：本实例内单调递增（`0` 也是合法 id；元类型＝0）。
+            /// 由 `Instance::alloc_type_raw` 构造后赋值一次；用于 MRO 位图与热路径按 id 查表 ✓。
+            type_id: Cell<u32>,
+            /// **MRO 成员 id 位图**（round 249 性能，A2-4）：`register_bases` 时建一次；
+            /// `is_subtype` 变成"下标＋位与"O(1) ✓（先前每判一次都要 `mro()` **clone** 一个 Vec ✗）。
+            /// 空 ⇒ 还没建（调用方回退线性扫 ✓）。
+            mro_ids: RefCell<Vec<u64>>,
+        }
     }
 }
 
@@ -289,6 +309,67 @@ impl TypeObject {
     /// 同上的**只读**版（热路径：一次位测 ✓）。
     pub fn is_dunder_capable(&self) -> bool {
         self.type_flags.get() & DUNDER_CAPABLE != 0
+    }
+
+    /// **round 249 性能（A2-4）**：本类型的实例内 id（元类型＝0，随后按登记顺序递增）。
+    pub fn type_id(&self) -> u32 {
+        self.type_id.get()
+    }
+
+    /// 由 `alloc_type_raw` 在构造后**赋值一次** ✓。
+    pub(crate) fn set_type_id(&self, id: u32) {
+        self.type_id.set(id);
+    }
+
+    /// **round 249 性能（A2-4）**：按 id 位图判"`super_id` 在不在本类型的 MRO 里"。
+    /// `None` ＝位图还没建（调用方回退线性扫 ✓）；一次 `RefCell` 借用＋一次位测 ✓。
+    pub fn mro_bitmap_contains(&self, super_id: u32) -> Option<bool> {
+        let bits = self.mro_ids.borrow();
+        if bits.is_empty() {
+            return None;
+        }
+        let index = (super_id / 64) as usize;
+        let bit = 1u64 << (super_id % 64);
+        Some(bits.get(index).is_some_and(|word| word & bit != 0))
+    }
+
+    /// **round 249 性能（A2-4）**：用当前 MRO 重建 id 位图（`register_bases` 后调用一次 ✓；
+    /// MRO 之后不再变化 ⇒ 位图是稳定的 ✓）。
+    pub fn rebuild_mro_bitmap(&self) {
+        let mro = self.mro.borrow();
+        let mut highest = 0usize;
+        for member in mro.iter() {
+            // SAFETY: MRO 里的类型都由本实例注册表持有、存活。
+            highest = highest.max(unsafe { member.as_ref() }.type_id() as usize);
+        }
+        let mut bits = vec![0u64; highest / 64 + 1];
+        for member in mro.iter() {
+            // SAFETY: 同上。
+            let id = unsafe { member.as_ref() }.type_id() as usize;
+            bits[id / 64] |= 1u64 << (id % 64);
+        }
+        *self.mro_ids.borrow_mut() = bits;
+    }
+
+    /// **round 249 性能（A2-4）**：标成"本层接线的迭代器类型"（建类型时按名字定死 ✓）。
+    pub(crate) fn mark_iterator_type(&self) {
+        self.type_flags.set(self.type_flags.get() | IS_ITERATOR_TYPE);
+    }
+
+    /// 是不是本层接线的迭代器类型（热路径一次位测 ✓）。
+    pub fn is_iterator_kind(&self) -> bool {
+        self.type_flags.get() & IS_ITERATOR_TYPE != 0
+    }
+
+    /// **round 249 性能（A2-4）**：标成"有专用推进分支"（建类型时按名字定死 ✓）。
+    pub(crate) fn mark_dedicated_iterator(&self) {
+        self.type_flags
+            .set(self.type_flags.get() | DEDICATED_ITERATOR_TYPE);
+    }
+
+    /// 有没有专用推进分支（热路径一次位测 ✓）。
+    pub fn is_dedicated_iterator_kind(&self) -> bool {
+        self.type_flags.get() & DEDICATED_ITERATOR_TYPE != 0
     }
 
     /// 是不是**定长宿主布局**（`OM-14`／`AB-58`：载荷紧跟在头部之后、由 VM 分配）。
@@ -332,6 +413,14 @@ impl TypeObject {
     /// **OM-10**／**OM-13**：MRO（*占位*：C3 线性化待接线）。
     pub fn mro(&self) -> Vec<NonNull<TypeObject>> {
         self.mro.borrow().clone()
+    }
+
+    /// **round 249 性能（A2-4）**：只读借用 MRO（**不 clone** ✓）。
+    ///
+    /// 热路径的"MRO 遍历"一律走这个：先前 `mro()` 每次返回**克隆的 `Vec`** ⇒ 类型查找／属性查找／
+    /// 二元运算的 dunder 查找每查一次都付一次分配 ✗（perf：`type_lookup_owner`＋malloc/免费 共 ≈5%）。
+    pub fn with_mro<R>(&self, f: impl FnOnce(&[NonNull<TypeObject>]) -> R) -> R {
+        f(&self.mro.borrow())
     }
 
     /// 登记基类与 MRO。
