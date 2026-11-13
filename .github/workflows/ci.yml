@@ -32,7 +32,7 @@ jobs:
         run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core -p pyawa-lsp
       - name: 文档/规格/编号闸门（18 项）
         run: python3 tests/ci/check.py
-      # PLAN §10.1 ④：check.py 之后对 407 语料（.py）跑 pyawa check——只编译不执行，
+      # PLAN §11.1 ④：check.py 之后对 407 语料（.py）跑 pyawa check——只编译不执行，
       # 期望 0 诊断、退出码 0（LSP 线①的语料回归闸）。
       - name: pyawa check 语料（407 个 .py ⇒ 0 诊断）
         run: |

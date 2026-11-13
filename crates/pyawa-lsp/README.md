@@ -1,4 +1,4 @@
-# `pyawa-lsp` —— Pyawa 的 LSP 服务（PLAN §10 梯②：诊断 ＋ hover）
+# `pyawa-lsp` —— Pyawa 的 LSP 服务（PLAN §11 梯②：诊断 ＋ hover）
 
 **零第三方依赖**（手写 JSON-RPC 2.0／`Content-Length` 帧）；只依赖 `pyawa-core` 的编译期 API。
 **只编译不执行**：本服务不建 VM 实例、不跑字节码 ✓。
@@ -46,7 +46,7 @@ cargo build -p pyawa-lsp --bin pyawa-lsp
   统一给 151 处 parser 错误点补 span 的成本/风险与 LSP 需求不成比例（`pyawa check` 同口径）。
 - **hover 只覆盖已标注的名字**：类型推断违反 `TS-2`「完全不推断」的既有决策；不做 docstring 渲染。
 - **completion／definition／rename 只支持当前文档**：跨文件需 workspace／import 图与会话状态，
-  PLAN §10 的第③梯原文即"**按需**"；成员补全／标准库符号同理范围外。
+  PLAN §11 的第③梯原文即"**按需**"；成员补全／标准库符号同理范围外。
 - **增量同步／`workspace/*`／文档符号／语义高亮**：LSP MVP 只需全量同步；这些是后续独立需求。
 - **rename 作用域**：单文件整词替换（无作用域分析）；跨文件改名需先有 workspace 语义。
 

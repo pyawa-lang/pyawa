@@ -754,13 +754,13 @@
 
 > **历史台账已移到 `docs/ROUNDS.md`（索引）与 `docs/rounds/` 各卷**（逐轮日志、块结构模型、M3 完成度；**非规范**）✓
 
-## 10. LSP 线（2026-11-13 用户批准开工 ✓）
+## 11. LSP 线（2026-11-13 用户批准开工 ✓）
 
 **三梯，每梯可独立验收** ✓：① `pyawa check` ② LSP MVP（`publishDiagnostics` ＋ `hover`）③ 补全／跳转／重命名（按需）。
 
 **依赖隔离** ✓：第三方依赖只许在 `pyawa-lsp` crate 内（`CX-27`／`T-CX-17`）；核心 crate 的边界见 `CONSTRAINTS` 的 `CX-27` ✓。
 
-### 10.1 ① `pyawa check` 需求（给开发）
+### 11.1 ① `pyawa check` 需求（给开发）
 
 语义以 `SPEC-type-system.md`／`SPEC-imports-and-modes.md` 为**一处真相** ✓；此处只给**范围／验收／禁区** ✓。
 
