@@ -71,3 +71,54 @@ fn valid_sources_have_no_diagnostics() {
     let dynamic = "u = \"x\"\na: int = u\n";
     assert!(check_source(dynamic, "dynamic.pyawa", Mode::Extension).is_empty());
 }
+
+#[test]
+fn user_function_argument_and_return_types_are_checked() {
+    // 用户报告的 bug：`f` 的签名没参与检查 ⇒ `a`／`b` 不报、`c` 报。
+    let source = "def f(x: int) -> int:\n    return x\na: str = f(1)\nb: int = f(\"nope\")\nc: list[int] = \"x\"\n";
+    let diagnostics = check_source(source, "user.pyawa", Mode::Extension);
+    assert_eq!(
+        diagnostics.len(),
+        3,
+        "应报 a/b/c 三条：{diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0].line, 3);
+    assert!(diagnostics[0].message.contains("expects str, got int"));
+    assert_eq!(diagnostics[1].line, 4);
+    assert!(
+        diagnostics[1].message.contains("call type check failed")
+            && diagnostics[1].message.contains("argument 0"),
+        "{diagnostics:?}"
+    );
+    assert_eq!(diagnostics[2].line, 5);
+    assert!(diagnostics[2].message.contains("expects list[int], got str"));
+}
+
+#[test]
+fn valid_user_function_calls_pass() {
+    let source = "def f(x: int) -> int:\n    return x\na: int = f(1)\nb: int = f(True)\n";
+    assert!(
+        check_source(source, "valid.pyawa", Mode::Extension).is_empty(),
+        "合法调用不得误报（bool ⊂ int 相容）"
+    );
+}
+
+#[test]
+fn decorated_functions_are_not_statically_checked() {
+    // 装饰器可能改签名 ⇒ 静态不猜（避免误报）。
+    let source = "def deco(g):\n    return g\n@deco\ndef f(x: int) -> int:\n    return x\na: str = f(1)\n";
+    assert!(
+        check_source(source, "decorated.pyawa", Mode::Extension).is_empty(),
+        "带装饰器的函数不做调用点检查"
+    );
+}
+
+#[test]
+fn calls_with_unpacking_skip_argument_checks() {
+    // `*args`／关键字解包时静态个数不可判 ⇒ 参数检查跳过（不误报），返回类型仍可查。
+    let source = "def f(x: int) -> int:\n    return x\na: int = f(*[1])\n";
+    assert!(
+        check_source(source, "unpack.pyawa", Mode::Extension).is_empty(),
+        "解包调用的参数检查应跳过"
+    );
+}

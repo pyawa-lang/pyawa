@@ -68,6 +68,13 @@ pub(super) struct TypeDiagnostic {
     pub message: String,
 }
 
+/// 模块级函数的**静态签名**（`TS-47` 的调用点检查用）：形参类型 ＋ 返回类型（未标注＝`Any`）✓。
+#[derive(Clone, Debug)]
+struct FunctionSignature {
+    parameters: Vec<StaticType>,
+    returns: StaticType,
+}
+
 /// 检查器（除了文件名，还带 `TS-49` 要用的**类属性标注表**）。
 struct Checker<'a> {
     filename: &'a str,
@@ -77,6 +84,8 @@ struct Checker<'a> {
     errors: Vec<TypeDiagnostic>,
     /// **`AB-69`**：宿主函数声明（名字 → 静态标签）；调用点检查用。
     host_functions: HashMap<String, super::HostFunctionSignature>,
+    /// **模块级函数签名**（`def` 的形参／返回注解；`TS-47` 的调用点检查用）。
+    functions: HashMap<String, FunctionSignature>,
     /// **`TS-49` 的已知类型来源**：模块级 `class C:` 体里 `属性: 类型` 的注解。
     /// `A?` 上的 `a?.b`（`b: B`）⇒ `B?` 要靠它；查不到（内建类型／未标注属性）⇒ 平台类型（`TS-48`）。
     /// 类体本身仍**不做赋值检查**（与 M4 的口径一致），这里只读标注。
@@ -91,10 +100,13 @@ pub(super) fn check(
 ) -> Result<(), CompileError> {
     let mut class_attributes = HashMap::new();
     collect_class_attributes(statements, &mut class_attributes);
+    let mut functions = HashMap::new();
+    collect_functions(statements, &mut functions);
     let mut checker = Checker {
         filename,
         collecting: false,
         errors: Vec::new(),
+        functions,
         class_attributes,
         host_functions: host_functions
             .iter()
@@ -121,10 +133,13 @@ pub(super) fn check_diagnostics(
 ) -> Vec<TypeDiagnostic> {
     let mut class_attributes = HashMap::new();
     collect_class_attributes(statements, &mut class_attributes);
+    let mut functions = HashMap::new();
+    collect_functions(statements, &mut functions);
     let mut checker = Checker {
         filename,
         collecting: true,
         errors: Vec::new(),
+        functions,
         class_attributes,
         host_functions: host_functions
             .iter()
@@ -141,6 +156,49 @@ pub(super) fn check_diagnostics(
     // 批量模式不会因单条语句失败而中断（`check_block` 逐条兜住 ✓）。
     let _ = checker.check_block(statements, &mut scope, &HashMap::new());
     checker.errors
+}
+
+/// 收**模块级函数签名**（`def`；**跳过装饰器** —— 签名可能被装饰器改掉，静态不猜 ✓；
+/// 只收**带类型注解**的形参／返回；未标注＝`Any`）。
+fn collect_functions(statements: &[Statement], out: &mut HashMap<String, FunctionSignature>) {
+    for statement in statements {
+        if let Statement::Def {
+            name,
+            decorators,
+            parameters,
+            returns,
+            ..
+        } = statement
+        {
+            if !decorators.is_empty() {
+                continue;
+            }
+            let parameters = parameters
+                .iter()
+                .map(|parameter| parameter_static_type(parameter))
+                .collect();
+            let returns = returns
+                .as_ref()
+                .map(static_from_annotation)
+                .unwrap_or(StaticType::Any);
+            out.insert(
+                name.clone(),
+                FunctionSignature {
+                    parameters,
+                    returns,
+                },
+            );
+        }
+    }
+}
+
+/// 形参的静态类型（未标注／表达式来源注解 ⇒ `Any`）。
+fn parameter_static_type(parameter: &Parameter) -> StaticType {
+    parameter
+        .annotation
+        .as_ref()
+        .map(static_from_annotation)
+        .unwrap_or(StaticType::Any)
 }
 
 /// 收**类属性标注表**（`TS-49`；`class C:` 体里的 `属性: 类型` 与嵌套类）。
@@ -579,6 +637,32 @@ impl Checker<'_> {
                         || scope.declared.contains_key(name)
                         || scope.globals.contains(name);
                     if !shadowed {
+                        // **本地模块级函数**：参数类型按声明核（判不出的实参放行 ✓）。
+                        let local = self.functions.get(name).cloned();
+                        if let Some(signature) = &local {
+                            if star_arguments.is_empty()
+                                && keywords.is_empty()
+                                && dict_arguments.is_empty()
+                            {
+                                for (index, argument) in arguments.iter().enumerate() {
+                                    let Some(expected) = signature.parameters.get(index) else {
+                                        break;
+                                    };
+                                    let actual = self.infer(argument, scope, narrow);
+                                    if !compatible(expected, &actual) {
+                                        let message = format!(
+                                            "call type check failed: `{name}` argument {index} \
+                                             expects {}, got {} (TS-47; {}: line {})",
+                                            render_static(expected),
+                                            render_static(&actual),
+                                            self.filename,
+                                            span.line_start
+                                        );
+                                        self.report(message, *span)?;
+                                    }
+                                }
+                            }
+                        }
                         let signature = self.host_functions.get(name).cloned();
                         if let Some(signature) = signature {
                             for (index, argument) in arguments.iter().enumerate() {
@@ -709,7 +793,36 @@ impl Checker<'_> {
             // 空安全链的基底占位只在 `SafeChain::rest` 里出现（那里由 `infer_safe_chain` 直接带
             // 类型走，不经过 `infer`）⇒ 走到这里说明判不出，返回平台类型。
             Expression::ChainSubject(_) => StaticType::Any,
-            // 调用／属性／下标／容器字面量／运算… ⇒ 判不出，交运行期（`TS-47` ②）。
+            // **调用**：被调是**未被遮蔽的模块级函数**且返回注解可判 ⇒ 返回类型（`TS-47`）；
+            // 宿主函数声明过返回类型同理；其余（方法／装饰器／动态可调用）⇒ `Any`，交运行期。
+            Expression::Call {
+                function,
+                star_arguments,
+                keywords,
+                dict_arguments,
+                ..
+            } => {
+                let Expression::Name(name, _) = function.as_ref() else {
+                    return StaticType::Any;
+                };
+                if scope.assigned.contains(name)
+                    || scope.declared.contains_key(name)
+                    || scope.globals.contains(name)
+                {
+                    return StaticType::Any;
+                }
+                let _ = (star_arguments, keywords, dict_arguments);
+                if let Some(signature) = self.functions.get(name) {
+                    return signature.returns.clone();
+                }
+                if let Some(signature) = self.host_functions.get(name) {
+                    if let Some(label) = &signature.returns {
+                        return StaticType::Label(type_label(label));
+                    }
+                }
+                StaticType::Any
+            }
+            // 属性／下标／容器字面量／运算… ⇒ 判不出，交运行期（`TS-47` ②）。
             _ => StaticType::Any,
         }
     }
