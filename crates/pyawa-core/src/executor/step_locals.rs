@@ -172,6 +172,21 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                             opcode: opcode_number,
                             what: "常量表下标越界",
                         })?;
+                    // **诊断：常量已死**（round 264，`PYAWA_CONST_DEAD_CHECK=1`）：常量表持有裸引用
+                    // （`OM-40`）⇒ 若常量计数已归零，`push` 的 incref 会撞上已释放对象（后续某处
+                    // release 再炸）。这里在**第一次 stale LOAD_CONST** 点名声明的 qualname＋下标 ⇒
+                    // 定位"谁把 code object 的常量引用提前放掉"（`test_difflib` 实测死于
+                    // `_line_iterator` 的 `'X'` 常量 ✗）。默认关（每次 `LOAD_CONST` 只多一次缓存位读 ✓）。
+                    if crate::diag::flag_site!("PYAWA_CONST_DEAD_CHECK")
+                        && unsafe { &*raw.as_ptr() }.refcount() == 0
+                    {
+                        eprintln!(
+                            "[const-dead] qualname={} const_index={oparg} ptr={:p} 现场={}",
+                            code.qualname(),
+                            raw.as_ptr(),
+                            instance.current_site()
+                        );
+                    }
                     push(instance, frame.get(), raw)?;
                 }
                 // BC-51：LOAD_FAST 假定槽位已绑定（编译器保证）；这里宁可报错也不读垃圾
