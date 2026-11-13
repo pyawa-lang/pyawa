@@ -47,8 +47,9 @@ const PLACEHOLDER_TYPES: [&str; 12] = [
 ];
 
 /// **只占名字**的函数（调用时如实报未实现 ✓，`CM-6`）。
-/// `open` **已转真**（task-18 ✓，见 [`open_native`] ✓）⇒ 从本表移出 ✓。
-const STUB_FUNCTIONS: [&str; 2] = ["open_code", "text_encoding"];
+/// `open` **已转真**（task-18 ✓，见 [`open_native`] ✓）⇒ 从本表移出 ✓；
+/// `text_encoding` 已转真（round 268，`pathlib`／`_pyio` 一族都要它 ✓）⇒ 也移出 ✓。
+const STUB_FUNCTIONS: [&str; 1] = ["open_code"];
 
 /// 占位 native：调用即**如实报未实现** ✗（真 I/O 走 `fs` 能力域 ✓）。
 fn not_implemented_native(
@@ -148,6 +149,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **函数**：`open` 走真实现 ✓（task-18），其余名字齐、调用报未实现 ✓
     let open_function = make_native(instance, "open", open_native as NativeFn);
     instance.dict_set(namespace, "open", open_function);
+    // **`text_encoding`**（round 268）：`Lib/io.py` 在导入期 `from _io import text_encoding` ✓
+    // ⇒ 缺它 `import io` 就失败；`pathlib.Path.read_text／write_text` 也一进门就调它 ✓。
+    let text_encoding = make_native(instance, "text_encoding", text_encoding_native as NativeFn);
+    instance.dict_set(namespace, "text_encoding", text_encoding);
     for name in STUB_FUNCTIONS {
         let native = make_native(instance, name, not_implemented_native as NativeFn);
         instance.dict_set(namespace, name, native);
@@ -155,7 +160,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `__all__` 与 `__name__`（与既有模块同一口径 ✓）
     let exports: Vec<NonNull<Header>> = PLACEHOLDER_TYPES
         .iter()
-        .chain(["open"].iter())
+        .chain(["open", "text_encoding"].iter())
         .chain(STUB_FUNCTIONS.iter())
         .map(|name| instance.new_str(name))
         .collect();
@@ -1262,6 +1267,28 @@ fn strerror(name: &str) -> Option<&'static str> {
         "EINVAL" => "Invalid argument",
         "ELOOP" => "Too many levels of symbolic links",
         "ENAMETOOLONG" => "File name too long",
+        // **round 268：`pathlib` 一族的日常 errno 文案**（glibc `strerror` 实测口径 ✓）——
+        // 先前 `rmdir` 非空目录报 `[Errno 39] unknown error` ✗（参照 `Directory not empty`）。
+        "ENOTEMPTY" => "Directory not empty",
+        "EBUSY" => "Device or resource busy",
+        "EXDEV" => "Invalid cross-device link",
+        "ENOSPC" => "No space left on device",
+        "EROFS" => "Read-only file system",
+        "EMFILE" => "Too many open files",
+        "ENFILE" => "Too many open files in system",
+        "EAGAIN" => "Resource temporarily unavailable",
+        "EINTR" => "Interrupted system call",
+        "EIO" => "Input/output error",
+        "EBADF" => "Bad file descriptor",
+        "ENOMEM" => "Cannot allocate memory",
+        "EFAULT" => "Bad address",
+        "ENOSYS" => "Function not implemented",
+        "EOPNOTSUPP" => "Operation not supported",
+        "EADDRINUSE" => "Address already in use",
+        "ECONNREFUSED" => "Connection refused",
+        "ETIMEDOUT" => "Connection timed out",
+        "EPIPE" => "Broken pipe",
+        "EOVERFLOW" => "Value too large for defined data type",
         _ => return None,
     })
 }
@@ -1430,6 +1457,31 @@ pub(crate) fn fs_error_with_display(
     }
 }
 
+/// **`_io.text_encoding(encoding, stacklevel=2)`**（round 268）：`io`／`pathlib`／`_pyio` 的
+/// 编码提示入口 —— 参照实测：`encoding is None` ⇒ 返回字符串 **`"locale"`**；否则**原样返回**
+/// （连非 `str` 的 `1` 也原样回交，**不**做类型检查 ✓）；`stacklevel` 只影响警告栈深（本层没有
+/// `EncodingWarning` 通道 ⇒ 收下即可 ✓）。
+fn text_encoding_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "text_encoding() takes 1 or 2 arguments ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    if args[0] == instance.singletons().none() {
+        return Ok(instance.new_str("locale"));
+    }
+    Ok(instance.retain(args[0]))
+}
+
 /// **`open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, …)`** ✓（task-18 ✓）。
 ///
 /// 见本节的"口径（如实 ✗）"——`buffering`／`errors`／`newline`／`closefd`／`opener` 未实现 ✓。
@@ -1459,13 +1511,19 @@ pub fn open_native(
         Ok(spec) => spec,
         Err(message) => return Err(instance.raise_builtin_error("ValueError", &message)),
     };
-    let encoding = args
+    let mut encoding = args
         .get(3)
         .copied()
         .or_else(|| kwarg_of(instance, kwargs, "encoding"))
         .and_then(|value| instance.text_of(value))
         .unwrap_or("utf-8")
         .to_owned();
+    // **`"locale"` 解析**（round 268）：`io.text_encoding(None)` 按参照返回字符串 `"locale"` ⇒
+    // 到 `open` 这里要换成真实编码。**如实记 ✗**：本层没有 locale 能力通道 ⇒ 固定 **UTF-8**
+    // （宿主实测 `locale.getencoding() == "UTF-8"`；`LANG=C` 一类的 ASCII locale 不建模 ✗）。
+    if encoding == "locale" {
+        encoding = "utf-8".to_owned();
+    }
     let kind = match spec.kind {
         ModeKind::Read => open_flag::RDONLY,
         ModeKind::Write | ModeKind::Append | ModeKind::Create => open_flag::WRONLY,
@@ -1979,6 +2037,11 @@ fn build_file_io(instance: &Instance, namespace: NonNull<Header>) {
         ("__exit__", file_exit as NativeFn),
         ("__iter__", file_enter as NativeFn),
         ("__next__", file_next as NativeFn),
+        // **`__del__`**（round 268）：参照里文件对象销毁即 close（引用计数驱动）；本层 `p.open("a")`
+        // 的临时柄若不等显式 close，缓冲写入会**随对象一起丢** ✗（实测 `Path.open("a").write(...)`
+        // 后 `read_text()` 看不到新增内容）。这里销毁时**尽力** flush＋关句柄（失败吞掉 ✓——`__del__`
+        // 里抛异常只会变成警告，且文件可能已失效 ✓）。
+        ("__del__", file_del_native as NativeFn),
     ];
     for (name, handler) in handlers {
         let function = make_native(instance, name, *handler);
@@ -2283,6 +2346,34 @@ fn file_close(
     set_attr(instance, this, "closed", mirror);
     let gone = instance.new_int(-1);
     set_attr(instance, this, "_handle", gone);
+    Ok(instance.new_none())
+}
+
+/// **`FileIO.__del__`**（round 268）：对象销毁时**尽力**把缓冲数据落盘并关句柄 ✓。
+///
+/// 口径：与 [`file_close`] 同一条落盘路径（`file_flush_data` ＋ `fs_close`）；错误**吞掉**（`__del__`
+/// 里抛没有接收者，参照也只会打 `Exception ignored`）✓；可重入安全（`_closed` 已真就什么都不做 ✓）。
+fn file_del_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((this, _)) = this_of(bound, args) else {
+        return Ok(instance.new_none());
+    };
+    if file_flag(instance, this, "_closed") {
+        return Ok(instance.new_none());
+    }
+    let _ = file_flush_data(instance, this);
+    let handle = file_int(instance, this, "_handle");
+    if handle >= 0 {
+        let _ = instance.fs_close(handle as u64);
+        let gone = instance.new_int(-1);
+        set_attr(instance, this, "_handle", gone);
+    }
+    let closed = instance.new_bool(true);
+    set_attr(instance, this, "_closed", closed);
     Ok(instance.new_none())
 }
 

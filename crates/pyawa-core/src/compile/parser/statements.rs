@@ -1730,6 +1730,12 @@ fn parse_statement_kw_from(lexed: &Lexed, cursor: &mut usize, statements: &mut V
                     return Err(CompileError::Syntax("`from …` 后面要 `import`".to_owned()));
                 }
                 *cursor += 1;
+                // **`with (` 的消歧**（round 268）：前导 `(` 既可能是**括号包裹的 with 项列表**
+                // （`with (a as x, b):` —— 3.10+ 语法 ✓），也可能是**普通括号表达式**
+                // （`with (p / "x").open("wb") as f:` ✗ 先前一律当项列表 ⇒ 报"这里要冒号" ✗）。
+                // 判据：扫到匹配的 `)` 为止，**其内顶层**出现 `as` 或逗号，且紧跟 `)` 的是 `:`／换行
+                // ⇒ 项列表；否则按普通表达式解析（`(a, b), c:` 也走普通项列表 ⇒ 第一项是元组表达式 ✓，
+                // 与参照的运行时行为一致：元组没有 `__enter__` ⇒ AttributeError ✓）。
                 let parenthesized = tokens.get(*cursor) == Some(&Lexeme::LeftParen);
                 if parenthesized {
                     *cursor += 1;
@@ -1971,7 +1977,7 @@ fn parse_statement_kw_with(lexed: &Lexed, cursor: &mut usize, depth: usize, in_f
                 // **带括号的 `with`**（第 299 轮接）：`with (a as x, b, c as y):` —— 3.10 起合法 ✓，
                 // `Lib/test/support/__init__.py:2943` 正是它 ✓（那一族 **26** 个模块 ✓）。
                 // 括号只是**分组**：项还是照逗号分、`as` 还是照项挂 ✓（回填的那条 `JUMP` 不算括号里的 ✓）。
-                let parenthesized = tokens.get(*cursor) == Some(&Lexeme::LeftParen);
+                let parenthesized = with_items_parenthesized(tokens, *cursor);
                 if parenthesized {
                     // 括号里允许**换行** ✓（实测参照就是这么写的 ✓）⇒ 吃掉括号后的换行词素 ✓。
                     *cursor += 1;
@@ -2027,6 +2033,39 @@ fn parse_statement_kw_with(lexed: &Lexed, cursor: &mut usize, depth: usize, in_f
         _ => unreachable!("parse_statement_kw_with 只接收对应分支"),
     }
     Ok(StatementFlow::Continue)
+}
+
+/// **`with (` 的消歧**（round 268）：见 `parse_statement_kw_with` 里的调用点注释。
+fn with_items_parenthesized(tokens: &[Lexeme], cursor: usize) -> bool {
+    if tokens.get(cursor) != Some(&Lexeme::LeftParen) {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut as_seen = false;
+    let mut comma_seen = false;
+    let mut index = cursor;
+    while let Some(token) = tokens.get(index) {
+        match token {
+            Lexeme::LeftParen | Lexeme::LeftBracket | Lexeme::LeftBrace => depth += 1,
+            Lexeme::RightParen | Lexeme::RightBracket | Lexeme::RightBrace => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    // **顶层 `as`／逗号** 且 `)` 后立刻收尾（`:`／换行）⇒ 项列表形式 ✓；
+                    // 后面还有 `.attr`／`(` 等 ⇒ 普通表达式 ✓（`(a, b), c:` 也走表达式 ✓）。
+                    let ends_item = matches!(
+                        tokens.get(index + 1),
+                        Some(Lexeme::Colon) | Some(Lexeme::Newline)
+                    );
+                    return (as_seen || comma_seen) && ends_item;
+                }
+            }
+            Lexeme::Name(word) if depth == 1 && word == "as" => as_seen = true,
+            Lexeme::Comma if depth == 1 => comma_seen = true,
+            _ => {}
+        }
+        index += 1;
+    }
+    false
 }
 
 /// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "try"` 分支原样搬入。

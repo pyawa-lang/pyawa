@@ -426,7 +426,7 @@
 > **工单收口后的下一阶段（2026-11-13；用户确认 8 项全部完成 ✓ —— 全量 valgrind 410 例 0 error ✓、memdangle 基线 2（既有、A/B 证）✓、bench 空载复测 +0.8~5.6% 在容差内 ✓）**：
 > ① **每实例内存配额** ✓（**round 266 落地**：`OM-41`／`AB-65`／`AB-66`；超限抛**可捕获的** `MemoryError`；宿主占用上界 ≈ `limit+slack`；CLI `PYAWA_MEMORY_LIMIT` 示例接缝；验收 `crates/pyawa-core/tests/memory_quota.rs` 5 例 ＋ `crates/pyawa-runtime/tests/memory_quota.rs` 5 例 ＋ `crates/pyawa-abi/tests/memory_quota.rs` 4 例 ✓）—— 沙箱**硬需求** ✓；**注意**：配额是**宿主侧的 ABI 钩子** ⇒ 属 ABI-adjacent ✓，应与 ⑤ 的钩子**一起定** ✓（ABI 仍暂不发布 ✓）。
 > ② **威胁模型与宿主责任** ✓（**round 267 落地**：`DESIGN` §7.5 —— 四目标（不逃逸／不越界／不拖垮宿主／不串实例）、VM 已保证（无 FFI 出口＋静态 `T-CX-*`、内省只碰 VM 对象、能力面依赖倒置、栈溢出干净异常、内存安全基线＋配额）、宿主必须承担 7 条（壁钟超时／配额／同实例串行／provider 根夹紧／资源策略／有界输入／实例隔离）、残余风险 6 条如实记 ✗）；
-> ③ **`io.open`／`pathlib` 文件面** ✗（工单 5b①，脚本读写文件必修 ✓）；
+> ③ **`io.open`／`pathlib` 文件面** ✓（**round 268 落地**：`_io.text_encoding` 真接线、`FileIO.__del__` 落盘、`symlink` 三参、errno 文案扩充、`with (expr).attr` 解析修复（`MS-19`）；验收 `crates/pyawa-runtime/tests/io_pathlib_face.rs`（与 CPython 27 行逐行一致）＋`crates/pyawa-core/tests/with_parenthesized.rs` 4 例 ✓；如实缺口：`open_code` 占位、绝对路径输出不进对拍）；
 > ④ **通用参考宿主** ✗（宿主定义脚本 API → 脚本调回宿主 → 沙箱拒绝越界 → 超时 → 体量/多实例）——**对接方看的第一个东西** ✓；**必须与具体宿主身份无关** ✓（2026-11-13 用户：不管是谁都不应成为区别的理由 ✓）⇒ 写成**照抄即可**的规格级示例 ✓，不做任何特定应用的定制 ✗；
 > ⑤ `ABI 发布` ＝ **暂不发布** ✗（2026-11-13 用户：**可能还要加几个钩子** ✓）⇒ 等钩子稳定再发 ✓；且 ①（配额）与钩子族同属 ABI-adjacent ⇒ **应在冻结前** ✓。
 

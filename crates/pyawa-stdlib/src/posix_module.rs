@@ -1884,10 +1884,13 @@ fn symlink_native(
             "symlink() missing required argument 'src'/'dst'",
         ));
     };
-    if args.len() > 2 {
+    // **参照的 POSIX 签名是 `symlink(src, dst, target_is_directory=False)`** ✓ —— 第三个参数在
+    // POSIX 上**忽略**但**必须接受**（`pathlib.Path.symlink_to` 就按位置传三个 ✓；round 268
+    // 实测此前报 `symlink() takes exactly 2 arguments (3 given)` ✗）。
+    if args.len() > 3 {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("symlink() takes exactly 2 arguments ({} given)", args.len()),
+            &format!("symlink() takes at most 3 arguments ({} given)", args.len()),
         ));
     }
     // 目标按"路径形状"编码（str 走 surrogateescape、bytes 原样），但**不**做 VM 路径解析。
