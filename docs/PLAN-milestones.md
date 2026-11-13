@@ -780,3 +780,59 @@
 **依赖** ✓：`M4` 检查器（`TS-*`）＋ `compile/` 解析器（0 unsafe）；**不引** LSP 框架 ✓（那是 `pyawa-lsp` 的事）。
 
 **状态** ✓：① `pyawa check` **已落地 ✓（round 275）**——`pyawa check [--format=json] <文件…>`：只编译不执行、批量诊断（不遇首错即止）、`.py` 只语法类（`MS-19`）／`.pyawa` 语法＋类型、`--format=json`（`file`/`line`/`col`/`code`/`severity`/`message`）、退出码 0／1／2；验收 `crates/pyawa-runtime/tests/check_command.rs` 6 例（含 **407 语料 0 诊断**、JSON 字段、执行 vs check 语法诊断一致、退出码）；CI fast 在 `check.py` 后已加语料步骤（PLAN §10.1 ④）。② LSP MVP **已落地 ✓（round 276）**——`crates/pyawa-lsp`（**零第三方依赖**的手写 JSON-RPC／LSP 帧）：`initialize`／`initialized`／全量 `didOpen·didChange·didClose`／`publishDiagnostics`（与 `check_source` 同一处真相）／`hover`（已标注名字的声明类型）；集成验收 `crates/pyawa-lsp/tests/lsp_stdio.rs` 3 例（真起子进程走 Content-Length 帧）；CI fast 已加 `-p pyawa-lsp` 测试。③ **按需梯的最小项 已落地 ✓（round 277）**——`textDocument/completion`（文档内符号）／`textDocument/definition`（注解/def/class/顶层赋值首个定义处）／`textDocument/rename`（**单文件整词** `WorkspaceEdit`）；验收 `crates/pyawa-lsp/tests/lsp_stdio.rs` 第 4 例。**如实边界**：不做类型推断／成员补全／标准库符号／跨文件跳转／作用域分析（PLAN 原文即"按需"，这些留待需求出现 ✗）。**位置口径收口 ✓（round 279）**：LSP `character` 已严格按 **UTF-16 code unit** 换算（入参/出参、非 BMP 字符；验收 `lsp_stdio.rs` 第 5 例）；其余已知边界在 `crates/pyawa-lsp/README.md` 的「范围外」逐条写明理由 ✗。
+
+## 12. 需求单：语言与库缺口（2026-11-13）
+
+三项均由文档侧实测定位（非推测），证据与验收如下。语义仍以各 `SPEC-*` 为**一处真相**，此处只给范围与判据。
+
+### 12.1 `x = yield`（`SEND` 取值形态）—— 语言语义缺口
+
+**证据**：
+- `SPEC-bytecode.md:533` 把 `RETURN_GENERATOR`／`YIELD_VALUE`／`SEND`／`GET_AWAITABLE`／`GET_YIELD_FROM_ITER` 列入「生成器与协程」族。
+- 实测（release）：
+  - `def g(): yield 1` ⇒ 正常；`def g():\n while True: yield` 的 `send()` ⇒ 正常。
+  - **`def g():\n v = yield\n print(v)`** ⇒ `未捕获（状态 5）：指令 52 的这个形态尚未接线：非生成器函数不该让出（码元被改坏了？）`。
+- 即：**yield 不接值时可用，接值（`x = yield`）即崩**。
+
+**范围**：让 `x = yield`（`SEND` 后取值）按 `YIELD_VALUE`／`SEND` 的规格工作；`send(v)` 的 `v` 必须成为该表达式的值；`throw`／`close` 的既有行为不得回退。
+**验收**：
+① `v = yield` ＋ `gi.send(7)` ⇒ 生成器内 `v == 7`；
+② `try/except GeneratorExit` 包住的 `x = yield` 形态在 `close()` 时不泄漏、不崩；
+③ `yield from`／`await` 现有用例（含 `pyawa-lsp` 之外的核心测试）全绿；
+④ 语料新增一条该形态（`tests/conformance/corpus/`），对拍参照一致；
+⑤ `check.py` 全绿 ＋ `slowcheck` 十一项全绿。
+**禁区**：不改 `YIELD_VALUE` 的既有语义；不为"看起来能跑"在解释器层特判（须按码元路径修）。
+
+### 12.2 `_signal` 最小面 —— 一次解锁 `asyncio`
+
+**证据**：
+- 实测：`import signal` 成功，常量与 `Handlers` 可见；但 `signal.getsignal(2)` ⇒ `NotImplementedError: _signal.getsignal：真实信号注册／查询是能力域（CM-8）问题，本轮未接线`。
+- 实测：`asyncio.run(m())` ⇒ **同一条 `_signal.getsignal` 报错**（即 `asyncio` 在事件循环初始化阶段就依赖它）。
+
+**范围**：在**不启用真实信号**的前提下，提供 `_signal` 的最小面，使 `asyncio` 的事件循环可初始化并跑完一个协程：
+`getsignal`／`signal`（**注册为 no-op 或仅记账**，不真正投递）／`set_wakeup_fd`（返回前值或 `-1`）／`SIGCHLD` 等常量的存在性。
+**待定（需用户拍板）**：真实信号是否作为**能力域**提供？
+- 方案 A：**不提供真实信号**，只做记账式 façade（沙箱友好、无宿主副作用）；
+- 方案 B：作为能力域交给宿主（`fs`／`net` 同层），由宿主决定是否允许。
+**验收**：
+① `asyncio.run(coro())` 返回正确结果；② `await asyncio.sleep(0)` ＋ `async for` ＋ 异步推导式可用；
+③ `signal.getsignal` 不再抛 `NotImplementedError`，返回记账号；
+④ 若走方案 B：未授予该能力域时**如实报未实现**（`CM-6`），不得假装成功；
+⑤ 不引入宿主不可控的信号处理；`check.py` ＋ `slowcheck` 全绿。
+**禁区**：不得在 VM 内部直接调用宿主信号设施绕过能力面（`CP-` 口径）。
+
+### 12.3 `_csv` ＋ `Lib/csv.py` —— 标准库 C 底座缺口
+
+**证据**：
+- 实测：`import csv` ⇒ `ModuleNotFoundError: No module named 'csv'`。
+- `Lib/csv.py` **不在仓库**（`Lib/` 同步面尚未覆盖它）；`crates/pyawa-stdlib/src` 内**无 `_csv`**。
+- 排期口径见 `P3-14`（逐模块合约与 stdlib 实现）与 `P3-26`（判据① 的驱动量＝C 模块缺口）。
+
+**范围**：用 Rust 实现 `_csv` 的最小面（`reader`／`writer`／`field_size_limit`／`Error` 及 `Dialect` 的必要方法），并同步 `Lib/csv.py`，使 `csv` 可 `import` 并完成读写回环。
+**验收**：
+① `csv.reader(io.StringIO(...))`／`csv.writer(...)` 对拍参照一致（含引号、转义、换行处理）；
+② `csv.DictReader`／`DictWriter` 可用；
+③ 上游 `Lib/test/test_csv.py` 的通过项数较接入前**上升**（记录前后数字）；
+④ `CM-14` 的逐模块合约补段（`SPEC-c-modules.md` §5.x），含"未接面如实"；
+⑤ `check.py` ＋ `slowcheck` 全绿。
+**禁区**：不引入 C 扩展加载（C 底座用 Rust 重写）；不合规方言静默降级（要么支持、要么如实报未实现）。
