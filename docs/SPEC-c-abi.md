@@ -92,6 +92,25 @@
 - **AB-16** 返回值为**新引用**（`OM-16`）；借出方**禁止**假定宿主会归还。
 - **AB-17** 宿主**禁止**在"可能触发释放的调用"之后继续使用借用句柄（`OM-19` 的跨边界版本）。
 - **AB-18** 实例销毁后其全部句柄**立即失效**；宿主**禁止**再使用（`CX-13` 的实例隔离）。
+- **AB-70** **宿主对象载荷读回**（`AB-35`／`AB-58` 的配套）：
+  `int pa_tohandle(pa_state *st, int idx, void **payload_out)`（栈契约 `—`）：
+  - 栈上 `idx` 指向**宿主对象**（`pa_newtype` 注册的类型**或其 Python 子类**）⇒ `PA_OK`，
+    `*payload_out` 指向 **VM 分配**的载荷（`AB-58`；注册的 `payload_size == 0` ⇒ `NULL`）；
+  - **只借出、不转移**：指针有效期同 `AB-15`／`AB-17`（下一次可能触发释放的调用之前有效），
+    宿主**禁止** `free`／`realloc`（载荷归 VM，`AB-58`）；
+  - `idx` 越界／`payload_out == NULL`／栈上**不是宿主对象** ⇒ `PA_ERR_INVALID`（`AB-22`）；
+  - **判定"是不是我的句柄"用本函数本身**：`pa_type` 对 `list`／普通实例也报 `PA_THANDLE`
+    （`AB-63`），不能用它猜（那是第二个真相）。
+- **AB-71** `pa_set_program_filename(st, name, len)`：**设置后续执行产物**的 `co_filename` 来源
+  （CLI 在 `pa_exec_bytecode`／`pa_exec_string` 之前调用；未设置 ⇒ 内部占位名 `<pyawa-test>`）。
+  - `name` 指向 `len` 个 **UTF-8** 字节（**不要求** NUL 结尾）；`len < 0`／`name == NULL`／
+    非 UTF-8 ⇒ `PA_ERR_INVALID`；栈契约 `—`；
+  - **按实例**保存（不影响其它实例）；成功后再执行的 `f_code.co_filename`／traceback 用这份值。
+- **AB-72** `pa_call`／`pa_pcall` 的 `nresults` 是**精确结果数**（栈契约 `−nargs+nresults`）：
+  - 被调用方产出 **M** 个结果（v1 的调用 **M = 1**）⇒ `nresults < M` **截断**、`> M` 用 `None`
+    **补齐**、`0` **全部丢弃**（v1 的 `0` 即丢弃那唯一结果）；
+  - `nargs < 0` 或 `nresults < 0` ⇒ `PA_ERR_INVALID`；
+  - **v1 边界（如实）**：本层调用只产出 1 个结果 ⇒ 多值形态的"多截"当前不可观测，规则先钉住。
 
 ---
 
@@ -261,12 +280,13 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.7**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **7**）——`AB-41` 的追加式改动只升
-> 次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。逐版追加
-> 历史（`fs` 的 `stat_times`／`pipe`、`clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64`
-> 并发契约、`AB-65`／`AB-66` 配额、`AB-68` `pa_setpath`）见 `pa.h` 头注释的版本历史（**一处真相** ✓）。
-> `CP-30` 的注册校验口径**不变**：公共头的 version／size 规则不动（vtable 的形状归 `CP-`，本文件
-> 只管"如何注册"）。
+> **当前版本：1.10**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **10**）——`AB-41` 的追加式改动
+> 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
+> 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
+> `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
+> `AB-67` 宿主模块四函数、`AB-68` `pa_setpath`、`AB-69` 签名句柄、`AB-70` `pa_tohandle`／
+> `AB-71` `pa_set_program_filename`）。`CP-30` 的注册校验口径**不变**：公共头的 version／size
+> 规则不动（vtable 的形状归 `CP-`，本文件只管"如何注册"）。
 
 - **AB-45** 头文件**必须**是**单一** `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
   **禁止**分层头。
@@ -312,8 +332,8 @@
 - **AB-49** 每个函数**必须**返回状态码（`AB-19`）；**返回值不经状态码传递**，它经栈传递。
   **唯一例外**：`pa_create` 经**出参**交回实例（`AB-55`）——创建那一刻**还没有栈**
   （`AB-13` 把栈绑在实例上）。
-- **AB-50** 函数总数**必须** ≤ 120（`AB-1`）。本表列出 **72 个**（核心 54 ＋ 辅助 18），余 **48** 个预算；
-  新增**必须**从表尾追加（`AB-44`）。
+- **AB-50** 函数总数**必须** ≤ 120（`AB-1`）。当前 §15.3＋§15.4 共列出 **93** 个（核心 **75** ＋辅助 18），
+  余 **27** 个预算；新增**必须**从表尾追加（`AB-44`）。
 
 ### 15.2 状态码枚举（`AB-20`：既有取值**禁止**改变含义，新增**必须**追加到预留区）
 
@@ -329,7 +349,7 @@
 | 7 | `PA_ERR_ABI` | ABI 版本或尺寸不兼容（`AB-40`） |
 | 8–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
 
-### 15.3 核心层 `pa_`（54 个）
+### 15.3 核心层 `pa_`（75 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
 
 | 函数 | 栈契约 | 说明 |
 |---|---|---|
@@ -342,6 +362,7 @@
 | `pa_exec_string(st, src, len, chunkname, mode, const pa_options *opts)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`／`AB-60`）；`opts` **可传 `NULL`**（＝浅层 ＋ 默认优化级），见 `AB-61` |
 | `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件；I/O 经能力层（`IM-15`）。`mode` 见 `AB-60`；`opts` 见 `AB-61` |
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |
+| `pa_set_program_filename(st, name, len)` | — | 设置后续执行的 `co_filename`（`AB-71`；按实例；未设置 ⇒ 内部占位名；非 UTF-8 ⇒ `PA_ERR_INVALID`） |
 | `pa_set_memory_limit(st, limit)` | — | 每实例内存配额（`AB-65`／`OM-41`）；`0` ＝ 取消。超限 ⇒ 脚本内可捕获的 `MemoryError` |
 | `pa_memory_used(st, u64 *out)` | — | 读取当前占用字节（`AB-66`）；`out == NULL` ⇒ `PA_ERR_INVALID` |
 | `pa_setpath(st, const char *const *dirs, size_t n)` | — | 设每实例 `sys.path`（`AB-68`）；`dirs == NULL` 或 `n == 0` ⇒ 清空。路径可读性仍由 `fs` 能力域决定（`CP-21`）|
@@ -380,6 +401,7 @@
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
 | `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
 | `pa_tobytes(st, idx, len*)` | — | 取只读字节视图（**借用**） |
+| `pa_tohandle(st, idx, payload_out)` | — | **宿主对象**载荷读回（`AB-70`；借用、仅宿主对象；NULL／类型不符 ⇒ `PA_ERR_INVALID`） |
 | `pa_newtable(st)` | +1 | 新建表 |
 | `pa_newlist(st, n)` | +1 | 新建长度 n 的列表 |
 | `pa_getfield(st, idx, name)` | ±1 | 属性访问；走 `getattr` 槽位（`TS` §8） |
@@ -390,8 +412,8 @@
 | `pa_rawset(st, idx)` | ±1 | 下标写入但**不触发**槽位 |
 | `pa_getglobal(st, name)` | +1 | 读模块全局 |
 | `pa_setglobal(st, name)` | −1 | 写模块全局 |
-| `pa_call(st, nargs, nresults)` | −nargs+nresults | 调用；异常经状态码 ＋ `pa_errmsg` |
-| `pa_pcall(st, nargs, nresults)` | −nargs+nresults | 受保护调用（语义同 `pa_call`，显式区分调用点） |
+| `pa_call(st, nargs, nresults)` | −nargs+nresults | 调用；异常经状态码 ＋ `pa_errmsg`；`nresults` 精确（`0`/`N`，多截少补 `None`，`AB-72`） |
+| `pa_pcall(st, nargs, nresults)` | −nargs+nresults | 受保护调用（语义同 `pa_call`，显式区分调用点；`AB-72`） |
 | `pa_errmsg(st)` | — | 取错误信息（**借用**，`AB-48`） |
 | `pa_error(st, msg)` | — | 宿主主动抛错 |
 | `pa_register(st, name, fn, sig)` | — | 注入宿主函数（`AB-24`／`AB-25`）；`sig` 形态见 §15.5 |

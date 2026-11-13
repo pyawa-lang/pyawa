@@ -2070,3 +2070,233 @@ fn a_bare_instance_imports_sys_but_not_stdlib_modules() {
     );
     unsafe { pa_destroy(state) };
 }
+
+// ---- AB-70：宿主对象载荷读回 ----
+
+/// 宿主函数：读回 `-1` 处宿主对象载荷里的 `u64` 并压回栈顶（`AB-70` 的端到端用）。
+unsafe extern "C-unwind" fn host_read_handle(state: *mut pa_state) -> i32 {
+    // SAFETY: 调度器保证 `state` 与实参有效。
+    unsafe {
+        let mut payload: *mut c_void = core::ptr::null_mut();
+        if pa_tohandle(state, -1, &mut payload) != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        let value = *payload.cast::<u64>();
+        let _ = pa_pop(state, 1);
+        pa_pushinteger(state, value as i64)
+    }
+}
+
+/// 宿主函数：零参数、返回 7（`AB-72` 的 `nresults` 用例）。
+unsafe extern "C-unwind" fn host_seven(state: *mut pa_state) -> i32 {
+    // SAFETY: 回调契约。
+    unsafe { pa_pushinteger(state, 7) }
+}
+
+/// 单位置参数的签名（名字与 `pa_param` 都要活到注册调用结束）。
+fn signature_with_one_positional(name: &'static [u8]) -> (pa_sig, [pa_param; 1]) {
+    let params = [pa_param {
+        size: size_of::<pa_param>(),
+        name: name.as_ptr().cast(),
+        type_expr: core::ptr::null(),
+        flags: pyawa_abi::host::param_flags::PA_PARAM_POSITIONAL,
+        default_handle: core::ptr::null_mut(),
+    }];
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: params.len(),
+        params: params.as_ptr(),
+    };
+    (signature, params)
+}
+
+#[test]
+fn tohandle_reads_back_the_vm_payload_after_container_roundtrip() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    const VALUE: u64 = 0x1122_3344_5566_7788;
+
+    let type_signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let dealloc: PaHostDealloc = quiet_dealloc;
+    let traverse: PaHostTraverse = quiet_traverse;
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                b"Gadget\0".as_ptr().cast(),
+                size_of::<u64>(),
+                dealloc,
+                traverse,
+                &type_signature,
+            )
+        },
+        PA_OK
+    );
+    let mut payload: *mut c_void = core::ptr::null_mut();
+    // SAFETY: state 存活；类型在 `-1`。
+    unsafe {
+        assert_eq!(pa_newhandle(state, -1, &mut payload), PA_OK);
+        assert!(!payload.is_null(), "AB-58：载荷由 VM 分配");
+        *payload.cast::<u64>() = VALUE;
+
+        // 宿主对象放进脚本全局；类型槽弹掉，栈回到空。
+        assert_eq!(pa_setglobal(state, b"gadget\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+    }
+    let payload_address = payload as usize;
+
+    // 注册"读回载荷"的宿主函数（一个位置参数）：脚本把句柄穿过 list／dict 再传进来。
+    let (mut signature, _params) = signature_with_one_positional(b"handle\0");
+    signature.params = _params.as_ptr();
+    // SAFETY: name／fn／sig 都有效。
+    assert_eq!(
+        unsafe { pa_register(state, b"host_read_handle\0".as_ptr().cast(), host_read_handle, &signature) },
+        PA_OK
+    );
+
+    let source = b"box = [gadget]\ncell = {'k': gadget}\nseen = host_read_handle(cell['k'])\n";
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            core::ptr::null(),
+            b"python\0".as_ptr().cast(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(status, PA_OK, "执行应当成功；诊断：{:?}", message_of(state));
+
+    // SAFETY: state 存活；下面每一步都成对 pop，结束时栈回到 0。
+    unsafe {
+        // ① 脚本把 dict 里的句柄传给宿主函数 ⇒ 宿主读回同一块载荷
+        assert_eq!(pa_getglobal(state, b"seen\0".as_ptr().cast()), PA_OK);
+        let mut seen = 0i64;
+        assert_eq!(pa_tointeger(state, -1, &mut seen), PA_OK);
+        assert_eq!(seen as u64, VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // ② list 往返后仍能读回（直接走 API，核对指针身份）
+        let value = |state: *mut pa_state| -> u64 {
+            let mut out: *mut c_void = core::ptr::null_mut();
+            assert_eq!(pa_tohandle(state, -1, &mut out), PA_OK);
+            assert_eq!(out as usize, payload_address, "读回的必须是同一块 VM 载荷");
+            *out.cast::<u64>()
+        };
+        assert_eq!(pa_getglobal(state, b"box\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushinteger(state, 0), PA_OK);
+        assert_eq!(pa_gettable(state, -2), PA_OK);
+        assert_eq!(value(state), VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK); // 元素
+        assert_eq!(pa_pop(state, 1), PA_OK); // box
+
+        // ③ dict 往返后仍能读回
+        assert_eq!(pa_getglobal(state, b"cell\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushstring(state, b"k\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_gettable(state, -2), PA_OK);
+        assert_eq!(value(state), VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK); // 值
+        assert_eq!(pa_pop(state, 1), PA_OK); // dict
+
+        // ④ 宿主对象本身在栈上也能读回
+        assert_eq!(pa_getglobal(state, b"gadget\0".as_ptr().cast()), PA_OK);
+        assert_eq!(value(state), VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // ⑤ 非宿主对象 ⇒ PA_ERR_INVALID（**不要**用 pa_type == PA_THANDLE 猜：
+        //    list／int 也都在报 PA_THANDLE／不是句柄）
+        assert_eq!(pa_newlist(state, 0), PA_OK);
+        assert_eq!(pa_type(state, -1), PA_THANDLE, "list 的 pa_type 也是 PA_THANDLE（AB-63）");
+        let mut out: *mut c_void = core::ptr::null_mut();
+        assert_eq!(pa_tohandle(state, -1, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        assert_eq!(pa_tohandle(state, -1, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // ⑥ payload_out 为 NULL／索引越界 ⇒ 都是宿主用法错误
+        assert_eq!(pa_getglobal(state, b"gadget\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_tohandle(state, -1, core::ptr::null_mut()), PA_ERR_INVALID);
+        assert_eq!(pa_tohandle(state, 99, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// ---- AB-72：`pa_call`／`pa_pcall` 的精确结果数 ----
+
+#[test]
+fn call_nresults_is_exact() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    // SAFETY: name／fn／sig 都有效。
+    assert_eq!(
+        unsafe { pa_register(state, b"host_seven\0".as_ptr().cast(), host_seven, &signature) },
+        PA_OK
+    );
+    // SAFETY: state 存活；每步成对收栈。
+    unsafe {
+        // `nresults == 0`：结果被丢弃，可调用与实参也都不留 ⇒ 栈回到空。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, 0), PA_OK, "AB-72：0 个结果是合法请求");
+        assert_eq!(pa_gettop(state), 0);
+
+        // `nresults == 2`：固定产出 1 个结果 ⇒ 第 1 项是结果，其余补 `None`。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, 2), PA_OK);
+        assert_eq!(pa_gettop(state), 2);
+        assert_eq!(pa_type(state, -1), PA_TNIL, "结果数不足 ⇒ 用 None 补齐（AB-72）");
+        let mut value = 0i64;
+        assert_eq!(pa_tointeger(state, -2, &mut value), PA_OK);
+        assert_eq!(value, 7, "第 1 项才是被调用方的结果");
+        assert_eq!(pa_pop(state, 2), PA_OK);
+
+        // `nresults == 1`：既有行为不回退。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 1);
+        assert_eq!(pa_tointeger(state, -1, &mut value), PA_OK);
+        assert_eq!(value, 7);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // `pa_pcall` 同口径（受保护调用）。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pcall(state, 0, 2), PA_OK);
+        assert_eq!(pa_gettop(state), 2);
+        assert_eq!(pa_type(state, -1), PA_TNIL);
+        assert_eq!(pa_tointeger(state, -2, &mut value), PA_OK);
+        assert_eq!(value, 7);
+        assert_eq!(pa_pop(state, 2), PA_OK);
+
+        // 负数 ⇒ 宿主用法错误（AB-72）。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, -1), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}

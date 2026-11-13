@@ -21,9 +21,11 @@
  * 次版本 6：`AB-65`／`AB-66` 每实例内存配额两函数（追加式）。
  * 次版本 7：`AB-68` `pa_setpath`（追加式）。
  * 次版本 8：`AB-67` 宿主模块注入四函数（追加式）。
- * 次版本 9：`AB-69` 宿主函数签名（`pa_type_expr` 句柄版，追加式）。 */
+ * 次版本 9：`AB-69` 宿主函数签名（`pa_type_expr` 句柄版，追加式）。
+ * 次版本 10：`AB-70` `pa_tohandle`（宿主对象载荷读回）＋ `AB-71` `pa_set_program_filename`
+ * （均追加式）；同版补齐 `AB-72` 的 `pa_call`／`pa_pcall` `nresults` 语义（未发布前的补齐）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 9u
+#define PA_ABI_MINOR 10u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -152,6 +154,10 @@ int pa_exec_string(pa_state *state, const char *source, ptrdiff_t length,
 int pa_exec_file(pa_state *state, const char *path, const char *mode,
                  const pa_options *options);
 int pa_exec_bytecode(pa_state *state, const void *buffer, ptrdiff_t length);
+/* AB-71：设置**后续执行产物**的 `co_filename` 来源（CLI 在执行前调用；未设置 ⇒ 内部占位名）。
+ * `name` 指向 `len` 个 UTF-8 字节（**不要求** NUL 结尾）；`len < 0`／`NULL`／非 UTF-8 ⇒
+ * `PA_ERR_INVALID`；按实例保存（不影响其它实例）；栈契约 `—`。 */
+int pa_set_program_filename(pa_state *state, const char *name, ptrdiff_t len);
 
 /* ---- 虚拟栈（AB-9…AB-13）----
  *
@@ -198,6 +204,11 @@ const char *pa_tointstring(pa_state *state, int idx, size_t *len);
 int pa_tonumber(pa_state *state, int idx, double *out);
 const char *pa_tostring(pa_state *state, int idx, size_t *len);    /* 只读视图（借用，AB-15） */
 const char *pa_tobytes(pa_state *state, int idx, size_t *len);     /* 只读字节视图（借用） */
+/* AB-70：**宿主对象**的载荷读回（栈契约 `—`）。成功 ⇒ *payload_out 指向 VM 分配的载荷
+ * （AB-58；payload_size == 0 ⇒ NULL）；**只借出、不转移**（AB-15／AB-17，宿主禁止 free）。
+ * 栈上不是宿主对象／idx 越界／payload_out == NULL ⇒ PA_ERR_INVALID。
+ * 注意：list／普通实例的 pa_type 也是 PA_THANDLE ⇒ **判定用本函数，不要用 pa_type 猜**。 */
+int pa_tohandle(pa_state *state, int idx, void **payload_out);
 int pa_newtable(pa_state *state);
 int pa_newlist(pa_state *state, int n);
 int pa_retain(pa_state *state, int idx);
@@ -291,6 +302,9 @@ pa_type_expr pa_type_expr_apply(pa_state *state, pa_type_expr base, const pa_typ
 int pa_func_set_signature(pa_state *state, pa_host_fn function,
                           const pa_type_expr *params, size_t nparams, pa_type_expr ret,
                           const pa_type_expr *tparams, size_t ntparams, unsigned flags);
+/* AB-72：nresults 是**精确**结果数（栈契约 −nargs+nresults）：0 ⇒ 丢弃结果；≥1 ⇒ 产出
+ * nresults 项（v1 的调用固定产出 1 个结果，其余补 None；未来多值通道按「多截、少补 None」）。
+ * nargs < 0 或 nresults < 0 ⇒ PA_ERR_INVALID。 */
 int pa_call(pa_state *state, int nargs, int nresults);
 int pa_pcall(pa_state *state, int nargs, int nresults);
 int pa_error(pa_state *state, const char *msg);

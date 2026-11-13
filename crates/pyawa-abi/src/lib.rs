@@ -94,7 +94,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 9;
+pub const PA_ABI_MINOR: u32 = 10;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -2799,6 +2799,63 @@ pub unsafe extern "C" fn pa_newlist(state: *mut pa_state, length: i32) -> i32 {
     })
 }
 
+/// **`AB-70`**：`pa_tohandle(st, idx, void **payload_out)`（栈契约 `—`）。
+///
+/// 栈上 `idx` 指向**宿主对象**（`pa_newtype` 注册的类型或其 Python 子类）⇒ `PA_OK`，
+/// `*payload_out` 指向 **VM 分配**的载荷（`AB-58`；`payload_size == 0` ⇒ `NULL`）。
+/// **只借出、不转移**（`AB-15`／`AB-17`）：指针在下一次可能触发释放的调用前有效；
+/// 宿主**禁止** `free`／`realloc`。
+///
+/// 失败面：`idx` 越界／`payload_out == NULL`／**栈上不是宿主对象** ⇒ `PA_ERR_INVALID`。
+/// **判定"是不是我的句柄"不要用 `pa_type == PA_THANDLE`**：`list`／普通实例也报
+/// `PA_THANDLE`（`AB-63`）——这里按"类型是不是宿主布局"如实报错（`AB-22`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]；`payload_out` 必须可写（不可为 `NULL`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_tohandle(
+    state: *mut pa_state,
+    index: i32,
+    payload_out: *mut *mut core::ffi::c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if payload_out.is_null() {
+            state.set_message("pa_tohandle：payload_out 不能为 NULL");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(object) = state.stack.get(index).map(|slot| slot.object) else {
+            state.set_message("pa_tohandle：栈索引越界");
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: 栈槽持有一份引用 ⇒ object 存活；类型对象由注册表持有。
+        let type_object = unsafe { object.as_ref() }.ty();
+        // SAFETY: 同上。
+        let layout = unsafe { type_object.as_ref() };
+        if !layout.is_host_layout() {
+            state.set_message("pa_tohandle：栈上那一项不是宿主对象句柄（AB-70）");
+            return status::PA_ERR_INVALID;
+        }
+        let payload_size = layout.instance_size().saturating_sub(layout.payload_offset());
+        let payload = if payload_size == 0 {
+            core::ptr::null_mut()
+        } else {
+            // SAFETY: 载荷紧跟头部、由 VM 分配（`AB-58`）；本函数只借出指针，不转移所有权。
+            unsafe {
+                object
+                    .as_ptr()
+                    .cast::<u8>()
+                    .add(layout.payload_offset())
+                    .cast::<core::ffi::c_void>()
+            }
+        };
+        // SAFETY: 调用方保证 `payload_out` 可写（上面判过非 NULL）。
+        unsafe { *payload_out = payload };
+        status::PA_OK
+    })
+}
+
 /// `pa_retain(st, idx)`：借用 → 持有（`AB-15`）。
 ///
 /// # Safety
@@ -2924,8 +2981,11 @@ pub unsafe extern "C" fn pa_setglobal(state: *mut pa_state, name: *const c_char)
 
 /// `pa_call(st, nargs, nresults)`：调用（−nargs+nresults）。
 ///
-/// 栈上是 `[…, 可调用, 实参…]`；成功后结果替换掉它们。异常经状态码 ＋ `pa_errmsg`。
-/// `nresults` 目前**必须**是 1（多返回值尚未定，见 `README.md`）。
+/// 栈上是 `[…, 可调用, 实参…]`；成功后结果替换掉它们（净 `−nargs−1+nresults`）。
+/// 异常经状态码 ＋ `pa_errmsg`。
+///
+/// **`AB-72`**：`nresults` 是**精确**结果数——`0` ⇒ 丢弃结果；`≥1` ⇒ 产出 `nresults` 项
+/// （v1 的调用固定产出 1 个结果，其余补 `None`；未来多值通道按"多截、少补 `None`"）。
 ///
 /// 本入口自己走 [`boundary`]（`CX-11`）——公共实现 [`call_inner`] **不含** `catch_unwind`。
 ///
@@ -2958,10 +3018,7 @@ unsafe fn call_inner(
     if nargs < 0 || nresults < 0 {
         return status::PA_ERR_INVALID;
     }
-    if nresults != 1 {
-        // 多返回值/调整结果数：规格未钉，先如实报未实现
-        return status::PA_ERR_NOTIMPLEMENTED;
-    }
+    let wanted_results = nresults as usize;
     let nargs = nargs as usize;
     if state.stack.len() < nargs + 1 {
         return status::PA_ERR_INVALID;
@@ -2984,7 +3041,23 @@ unsafe fn call_inner(
     let keep = state.stack.len() - nargs - 1;
     drain_stack(state, keep);
     match outcome {
-        Ok(result) => state.stack.push_owned(result),
+        Ok(result) => {
+            // **`AB-72`**：`nresults` 是**精确**结果数——不足补 `None`、超出截断。
+            // v1 的调用固定产出 **1** 个结果（多值通道未来才可能产出更多）。
+            if wanted_results == 0 {
+                // 丢弃结果（栈已收干净；结果那份引用由这里还）。
+                // SAFETY: result 是 `call_value` 交回的新引用，尚未进栈。
+                unsafe { state.instance.release_object(result.as_ptr()) };
+                return status::PA_OK;
+            }
+            state.stack.push_owned(result);
+            let none = state.instance.singletons().none();
+            for _ in 1..wanted_results {
+                let padding = state.instance.retain(none);
+                state.stack.push_owned(padding);
+            }
+            status::PA_OK
+        }
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // 异常不跨边界逃逸（AB-21）：转成状态码 ＋ 可由宿主取回的信息
             let message = exception_message(&state.instance, exception);

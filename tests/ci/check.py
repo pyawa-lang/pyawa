@@ -59,9 +59,11 @@ ABI_HEADER = "crates/pyawa-abi/include/pa.h"
 ABI_SPEC = "docs/SPEC-c-abi.md"
 ABI_EXPORT_SOURCE_DIRS = ("crates/pyawa-abi/src", "crates/pyawa-runtime/src")
 ABI_FUNCTION_BUDGET = 120
-#: **过渡清单**（`PLAN-milestones.md` §12.4 #8 的**待裁**影子导出）：补进头／规格 或 去掉导出。
-#: 只允许点名这一个；**新增影子导出**、或**这一条修好后忘了删**，`T-CX-19` 都红（棘轮：不得更差）。
-ABI_PENDING_SHADOW_EXPORTS = frozenset({"pa_set_program_filename"})
+#: **过渡清单**（`T-CX-19` 的棘轮）：只允许点名"已授权但暂未进 `pa.h`"的影子导出。
+#: **当前为空**（`PLAN-milestones.md` §12.4 #8 已于 2026-11-14 收口：`pa_set_program_filename`
+#: 补进 `pa.h`／规格）。新增影子导出 ⇒ 红；将来若再出现过渡项，必须显式列在这里，修好后删掉
+#: （不删同样红——棘轮：不得更差）。
+ABI_PENDING_SHADOW_EXPORTS: frozenset[str] = frozenset()
 ABI_HEADER_DECL = re.compile(r"\b(paL?_[a-z0-9_]+)\s*\([^;{]*\);")
 ABI_SPEC_MENTION = re.compile(r"\b(paL?_[a-z0-9_]+)\s*\(")
 ABI_NO_MANGLE = re.compile(r"#\[(?:unsafe\()?no_mangle(?:\))?\]")
