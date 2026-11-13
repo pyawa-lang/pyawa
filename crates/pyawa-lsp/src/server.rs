@@ -216,16 +216,29 @@ impl Server {
         let diagnostics = check_source(text, uri, mode);
         let mut items: Vec<String> = Vec::with_capacity(diagnostics.len());
         for diagnostic in &diagnostics {
+            // `Diagnostic.line/col` 是 **1 基 char 下标**（lexer 的列口径）⇒ 换成 LSP 的
+            // 0 基 **UTF-16 code unit**（非 BMP 字符占 2 个 unit；与真实客户端一致 ✓）。
             let (start_line, start_character) = if diagnostic.line > 0 {
+                let line_text = text
+                    .lines()
+                    .nth(diagnostic.line as usize - 1)
+                    .unwrap_or("");
+                let char_index = diagnostic.col.saturating_sub(1) as usize;
                 (
                     diagnostic.line - 1,
-                    diagnostic.col.saturating_sub(1),
+                    char_index_to_utf16(line_text, char_index),
                 )
             } else {
                 (0, 0)
             };
+            let line_text = text.lines().nth(start_line as usize).unwrap_or("");
+            let width = line_text
+                .chars()
+                .nth(start_character as usize)
+                .map(|character| character.len_utf16() as u32)
+                .unwrap_or(1);
             let end_line = start_line;
-            let end_character = start_character.saturating_add(1);
+            let end_character = start_character.saturating_add(width);
             items.push(format!(
                 "{{\"range\":{{\"start\":{{\"line\":{start_line},\"character\":{start_character}}},\
                  \"end\":{{\"line\":{end_line},\"character\":{end_character}}}}},\
@@ -288,8 +301,13 @@ impl Server {
         else {
             return "null".to_owned();
         };
-        let start_character = symbol.character;
-        let end_character = start_character + symbol.name.chars().count() as u32;
+        let definition_line = source
+            .lines()
+            .nth(symbol.line as usize)
+            .unwrap_or("");
+        let start_character = char_index_to_utf16(definition_line, symbol.character as usize);
+        let end_character =
+            char_index_to_utf16(definition_line, symbol.character as usize + symbol.name.chars().count());
         format!(
             "{{\"uri\":{},\"range\":{{\"start\":{{\"line\":{},\"character\":{start_character}}},\
              \"end\":{{\"line\":{},\"character\":{end_character}}}}}}}",
@@ -324,6 +342,8 @@ impl Server {
         let mut edits: Vec<String> = Vec::new();
         for (line_index, line_text) in source.lines().enumerate() {
             for (start, end) in word_occurrences(line_text, &token) {
+                let start = char_index_to_utf16(line_text, start as usize);
+                let end = char_index_to_utf16(line_text, end as usize);
                 edits.push(format!(
                     "{{\"range\":{{\"start\":{{\"line\":{line_index},\"character\":{start}}},\
                      \"end\":{{\"line\":{line_index},\"character\":{end}}}}},\"newText\":{}}}",
@@ -488,7 +508,8 @@ fn identifier_at(line: &str, character: usize) -> Option<String> {
 fn hover_markdown(source: &str, line: u32, character: u32) -> Option<String> {
     let lines: Vec<&str> = source.lines().collect();
     let line_text = lines.get(line as usize)?;
-    let token = identifier_at(line_text, character as usize);
+    let character = utf16_to_char_index(line_text, character);
+    let token = identifier_at(line_text, character);
     if let Some((name, type_text, name_start)) = annotation_on_line(line_text) {
         let on_name = token.as_deref() == Some(name.as_str());
         if on_name || (character as usize) >= name_start {
@@ -609,10 +630,30 @@ fn push_symbol(symbols: &mut Vec<DocumentSymbol>, symbol: DocumentSymbol) {
     symbols.push(symbol);
 }
 
-/// 光标下的标识符（`source` 的 `line` 行 `character` 列）。
+/// 光标下的标识符（`line` 行 `character` 列；**LSP 的 UTF-16 code unit** 入参）。
 fn token_at(source: &str, line: u32, character: u32) -> Option<String> {
     let line_text = source.lines().nth(line as usize)?;
-    identifier_at(line_text, character as usize)
+    identifier_at(line_text, utf16_to_char_index(line_text, character))
+}
+
+/// char 下标 ⇒ 该行的 UTF-16 code unit 列（LSP `character`）。
+fn char_index_to_utf16(line: &str, char_index: usize) -> u32 {
+    line.chars()
+        .take(char_index)
+        .map(|character| character.len_utf16() as u32)
+        .sum()
+}
+
+/// UTF-16 code unit 列（LSP `character`）⇒ char 下标。
+fn utf16_to_char_index(line: &str, utf16: u32) -> usize {
+    let mut units = 0u32;
+    for (index, character) in line.chars().enumerate() {
+        if units >= utf16 {
+            return index;
+        }
+        units += character.len_utf16() as u32;
+    }
+    line.chars().count()
 }
 
 fn is_identifier(text: &str) -> bool {

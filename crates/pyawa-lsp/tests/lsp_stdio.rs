@@ -388,3 +388,101 @@ fn completion_definition_and_rename() {
     assert_eq!(bad_rename.get("result"), Some(&Value::Null));
     client.shutdown();
 }
+
+#[test]
+fn unicode_positions_use_utf16_code_units() {
+    // 测试侧的 JSON 字符串拼装（避免手写多层转义）。
+    fn quoted(text: &str) -> String {
+        format!("\"{}\"", json::escape(text))
+    }
+    let mut client = Client::start();
+    client.request(1, "initialize", "{\"capabilities\":{}}");
+    client.notify("initialized", "{}");
+    let uri = "file:///tmp/pyawa-lsp-unicode.pyawa";
+    // 行 0 以字符串字面量 `"😀"` 开头（UTF-16 占 3 个 unit：引号+emoji+引号）：
+    // `x` 在 **UTF-16 列 6**，而 char 下标是 5。
+    let text = "\"😀\"; x: int = 1\ny = x\n";
+    let open = format!(
+        "{{\"textDocument\":{{\"uri\":{},\"languageId\":\"pyawa\",\"version\":1,\"text\":{}}}}}",
+        quoted(uri),
+        quoted(text)
+    );
+    client.notify("textDocument/didOpen", &open);
+    let published = client.wait_notification("textDocument/publishDiagnostics");
+    assert_eq!(diagnostics_of(&published).len(), 0, "合法源不该有诊断");
+
+    // definition：第 1 行的 `x`（LSP 列 4）⇒ 第 0 行注解，起始列必须是 **6**（UTF-16）。
+    let definition = client.request(
+        2,
+        "textDocument/definition",
+        &format!(
+            "{{\"textDocument\":{{\"uri\":{}}},\"position\":{{\"line\":1,\"character\":4}}}}",
+            quoted(uri)
+        ),
+    );
+    let start = definition
+        .get("result")
+        .and_then(|result| result.get("range"))
+        .and_then(|range| range.get("start"))
+        .expect("definition start");
+    assert_eq!(start.get("line").and_then(Value::as_u32), Some(0));
+    assert_eq!(
+        start.get("character").and_then(Value::as_u32),
+        Some(6),
+        "emoji 之后的名字在 UTF-16 里是第 6 列：{start:?}"
+    );
+
+    // rename：两处编辑的列也要按 UTF-16 报（0 行 6..7；1 行 4..5）。
+    let rename = client.request(
+        3,
+        "textDocument/rename",
+        &format!(
+            "{{\"textDocument\":{{\"uri\":{}}},\"position\":{{\"line\":1,\"character\":4}},\"newName\":\"z\"}}",
+            quoted(uri)
+        ),
+    );
+    let edits = match rename
+        .get("result")
+        .and_then(|result| result.get("changes"))
+        .and_then(|changes| changes.get(uri))
+    {
+        Some(Value::Array(edits)) => edits,
+        other => panic!("rename 结果不对：{other:?}"),
+    };
+    assert_eq!(edits.len(), 2, "{edits:?}");
+    let first_start = edits[0]
+        .get("range")
+        .and_then(|range| range.get("start"))
+        .and_then(|start| start.get("character"))
+        .and_then(Value::as_u32);
+    assert_eq!(first_start, Some(6), "第一处 UTF-16 列：{edits:?}");
+    let second_start = edits[1]
+        .get("range")
+        .and_then(|range| range.get("start"))
+        .and_then(|start| start.get("character"))
+        .and_then(Value::as_u32);
+    assert_eq!(second_start, Some(4), "第二处 UTF-16 列：{edits:?}");
+
+    // 诊断：emoji 后的 `a` 类型错，LSP 起始列同样应为 6。
+    let broken = "\"😀\"; a: int = \"x\"\n";
+    let change = format!(
+        "{{\"textDocument\":{{\"uri\":{},\"version\":2}},\"contentChanges\":[{{\"text\":{}}}]}}",
+        quoted(uri),
+        quoted(broken)
+    );
+    client.notify("textDocument/didChange", &change);
+    let published = client.wait_notification("textDocument/publishDiagnostics");
+    let diagnostics = diagnostics_of(&published);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let start = diagnostics[0]
+        .get("range")
+        .and_then(|range| range.get("start"))
+        .expect("diagnostic start");
+    assert_eq!(start.get("line").and_then(Value::as_u32), Some(0));
+    assert_eq!(
+        start.get("character").and_then(Value::as_u32),
+        Some(6),
+        "诊断列应按 UTF-16 报：{start:?}"
+    );
+    client.shutdown();
+}

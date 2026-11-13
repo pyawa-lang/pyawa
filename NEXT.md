@@ -6,9 +6,9 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`516e5873`（本笔前；round 278 规则 bug 修复：AGENTS 先问再动三档＋完成口径、round-rule §8、REQUIREMENTS 工作边界；按新口径继续 LSP 质量项）
+- **HEAD**：`004fb2a1`（本笔前；round 279 LSP 质量收口：character 严格 UTF-16 全链路＋边界改「范围外＋理由」，LSP 测试 5/5；下阶段：用户新指令／⑤ ABI 发布等决定）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
-- **下一阶段**：按 PLAN 收口后次序 —— ① 每实例内存配额 **✓ round 266** → ② 威胁模型与宿主责任 **✓ round 267（DESIGN §7.5）** → ③ `io.open`／`pathlib` 文件面 **✓ round 268** → ④ 通用参考宿主 **✓ round 269**；四项全落地 ✓。⑤ ABI **暂不发布**（等用户决定，不自行发布）。**新工单＝PLAN §10 LSP 线 ① `pyawa check`**（用户 2026-11-13）：core 批量诊断 **✓ round 274** → CLI／JSON／退出码／CI fast **✓ round 275 —— 梯①完成**；② LSP MVP **✓ round 276（pyawa-lsp）** → ③ 按需最小项 **✓ round 277（completion/definition/单文件 rename）** —— **LSP 三梯全部落地 ✓**；round 278 修「做完仍停手」规则 bug（完成口径）。按新口径继续 LSP 质量收尾。ABI 发布仍等用户决定；memory 深水区两族留作独立专项 ✗
+- **下一阶段**：按 PLAN 收口后次序 —— ① 每实例内存配额 **✓ round 266** → ② 威胁模型与宿主责任 **✓ round 267（DESIGN §7.5）** → ③ `io.open`／`pathlib` 文件面 **✓ round 268** → ④ 通用参考宿主 **✓ round 269**；四项全落地 ✓。⑤ ABI **暂不发布**（等用户决定，不自行发布）。**新工单＝PLAN §10 LSP 线 ① `pyawa check`**（用户 2026-11-13）：core 批量诊断 **✓ round 274** → CLI／JSON／退出码／CI fast **✓ round 275 —— 梯①完成**；② LSP MVP **✓ round 276（pyawa-lsp）** → ③ 按需最小项 **✓ round 277（completion/definition/单文件 rename）** —— **LSP 三梯全部落地 ✓**；round 278 修「做完仍停手」规则 bug（完成口径）。LSP 质量收尾 **✓ round 279**（UTF-16 全链路＋范围外理由）—— LSP 线按完成口径已做完 ✓；ABI 发布仍等用户决定；memory 深水区两族留作独立专项 ✗
 - **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
 - **完整工单**：`PLAN` §9.4（2026-11-12 **一次性下达** ✓，逐轮自走 ✗ 不再逐步请示；只对四类请示 ✗）
 - **当前主线（2026-11-12 用户口径 ✓）**：**内存安全 ＋ 执行效率**（解释器硬要求 ✓）；其余**慢慢补** ✗

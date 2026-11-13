@@ -31,19 +31,24 @@ cargo build -p pyawa-lsp --bin pyawa-lsp
 `.py` **只语法类**（`TS-26`／`MS-19`）、`.pyawa` 语法＋`TS-47` 类型；**批量**（不遇首错即止）。
 模式判定：URI 以 `.pyawa` 结尾或 `languageId == "pyawa"` ⇒ 扩模式，否则纯 Python 模式。
 
-## 如实边界（v1 ✗，后续梯次再补）
+## 位置口径（已按 LSP 严格换算）
 
-- **LSP 子集**：未实现 `workspace/*`、增量同步、文档符号、语义高亮等；协议版本按 LSP 3.17 的
-  最小面自洽，不声明未实现的能力。
-- **hover 只覆盖"已标注的名字"**：显示声明的类型文本（如 `x: int`）；不推断表达式类型、
-  不做文档字符串渲染。
-- **列口径近似**：诊断与 hover 的 `character` 按 `char` 计，**不是严格 UTF-16 code unit**；
-  纯 ASCII 等价，非 BMP 字符（如 emoji）会偏（已在 `server.rs` 的 `publish` 文档里标注）。
-- **`publishDiagnostics` 的 range 为 1 字符宽**（起止同行）；精确到 token 的 span 要等 parser
-  统一带位点（梯②之后的补齐面）。
-- **completion／definition／rename 只做"文档内符号"的浅层版本**：不做类型推断、成员补全、
-  标准库符号、跨文件跳转；rename 是**单文件整词替换**（同名单文件内全部替换，无作用域分析）。
-- 语法诊断在既有 parser **无位点标记**时 `line/col = 0`（与 `pyawa check` 同口径，如实记录）。
+- **`character` 一律按 UTF-16 code unit**：入参（hover／definition／rename／completion 的位置）与
+  出参（诊断 `range`、definition `Location`、rename `WorkspaceEdit`）都在 LSP 单位与内部 char 下标
+  之间换算；非 BMP 字符（emoji 等）占 2 个 unit ✓（验收见 `tests/lsp_stdio.rs` 的
+  `unicode_positions_use_utf16_code_units`）。
+- 内部 `Diagnostic.line/col` 来自 lexer 的 **1 基 char 下标**（`pyawa check` 同源），LSP 层换算成
+  0 基 UTF-16；`publish` 的 range 宽度＝该字符的 UTF-16 宽度（通常 1）。
+
+## 范围外（明确不做，理由在行内 ✗——不是"待办"）
+
+- **语法诊断无位点时 `line/col = 0`**：既有 parser 只有**部分**错误消息带「第 L 行，列 C」；
+  统一给 151 处 parser 错误点补 span 的成本/风险与 LSP 需求不成比例（`pyawa check` 同口径）。
+- **hover 只覆盖已标注的名字**：类型推断违反 `TS-2`「完全不推断」的既有决策；不做 docstring 渲染。
+- **completion／definition／rename 只支持当前文档**：跨文件需 workspace／import 图与会话状态，
+  PLAN §10 的第③梯原文即"**按需**"；成员补全／标准库符号同理范围外。
+- **增量同步／`workspace/*`／文档符号／语义高亮**：LSP MVP 只需全量同步；这些是后续独立需求。
+- **rename 作用域**：单文件整词替换（无作用域分析）；跨文件改名需先有 workspace 语义。
 
 ## 依赖隔离（`CX-27`／`T-CX-17`）
 
