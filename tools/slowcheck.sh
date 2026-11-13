@@ -101,7 +101,7 @@ if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙
 # ⑤ 绿则 ③ 必然绿 ✓（旧版这里串行重跑一遍纯属浪费 ≈109 s；判定口径不变 ✓）。
 STEP_NO=$((STEP_NO + 1))
 [ "$QUIET" = "0" ] && printf '%2d/11 ✓ %-58s %3s（由 ⑤ 覆盖：同一命令 3 次全绿）\n' "$STEP_NO" "cargo test --workspace" "(0)"
-step "python3 tests/ci/check.py" python3 tests/ci/check.py || true
+step "python3 tests/ci/check.py ＋ C 参考宿主（t_ref_host）" bash -c 'python3 tests/ci/check.py && python3 tests/ci/t_ref_host.py' || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 step "python3 tests/ci/stability.py" python3 tests/ci/stability.py "${PY_PROFILE_ARGS[@]}" || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi

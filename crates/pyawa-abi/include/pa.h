@@ -15,9 +15,12 @@
 
 /* AB-45：版本宏。编码：主版本在高 16 位（见 crates/pyawa-abi/src/lib.rs）。
  * 次版本 2：fs 域 vtable 表尾追加 stat_times 槽（AB-41：旧宿主仍可用）。
- * 次版本 3：clock 域 vtable 表尾追加 localtime／strftime／mktime 三槽（同上，追加式）。 */
+ * 次版本 3：clock 域 vtable 表尾追加 localtime／strftime／mktime 三槽（同上，追加式）。
+ * 次版本 4：`AB-63` 类型标签追加 `PA_TBYTES`。
+ * 次版本 5：`AB-64` 实例并发边界（宿主契约，无 ABI 面变化）。
+ * 次版本 6：`AB-65`／`AB-66` 每实例内存配额两函数（追加式）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 4u
+#define PA_ABI_MINOR 6u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -89,7 +92,17 @@ size_t pa_abi_size(void);
 int pa_create(const pa_host *host, pa_state **out);
 int pa_destroy(pa_state *state);
 int pa_interrupt(pa_state *state);
-const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
+const char *pa_errmsg(pa_state *state);
+
+/* ---- 每实例内存配额（AB-65／AB-66；`OM-41`；ABI-adjacent、发布前定）----
+ *
+ * AB-65：`limit == 0` 取消限制；活分配字节超过上限时脚本里抛**可捕获的** `MemoryError`
+ *        （执行器在指令边界派发；**不是** abort／panic）。抛错后水位抬高一档
+ *        `slack = max(64 KiB, limit/16)`（处理块还能分配），继续增长则每 `slack` 字节再抛一次。
+ * AB-66：`out` 必须可写（`NULL` ⇒ `PA_ERR_INVALID`）；宿主用它做指标／看门狗。
+ */
+int pa_set_memory_limit(pa_state *state, uint64_t limit);
+int pa_memory_used(pa_state *state, uint64_t *out);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
 
 /* ---- 执行（§15.3；AB-5②／AB-7／AB-60／AB-61）----
  *
