@@ -113,6 +113,21 @@ impl HostFunction {
     pub fn arity(&self) -> usize {
         self.params.len()
     }
+
+    /// 宿主 C 函数（`AB-69` 的签名按它查）。
+    pub fn function_pointer(&self) -> PaHostFn {
+        self.function
+    }
+
+    /// 注册时拷贝的形参（含 `AB-27`／`AB-52` 的 flags；边界检查的个数规则用）。
+    pub fn params(&self) -> &[HostParam] {
+        &self.params
+    }
+
+    /// 注册名（错误消息用）。
+    pub fn host_name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// 从一个 C 字符串读一份 owned 文本（`NULL` ⇒ `None`）。**有界**：最多读 `limit` 字节。

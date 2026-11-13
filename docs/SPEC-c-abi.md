@@ -384,6 +384,8 @@
 | `pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` | — | 往宿主模块装函数（`AB-67`）；签名必须同时给（`AB-25`／`AB-51`） |
 | `pa_module_setconst(st, module, name)` | — | 往宿主模块装常量（`AB-67`）；值取自**栈顶**并消费 |
 | `pa_module_addsubmodule(st, parent, name, pa_module *out)` | — | 在宿主模块下建子模块（`AB-67`）；登记 `sys.modules["<parent>.<name>"]` 与父属性 |
+| `pa_ty_*`（9 个构造：`runtime_tag`／`named`／`list_of`／`dict_of`／`optional`／`union`／`callable`／`var`／`apply`） | — | 建 `AB-69` 的类型表达式句柄（每实例、不透明）；失败 ⇒ `NULL` ＋ `pa_errmsg` |
+| `pa_func_set_signature(st, fn, params, n, ret, tparams, nt, flags)` | — | 给已注册宿主函数声明签名（`AB-69`）；注册后、任何执行前；不符 ⇒ `PA_ERR_INVALID`；声明后边界核参数／返回（脚本侧 `TypeError`，归责插件） |
 | `pa_newtype(st, name, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`），故**必须**提供子类分派槽位与实例字典声明 |
 | `pa_setcapability(st, domain, impl)` | — | 注册能力域实现（`AB-32`／`AB-33`） |
 | `pa_setcapability_async(st, domain, cls)` | — | 异步分类声明；**缺失即注册失败**（`AB-34`） |
@@ -477,38 +479,57 @@
   宿主注入函数时**一并**声明签名。**类型表达式用不透明句柄**（不是扁平标签 ✗）：
 
   ```
-  typedef struct pa_ty_s *pa_ty;
-  pa_ty pa_ty_runtime_tag(int tag);            // AB-63 的取值域（v1 全兼容 ✓）
-  pa_ty pa_ty_named(const char *name);         // 具名／宿主注册类型（同一性＝类型对象 ✓）
-  pa_ty pa_ty_list_of(pa_ty elem);
-  pa_ty pa_ty_dict_of(pa_ty k, pa_ty v);
-  pa_ty pa_ty_optional(pa_ty t);               // T?
-  pa_ty pa_ty_union(const pa_ty *ts, size_t n);
-  pa_ty pa_ty_callable(const pa_ty *params, size_t n, pa_ty ret);
-  pa_ty pa_ty_var(const char *name);           // 类型参数 T（配 tparams）
-  pa_ty pa_ty_apply(pa_ty base, const pa_ty *args, size_t n);  // 宿主泛型类型 Result[T]
-  void  pa_func_set_signature(pa_fn f, const pa_ty *params, size_t n, pa_ty ret,
-                              const pa_ty *tparams, size_t ntparams, unsigned flags);
+  typedef struct pa_ty_s *pa_ty;              /* 每实例不透明句柄；pa_destroy 后失效（AB-18） */
+  pa_ty pa_ty_runtime_tag(pa_state *st, int tag);       /* AB-63 的取值域 */
+  pa_ty pa_ty_named(pa_state *st, const char *name);    /* 具名／宿主注册类型（同一性＝类型对象） */
+  pa_ty pa_ty_list_of(pa_state *st, pa_ty elem);
+  pa_ty pa_ty_dict_of(pa_state *st, pa_ty k, pa_ty v);
+  pa_ty pa_ty_optional(pa_state *st, pa_ty t);          /* T? */
+  pa_ty pa_ty_union(pa_state *st, const pa_ty *ts, size_t n);
+  pa_ty pa_ty_callable(pa_state *st, const pa_ty *params, size_t n, pa_ty ret);
+  pa_ty pa_ty_var(pa_state *st, const char *name);      /* 类型参数 T（配 tparams） */
+  pa_ty pa_ty_apply(pa_state *st, pa_ty base, const pa_ty *args, size_t n); /* 宿主泛型 Result[T] */
+  int pa_func_set_signature(pa_state *st, pa_host_fn f, const pa_ty *params, size_t n,
+                            pa_ty ret, const pa_ty *tparams, size_t ntparams, unsigned flags);
   ```
 
-  约束：
-  - **与函数同一时刻给** ✗（注入时声明；禁止先注入后补签名——否则检查器与时序耦合 ✓ 不可查）；
-  - **不声明 ＝ 未标注** ✓（按 `object`、不检查 ✓，行为与今天一致 ✓）；
-  - **有标注调用方** ⇒ 调用点核对、不匹配**检查期报错** ✓（归责插件 ✓）；**无标注调用方** ⇒
-    边界**运行期检查** ✓（按 M4 的 `TS-*` 归责 ✓）；
-  - **宿主类型**：`pa_ty_named` 的同一性 ＝ **类型注册得到的那个类型对象** ✓（不按字符串 ✓）；
-    签名含宿主类型**不暴露内部** ✓（`CP-10`：只能调宿主显式注册的方法 ✓）；宿主类型的
-    **子类型关系由注册时声明** ✓（与 `DESIGN` §13-1 一致），**未声明即互不兼容** ✓；宿主泛型类型用 `pa_ty_apply` ✓；
-  - **泛型擦除口径**（沿用 `TS-35`／`TS-30` ✓）：**擦除类型身份** ✓ —— 运行期 `list[int]` 与 `list[str]`
-    同一类、`type(x)` 是 `list`、`isinstance(x, list[int])` ⇒ `TypeError`（与 CPython 一致 ✓）；
-    **但注解检查不擦除** ✓✓（`TS-47` 的插入点）—— 边界主要核身份 ✓，元素级检查按 M4 插入口径 ✓，
-    **不做 reified generics** ✗。
-  **状态**：**需要**（用户 2026-11-13 确认 ✓）；具体编码（`pa_ty` 生命周期／表归属／flags 位）与钩子族一起定 ✗（**未实现** ✗）。
+  **与用户草案的两处必要修正**（`ABI` 未发布 ⇒ 现在定最便宜 ✓）：
+  - `pa_ty` 的构造与 `pa_func_set_signature` 都**收 `pa_state *`**：句柄与签名是**按实例**存的
+    （`AB-64`），无 `state` 版无法满足；
+  - `pa_func_set_signature` **返回 `int` 状态码**（`AB-19`），不返回 `void`；`pa_ty_*` 构造失败返回
+    `NULL` ＋ `pa_errmsg`（与 `AB-58` 的"载荷指针"同口径）。
+  - `pa_fn` 在头文件里**不存在**（只有 `pa_host_fn`）⇒ 签名按 **`pa_host_fn` 函数指针**绑定；
+    **同一 C 函数可注册多次**（同实现同签名 ✓），声明一次覆盖全部。
 
+  约束：
+  - **与函数同一时刻给** ✓（v1 可执行口径）：必须在该函数**注册之后、任何执行之前**声明——
+    注册时记下执行序号，声明时序号必须未变；晚声明 ⇒ `PA_ERR_INVALID` ✗（禁止先注入后补签名）；
+  - `params` 与注册时的 `pa_sig.nparams` **一一对应**：**类型**只在 `pa_ty` 里；**可选／变参的
+    个数语义**仍由 `pa_sig` 的 `PA_PARAM_HAS_DEFAULT`／`PA_PARAM_VARARGS` 表达 ✓；
+    `flags` v1 **保留**（必须 0）；
+  - **不声明 ＝ 未标注** ✓（按 `object` 处理、**不检查** ✓，行为与今天一致 ✓）；
+  - **边界运行期检查** ✓：声明后调用边界核**参数**（个数／类型）与**非 NULL 返回类型**；不符 ⇒
+    **脚本侧可捕获的 `TypeError`**（消息带宿主函数名 ⇒ **归责插件** ✓）。**检查期调用点检查**
+    （有标注插件在编译期抓错）**仍待** ✗（下一轮，需把宿主签名表接进 `TS-47` 的调用点检查）。
+  - **宿主类型**：`pa_ty_named` 的同一性 ＝ **类型注册得到的那个类型对象** ✓（不按字符串 ✓；
+    解析时机＝声明签名时 ⇒ 宿主类型须先 `pa_newtype` ✓）；签名含宿主类型**不暴露内部** ✓
+    （`CP-10`：只能当不透明句柄传；边界只核类型对象身份 ✓）；
+  - **泛型擦除口径**（沿用 `TS-35`／`TS-30` ✓）：`list[int]`／`dict[K,V]`／`pa_ty_apply` 的宿主
+    泛型在**边界只核容器／基底身份**，元素类型**不核** ✓（运行期 `isinstance(x, list[int])` 仍按
+    `TS-35` 与 CPython 一致报 `TypeError` ✓）；**注解检查不擦除**（`TS-47` 插入点）✓；
+    **不做 reified generics** ✗；
+  - **类型变量**（`pa_ty_var`）：同一次调用的同名变量**统一**（首个实参定下类型，后续须相容）；
+    `tparams` 里必须声明参数里用到的变量（未声明 ⇒ `TypeError` 归责插件）✓；
+  - `pa_ty_callable` v1 只核"可调用"（`PA_TFUNCTION` 标签），形参／返回类型暂不核（如实 ✗）。
+
+  **实现 ✓（round 272，部分）**：数据模型 ＋ 9 个构造 API ＋ `pa_func_set_signature` ＋ 边界
+  参数／返回检查已落地；验收 `crates/pyawa-abi/tests/host_signature.rs`（9 例：参数类型与归责消息／
+  未声明不检查／宿主不透明类型／可选＋变参 flags／泛型擦除／返回类型／生命周期窗口／参数校验／
+  `pa_ty` 构造失败面）。**检查期那一半 ✗ 尚未实现**。
 
 ## 16. 尚未写出（本规格自己缺的节）
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**一处待实现**（缺口 ✓）：`AB-69` 宿主函数签名（`pa_ty` 句柄版）—— **需要已定** ✓（用户 2026-11-13），具体编码（`pa_ty` 生命周期／表归属／flags 位）待落 ✗，**尚未实现** ✗；`AB-67`／`AB-68` **已实现** ✓（round 271／270）。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
+**一处部分实现**（缺口 ✓）：`AB-69` 宿主函数签名（`pa_ty` 句柄版）—— 数据模型＋边界运行期检查 **已实现 ✓（round 272）**；**检查期调用点检查 ✗**（需把宿主签名表接进 `TS-47`，下一轮）。`AB-67`／`AB-68` **已实现** ✓（round 271／270）。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。

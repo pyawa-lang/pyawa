@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`eda0a2a6`（本笔前；round 271 钩子族② AB-67 宿主模块注入落地：pa_add_host_module／pa_module_*＋8 例验收；下轮 AB-69 pa_ty 宿主函数签名）
+- **HEAD**：`3d42e11d`（本笔前；round 272 钩子族③-A `AB-69` 签名数据模型＋边界运行期检查落地（9 例）；下轮检查期调用点检查收口 AB-69）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：按 PLAN 收口后次序 —— ① 每实例内存配额 **✓ round 266** → ② 威胁模型与宿主责任 **✓ round 267（DESIGN §7.5）** → ③ `io.open`／`pathlib` 文件面 **✓ round 268** → ④ 通用参考宿主 **✓ round 269**；四项全落地 ✓。⑤ ABI **暂不发布**（等用户决定，不自行发布）。**新工单＝钩子族**（PLAN 2026-11-13）：AB-68 **✓ round 270** → AB-67 **✓ round 271** → AB-69；memory 深水区两族（difflib／test_gc）留作独立专项 ✗
 - **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
@@ -35,6 +35,6 @@
 - **改编译器后清缓存**：`find target Lib -name __pyawa__ -prune -exec rm -rf {} +`
   ＋ `find target/upstream -name '*.pyac' -delete`
 - **判据①**：`tools/lib_import_ratio.py`（先重建 conformance 二进制；±1 报区间；禁止 `| tail`）
-- **ABI**：`PA_ABI_VERSION`＝**1.8**（追加式：… → `AB-67` 宿主模块注入；`AB-41`）；指令集版本 **2**
+- **ABI**：`PA_ABI_VERSION`＝**1.9**（追加式：… → `AB-69` `pa_ty` 签名；`AB-41`）；指令集版本 **2**
 - **编号现最大**：`BC-65`／`TS-50`／`T-BC-22`／`CP-39`／`CX-22`／`P3-42`（新增前先查已定义；墓碑算定义）
 - **闸门**：`&&` 只看 exit code；`git commit -F - -- <显式路径>`；slowcheck 十一项全绿才提交

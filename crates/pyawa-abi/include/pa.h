@@ -20,9 +20,10 @@
  * 次版本 5：`AB-64` 实例并发边界（宿主契约，无 ABI 面变化）。
  * 次版本 6：`AB-65`／`AB-66` 每实例内存配额两函数（追加式）。
  * 次版本 7：`AB-68` `pa_setpath`（追加式）。
- * 次版本 8：`AB-67` 宿主模块注入四函数（追加式）。 */
+ * 次版本 8：`AB-67` 宿主模块注入四函数（追加式）。
+ * 次版本 9：`AB-69` 宿主函数签名（`pa_ty` 句柄版，追加式）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 8u
+#define PA_ABI_MINOR 9u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -261,6 +262,33 @@ int pa_module_addfunction(pa_state *state, pa_module module, const char *name,
 int pa_module_setconst(pa_state *state, pa_module module, const char *name);
 int pa_module_addsubmodule(pa_state *state, pa_module parent, const char *name,
                            pa_module *out);
+
+/* ---- 宿主函数签名（`AB-69`；`pa_ty` 句柄版；ABI-adjacent、发布前定）----
+ *
+ * 类型表达式是**不透明句柄** `pa_ty`（不是扁平标签 ✗）：构造 API 见下；句柄**按实例**存，
+ * `pa_destroy` 后失效（`AB-18`）。构造失败 ⇒ 返回 `NULL` 并经 `pa_errmsg` 说明。
+ *
+ * `pa_func_set_signature`：给**已注册**的宿主函数声明签名；返回状态码（`AB-19`）。
+ * **与函数同一时刻给**：必须在该函数注册之后、**任何执行之前**（晚声明 ⇒ `PA_ERR_INVALID`）。
+ * `params` 与注册时 `pa_sig.nparams` 一一对应（类型只在 `pa_ty`；可选／变参的**个数**语义仍由
+ * `pa_sig` 的 flags 表达）；`flags` v1 保留（必须 0）；不声明 ⇒ 不检查（与今天一致）。
+ * 声明后：调用边界核**参数**（及非 NULL 返回类型）⇒ 不符是**脚本侧可捕获的 `TypeError`**
+ * （消息归责插件）。**泛型擦除**（`TS-35`）：`list[T]`／`dict[K,V]`／宿主泛型只核容器／基底身份，
+ * 元素类型不核 ✓（不做 reified generics ✗）。
+ */
+typedef struct pa_ty_s *pa_ty;
+pa_ty pa_ty_runtime_tag(pa_state *state, int tag);
+pa_ty pa_ty_named(pa_state *state, const char *name);
+pa_ty pa_ty_list_of(pa_state *state, pa_ty elem);
+pa_ty pa_ty_dict_of(pa_state *state, pa_ty key, pa_ty value);
+pa_ty pa_ty_optional(pa_state *state, pa_ty inner);
+pa_ty pa_ty_union(pa_state *state, const pa_ty *members, size_t count);
+pa_ty pa_ty_callable(pa_state *state, const pa_ty *params, size_t count, pa_ty ret);
+pa_ty pa_ty_var(pa_state *state, const char *name);
+pa_ty pa_ty_apply(pa_state *state, pa_ty base, const pa_ty *arguments, size_t count);
+int pa_func_set_signature(pa_state *state, pa_host_fn function,
+                          const pa_ty *params, size_t nparams, pa_ty ret,
+                          const pa_ty *tparams, size_t ntparams, unsigned flags);
 int pa_call(pa_state *state, int nargs, int nresults);
 int pa_pcall(pa_state *state, int nargs, int nresults);
 int pa_error(pa_state *state, const char *msg);
