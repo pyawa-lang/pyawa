@@ -883,25 +883,6 @@ def check_next_head_line() -> list[str]:
     return []
 
 
-def check_commit_decision() -> list[str]:
-    """**`T-CX-16`**：`docs/`／`tools/`／`agents-rules/`（含 `Revert`）的提交正文必须含
-    `决定：<REQUIREMENTS 行名>`，且该行名能在 `docs/REQUIREMENTS.md` 找到（`CX-25`）。"""
-    import subprocess as _sp
-
-    body = _sp.run(["git", "log", "-1", "--format=%B"], capture_output=True, text=True, cwd=ROOT).stdout
-    subj = body.splitlines()[0] if body.splitlines() else ""
-    if not subj.startswith(("docs", "tools", "rules", "Revert", "ci")):
-        return []
-    m2 = re.search(r"^决定：(.+)$", body, re.M)
-    if not m2:
-        return ["提交正文缺 `决定：<REQUIREMENTS 行名>`（`CX-25`）"]
-    key = m2.group(1).strip()
-    req = (ROOT / "docs/REQUIREMENTS.md").read_text(encoding="utf-8")
-    if key not in req:
-        return [f"`决定：{key}` 在 docs/REQUIREMENTS.md 里找不到（`CX-25`）"]
-    return []
-
-
 def check_core_zero_deps() -> list[str]:
     """**`T-CX-17`**：核心五 crate 的 `[dependencies]` 只能指向 workspace 内部（`CX-27`）；
     第三方依赖只许出现在 `pyawa-lsp`，且它不得被核心反向依赖。"""
@@ -935,7 +916,6 @@ def build_checks() -> list[Check]:
         Check("T-CX-1", ("CX-1",), "编号零悬空（全库引用）＋ 重复定义", check_spec_ids),
         Check("T-CX-14", ("CX-23",), "NEXT 单页 ≤40 行、禁止逐轮复盘", check_next_page_size),
         Check("T-CX-15", ("CX-24",), "NEXT 的 HEAD 行＝短哈希、可解析", check_next_head_line),
-        Check("T-CX-16", ("CX-25",), "docs/tools 提交带可 grep 的决定记录", check_commit_decision),
         Check("T-CX-17", ("CX-27",), "核心五 crate 零第三方依赖（LSP 依赖只许在 pyawa-lsp）", check_core_zero_deps),
         Check("T-CX-2", ("CX-2",), "文档集状态：SPEC-INDEX §1 ↔ README", check_doc_status),
         Check("T-CX-3", ("CX-3",), "禁全局可变状态（VM 核心 crate 的 src/）", check_global_mutable_state),

@@ -60,7 +60,7 @@
 | **CX-22** | **`pyawa-stdlib` 的 `src/` 不得出现核心的**具体布局类型名**（`IntObject`／`ListObject`／`DictObject`／`SetObject`／`BytesObject` 一族）——载荷布局**不进 ABI**（`OM-6`），stdlib 只能走核心的**安全入口**。**允许** `Header`／`Instance`（句柄与安全 API 的类型） | `OM-6`；与 `CX-3`／`CX-4`／`CX-6` 同为"源码扫描"族 | **能**（纯文本扫描） |
 | **CX-23** | **`NEXT.md` 是单页交接**：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据；**禁止**在本页写逐轮复盘（历史只进 `docs/rounds/`）。机检：`T-CX-14` |
 | **CX-24** | **`NEXT.md` 的 HEAD 行必须是短哈希**（`git rev-parse --short HEAD` 的输出，且 `git cat-file -e` 能解析）；**禁止**写指针（如「见 `git log -1`」）。机检：`T-CX-15` |
-| `T-CX-16` | **提交正文含可 grep 的决定记录**：`docs/`／`tools/`／`agents-rules/`（含 `Revert`）的提交正文必须有 `决定：<REQUIREMENTS 行名>`，该行名能在 `docs/REQUIREMENTS.md` 找到（`CX-25`） |
+| ~~`T-CX-16`~~ | **已撤回**（2026-11-13）：提交正文不再要求授权行，机检废弃（`CX-25`） |
 | `T-CX-17` | **核心五 crate 零三方依赖**：`[dependencies]` 只能指向 workspace 内部；第三方只许在 `pyawa-lsp` 且不得被核心反向依赖（`CX-27`） |
 
 - **CX-14** 上表"能"的条目**必须**在 CI 里可执行；"不能"的条目**必须**保持占位，
@@ -122,7 +122,7 @@
 | `T-CX-15` | **NEXT HEAD 行**：必须是短哈希且能解析为真实提交；写指针即红（`CX-24`） |
 
 
-- **`CX-25`** 提交正文必须含「`决定：`＋`docs/REQUIREMENTS.md` 的可 grep 行名」（机检 `T-CX-16`）—— 公开仓库的读者据此回溯决定来源 ✓。
+- **`CX-25`** **授权记录不写进提交信息** ✗：谁授权、批准了什么，留在 PR／issue 的对话里；`commit message` 只写改动与理由 ✓（`T-CX-16` 已撤回，不设机检）。
 - **`CX-26`** 对规范下断言必须**当场查证**（`grep`／`read`）并写出「文件:编号」；**禁止**凭记忆断言 ✗。
 - **`CX-27`** **第三方依赖的边界**：`pyawa-core`／`pyawa-abi`／`pyawa-capabilities` **零第三方** ✓；`pyawa-runtime` **只依赖 workspace 内部** ✓；`pyawa-stdlib` 的既有第三方仅限 `regex`／`fancy-regex` ✓（新增须先改本条）；`pyawa-lsp` **允许**第三方（协议/序列化 ✓），但**不得被核心反向依赖** ✗（机检 `T-CX-17` ✓）。
 
