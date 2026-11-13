@@ -48,6 +48,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq valgrind gcc
           rustc --version && cargo --version
+      # slowcheck 的第 5 项（check.py 的 M3-COVERAGE ④⑤）依赖 conformance 测试产出的
+      # target/conformance/{self-check.md,report.md}；本地有残留，CI 全新 clone 必须先生成
+      - name: 生成 conformance 报告（供 slowcheck 第 5 项使用）
+        run: tools/cargo.sh test --release -p pyawa-abi --test conformance
       - name: slowcheck（11 项：含基准闸＝性能回退 ＋ memcheck 子集）
         run: tools/slowcheck.sh --release
 
@@ -65,6 +69,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq valgrind gcc
+      # slowcheck 的第 5 项（check.py 的 M3-COVERAGE ④⑤）依赖 conformance 测试产出的
+      # target/conformance/{self-check.md,report.md}；本地有残留，CI 全新 clone 必须先生成
+      - name: 生成 conformance 报告（供 slowcheck 第 5 项使用）
+        run: tools/cargo.sh test --release -p pyawa-abi --test conformance
       - name: slowcheck
         run: tools/slowcheck.sh --release
       - name: 全量内存棘轮（memdangle_survey）
