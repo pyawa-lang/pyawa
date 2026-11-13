@@ -213,6 +213,17 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
         ),
     ),
     ("T-CX-13", "crates/pyawa-stdlib/src/sys_module.rs", leak_a_layout_type),
+    (
+        "T-CX-19",
+        "crates/pyawa-abi/include/pa.h",
+        lambda path: path.write_text(
+            # 头文件里声明一个规格从未提及的函数 ⇒ `pa.h ⊆ 规格` 破（CX-29）
+            path.read_text(encoding="utf-8").rstrip()
+            + "\n/* 自检注入：规格未提及的声明 ⇒ T-CX-19 必须红 */\n"
+            + "int pa_self_test_unmentioned(pa_state *state);\n",
+            encoding="utf-8",
+        ),
+    ),
 )
 
 

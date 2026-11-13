@@ -42,7 +42,7 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 | `CX-21` | 已实现 | `T-CX-12`：**持引用字段必须被 `traverse`／`clear` 覆盖**（`OM-12`）；**Rust 侧承担**，含"新增字段漏项必须红"的注入用例（不设 `check.py` 扫描，同 `CX-12` 的先例） |
 | `CX-22` | 已实现 | `T-CX-13`：**`pyawa-stdlib/src/` 不得出现载荷布局类型名**（`BoolObject`／`IntObject`／`FloatObject`／`StrObject`／`BytesObject`／`ListObject`／`TupleObject`／`DictObject`／`SetObject`／`SliceObject`）；**允许** `Header`／`Instance`。名单与核心的 `pub struct` 声明**互相钉住**（核心改名 ⇒ 本检查自己变红，不会悄悄放过）；`selftest.py` 有红例（塞真代码里的类型名会红、写在注释里不会） |
 
-对应验收编号：`T-CX-1`…`T-CX-13` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
+对应验收编号：`T-CX-1`…`T-CX-19` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
 与本目录同源，实现处也是本目录。
 
 ## C ABI 的 M1 验收（`T-AB-1`／`MS-21`）

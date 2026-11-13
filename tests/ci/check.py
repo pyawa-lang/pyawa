@@ -52,6 +52,21 @@ FORBIDDEN_PLATFORM = (
 )
 FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
 
+#: `CX-29`：ABI 的**符号面**——cdylib 导出 ⊆ `pa.h` 声明 ⊆ `SPEC-c-abi` 提及；总数 ≤ `AB-1` 的预算。
+#: `pyawa-abi` 与 `pyawa-runtime` 两个 crate 的 `#[no_mangle] extern "C"` 都算"导出"：前者是 cdylib，
+#: 后者是 `paL_newstate`（`§15.4` 指定由组合根实现）。
+ABI_HEADER = "crates/pyawa-abi/include/pa.h"
+ABI_SPEC = "docs/SPEC-c-abi.md"
+ABI_EXPORT_SOURCE_DIRS = ("crates/pyawa-abi/src", "crates/pyawa-runtime/src")
+ABI_FUNCTION_BUDGET = 120
+#: **过渡清单**（`PLAN-milestones.md` §12.4 #8 的**待裁**影子导出）：补进头／规格 或 去掉导出。
+#: 只允许点名这一个；**新增影子导出**、或**这一条修好后忘了删**，`T-CX-19` 都红（棘轮：不得更差）。
+ABI_PENDING_SHADOW_EXPORTS = frozenset({"pa_set_program_filename"})
+ABI_HEADER_DECL = re.compile(r"\b(paL?_[a-z0-9_]+)\s*\([^;{]*\);")
+ABI_SPEC_MENTION = re.compile(r"\b(paL?_[a-z0-9_]+)\s*\(")
+ABI_NO_MANGLE = re.compile(r"#\[(?:unsafe\()?no_mangle(?:\))?\]")
+ABI_EXPORT_FN = re.compile(r'pub\s+(?:unsafe\s+)?extern\s+"C(?:-unwind)?"\s+fn\s+(paL?_[a-z0-9_]+)')
+
 #: `CX-22`：值**载荷**的布局类型（`*Object` 一族）。名单**必须**都能在核心里找到声明——
 #: 改名的类型会让本检查自己变红，而不是悄悄放过（见 `check_stdlib_layout_isolation`）。
 LAYOUT_TYPES = (
@@ -800,6 +815,58 @@ def check_fake_gaps() -> list[str]:
     return failures
 
 
+def check_abi_export_surface() -> list[str]:
+    """**`T-CX-19`**：ABI 符号面三面一致（`CX-29`）。
+
+    - **导出 ⊆ `pa.h` 声明**：`#[no_mangle] extern "C"` 的函数名必须都能在头文件找到声明
+      （禁止"影子导出"；当前唯一过渡项是 `PLAN-milestones.md` §12.4 #8 的待裁项，显式列出）；
+    - **`pa.h` ⊆ 规格提及**：头文件里每个函数名都必须在 `SPEC-c-abi.md` 里出现
+      （权威清单是规格，头文件只是它的落地）；
+    - **预算**：导出与声明总数都不超过 `AB-1` 的 120。
+
+    只扫源码与文本，不构建 cdylib（`AB-6` 的清单规则是纯符号名比对）。
+    """
+    failures: list[str] = []
+    header_path = ROOT / ABI_HEADER
+    if not header_path.is_file():
+        return [f"{ABI_HEADER} 不存在"]
+    declared = set(ABI_HEADER_DECL.findall(header_path.read_text(encoding="utf-8")))
+    exported: set[str] = set()
+    for directory in ABI_EXPORT_SOURCE_DIRS:
+        for path in sorted((ROOT / directory).rglob("*.rs")):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                if ABI_NO_MANGLE.search(line) is None:
+                    continue
+                # 属性与函数签名之间可能隔几行（注释／其它属性）。
+                tail = "\n".join(lines[index : index + 6])
+                matched = ABI_EXPORT_FN.search(tail)
+                if matched is not None:
+                    exported.add(matched.group(1))
+    if not exported:
+        return ["一个 `#[no_mangle] extern \"C\"` 导出都没解析到——正则失效？"]
+
+    shadow = exported - declared
+    for name in sorted(shadow - ABI_PENDING_SHADOW_EXPORTS):
+        failures.append(f"{ABI_HEADER}：导出 {name!r} 不在头文件里（禁止影子导出）")
+    stale = ABI_PENDING_SHADOW_EXPORTS - shadow
+    for name in sorted(stale):
+        failures.append(
+            f"`T-CX-19` 的待裁清单已过期：{name!r} 现在已在 `pa.h` 里"
+            "（`PLAN-milestones.md` §12.4 #8 修好后请删掉过渡清单里的这一项）"
+        )
+
+    mentioned = set(ABI_SPEC_MENTION.findall((ROOT / ABI_SPEC).read_text(encoding="utf-8")))
+    for name in sorted(declared - mentioned):
+        failures.append(f"{ABI_HEADER} 声明了 {name!r}，但 {ABI_SPEC} 没有提及（权威清单缺项）")
+
+    if len(exported) > ABI_FUNCTION_BUDGET:
+        failures.append(f"导出 {len(exported)} 个 > `AB-1` 的预算 {ABI_FUNCTION_BUDGET}")
+    if len(declared) > ABI_FUNCTION_BUDGET:
+        failures.append(f"`pa.h` 声明 {len(declared)} 个 > `AB-1` 的预算 {ABI_FUNCTION_BUDGET}")
+    return failures
+
+
 def check_placeholder_ledger(implemented: set[str], defined: set[str]) -> list[str]:
     landing = parse_landing()
     ledger = parse_ledger()
@@ -946,6 +1013,12 @@ def build_checks() -> list[Check]:
         Check("T-CX-15", ("CX-24",), "NEXT 的 HEAD 行＝短哈希、可解析", check_next_head_line),
         Check("T-CX-17", ("CX-27",), "核心五 crate 零第三方依赖（LSP 依赖只许在 pyawa-lsp）", check_core_zero_deps),
         Check("T-CX-18", ("CX-28",), "文档二级章节编号唯一且从 1 连续", check_section_numbering),
+        Check(
+            "T-CX-19",
+            ("CX-29",),
+            "ABI 符号面：导出 ⊆ pa.h ⊆ 规格（含 ≤120 预算）",
+            check_abi_export_surface,
+        ),
         Check("T-CX-2", ("CX-2",), "文档集状态：SPEC-INDEX §1 ↔ README", check_doc_status),
         Check("T-CX-3", ("CX-3",), "禁全局可变状态（VM 核心 crate 的 src/）", check_global_mutable_state),
         Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 ＋ C 层模块 crate 的 src/）", check_platform_dependencies),

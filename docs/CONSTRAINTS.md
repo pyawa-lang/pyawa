@@ -121,12 +121,14 @@
 | `T-CX-13` | **stdlib 布局隔离**：`crates/pyawa-stdlib/src/` 不出现具体布局类型名（`*Object` 一族）；`Header`／`Instance` **允许**（`CX-22`） |
 | `T-CX-14` | **NEXT 单页上限**：`NEXT.md` ≤ 40 行且最长行 ≤ 4000 字符；超限即红（`CX-23`） |
 | `T-CX-15` | **NEXT HEAD 行**：必须是短哈希且能解析为真实提交；写指针即红（`CX-24`） |
+| `T-CX-19` | **ABI 符号面**：导出 ⊆ `pa.h` 声明 ⊆ 规格提及；总数 ≤ 120（`CX-29`） |
 
 
 - **`CX-25`** **授权记录不写进提交信息** ✗：谁授权、批准了什么，留在 PR／issue 的对话里；`commit message` 只写改动与理由 ✓（`T-CX-16` 已撤回，不设机检）。
 - **`CX-26`** 对规范下断言必须**当场查证**（`grep`／`read`）并写出「文件:编号」；**禁止**凭记忆断言 ✗。
 - **`CX-27`** **第三方依赖的边界**：`pyawa-core`／`pyawa-abi`／`pyawa-capabilities` **零第三方** ✓；`pyawa-runtime` **只依赖 workspace 内部** ✓；`pyawa-stdlib` 的既有第三方仅限 `regex`／`fancy-regex` ✓（新增须先改本条）；`pyawa-lsp` **允许**第三方（协议/序列化 ✓），但**不得被核心反向依赖** ✗（机检 `T-CX-17` ✓）。
 - **`CX-28`** 文档的二级章节编号（`## N. `）**在本文件内唯一且从 1 连续** ✓；子节标题（`## 3b.`／`## 5.9`）不计入 ✗；`docs/rounds/` 为历史台账不扫描 ✓（机检 `T-CX-18`）。
+- **`CX-29`** ABI 的**符号面必须三面一致**：`#[no_mangle] extern "C"` 的**导出符号集合** ⊆ `pa.h` **声明集合** ⊆ `SPEC-c-abi.md` **提及集合**；导出与声明的总数都**不得超过** `AB-1` 的预算 **120**。扫描面：`crates/pyawa-abi/src/` ＋ `crates/pyawa-runtime/src/`（`paL_newstate` 按 `§15.4` 由组合根实现）＋ `crates/pyawa-abi/include/pa.h` ＋ `docs/SPEC-c-abi.md`。**禁止影子导出**（`AB-6`）。**唯一过渡项**：`PLAN-milestones.md` §12.4 #8 的**待裁**项 `pa_set_program_filename` 显式列入过渡清单——**棘轮**：新增影子导出立即红；该项修好后不删过渡清单同样红 ✓（机检 `T-CX-19`）。
 
 
 ---

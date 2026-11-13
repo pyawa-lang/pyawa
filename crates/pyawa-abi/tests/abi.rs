@@ -1554,6 +1554,18 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
         "类型的导出：{text}"
     );
     assert!(text.contains("__dict__: dict[str, object]"), "实例字典声明：{text}");
+    // **逐项投影 ＋ 纯函数**（`AB-53`／`AB-54`）：导出必须由**注册账本**遍历而成，
+    // 不是"只覆盖第一条样例"；同一账本两次导出逐字节相同（可重复构建）。
+    let again = export::pyi(state);
+    assert_eq!(text, again, "`AB-53`：导出是可重复的纯投影");
+    let declarations = text
+        .lines()
+        .filter(|line| line.starts_with("def ") || line.starts_with("class "))
+        .count();
+    assert_eq!(
+        declarations, 2,
+        "两条注册（1 函数 ＋ 1 类型）都必须逐项出现在导出里：{text}"
+    );
     // `AB-54`：导出是**同一份数据**的投影 ⇒ 名字与运行期注册的一模一样
     // SAFETY: state 存活。
     unsafe {
