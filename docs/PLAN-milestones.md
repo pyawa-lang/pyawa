@@ -411,6 +411,9 @@
 > 5. **C1 日常面四连**：`json.load(open(f))` ✗／`defaultdict` ✗／`match` 同行 suite ✗／`urllib.request` ✗。**（2026-11-13 已全部转绿 ✓）**
 > 5b. **真实脚本冒烟抓到的 3 个库缺口**（2026-11-13，10 个真实脚本 7/10 ✗）：① `pathlib.Path.write_text/read_text` ✗（走 `io.open`，`_io` 真文件面未接线）；② `csv` 模块缺 ✗（`CM-` 尾）；③ `subprocess` 的真执行 ✗（`_posixsubprocess.fork_exec` 未接线、`capture_output` 的 fd 处理报 `open: path should be string`）。
 >   —— 语言面已无问题 ✓（`match`／`except*`／`\N{…}`／socketpair／argparse／re 全过 ✓）；**这些是库面长尾** ✗，按 `CM-14` fan-in 取。
+>   **三者的定位要分开 ✗（2026-11-13，按 `DESIGN` §1 的定位对齐）**：① `io.open`／`pathlib` 文件面 = **脚本相关，必修** ✓（脚本读写文件走宿主授予的 `fs` 能力 ✓）；② `csv` = **低优先**（宿主可提供／脚本可手写 ✓）；③ `subprocess` = **非目标，不修** ✗（沙箱禁 fork ✓；`proc` 域须宿主显式授予，`DESIGN` §1 已列为非目标 ✓ —— **不是缺陷** ✓）。
+>   ⇒ **「用真实脚本 7/10」是 CPython 替代品的尺子** ✗，**不是本项目的尺子** ✓；本项目的尺子是「**宿主能否安全地跑不可信脚本脚本**」✓（易嵌入 ✓／隔离 ✓／沙箱 ✓／体量 ✓／语言语义 ✓）。
+
 
 > 6. **C2 冷门语义**：`\N{…}`／`except*`／async 推导式／PEP 695／`import *`／下标删除 —— 按 `MS-19` 判据补充**必须修** ✗。
 > 7. **全量内存棘轮**（阶段边界做一次）：全量 valgrind（分批）＋ 全量套件 memdangle ⇒ 记基线 ＋ 「不得更差」。
