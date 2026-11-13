@@ -60,9 +60,19 @@
 |---|---|---|---|---|---|
 | round 88 首测（修 `filter` 前） | **5**（`test_itertools`／`test_platform`／`test_random`／`test_urlparse`／`test_webbrowser`） | 3 | 35 | 271 | 83 |
 | round 88 修 `filter`＋`getrandbits` 后 | **1**（只剩 `test_itertools.test_issue30347_2` 的 groupby 可重入 ✗） | 3 | 35 | 273 | 85 |
-| round 89 修 `groupby` 键双持有后 | **0** ✅（硬门①首次达成） | 3 | 35 | 273 | 86 |
+| round 89 修 `groupby` 键双持有后 | **0** ✅（硬门①首次达成，当时套件覆盖面较小） | 3 | 35 | 273 | 86 |
+| **round 261 全量棘轮复测**（2026-11-13 @ `376856f7`，jobs=4，timeout=90） | **3**（`test_difflib`／`test_gc`／`test_io`）✗ | 7 | 70 | 266 | 49（syntax 2） |
+
 
 > memory 类判定与"清零"口径见 §1／§2；**只统计签名命中，不把语义失败算进来**。
+
+> **round 261 的新事实**：三条 memory 命中经 **A/B 旧树二进制**（`target/pyawa_before_b256`）证明**既有**
+> （同一文件同样标记）⇒ 不是 round 257–260 的回归；历史"0"是 round 89 的观测，之后套件能跑到更深的
+> 线程／GC 路径才暴露。**当前硬门① 未达**（3 ≠ 0）⇒ 以 **memory ≤ 3 为新棘轮基线**，下一轮起专项修：
+> ① `test_io`：`test_close_assert` 的局部类 `R` 在某线程用例处**二次 decref**（`对已释放对象 decref：R`）；
+> ② `test_difflib`：`HtmlDiff._tab_newline_replace` 一族 str 悬垂（GC 时序相关，单测单跑不复现）；
+> ③ `test_gc`：已知 `GCTogglingTests.test_bug1055820c` 段错误族（B3-2 已 A/B 证明既有 ✗）。
+
 
 ## 4. 泄漏基线（不是"零泄漏"）
 
@@ -73,8 +83,11 @@
 
 - 已有：`PYAWA_DANGLING=1`（悬垂检测）、`PYAWA_ZOMBIE_TRACE=1`（最早释放点）、`tools/memdangle_survey.py`
   （本文件 §2 第 1 条的可执行基线）。
-- **缺**：本机**没有 valgrind**、rust 工具链**只有 stable**（无 `-Zsanitizer`）⇒ ASan/valgrind 需先装工具链
-  或换 CI 环境；落地前 §2 第 2 条只能标记为"未测"。
+- **valgrind 已落地**（本地前缀 `target/valgrind/`，`tools/memcheck.sh --setup` 自举）⇒ §2 第 2 条可测 ✓。
+  **round 261 全量实测**：`tools/memcheck.sh --full --bin target/release/pyawa` ⇒ **410 个用例、累计 memory
+  error 0** ✓（5 个非零退出全是语料里**故意**的 `exit=1` 脚本：`name_error.py`／`matmul.py`／
+  `libtest_filter_*`；工具已改为把"非信号非零退出"与"内存问题"分开计 ✓）。
+- **缺**：rust 工具链只有 stable（无 `-Zsanitizer`）⇒ ASan 仍未测；valgrind 已覆盖。
 
 ## 6. 清零路线（按轮次，不给日历日期）
 

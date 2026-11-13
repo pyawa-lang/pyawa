@@ -54,7 +54,7 @@ mapfile -t CASES < <(find "$ROOT/tests/conformance" -name '*.py' 2>/dev/null | s
 [ "${#CASES[@]}" -eq 0 ] && { echo "找不到语料 .py ✗" >&2; exit 2; }
 if [ "$LIMIT" -gt 0 ] && [ "${#CASES[@]}" -gt "$LIMIT" ]; then CASES=("${CASES[@]:0:$LIMIT}"); fi
 
-errs=0; bad=0
+errs=0; bad=0; nonzero=0
 : > "$OUT"
 printf "file\terrors\tnote\n" >> "$OUT"
 for c in "${CASES[@]}"; do
@@ -65,7 +65,16 @@ for c in "${CASES[@]}"; do
   n=$(grep -oE 'ERROR SUMMARY: [0-9]+' "$log" | grep -oE '[0-9]+' | head -1)
   [ -z "${n:-}" ] && n=0
   note=""
-  [ "$rc" -ne 0 ] && { note="exit=$(echo $rc)"; bad=$((bad+1)); }
+  # **非零退出分两类**（第 261 轮）：`rc>=128`＝被信号打死（SIGSEGV／SIGABRT 等 ⇒ 真问题 ✗）；
+  # `1` 一类非零退出在**语料里是故意**的（`name_error.py` 就该抛 NameError 退出 1 ✓）⇒ 只记数、
+  # 不算"内存问题"（全量跑时否则会误报 5 例 ✗）。内存类错误仍由下面的 errors 判 ✓。
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -ge 128 ]; then
+      note="signal=$rc"; bad=$((bad+1))
+    else
+      note="exit=$rc"; nonzero=$((nonzero+1))
+    fi
+  fi
   if [ "$n" -gt 0 ] 2>/dev/null; then
     errs=$((errs+n)); bad=$((bad+1))
     note="$(grep -m1 -E 'Invalid |double free|uninitialised' "$log" | cut -c1-110)"
@@ -74,7 +83,7 @@ for c in "${CASES[@]}"; do
   rm -f "$log"
 done
 
-echo "memcheck：${#CASES[@]} 个用例 ｜ 累计错误 $errs ｜ 有问题用例 $bad"
+echo "memcheck：${#CASES[@]} 个用例 ｜ 累计错误 $errs ｜ 内存问题用例 $bad ｜ 非零退出（非信号）$nonzero"
 echo "  明细 → $OUT"
 if [ "$errs" -gt 0 ] || [ "$bad" -gt 0 ]; then exit 99; fi
 echo "  ✓ 无 invalid read/write／double free／uninitialised"
