@@ -469,7 +469,7 @@
   不 UB ✓）；`pa_module_setconst` 的值可以是裸数据或不透明句柄 ✓。
   验收：`crates/pyawa-abi/tests/host_module.rs`（8 例：三种 import 形态／保留与非法名／两实例隔离／
   guest 无 `pa_*`／两次调用之间可加／宿主错误与 panic 不穿 FFI／回调内注册返错误码／不透明句柄往返）。
-  **状态**：**已实现 ✓（round 271）**；`AB-69` 的 `pa_ty` 签名通道仍在下一步 ✗。
+  **状态**：**已实现 ✓（round 271）**；`AB-69` 的 `pa_ty` 签名通道已随 round 272–273 落地 ✓（检查期投影见 `d4847368`）。
 - **AB-68** **宿主设置每实例 `sys.path`**：`pa_setpath(st, const char *const *dirs, size_t n)`（`dirs == NULL` 或 `n == 0` ⇒ 清空）。语义**完全**沿用 `SPEC-imports-and-modes` 的 `IM-*`（**禁止**另立一套路径逻辑 ✗，禁令照该规格 ✓）；实现上就是把 `sys.path` 换成本实例的这份列表（**拷贝**宿主缓冲区 ✓，宿主返回后可释放 ✓）。约束：**按实例** ✓；路径访问仍受 **`fs` 能力域**夹根 ✓（`CP-21`／`AB-32`）——`sys.path` 只决定**在哪找** ✓，**能不能读**由能力面决定 ✓；脚本自己改 `sys.path` 的语义不变 ✓（`sys.path` 本就可变 ✓）。
   **实现 ✓（round 270）**：`pa_setpath(st, dirs, n)` 已接线；`pa_create` 的实例带**最小 `sys` 骨架**
   （`sys.path` 空表 ＋ `sys.modules`；`paL_openlibs` 仍如实"未提供"，P3-14）。验收
