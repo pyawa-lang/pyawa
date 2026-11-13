@@ -25,7 +25,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use pyawa_core::compile::{compile, instantiate, CheckTier, CompileError, Mode};
 use pyawa_core::{
-    DictObject, ExecError, FloatObject, Frame, Header, Instance, IntObject, ListObject, StrObject,
+    AttributeObject, DictObject, ExecError, FloatObject, Frame, Header, Instance, IntObject,
+    ListObject, StrObject,
 };
 
 pub mod export;
@@ -88,7 +89,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 6;
+pub const PA_ABI_MINOR: u32 = 7;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -432,6 +433,10 @@ impl pa_state {
             ))
             .into_raw()
             .cast::<Header>();
+        // **`AB-68` 的前置**：ABI 宿主即使不装标准库，`import` 也必须有每实例的模块表与
+        // `sys.path`（`IM-*` 的语义就是读这两处 ✓）。`paL_openlibs` 仍如实"未提供"（P3-14）——
+        // 这里只装**最小 sys 骨架**（`sys.path` 空表 ＋ `sys.modules`），不装 builtins／标准库 ✓。
+        install_minimal_sys(&instance);
         Self {
             instance,
             stack: VirtualStack::new(),
@@ -545,6 +550,98 @@ pub unsafe extern "C" fn pa_create(host: *const pa_host, out: *mut *mut pa_state
         // SAFETY: 同上。
         unsafe { *out = Box::into_raw(state) };
         status::PA_OK
+    })
+}
+
+/// **最小 `sys` 骨架**（`AB-68` 的前置）：只装 `sys.path`（空表）与 `sys.modules`（含 `sys` 自己）。
+///
+/// 参照语义里 `sys` 也是模块对象（`import sys` 要能拿到它）；这里用与标准库组合根同一条形状：
+/// 模块表（`Instance::modules`）与 `sys.modules` 是**同一份 dict**（一处真相 ✓），`sys` 本身是
+/// `AttributeObject` 包着的名字空间 dict（`mounted_instance_dict` 可查 ✓）。
+fn install_minimal_sys(instance: &Instance) {
+    let modules = instance.new_dict();
+    let sys_namespace = instance.new_dict();
+    let path = instance.new_list(Vec::new());
+    instance.dict_set(sys_namespace, "path", path);
+    instance.dict_set(sys_namespace, "modules", modules);
+    let name = instance.new_str("sys");
+    instance.dict_set(sys_namespace, "__name__", name);
+    let module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let sys_object = instance
+        .alloc(AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(sys_namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(modules, "sys", sys_object);
+    instance.set_modules(Some(modules));
+}
+
+/// **把宿主给的目录表换成实例的 `sys.path`**（`AB-68`）：语义完全走 `IM-*`（只换 `sys.path`，
+/// 路径访问仍由 `fs` 能力域夹根 ✓）。`entries` 已由调用方**拷贝**（宿主的缓冲区返回后可释放 ✓）。
+fn set_search_path(instance: &Instance, entries: &[String]) -> bool {
+    let Some(modules) = instance.modules() else {
+        return false;
+    };
+    let Some(sys_module) = instance.dict_get(modules, "sys") else {
+        return false;
+    };
+    let Some(namespace) = pyawa_core::mounted_instance_dict(instance, sys_module) else {
+        return false;
+    };
+    let items: Vec<NonNull<Header>> = entries.iter().map(|entry| instance.new_str(entry)).collect();
+    let path = instance.new_list(items);
+    instance.dict_set(namespace, "path", path);
+    true
+}
+
+/// `pa_setpath(pa_state *state, const char *const *dirs, size_t n)`：**每实例 `sys.path`**（`AB-68`）。
+///
+/// `dirs == NULL` 或 `n == 0` ⇒ **清空**；否则逐项拷贝成 `str`（宿主缓冲区返回后可释放 ✓）。
+/// 路径能不能读由 **`fs` 能力域**决定（`CP-21`／`AB-32`），本函数只决定"在哪找" ✓。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`dirs` 非 `NULL` 时必须指向 `n` 个
+/// **NUL 结尾的 UTF-8 C 串**指针（每个非 `NULL`）。违反即返回 `PA_ERR_INVALID`，不解引用野指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_setpath(
+    state: *mut pa_state,
+    dirs: *const *const c_char,
+    count: usize,
+) -> i32 {
+    boundary(|| {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        let mut entries: Vec<String> = Vec::new();
+        if count > 0 {
+            if dirs.is_null() {
+                return status::PA_ERR_INVALID;
+            }
+            entries.reserve(count);
+            for index in 0..count {
+                // SAFETY: 调用方保证 `dirs` 指向 `count` 个可读指针（本函数 Safety 段）。
+                let pointer = unsafe { *dirs.add(index) };
+                // SAFETY: 同上，每个指针是 NUL 结尾的 C 串。
+                let Some(text) = (unsafe { host::read_c_string(pointer, 1 << 16) }) else {
+                    return status::PA_ERR_INVALID;
+                };
+                entries.push(text);
+            }
+        }
+        if set_search_path(&state.instance, &entries) {
+            status::PA_OK
+        } else {
+            state.set_message("`sys` 模块未装配（`AB-68` 的前置失败）");
+            status::PA_ERR_RUNTIME
+        }
     })
 }
 

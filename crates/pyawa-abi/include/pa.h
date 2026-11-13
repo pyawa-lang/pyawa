@@ -18,9 +18,10 @@
  * 次版本 3：clock 域 vtable 表尾追加 localtime／strftime／mktime 三槽（同上，追加式）。
  * 次版本 4：`AB-63` 类型标签追加 `PA_TBYTES`。
  * 次版本 5：`AB-64` 实例并发边界（宿主契约，无 ABI 面变化）。
- * 次版本 6：`AB-65`／`AB-66` 每实例内存配额两函数（追加式）。 */
+ * 次版本 6：`AB-65`／`AB-66` 每实例内存配额两函数（追加式）。
+ * 次版本 7：`AB-68` `pa_setpath`（追加式）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 6u
+#define PA_ABI_MINOR 7u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -102,7 +103,14 @@ const char *pa_errmsg(pa_state *state);
  * AB-66：`out` 必须可写（`NULL` ⇒ `PA_ERR_INVALID`）；宿主用它做指标／看门狗。
  */
 int pa_set_memory_limit(pa_state *state, uint64_t limit);
-int pa_memory_used(pa_state *state, uint64_t *out);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
+int pa_memory_used(pa_state *state, uint64_t *out);
+
+/* ---- 每实例 `sys.path`（AB-68；ABI-adjacent、发布前定）----
+ *
+ * `AB-68`：`dirs == NULL` 或 `n == 0` ⇒ **清空**；否则逐项拷贝成 `sys.path`（宿主缓冲区返回后
+ * 可释放 ✓）。路径访问仍受 `fs` 能力域夹根（`CP-21`／`AB-32`）——本函数只决定"在哪找" ✓。
+ */
+int pa_setpath(pa_state *state, const char *const *dirs, size_t n);
 
 /* ---- 执行（§15.3；AB-5②／AB-7／AB-60／AB-61）----
  *

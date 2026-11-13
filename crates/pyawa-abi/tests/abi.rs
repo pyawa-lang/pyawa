@@ -2025,21 +2025,21 @@ fn exec_bytecode_runs_a_product_and_rejects_stale_or_malformed_input() {
     unsafe { pa_destroy(state) };
 }
 
-/// **裸 ABI 实例的导入面**（第 211 轮实测 ✓）：`pa_create` 交回的实例**没有装 stdlib** ⇒
-/// 连 `import sys` 都是 `PA_ERR_NOTIMPLEMENTED`（5）✗ —— 于是**不能**用"裸实例"来当
-/// `IM-15`（模块 I/O 经能力层）的判据 ✗（那条判据要有**运行时装配**的实例：装了 stdlib、
+/// **裸 ABI 实例的导入面**（`AB-68` 起改口径 ✓）：`pa_create` 交回的实例**没有装 stdlib**，
+/// 但有 `AB-68` 的**最小 `sys` 骨架**（`sys`＋`sys.path`＋`sys.modules`）⇒ `import sys` 可以 ✓；
+/// **标准库模块仍然没有** ⇒ `import os` 是脚本异常（`PA_ERR_RUNTIME`）✗ —— 于是**不能**用裸实例
+/// 当 `IM-15`（模块 I/O 经能力层）的判据 ✗（那条判据要有**运行时装配**的实例：装了 stdlib、
 /// 再比"注册／不注册 `fs` 域"两种情形 ✓）。
 ///
-/// 本格钉住的是**这条边界本身** ✓：谁要是以后让裸实例能导入，就会在这里看到变化 ✓，
+/// 本格钉住的是**这条边界本身** ✓：谁要是以后让裸实例能导入标准库，就会在这里看到变化 ✓，
 /// 从而必须回头确认 `IM-15` 的判据面 ✓。
 #[test]
-fn a_bare_instance_cannot_import_even_builtin_modules() {
+fn a_bare_instance_imports_sys_but_not_stdlib_modules() {
     let host = compatible_host();
     let mut state: *mut pa_state = core::ptr::null_mut();
     assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
     let mode = b"python\0";
-    let source = b"import sys\n";
-    let status = unsafe {
+    let run = |source: &[u8]| unsafe {
         pa_exec_string(
             state,
             source.as_ptr().cast(),
@@ -2049,9 +2049,12 @@ fn a_bare_instance_cannot_import_even_builtin_modules() {
             core::ptr::null(),
         )
     };
+    // `AB-68` 的最小 `sys`：`import sys` 必须成立（否则 `pa_setpath` 无处可写 ✓）。
+    assert_eq!(run(b"import sys\n"), PA_OK, "`AB-68` 起裸实例应有最小 `sys` 骨架");
     assert_eq!(
-        status, PA_ERR_NOTIMPLEMENTED,
-        "裸实例（没装 stdlib）的导入面变了 ⇒ `IM-15` 的判据面要重核"
+        run(b"import os\n"),
+        PA_ERR_RUNTIME,
+        "裸实例（没装 stdlib）不该能导入标准库模块 == `IM-15` 的判据面要重核"
     );
     unsafe { pa_destroy(state) };
 }
