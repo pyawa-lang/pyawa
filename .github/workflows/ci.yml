@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 # 与 AGENTS.md「硬线」一致：
-#  - fast：每次 push/PR —— check.py（16 项，秒级）＋ 构建 ＋ ABI/核心测试
+#  - fast：每次 push/PR —— check.py（18 项，秒级）＋ 构建 ＋ ABI/核心测试 ＋ pyawa check 语料
 #  - full：PR／手动／每周 —— slowcheck 11 项（含基准闸：性能回退 + memcheck 子集）
 jobs:
   fast:
@@ -30,8 +30,16 @@ jobs:
       # target/conformance/{self-check.md,report.md}（target/ 不进仓库）
       - name: ABI ＋ 核心测试（release）
         run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core
-      - name: 文档/规格/编号闸门（16 项）
+      - name: 文档/规格/编号闸门（18 项）
         run: python3 tests/ci/check.py
+      # PLAN §10.1 ④：check.py 之后对 407 语料（.py）跑 pyawa check——只编译不执行，
+      # 期望 0 诊断、退出码 0（LSP 线①的语料回归闸）。
+      - name: pyawa check 语料（407 个 .py ⇒ 0 诊断）
+        run: |
+          awk -F'\t' 'NF>=2 && $1 !~ /^#/ {print "tests/conformance/corpus/" $1}' \
+            tests/conformance/corpus/manifest.tsv > /tmp/pyawa-check-corpus.txt
+          wc -l /tmp/pyawa-check-corpus.txt
+          target/release/pyawa check $(cat /tmp/pyawa-check-corpus.txt)
 
   full:
     name: 完整闸门（slowcheck 11 项）

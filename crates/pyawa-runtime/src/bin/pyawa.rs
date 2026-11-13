@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! pyawa <文件.py|文件.pyawa> [参数…]
+//! pyawa check [--format=json] <文件…>     # 只编译不执行（LSP 线①；PLAN §10.1）
 //! ```
 //!
 //! # 如实范围（**这是本版的边界，不是待办清单的省略**）
@@ -72,7 +73,7 @@ fn set_attribute(
     instance.release(value);
 }
 
-use pyawa_core::compile::{CheckTier, Mode};
+use pyawa_core::compile::{check_source, CheckTier, Diagnostic, Mode};
 use pyawa_runtime::pyac;
 
 /// **崩溃点回溯器**（`PYAWA_SEGV_TRACE=1`，第 577 轮）：把段错误／总线错误／abort **变成可读栈** ✓。
@@ -167,6 +168,10 @@ fn real_main() {
         usage("缺文件参数");
         std::process::exit(EXIT_HOST);
     };
+    // **`pyawa check`**（LSP 线①；PLAN §10.1）：只编译不执行、批量诊断。
+    if first == std::ffi::OsStr::new("check") {
+        std::process::exit(run_check(arguments));
+    }
     // **`-c 代码`**（round 111）：`test.support.script_helper.assert_python_ok('-c', code)` 一族
     // （`test_list.test_deopt_from_append_list` ✓）与 `-c` 冒烟都需要 ✓。`-c` 的代码**不落盘**
     // （不写 `.pyac` 产物 ✓），路径名照参照给 `-c`（`sys.argv[0]` 由上层按 `-c` 约定处理 ✓）。
@@ -603,8 +608,165 @@ fn absolute_script_path(path: &std::path::Path) -> std::path::PathBuf {
     normalized
 }
 
+/// **`pyawa check [--format=json] <文件…>`**（PLAN §10.1；LSP 线①）：**只编译不执行**。
+///
+/// 范围：批量文件；批量诊断（不遇首错即止）；`.py` 只出语法类（`TS-26`／`MS-19`）、
+/// `.pyawa` 出语法＋类型；`--format=json` 供 LSP ② 当数据源；退出码 **0＝无诊断／1＝有诊断／
+/// 2＝用法或内部错误**。禁区：不对 `.py` 做类型诊断、不执行任何代码、不做 autofix、不实现 LSP 协议。
+fn run_check(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> i32 {
+    let mut json = false;
+    let mut files: Vec<std::ffi::OsString> = Vec::new();
+    let mut end_of_flags = false;
+    while let Some(argument) = arguments.next() {
+        if !end_of_flags {
+            if argument == std::ffi::OsStr::new("--") {
+                end_of_flags = true;
+                continue;
+            }
+            let text = argument.to_string_lossy();
+            if let Some(value) = text.strip_prefix("--format=") {
+                match value {
+                    "json" => json = true,
+                    "text" => json = false,
+                    _ => {
+                        usage(&format!("check 的 --format 只接受 json／text（收到 {value}）"));
+                        return EXIT_HOST;
+                    }
+                }
+                continue;
+            }
+            if text == "--format" {
+                let Some(value) = arguments.next() else {
+                    usage("check 的 --format 缺值");
+                    return EXIT_HOST;
+                };
+                match value.to_string_lossy().as_ref() {
+                    "json" => json = true,
+                    "text" => json = false,
+                    other => {
+                        usage(&format!("check 的 --format 只接受 json／text（收到 {other}）"));
+                        return EXIT_HOST;
+                    }
+                }
+                continue;
+            }
+            if text.starts_with('-') {
+                usage(&format!("check 不认识的选项：{text}"));
+                return EXIT_HOST;
+            }
+        }
+        files.push(argument);
+    }
+    if files.is_empty() {
+        usage("check 至少要给一个文件");
+        return EXIT_HOST;
+    }
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    for file in files {
+        let path = std::path::PathBuf::from(&file);
+        let display = path.to_string_lossy().into_owned();
+        let mode = match path.extension().and_then(|extension| extension.to_str()) {
+            Some("pyawa") => Mode::Extension,
+            Some("py") => Mode::PurePython,
+            _ => {
+                usage(&format!("check 只接 .py／.pyawa（收到 {display}）"));
+                return EXIT_HOST;
+            }
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("pyawa check: 读不到 {display}：{error}");
+                return EXIT_HOST;
+            }
+        };
+        let source = match String::from_utf8(bytes) {
+            Ok(source) => source,
+            Err(_) => {
+                diagnostics.push(Diagnostic {
+                    file: display,
+                    line: 0,
+                    col: 0,
+                    code: "syntax".to_owned(),
+                    severity: "error".to_owned(),
+                    message: "源文件不是合法 UTF-8".to_owned(),
+                });
+                continue;
+            }
+        };
+        diagnostics.extend(check_source(&source, &display, mode));
+    }
+    if json {
+        println!("{}", diagnostics_to_json(&diagnostics));
+    } else {
+        for diagnostic in &diagnostics {
+            println!(
+                "{}:{}:{}: {}: {} [{}]",
+                diagnostic.file,
+                diagnostic.line,
+                diagnostic.col,
+                diagnostic.severity,
+                diagnostic.message,
+                diagnostic.code
+            );
+        }
+    }
+    if diagnostics.is_empty() {
+        0
+    } else {
+        EXIT_SCRIPT
+    }
+}
+
+/// 把诊断列表手写序列化成 JSON 数组（**不引序列化库**：`CX-27` 只许 workspace 内部依赖）。
+///
+/// 字段固定为 `file`／`line`／`col`／`code`／`severity`／`message`（PLAN §10.1 ③）。
+fn diagnostics_to_json(diagnostics: &[Diagnostic]) -> String {
+    let mut out = String::from("[");
+    for (index, diagnostic) in diagnostics.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"file\":");
+        json_string(&mut out, &diagnostic.file);
+        out.push_str(",\"line\":");
+        out.push_str(&diagnostic.line.to_string());
+        out.push_str(",\"col\":");
+        out.push_str(&diagnostic.col.to_string());
+        out.push_str(",\"code\":");
+        json_string(&mut out, &diagnostic.code);
+        out.push_str(",\"severity\":");
+        json_string(&mut out, &diagnostic.severity);
+        out.push_str(",\"message\":");
+        json_string(&mut out, &diagnostic.message);
+        out.push('}');
+    }
+    out.push(']');
+    out
+}
+
+/// JSON 字符串转义（`"`／`\`／控制字符；非 ASCII 原样输出，LSP 侧是 UTF-8 ✓）。
+fn json_string(out: &mut String, text: &str) {
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other if (other as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", other as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+}
+
 fn usage(reason: &str) {
     eprintln!("pyawa: {reason}");
     eprintln!("用法：pyawa <文件.py|文件.pyawa> [参数…]");
+    eprintln!("      pyawa check [--format=json] <文件…>   # 只编译不执行；0=无诊断 1=有诊断 2=用法/内部错误");
     eprintln!("范围：跑单文件／给退出码／报未捕获异常；**本版还不能 `print`**（`CM-26`：`print` 须走 `sys.stdout → _io → fs`）。");
 }

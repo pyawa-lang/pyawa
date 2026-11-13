@@ -778,3 +778,5 @@
 **禁区** ✗：不对 `.py` 做类型诊断（破坏 `MS-19`）；不执行任何代码；不做 autofix（留 ③）；不实现 LSP 协议（那是 ②）。
 
 **依赖** ✓：`M4` 检查器（`TS-*`）＋ `compile/` 解析器（0 unsafe）；**不引** LSP 框架 ✓（那是 `pyawa-lsp` 的事）。
+
+**状态** ✓：① `pyawa check` **已落地 ✓（round 275）**——`pyawa check [--format=json] <文件…>`：只编译不执行、批量诊断（不遇首错即止）、`.py` 只语法类（`MS-19`）／`.pyawa` 语法＋类型、`--format=json`（`file`/`line`/`col`/`code`/`severity`/`message`）、退出码 0／1／2；验收 `crates/pyawa-runtime/tests/check_command.rs` 6 例（含 **407 语料 0 诊断**、JSON 字段、执行 vs check 语法诊断一致、退出码）；CI fast 在 `check.py` 后已加语料步骤（PLAN §10.1 ④）。② LSP MVP／③ 补全跳转 **待** ✗。
