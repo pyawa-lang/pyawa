@@ -119,6 +119,9 @@
 | `T-CX-13` | **stdlib 布局隔离**：`crates/pyawa-stdlib/src/` 不出现具体布局类型名（`*Object` 一族）；`Header`／`Instance` **允许**（`CX-22`） |
 | `T-CX-14` | **NEXT 单页上限**：`NEXT.md` ≤ 40 行且最长行 ≤ 4000 字符；超限即红（`CX-23`） |
 | `T-CX-15` | **NEXT HEAD 行**：必须是短哈希且能解析为真实提交；写指针即红（`CX-24`） |
+
+- **`T-CX-16`**：`docs/`／`tools/`／`agents-rules/`（含 `Revert`）的提交正文必须含 `决定：` 行，且其值能被 `grep` 到 `docs/REQUIREMENTS.md`（`CX-25`）；缺行或查不到即红。
+
 - **`CX-25`** 提交正文必须含「`决定：`＋`docs/REQUIREMENTS.md` 的可 grep 行名」（机检 `T-CX-16`）—— 公开仓库的读者据此回溯决定来源 ✓。
 - **`CX-26`** 对规范下断言必须**当场查证**（`grep`／`read`）并写出「文件:编号」；**禁止**凭记忆断言 ✗。
 
