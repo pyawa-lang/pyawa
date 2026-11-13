@@ -21,12 +21,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq valgrind gcc
           rustc --version && cargo --version
-      - name: 文档/规格/编号闸门（16 项）
-        run: python3 tests/ci/check.py
       - name: 构建（release）
         run: tools/cargo.sh build --release -p pyawa-runtime --bin pyawa
+      # 必须先跑 ABI 测试：M3-COVERAGE 的 ④⑤ 依赖它产出的
+      # target/conformance/{self-check.md,report.md}（target/ 不进仓库）
       - name: ABI ＋ 核心测试（release）
         run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core
+      - name: 文档/规格/编号闸门（16 项）
+        run: python3 tests/ci/check.py
 
   full:
     name: 完整闸门（slowcheck 11 项）
