@@ -389,10 +389,11 @@ provider。按优先级四个目标：
 - **C ABI 尚未发布**（用户 2026-11-13 口径：暂不发布，可能还要加钩子）⇒ 配额／钩子族在冻结前
   仍可能调整。
 
-**验收与证据索引（一处真相；本节不复制判据）**：`SPEC-c-abi` 的 `AB-5`／`AB-8`／`AB-43`／
+**验收与证据索引（一处真相；本节不复制判据）**：**宿主侧行为**＝`examples/reference_host.c`＋`docs/REFERENCE-HOST.md`（六项演示），由 `tests/ci/t_ref_host.py` 真编译、真运行、逐行验收 ✓；**静态约束**＝`tests/ci/check.py` 的 `T-CX-3`／`T-CX-4`／`T-CX-5`；**契约编号**＝`SPEC-c-abi` 的 `AB-5`／`AB-8`／`AB-43`／
+
 `AB-64`／`AB-65`／`AB-66`；`SPEC-object-model` 的 `OM-1`／`OM-3`／`OM-4`／`OM-41`；
 `crates/pyawa-abi/tests/memory_quota.rs`、`crates/pyawa-runtime/tests/memory_quota.rs`、
-`crates/pyawa-core/tests/memory_quota.rs`；`tests/ci/check.py`（`T-CX-3`／`T-CX-4`／`T-CX-5`）；
+`crates/pyawa-core/tests/memory_quota.rs`；
 `tools/memdangle_survey.py`；`docs/MEMORY_SAFETY.md`。
 
 ---
