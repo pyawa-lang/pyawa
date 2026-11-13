@@ -43,9 +43,9 @@ pub mod ast_module;
 pub mod _socket_module;
 /// **`pyexpat`**（`P3-37` 剩余，round 38）：形状面 ＋ 诚实解析桩（整块 expat C 扩展未移植）。
 pub mod pyexpat_module;
-/// **`_signal`**（task-13）：`import signal` 的导入闸（asyncio 族 118 的第一道 C 模块闸）。
-/// 导出面**刻意收窄**（常量 ＋ `signal`/`getsignal`）；两个函数调用如实报 `NotImplementedError`
-/// （能力域 `CM-8` 未接）——见模块头。
+/// **`_signal`**（task-13／§12.2）：`import signal` 的导入闸（asyncio 族的第一道 C 模块闸）。
+/// 导出面收窄（常量 ＋ `signal`／`getsignal`／`default_int_handler`／`set_wakeup_fd`）；
+/// **记账式**（只记录、不投递；§12.2 方案 A）——见模块头与 `docs/SPEC-c-modules.md` §5.2.11。
 pub mod _signal_module;
 /// **`_posixsubprocess`**（task-15）：`import subprocess` 的第一道 C 模块闸（`fork_exec` 只绑定、
 /// 不调用 ✓）；调用如实报 `NotImplementedError`（能力域 `CM-8` 未接）——见模块头。
@@ -110,9 +110,10 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // `from _socket import *` ＋ `class socket(_socket.socket)` 的底座 ✓。
         // 常量/`has_ipv6`/类与异常面为真；I/O 函数面如实报 `NotImplementedError`（能力域未接 ✓）。
         (_socket_module::NAME, _socket_module::build),
-        // **`_signal`**（task-13 ✓）：`Lib/signal.py` 的 `import _signal` ＋
+        // **`_signal`**（task-13 ✓／§12.2 记账式最小面 ✓）：`Lib/signal.py` 的 `import _signal` ＋
         // `@_wraps(_signal.signal/getsignal)` 的底座 ✓；导出面收窄 ⇒ 四个可选包装不定义 ✓。
-        // 常量是参照真值；两个函数调用如实报 `NotImplementedError`（能力域未接 ✓）。
+        // 常量是参照真值；`signal`／`getsignal`／`set_wakeup_fd` **只记账、不投递**（方案 A）⇒
+        // `asyncio.run` 可初始化（`getsignal(2) is default_int_handler` 成立）——见模块头。
         (_signal_module::NAME, _signal_module::build),
         // **`_posixsubprocess`**（task-15 ✓）：`subprocess.py:106` 的
         // `from _posixsubprocess import fork_exec as _fork_exec`（只绑定 ✓）。

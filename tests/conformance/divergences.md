@@ -33,6 +33,7 @@
 | `DIV-1` | `set`／`frozenset` 的**迭代序**与参照实现不同 | 迭代序**未规定**（依实现哈希布局）⇒ 本文件规定的必录项 | harness 对 `set`／`frozenset` 的迭代输出**排序后**再比对（或按集合语义比对，不比对顺序） | `425f1a7` · 3.14.4 |
 | `DIV-2` | `format(x, 'n')` 的输出与参照实现不同（Pyawa 把 `'n'` 当 `'d'`，不做 locale 分组） | `CM-25`（locale 类差异进差异清单） | harness 把语料里 `'n'` 规格的**期望值**替换为同一对象 `'d'` 规格的结果再比对 | `425f1a7` · 3.14.4 |
 | `DIV-8` | `code.co_stacksize` 的**值**与参照实现不同（本层给**保守上界**，参照给精确值） | 规格只说「值栈深度以它为上界、越界必须报错」（`BC-43`）；`SPEC-bytecode.md` §2.4 把它列为**元信息**，**未规定**具体值 | harness 不比对 `co_stacksize` 的值，只比对「被遵守」（`T-BC-14` 的越界报错） | `2395bad` · 3.14.4 |
+| `DIV-10` | `signal.signal()` 注册的 handler **永不触发**（记账式、不投递）；`_signal.getsignal` 初值取**记账表**（`SIGINT`→`default_int_handler`、32／33→`None`、其余 `SIG_DFL`），不反映宿主进程继承的信号处置 | `docs/REQUIREMENTS.md`「信号面（2026-11-14）」行（方案 A：不做真实信号投递）／`docs/PLAN-milestones.md` §12.2 | harness 对「注册 handler 后是否被触发」的探针**归一为固定值「不触发」**；对依赖宿主继承处置的 `getsignal`／`signal` 前值探针（如 `SIGPIPE`／`SIGXFSZ` 初值）归一为记账表值（`SIG_DFL`＝0）；其余 `getsignal`／`signal` 返回值照参照比对、不归一 | `9af71464` · 3.14.4 |
 
 ### 已修 / 已移出（留墓碑，`CX-19`：墓碑算定义）
 

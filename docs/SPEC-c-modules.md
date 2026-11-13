@@ -619,7 +619,7 @@ schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模�
 | `time` | §5.2.8 | 能力域（`clock` 域） |
 | `_thread` | §5.2.9 | VM 侧（用户裁定 A） |
 | `_socket` | §5.2.10 | 能力域最小面（I/O 未接线） |
-| `_signal` | §5.2.11 | 能力域最小面（注册未接线） |
+| `_signal` | §5.2.11 | 能力域最小面（记账式：只记录、不投递） |
 | `_posixsubprocess` | §5.2.12 | 能力域最小面（`fork_exec` 未接线） |
 | `select` | §5.2.13 | 能力域最小面（`select` 未接线；导出面收窄） |
 | `array` | §5.2.14 | 纯计算最小面（空数组薄载荷） |
@@ -823,29 +823,51 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 - **验收**：`crates/pyawa-runtime/tests/socket_surface_shapes.rs`（两个用例：面与参照**逐行一致**、
   如实报错面无假成功）。
 
-#### 5.2.11 `_signal`（**能力域最小面** —— task-13）
+#### 5.2.11 `_signal`（**记账式最小面** —— task-13／§12.2，2026-11-14 方案 A）
 
-- **归属**：**能力域模块**（信号注册／查询属外部世界权威；本轮只落导入面＋常量面）。
-- **能 import**：内建模块；`import _signal` 恒成功。上游 `Lib/signal.py` 导入期要：`import _signal`、
-  `from _signal import *`、`@_wraps(_signal.signal)`／`@_wraps(_signal.getsignal)` 在装饰期各读一次
-  `__doc__`。
-- **已落地面**（照参照实测）：
+- **归属**：**能力域模块**（信号注册／查询属外部世界权威）。**方案 A（用户已拍板）**：**不做真实信号投递**，
+  只维护**每实例记账表**（POSIX 信号是进程级状态，与 `CP-13`／`OM-1` 的实例隔离冲突；asyncio 常规路径
+  `run`／`await`／`async for` 不依赖真实投递）。代价：注册的 handler **永不触发** ⇒ `DIV-10`。
+- **能 import**：内建模块；`import _signal` 恒成功。上游 `Lib/signal.py` 导入期要 `import _signal`、
+  `from _signal import *`、`@_wraps(_signal.signal/getsignal)` 各读一次 `__doc__`；
+  `Lib/asyncio/runners.py` 判 `signal.getsignal(signal.SIGINT) is signal.default_int_handler`。
+- **已落地面**（照本机参照 3.14.4 实测，逐字一致）：
   - **45 个整型常量**（`SIG*` 一族含别名 `SIGIOT`／`SIGCLD`／`SIGPOLL`、`SIG_DFL=0`／`SIG_IGN=1`／
-    `NSIG=65`、`ITIMER_*`）；模块 `__doc__` 非空（照参照原文）；
-  - `signal(signalnum, handler, /)`／`getsignal(signalnum, /)` 的**参数校验语义全真**：关键字拒绝、
-    `signal` 元数文案 `signal expected 2 arguments, got N`、号码非整数／越界文案
-    （`ValueError: signal number out of range`）、handler 只收 `SIG_DFL`(0)／`SIG_IGN`(1)／可调用且
-    **`bool` 不算**（照参照 `signal(2, True)` 也报 handler 文案）——逐字与参照一致。
-- **如实未接线面（`CM-6`；禁止假数据）**：
-  - `signal()`／`getsignal()` 校验通过后**调用即 `NotImplementedError`**（"未接线"）：**不注册、不编返回值**。
-    `getsignal` **不返回 `None`**——参照对有效号码从不返回 `None`（未注册 ⇒ `SIG_DFL` 0；`SIGINT` ⇒
-    `default_int_handler`），返回 `None` 是编事实；
-  - **导出面刻意收窄**：`__all__`＝45 常量＋`signal`／`getsignal`（共 47）⇒ 上游 `signal.py` 的
-    `pthread_sigmask`／`sigpending`／`sigwait`／`valid_signals` 四个可选包装**不定义**、`Sigmasks`
-    不建（参照在无这些名字的平台同形）；其余 17 个函数与 2 个类型（`ItimerError`／`struct_siginfo`）
-    **不导出**（缺名＝语义少接线）；
-  - 原生函数 `__doc__` 为空串（core 现行口径）⇒ `signal.signal.__doc__` 读回 `None`（参照给 C 文档串）。
-- **验收**：`crates/pyawa-runtime/tests/signal_surface_shapes.rs`（面逐行一致 ＋ 如实报错面）。
+    `NSIG=65`、`ITIMER_*`）＋ 模块 `__doc__`（照参照原文）；
+  - `__all__` ＝ 45 常量 ＋ `signal`／`getsignal`／`default_int_handler`／`set_wakeup_fd`（**49**）；
+  - `signal(signalnum, handler, /)`：参数校验全真（关键字／元数／非整数／大整数 `OverflowError`／
+    越界 `ValueError: signal number out of range`／handler 只收 `SIG_DFL`(0)／`SIG_IGN`(1)／可调用且
+    `bool` 不算）；校验通过后**记账并返回前值**；
+  - `getsignal(signalnum, /)`：读记账表。**初值**：`SIGINT` ⇒ `default_int_handler`（与
+    `_signal.default_int_handler` **同一对象**）、32／33 保留号 ⇒ `None`、其余 ⇒ `SIG_DFL`(0)；
+  - `default_int_handler(signum, frame, /)`：存在、可调用，**调用必抛 `KeyboardInterrupt`**
+    （元数文案 `default_int_handler expected 2 arguments, got N`）；
+  - `set_wakeup_fd(fd, /, *, warn_on_full_buffer=True)`：记账式——当前 wakeup fd 初值 `-1`，
+    只接受 `-1`（≡ 解除），返回前值；
+  - **不可捕获号**（9 `SIGKILL`／19 `SIGSTOP`／32／33）：照参照实测折成
+    `OSError: [Errno 22] Invalid argument`。
+- **每实例状态（`CX-3`）**：记账表存在模块命名空间的隐藏键（`__pyawa_signal_handlers__`：号码→handler
+  的 dict；`__pyawa_signal_wakeup_fd__`：int），**随实例走**，无全局可变状态、不调用宿主信号设施。
+- **可观察偏差（如实记）**：
+  - `vars(_signal)` 比参照多两个隐藏键（不在 `__all__` ⇒ `from _signal import *` 不导出）；
+  - **handler 永不触发**（`DIV-10`）；初值表**不反映宿主继承的处置**（参照进程 `SIGPIPE`(13)／
+    `SIGXFSZ`(25) 初值 `SIG_IGN`，本层 `SIG_DFL`；`DIV-10` 归一）；
+  - 原生函数 `__doc__` 空串（core 口径）⇒ `signal.signal.__doc__` 读回空串（参照给 C 文档串）；
+  - **异常对象的 `args` 保真度**属 core 既有口径（`str()` 一致）：不可捕获号的 `OSError` 参照
+    `args=(22,'Invalid argument')`／`errno=22`，本层 `args=('[Errno 22] Invalid argument',)`／
+    `errno=None`；`default_int_handler` 抛的 `KeyboardInterrupt` 参照 `args=()`、本层 `args=('',)`。
+    修它要动 core 的异常构造通道 ⇒ 另记（不影响 `asyncio` 路径与 `str` 面）。
+- **如实未实现面（`CM-6`；禁止假成功）**：
+  - `set_wakeup_fd(fd != -1)`：需要校验宿主 fd（有效＋非阻塞）⇒ **如实报 `NotImplementedError`**
+    （本层只能"解除"）；
+  - **导出面刻意收窄**（沿用 task-13 口径）：`pthread_sigmask`／`sigpending`／`sigwait`／
+    `valid_signals` 不导出 ⇒ `Lib/signal.py` 四个包装不定义、`Sigmasks` 不建；其余 17 个函数与 2 个
+    类型不导出；`Lib/asyncio/unix_events.py` 的 `add_signal_handler` 依赖的 `siginterrupt`／
+    `valid_signals` **缺名** ⇒ 该路径如实不可用（`asyncio.run` 常规路径不需要）；
+  - **真实信号投递**属 `proc` 域（`SPEC-capabilities.md` §9.3），等该域开工时另行设计（`PLAN` §12.2 留待）。
+- **验收**：`crates/pyawa-runtime/tests/signal_surface_shapes.rs`（参照逐行一致 ＋ 记账/收窄/如实面）、
+  `crates/pyawa-runtime/tests/asyncio_smoke.rs`（`asyncio.run`／`await sleep(0)`／`async for`／
+  异步推导式，子进程）＋ `tests/conformance/divergences.md` 的 `DIV-10`。
 
 #### 5.2.12 `_posixsubprocess`（**能力域最小面** —— task-15）
 
