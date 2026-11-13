@@ -333,6 +333,16 @@ impl Instance {
     }
 
     pub unsafe fn release_object(&self, ptr: *mut Header) {
+        // **GC 冻结窗口里"计数已 0"的防御**（round 262，内存安全）：`collect` 的 ④ 阶段先把
+        // 不可达对象整批冻结，再逐个 `clear`；环内对象的计数由 clear 的 decref 递减，**正常情况下**
+        // 每个对象的计数恰好在它被清空时归 0 ✓。若某个容器里有一份**没记账**的引用（欠 incref ✗），
+        // 就会先有一个容器把它减到 0、下一个容器再减 ⇒ `decref` 在 0 上 panic（实测
+        // `test_io.test_close_assert` 的局部类 `R` 实例：`list_clear` 先放、`tuple_clear` 再放 ✗）。
+        // 冻结集合里的对象**由 GC 统一释放**（本函数只该减计数 ✓）⇒ 计数已是 0 时再减**忽略**
+        // 是安全的（否则就是双放）；真正欠账的那一处 incref 仍待定位（台账记 ✗）。
+        if unsafe { &*ptr }.refcount() == 0 && !self.gc_frozen.borrow().is_empty() {
+            return;
+        }
         // **快路**（round 251 性能，A2-6）：没有释放诊断开着时（常见），只做两步：
         // ① 永生对象直接返回（计数不增减）；② `decref` 非 0 直接返回。
         // 先前每次释放都要过 5+ 处 `OnceLock` 原子读＋若干分支 ✗（perf：release_object 10–15%）。

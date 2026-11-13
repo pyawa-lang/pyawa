@@ -62,6 +62,7 @@
 | round 88 修 `filter`＋`getrandbits` 后 | **1**（只剩 `test_itertools.test_issue30347_2` 的 groupby 可重入 ✗） | 3 | 35 | 273 | 85 |
 | round 89 修 `groupby` 键双持有后 | **0** ✅（硬门①首次达成，当时套件覆盖面较小） | 3 | 35 | 273 | 86 |
 | **round 261 全量棘轮复测**（2026-11-13 @ `376856f7`，jobs=4，timeout=90） | **3**（`test_difflib`／`test_gc`／`test_io`）✗ | 7 | 70 | 266 | 49（syntax 2） |
+| **round 262**（2026-11-13 @ `fd6fc82f`，冻结窗口 double-decref 防御后） | **3**（`test_difflib`／`test_gc`／`test_weakref`※）✗ | 7 | 70 | 265 | 50（syntax 2） |
 
 
 > memory 类判定与"清零"口径见 §1／§2；**只统计签名命中，不把语义失败算进来**。
@@ -71,6 +72,7 @@
 > 线程／GC 路径才暴露。**当前硬门① 未达**（3 ≠ 0）⇒ 以 **memory ≤ 3 为新棘轮基线**，下一轮起专项修：
 > ① `test_io`：`test_close_assert` 的局部类 `R` 在某线程用例处**二次 decref**（`对已释放对象 decref：R`）；
 > ② `test_difflib`：`HtmlDiff._tab_newline_replace` 一族 str 悬垂（GC 时序相关，单测单跑不复现）；
+> ※ **round 262 起 `test_io` 已消**（`collect` ④ 冻结窗口里'计数已 0 的冻结对象'再减改为**忽略** ——实测 `test_io.test_close_assert` 的局部类 `R` 实例被 `list_clear` 先放、`tuple_clear` 再放；guard 后单文件 0 标记 ✓）。`test_weakref` 并行/时序敏感：新树单跑 2/2 干净、旧树二进制单跑 1 标记＋段错误 ⇒ **既有** ✗，记档待查。
 > ③ `test_gc`：已知 `GCTogglingTests.test_bug1055820c` 段错误族（B3-2 已 A/B 证明既有 ✗）。
 
 
