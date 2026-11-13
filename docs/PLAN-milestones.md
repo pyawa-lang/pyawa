@@ -785,6 +785,8 @@
 
 三项均由文档侧实测定位（非推测），证据与验收如下。语义仍以各 `SPEC-*` 为**一处真相**，此处只给范围与判据。
 
+**状态 ✓（2026-11-14）**：三项**全部落地**（逐项状态见各小节末尾状态注；`REQUIREMENTS.md` 的「信号面」「工作边界」等决策已按本轮实测收口）。
+
 ### 12.1 `x = yield`（`SEND` 取值形态）—— 语言语义缺口
 
 **证据**：
@@ -802,6 +804,8 @@
 ④ 语料新增一条该形态（`tests/conformance/corpus/`），对拍参照一致；
 ⑤ `check.py` 全绿 ＋ `slowcheck` 十一项全绿。
 **禁区**：不改 `YIELD_VALUE` 的既有语义；不为"看起来能跑"在解释器层特判（须按码元路径修）。
+
+**状态 ✓（2026-11-14 落地）**：修因在**编译器符号分析**（按码元路径，无解释器特判）：`statement_has_yield` 覆盖全部语句变体（赋值族／`assert`／`for` 可迭代／`while` 条件／`with` 项与目标／`match` 主语与守卫／`raise`／`delete`／`def` 装饰器与形参默认值／`class` 基类·关键字·装饰器），`expression_has_yield` 全面下探同作用域表达式（`lambda` 形参默认值、推导式**最外层可迭代**等作用域边界逐条实测；`lambda`／`def`／`class` 的**体**不下探）。独立复核：72 例判定矩阵 66/72 一致（6 例外全部是"参照 SyntaxError、本层接受"的**既有** parser 缺口，非本笔引入）；参照判为生成器的 55 例**全部**一致；`compile` 夹具逐指令与 conformance **408/408** 证明既有产物未变。验收：①`send(7)` ⇒ `v == 7` ✓ ②`GeneratorExit`＋`close()` 不崩、`PYAWA_DANGLING=1` 干净 ✓ ③`compile`／`generators`／`coroutines`／`generator_and_range_shapes` 全绿 ✓ ④语料 `yield_expression_assignment.py`（manifest **408** 条）对拍一致 ✓ ⑤`check.py`＋`slowcheck` 全绿 ✓（收口轮）。**顺带收口**：同族两处漏标（`except (yield):` 的类型表达式；`yield (yield from …)` 的操作数）已一并修并加回归测试（`tests/yield_expression_shapes.rs` 6 例）。
 
 ### 12.2 `_signal` 最小面 —— 一次解锁 `asyncio`
 
@@ -826,6 +830,8 @@
 ⑤ 不引入宿主不可控的信号处理；`check.py` ＋ `slowcheck` 全绿。
 **禁区**：不得在 VM 内部直接调用宿主信号设施绕过能力面（`CP-` 口径）。
 
+**状态 ✓（2026-11-14 落地）**：**方案 A 记账式**已落地——每实例记账表存在 `_signal` 模块命名空间的隐藏键（`__pyawa_signal_handlers__`／`__pyawa_signal_wakeup_fd__`；无全局可变状态、不调用宿主信号设施）。`getsignal`／`signal` 记账并返回前值（`SIGINT` 初值即 `default_int_handler`、32／33 → `None`、其余 `SIG_DFL`）；`default_int_handler` 导出且调用抛 `KeyboardInterrupt`；`set_wakeup_fd` 只接受 `-1`（其余如实 `NotImplementedError`）。独立复核：asyncio 面（`run` 返回值／`await sleep(0)`／`async for`／异步推导式／SIGINT 记账→恢复）与 signal 面（45 常量／初值／读回／前值／参数校验文案／不可捕获号）与参照逐行一致；`PYAWA_DANGLING=1` 下 7 个脚本零崩溃、零 stderr。验收①-⑤全过。差异与可观察偏差登记为 `DIV-10`，契约改写见 `SPEC-c-modules.md` §5.2.11。**范围外发现（非本项引入，另记）**：`asyncio.gather`／`wait_for` 红在 `pyawa-core` 缺**类体私有名改写**（`__x` → `_C__x`）；`OSError` 的 `.args`／`.errno` 与 `KeyboardInterrupt.args` 保真度属 core 既有口径（`str` 一致）。
+
 ### 12.3 `_csv` ＋ `Lib/csv.py` —— 标准库 C 底座缺口
 
 **证据**：
@@ -841,3 +847,24 @@
 ④ `CM-14` 的逐模块合约补段（`SPEC-c-modules.md` §5.x），含"未接面如实"；
 ⑤ `check.py` ＋ `slowcheck` 全绿。
 **禁区**：不引入 C 扩展加载（C 底座用 Rust 重写）；不合规方言静默降级（要么支持、要么如实报未实现）。
+
+**状态 ✓（2026-11-14 落地）**：`_csv` 以 Rust 逐条转写参照 `Modules/_csv.c` 状态机实现（`Error`／`Dialect`／`Reader`／`Writer`／`reader`／`writer`／`field_size_limit`／方言注册四函数／6 个 `QUOTE_*`／`_dialects`；读侧 `parse_process_char`、写侧 `join_append_data`、方言校验次序与文案逐字一致）；`Lib/csv.py` 已由 `tools/sync_lib.py --sync` **逐字节同步**（`SLICE` 只增 `csv.py`；`--check` 零差异）。验收：①`csv.reader`／`csv.writer` 全档对拍一致（120 行双侧逐行）✓ ②`DictReader`／`DictWriter` 可用（上游 `-k Dict` 25 例全过）✓ ③上游 `test_csv.py`：接入前 `ModuleNotFoundError`（**0 通过**）⇒ 接入后 **127 例：114 通过／1 失败／6 错误／6 跳过** ✓ ④`SPEC-c-modules.md` §5.2.33（工单写 §5.2.30，已被占号 ⇒ 取下一空号；含未接面如实）✓ ⑤`check.py`＋`slowcheck` 全绿 ✓。**剩余 7 条如实归因（均在 `_csv` 语义之外）**：1 失败＝`pyawa-core` 的 `builtin_function_or_method.__module__` 统一硬编码 `"builtins"`（上游 `check__all__` 认不出 7 个名字；修它要动 core ⇒ 另一工单）；2 错误＝`_io` 的 `newline=''` 不在**孤立 `\r`** 断行（`_io` 缺口）；4 错误＝`array.array` 元素存储未接线（§5.2.14 既有缺口）。
+
+### 12.4 ABI 收口（2026-11-14 审计，8 项）
+
+审计口径：规格定义 `AB-*` **68** 条（编号 1–69 无缺号）；`pa.h` 声明函数 **73**；cdylib 实际导出 **74**。
+以下 8 项排期全部收掉；待裁只剩 #6。
+
+| # | 项 | 收法 | 验收 |
+|---|---|---|---|
+| 1 | `AB-52` 的 `type_expr` **不求值**（只原样保留表达式字符串） | 落 `TS` 注解解析器；未落前保持"原样保留"（合规） | 注解表达式可求值；`.pyi` 导出正确 |
+| 2 | `pa_exec_file` **未提供**（文件 I/O 经能力层 `IM-15`） | 接 `IM-15` 后提供；未接时如实 `PA_ERR_NOTIMPLEMENTED`（现状合规） | 提供后文件执行可用；未提供时与"已实现但拒绝"可区分（`AB-22`） |
+| 3 | `pa_call` 的 `nresults != 1` **未定** | 先定多返回值形状（规格），再实现 | 多返回值用例；单返回值不回退 |
+| 4 | **宿主对象句柄不可读回**：`pa_type` 不报 `PA_THANDLE`，且无 `pa_tohandle` | **必须实现**（不是选项）：① `pa_type` 如实报 `PA_THANDLE`；② 新增 `int pa_tohandle(pa_state*, int idx, void **payload_out)`——栈契约 `—`（不消耗），仅对句柄成功，类型不符 `PA_ERR_INVALID`（`AB-22`）；借用规则照 `AB-15`／`AB-17` | 脚本把句柄当参数传给宿主函数能取回载荷；经 `list`／`dict` 往返后仍能取回；类型不符如实报错；规格 §15.3 表格同步 |
+| 5 | `§15.4` 辅助层（`paL_*`）**规格无签名** | 按现状（`AB-19` 形态）把签名补进规格 | 规格与 `pa.h` 一致 |
+| 6 | `getfield`／`setfield`／`gettable`／`settable` 栈契约：规格 `±1` vs 实现 `−1`／`−2` | **待裁**（荐：改规格记法，实现更自然） | 规格与实现一致；`T-AB` 用例覆盖 |
+| 7 | `pa.h:140` 注释**过时**（`pa_exec_bytecode` 已落地，真的 decode 并按 `BC-29` 校验） | 改注释 | 注释与实现一致 |
+| 8 | `pa_set_program_filename` **影子导出**（不在 `pa.h`、不在规格） | 二选一：补进 `pa.h` ＋ 规格，或去掉导出 | 导出 ⊆ 头文件 ⊆ 规格 |
+
+**防 #8 复发**：新增机检 `T-CX-19`——cdylib 导出符号集合 ⊆ `pa.h` 声明集合 ⊆ 规格提及集合，否则红。
+只比对符号名，纯客观，不涉及判断。
