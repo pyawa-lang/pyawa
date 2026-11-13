@@ -246,12 +246,12 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.4**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **3 → 4**）——`AB-41` 的又一次应用：
-> `fs` 域 vtable **表尾追加** `pipe` 槽（形状见 `SPEC-capabilities.md` §9.1）
-> ⇒ 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新槽 ⇒ "未实现"，`CP-3`）。此前 1→2 是
-> `fs` 域追加 `stat_times`、2→3 是 `clock` 域追加 `localtime`／`strftime`／`mktime`
-> （形状见 `SPEC-capabilities.md` §9.1／§9.4）。`CP-30` 的注册校验口径**不变**：公共头的
-> version／size 规则不动（vtable 的形状归 `CP-`，本文件只管"如何注册"）。
+> **当前版本：1.7**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **7**）——`AB-41` 的追加式改动只升
+> 次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。逐版追加
+> 历史（`fs` 的 `stat_times`／`pipe`、`clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64`
+> 并发契约、`AB-65`／`AB-66` 配额、`AB-68` `pa_setpath`）见 `pa.h` 头注释的版本历史（**一处真相** ✓）。
+> `CP-30` 的注册校验口径**不变**：公共头的 version／size 规则不动（vtable 的形状归 `CP-`，本文件
+> 只管"如何注册"）。
 
 - **AB-45** 头文件**必须**是**单一** `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
   **禁止**分层头。
@@ -329,6 +329,7 @@
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |
 | `pa_set_memory_limit(st, limit)` | — | 每实例内存配额（`AB-65`／`OM-41`）；`0` ＝ 取消。超限 ⇒ 脚本内可捕获的 `MemoryError` |
 | `pa_memory_used(st, u64 *out)` | — | 读取当前占用字节（`AB-66`）；`out == NULL` ⇒ `PA_ERR_INVALID` |
+| `pa_setpath(st, const char *const *dirs, size_t n)` | — | 设每实例 `sys.path`（`AB-68`）；`dirs == NULL` 或 `n == 0` ⇒ 清空。路径可读性仍由 `fs` 能力域决定（`CP-21`）|
 
 > **`AB-7` 的档位／优化级子句：已满足** ✓（`AB-61` 的 `pa_options`，`P1-13` 已落地）。
 > `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（`NULL` ⇒ 浅层 ＋ 默认优化级），
@@ -447,13 +448,42 @@
   - **签名与函数同一时刻给** ✗（见 `AB-69`），禁止先注入后补签名。
   **状态**：**需要**（用户 2026-11-13 确认 ✓）；**API 形状**与 ABI 发布前的钩子族一起定 ✗（**未实现** ✗）。
 - **AB-68** **宿主设置每实例 `sys.path`**：`pa_setpath(st, const char *const *dirs, size_t n)`（`dirs == NULL` 或 `n == 0` ⇒ 清空）。语义**完全**沿用 `SPEC-imports-and-modes` 的 `IM-*`（**禁止**另立一套路径逻辑 ✗，禁令照该规格 ✓）；实现上就是把 `sys.path` 换成本实例的这份列表（**拷贝**宿主缓冲区 ✓，宿主返回后可释放 ✓）。约束：**按实例** ✓；路径访问仍受 **`fs` 能力域**夹根 ✓（`CP-21`／`AB-32`）——`sys.path` 只决定**在哪找** ✓，**能不能读**由能力面决定 ✓；脚本自己改 `sys.path` 的语义不变 ✓（`sys.path` 本就可变 ✓）。
-  **状态**：**需要**（用户 2026-11-13 确认 ✓）；**形状**待钩子族一起定 ✗（**未实现** ✗）。
-- **AB-69** **宿主函数的类型签名**（`AB-67` 配套；卖点①「类型检查真正生效」的边界延伸 ✓）：宿主注入函数时**一并**声明签名——`pa_func_set_signature(host_fn, const int *param_types, size_t nparams, int ret_type, unsigned flags)`；`param_types`／`ret_type` 用 `AB-63` 的类型标签（**含宿主注册的不透明类型** ✓）；`flags` 表达可选（`T?`）／变参（`*args`／`**kwargs`）／无返回。约束：
-  - **与函数同一时刻给** ✗（注入时声明，禁止先注入后补签名——否则检查器与时序耦合 ✓ 不可查）；
-  - **不声明 ＝ 未标注** ✓（按 `object` 处理、**不检查** ✓，行为与今天一致 ✓）；
-  - **调用方有标注** ⇒ 调用点核对，不匹配**检查期报错** ✓（归责插件 ✓）；**调用方无标注** ⇒ 边界**运行期检查** ✓（按 M4 的 `TS-*` 归责 ✓）——宿主函数拿到的一定是声明过的类型 ✓；
-  - 签名里的「宿主类型」仍是不透明句柄 ✓（`CP-10`）：**声明类型 ≠ 暴露内部** ✓。
-  **状态**：**需要**（用户 2026-11-13 确认 ✓）；**具体形态**（类型标签编码／flags 位）与钩子族一起定 ✗（**未实现** ✗）。
+  **实现 ✓（round 270）**：`pa_setpath(st, dirs, n)` 已接线；`pa_create` 的实例带**最小 `sys` 骨架**
+  （`sys.path` 空表 ＋ `sys.modules`；`paL_openlibs` 仍如实"未提供"，P3-14）。验收
+  `crates/pyawa-abi/tests/host_path.rs`（5 例：两目录可 import／脚本改 `sys.path` 语义不变／
+  `fs` 夹根后越根模块 `ImportError`／两实例路径隔离／参数边界与清空）。`pa.h` 已声明；次版本 6→7。
+- **AB-69** **宿主函数的类型签名**（`AB-67` 配套；卖点①「类型检查真正生效」的边界延伸 ✓）：
+  宿主注入函数时**一并**声明签名。**类型表达式用不透明句柄**（不是扁平标签 ✗）：
+
+  ```
+  typedef struct pa_ty_s *pa_ty;
+  pa_ty pa_ty_runtime_tag(int tag);            // AB-63 的取值域（v1 全兼容 ✓）
+  pa_ty pa_ty_named(const char *name);         // 具名／宿主注册类型（同一性＝类型对象 ✓）
+  pa_ty pa_ty_list_of(pa_ty elem);
+  pa_ty pa_ty_dict_of(pa_ty k, pa_ty v);
+  pa_ty pa_ty_optional(pa_ty t);               // T?
+  pa_ty pa_ty_union(const pa_ty *ts, size_t n);
+  pa_ty pa_ty_callable(const pa_ty *params, size_t n, pa_ty ret);
+  pa_ty pa_ty_var(const char *name);           // 类型参数 T（配 tparams）
+  pa_ty pa_ty_apply(pa_ty base, const pa_ty *args, size_t n);  // 宿主泛型类型 Result[T]
+  void  pa_func_set_signature(pa_fn f, const pa_ty *params, size_t n, pa_ty ret,
+                              const pa_ty *tparams, size_t ntparams, unsigned flags);
+  ```
+
+  约束：
+  - **与函数同一时刻给** ✗（注入时声明；禁止先注入后补签名——否则检查器与时序耦合 ✓ 不可查）；
+  - **不声明 ＝ 未标注** ✓（按 `object`、不检查 ✓，行为与今天一致 ✓）；
+  - **有标注调用方** ⇒ 调用点核对、不匹配**检查期报错** ✓（归责插件 ✓）；**无标注调用方** ⇒
+    边界**运行期检查** ✓（按 M4 的 `TS-*` 归责 ✓）；
+  - **宿主类型**：`pa_ty_named` 的同一性 ＝ **类型注册得到的那个类型对象** ✓（不按字符串 ✓）；
+    签名含宿主类型**不暴露内部** ✓（`CP-10`：只能调宿主显式注册的方法 ✓）；宿主类型的
+    **子类型关系由注册时声明** ✓（与 `DESIGN` §13-1 一致），**未声明即互不兼容** ✓；宿主泛型类型用 `pa_ty_apply` ✓；
+  - **泛型擦除口径**（沿用 `TS-35`／`TS-30` ✓）：**擦除类型身份** ✓ —— 运行期 `list[int]` 与 `list[str]`
+    同一类、`type(x)` 是 `list`、`isinstance(x, list[int])` ⇒ `TypeError`（与 CPython 一致 ✓）；
+    **但注解检查不擦除** ✓✓（`TS-47` 的插入点）—— 边界主要核身份 ✓，元素级检查按 M4 插入口径 ✓，
+    **不做 reified generics** ✗。
+  **状态**：**需要**（用户 2026-11-13 确认 ✓）；具体编码（`pa_ty` 生命周期／表归属／flags 位）与钩子族一起定 ✗（**未实现** ✗）。
+
 
 ## 16. 尚未写出（本规格自己缺的节）
 
