@@ -780,3 +780,24 @@
 **依赖** ✓：`M4` 检查器（`TS-*`）＋ `compile/` 解析器（0 unsafe）；**不引** LSP 框架 ✓（那是 `pyawa-lsp` 的事）。
 
 **状态** ✓：① `pyawa check` **已落地 ✓（round 275）**——`pyawa check [--format=json] <文件…>`：只编译不执行、批量诊断（不遇首错即止）、`.py` 只语法类（`MS-19`）／`.pyawa` 语法＋类型、`--format=json`（`file`/`line`/`col`/`code`/`severity`/`message`）、退出码 0／1／2；验收 `crates/pyawa-runtime/tests/check_command.rs` 6 例（含 **407 语料 0 诊断**、JSON 字段、执行 vs check 语法诊断一致、退出码）；CI fast 在 `check.py` 后已加语料步骤（PLAN §10.1 ④）。② LSP MVP **已落地 ✓（round 276）**——`crates/pyawa-lsp`（**零第三方依赖**的手写 JSON-RPC／LSP 帧）：`initialize`／`initialized`／全量 `didOpen·didChange·didClose`／`publishDiagnostics`（与 `check_source` 同一处真相）／`hover`（已标注名字的声明类型）；集成验收 `crates/pyawa-lsp/tests/lsp_stdio.rs` 3 例（真起子进程走 Content-Length 帧）；CI fast 已加 `-p pyawa-lsp` 测试。③ **按需梯的最小项 已落地 ✓（round 277）**——`textDocument/completion`（文档内符号）／`textDocument/definition`（注解/def/class/顶层赋值首个定义处）／`textDocument/rename`（**单文件整词** `WorkspaceEdit`）；验收 `crates/pyawa-lsp/tests/lsp_stdio.rs` 第 4 例。**如实边界**：不做类型推断／成员补全／标准库符号／跨文件跳转／作用域分析（PLAN 原文即"按需"，这些留待需求出现 ✗）。**位置口径收口 ✓（round 279）**：LSP `character` 已严格按 **UTF-16 code unit** 换算（入参/出参、非 BMP 字符；验收 `lsp_stdio.rs` 第 5 例）；其余已知边界在 `crates/pyawa-lsp/README.md` 的「范围外」逐条写明理由 ✗。
+
+### 10.2 编辑器插件（独立仓，2026-11-13 用户决定分仓）
+
+插件**独立成仓**，不放在本仓 ✓：
+
+| 仓 | 内容 |
+|---|---|
+| `pyawa-lang/vscode-pyawa` | VSCode 插件（TypeScript ＋ `vscode-languageclient`） |
+| `pyawa-lang/jetbrains-pyawa` | JetBrains 插件（IntelliJ Platform ＋ LSP 客户端） |
+| `pyawa-lang/pyawa-web` | 浏览器端（用户另建，用途以该仓为准） |
+
+**插件与本仓的契约**（只依赖这两样，**不依赖源码**）：
+① 启动 `pyawa-lsp` 可执行文件（路径可配置／从 PATH 找）；
+② **LSP 3.17 的 stdio 协议**，靠 `initialize` 的 **capabilities 协商** —— **不设自定义版本号** ✗
+（LSP 本身稳定 ✓；会变的是诊断内容，属透传数据 ✓）。
+
+**展示口径**（用户可见，插件文档必须写明）：`.py` **只报语法** ✓（`TS-26`／`MS-19`）；`.pyawa` 报语法＋类型 ✓。
+
+**不放在插件里的**：类型检查逻辑／诊断生成／autofix —— 全在 VM 侧 ✓。
+
+**发布**：各自 Marketplace 上架，凭证由用户提供。
