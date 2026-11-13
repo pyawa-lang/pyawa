@@ -344,8 +344,8 @@ pub unsafe fn builtin_function_getattr(
     }
     // **`__text_signature__`**（round 86）：`inspect.signature` 解析内建可调用对象的入口 ✓。
     if name == "__text_signature__" {
-        return Some(match instance.builtin_text_signature(unsafe { NonNull::new_unchecked(ptr) }) {
-            Some(signature) => instance.new_str(signature),
+        return Some(match instance.text_signature(unsafe { NonNull::new_unchecked(ptr) }) {
+            Some(signature) => instance.new_str(&signature),
             None => instance.new_none(),
         });
     }

@@ -198,6 +198,160 @@ pub unsafe fn read_signature(sig: *const pa_sig) -> Option<Signature> {
     Some(signature)
 }
 
+/// **`AB-54`**：把注册签名投影成宿主函数的 `__text_signature__` 文本；`None` ⇒ **如实不提供**。
+///
+/// 口径照 `Lib/inspect.py` 的 `_signature_fromstr`（本机 3.14.4 实测，见 `_signature_fromstr` 的
+/// `parse_name`／`wrap_value`）：
+/// - 文本签名**不能有注解**（带注解的形参直接 `ValueError`）⇒ `pa_param.type_expr` **不进**文本
+///   签名（它是给进程内检查器的类型元数据，走 `AB-69` 的通道）；
+/// - 默认值必须是可 `literal_eval` 的常数 ⇒ 只有 `None`／`bool`／`int` 能还原；其它类型
+///   （含"默认值给了句柄但没有可渲染字面量"）⇒ **整个文本签名不提供**（**禁止**编一个假值）。
+///
+/// # Safety
+///
+/// 同 [`read_signature`]。
+pub unsafe fn text_signature(instance: &Instance, sig: *const pa_sig) -> Option<String> {
+    if sig.is_null() {
+        return None;
+    }
+    // SAFETY: 调用方保证至少能读 `size` 字段。
+    let declared = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*sig).size)) };
+    let limit = declared.min(core::mem::size_of::<pa_sig>());
+    let params_offset = core::mem::offset_of!(pa_sig, params);
+    if limit < params_offset + core::mem::size_of::<*const pa_param>() {
+        return Some("()".to_owned());
+    }
+    // SAFETY: 偏移落在宿主声明的尺寸内。
+    let count = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*sig).nparams)) };
+    // SAFETY: 同上。
+    let list = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*sig).params)) };
+    if count > 256 || (count > 0 && list.is_null()) {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut seen_default = false;
+    let mut keyword_only_seen = false;
+    let mut varargs_seen = false;
+    let mut varkw_seen = false;
+    for index in 0..count {
+        // SAFETY: 宿主保证 params 有 count 项。
+        let entry = unsafe { list.add(index) };
+        // SAFETY: 同上。
+        let param = unsafe { read_param(entry) };
+        let name = param.name?;
+        if !is_python_identifier(&name) {
+            return None;
+        }
+        let flags = param.flags;
+        let class = flags
+            & (param_flags::PA_PARAM_POSITIONAL
+                | param_flags::PA_PARAM_KEYWORD_ONLY
+                | param_flags::PA_PARAM_VARARGS
+                | param_flags::PA_PARAM_VARKW);
+        if class.count_ones() != 1 {
+            return None;
+        }
+        let has_default = flags & param_flags::PA_PARAM_HAS_DEFAULT != 0;
+        // SAFETY: 同上。
+        let default = unsafe { read_default_handle(entry) }?;
+        if has_default != default.is_some() {
+            // `AB-52`：`default_handle` 只在"有默认值"时非 NULL ⇒ 不一致就不给文本签名。
+            return None;
+        }
+        let default = match default {
+            Some(object) => Some(render_default(instance, object)?),
+            None => None,
+        };
+        if flags & param_flags::PA_PARAM_VARARGS != 0 {
+            if varargs_seen || keyword_only_seen || varkw_seen {
+                return None;
+            }
+            varargs_seen = true;
+            parts.push(format!("*{name}"));
+        } else if flags & param_flags::PA_PARAM_VARKW != 0 {
+            if varkw_seen || index + 1 != count {
+                return None;
+            }
+            varkw_seen = true;
+            parts.push(format!("**{name}"));
+        } else if flags & param_flags::PA_PARAM_KEYWORD_ONLY != 0 {
+            if !keyword_only_seen {
+                keyword_only_seen = true;
+                if !varargs_seen {
+                    parts.push("*".to_owned());
+                }
+            }
+            parts.push(match default {
+                Some(value) => format!("{name}={value}"),
+                None => name,
+            });
+        } else {
+            // 位置参数：必须全部出现在 `*` 之前，且"有默认"之后不能再有"无默认"（Python 语法）。
+            if keyword_only_seen || varargs_seen || varkw_seen {
+                return None;
+            }
+            if has_default {
+                seen_default = true;
+            } else if seen_default {
+                return None;
+            }
+            parts.push(match default {
+                Some(value) => format!("{name}={value}"),
+                None => name,
+            });
+        }
+    }
+    Some(format!("({})", parts.join(", ")))
+}
+
+/// 读一个参数的 `default_handle`（有界读；`None` ＝ 不可读／NULL）。
+///
+/// # Safety
+///
+/// `param` 指向宿主编译时的 `pa_param`。
+unsafe fn read_default_handle(param: *const pa_param) -> Option<Option<NonNull<Header>>> {
+    // SAFETY: 调用方保证至少能读 `size`。
+    let declared = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*param).size)) };
+    let limit = declared.min(core::mem::size_of::<pa_param>());
+    let offset = core::mem::offset_of!(pa_param, default_handle);
+    if limit < offset + core::mem::size_of::<*mut c_void>() {
+        return Some(None);
+    }
+    // SAFETY: 偏移落在宿主声明的尺寸内。
+    let handle = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*param).default_handle)) };
+    Some(NonNull::new(handle.cast::<Header>()))
+}
+
+/// 默认值 → Python 字面量文本（只支持 `inspect` 能 `literal_eval` 回去的三类）。
+fn render_default(instance: &Instance, object: NonNull<Header>) -> Option<String> {
+    use crate::stack::tag;
+    match crate::stack::tag_of(instance, object) {
+        tag::PA_TNIL => Some("None".to_owned()),
+        tag::PA_TBOOLEAN => Some(
+            if crate::stack::truthy(instance, object) {
+                "True"
+            } else {
+                "False"
+            }
+            .to_owned(),
+        ),
+        tag::PA_TINTEGER => Some(instance.int_value(object)?.to_string()),
+        _ => None,
+    }
+}
+
+/// 简单标识符判定（`__text_signature__` 是要被 `ast.parse` 的，名字必须合法）。
+fn is_python_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|character| character.is_alphanumeric() || character == '_')
+}
+
 /// 读取一个参数的签名（同样按自带尺寸有界读）。
 ///
 /// # Safety

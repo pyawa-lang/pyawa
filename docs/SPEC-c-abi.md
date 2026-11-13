@@ -141,6 +141,17 @@
 - **AB-54** 签名的**唯一权威**是注册信息（`AB-31`）：进程内检查器读它的**内存投影**；运行期
   `inspect` 一类读**注册信息本身**（`__text_signature__` 由 `pa_sig` 投影）；进程外工具读
   **导出投影**（`.pyi`）。各投影**禁止**不一致——导出是同一份数据的**投影**，不是第二来源。
+> **`AB-54` 的运行期投影规则**（实现口径，随 2026-11-14 的 `__text_signature__` 落地）：
+> - 运行期 `__text_signature__` 由注册时的 `pa_sig` **投影**（不读 fs、与 `.pyi` 无关）；
+> - 文本签名**不含注解**（`inspect` 的 `_signature_fromstr` 对带注解形参直接报错——注解走
+>   `AB-69` 的 `pa_type_expr` 通道）；
+> - 默认值只有在能还原成 `literal_eval` 常数（`None`／`bool`／`int`）时才进文本签名；
+>   其它（含"`HAS_DEFAULT` 但默认值句柄不可渲染"）⇒ **整条文本签名不提供**（如实 `None`，
+>   `inspect` 报"no signature"），**禁止**编一个假值；
+> - 宿主函数对象带 `__call__`（委托 call 槽）与普通函数的 `__get__`（类属性绑定）⇒ 上游
+>   `inspect` 的 `_signature_is_builtin` 走方法描述符分支，读到上面的 `__text_signature__`。
+> 验收：`crates/pyawa-runtime/tests/abi_text_signature.rs`（端到端：真装 stdlib ＋ 真注册）。
+
 - **AB-55** `pa_create` 的签名**必须**是 `int pa_create(const pa_host *host, pa_state **out)`：
   实例经**出参**交回（`AB-49` 的"经栈"在此不适用）。`pa_create` **不接触栈**（栈契约 `—`）。
 - **AB-56** **ABI 不匹配时仍交出实例**：`pa_create` 返回 `PA_ERR_ABI`，且 `*out` 指向一个

@@ -186,9 +186,11 @@ pub struct Instance {
     /// 一类内建类在参照里有非空签名（`(function, /)` 等）——`inspect.signature(<类>)` 的类分支
     /// 会先读"MRO 里第一个非空 `base.__text_signature__`" ✓。
     type_text_signatures: RefCell<std::collections::HashMap<usize, &'static str>>,
-    /// **内建函数的 `__text_signature__` 旁表**（round 86）：`inspect.signature` 解析内建可调用
-    /// 对象（`object.__init__`／`__new__`／`__init_subclass__`）的文本签名入口 ✓。
-    builtin_text_signatures: RefCell<std::collections::HashMap<usize, &'static str>>,
+    /// **对象级 `__text_signature__` 旁表**（round 86；`AB-54`）：内建函数与**宿主函数**共用
+    /// （宿主函数的文本签名由 ABI 在注册时从 `pa_sig` 投影写入 ⇒ 值用 `String`，运行期数据）。
+    /// `inspect.signature` 解析内建可调用对象（`object.__init__`／`__new__`／`__init_subclass__`
+    /// 以及宿主函数）的文本签名入口 ✓。
+    text_signatures: RefCell<std::collections::HashMap<usize, String>>,
     /// **`mappingproxy` 的活视图来源**（round 125）：键/值/项视图的 `.mapping` 要是**源字典的活视图** ✓
     /// ⇒ 按代理地址记源 dict 指针；等价比较等入口先同步快照 ✓（`test_dict.test_views_mapping` ✓）。
     mappingproxy_live: RefCell<crate::fast_hash::FastMap<usize, NonNull<Header>>>,

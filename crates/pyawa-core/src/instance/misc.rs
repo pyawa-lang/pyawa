@@ -338,19 +338,22 @@ impl Instance {
             .copied()
     }
 
-    /// **内建函数 `__text_signature__` 旁表**（round 86）。
-    pub fn set_builtin_text_signature(&self, function: NonNull<Header>, signature: &'static str) {
-        self.builtin_text_signatures
+    /// **对象级 `__text_signature__` 旁表**（round 86）：内建函数与**宿主函数**共用。
+    ///
+    /// 宿主函数由 ABI 在注册时写入（`AB-54`：文本签名是 `pa_sig` 的**投影**）；因此值用
+    /// `String`（运行期数据），而不是原来的 `&'static str`。
+    pub fn set_text_signature(&self, function: NonNull<Header>, signature: impl Into<String>) {
+        self.text_signatures
             .borrow_mut()
-            .insert(function.as_ptr() as usize, signature);
+            .insert(function.as_ptr() as usize, signature.into());
     }
 
-    /// 取内建函数的 `__text_signature__`（借用，`None` ⇒ 没有）✓。
-    pub fn builtin_text_signature(&self, function: NonNull<Header>) -> Option<&'static str> {
-        self.builtin_text_signatures
+    /// 取对象的 `__text_signature__`（`None` ⇒ 没有；返回拷贝，调用方持有）✓。
+    pub fn text_signature(&self, function: NonNull<Header>) -> Option<String> {
+        self.text_signatures
             .borrow()
             .get(&(function.as_ptr() as usize))
-            .copied()
+            .cloned()
     }
 
     /// **Python 级终结器旁表**（round 82）：是否已跑过 `__del__` ✓。

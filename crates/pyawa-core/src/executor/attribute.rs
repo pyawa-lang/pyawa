@@ -153,6 +153,14 @@ pub(crate) fn attribute_lookup(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<Attribute, ExecError> {
+    // **对象级 `__text_signature__` 旁表**（`AB-54`）：内建函数与**宿主函数**共用同一通道。
+    // 宿主函数是 ABI 注册的载荷类型、没有自己的属性分派槽 ⇒ 文本签名由注册时的 `pa_sig`
+    // 投影进旁表，这里直接交回字符串（`inspect.signature` 读的就是这个属性）。
+    if name == "__text_signature__" {
+        if let Some(signature) = instance.text_signature(object) {
+            return Ok(Attribute::Owned(instance.new_str(&signature)));
+        }
+    }
     // **用户 `__getattribute__` 优先**（round 87，参照 `PyObject_GenericGetAttr` 之前的
     // `tp_getattro` 语义）：类型 MRO 上**覆写**了 `__getattribute__` ⇒ `getattr(obj, 名)`／
     // `obj.名` 一律先调它 ✓。守卫：钩子执行期间（`object.__getattribute__` → `attribute_read`）
@@ -473,7 +481,7 @@ pub(crate) fn attribute_lookup(
             .cast::<Header>();
         // **文本签名**（round 87）：`inspect.signature(C.mro)` 参照里是 `()`（`($self, /)` 去掉绑定
         // 首参）✓ —— `rlcompleter` 的 `CompleteMe.mro()` 期望靠它（否则给 `None.mro(` ✗）。
-        instance.set_builtin_text_signature(native, "($self, /)");
+        instance.set_text_signature(native, "($self, /)");
         // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
         unsafe { instance.incref_object(object.as_ptr()) };
         let bound = instance.alloc(MethodObject::new(

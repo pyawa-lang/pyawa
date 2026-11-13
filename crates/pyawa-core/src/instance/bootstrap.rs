@@ -16,7 +16,7 @@ impl Instance {
             not_implemented_singleton: core::cell::Cell::new(None),
             python_finalized: RefCell::new(crate::fast_hash::FastSet::default()),
             ast_parser: core::cell::Cell::new(None),
-            builtin_text_signatures: RefCell::new(std::collections::HashMap::new()),
+            text_signatures: RefCell::new(std::collections::HashMap::new()),
             type_text_signatures: RefCell::new(std::collections::HashMap::new()),
             getattribute_dispatching: Cell::new(false),
             trace_dispatching: Cell::new(false),

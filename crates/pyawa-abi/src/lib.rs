@@ -941,7 +941,9 @@ pub unsafe extern "C" fn pa_module_addfunction(
         let namespace = host_module_record(state, module)
             .and_then(|module| module_namespace(&state.instance, module))
             .expect("gate 已确认句柄有效");
-        let created = create_host_function(state, &text, function, &signature);
+        // SAFETY: 调用方按契约给出 sig。
+        let text_signature = unsafe { host::text_signature(&state.instance, sig) };
+        let created = create_host_function(state, &text, function, &signature, text_signature);
         // `dict_set` 自己加一份引用；`created` 的初始引用由 `host_functions` 账本持有（实例销毁时随堆释放）。
         state.instance.dict_set(namespace, &text, created);
         status::PA_OK
@@ -3058,7 +3060,9 @@ pub unsafe extern "C" fn pa_register(
         let Some(signature) = (unsafe { host::read_signature(sig) }) else {
             return status::PA_ERR_INVALID;
         };
-        let created = create_host_function(state, &text, function, &signature);
+        // SAFETY: 调用方按契约给出 sig。
+        let text_signature = unsafe { host::text_signature(&state.instance, sig) };
+        let created = create_host_function(state, &text, function, &signature, text_signature);
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
@@ -3086,6 +3090,7 @@ fn create_host_function(
     name: &str,
     function: host::PaHostFn,
     signature: &host::Signature,
+    text_signature: Option<String>,
 ) -> NonNull<Header> {
     // 宿主函数对象的类型（每实例一次）
     let host_type = match state.host_function_type {
@@ -3096,6 +3101,43 @@ fn create_host_function(
                 core::mem::size_of::<host::HostFunction>(),
                 pyawa_core::Slots::new(host_function_dealloc).with_call(host_function_call),
             );
+            // **`AB-54`**：给"运行期自描述"两条通用成员（`inspect.signature` 的入口）：
+            // - `__call__`：上游 `inspect` 对"非内建函数"的签名分支要求
+            //   `getattr_static(type(obj), "__call__")` 非空；这里放一个**委托**到 call 槽的
+            //   原生方法（也让 `fn.__call__(...)` 与 CPython 一致可用）；
+            // - `__text_signature__` 默认 `None`（与 CPython 里"无文本签名的内建函数"同形；
+            //   有注册签名时由**对象级旁表**在属性查找里优先投影出字符串）。
+            let call_method = state
+                .instance
+                .alloc(pyawa_core::BuiltinFunctionObject::new(
+                    state
+                        .instance
+                        .type_named("builtin_function_or_method")
+                        .expect("引导期已登记"),
+                    "__call__",
+                    core::cell::Cell::new(host_function_call_method),
+                ))
+                .into_raw()
+                .cast::<Header>();
+            state.instance.set_type_attribute(ty, "__call__", call_method);
+            // **`__get__`**：宿主函数在类属性里按普通函数绑定；同时让上游 `inspect` 的
+            // `ismethoddescriptor(obj)` 成立（它的 `_signature_is_builtin` 对"方法描述符"走
+            // `__text_signature__` 分支——本层没有 `getattr_static` 的完整面，这是可靠入口）。
+            let descriptor_get = state
+                .instance
+                .alloc(pyawa_core::BuiltinFunctionObject::new(
+                    state
+                        .instance
+                        .type_named("builtin_function_or_method")
+                        .expect("引导期已登记"),
+                    "__get__",
+                    core::cell::Cell::new(host_function_descriptor_get),
+                ))
+                .into_raw()
+                .cast::<Header>();
+            state.instance.set_type_attribute(ty, "__get__", descriptor_get);
+            let none = state.instance.retain(state.instance.singletons().none());
+            state.instance.set_type_attribute(ty, "__text_signature__", none);
             state.host_function_type = Some(ty);
             ty
         }
@@ -3110,6 +3152,11 @@ fn create_host_function(
         signature.flags,
     );
     let created = state.instance.alloc_payload(object).cast::<Header>();
+    // **`AB-54`**：文本签名是注册信息的**投影**（给运行期 `inspect.signature` 读；与 `.pyi`
+    // 无关）。渲染不出诚实文本时 `None` ⇒ 不设，`__text_signature__` 如实是 `None`。
+    if let Some(text) = text_signature {
+        state.instance.set_text_signature(created, text);
+    }
     // 记下来（持有），脚本里按名字就能拿到
     state.host_functions.push(created);
     // `AB-69`：签名必须在**注册后、任何执行前**声明 ⇒ 记下注册时的执行序号。
@@ -3135,6 +3182,57 @@ fn create_host_function(
 unsafe fn host_function_dealloc(ptr: *mut Header) {
     // SAFETY: 调用方保证 ptr 是本类型的一个对象，且计数已归零、clear 已跑过。
     drop(unsafe { Box::from_raw(ptr.cast::<host::HostFunction>()) });
+}
+
+/// 宿主函数类型的 `__get__`（描述符面）：普通函数语义——绑定实例，类级取用返回自身。
+///
+/// # Safety
+///
+/// 契约见 `pyawa_core::NativeFn`。
+unsafe fn host_function_descriptor_get(
+    instance: &Instance,
+    this: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(function) = this else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' for 'host_function' objects needs an argument",
+        ));
+    };
+    match args.first() {
+        Some(target) if *target != instance.singletons().none() => {
+            // SAFETY: 两者都存活；绑定方法各持一份。
+            unsafe {
+                instance.incref_object(function.as_ptr());
+                instance.incref_object(target.as_ptr());
+            }
+            let method_type = instance.type_named("method").expect("method 类型已登记");
+            let bound = instance.alloc(pyawa_core::MethodObject::new(method_type, function, *target));
+            Ok(bound.into_raw().cast::<Header>())
+        }
+        // `__get__(None, owner)` ⇒ 未绑定，交回函数本身（同普通函数）。
+        _ => Ok(instance.retain(function)),
+    }
+}
+
+/// 宿主函数类型的 `__call__` 方法（`AB-54` 的 `inspect` 入口）：**委托**给 call 槽。
+///
+/// # Safety
+///
+/// 契约见 `pyawa_core::NativeFn`。
+unsafe fn host_function_call_method(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(object) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "宿主函数 __call__ 缺少 self"));
+    };
+    // SAFETY: 绑定契约保证 object 是本类型的存活对象。
+    unsafe { host_function_call(object.as_ptr(), bound, args, kwargs, instance) }
 }
 
 /// 宿主函数对象的 `call` 槽（`OM-11`）：实参压栈 → 调 C 函数 → 栈顶就是结果。
