@@ -16,6 +16,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
+          fetch-depth: 0
       - name: 环境
         run: |
           sudo apt-get update -qq
@@ -37,6 +40,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
+          fetch-depth: 0
       - name: 环境
         run: |
           sudo apt-get update -qq
@@ -52,6 +58,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
+          fetch-depth: 0
       - name: 环境
         run: |
           sudo apt-get update -qq
