@@ -55,6 +55,16 @@ jobs:
       - name: slowcheck（11 项：含基准闸＝性能回退 ＋ memcheck 子集）
         run: tools/slowcheck.sh --release
 
+      - name: 上传失败日志（artifact）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slowcheck-logs-${{ github.job }}
+          path: |
+            target/slowcheck/*.log
+            target/conformance/*.md
+          if-no-files-found: ignore
+
   weekly:
     name: 每周全量（slowcheck ＋ 内存棘轮）
     if: github.event_name == 'workflow_dispatch'
@@ -75,5 +85,15 @@ jobs:
         run: tools/cargo.sh test --release -p pyawa-abi --test conformance
       - name: slowcheck
         run: tools/slowcheck.sh --release
+
+      - name: 上传失败日志（artifact）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slowcheck-logs-${{ github.job }}
+          path: |
+            target/slowcheck/*.log
+            target/conformance/*.md
+          if-no-files-found: ignore
       - name: 全量内存棘轮（memdangle_survey）
         run: python3 tools/memdangle_survey.py --seconds 3000 || true
