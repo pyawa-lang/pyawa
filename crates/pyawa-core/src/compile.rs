@@ -445,6 +445,96 @@ pub fn compile(
     // 无宿主函数声明（普通宿主／测试）⇒ 与既有行为逐字节一致（`AB-69` ③）。
     compile_with_host_functions(source, filename, mode, tier, optimization, &[])
 }
+/// 一条**编译期诊断**（`TS-41` 批量诊断；`pyawa check` 与 LSP 的数据源）。
+///
+/// 字段口径（PLAN §10.1 的 `--format=json`）：`file`／`line`（1 基）／`col`（1 基）／`code`／
+/// `severity`／`message`。`code` 取值：`"syntax"`（词法／语法）／`"unsupported"`（尚未接线）／
+/// `"type"`（`TS-47` 静态类型）。**只编译不执行**：本结构只由 [`check_source`] 产出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// 源文件名（调用方给的 `filename`，不解析/不规范化）。
+    pub file: String,
+    /// 行号（**1 基**；提取不到时 0）。
+    pub line: u32,
+    /// 列号（**1 基**；提取不到时 0）。
+    pub col: u32,
+    /// 诊断类别：`"syntax"`／`"unsupported"`／`"type"`。
+    pub code: String,
+    /// 严重级：v1 全是 `"error"`（`TS-41` 只要求错误诊断；警告将来加值）。
+    pub severity: String,
+    /// 消息文本（与执行路径的编译错误同源 ✓）。
+    pub message: String,
+}
+
+/// **只编译不执行**的诊断入口（`pyawa check`／LSP 的数据源）：返回**批量**诊断（不遇首错即止）。
+///
+/// 口径（PLAN §10.1）：
+/// * `.py`（[`Mode::PurePython`]）**只出语法类**诊断（`TS-26`／`MS-19`：`.py` 的标注**不产生**
+///   任何检查）；`.pyawa`（[`Mode::Extension`]）出语法 ＋ `TS-47` 类型诊断；
+/// * 词法／语法错误最多一条（解析器本身不继续），**类型诊断批量收集**（`TS-41`）；
+/// * 不改动任何既有编译行为：执行路径仍用 [`compile`]／[`compile_with_host_functions`]。
+pub fn check_source(source: &str, filename: &str, mode: Mode) -> Vec<Diagnostic> {
+    let lexed = match lex(source, mode) {
+        Ok(lexed) => lexed,
+        Err(error) => return vec![diagnostic_from_error(filename, &error)],
+    };
+    let statements = match parse_module(&lexed) {
+        Ok(statements) => statements,
+        Err(error) => return vec![diagnostic_from_error(filename, &error)],
+    };
+    if mode != Mode::Extension {
+        // `.py`：**只语法**（`TS-26`／`MS-19`）——解析通过就 0 诊断。
+        return Vec::new();
+    }
+    typecheck::check_diagnostics(&statements, filename, &[])
+        .into_iter()
+        .map(|diagnostic| Diagnostic {
+            file: filename.to_owned(),
+            line: diagnostic.line,
+            col: diagnostic.col,
+            code: "type".to_owned(),
+            severity: "error".to_owned(),
+            message: diagnostic.message,
+        })
+        .collect()
+}
+
+/// 把一条编译错误折成诊断（行／列从消息里的"第 L 行／列 C"标记提取；没有就 0）。
+fn diagnostic_from_error(filename: &str, error: &CompileError) -> Diagnostic {
+    let (code, message) = match error {
+        CompileError::Syntax(message) => ("syntax", message.clone()),
+        CompileError::Unsupported(message) => ("unsupported", message.clone()),
+        CompileError::TypeAssignment(message) => ("type", message.clone()),
+    };
+    let (line, col) = extract_message_location(&message);
+    Diagnostic {
+        file: filename.to_owned(),
+        line,
+        col,
+        code: code.to_owned(),
+        severity: "error".to_owned(),
+        message,
+    }
+}
+
+/// 从错误消息里提取位置：找中文标记 `第 <n> 行` 与 `列 <n>`（词法／语法错误的既有格式）。
+///
+/// 提取不到 ⇒ `(0, 0)`（`--format=json` 的字段仍在，`T-CX-8` 的"字段齐全"不受影响 ✓）。
+fn extract_message_location(message: &str) -> (u32, u32) {
+    fn number_after(text: &str, marker: &str) -> Option<u32> {
+        let start = text.find(marker)? + marker.len();
+        let digits: String = text[start..]
+            .chars()
+            .skip_while(|character| *character == ' ')
+            .take_while(|character| character.is_ascii_digit())
+            .collect();
+        digits.parse().ok()
+    }
+    let line = number_after(message, "第 ").unwrap_or(0);
+    let col = number_after(message, "列 ").unwrap_or(0);
+    (line, col)
+}
+
 /// **`AB-69`**：编译期调用点检查用的宿主函数声明（类型用**静态标签名**；`None` ＝ 平台类型／未知）。
 ///
 /// 由 ABI 层从 `pa_ty` 签名投影出来（只投影**静态可判**的标签：int/bool/float/str/bytes/

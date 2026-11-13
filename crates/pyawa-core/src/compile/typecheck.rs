@@ -57,9 +57,24 @@ struct Scope {
     is_module: bool,
 }
 
+/// **批量诊断**的一条（`TS-41`；`pyawa check` 的数据源）：行／列从 1 起，消息与既有错误同源。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TypeDiagnostic {
+    /// 行号（1 基）。
+    pub line: u32,
+    /// 列号（1 基）。
+    pub col: u32,
+    /// 消息（与 `CompileError::TypeAssignment` 的文本一致）。
+    pub message: String,
+}
+
 /// 检查器（除了文件名，还带 `TS-49` 要用的**类属性标注表**）。
 struct Checker<'a> {
     filename: &'a str,
+    /// **`TS-41` 批量诊断**：`check_diagnostics` 时开收集（不遇首错即止）；`check` 时关。
+    collecting: bool,
+    /// 已收集的类型诊断（只在 `collecting` 时写）。
+    errors: Vec<TypeDiagnostic>,
     /// **`AB-69`**：宿主函数声明（名字 → 静态标签）；调用点检查用。
     host_functions: HashMap<String, super::HostFunctionSignature>,
     /// **`TS-49` 的已知类型来源**：模块级 `class C:` 体里 `属性: 类型` 的注解。
@@ -78,6 +93,8 @@ pub(super) fn check(
     collect_class_attributes(statements, &mut class_attributes);
     let mut checker = Checker {
         filename,
+        collecting: false,
+        errors: Vec::new(),
         class_attributes,
         host_functions: host_functions
             .iter()
@@ -93,6 +110,37 @@ pub(super) fn check(
     };
     checker.check_block(statements, &mut scope, &HashMap::new())?;
     Ok(())
+}
+
+/// **批量诊断入口**（`TS-41`）：与 [`check`] 同一条路，但**收集全部**能静态判定的类型诊断
+/// （不遇首错即止）；供 `pyawa check` 与 LSP 诊断使用 ✓。
+pub(super) fn check_diagnostics(
+    statements: &[Statement],
+    filename: &str,
+    host_functions: &[HostFunctionSignature],
+) -> Vec<TypeDiagnostic> {
+    let mut class_attributes = HashMap::new();
+    collect_class_attributes(statements, &mut class_attributes);
+    let mut checker = Checker {
+        filename,
+        collecting: true,
+        errors: Vec::new(),
+        class_attributes,
+        host_functions: host_functions
+            .iter()
+            .map(|signature| (signature.name.clone(), signature.clone()))
+            .collect(),
+    };
+    let mut scope = Scope {
+        declared: HashMap::new(),
+        assigned: HashSet::new(),
+        globals: HashSet::new(),
+        module_snapshot: HashMap::new(),
+        is_module: true,
+    };
+    // 批量模式不会因单条语句失败而中断（`check_block` 逐条兜住 ✓）。
+    let _ = checker.check_block(statements, &mut scope, &HashMap::new());
+    checker.errors
 }
 
 /// 收**类属性标注表**（`TS-49`；`class C:` 体里的 `属性: 类型` 与嵌套类）。
@@ -157,9 +205,40 @@ impl Checker<'_> {
     ) -> Result<HashMap<String, StaticType>, CompileError> {
         let mut narrow = narrow_in.clone();
         for statement in statements {
-            narrow = self.check_statement(statement, scope, &narrow)?;
+            match self.check_statement(statement, scope, &narrow) {
+                Ok(advanced) => narrow = advanced,
+                Err(error) => {
+                    if self.collecting {
+                        // 兜底：不预期走到（错位点都在 `report` 里），但不能让批量模式中断。
+                        let CompileError::TypeAssignment(message) = &error else {
+                            return Err(error);
+                        };
+                        self.errors.push(TypeDiagnostic {
+                            line: 0,
+                            col: 0,
+                            message: message.clone(),
+                        });
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
         }
         Ok(narrow)
+    }
+
+    /// 记录或返回一条类型诊断（`TS-47`／`TS-41` 的一处出口）：批量模式收集，执行模式立即返回。
+    fn report(&mut self, message: String, span: Span) -> Result<(), CompileError> {
+        if self.collecting {
+            self.errors.push(TypeDiagnostic {
+                line: span.line_start,
+                col: span.col_start.saturating_add(1),
+                message,
+            });
+            Ok(())
+        } else {
+            Err(CompileError::TypeAssignment(message))
+        }
     }
 
     /// 检查一条语句，返回**执行完之后**的收窄表。
@@ -460,14 +539,15 @@ impl Checker<'_> {
         if let Some(expected) = expected {
             let actual = self.infer(value, scope, narrow);
             if !compatible(&expected, &actual) {
-                return Err(CompileError::TypeAssignment(format!(
+                let message = format!(
                     "assignment type check failed: `{name}` expects {}, got {} \
                      (TS-47; {}: line {})",
                     render_static(&expected),
                     render_static(&actual),
                     self.filename,
                     target_span.line_start
-                )));
+                );
+                return self.report(message, target_span);
             }
         }
         narrow.remove(name);
@@ -478,7 +558,7 @@ impl Checker<'_> {
     /// 若实参的静态类型可判且与声明标签不相容 ⇒ **编译期**报错（归责插件：消息带宿主函数名）。
     /// 未声明签名的宿主函数／判不出的实参 ⇒ 放行（交给边界运行期，`AB-69` ②）。
     fn check_host_calls(
-        &self,
+        &mut self,
         expression: &Expression,
         scope: &Scope,
         narrow: &HashMap<String, StaticType>,
@@ -499,7 +579,8 @@ impl Checker<'_> {
                         || scope.declared.contains_key(name)
                         || scope.globals.contains(name);
                     if !shadowed {
-                        if let Some(signature) = self.host_functions.get(name) {
+                        let signature = self.host_functions.get(name).cloned();
+                        if let Some(signature) = signature {
                             for (index, argument) in arguments.iter().enumerate() {
                                 let Some(Some(expected_label)) =
                                     signature.parameters.get(index)
@@ -510,13 +591,15 @@ impl Checker<'_> {
                                 let expected =
                                     StaticType::Label(type_label(expected_label));
                                 if !compatible(&expected, &actual) {
-                                    return Err(CompileError::TypeAssignment(format!(
-                                        "host function type check failed: `{name}` argument                                          {index} expects {expected_label}, got {} \
+                                    let message = format!(
+                                        "host function type check failed: `{name}` argument \
+                                         {index} expects {expected_label}, got {} \
                                          (AB-69; {}: line {})",
                                         render_static(&actual),
                                         self.filename,
                                         span.line_start
-                                    )));
+                                    );
+                                    self.report(message, *span)?;
                                 }
                             }
                         }
