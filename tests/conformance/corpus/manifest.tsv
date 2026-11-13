@@ -414,3 +414,4 @@ libtest3_parallel_case_attrs.py	python	has_cls,name	-	Lib/test/libregrtest/paral
 libtest3_typinganndata_pkg.py	python	name,is_pkg	-	Lib/test/typinganndata/__init__.py
 libtest3_test_pkg.py	python	name,is_pkg	-	Lib/test/__init__.py
 libtest3_libregrtest_pkg.py	python	name,is_pkg	-	Lib/test/libregrtest/__init__.py
+yield_expression_assignment.py	python	-	-	-

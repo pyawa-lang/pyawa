@@ -1915,51 +1915,138 @@ fn write_exception_varint(out: &mut Vec<u8>, value: usize) {
 /// 都被当成 cell（`class C: def m(self, x): if x: …` ⇒ 多出 `MAKE_CELL` ✗，被夹具当场抓住 ✓）。
 /// **表达式里有没有 `yield`**（第 219 轮）✓：给"所在作用域是不是生成器"用 ✓。
 ///
-/// **不下潜到嵌套的 `Lambda`** ✓ —— 那里面的 `yield` 属于**它自己** ✓（它自成作用域 ✓）。
-fn expressions_have_yield(expression: &Expression) -> bool {
+/// `plain` 为真时连 `yield`（`yield <值>` 那半）也算；`yield from` **永远**算（调用方要
+/// "有没有任何让出"时传 `true`，只查 `yield from` 的语法档时传 `false`）。
+///
+/// **作用域边界**（逐条实测本机 3.14.4 定的，见 §12.1 的修因）：
+/// - **不下潜到 `lambda` 的体** ✓ —— 那里面的 `yield` 属于**它自己** ✓（它自成作用域 ✓）；
+/// - 但**下潜 `lambda` 形参默认值** ✓ —— 默认值在外层求值（实测：`def f(): return
+///   (lambda x=(yield): x)` 的 `f` 是生成器）；
+/// - **推导式只下潜最外层可迭代对象** ✓ —— 3.12+ 的内联形态里它在外层求值（实测：
+///   `def f(): r = [x for x in (yield)]` 的 `f` 是生成器）；元素／条件／内层迭代在推导
+///   作用域里，`yield` 写在那里是 `SyntaxError`；
+/// - 其余同层求值的子表达式全部下潜（含关键字实参、`**` 实参、三元、链式比较、f-string 插值、
+///   切片、比较、`await` 的操作数）。
+fn expression_has_yield(expression: &Expression, plain: bool) -> bool {
     match expression {
-        Expression::Yield(..) => true,
-        Expression::Lambda { .. } => false,
+        Expression::Yield(value, _) => {
+            plain || value.as_deref().is_some_and(|value| expression_has_yield(value, plain))
+        }
+        // `yield from` 在两种查询里都算命中（生成器判定与"async def 里不许 yield from"）。
+        Expression::YieldFrom(..) => true,
+        Expression::Await(value, _) => expression_has_yield(value, plain),
+        // **不下潜 lambda 的体**，但**形参默认值属于外层** ✓。
+        Expression::Lambda { parameters, kwonly, .. } => parameters
+            .iter()
+            .chain(kwonly.iter())
+            .any(|parameter| {
+                parameter
+                    .default
+                    .as_ref()
+                    .is_some_and(|value| expression_has_yield(value, plain))
+            }),
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
-        | Expression::TupleLiteral(items, _) => items.iter().any(expressions_have_yield),
+        | Expression::TupleLiteral(items, _) => {
+            items.iter().any(|item| expression_has_yield(item, plain))
+        }
         Expression::Map(items, _) => items.iter().any(|item| match item {
-            MapItem::Pair(key, value) => expressions_have_yield(key) || expressions_have_yield(value),
-            MapItem::Unpack(value) => expressions_have_yield(value),
+            MapItem::Pair(key, value) => {
+                expression_has_yield(key, plain) || expression_has_yield(value, plain)
+            }
+            MapItem::Unpack(value) => expression_has_yield(value, plain),
         }),
         Expression::Attribute(value, _, _)
         | Expression::Starred(value, _)
         | Expression::Unary(_, value, _)
-        | Expression::Not(value, _) => expressions_have_yield(value),
-        Expression::Binary(_, left, right, _) => {
-            expressions_have_yield(left) || expressions_have_yield(right)
+        | Expression::Not(value, _) => expression_has_yield(value, plain),
+        Expression::Binary(_, left, right, _)
+        | Expression::Compare(left, _, right, _)
+        | Expression::Subscript(left, right, _) => {
+            expression_has_yield(left, plain) || expression_has_yield(right, plain)
         }
-        Expression::Subscript(value, index, _) => {
-            expressions_have_yield(value) || expressions_have_yield(index)
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => [lower, upper, step].iter().any(|part| {
+            part.as_deref()
+                .is_some_and(|value| expression_has_yield(value, plain))
+        }),
+        Expression::ChainedCompare { operands, .. } => {
+            operands.iter().any(|value| expression_has_yield(value, plain))
         }
-        Expression::Walrus { value, .. } => expressions_have_yield(value),
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            expression_has_yield(condition, plain)
+                || expression_has_yield(then_value, plain)
+                || expression_has_yield(else_value, plain)
+        }
+        Expression::Walrus { value, .. } => expression_has_yield(value, plain),
         // **`BC-63`**：空合并／空安全链两个操作数都在本层求值 ⇒ 照常下潜
         Expression::NullCoalesce(left, right, _) => {
-            expressions_have_yield(left) || expressions_have_yield(right)
+            expression_has_yield(left, plain) || expression_has_yield(right, plain)
         }
         Expression::SafeChain { receiver, rest, .. } => {
-            expressions_have_yield(receiver) || expressions_have_yield(rest)
+            expression_has_yield(receiver, plain) || expression_has_yield(rest, plain)
         }
         // 空安全链的基底占位不是真表达式（不可能是 `yield`）
         Expression::ChainSubject(_) => false,
-        Expression::BoolOp { values, .. } => values.iter().any(expressions_have_yield),
+        Expression::BoolOp { values, .. } => {
+            values.iter().any(|value| expression_has_yield(value, plain))
+        }
+        // **f-string**：插值表达式（以及格式规格里的插值）都在本层求值 ✓。
+        Expression::FString { parts, .. } => parts
+            .iter()
+            .any(|part| fstring_part_has_yield(part, plain)),
+        // **推导式**（3.12+ 内联形态）：只有**最外层的可迭代对象**在外层求值 ✓。
+        Expression::Comprehension { generators, .. } => generators
+            .first()
+            .is_some_and(|generator| expression_has_yield(&generator.iterable, plain)),
         Expression::Call {
             function,
             arguments,
             star_arguments,
+            keywords,
+            dict_arguments,
             ..
         } => {
-            // **如实说** ✗：关键字实参那一列随后补 ✓（`yield` 出现在那里极罕见 ✓）。
-            expressions_have_yield(function)
-                || arguments.iter().any(expressions_have_yield)
-                || star_arguments.iter().any(expressions_have_yield)
+            expression_has_yield(function, plain)
+                || arguments
+                    .iter()
+                    .any(|argument| expression_has_yield(argument, plain))
+                || star_arguments
+                    .iter()
+                    .any(|argument| expression_has_yield(argument, plain))
+                || keywords
+                    .iter()
+                    .any(|(_, value)| expression_has_yield(value, plain))
+                || dict_arguments
+                    .iter()
+                    .any(|value| expression_has_yield(value, plain))
         }
         _ => false,
+    }
+}
+
+/// f-string 的一段里有没有让出（格式规格本身也可再嵌插值 ✓）。
+fn fstring_part_has_yield(part: &FStringPart, plain: bool) -> bool {
+    match part {
+        FStringPart::Literal { .. } | FStringPart::LiteralWtf8 { .. } => false,
+        FStringPart::Formatted {
+            expression, spec, ..
+        } => {
+            expression_has_yield(expression, plain)
+                || spec.as_ref().is_some_and(|spec| {
+                    spec.iter()
+                        .any(|part| fstring_part_has_yield(part, plain))
+                })
+        }
     }
 }
 

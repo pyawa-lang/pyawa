@@ -2046,23 +2046,63 @@ pub(super) fn block_terminates(statements: &[Statement]) -> bool {
     }
 }
 
-/// **这个作用域里有没有 `yield`**（第 124 轮）：有就是**生成器** ✓（`flags |= 0x20` ✓、
-/// 前言要补 `RETURN_GENERATOR; POP_TOP` ✓、收尾要补 `CALL_INTRINSIC_1 3; RERAISE 1` ✓）。
+/// **语句里本作用域求值的表达式**：给"生成器／yield from 语法档"用 ✓。
 ///
-/// **不下探**内层 `def`／`class` 与 `lambda` ✓（它们的 `yield` 属于它们自己 ✓）。
-pub(crate) fn statements_have_yield(statements: &[Statement]) -> bool {
-    statements.iter().any(|statement| match statement {
+/// `plain` 为真表示"任何让出都算"（生成器判定）；为假只找 `yield from`
+/// （`async def` 里不许 `yield from` 的编译期语法档）。
+///
+/// **作用域边界**（逐条实测本机 3.14.4 定的，见 PLAN §12.1 的修因）：
+/// - 复合语句只递归它的**体**（体属于本作用域）；
+/// - `def`／`class` 只下潜**装饰器、形参默认值、基类、类关键字**（这些在外层求值：
+///   实测 `def f(): def g(x=(yield)): pass` 与 `def f(): class C((yield)): pass` 的 `f`
+///   都是生成器）；**不下潜** `def`／`class` 的体（那是它们自己的作用域）；
+/// - `lambda` 只在表达式走查里处理（见 `expression_has_yield`）。
+fn statement_has_yield(statement: &Statement, plain: bool) -> bool {
+    match statement {
         // **`yield from` 也算让出**（第 315 轮）：漏了它 ⇒ `def g(): yield from [1,2]` 被编成
         // **普通函数** ✗ ⇒ 运行期报"非生成器函数不该让出（码元被改坏了？）" ✗。
-        Statement::Yield(_, _) | Statement::YieldFrom(_, _) => true,
+        // `yield` 语句带着的操作数也在**本作用域**求值 ⇒ 查 `yield from` 时照样下潜
+        // （否则 `async def f(): yield (yield from x)` 漏报参照的 SyntaxError）。
+        Statement::Yield(value, _) => {
+            plain
+                || value
+                    .as_ref()
+                    .is_some_and(|value| expression_has_yield(value, plain))
+        }
+        Statement::YieldFrom(_, _) => true,
         Statement::If {
+            condition,
             then_body,
             else_body,
             ..
-        } => statements_have_yield(then_body) || statements_have_yield(else_body),
-        Statement::While { body, else_body, .. }
-        | Statement::For { body, else_body, .. } => {
-            statements_have_yield(body) || statements_have_yield(else_body)
+        } => {
+            expression_has_yield(condition, plain)
+                || statements_have_yield_kind(then_body, plain)
+                || statements_have_yield_kind(else_body, plain)
+        }
+        Statement::While {
+            condition,
+            body,
+            else_body,
+            ..
+        } => {
+            expression_has_yield(condition, plain)
+                || statements_have_yield_kind(body, plain)
+                || statements_have_yield_kind(else_body, plain)
+        }
+        Statement::For {
+            iterable,
+            body,
+            else_body,
+            tuple_targets,
+            ..
+        } => {
+            expression_has_yield(iterable, plain)
+                || tuple_targets
+                    .iter()
+                    .any(|target| for_target_has_yield(target, plain))
+                || statements_have_yield_kind(body, plain)
+                || statements_have_yield_kind(else_body, plain)
         }
         Statement::Try {
             body,
@@ -2071,42 +2111,186 @@ pub(crate) fn statements_have_yield(statements: &[Statement]) -> bool {
             finally_body,
             ..
         } => {
-            statements_have_yield(body)
-                || handlers.iter().any(|handler| statements_have_yield(&handler.body))
-                || statements_have_yield(else_body)
-                || statements_have_yield(finally_body)
+            statements_have_yield_kind(body, plain)
+                || handlers.iter().any(|handler| {
+                    // **`except (yield):` 的类型表达式在外层作用域求值** ✓（独立审查发现：先前只扫
+                    // `handler.body` ⇒ `def f(): try: … except (yield): …` 里的 `f` 漏标成生成器 ✗）。
+                    handler
+                        .type_
+                        .as_ref()
+                        .is_some_and(|type_| expression_has_yield(type_, plain))
+                        || statements_have_yield_kind(&handler.body, plain)
+                })
+                || statements_have_yield_kind(else_body, plain)
+                || statements_have_yield_kind(finally_body, plain)
         }
-        Statement::With { body, .. } => statements_have_yield(body),
+        Statement::With { items, body, .. } => {
+            items.iter().any(|(expression, target)| {
+                expression_has_yield(expression, plain)
+                    || target
+                        .as_ref()
+                        .is_some_and(|target| for_target_has_yield(target, plain))
+            }) || statements_have_yield_kind(body, plain)
+        }
+        Statement::Match {
+            subject, cases, ..
+        } => {
+            expression_has_yield(subject, plain)
+                || cases.iter().any(|case| {
+                    case.guard
+                        .as_ref()
+                        .is_some_and(|guard| expression_has_yield(guard, plain))
+                        || statements_have_yield_kind(&case.body, plain)
+                })
+        }
+        // ---- 赋值族：目标那一半也可能在本层求值（属性对象／下标容器与键） ----
+        Statement::Assign { value, .. } => expression_has_yield(value, plain),
+        Statement::AssignChained { targets, value, .. } => {
+            expression_has_yield(value, plain)
+                || targets
+                    .iter()
+                    .any(|target| expression_has_yield(target, plain))
+        }
+        Statement::AssignTuple {
+            targets,
+            value,
+            chain,
+            ..
+        } => {
+            expression_has_yield(value, plain)
+                || targets
+                    .iter()
+                    .any(|(target, _)| expression_has_yield(target, plain))
+                || chain
+                    .iter()
+                    .any(|target| expression_has_yield(target, plain))
+        }
+        Statement::AssignSubscript {
+            container,
+            key,
+            value,
+            ..
+        } => {
+            expression_has_yield(container, plain)
+                || expression_has_yield(key, plain)
+                || expression_has_yield(value, plain)
+        }
+        Statement::AssignAttr { object, value, .. } => {
+            expression_has_yield(object, plain) || expression_has_yield(value, plain)
+        }
+        Statement::AugAssign { target, value, .. } => {
+            expression_has_yield(value, plain) || aug_target_has_yield(target, plain)
+        }
+        Statement::NullCoalesceAssign { value, .. } => expression_has_yield(value, plain),
+        Statement::Delete { targets, .. } => targets
+            .iter()
+            .any(|target| expression_has_yield(target, plain)),
+        Statement::Assert { test, message, .. } => {
+            expression_has_yield(test, plain)
+                || message
+                    .as_ref()
+                    .is_some_and(|message| expression_has_yield(message, plain))
+        }
+        Statement::Raise { value, cause, .. } => {
+            value
+                .as_ref()
+                .is_some_and(|value| expression_has_yield(value, plain))
+                || cause
+                    .as_ref()
+                    .is_some_and(|cause| expression_has_yield(cause, plain))
+        }
         // **语句里的表达式** ✓（第 219 轮）：lambda 的体会被合成成 `return <体>` ✓ ⇒ 必须看到这一层 ✓
         //（否则含 `yield` 的 lambda **不会**被标成生成器 ✗ ⇒ `type((lambda: (yield))())` 就不是 `generator` ✗）。
-        // **如实说** ✗：目前只覆盖 `return` 与裸表达式两块 ✓；赋值那一族的表达式随后补 ✓。
         Statement::Return(value, _) | Statement::Expression(value, _) => {
-            crate::compile::expressions_have_yield(value)
+            expression_has_yield(value, plain)
         }
+        // **嵌套定义只下潜"在外层求值"的那几列**（装饰器／默认值／基类／类关键字）✓。
+        Statement::Def {
+            decorators,
+            parameters,
+            kwonly,
+            ..
+        } => {
+            decorators
+                .iter()
+                .any(|decorator| expression_has_yield(decorator, plain))
+                || parameters
+                    .iter()
+                    .chain(kwonly.iter())
+                    .any(|parameter| {
+                        parameter
+                            .default
+                            .as_ref()
+                            .is_some_and(|value| expression_has_yield(value, plain))
+                    })
+        }
+        Statement::Class {
+            decorators,
+            bases,
+            keywords,
+            ..
+        } => {
+            decorators
+                .iter()
+                .any(|decorator| expression_has_yield(decorator, plain))
+                || bases
+                    .iter()
+                    .any(|base| expression_has_yield(base, plain))
+                || keywords
+                    .iter()
+                    .any(|(_, value)| expression_has_yield(value, plain))
+        }
+        // 其余语句不带本作用域求值的表达式（`pass`／`break`／`continue`／`global`／`nonlocal`／
+        // `import` 一族／类体之外的注解与类型别名——后两者里出现 `yield` 参照报 SyntaxError）。
         _ => false,
-    })
+    }
+}
+
+/// **这个作用域里有没有 `yield`**（第 124 轮）：有就是**生成器** ✓（`flags |= 0x20` ✓、
+/// 前言要补 `RETURN_GENERATOR; POP_TOP` ✓、收尾要补 `CALL_INTRINSIC_1 3; RERAISE 1` ✓）。
+///
+/// **不下探**内层的体（`def`／`class`／`lambda`／推导式作用域）✓；但**要看**同层语句里的
+/// 表达式（PLAN §12.1：`v = yield` 就是漏在这里 ⇒ 生成器标志没置 ⇒ 运行期"非生成器函数不该让出"）。
+pub(crate) fn statements_have_yield(statements: &[Statement]) -> bool {
+    statements_have_yield_kind(statements, true)
 }
 
 /// **作用域里有 `yield from` 吗**（round 244）：`async def` 里出现 ⇒ `SyntaxError: 'yield from' inside async function` ✓
 /// （参照在**编译期**就拒 ✗ —— 本层先前接受 ⇒ `test_asyncgen` 的 5 个语法档全红 ✗）。只看本层，不进嵌套定义 ✓。
 pub(crate) fn statements_have_yield_from(statements: &[Statement]) -> bool {
-    statements.iter().any(|statement| match statement {
-        Statement::YieldFrom(_, _) => true,
-        Statement::If { then_body, else_body, .. } => {
-            statements_have_yield_from(then_body) || statements_have_yield_from(else_body)
+    statements_have_yield_kind(statements, false)
+}
+
+fn statements_have_yield_kind(statements: &[Statement], plain: bool) -> bool {
+    statements
+        .iter()
+        .any(|statement| statement_has_yield(statement, plain))
+}
+
+/// 赋值目标（`for`／`with … as` 的递归目标）里本层求值的表达式。
+fn for_target_has_yield(target: &ForTarget, plain: bool) -> bool {
+    match target {
+        ForTarget::Name(..) => false,
+        ForTarget::Group(items, _) => items
+            .iter()
+            .any(|item| for_target_has_yield(item, plain)),
+        ForTarget::Starred(inner, _) => for_target_has_yield(inner, plain),
+        ForTarget::Attribute(object, _, _) => expression_has_yield(object, plain),
+        ForTarget::Subscript(container, key, _) => {
+            expression_has_yield(container, plain) || expression_has_yield(key, plain)
         }
-        Statement::While { body, else_body, .. } | Statement::For { body, else_body, .. } => {
-            statements_have_yield_from(body) || statements_have_yield_from(else_body)
+    }
+}
+
+/// 增强赋值目标里本层求值的表达式。
+fn aug_target_has_yield(target: &AugTarget, plain: bool) -> bool {
+    match target {
+        AugTarget::Name(..) => false,
+        AugTarget::Attribute { object, .. } => expression_has_yield(object, plain),
+        AugTarget::Subscript { container, key, .. } => {
+            expression_has_yield(container, plain) || expression_has_yield(key, plain)
         }
-        Statement::Try { body, handlers, else_body, finally_body, .. } => {
-            statements_have_yield_from(body)
-                || handlers.iter().any(|handler| statements_have_yield_from(&handler.body))
-                || statements_have_yield_from(else_body)
-                || statements_have_yield_from(finally_body)
-        }
-        Statement::With { body, .. } => statements_have_yield_from(body),
-        _ => false,
-    })
+    }
 }
 
 /// **作用域里有"带值的 return"吗**（round 244）：异步生成器里出现 ⇒
