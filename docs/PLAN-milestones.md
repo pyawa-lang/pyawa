@@ -753,3 +753,28 @@
 > 原先的「`MS-16` 的版本升级流程」缺口已由 §2.1 的 `MS-22`／`MS-23` 关闭。
 
 > **历史台账已移到 `docs/ROUNDS.md`（索引）与 `docs/rounds/` 各卷**（逐轮日志、块结构模型、M3 完成度；**非规范**）✓
+
+## 10. LSP 线（2026-11-13 用户批准开工 ✓）
+
+**三梯，每梯可独立验收** ✓：① `pyawa check` ② LSP MVP（`publishDiagnostics` ＋ `hover`）③ 补全／跳转／重命名（按需）。
+
+**依赖隔离** ✓：第三方依赖只许在 `pyawa-lsp` crate 内（`CX-27`／`T-CX-17`）；核心 crate 的边界见 `CONSTRAINTS` 的 `CX-27` ✓。
+
+### 10.1 ① `pyawa check` 需求（给开发）
+
+语义以 `SPEC-type-system.md`／`SPEC-imports-and-modes.md` 为**一处真相** ✓；此处只给**范围／验收／禁区** ✓。
+
+**范围** ✓：`pyawa check <文件…>` 子命令——**只编译不执行** ✓；**批量诊断**（`TS-41` ✓，禁止遇首错即止 ✗）；
+`--format=json` ✓（LSP ② 的数据源）；`.py` **只出语法类** ✓（`TS-26`／`MS-19`），`.pyawa` 出语法＋类型 ✓；
+退出码 **0＝无诊断／1＝有诊断／2＝内部错误** ✓。
+
+**验收** ✓：
+① 407 语料（`.py`）跑 `check` **0 诊断** ✓；
+② 一个故意写错的 `.pyawa` 能**一次报出 ≥2 条**类型诊断 ✓（证批量）；
+③ `--format=json` 含 `file`／`line`／`col`／`code`／`severity`／`message` ✓；
+④ CI `fast` 档在 `check.py` 之后加一步对语料跑 `pyawa check` ✓；
+⑤ 同一文件「`pyawa` 执行」与「`pyawa check`」的**语法**诊断一致 ✓。
+
+**禁区** ✗：不对 `.py` 做类型诊断（破坏 `MS-19`）；不执行任何代码；不做 autofix（留 ③）；不实现 LSP 协议（那是 ②）。
+
+**依赖** ✓：`M4` 检查器（`TS-*`）＋ `compile/` 解析器（0 unsafe）；**不引** LSP 框架 ✓（那是 `pyawa-lsp` 的事）。
