@@ -25,7 +25,8 @@ fn locating_a_file_backed_module_does_not_execute_it() {
         );
         assert_eq!(pyawa_abi::pa_setcapability(raw, PA_DOMAIN_FS, implementation), 0);
     }
-    let lib = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/lib-full");
+    // 用**仓库内**的 `Lib/`（进版本库 ✓）而不是 `target/lib-full`（上游语料副本，仓库外 ✗）
+    let lib = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Lib");
     pyawa_stdlib::set_module_search_path(instance, &[String::from(lib)]);
 
     // ① 文件型模块：**找得到** ✓（`os.py` 在 `sys.path` 上 ✓）

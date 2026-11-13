@@ -25,7 +25,8 @@ fn loading_into_a_given_namespace_executes_the_module_there() {
         );
         assert_eq!(pyawa_abi::pa_setcapability(raw, PA_DOMAIN_FS, implementation), 0);
     }
-    let lib = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/lib-full");
+    // 用**仓库内**的 `Lib/`（进版本库 ✓）而不是 `target/lib-full`（上游语料副本，仓库外 ✗）
+    let lib = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Lib");
     pyawa_stdlib::set_module_search_path(instance, &[String::from(lib)]);
 
     // 目标名字空间由调用方给（`_bootstrap` 的 `create_module` 给的就是它 ✓）。

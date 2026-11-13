@@ -52,10 +52,6 @@ jobs:
       # target/conformance/{self-check.md,report.md}；本地有残留，CI 全新 clone 必须先生成
       - name: 生成 conformance 报告（供 slowcheck 第 5 项使用）
         run: tools/cargo.sh test --release -p pyawa-abi --test conformance
-      # 两个 runtime 测试（bridge_locate／exec_into_namespace）写死依赖 target/lib-full
-      # （上游 Lib/ 全量拷贝），它在仓库外、由 lib_import_ratio.py 懒创建 ⇒ CI 需先准备
-      - name: 准备 target/lib-full（runtime 测试依赖）
-        run: python3 tools/lib_import_ratio.py --ceiling --jobs 4 || true
       - name: slowcheck（11 项：含基准闸＝性能回退 ＋ memcheck 子集）
         run: tools/slowcheck.sh --release
 
@@ -87,10 +83,6 @@ jobs:
       # target/conformance/{self-check.md,report.md}；本地有残留，CI 全新 clone 必须先生成
       - name: 生成 conformance 报告（供 slowcheck 第 5 项使用）
         run: tools/cargo.sh test --release -p pyawa-abi --test conformance
-      # 两个 runtime 测试（bridge_locate／exec_into_namespace）写死依赖 target/lib-full
-      # （上游 Lib/ 全量拷贝），它在仓库外、由 lib_import_ratio.py 懒创建 ⇒ CI 需先准备
-      - name: 准备 target/lib-full（runtime 测试依赖）
-        run: python3 tools/lib_import_ratio.py --ceiling --jobs 4 || true
       - name: slowcheck
         run: tools/slowcheck.sh --release
 
