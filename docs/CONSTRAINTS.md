@@ -60,7 +60,7 @@
 | **CX-22** | **`pyawa-stdlib` 的 `src/` 不得出现核心的**具体布局类型名**（`IntObject`／`ListObject`／`DictObject`／`SetObject`／`BytesObject` 一族）——载荷布局**不进 ABI**（`OM-6`），stdlib 只能走核心的**安全入口**。**允许** `Header`／`Instance`（句柄与安全 API 的类型） | `OM-6`；与 `CX-3`／`CX-4`／`CX-6` 同为"源码扫描"族 | **能**（纯文本扫描） |
 | **CX-23** | **`NEXT.md` 是单页交接**：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据；**禁止**在本页写逐轮复盘（历史只进 `docs/rounds/`）。机检：`T-CX-14` |
 | **CX-24** | **`NEXT.md` 的 HEAD 行必须是短哈希**（`git rev-parse --short HEAD` 的输出，且 `git cat-file -e` 能解析）；**禁止**写指针（如「见 `git log -1`」）。机检：`T-CX-15` |
-| `T-CX-16` | `CX-25` | `docs/`／`tools/`／`agents-rules/` 的提交正文含 `决定：<REQUIREMENTS 行名>`（可 grep） | `T-CX-16` |
+| `T-CX-16` | **提交正文含可 grep 的决定记录**：`docs/`／`tools/`／`agents-rules/`（含 `Revert`）的提交正文必须有 `决定：<REQUIREMENTS 行名>`，该行名能在 `docs/REQUIREMENTS.md` 找到（`CX-25`） |
 
 - **CX-14** 上表"能"的条目**必须**在 CI 里可执行；"不能"的条目**必须**保持占位，
   **禁止**在实现前写成"已就位"。
@@ -120,7 +120,6 @@
 | `T-CX-14` | **NEXT 单页上限**：`NEXT.md` ≤ 40 行且最长行 ≤ 4000 字符；超限即红（`CX-23`） |
 | `T-CX-15` | **NEXT HEAD 行**：必须是短哈希且能解析为真实提交；写指针即红（`CX-24`） |
 
-- **`T-CX-16`**：`docs/`／`tools/`／`agents-rules/`（含 `Revert`）的提交正文必须含 `决定：` 行，且其值能被 `grep` 到 `docs/REQUIREMENTS.md`（`CX-25`）；缺行或查不到即红。
 
 - **`CX-25`** 提交正文必须含「`决定：`＋`docs/REQUIREMENTS.md` 的可 grep 行名」（机检 `T-CX-16`）—— 公开仓库的读者据此回溯决定来源 ✓。
 - **`CX-26`** 对规范下断言必须**当场查证**（`grep`／`read`）并写出「文件:编号」；**禁止**凭记忆断言 ✗。
