@@ -327,6 +327,8 @@
 | `pa_exec_string(st, src, len, chunkname, mode, const pa_options *opts)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`／`AB-60`）；`opts` **可传 `NULL`**（＝浅层 ＋ 默认优化级），见 `AB-61` |
 | `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件；I/O 经能力层（`IM-15`）。`mode` 见 `AB-60`；`opts` 见 `AB-61` |
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |
+| `pa_set_memory_limit(st, limit)` | — | 每实例内存配额（`AB-65`／`OM-41`）；`0` ＝ 取消。超限 ⇒ 脚本内可捕获的 `MemoryError` |
+| `pa_memory_used(st, u64 *out)` | — | 读取当前占用字节（`AB-66`）；`out == NULL` ⇒ `PA_ERR_INVALID` |
 
 > **`AB-7` 的档位／优化级子句：已满足** ✓（`AB-61` 的 `pa_options`，`P1-13` 已落地）。
 > `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（`NULL` ⇒ 浅层 ＋ 默认优化级），
@@ -424,6 +426,14 @@
   - **锁的粒度是"每实例一把"**（**不是**进程级 GIL）：脚本级 `threading` 线程在同一实例内**串行**。
   - **阻塞的能力调用必须让出实例**：`DESIGN.md` §7.2 的"可异步化"一类（文件／socket／时钟／随机／进程）
     送 worker 线程，**等待期间必须**允许同实例的其它线程推进（否则该实例会被一次阻塞 I/O 拖死）。
+
+- **AB-65** **每实例内存配额**：`pa_set_memory_limit(st, limit)`（`limit == 0` ⇒ 取消）。
+  超限时脚本里抛**可捕获的** `MemoryError`（执行器在指令边界派发；**不是** abort／panic ✗）；
+  抛错后水位抬高一档 `slack = max(64 KiB, limit/16)`（处理块还能分配），继续增长则每 `slack` 字节
+  再抛一次 ⇒ 宿主占用上界 ≈ `limit + slack` 量级。记账口径与已知不精确见 `OM-41`。
+  配额是**宿主侧钩子**（ABI-adjacent）⇒ 与 ABI 发布前的钩子族一起定 ✓。
+- **AB-66** **读取当前占用**：`pa_memory_used(st, u64 *out)`（`out == NULL` ⇒ `PA_ERR_INVALID`）。
+  宿主用它做指标／看门狗；数值与 `OM-41` 的记账口径一致。
 
 ## 16. 尚未写出（本规格自己缺的节）
 

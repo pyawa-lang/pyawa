@@ -562,6 +562,120 @@ impl Instance {
         self.bytes_allocated.get()
     }
 
+    /// **OM-3 扩**：设置每实例内存配额（字节；`0` ＝ 不限）。
+    ///
+    /// 语义：**活着的**分配字节数（[`Self::bytes_allocated`]，释放会减）超过 `limit` ⇒ 分配器置
+    /// `memory_hit`，执行器在**下一条指令边界**抛**可捕获的** `MemoryError`（不 abort／不 panic ✓）。
+    /// 已用量超过新上限时立即置位（下一次指令边界就抛 ✓）。宿主经 ABI `pa_set_memory_limit`
+    /// 调用（ABI-adjacent，发布前定 ✓）。
+    pub fn set_memory_limit(&self, limit: usize) {
+        self.memory_limit.set(limit);
+        self.memory_ceiling.set(limit);
+        self.memory_hit.set(limit != 0 && self.bytes_allocated.get() > limit);
+    }
+
+    /// 当前每实例内存配额（`0` ＝ 不限）。
+    pub fn memory_limit(&self) -> usize {
+        self.memory_limit.get()
+    }
+
+    /// 配额命中标志（分配器置位；取走后清掉 —— 处理块里还能继续跑，直到再次超限 ✓）。
+    pub fn take_memory_hit(&self) -> bool {
+        self.memory_hit.replace(false)
+    }
+
+    /// **分配记账**（`OM-3` 的唯一入口）：累积字节数并按需置配额命中位 ✓
+    /// （判据是 `memory_ceiling`：初始＝上限，每次抛错后抬高一档 `slack` ⇒ 处理块能跑 ✓）。
+    pub(crate) fn account_allocation(&self, size: usize) {
+        let next = self.bytes_allocated.get().saturating_add(size);
+        self.bytes_allocated.set(next);
+        if self.memory_limit.get() != 0 && next > self.memory_ceiling.get() {
+            self.memory_hit.set(true);
+        }
+    }
+
+    /// **对象载荷字节**（`OM-3` 扩的释放侧口径）：`str`／`bytes` 的载荷按实际字节算；
+    /// 其它类型暂按 0（容器指针数组等由对象头大小近似 —— 如实记，后续按需补 ✓）。
+    pub(crate) fn object_payload_bytes(
+        &self,
+        ty: NonNull<crate::TypeObject>,
+        object: NonNull<crate::Header>,
+    ) -> usize {
+        if self.is_subtype(ty, self.singletons().str_type()) {
+            // SAFETY: 类型身份刚确认 ⇒ 载荷是 `StrObject`。
+            return unsafe { &*object.as_ptr().cast::<crate::builtin_objects::StrObject>() }
+                .wtf8_bytes()
+                .len();
+        }
+        if self
+            .hot_type(crate::HotId::Bytes)
+            .is_some_and(|bytes| self.is_subtype(ty, bytes))
+        {
+            // SAFETY: 类型身份刚确认 ⇒ 载荷是 `BytesObject`。
+            return unsafe { &*object.as_ptr().cast::<crate::builtin_objects::BytesObject>() }
+                .value()
+                .len();
+        }
+        0
+    }
+
+    /// **释放记账**（`OM-3` 扩）：结构体字节 ＋ 载荷字节一起减回 ✓（`saturating_sub` 防口径漂移
+    /// 下的负数 ✗）。
+    pub(crate) fn release_accounting(
+        &self,
+        ty: NonNull<crate::TypeObject>,
+        object: NonNull<crate::Header>,
+    ) {
+        // SAFETY: ty 由注册表持有。
+        let size = unsafe { ty.as_ref() }.instance_size;
+        let payload = self.object_payload_bytes(ty, object);
+        self.bytes_allocated
+            .set(self.bytes_allocated.get().saturating_sub(size + payload));
+    }
+
+    /// 每次抛 `MemoryError` 时抬高的余量：`max(64 KiB, limit/16)`（宿主占用上界 ≈ `limit+slack`）。
+    fn memory_slack(&self) -> usize {
+        let limit = self.memory_limit.get();
+        limit.div_ceil(16).max(64 * 1024)
+    }
+
+    /// 构造一次配额异常并**抬高水位**（处理块能继续分配／清理；继续增长则再次抛 ✓）。
+    pub fn memory_budget_error(&self) -> crate::ExecError {
+        let ceiling = self
+            .bytes_allocated
+            .get()
+            .saturating_add(self.memory_slack());
+        self.memory_ceiling.set(ceiling);
+        self.memory_hit.set(false);
+        self.raise_builtin_error(
+            "MemoryError",
+            &format!(
+                "超出每实例内存配额（上限 {} 字节；已用 {} 字节）",
+                self.memory_limit.get(),
+                self.bytes_allocated.get()
+            ),
+        )
+    }
+
+    /// **大块分配前的预算检查**（`OM-3` 扩）：明知要再要 `additional` 字节时先问一声 ⇒ 超限直接
+    /// 抛 `MemoryError`（不先分配一大块再抛 ✗）。返回的 `Err` 就是**可捕获的** Python 异常 ✓。
+    pub fn ensure_memory_budget(&self, additional: usize) -> Result<(), crate::ExecError> {
+        if self.memory_limit.get() != 0
+            && self.bytes_allocated.get().saturating_add(additional) > self.memory_ceiling.get()
+        {
+            return Err(self.memory_budget_error());
+        }
+        Ok(())
+    }
+
+    /// 配额已命中 ⇒ 抛 `MemoryError`（取走命中位；执行器边界与大块分配循环共用 ✓）。
+    pub fn enforce_memory_quota(&self) -> Result<(), crate::ExecError> {
+        if self.take_memory_hit() {
+            return Err(self.memory_budget_error());
+        }
+        Ok(())
+    }
+
     /// **OM-26**：设置阈值三元组。`t0` **0 会被拒绝**——那等于每次分配都回收；
     /// `t1`／`t2` 只存不生效（单代，**临时**）。
     pub fn set_gc_threshold(&self, threshold: (usize, usize, usize)) {

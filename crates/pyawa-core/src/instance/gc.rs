@@ -351,8 +351,7 @@ impl Instance {
         }
         self.forget_python_finalized(ptr.as_ptr() as usize);
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
-        let size = unsafe { ty.as_ref() }.instance_size;
-        self.bytes_allocated.set(self.bytes_allocated.get() - size);
+        self.release_accounting(ty, ptr);
         // **小元组进复用池**（round 96）：参照 tuple freelist ✓（`test_genexps` 的 id 复用 doctest ✓）。
         if !quarantine_mode() && !leak_mode() && (self.pool_int(ptr, ty) || self.pool_tuple(ptr, ty)) {
             return;
@@ -383,12 +382,11 @@ impl Instance {
             unsafe { self.release_object(mapping.as_ptr()) };
         }
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
-        let size = unsafe { ty.as_ref() }.instance_size;
         // **释放前写毒值**（round 107 诊断；`PYAWA_REFCOUNT_CANARY=1` 才写 ✓）：之后任何
         // `incref`/`release` 碰它就当场 panic，能定位"第二次释放"的 Rust 路径 ✓。
         crate::instance::poison_refcount(header);
         self.unlink(header);
-        self.bytes_allocated.set(self.bytes_allocated.get() - size);
+        self.release_accounting(ty, header);
         if !quarantine_mode() && !leak_mode() && (self.pool_int(header, ty) || self.pool_tuple(header, ty)) {
             return;
         }

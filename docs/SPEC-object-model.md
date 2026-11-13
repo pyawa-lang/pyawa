@@ -61,6 +61,18 @@
   即：销毁实例不得依赖回收器先跑完。
 - **OM-3** 内存记账**必须**在 VM 侧按实例进行（每实例字节计数器）。
   **禁止**把预算职责下放给能力接口——能力接口只提供"权威"，判定与记账在 VM（DESIGN §7 原则 1）。
+- **OM-41** **每实例内存配额**（沙箱硬需求；2026-11-13 起）：宿主可给实例设**活分配字节**上限
+  （`0` ＝ 不限）；超限时执行器**必须**在**指令边界**抛**可捕获的** `MemoryError`
+  （禁止 abort／panic ✗）。语义细则：
+  - 记账口径＝对象结构体字节（`OM-3` 的 `bytes_allocated`）＋**已接线载荷**（`str`／`bytes`
+    的实际字节；容器指针数组等暂按 0，如实记 ✗，后续按需补）；释放时**同口径**减回（`saturating`）；
+  - 抛错时**水位抬高一档** `slack = max(64 KiB, limit/16)` ⇒ 处理块／`finally` 还有分配余量；
+    继续增长则每 `slack` 字节再抛一次 ⇒ 宿主占用上界 ≈ `limit + slack` 量级（不断言"恰好上限"）；
+  - **大块来源**（`str`／`bytes`／序列重复、`list(<大迭代器>)`）**必须先在分配前**问预算；
+  - 宿主钩子：ABI `pa_set_memory_limit`（`AB-65`）／`pa_memory_used`（`AB-66`）；CLI 的
+    `PYAWA_MEMORY_LIMIT` 只是**示例宿主**接缝；
+  - **已知不精确** ✗：容器增长（`list.append` 等）的指针数组、`dict` 表、大整数肢未计载荷；
+    单条指令内的超量由"指令边界抛"约束（大块重复已前置拦截 ✓）。
 - **OM-4** 分配器**必须**可参数化为实例私有（建议：实例私有 arena，后端可用系统分配器）。
   **禁止**使用进程级可变分配状态。
 
@@ -255,6 +267,7 @@
 | T-OM-7 | CI 静态检查：禁止 `static mut`／`thread_local`（`CX-3`；`OM-1`、`OM-4`） |
 | T-OM-8 | CI 静态检查：VM 核心 crate 无平台依赖（`CX-4`） |
 | T-OM-9 | 容器载荷按 `OM-40` 释放：构造容器 → 释放 → 子对象计数正确归零；且除 `clear` 外无释放路径（`OM-40`） |
+| T-OM-10 | 每实例内存配额（`OM-41`）：超限被**可捕获**的 `MemoryError`接住、未捕获时是脚本异常（非 signal）、大块重复**分配前**拒绝；宿主占用 ≤ `limit+slack` 量级（`crates/pyawa-core/tests/memory_quota.rs`／`pyawa-runtime/tests/memory_quota.rs`／`pyawa-abi/tests/memory_quota.rs`） |
 
 ---
 

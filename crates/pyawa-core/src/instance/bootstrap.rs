@@ -9,6 +9,9 @@ impl Instance {
     pub fn new() -> Self {
         let this = Self {
             bytes_allocated: Cell::new(0),
+            memory_limit: Cell::new(0),
+            memory_hit: Cell::new(false),
+            memory_ceiling: Cell::new(0),
             current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
             python_finalized: RefCell::new(crate::fast_hash::FastSet::default()),

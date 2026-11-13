@@ -78,9 +78,12 @@ impl Instance {
     pub fn new_bytes(&self, value: &[u8]) -> NonNull<Header> {
         let bytes_type = self.hot_type(HotId::Bytes)
             .expect("bytes 在引导期已登记");
-        self.alloc(BytesObject::new(bytes_type, value.to_vec()))
+        let object = self
+            .alloc(BytesObject::new(bytes_type, value.to_vec()))
             .into_raw()
-            .cast::<Header>()
+            .cast::<Header>();
+        self.account_allocation(value.len());
+        object
     }
 
     /// 建一个空 `dict`（**新引用**）——给 stdlib 模块建命名空间用（`CM-4` 的 Python 面）。
@@ -147,7 +150,7 @@ impl Instance {
             );
         }
         self.live.borrow_mut().insert(header.as_ptr() as usize);
-        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        self.account_allocation(size);
         if tracked {
             self.link_gc(header);
         }
@@ -276,12 +279,13 @@ impl Instance {
             unsafe { self.incref_object(empty.as_ptr()) };
             return empty;
         }
-        self.alloc(StrObject::new(
-            self.singletons().str_type(),
-            text.to_owned(),
-        ))
-        .into_raw()
-        .cast::<Header>()
+        let object = self
+            .alloc(StrObject::new(self.singletons().str_type(), text.to_owned()))
+            .into_raw()
+            .cast::<Header>();
+        // **载荷字节**（`OM-3` 扩）：配额按"对象头 ＋ str 载荷"计 ✓（释放时同口径减回 ✓）。
+        self.account_allocation(text.len());
+        object
     }
 
     /// 造一个 **WTF-8** 形态的 `str`（P3-38 S2a；`None` ＝ 非法 WTF-8）——**新引用**。
@@ -299,7 +303,9 @@ impl Instance {
             return Some(empty);
         }
         let object = StrObject::new_wtf8(self.singletons().str_type(), bytes.to_vec())?;
-        Some(self.alloc(object).into_raw().cast::<Header>())
+        let raw = self.alloc(object).into_raw().cast::<Header>();
+        self.account_allocation(bytes.len());
+        Some(raw)
     }
 
     pub fn new_tuple(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
@@ -369,7 +375,7 @@ impl Instance {
                 .remove(&(ptr.as_ptr() as usize));
         }
         self.live.borrow_mut().insert(ptr.as_ptr() as usize);
-        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        self.account_allocation(size);
         self.link_gc(ptr);
         ptr
     }
@@ -476,7 +482,7 @@ impl Instance {
                 .remove(&(ptr.as_ptr() as usize));
         }
         self.live.borrow_mut().insert(ptr.as_ptr() as usize);
-        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        self.account_allocation(size);
         ptr
     }
 
@@ -562,7 +568,7 @@ impl Instance {
                 self.current_site()
             );
         }
-        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        self.account_allocation(size);
         if tracked {
             self.link_gc(header);
         }
@@ -605,8 +611,7 @@ impl Instance {
         // 不由通用路径释放 ✓）。**不**用 `IMMORTAL`：`OM-24`／`DESIGN` §13-5 已决"不实现 immortal" ✓。
         type_object.header.set_flag(crate::flags::TYPE_OBJECT);
         // 类型对象也走同一本账（OM-3），但由注册表持有：不进 `live`，销毁时统一释放（OM-2）。
-        self.bytes_allocated
-            .set(self.bytes_allocated.get() + core::mem::size_of::<TypeObject>());
+        self.account_allocation(core::mem::size_of::<TypeObject>());
         self.types.borrow_mut().push(ptr);
         // **名字索引**（round 142）：先登记者优先（与 `type_named` 旧线性扫口径一致 ✓）。
         // **round 249（A2-4）**：**首个登记**顺手标"迭代器类型／专用迭代器类型"**能力位**

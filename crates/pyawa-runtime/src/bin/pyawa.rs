@@ -24,7 +24,7 @@ use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAI
 use pyawa_abi::{
     pa_setcapability, pa_setcapability_async,
     pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host,
-    pa_set_program_filename,
+    pa_set_memory_limit, pa_set_program_filename,
     pa_state, status, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
@@ -106,6 +106,25 @@ fn install_segv_trace() {
 
 #[cfg(not(unix))]
 fn install_segv_trace() {}
+
+/// 从 `PYAWA_MEMORY_LIMIT` 读每实例内存配额（字节；支持 `K`／`M`／`G` 后缀，大小写不敏感）。
+///
+/// 宿主接缝的**示例实现**：正式宿主应经 ABI `pa_set_memory_limit` 自己决定（`AB-65`）✓；
+/// 这里只为 CLI 演示／冒烟提供一个环境变量入口（不影响库内语义 ✓）。
+fn memory_limit_from_env() -> Option<u64> {
+    let text = std::env::var("PYAWA_MEMORY_LIMIT").ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (number, multiplier) = match text.as_bytes().last().copied() {
+        Some(b'k') | Some(b'K') => (&text[..text.len() - 1], 1024u64),
+        Some(b'm') | Some(b'M') => (&text[..text.len() - 1], 1024 * 1024),
+        Some(b'g') | Some(b'G') => (&text[..text.len() - 1], 1024 * 1024 * 1024),
+        _ => (text, 1),
+    };
+    number.trim().parse::<u64>().ok().map(|value| value.saturating_mul(multiplier))
+}
 
 fn main() {
     install_segv_trace();
@@ -216,6 +235,18 @@ fn real_main() {
     if created != status::PA_OK {
         eprintln!("pyawa: 建实例失败（状态 {created}）");
         std::process::exit(EXIT_HOST);
+    }
+
+    // **每实例内存配额**（OM-3 扩；宿主接缝示例）：`PYAWA_MEMORY_LIMIT` 以字节为单位，可带
+    // K/M/G 后缀（如 `64M`）。沙箱宿主用它把"一个脚本把宿主 RSS 撑大"变成脚本内可捕获的
+    // MemoryError ✓（正式宿主应直接调 ABI `pa_set_memory_limit`，`AB-65`）。
+    if let Some(limit) = memory_limit_from_env() {
+        // SAFETY: `state` 刚建成功、尚未销毁。
+        let quota_status = unsafe { pa_set_memory_limit(state, limit) };
+        if quota_status != status::PA_OK {
+            eprintln!("pyawa: 设置内存配额失败（状态 {quota_status}）");
+            std::process::exit(EXIT_HOST);
+        }
     }
 
     // 能力注册（`AB-32`／`AB-33`／`AB-34`：按域注册、必须带异步分类 ✓）

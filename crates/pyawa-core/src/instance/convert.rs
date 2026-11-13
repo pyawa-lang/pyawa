@@ -104,6 +104,11 @@ impl Instance {
         };
         let mut items = Vec::new();
         loop {
+            // **每 4096 个元素查一次配额**（`OM-3` 扩）：`list(range(10**9))` 这类大块来源
+            // 在**收集循环里**就停手（否则等指令边界时宿主已被吃满 ✗）。
+            if items.len() & 0xFFF == 0 {
+                self.enforce_memory_quota()?;
+            }
             match crate::executor::runtime::advance(self, iterator) {
                 Ok(Some(item)) => items.push(item),
                 Ok(None) => break,

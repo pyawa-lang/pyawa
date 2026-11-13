@@ -28,6 +28,10 @@ impl Drop for Instance {
             self.gc_head.set(ptr::null_mut());
             self.gc_count.set(0);
             self.bytes_allocated.set(0);
+            self.memory_limit.set(0);
+            self.memory_hit.set(false);
+        self.memory_ceiling.set(0);
+            self.memory_ceiling.set(0);
             return;
         }
         let live: Vec<usize> = self.live.borrow().iter().copied().collect();
@@ -57,6 +61,8 @@ impl Drop for Instance {
         self.gc_head.set(ptr::null_mut());
         self.gc_count.set(0);
         self.bytes_allocated.set(0);
+        self.memory_limit.set(0);
+        self.memory_hit.set(false);
     }
 }
 

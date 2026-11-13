@@ -956,6 +956,45 @@ pub unsafe extern "C" fn pa_set_program_filename(
     }
 }
 
+/// `pa_set_memory_limit(st, limit)`：**每实例内存配额**（`AB-65`；`limit == 0` ⇒ 取消限制）。
+///
+/// 语义：活着的分配字节数（`OM-3` 的 `bytes_allocated`）超过 `limit` 时，分配器记一次命中，
+/// 运行时在**下一条指令边界**抛**可捕获的** `MemoryError`（不 abort ✗）。宿主可在任意时刻调用
+/// （改小到低于当前用量 ⇒ 下一次指令边界即抛 ✓）。配额区间按**活字节**算：对象释放后会回落，
+/// 处理块／`finally` 仍可继续执行 ✓。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_set_memory_limit(state: *mut pa_state, limit: u64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        state.instance.set_memory_limit(limit as usize);
+        status::PA_OK
+    })
+}
+
+/// `pa_memory_used(st, out)`：读取**当前**占用字节数（`OM-3` 的 `bytes_allocated`；`AB-66`）。
+///
+/// 宿主用它做指标／看门狗；`out` 必须可写（`NULL` ⇒ `PA_ERR_INVALID`）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`out` 要么 `NULL`、要么指向可写 `u64`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_memory_used(state: *mut pa_state, out: *mut u64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 out 可写。
+        unsafe { *out = state.instance.bytes_allocated() as u64 };
+        status::PA_OK
+    })
+}
+
 /// `pa_exec_bytecode(st, buf, len)`：执行 `.pyac`——**产物容器与装载器尚未接线**（`P3-12`）⇒
 /// **`.pyac` 装载器**（第 404 轮接线 ✓）：解码产物头部与代码段 ⇒ 执行（`IM-18`…`IM-21`、`BC-29`）。
 ///

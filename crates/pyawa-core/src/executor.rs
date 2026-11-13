@@ -2156,9 +2156,15 @@ pub fn execute<'a>(
     // （所以生成器体里的 `try/except` 能接住，与参照实现"抛在挂起点"一致）。
     let mut forced_raise = frame.get().take_pending_raise();
     let slot_trace = slot_trace_enabled();
+    // **每实例内存配额**（`OM-3` 扩，沙箱硬需求）：配额为 0（默认宿主）时只多读一次 `Cell`
+    // （在循环外读一次本地量 ⇒ 每条指令只剩一个分支 ✓）；命中位由分配器置、这里**取走**并抛
+    // 可捕获的 `MemoryError`（不 abort ✗）。处理块／`finally` 照常能跑 ✓。
+    let memory_limit = instance.memory_limit();
     let mut decoder = Decoder::new(code.code());
     decoder.set_position(frame.get().instruction_pointer());
     while let Some(instruction) = decoder.next_instruction()? {
+        // **`throw`／`close` 的待抛异常**（恢复点上有就按本帧异常表派发 ✓；先前被本轮配额
+        // 改动误删，此处恢复 ✓）。
         if let Some(exception) = forced_raise.take() {
             dispatch_raise(
                 instance,
@@ -2169,6 +2175,26 @@ pub fn execute<'a>(
                 &mut decoder,
             )?;
             continue;
+        }
+        if memory_limit != 0 {
+            // **按参照语义派发**（可捕获 ✓）：走异常表（与普通运行时异常同一路径），不能直接
+            // `return Err`（那会越过 Python 层 `except` ✗）。抛错时会抬高水位一档 slack，让处理块
+            // 能继续分配／清理（见 `Instance::memory_budget_error` ✓）。
+            match instance.enforce_memory_quota() {
+                Ok(()) => {}
+                Err(ExecError::Raised { exception }) => {
+                    dispatch_raise(
+                        instance,
+                        frame.get(),
+                        code.exceptiontable(),
+                        instruction.offset * 2,
+                        exception,
+                        &mut decoder,
+                    )?;
+                    continue;
+                }
+                Err(other) => return Err(other),
+            }
         }
         // **`AB-5`①**：宿主请求中断后就地停手（每条指令查一次，按实例存，`CX-3`）。
         if instance.interrupted() {

@@ -358,6 +358,8 @@ pub(crate) fn sequence_repeat(
         if bytes_len.saturating_mul(count) > MAX_REPEAT_BYTES {
             return Err(instance.raise_builtin_error("MemoryError", "string repetition too large"));
         }
+        // **大块分配前置预算**（OM-3 扩）：先问配额再分配，避免"先吃满宿主再抛" ✗
+        instance.ensure_memory_budget(bytes_len.saturating_mul(count))?;
         return instance
             .str_repeat(sequence, count)
             .map(Some)
@@ -369,6 +371,7 @@ pub(crate) fn sequence_repeat(
         if value.len().saturating_mul(count) > MAX_REPEAT_BYTES {
             return Err(instance.raise_builtin_error("MemoryError", "bytes repetition too large"));
         }
+        instance.ensure_memory_budget(value.len().saturating_mul(count))?;
         let mut repeated = Vec::with_capacity(value.len().saturating_mul(count));
         for _ in 0..count {
             repeated.extend_from_slice(&value);
@@ -387,6 +390,13 @@ pub(crate) fn sequence_repeat(
     if items.len().saturating_mul(count) > MAX_REPEAT_ITEMS {
         return Err(instance.raise_builtin_error("MemoryError", "sequence repetition too large"));
     }
+    // 指针表 ＋ 头部（保守估计；实际元素对象是共享的 ✓）。
+    instance.ensure_memory_budget(
+        items
+            .len()
+            .saturating_mul(count)
+            .saturating_mul(core::mem::size_of::<NonNull<Header>>()),
+    )?;
     let mut repeated: Vec<NonNull<Header>> = Vec::with_capacity(items.len().saturating_mul(count));
     for _ in 0..count {
         for item in &items {

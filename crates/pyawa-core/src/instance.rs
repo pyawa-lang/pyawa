@@ -198,6 +198,20 @@ pub struct Instance {
     mappingproxy_sources: RefCell<crate::fast_hash::FastMap<usize, NonNull<TypeObject>>>,
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
+    /// **OM-3 扩（每实例内存配额，round 266）**：`0` ＝ 不限；否则**活着**的分配字节数
+    /// （`bytes_allocated`）超过它即置 [`Self::memory_hit`]；执行器在**指令边界**取走并抛
+    /// 可捕获的 `MemoryError` ⇒ 沙箱宿主能把"一个脚本把宿主 RSS 撑大"变成干净异常 ✓。
+    /// 配额是**宿主侧 ABI 钩子**（ABI-adjacent，发布前定 ✓）：由 `pa_set_memory_limit` 设 ✓。
+    memory_limit: Cell<usize>,
+    /// 配额命中标志（分配器置位；执行器／大块分配循环取走并抛 `MemoryError`）。
+    memory_hit: Cell<bool>,
+    /// **当前允许的水位**（初始等于 `memory_limit`；每次抛 `MemoryError` 后抬高 `slack` 字节 ✓）。
+    ///
+    /// 为什么需要 ✗：`MemoryError` 抛到 Python 处理块后，**已用字节还高于上限** ⇒ 处理块里
+    /// 任何一个分配都会再次命中 ⇒ 异常从处理块里逃出去（实测 `except MemoryError: print(...)`
+    /// 接不住 ✗）。抬高 `slack`（`max(64 KiB, limit/16)`）⇒ 处理块有清理空间，同时继续增长时
+    /// 每 `slack` 字节再抛一次 ⇒ 宿主占用的上界是 `limit + slack` 量级 ✓（不断言"恰好上限"）。
+    memory_ceiling: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
     live: RefCell<crate::fast_hash::FastSet<usize>>,
     /// **盯住的地址**（第 113 轮，`PYAWA_NS_DEBUG` 下由建类那处设 ✓）：0 ＝ 关 ✓。
