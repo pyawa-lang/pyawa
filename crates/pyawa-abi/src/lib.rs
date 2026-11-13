@@ -89,7 +89,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 7;
+pub const PA_ABI_MINOR: u32 = 8;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -404,6 +404,22 @@ pub struct pa_state {
     /// **`co_filename` 的来源**（round 176）：CLI 在 `pa_exec_bytecode`／`pa_exec_string` 前设置；
     /// 未设置时用测试占位名 `<pyawa-test>` ✓（`test_frame.ReprTest.test_repr` 要真实路径 ✓）。
     program_filename: Option<String>,
+    /// **`AB-67`**：本实例注入过的宿主模块（宿主持有不透明句柄；模块对象由 `sys.modules`
+    /// 与这里**各持一份引用**，故脚本从 `sys.modules` 删掉也不会让句柄悬空 ✓）。
+    host_modules: Vec<Box<HostModule>>,
+    /// **`AB-67`** 的生命周期守卫：宿主函数回调期间（VM 正在执行）**禁止改模块结构** ✗。
+    /// 只在模块注册 API 里检查；置位／复位在 [`host_function_call`] 的边界内。
+    in_host_callback: bool,
+}
+
+/// **`AB-67`**：一个已注入宿主模块的 ABI 侧记录（宿主拿到的 `pa_module` 就是指向它的不透明指针）。
+struct HostModule {
+    /// 模块对象（`AttributeObject`，名字空间挂在实例字典上）。**它同时是存活锚点**：
+    /// `new_host_module` 交回的初始引用一直留在这里（实例销毁时随堆释放）⇒ 就算脚本把
+    /// `sys.modules` 里的条目删了，名字空间也不会先被回收 ✓。
+    object: NonNull<Header>,
+    /// **完整点分名**（`sys.modules` 的键）。
+    full_name: String,
 }
 
 impl pa_state {
@@ -451,7 +467,10 @@ impl pa_state {
             diagnostic: false,
             message: None,
             program_filename: None,
-        }    }
+            host_modules: Vec::new(),
+            in_host_callback: false,
+        }
+    }
 
     /// 造一个**诊断实例**（`AB-56`）：`reason` 是给宿主看的可诊断信息（`T-AB-4`）。
     fn diagnostic(reason: String) -> Self {
@@ -478,6 +497,8 @@ impl pa_state {
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
             program_filename: None,
+            host_modules: Vec::new(),
+            in_host_callback: false,
         }
     }
 
@@ -642,6 +663,291 @@ pub unsafe extern "C" fn pa_setpath(
             state.set_message("`sys` 模块未装配（`AB-68` 的前置失败）");
             status::PA_ERR_RUNTIME
         }
+    })
+}
+
+// ---- `AB-67`：宿主模块注入（`pa_add_host_module` ＋ 原子 API）------------------------------
+
+/// **`AB-67`** 的保留名（顶层模块）：这些名字归 Pyawa 自己（结构／标准库），宿主**不得**覆盖 ✓。
+/// 追加式维护：以后标准库模块名稳定后，这里同步扩充；另外**注入时 `sys.modules` 里已有的名字**
+/// 一律视为保留（见 [`reserved_module_name`]）✓。
+const RESERVED_HOST_MODULE_NAMES: &[&str] = &["sys", "builtins", "_io", "io", "importlib", "_imp"];
+
+/// 简单标识符（模块名）：首字符字母或 `_`，其余字母／数字／`_`；`AB-67` 的树形名字**不允许点** ✗
+/// （带点名的子树走 `pa_module_addsubmodule`）。
+fn simple_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !(first.is_alphabetic() || first == '_') {
+        return false;
+    }
+    characters.all(|character| character.is_alphanumeric() || character == '_')
+}
+
+/// 顶层模块名是否保留（静态名单 ＋ 本实例 `sys.modules` 已有名字）。
+fn reserved_module_name(instance: &Instance, modules: NonNull<Header>, name: &str) -> bool {
+    RESERVED_HOST_MODULE_NAMES.contains(&name) || instance.dict_get(modules, name).is_some()
+}
+
+/// 建一个**普通 Python 模块对象**：名字空间 dict ＋ `__name__` ＋ `AttributeObject`（`module` 类型）。
+///
+/// 返回 `(模块对象, 名字空间)`；模块对象的**初始引用**由调用方持有（随后交给 `sys.modules`／父模块／
+/// 本实例的宿主模块表，具体见各 API）。
+fn new_host_module(instance: &Instance, full_name: &str) -> (NonNull<Header>, NonNull<Header>) {
+    let namespace = instance.new_dict();
+    let name = instance.new_str(full_name);
+    instance.dict_set(namespace, "__name__", name);
+    let module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let object = instance
+        .alloc(AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    (object, namespace)
+}
+
+/// 把模块句柄解析成记录（**只认本实例登记过的指针** ✓：不 deref 任意宿主指针，避免 UB）。
+fn host_module_record<'a>(state: &'a pa_state, handle: *mut c_void) -> Option<&'a HostModule> {
+    if handle.is_null() {
+        return None;
+    }
+    state
+        .host_modules
+        .iter()
+        .find(|module| core::ptr::addr_of!(***module) as *const HostModule as *mut c_void == handle)
+        .map(|module| module.as_ref())
+}
+
+/// 取模块的名字空间（`mounted_instance_dict` 的同一份 dict；对象由记录持引用 ⇒ 存活 ✓）。
+fn module_namespace(instance: &Instance, module: &HostModule) -> Option<NonNull<Header>> {
+    pyawa_core::mounted_instance_dict(instance, module.object)
+}
+
+/// 模块注册类 API 的**统一前置检查**：诊断实例／回调期间／坏句柄 ⇒ 状态码。
+fn module_edit_gate(state: &mut pa_state, handle: *mut c_void) -> Result<(), i32> {
+    if state.diagnostic {
+        return Err(status::PA_ERR_ABI);
+    }
+    if state.in_host_callback {
+        state.set_message("`AB-67`：宿主函数回调内部禁止改模块结构（setup 阶段或两次调用之间才行）");
+        return Err(status::PA_ERR_INVALID);
+    }
+    if host_module_record(state, handle).is_none() {
+        state.set_message("`AB-67`：模块句柄无效（只认本实例 `pa_add_host_module`／`pa_module_addsubmodule` 交回的）");
+        return Err(status::PA_ERR_INVALID);
+    }
+    Ok(())
+}
+
+/// **`AB-67`**：`pa_add_host_module(st, name, pa_module *out)` —— 建一个**顶层宿主模块**并登记进
+/// 本实例的 `sys.modules`（`import <name>` 从第一行就能拿到 ✓）。名字不得是保留名／重复名，
+/// 且必须是**简单标识符**（树形子模块走 `pa_module_addsubmodule`）。
+///
+/// # Safety
+///
+/// `state` 存活；`name` 是 NUL 结尾 UTF-8；`out` 可写（成功时写入不透明句柄，失败不动）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_add_host_module(
+    state: *mut pa_state,
+    name: *const c_char,
+    out: *mut *mut c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        if state.in_host_callback {
+            state.set_message("`AB-67`：宿主函数回调内部禁止改模块结构");
+            return status::PA_ERR_INVALID;
+        }
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            state.set_message("`AB-67`：模块名必须是简单标识符（点分名走子模块 API）");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(modules) = state.instance.modules() else {
+            return status::PA_ERR_RUNTIME;
+        };
+        if reserved_module_name(&state.instance, modules, &text) {
+            state.set_message(&format!(
+                "`AB-67`：模块名 `{text}` 是保留名或已存在（禁止覆盖内置模块）"
+            ));
+            return status::PA_ERR_INVALID;
+        }
+        let (object, namespace) = new_host_module(&state.instance, &text);
+        // `sys.modules[<name>] = 模块对象`（`dict_set` 自己加一份引用 ✓）。
+        state.instance.dict_set(modules, &text, object);
+        // `namespace` 由模块对象持有（`mounted_instance_dict` 现取）⇒ 这里只锚住对象 ✓。
+        let _ = namespace;
+        state.host_modules.push(Box::new(HostModule {
+            object,
+            full_name: text,
+        }));
+        let handle = state
+            .host_modules
+            .last_mut()
+            .expect("刚 push 过")
+            .as_mut() as *mut HostModule as *mut c_void;
+        // SAFETY: out 可写（上面检查过）。
+        unsafe { *out = handle };
+        status::PA_OK
+    })
+}
+
+/// **`AB-67`**：`pa_module_setconst(st, module, name)` —— 把**栈顶**的值装成模块常量（**消费**栈顶，
+/// 语义同 `pa_setglobal`；值可以是裸数据或不透明句柄 ✓）。
+///
+/// # Safety
+///
+/// `state` 存活；`module` 是本实例交回的句柄；`name` 是 NUL 结尾 UTF-8。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_module_setconst(
+    state: *mut pa_state,
+    module: *mut c_void,
+    name: *const c_char,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if let Err(code) = module_edit_gate(state, module) {
+            return code;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            return status::PA_ERR_INVALID;
+        }
+        let Some(slot) = state.stack.pop_slot() else {
+            return status::PA_ERR_INVALID;
+        };
+        let namespace = host_module_record(state, module)
+            .and_then(|module| module_namespace(&state.instance, module))
+            .expect("gate 已确认句柄有效");
+        state.instance.dict_set(namespace, &text, slot.object);
+        if slot.owned {
+            // 栈交出一份引用；`dict_set` 自己又加了一份 ⇒ 把栈这份还掉 ✓（借用则不用动）。
+            // SAFETY: slot.object 由本状态持有／借用，存活。
+            unsafe { state.instance.release_object(slot.object.as_ptr()) };
+        }
+        status::PA_OK
+    })
+}
+
+/// **`AB-67`**：`pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` —— 把**宿主函数**
+/// 装进模块（签名**必须同时给**，`AB-25`／`AB-51`；后续 `AB-69` 的 `pa_ty` 签名走另一 API）。
+///
+/// # Safety
+///
+/// 同 `pa_module_setconst`，另：`sig` 按 `AB-51` 契约可读。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_module_addfunction(
+    state: *mut pa_state,
+    module: *mut c_void,
+    name: *const c_char,
+    function: host::PaHostFn,
+    sig: *const host::pa_sig,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if let Err(code) = module_edit_gate(state, module) {
+            return code;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            return status::PA_ERR_INVALID;
+        }
+        // AB-25：禁止无名签名的宿主函数。
+        // SAFETY: 调用方按契约给出 sig。
+        let Some(signature) = (unsafe { host::read_signature(sig) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        let namespace = host_module_record(state, module)
+            .and_then(|module| module_namespace(&state.instance, module))
+            .expect("gate 已确认句柄有效");
+        let created = create_host_function(state, &text, function, &signature);
+        // `dict_set` 自己加一份引用；`created` 的初始引用由 `host_functions` 账本持有（实例销毁时随堆释放）。
+        state.instance.dict_set(namespace, &text, created);
+        status::PA_OK
+    })
+}
+
+/// **`AB-67`**：`pa_module_addsubmodule(st, parent, name, pa_module *out)` —— 在已有宿主模块下建
+/// **子模块**（树形命名空间）：登记 `sys.modules["<parent>.<name>"]`、挂到父模块属性上 ✓。
+/// `import myapp.api`／`from myapp.api import f` 都靠这两步 ✓。
+///
+/// # Safety
+///
+/// 同 `pa_add_host_module`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_module_addsubmodule(
+    state: *mut pa_state,
+    parent: *mut c_void,
+    name: *const c_char,
+    out: *mut *mut c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if let Err(code) = module_edit_gate(state, parent) {
+            return code;
+        }
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            return status::PA_ERR_INVALID;
+        }
+        let (parent_namespace, parent_name) = host_module_record(state, parent)
+            .and_then(|module| {
+                module_namespace(&state.instance, module)
+                    .map(|namespace| (namespace, module.full_name.clone()))
+            })
+            .expect("gate 已确认句柄有效");
+        let full_name = format!("{parent_name}.{text}");
+        let Some(modules) = state.instance.modules() else {
+            return status::PA_ERR_RUNTIME;
+        };
+        if state.instance.dict_get(modules, &full_name).is_some() {
+            state.set_message(&format!("`AB-67`：模块 `{full_name}` 已存在（禁止覆盖）"));
+            return status::PA_ERR_INVALID;
+        }
+        let (object, namespace) = new_host_module(&state.instance, &full_name);
+        // ① `sys.modules[<full>] = 子模块`；② 父模块属性 `<name> = 子模块`（两处都各加一份引用 ✓）。
+        state.instance.dict_set(modules, &full_name, object);
+        state.instance.dict_set(parent_namespace, &text, object);
+        let _ = namespace;
+        state.host_modules.push(Box::new(HostModule {
+            object,
+            full_name,
+        }));
+        let handle = state
+            .host_modules
+            .last_mut()
+            .expect("刚 push 过")
+            .as_mut() as *mut HostModule as *mut c_void;
+        // SAFETY: out 可写（上面检查过）。
+        unsafe { *out = handle };
+        status::PA_OK
     })
 }
 
@@ -2251,42 +2557,7 @@ pub unsafe extern "C" fn pa_register(
         let Some(signature) = (unsafe { host::read_signature(sig) }) else {
             return status::PA_ERR_INVALID;
         };
-        // 宿主函数对象的类型（每实例一次）
-        let host_type = match state.host_function_type {
-            Some(ty) => ty,
-            None => {
-                let ty = state.instance.new_type(
-                    "host_function",
-                    core::mem::size_of::<host::HostFunction>(),
-                    pyawa_core::Slots::new(host_function_dealloc).with_call(host_function_call),
-                );
-                state.host_function_type = Some(ty);
-                ty
-            }
-        };
-        let object = host::HostFunction::new(
-            host_type,
-            function,
-            state as *mut pa_state,
-            text.clone(),
-            signature.ret_expr.clone(),
-            signature.params.clone(),
-            signature.flags,
-        );
-        let created = state
-            .instance
-            .alloc_payload(object)
-            .cast::<Header>();
-        // 记下来（持有），并放进模块全局，脚本里按名字就能拿到
-        state.host_functions.push(created);
-        // `AB-53`／`AB-54`：注册账本（`.pyi` 导出与运行期读同一份）
-        state.registrations.push(export::Registration {
-            name: text.clone(),
-            is_type: false,
-            signature: signature.clone(),
-            is_final: false,
-            has_instance_dict: false,
-        });
+        let created = create_host_function(state, &text, function, &signature);
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
@@ -2306,6 +2577,49 @@ pub unsafe extern "C" fn pa_register(
         mapping.insert_raw(key, created);
         status::PA_OK
     })
+}
+
+/// 造一个**宿主函数对象**并登账（`pa_register` 与 `AB-67` 的 `pa_module_addfunction` 共用一处 ✓）。
+fn create_host_function(
+    state: &mut pa_state,
+    name: &str,
+    function: host::PaHostFn,
+    signature: &host::Signature,
+) -> NonNull<Header> {
+    // 宿主函数对象的类型（每实例一次）
+    let host_type = match state.host_function_type {
+        Some(ty) => ty,
+        None => {
+            let ty = state.instance.new_type(
+                "host_function",
+                core::mem::size_of::<host::HostFunction>(),
+                pyawa_core::Slots::new(host_function_dealloc).with_call(host_function_call),
+            );
+            state.host_function_type = Some(ty);
+            ty
+        }
+    };
+    let object = host::HostFunction::new(
+        host_type,
+        function,
+        state as *mut pa_state,
+        name.to_owned(),
+        signature.ret_expr.clone(),
+        signature.params.clone(),
+        signature.flags,
+    );
+    let created = state.instance.alloc_payload(object).cast::<Header>();
+    // 记下来（持有），脚本里按名字就能拿到
+    state.host_functions.push(created);
+    // `AB-53`／`AB-54`：注册账本（`.pyi` 导出与运行期读同一份）
+    state.registrations.push(export::Registration {
+        name: name.to_owned(),
+        is_type: false,
+        signature: signature.clone(),
+        is_final: false,
+        has_instance_dict: false,
+    });
+    created
 }
 
 /// 宿主函数对象的 `dealloc`（`OM-11` 的必填槽）。
@@ -2368,11 +2682,15 @@ unsafe fn host_function_call(
     }
     // AB-26：宿主函数内部的 panic 必须被捕获并转成状态码
     let base = state_ref.stack.len() - args.len();
+    // **`AB-67`**：回调期间禁止改模块结构（setup 阶段或两次调用之间才行）——本标志由
+    // `pa_add_host_module`／`pa_module_*` 检查；C 侧拿回了错误码，不是 UB ✓。
+    state_ref.in_host_callback = true;
     // SAFETY: 由注册时的契约保证 function 有效。
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         (host.function)(host.state)
     }))
     .unwrap_or(status::PA_ERR_RUNTIME);
+    state_ref.in_host_callback = false;
     // 收栈：宿主函数把结果留在**栈顶**
     let result = match outcome {
         status::PA_OK => {

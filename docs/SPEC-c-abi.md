@@ -380,6 +380,10 @@
 | `pa_errmsg(st)` | — | 取错误信息（**借用**，`AB-48`） |
 | `pa_error(st, msg)` | — | 宿主主动抛错 |
 | `pa_register(st, name, fn, sig)` | — | 注入宿主函数（`AB-24`／`AB-25`）；`sig` 形态见 §15.5 |
+| `pa_add_host_module(st, name, pa_module *out)` | — | 建宿主模块（`AB-67`）；名字须简单标识符、不得是保留名／重名 ⇒ `PA_ERR_INVALID` |
+| `pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` | — | 往宿主模块装函数（`AB-67`）；签名必须同时给（`AB-25`／`AB-51`） |
+| `pa_module_setconst(st, module, name)` | — | 往宿主模块装常量（`AB-67`）；值取自**栈顶**并消费 |
+| `pa_module_addsubmodule(st, parent, name, pa_module *out)` | — | 在宿主模块下建子模块（`AB-67`）；登记 `sys.modules["<parent>.<name>"]` 与父属性 |
 | `pa_newtype(st, name, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`），故**必须**提供子类分派槽位与实例字典声明 |
 | `pa_setcapability(st, domain, impl)` | — | 注册能力域实现（`AB-32`／`AB-33`） |
 | `pa_setcapability_async(st, domain, cls)` | — | 异步分类声明；**缺失即注册失败**（`AB-34`） |
@@ -446,7 +450,24 @@
   - **两次宿主调用之间**可以继续往模块里加函数 ✓（模块对象是**活的** ✓，已 import 的同一对象对后续调用可见 ✓）；
   - **宿主函数回调内部**（VM 正在执行）**禁止**改模块结构 ✗（属 `AB-64` 的并发进入 ＋ 状态改动，只为可查性保留 setup 阶段这一个写窗口 ✓）；
   - **签名与函数同一时刻给** ✗（见 `AB-69`），禁止先注入后补签名。
-  **状态**：**需要**（用户 2026-11-13 确认 ✓）；**API 形状**与 ABI 发布前的钩子族一起定 ✗（**未实现** ✗）。
+  **API 形状（v1，round 271 落地 ✓）**：
+
+  ```
+  typedef struct pa_module_s *pa_module;   /* 每实例不透明句柄；pa_destroy 后失效（AB-18） */
+  int pa_add_host_module(pa_state *st, const char *name, pa_module *out);
+  int pa_module_addfunction(pa_state *st, pa_module module, const char *name,
+                            pa_host_fn fn, const pa_sig *sig);   /* 签名必须同时给（AB-25/51） */
+  int pa_module_setconst(pa_state *st, pa_module module, const char *name); /* 值取自栈顶，消费 */
+  int pa_module_addsubmodule(pa_state *st, pa_module parent, const char *name, pa_module *out);
+  ```
+
+  约束细化：模块名必须是**简单标识符**（点分名走子模块 API ✗）；保留名＝静态名单
+  （`sys`／`builtins`／`_io`／`io`／`importlib`／`_imp`）**＋**本实例 `sys.modules` 里已有的名字，
+  重复名 ⇒ `PA_ERR_INVALID`；坏句柄／空出参／**回调期间** ⇒ `PA_ERR_INVALID`（写 `pa_errmsg`，
+  不 UB ✓）；`pa_module_setconst` 的值可以是裸数据或不透明句柄 ✓。
+  验收：`crates/pyawa-abi/tests/host_module.rs`（8 例：三种 import 形态／保留与非法名／两实例隔离／
+  guest 无 `pa_*`／两次调用之间可加／宿主错误与 panic 不穿 FFI／回调内注册返错误码／不透明句柄往返）。
+  **状态**：**已实现 ✓（round 271）**；`AB-69` 的 `pa_ty` 签名通道仍在下一步 ✗。
 - **AB-68** **宿主设置每实例 `sys.path`**：`pa_setpath(st, const char *const *dirs, size_t n)`（`dirs == NULL` 或 `n == 0` ⇒ 清空）。语义**完全**沿用 `SPEC-imports-and-modes` 的 `IM-*`（**禁止**另立一套路径逻辑 ✗，禁令照该规格 ✓）；实现上就是把 `sys.path` 换成本实例的这份列表（**拷贝**宿主缓冲区 ✓，宿主返回后可释放 ✓）。约束：**按实例** ✓；路径访问仍受 **`fs` 能力域**夹根 ✓（`CP-21`／`AB-32`）——`sys.path` 只决定**在哪找** ✓，**能不能读**由能力面决定 ✓；脚本自己改 `sys.path` 的语义不变 ✓（`sys.path` 本就可变 ✓）。
   **实现 ✓（round 270）**：`pa_setpath(st, dirs, n)` 已接线；`pa_create` 的实例带**最小 `sys` 骨架**
   （`sys.path` 空表 ＋ `sys.modules`；`paL_openlibs` 仍如实"未提供"，P3-14）。验收
@@ -489,5 +510,5 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**两处待实现**（缺口 ✓）：`AB-67`／`AB-69` —— **需要已定** ✓（用户 2026-11-13），**API 形状待钩子族一起定** ✗，**尚未实现** ✗；`AB-68` **已实现** ✓（round 270，`pa_setpath`，见上）。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
+**一处待实现**（缺口 ✓）：`AB-69` 宿主函数签名（`pa_ty` 句柄版）—— **需要已定** ✓（用户 2026-11-13），具体编码（`pa_ty` 生命周期／表归属／flags 位）待落 ✗，**尚未实现** ✗；`AB-67`／`AB-68` **已实现** ✓（round 271／270）。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。

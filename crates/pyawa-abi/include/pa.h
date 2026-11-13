@@ -19,9 +19,10 @@
  * 次版本 4：`AB-63` 类型标签追加 `PA_TBYTES`。
  * 次版本 5：`AB-64` 实例并发边界（宿主契约，无 ABI 面变化）。
  * 次版本 6：`AB-65`／`AB-66` 每实例内存配额两函数（追加式）。
- * 次版本 7：`AB-68` `pa_setpath`（追加式）。 */
+ * 次版本 7：`AB-68` `pa_setpath`（追加式）。
+ * 次版本 8：`AB-67` 宿主模块注入四函数（追加式）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 7u
+#define PA_ABI_MINOR 8u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -242,6 +243,24 @@ typedef struct pa_sig {
 int pa_getglobal(pa_state *state, const char *name);
 int pa_setglobal(pa_state *state, const char *name);
 int pa_register(pa_state *state, const char *name, pa_host_fn fn, const pa_sig *sig);
+
+/* ---- 宿主模块注入（`AB-67`；ABI-adjacent、发布前定）----
+ *
+ * 宿主库不是 Pyawa 写的时的正解：`pa_add_host_module` 拿模块句柄，再用原子 API 装
+ * 宿主函数／常量／子模块（树形命名空间）。模块对象是**普通 Python 模块**（`__name__`／
+ * `sys.modules`／`from X import y` 一致 ✓）；注入发生在 setup 阶段／两次宿主调用之间；
+ * **宿主函数回调内部禁止改模块结构**（返回 `PA_ERR_INVALID`，不是 UB ✓）。
+ * 保留名（`sys`／`builtins`／`io` 等内置模块名）不得覆盖 ⇒ `PA_ERR_INVALID`。
+ * 宿主函数签名**必须同时给**（`AB-25`／`AB-51`；`AB-69` 的 `pa_ty` 签名走另一 API）。
+ * 句柄是**每实例**不透明指针，`pa_destroy` 后失效（`AB-18`）。
+ */
+typedef struct pa_module_s *pa_module;
+int pa_add_host_module(pa_state *state, const char *name, pa_module *out);
+int pa_module_addfunction(pa_state *state, pa_module module, const char *name,
+                          pa_host_fn fn, const pa_sig *sig);
+int pa_module_setconst(pa_state *state, pa_module module, const char *name);
+int pa_module_addsubmodule(pa_state *state, pa_module parent, const char *name,
+                           pa_module *out);
 int pa_call(pa_state *state, int nargs, int nresults);
 int pa_pcall(pa_state *state, int nargs, int nresults);
 int pa_error(pa_state *state, const char *msg);
