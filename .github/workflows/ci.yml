@@ -28,8 +28,8 @@ jobs:
         run: tools/cargo.sh build --release -p pyawa-runtime --bin pyawa
       # 必须先跑 ABI 测试：M3-COVERAGE 的 ④⑤ 依赖它产出的
       # target/conformance/{self-check.md,report.md}（target/ 不进仓库）
-      - name: ABI ＋ 核心测试（release）
-        run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core
+      - name: ABI ＋ 核心 ＋ LSP 测试（release）
+        run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core -p pyawa-lsp
       - name: 文档/规格/编号闸门（18 项）
         run: python3 tests/ci/check.py
       # PLAN §10.1 ④：check.py 之后对 407 语料（.py）跑 pyawa check——只编译不执行，

@@ -6,9 +6,9 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`45e081f7`（本笔前；round 275 LSP 线①-B：pyawa check CLI/JSON/退出码 收口，407 语料 0 诊断＋CI fast 闸；下阶段 LSP ② MVP 或用户新指令）
+- **HEAD**：`1e94439b`（本笔前；round 276 LSP 线② MVP：pyawa-lsp（initialize/全量同步/publishDiagnostics/hover，零第三方）3 例验收；下轮 ③ 补全/跳转按需）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
-- **下一阶段**：按 PLAN 收口后次序 —— ① 每实例内存配额 **✓ round 266** → ② 威胁模型与宿主责任 **✓ round 267（DESIGN §7.5）** → ③ `io.open`／`pathlib` 文件面 **✓ round 268** → ④ 通用参考宿主 **✓ round 269**；四项全落地 ✓。⑤ ABI **暂不发布**（等用户决定，不自行发布）。**新工单＝PLAN §10 LSP 线 ① `pyawa check`**（用户 2026-11-13）：core 批量诊断 **✓ round 274** → CLI／JSON／退出码／CI fast **✓ round 275 —— 梯①完成**；② LSP MVP 待开工（`pyawa-lsp`）。ABI 发布等用户决定；memory 深水区两族留作独立专项 ✗
+- **下一阶段**：按 PLAN 收口后次序 —— ① 每实例内存配额 **✓ round 266** → ② 威胁模型与宿主责任 **✓ round 267（DESIGN §7.5）** → ③ `io.open`／`pathlib` 文件面 **✓ round 268** → ④ 通用参考宿主 **✓ round 269**；四项全落地 ✓。⑤ ABI **暂不发布**（等用户决定，不自行发布）。**新工单＝PLAN §10 LSP 线 ① `pyawa check`**（用户 2026-11-13）：core 批量诊断 **✓ round 274** → CLI／JSON／退出码／CI fast **✓ round 275 —— 梯①完成**；② LSP MVP **✓ round 276（pyawa-lsp）** → ③ 补全/跳转/重命名按需。ABI 发布等用户决定；memory 深水区两族留作独立专项 ✗
 - **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
 - **完整工单**：`PLAN` §9.4（2026-11-12 **一次性下达** ✓，逐轮自走 ✗ 不再逐步请示；只对四类请示 ✗）
 - **当前主线（2026-11-12 用户口径 ✓）**：**内存安全 ＋ 执行效率**（解释器硬要求 ✓）；其余**慢慢补** ✗
