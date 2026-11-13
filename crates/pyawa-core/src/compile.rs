@@ -334,7 +334,7 @@ pub fn compile_interactive(
     let mut statements = parse_module(&lexed)?;
     wrap_interactive_expressions(&mut statements);
     if mode == Mode::Extension {
-        typecheck::check(&statements, filename)?;
+        typecheck::check(&statements, filename, &[])?;
     }
     let unit = compile_scope(
         "<module>",
@@ -442,21 +442,42 @@ pub fn compile(
     tier: CheckTier,
     optimization: u8,
 ) -> Result<CompiledUnit, CompileError> {
-    // `BC-14`：模式是显式入参，词法期就按它分流（`TS-46` 的 `?` 只在扩展模式是词素）。
-    // `BC-15` 要求纯 Python 模式拒绝扩展语法 ⇒ 纯模式下 `?` 仍是词法期的 `Syntax` 错误。
-    // `TS-31`：档位同层显式传入；深层档位目前不改发射（见 `CheckTier` 的说明）。
-    // `IM-19`／`IM-21`：优化级同层显式传入，同样暂不改发射。
+    // 无宿主函数声明（普通宿主／测试）⇒ 与既有行为逐字节一致（`AB-69` ③）。
+    compile_with_host_functions(source, filename, mode, tier, optimization, &[])
+}
+/// **`AB-69`**：编译期调用点检查用的宿主函数声明（类型用**静态标签名**；`None` ＝ 平台类型／未知）。
+///
+/// 由 ABI 层从 `pa_ty` 签名投影出来（只投影**静态可判**的标签：int/bool/float/str/bytes/
+/// list/dict 一族；宿主不透明类型与泛型参数投影成 `None` ⇒ 编译期放行、边界运行期兜底）。
+#[derive(Debug, Clone, Default)]
+pub struct HostFunctionSignature {
+    /// 宿主函数在模块全局里的名字。
+    pub name: String,
+    /// 形参类型标签（与注册时的 `pa_sig.nparams` 一一对应）。
+    pub parameters: Vec<Option<String>>,
+    /// 返回类型标签（`None` ＝ 未声明／不可静态判定）。
+    pub returns: Option<String>,
+}
+
+/// **`AB-69`**：带宿主函数声明表的编译入口（`TS-47` 的**调用点检查**用）。
+///
+/// 其它行为与 [`compile`] 完全一致；`host_functions` 只影响扩展模式（`Mode::Extension`）的
+/// 静态检查，**不改发射**（`TS-5`：产物逐字节不变）。
+pub fn compile_with_host_functions(
+    source: &str,
+    filename: &str,
+    mode: Mode,
+    tier: CheckTier,
+    optimization: u8,
+    host_functions: &[HostFunctionSignature],
+) -> Result<CompiledUnit, CompileError> {
+    // 口径与 [`compile`] 逐字相同；唯一区别是扩展模式的静态检查多一张宿主函数声明表。
     let _ = optimization;
     let lexed = lex(source, mode)?;
     let statements = parse_module(&lexed)?;
-    // **`TS-47` 的编译期一半**（静态赋值检查）：**只在扩展模式**跑（`TS-5`：`.py` 的标注
-    // 不产生任何检查、产物逐字节不变）。能静态判定的不符在这里就报 `TypeAssignment`；
-    // 判不出的留给运行期 `CHECK_ASSIGNMENT`（`BC-65`）兜住。
     if mode == Mode::Extension {
-        typecheck::check(&statements, filename)?;
+        typecheck::check(&statements, filename, host_functions)?;
     }
-    // 注意：**空模块与"只有 `pass` 的模块"在参照里都编得过**（实测：`RESUME; LOAD_CONST None;
-    // RETURN_VALUE`）⇒ 这里**不能**因为"一条语句都没有"报错（`pass` 不产生指令、也不进语句表）
     let unit = compile_scope(
         "<module>",
         "<module>",
@@ -474,10 +495,10 @@ pub fn compile(
         &[],
         Span::synthetic(),
     )?;
-    // **编译期不变量** ✓（第 207 轮）：模块作用域也过一遍 ✓。
     verify::check(&unit)?;
     Ok(unit)
 }
+
 
 mod nfkc;
 mod symbols;

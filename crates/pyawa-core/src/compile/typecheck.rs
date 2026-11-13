@@ -60,6 +60,8 @@ struct Scope {
 /// 检查器（除了文件名，还带 `TS-49` 要用的**类属性标注表**）。
 struct Checker<'a> {
     filename: &'a str,
+    /// **`AB-69`**：宿主函数声明（名字 → 静态标签）；调用点检查用。
+    host_functions: HashMap<String, super::HostFunctionSignature>,
     /// **`TS-49` 的已知类型来源**：模块级 `class C:` 体里 `属性: 类型` 的注解。
     /// `A?` 上的 `a?.b`（`b: B`）⇒ `B?` 要靠它；查不到（内建类型／未标注属性）⇒ 平台类型（`TS-48`）。
     /// 类体本身仍**不做赋值检查**（与 M4 的口径一致），这里只读标注。
@@ -67,12 +69,20 @@ struct Checker<'a> {
 }
 
 /// 检查一段源码（模块体）。只在扩展模式调用。
-pub(super) fn check(statements: &[Statement], filename: &str) -> Result<(), CompileError> {
+pub(super) fn check(
+    statements: &[Statement],
+    filename: &str,
+    host_functions: &[HostFunctionSignature],
+) -> Result<(), CompileError> {
     let mut class_attributes = HashMap::new();
     collect_class_attributes(statements, &mut class_attributes);
     let mut checker = Checker {
         filename,
         class_attributes,
+        host_functions: host_functions
+            .iter()
+            .map(|signature| (signature.name.clone(), signature.clone()))
+            .collect(),
     };
     let mut scope = Scope {
         declared: HashMap::new(),
@@ -176,6 +186,7 @@ impl Checker<'_> {
                 ..
             } => {
                 self.check_assignment(target, *target_span, value, scope, &mut narrow)?;
+                self.check_host_calls(value, scope, &narrow)?;
             }
             Statement::AssignChained { targets, value, .. } => {
                 // 只查**名字**目标（属性／下标目标不在 `TS-47` 这一格；`TS-50` 也不窄化它们）。
@@ -184,6 +195,7 @@ impl Checker<'_> {
                         self.check_assignment(name, *name_span, value, scope, &mut narrow)?;
                     }
                 }
+                self.check_host_calls(value, scope, &narrow)?;
             }
             // **`BC-63` 的 `a ??= b`**（`TS-49`）：**不改变 `a` 的标注类型** —— 但赋值本身仍按
             // `TS-47` 查（`b` 与标注相容才算数；`a` 是未标注 ⇒ 平台类型，放行）。
@@ -194,6 +206,7 @@ impl Checker<'_> {
                 ..
             } => {
                 self.check_assignment(name, *name_span, value, scope, &mut narrow)?;
+                self.check_host_calls(value, scope, &narrow)?;
             }
             Statement::If {
                 condition,
@@ -301,6 +314,7 @@ impl Checker<'_> {
         scope: &mut Scope,
         narrow: &HashMap<String, StaticType>,
     ) -> Result<HashMap<String, StaticType>, CompileError> {
+        self.check_host_calls(condition, scope, narrow)?;
         let info = self.is_none_condition(condition, scope, narrow);
         let mut then_narrow = narrow.clone();
         let mut else_narrow = narrow.clone();
@@ -457,6 +471,132 @@ impl Checker<'_> {
             }
         }
         narrow.remove(name);
+        Ok(())
+    }
+
+    /// **`AB-69`** 的**调用点检查**（`TS-47` 的第二插入点）：调用**声明过签名**的宿主函数时，
+    /// 若实参的静态类型可判且与声明标签不相容 ⇒ **编译期**报错（归责插件：消息带宿主函数名）。
+    /// 未声明签名的宿主函数／判不出的实参 ⇒ 放行（交给边界运行期，`AB-69` ②）。
+    fn check_host_calls(
+        &self,
+        expression: &Expression,
+        scope: &Scope,
+        narrow: &HashMap<String, StaticType>,
+    ) -> Result<(), CompileError> {
+        match expression {
+            Expression::Call {
+                function,
+                arguments,
+                star_arguments,
+                keywords,
+                dict_arguments,
+                span,
+                ..
+            } => {
+                // 只对"**未被局部遮蔽**的模块全局名"做静态判定（避免把局部同名函数误判成宿主函数）。
+                if let Expression::Name(name, _) = function.as_ref() {
+                    let shadowed = scope.assigned.contains(name)
+                        || scope.declared.contains_key(name)
+                        || scope.globals.contains(name);
+                    if !shadowed {
+                        if let Some(signature) = self.host_functions.get(name) {
+                            for (index, argument) in arguments.iter().enumerate() {
+                                let Some(Some(expected_label)) =
+                                    signature.parameters.get(index)
+                                else {
+                                    continue;
+                                };
+                                let actual = self.infer(argument, scope, narrow);
+                                let expected =
+                                    StaticType::Label(type_label(expected_label));
+                                if !compatible(&expected, &actual) {
+                                    return Err(CompileError::TypeAssignment(format!(
+                                        "host function type check failed: `{name}` argument                                          {index} expects {expected_label}, got {} \
+                                         (AB-69; {}: line {})",
+                                        render_static(&actual),
+                                        self.filename,
+                                        span.line_start
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                // 递归：实参／星号／关键字／`**`／被调用者里都可能还有调用点。
+                for argument in arguments.iter().chain(star_arguments) {
+                    self.check_host_calls(argument, scope, narrow)?;
+                }
+                for (_, value) in keywords {
+                    self.check_host_calls(value, scope, narrow)?;
+                }
+                for value in dict_arguments {
+                    self.check_host_calls(value, scope, narrow)?;
+                }
+                self.check_host_calls(function, scope, narrow)?;
+            }
+            Expression::Binary(_, left, right, _)
+            | Expression::Compare(left, _, right, _) => {
+                self.check_host_calls(left, scope, narrow)?;
+                self.check_host_calls(right, scope, narrow)?;
+            }
+            Expression::Unary(_, operand, _) | Expression::Not(operand, _) => {
+                self.check_host_calls(operand, scope, narrow)?;
+            }
+            Expression::Await(inner, _) | Expression::YieldFrom(inner, _) => {
+                self.check_host_calls(inner, scope, narrow)?;
+            }
+            Expression::Yield(Some(inner), _) => {
+                self.check_host_calls(inner, scope, narrow)?;
+            }
+            Expression::Attribute(receiver, _, _) | Expression::Starred(receiver, _) => {
+                self.check_host_calls(receiver, scope, narrow)?;
+            }
+            Expression::Subscript(container, index, _) => {
+                self.check_host_calls(container, scope, narrow)?;
+                self.check_host_calls(index, scope, narrow)?;
+            }
+            Expression::List(items, _)
+            | Expression::SetLiteral(items, _)
+            | Expression::TupleLiteral(items, _) => {
+                for item in items {
+                    self.check_host_calls(item, scope, narrow)?;
+                }
+            }
+            Expression::Map(items, _) => {
+                for item in items {
+                    match item {
+                        MapItem::Pair(key, value) => {
+                            self.check_host_calls(key, scope, narrow)?;
+                            self.check_host_calls(value, scope, narrow)?;
+                        }
+                        MapItem::Unpack(value) => {
+                            self.check_host_calls(value, scope, narrow)?;
+                        }
+                    }
+                }
+            }
+            Expression::BoolOp { values, .. } => {
+                for value in values {
+                    self.check_host_calls(value, scope, narrow)?;
+                }
+            }
+            Expression::Conditional {
+                condition,
+                then_value,
+                else_value,
+                ..
+            } => {
+                self.check_host_calls(condition, scope, narrow)?;
+                self.check_host_calls(then_value, scope, narrow)?;
+                self.check_host_calls(else_value, scope, narrow)?;
+            }
+            Expression::ChainedCompare { operands, .. } => {
+                for operand in operands {
+                    self.check_host_calls(operand, scope, narrow)?;
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 

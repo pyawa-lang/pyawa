@@ -23,7 +23,10 @@ use core::ptr::NonNull;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pyawa_core::compile::{compile, instantiate, CheckTier, CompileError, Mode};
+use pyawa_core::compile::{
+    compile_with_host_functions, instantiate, CheckTier, CompileError, HostFunctionSignature,
+    Mode,
+};
 use pyawa_core::{
     AttributeObject, DictObject, ExecError, FloatObject, Frame, Header, Instance, IntObject,
     ListObject, StrObject,
@@ -327,6 +330,34 @@ where
 #[allow(unpredictable_function_pointer_comparisons)]
 fn same_host_function(left: host::PaHostFn, right: host::PaHostFn) -> bool {
     left == right
+}
+
+/// **`AB-69`**：把本实例已声明的 `pa_ty` 签名投影成编译期声明表（`TS-47` 调用点检查用）。
+///
+/// 同一 C 函数注册多次 ⇒ 每个注册名都带同一份声明 ✓（同实现同签名）。
+fn compiled_host_signatures(state: &pa_state) -> Vec<HostFunctionSignature> {
+    let mut signatures = Vec::new();
+    for signature in &state.host_typed_signatures {
+        let parameters: Vec<Option<String>> = signature
+            .params
+            .iter()
+            .map(host_signature::static_label)
+            .collect();
+        let returns = signature.ret.as_ref().and_then(host_signature::static_label);
+        for header in &state.host_functions {
+            // SAFETY: host_functions 只存本实例的宿主函数对象。
+            let host = unsafe { &*header.as_ptr().cast::<host::HostFunction>() };
+            if !same_host_function(host.function_pointer(), signature.function) {
+                continue;
+            }
+            signatures.push(HostFunctionSignature {
+                name: host.host_name().to_owned(),
+                parameters: parameters.clone(),
+                returns: returns.clone(),
+            });
+        }
+    }
+    signatures
 }
 
 /// **指针版边界**：`boundary` 只适配返回 `i32` 的入口（`AB-19`），返回借用视图
@@ -1677,7 +1708,15 @@ pub unsafe extern "C" fn pa_exec_string(
         let chunk = unsafe { host::read_c_string(chunkname, 4096) }
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "<string>".to_owned());
-        let unit = match compile(&source_text, &chunk, compile_mode, check_tier, optimization) {
+        let host_signatures = compiled_host_signatures(state);
+        let unit = match compile_with_host_functions(
+            &source_text,
+            &chunk,
+            compile_mode,
+            check_tier,
+            optimization,
+            &host_signatures,
+        ) {
             Ok(unit) => unit,
             Err(CompileError::Syntax(message)) => {
                 state.set_message(&message);

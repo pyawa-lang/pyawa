@@ -610,3 +610,84 @@ fn pa_ty_constructors_validate_handles() {
     // SAFETY: state 由 pa_create 交回、尚未销毁。
     unsafe { pa_destroy(state) };
 }
+
+// --------------------------------------------------------------------------- #
+// ①：检查期（编译期调用点检查；`TS-47` 第二插入点）
+// --------------------------------------------------------------------------- #
+
+/// 扩展模式（`pyawa`）下的编译期检查：**有标注**的调用点不匹配 ⇒ `PA_ERR_SYNTAX`（脚本没起来）。
+#[test]
+fn annotated_call_sites_are_checked_at_compile_time() {
+    let state = new_state();
+    // SAFETY: state 存活。
+    unsafe {
+        register(state, "expect_int", host_one, &[param_flags::PA_PARAM_POSITIONAL]);
+        let int_ty = pa_ty_runtime_tag(state, PA_TINTEGER);
+        let mut params = [int_ty];
+        set_signature(state, host_one, &mut params, core::ptr::null_mut());
+    }
+    // 静态可判的不符 ⇒ **编译期**拒绝（`PA_ERR_SYNTAX`；`TS-47` 的静态档）。
+    let source = c_string("s: str = \"x\"\ny = expect_int(s)\n");
+    let mode = c_string("pyawa");
+    // SAFETY: state 存活；source／mode 是 NUL 结尾局部串。
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr(),
+            -1,
+            core::ptr::null(),
+            mode.as_ptr(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(
+        status, PA_ERR_SYNTAX,
+        "有标注调用点的不符应在**检查期**报错；实际状态 {status}，消息 {}",
+        error_message(state)
+    );
+    let message = error_message(state);
+    assert!(
+        message.contains("expect_int") && message.contains("AB-69"),
+        "编译期错误应归责插件：{message}"
+    );
+    // 静态可判的**相符** ⇒ 正常编译并运行（宿主函数被调到）。
+    let good = c_string("x: int = 1\nok = expect_int(x)\n");
+    // SAFETY: 同上。
+    assert_eq!(
+        unsafe {
+            pa_exec_string(
+                state,
+                good.as_ptr(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr(),
+                core::ptr::null(),
+            )
+        },
+        PA_OK,
+        "{}",
+        error_message(state)
+    );
+    assert_eq!(global_int(state, "ok"), 1);
+    // 判不出的实参（无标注的名字）⇒ 编译期放行，**边界运行期**才报（两档分工 ✓）。
+    let dynamic = c_string("u = \"x\"\ncaught = 0\ntry:\n    expect_int(u)\nexcept:\n    caught = 1\n");
+    // SAFETY: 同上。
+    assert_eq!(
+        unsafe {
+            pa_exec_string(
+                state,
+                dynamic.as_ptr(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr(),
+                core::ptr::null(),
+            )
+        },
+        PA_OK,
+        "{}",
+        error_message(state)
+    );
+    assert_eq!(global_int(state, "caught"), 1, "判不出时由边界运行期兜住");
+    // SAFETY: state 由 pa_create 交回、尚未销毁。
+    unsafe { pa_destroy(state) };
+}

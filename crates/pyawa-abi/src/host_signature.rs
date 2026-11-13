@@ -70,6 +70,31 @@ enum Bound {
     Type(NonNull<TypeObject>),
 }
 
+/// **投影成编译期静态标签**（`AB-69` 的检查期那一半用）：只投影**静态可判**的简单标签；
+/// 复杂/未知（泛型参数、宿主不透明类型、callable、union…）⇒ `None`（编译期放行、边界运行期兜底 ✓）。
+pub fn static_label(expression: &TyExpr) -> Option<String> {
+    match expression {
+        TyExpr::RuntimeTag(tag) => match *tag {
+            crate::stack::tag::PA_TNIL => Some("NoneType".to_owned()),
+            crate::stack::tag::PA_TBOOLEAN => Some("bool".to_owned()),
+            crate::stack::tag::PA_TINTEGER => Some("int".to_owned()),
+            crate::stack::tag::PA_TNUMBER => Some("float".to_owned()),
+            crate::stack::tag::PA_TSTRING => Some("str".to_owned()),
+            crate::stack::tag::PA_TBYTES => Some("bytes".to_owned()),
+            // `TABLE`（list/dict 歧义）／`FUNCTION`／`HANDLE` ⇒ 不投影
+            _ => None,
+        },
+        TyExpr::Named(ty) => {
+            // SAFETY: 类型对象由实例注册表持有，实例存活期间有效。
+            Some(unsafe { ty.as_ref() }.name().to_owned())
+        }
+        TyExpr::ListOf(_) => Some("list".to_owned()),
+        TyExpr::DictOf(_, _) => Some("dict".to_owned()),
+        TyExpr::Apply(base, _) => static_label(base),
+        TyExpr::Optional(_) | TyExpr::Union(_) | TyExpr::Callable { .. } | TyExpr::Var(_) => None,
+    }
+}
+
 /// 标签的显示名（错误消息用；与 `AB-63` 的取值域一致）。
 fn tag_name(tag: i32) -> &'static str {
     match tag {
