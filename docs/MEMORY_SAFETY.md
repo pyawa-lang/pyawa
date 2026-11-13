@@ -69,6 +69,7 @@
 | **round 261 全量棘轮复测**（2026-11-13 @ `376856f7`，jobs=4，timeout=90） | **3**（`test_difflib`／`test_gc`／`test_io`）✗ | 7 | 70 | 266 | 49（syntax 2） |
 | **round 262**（2026-11-13 @ `fd6fc82f`，冻结窗口 double-decref 防御后） | **3**（`test_difflib`／`test_gc`／`test_weakref`※）✗ | 7 | 70 | 265 | 50（syntax 2） |
 | **round 263**（2026-11-13 @ `63794f39`，memdangle 加「memory 顺序复跑 ⇒ flaky 分离」后） | **2**（确定性：`test_difflib`／`test_gc`）✗ ＋ flaky **0**（本轮首跑无 weakref 命中） | 7 | 70 | 266 | 50（syntax 2） |
+| **round 265 收口复测**（@ `5cfa86ec`） | **2**（`test_difflib`／`test_gc`，round 263–265 稳定）✗ ＋ flaky 0 | 7 | 70 | 266 | 50（syntax 2） |
 
 
 > memory 类判定与"清零"口径见 §1／§2；**只统计签名命中，不把语义失败算进来**。
