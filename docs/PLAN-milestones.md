@@ -428,7 +428,7 @@
 > ② **威胁模型与宿主责任** ✓（**round 267 落地**：`DESIGN` §7.5 —— 四目标（不逃逸／不越界／不拖垮宿主／不串实例）、VM 已保证（无 FFI 出口＋静态 `T-CX-*`、内省只碰 VM 对象、能力面依赖倒置、栈溢出干净异常、内存安全基线＋配额）、宿主必须承担 7 条（壁钟超时／配额／同实例串行／provider 根夹紧／资源策略／有界输入／实例隔离）、残余风险 6 条如实记 ✗）；
 > ③ **`io.open`／`pathlib` 文件面** ✓（**round 268 落地**：`_io.text_encoding` 真接线、`FileIO.__del__` 落盘、`symlink` 三参、errno 文案扩充、`with (expr).attr` 解析修复（`MS-19`）；验收 `crates/pyawa-runtime/tests/io_pathlib_face.rs`（与 CPython 27 行逐行一致）＋`crates/pyawa-core/tests/with_parenthesized.rs` 4 例 ✓；如实缺口：`open_code` 占位、绝对路径输出不进对拍）；
 > ④ **通用参考宿主** ✓（**round 269 落地**：`examples/reference_host.c` ＋ `docs/REFERENCE-HOST.md` ＋ 可执行验收 `tests/ci/t_ref_host.py`（真编译真运行、stdout 逐行对拍、`pa.h` 的 `AB-65/66` 同步检查）。演示：宿主定义脚本 API → 脚本调回宿主 → 沙箱拒绝越界 → 协作式超时 → 每实例配额／指标 → 实例隔离 → 销毁；**与宿主身份无关**（无业务逻辑、无命名假设）✓；如实边界：C 宿主暂无标准库（`paL_openlibs` 未接线，P3-14），沙箱用宿主 API 白名单演示，能力域 vtable 样例见 CLI provider）；
-**钩子族清单（一处真相＝`SPEC-c-abi`）**：`AB-67` 宿主模块注入 ✓／`AB-68` 宿主设每实例 `sys.path` ✓ —— 两条**需要已定** ✓、**形状待定** ✗、**未实现** ✗。
+**钩子族清单（一处真相＝`SPEC-c-abi`）**：`AB-69` 宿主函数签名（含生命周期：setup 阶段注入 ✓）／：`AB-67` 宿主模块注入 ✓／`AB-68` 宿主设每实例 `sys.path` ✓ —— 两条**需要已定** ✓、**形状待定** ✗、**未实现** ✗。
 > ⑤ `ABI 发布` ＝ **暂不发布** ✗（2026-11-13 用户：**可能还要加几个钩子** ✓）⇒ 等钩子稳定再发 ✓；且 ①（配额）与钩子族同属 ABI-adjacent ⇒ **应在冻结前** ✓。
 
 
