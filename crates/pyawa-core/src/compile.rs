@@ -537,7 +537,7 @@ fn extract_message_location(message: &str) -> (u32, u32) {
 
 /// **`AB-69`**：编译期调用点检查用的宿主函数声明（类型用**静态标签名**；`None` ＝ 平台类型／未知）。
 ///
-/// 由 ABI 层从 `pa_ty` 签名投影出来（只投影**静态可判**的标签：int/bool/float/str/bytes/
+/// 由 ABI 层从 `pa_type_expr` 签名投影出来（只投影**静态可判**的标签：int/bool/float/str/bytes/
 /// list/dict 一族；宿主不透明类型与泛型参数投影成 `None` ⇒ 编译期放行、边界运行期兜底）。
 #[derive(Debug, Clone, Default)]
 pub struct HostFunctionSignature {

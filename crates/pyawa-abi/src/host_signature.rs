@@ -1,15 +1,15 @@
-//! **`AB-69` 的签名数据模型与边界检查**（`pa_ty` 句柄版；round 272）。
+//! **`AB-69` 的签名数据模型与边界检查**（`pa_type_expr` 句柄版；round 272）。
 //!
 //! 口径（一处真相＝`SPEC-c-abi.md` 的 `AB-69`）：
-//! * 类型表达式是**不透明句柄** `pa_ty`（`pa_ty_runtime_tag`／`named`／`list_of`／`dict_of`／
+//! * 类型表达式是**不透明句柄** `pa_type_expr`（`pa_type_expr_runtime_tag`／`named`／`list_of`／`dict_of`／
 //!   `optional`／`union`／`callable`／`var`／`apply` 构造）；句柄**按实例**存，`pa_destroy` 后失效；
 //! * **边界运行期检查**：宿主函数**声明过**签名 ⇒ 调用边界按声明核参数（与返回）；不符 ⇒
 //!   **脚本侧可捕获**的 `TypeError`（归责插件：消息带宿主函数名）✓；未声明 ⇒ 与今天完全一致
 //!   （不检查，`AB-69` ③）✓；
 //! * **泛型擦除**（`TS-35`／`TS-30`）：`list[int]`／`dict[str,int]` 的**容器身份**在边界核
-//!   （是 list／dict），**元素类型不核** ✓；宿主泛型 `pa_ty_apply` 同样只核基底 ✓（不做
+//!   （是 list／dict），**元素类型不核** ✓；宿主泛型 `pa_type_expr_apply` 同样只核基底 ✓（不做
 //!   reified generics ✗）；
-//! * **类型变量**（`pa_ty_var`）：同一次调用里同名变量**统一**（第一个实参定下实际类型，
+//! * **类型变量**（`pa_type_expr_var`）：同一次调用里同名变量**统一**（第一个实参定下实际类型，
 //!   后续同名参数必须相容）✓；未在参数里出现的变量不做额外限制 ✓。
 
 use core::ptr::NonNull;
@@ -20,7 +20,7 @@ use pyawa_core::{ExecError, Header, Instance, TypeObject};
 use crate::host::{self, param_flags};
 use crate::stack::tag_of;
 
-/// 一个 `pa_ty` 句柄的实际内容（实例私有；宿主只能当不透明指针传回）。
+/// 一个 `pa_type_expr` 句柄的实际内容（实例私有；宿主只能当不透明指针传回）。
 #[derive(Clone)]
 pub enum TyExpr {
     /// `AB-63` 的运行时标签（`int` 与 `bool` 在标签上分得开 ⇒ 精确匹配）。
@@ -57,7 +57,7 @@ pub struct TypedSignature {
     pub params: Vec<TyExpr>,
     /// 返回类型；`None` ＝ 不声明（不检查返回值）。
     pub ret: Option<TyExpr>,
-    /// 类型变量名（`pa_ty_var` 的集合；只作文档与一致性检查用）。
+    /// 类型变量名（`pa_type_expr_var` 的集合；只作文档与一致性检查用）。
     pub tparams: Vec<String>,
     /// 签名级标志（v1 保留：必须 0）。
     pub flags: u32,
@@ -66,7 +66,7 @@ pub struct TypedSignature {
 /// 类型变量统一时的实际类型。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Bound {
-    /// 类型对象（`pa_ty_var` 的统一只按类型对象走；`TS-35` 的擦除口径）。
+    /// 类型对象（`pa_type_expr_var` 的统一只按类型对象走；`TS-35` 的擦除口径）。
     Type(NonNull<TypeObject>),
 }
 

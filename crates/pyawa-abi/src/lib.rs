@@ -35,7 +35,7 @@ use pyawa_core::{
 pub mod export;
 pub mod helpers;
 pub mod host;
-/// **`AB-69`** 的签名数据模型与边界检查（`pa_ty` 句柄版）。
+/// **`AB-69`** 的签名数据模型与边界检查（`pa_type_expr` 句柄版）。
 mod host_signature;
 /// **宿主平台 `errno` 数字表**（生成物；`CM-20`／`DESIGN.md` §9 第 20 条）。
 ///
@@ -332,7 +332,7 @@ fn same_host_function(left: host::PaHostFn, right: host::PaHostFn) -> bool {
     left == right
 }
 
-/// **`AB-69`**：把本实例已声明的 `pa_ty` 签名投影成编译期声明表（`TS-47` 调用点检查用）。
+/// **`AB-69`**：把本实例已声明的 `pa_type_expr` 签名投影成编译期声明表（`TS-47` 调用点检查用）。
 ///
 /// 同一 C 函数注册多次 ⇒ 每个注册名都带同一份声明 ✓（同实现同签名）。
 fn compiled_host_signatures(state: &pa_state) -> Vec<HostFunctionSignature> {
@@ -453,7 +453,7 @@ pub struct pa_state {
     /// **`AB-67`** 的生命周期守卫：宿主函数回调期间（VM 正在执行）**禁止改模块结构** ✗。
     /// 只在模块注册 API 里检查；置位／复位在 [`host_function_call`] 的边界内。
     in_host_callback: bool,
-    /// **`AB-69`**：本实例创建的 `pa_ty` 句柄（宿主只能当不透明指针传回；`pa_destroy` 后失效）。
+    /// **`AB-69`**：本实例创建的 `pa_type_expr` 句柄（宿主只能当不透明指针传回；`pa_destroy` 后失效）。
     host_tys: Vec<Box<host_signature::TyExpr>>,
     /// **`AB-69`**：已声明的宿主函数签名（按宿主 C 函数指针查；每个函数至多一条）。
     host_typed_signatures: Vec<host_signature::TypedSignature>,
@@ -908,7 +908,7 @@ pub unsafe extern "C" fn pa_module_setconst(
 }
 
 /// **`AB-67`**：`pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` —— 把**宿主函数**
-/// 装进模块（签名**必须同时给**，`AB-25`／`AB-51`；后续 `AB-69` 的 `pa_ty` 签名走另一 API）。
+/// 装进模块（签名**必须同时给**，`AB-25`／`AB-51`；后续 `AB-69` 的 `pa_type_expr` 签名走另一 API）。
 ///
 /// # Safety
 ///
@@ -1011,9 +1011,9 @@ pub unsafe extern "C" fn pa_module_addsubmodule(
     })
 }
 
-// ---- `AB-69`：宿主函数签名（`pa_ty` 句柄版）-----------------------------------------------
+// ---- `AB-69`：宿主函数签名（`pa_type_expr` 句柄版）-----------------------------------------------
 
-/// `pa_ty` 的**指针版边界**（`catch_unwind`；panic ⇒ `NULL` ＋ 实例消息，`AB-26` 同一口径）。
+/// `pa_type_expr` 的**指针版边界**（`catch_unwind`；panic ⇒ `NULL` ＋ 实例消息，`AB-26` 同一口径）。
 fn boundary_ty<F>(state: *mut pa_state, body: F) -> *mut c_void
 where
     F: FnOnce() -> *mut c_void,
@@ -1023,14 +1023,14 @@ where
         Err(_) => {
             // SAFETY: state 由调用方按契约给出；`NULL` 时只返回 NULL。
             if let Some(state) = unsafe { state.as_mut() } {
-                state.set_message("`pa_ty` 构造期间发生内部 panic（AB-26 边界已接住）");
+                state.set_message("`pa_type_expr` 构造期间发生内部 panic（AB-26 边界已接住）");
             }
             core::ptr::null_mut()
         }
     }
 }
 
-/// 解析一个 `pa_ty` 句柄（**只认本实例建过的** ✓：不 deref 任意宿主指针）。
+/// 解析一个 `pa_type_expr` 句柄（**只认本实例建过的** ✓：不 deref 任意宿主指针）。
 fn ty_handle<'a>(state: &'a pa_state, handle: *mut c_void) -> Option<&'a host_signature::TyExpr> {
     if handle.is_null() {
         return None;
@@ -1052,7 +1052,7 @@ fn push_ty(state: &mut pa_state, expression: host_signature::TyExpr) -> *mut c_v
         .as_mut() as *mut host_signature::TyExpr as *mut c_void
 }
 
-/// `pa_ty` 构造的统一前置（诊断实例 ⇒ `NULL`）。返回 `true` 表示可以继续。
+/// `pa_type_expr` 构造的统一前置（诊断实例 ⇒ `NULL`）。返回 `true` 表示可以继续。
 fn ty_gate(state: &pa_state) -> bool {
     !state.diagnostic
 }
@@ -1067,9 +1067,9 @@ fn resolve_named_type(state: &pa_state, name: &str) -> Option<NonNull<pyawa_core
     state.instance.as_type(value)
 }
 
-/// `pa_ty pa_ty_runtime_tag(pa_state *state, int tag)`：`AB-63` 的运行时标签。
+/// `pa_type_expr pa_type_expr_runtime_tag(pa_state *state, int tag)`：`AB-63` 的运行时标签。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_runtime_tag(state: *mut pa_state, tag: i32) -> *mut c_void {
+pub unsafe extern "C" fn pa_type_expr_runtime_tag(state: *mut pa_state, tag: i32) -> *mut c_void {
     boundary_ty(state, || {
         let Some(state) = (unsafe { state.as_mut() }) else {
             return core::ptr::null_mut();
@@ -1078,16 +1078,16 @@ pub unsafe extern "C" fn pa_ty_runtime_tag(state: *mut pa_state, tag: i32) -> *m
             return core::ptr::null_mut();
         }
         if !(stack::tag::PA_TNIL..=stack::tag::PA_TBYTES).contains(&tag) {
-            state.set_message("`pa_ty_runtime_tag`：tag 不在 `AB-63` 的取值域（0..=8）");
+            state.set_message("`pa_type_expr_runtime_tag`：tag 不在 `AB-63` 的取值域（0..=8）");
             return core::ptr::null_mut();
         }
         push_ty(state, host_signature::TyExpr::RuntimeTag(tag))
     })
 }
 
-/// `pa_ty pa_ty_named(pa_state *state, const char *name)`：具名类型（**同一性＝类型对象**）。
+/// `pa_type_expr pa_type_expr_named(pa_state *state, const char *name)`：具名类型（**同一性＝类型对象**）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_named(
+pub unsafe extern "C" fn pa_type_expr_named(
     state: *mut pa_state,
     name: *const c_char,
 ) -> *mut c_void {
@@ -1100,12 +1100,12 @@ pub unsafe extern "C" fn pa_ty_named(
         }
         // SAFETY: 调用方保证 name 是 NUL 结尾。
         let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
-            state.set_message("`pa_ty_named`：name 不是合法 UTF-8 C 串");
+            state.set_message("`pa_type_expr_named`：name 不是合法 UTF-8 C 串");
             return core::ptr::null_mut();
         };
         let Some(ty) = resolve_named_type(state, &text) else {
             state.set_message(&format!(
-                "`pa_ty_named`：找不到类型 `{text}`（内置类型可由运行时解析；宿主类型须先 `pa_newtype`）"
+                "`pa_type_expr_named`：找不到类型 `{text}`（内置类型可由运行时解析；宿主类型须先 `pa_newtype`）"
             ));
             return core::ptr::null_mut();
         };
@@ -1113,7 +1113,7 @@ pub unsafe extern "C" fn pa_ty_named(
     })
 }
 
-/// 读一个 `pa_ty` 句柄并 **clone** 出来（构造复合类型时用；句柄仍归实例所有 ✓）。
+/// 读一个 `pa_type_expr` 句柄并 **clone** 出来（构造复合类型时用；句柄仍归实例所有 ✓）。
 fn clone_ty(state: &pa_state, handle: *mut c_void, what: &str) -> Option<host_signature::TyExpr> {
     let Some(expression) = ty_handle(state, handle) else {
         return None;
@@ -1122,9 +1122,9 @@ fn clone_ty(state: &pa_state, handle: *mut c_void, what: &str) -> Option<host_si
     Some(expression.clone())
 }
 
-/// `pa_ty pa_ty_list_of(pa_state *state, pa_ty elem)`：`list[T]`（边界只核 list 身份，`TS-35`）。
+/// `pa_type_expr pa_type_expr_list_of(pa_state *state, pa_type_expr elem)`：`list[T]`（边界只核 list 身份，`TS-35`）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_list_of(state: *mut pa_state, elem: *mut c_void) -> *mut c_void {
+pub unsafe extern "C" fn pa_type_expr_list_of(state: *mut pa_state, elem: *mut c_void) -> *mut c_void {
     boundary_ty(state, || {
         let Some(state) = (unsafe { state.as_mut() }) else {
             return core::ptr::null_mut();
@@ -1133,16 +1133,16 @@ pub unsafe extern "C" fn pa_ty_list_of(state: *mut pa_state, elem: *mut c_void) 
             return core::ptr::null_mut();
         }
         let Some(elem) = clone_ty(state, elem, "elem") else {
-            state.set_message("`pa_ty_list_of`：elem 句柄无效");
+            state.set_message("`pa_type_expr_list_of`：elem 句柄无效");
             return core::ptr::null_mut();
         };
         push_ty(state, host_signature::TyExpr::ListOf(Box::new(elem)))
     })
 }
 
-/// `pa_ty pa_ty_dict_of(pa_state *state, pa_ty k, pa_ty v)`：`dict[K, V]`（只核 dict 身份）。
+/// `pa_type_expr pa_type_expr_dict_of(pa_state *state, pa_type_expr k, pa_type_expr v)`：`dict[K, V]`（只核 dict 身份）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_dict_of(
+pub unsafe extern "C" fn pa_type_expr_dict_of(
     state: *mut pa_state,
     key: *mut c_void,
     value: *mut c_void,
@@ -1155,11 +1155,11 @@ pub unsafe extern "C" fn pa_ty_dict_of(
             return core::ptr::null_mut();
         }
         let Some(key) = clone_ty(state, key, "k") else {
-            state.set_message("`pa_ty_dict_of`：k 句柄无效");
+            state.set_message("`pa_type_expr_dict_of`：k 句柄无效");
             return core::ptr::null_mut();
         };
         let Some(value) = clone_ty(state, value, "v") else {
-            state.set_message("`pa_ty_dict_of`：v 句柄无效");
+            state.set_message("`pa_type_expr_dict_of`：v 句柄无效");
             return core::ptr::null_mut();
         };
         push_ty(
@@ -1169,9 +1169,9 @@ pub unsafe extern "C" fn pa_ty_dict_of(
     })
 }
 
-/// `pa_ty pa_ty_optional(pa_state *state, pa_ty t)`：`T?`（`None` 或 `T`）。
+/// `pa_type_expr pa_type_expr_optional(pa_state *state, pa_type_expr t)`：`T?`（`None` 或 `T`）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_optional(state: *mut pa_state, inner: *mut c_void) -> *mut c_void {
+pub unsafe extern "C" fn pa_type_expr_optional(state: *mut pa_state, inner: *mut c_void) -> *mut c_void {
     boundary_ty(state, || {
         let Some(state) = (unsafe { state.as_mut() }) else {
             return core::ptr::null_mut();
@@ -1180,14 +1180,14 @@ pub unsafe extern "C" fn pa_ty_optional(state: *mut pa_state, inner: *mut c_void
             return core::ptr::null_mut();
         }
         let Some(inner) = clone_ty(state, inner, "t") else {
-            state.set_message("`pa_ty_optional`：t 句柄无效");
+            state.set_message("`pa_type_expr_optional`：t 句柄无效");
             return core::ptr::null_mut();
         };
         push_ty(state, host_signature::TyExpr::Optional(Box::new(inner)))
     })
 }
 
-/// 从 `const pa_ty *` 读一段句柄（`n == 0` ⇒ 空；`NULL` 配 `n > 0` ⇒ `None`）。
+/// 从 `const pa_type_expr *` 读一段句柄（`n == 0` ⇒ 空；`NULL` 配 `n > 0` ⇒ `None`）。
 unsafe fn read_ty_array(
     state: &pa_state,
     handles: *const *mut c_void,
@@ -1208,9 +1208,9 @@ unsafe fn read_ty_array(
     Some(expressions)
 }
 
-/// `pa_ty pa_ty_union(pa_state *state, const pa_ty *ts, size_t n)`：`T | U | …`。
+/// `pa_type_expr pa_type_expr_union(pa_state *state, const pa_type_expr *ts, size_t n)`：`T | U | …`。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_union(
+pub unsafe extern "C" fn pa_type_expr_union(
     state: *mut pa_state,
     members: *const *mut c_void,
     count: usize,
@@ -1224,20 +1224,20 @@ pub unsafe extern "C" fn pa_ty_union(
         }
         // SAFETY: 调用方按 `n` 给出数组。
         let Some(members) = (unsafe { read_ty_array(state, members, count) }) else {
-            state.set_message("`pa_ty_union`：成员句柄无效（或 NULL 配 n>0）");
+            state.set_message("`pa_type_expr_union`：成员句柄无效（或 NULL 配 n>0）");
             return core::ptr::null_mut();
         };
         if members.is_empty() {
-            state.set_message("`pa_ty_union`：至少要有 1 个成员");
+            state.set_message("`pa_type_expr_union`：至少要有 1 个成员");
             return core::ptr::null_mut();
         }
         push_ty(state, host_signature::TyExpr::Union(members))
     })
 }
 
-/// `pa_ty pa_ty_callable(pa_state *state, const pa_ty *params, size_t n, pa_ty ret)`：`Callable[[…], R]`。
+/// `pa_type_expr pa_type_expr_callable(pa_state *state, const pa_type_expr *params, size_t n, pa_type_expr ret)`：`Callable[[…], R]`。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_callable(
+pub unsafe extern "C" fn pa_type_expr_callable(
     state: *mut pa_state,
     params: *const *mut c_void,
     count: usize,
@@ -1252,11 +1252,11 @@ pub unsafe extern "C" fn pa_ty_callable(
         }
         // SAFETY: 调用方按 `n` 给出数组。
         let Some(params) = (unsafe { read_ty_array(state, params, count) }) else {
-            state.set_message("`pa_ty_callable`：形参句柄无效");
+            state.set_message("`pa_type_expr_callable`：形参句柄无效");
             return core::ptr::null_mut();
         };
         let Some(ret) = clone_ty(state, ret, "ret") else {
-            state.set_message("`pa_ty_callable`：返回类型句柄无效");
+            state.set_message("`pa_type_expr_callable`：返回类型句柄无效");
             return core::ptr::null_mut();
         };
         push_ty(
@@ -1269,9 +1269,9 @@ pub unsafe extern "C" fn pa_ty_callable(
     })
 }
 
-/// `pa_ty pa_ty_var(pa_state *state, const char *name)`：类型变量 `T`（配 `tparams`）。
+/// `pa_type_expr pa_type_expr_var(pa_state *state, const char *name)`：类型变量 `T`（配 `tparams`）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_var(state: *mut pa_state, name: *const c_char) -> *mut c_void {
+pub unsafe extern "C" fn pa_type_expr_var(state: *mut pa_state, name: *const c_char) -> *mut c_void {
     boundary_ty(state, || {
         let Some(state) = (unsafe { state.as_mut() }) else {
             return core::ptr::null_mut();
@@ -1281,21 +1281,21 @@ pub unsafe extern "C" fn pa_ty_var(state: *mut pa_state, name: *const c_char) ->
         }
         // SAFETY: 调用方保证 name 是 NUL 结尾。
         let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
-            state.set_message("`pa_ty_var`：name 不是合法 UTF-8 C 串");
+            state.set_message("`pa_type_expr_var`：name 不是合法 UTF-8 C 串");
             return core::ptr::null_mut();
         };
         if !simple_identifier(&text) {
-            state.set_message("`pa_ty_var`：类型变量名必须是简单标识符");
+            state.set_message("`pa_type_expr_var`：类型变量名必须是简单标识符");
             return core::ptr::null_mut();
         }
         push_ty(state, host_signature::TyExpr::Var(text))
     })
 }
 
-/// `pa_ty pa_ty_apply(pa_state *state, pa_ty base, const pa_ty *args, size_t n)`：宿主泛型
+/// `pa_type_expr pa_type_expr_apply(pa_state *state, pa_type_expr base, const pa_type_expr *args, size_t n)`：宿主泛型
 /// `Base[Args…]`；**边界只核基底**（擦除类型身份，`TS-35` ✓）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_ty_apply(
+pub unsafe extern "C" fn pa_type_expr_apply(
     state: *mut pa_state,
     base: *mut c_void,
     args: *const *mut c_void,
@@ -1309,34 +1309,34 @@ pub unsafe extern "C" fn pa_ty_apply(
             return core::ptr::null_mut();
         }
         let Some(base) = clone_ty(state, base, "base") else {
-            state.set_message("`pa_ty_apply`：base 句柄无效");
+            state.set_message("`pa_type_expr_apply`：base 句柄无效");
             return core::ptr::null_mut();
         };
         // SAFETY: 调用方按 `n` 给出数组。
         let Some(args) = (unsafe { read_ty_array(state, args, count) }) else {
-            state.set_message("`pa_ty_apply`：类型实参句柄无效");
+            state.set_message("`pa_type_expr_apply`：类型实参句柄无效");
             return core::ptr::null_mut();
         };
         push_ty(state, host_signature::TyExpr::Apply(Box::new(base), args))
     })
 }
 
-/// `int pa_func_set_signature(pa_state *state, pa_host_fn function, const pa_ty *params, size_t nparams,
-/// pa_ty ret, const pa_ty *tparams, size_t ntparams, unsigned flags)`：**给已注册的宿主函数声明签名**。
+/// `int pa_func_set_signature(pa_state *state, pa_host_fn function, const pa_type_expr *params, size_t nparams,
+/// pa_type_expr ret, const pa_type_expr *tparams, size_t ntparams, unsigned flags)`：**给已注册的宿主函数声明签名**。
 ///
 /// 口径（`SPEC-c-abi` `AB-69`）：
 /// * 形状 v1：**带 `state` 参数**（签名按实例存 ✓；用户草案里的无 `state` 版无法满足 `AB-64`）；
 ///   返回 `int` 状态码（`AB-19`），构造失败经 `pa_errmsg` 说明；
 /// * **与函数同一时刻给**：必须在该函数**注册之后、任何执行之前**（注册时记下执行序号；声明时
 ///   序号必须未变）⇒ 晚声明 ⇒ `PA_ERR_INVALID`；
-/// * `params` 与注册时的 `pa_sig.nparams` **一一对应**（类型只在 `pa_ty` 里；可选／变参的
+/// * `params` 与注册时的 `pa_sig.nparams` **一一对应**（类型只在 `pa_type_expr` 里；可选／变参的
 ///   **个数**语义仍由 `pa_sig` 的 `flags` 表达 ✓）；`flags` v1 保留（必须 0）；
 /// * 不声明 ＝ 未标注 ⇒ 不检查（与今天一致 ✓）。
 ///
 /// # Safety
 ///
 /// `state` 存活；`function` 是本实例注册过的 C 函数；`params`／`tparams` 按 `n` 给出句柄数组；
-/// 所有句柄都必须是本实例建过的 `pa_ty`。
+/// 所有句柄都必须是本实例建过的 `pa_type_expr`。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_func_set_signature(
     state: *mut pa_state,
@@ -1394,7 +1394,7 @@ pub unsafe extern "C" fn pa_func_set_signature(
         }
         if nparams != arity {
             state.set_message(&format!(
-                "`AB-69`：`nparams`={nparams} 与注册时 `pa_sig.nparams`={arity} 不一致（类型只在 pa_ty 里）"
+                "`AB-69`：`nparams`={nparams} 与注册时 `pa_sig.nparams`={arity} 不一致（类型只在 pa_type_expr 里）"
             ));
             return status::PA_ERR_INVALID;
         }
@@ -1420,7 +1420,7 @@ pub unsafe extern "C" fn pa_func_set_signature(
         let mut variable_names = Vec::with_capacity(tparams.len());
         for expression in &tparams {
             let host_signature::TyExpr::Var(name) = expression else {
-                state.set_message("`AB-69`：`tparams` 里的句柄必须是 `pa_ty_var` 建的");
+                state.set_message("`AB-69`：`tparams` 里的句柄必须是 `pa_type_expr_var` 建的");
                 return status::PA_ERR_INVALID;
             };
             variable_names.push(name.clone());

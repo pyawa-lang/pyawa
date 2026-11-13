@@ -384,7 +384,7 @@
 | `pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` | — | 往宿主模块装函数（`AB-67`）；签名必须同时给（`AB-25`／`AB-51`） |
 | `pa_module_setconst(st, module, name)` | — | 往宿主模块装常量（`AB-67`）；值取自**栈顶**并消费 |
 | `pa_module_addsubmodule(st, parent, name, pa_module *out)` | — | 在宿主模块下建子模块（`AB-67`）；登记 `sys.modules["<parent>.<name>"]` 与父属性 |
-| `pa_ty_*`（9 个构造：`runtime_tag`／`named`／`list_of`／`dict_of`／`optional`／`union`／`callable`／`var`／`apply`） | — | 建 `AB-69` 的类型表达式句柄（每实例、不透明）；失败 ⇒ `NULL` ＋ `pa_errmsg` |
+| `pa_type_expr_*`（9 个构造：`runtime_tag`／`named`／`list_of`／`dict_of`／`optional`／`union`／`callable`／`var`／`apply`） | — | 建 `AB-69` 的类型表达式句柄（每实例、不透明）；失败 ⇒ `NULL` ＋ `pa_errmsg` |
 | `pa_func_set_signature(st, fn, params, n, ret, tparams, nt, flags)` | — | 给已注册宿主函数声明签名（`AB-69`）；注册后、任何执行前；不符 ⇒ `PA_ERR_INVALID`；声明后边界核参数／返回（脚本侧 `TypeError`，归责插件） |
 | `pa_newtype(st, name, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`），故**必须**提供子类分派槽位与实例字典声明 |
 | `pa_setcapability(st, domain, impl)` | — | 注册能力域实现（`AB-32`／`AB-33`） |
@@ -469,7 +469,7 @@
   不 UB ✓）；`pa_module_setconst` 的值可以是裸数据或不透明句柄 ✓。
   验收：`crates/pyawa-abi/tests/host_module.rs`（8 例：三种 import 形态／保留与非法名／两实例隔离／
   guest 无 `pa_*`／两次调用之间可加／宿主错误与 panic 不穿 FFI／回调内注册返错误码／不透明句柄往返）。
-  **状态**：**已实现 ✓（round 271）**；`AB-69` 的 `pa_ty` 签名通道已随 round 272–273 落地 ✓（检查期投影见 `d4847368`）。
+  **状态**：**已实现 ✓（round 271）**；`AB-69` 的 `pa_type_expr` 签名通道已随 round 272–273 落地 ✓（检查期投影见 `d4847368`）。
 - **AB-68** **宿主设置每实例 `sys.path`**：`pa_setpath(st, const char *const *dirs, size_t n)`（`dirs == NULL` 或 `n == 0` ⇒ 清空）。语义**完全**沿用 `SPEC-imports-and-modes` 的 `IM-*`（**禁止**另立一套路径逻辑 ✗，禁令照该规格 ✓）；实现上就是把 `sys.path` 换成本实例的这份列表（**拷贝**宿主缓冲区 ✓，宿主返回后可释放 ✓）。约束：**按实例** ✓；路径访问仍受 **`fs` 能力域**夹根 ✓（`CP-21`／`AB-32`）——`sys.path` 只决定**在哪找** ✓，**能不能读**由能力面决定 ✓；脚本自己改 `sys.path` 的语义不变 ✓（`sys.path` 本就可变 ✓）。
   **实现 ✓（round 270）**：`pa_setpath(st, dirs, n)` 已接线；`pa_create` 的实例带**最小 `sys` 骨架**
   （`sys.path` 空表 ＋ `sys.modules`；`paL_openlibs` 仍如实"未提供"，P3-14）。验收
@@ -479,24 +479,28 @@
   宿主注入函数时**一并**声明签名。**类型表达式用不透明句柄**（不是扁平标签 ✗）：
 
   ```
-  typedef struct pa_ty_s *pa_ty;              /* 每实例不透明句柄；pa_destroy 后失效（AB-18） */
-  pa_ty pa_ty_runtime_tag(pa_state *st, int tag);       /* AB-63 的取值域 */
-  pa_ty pa_ty_named(pa_state *st, const char *name);    /* 具名／宿主注册类型（同一性＝类型对象） */
-  pa_ty pa_ty_list_of(pa_state *st, pa_ty elem);
-  pa_ty pa_ty_dict_of(pa_state *st, pa_ty k, pa_ty v);
-  pa_ty pa_ty_optional(pa_state *st, pa_ty t);          /* T? */
-  pa_ty pa_ty_union(pa_state *st, const pa_ty *ts, size_t n);
-  pa_ty pa_ty_callable(pa_state *st, const pa_ty *params, size_t n, pa_ty ret);
-  pa_ty pa_ty_var(pa_state *st, const char *name);      /* 类型参数 T（配 tparams） */
-  pa_ty pa_ty_apply(pa_state *st, pa_ty base, const pa_ty *args, size_t n); /* 宿主泛型 Result[T] */
-  int pa_func_set_signature(pa_state *st, pa_host_fn f, const pa_ty *params, size_t n,
-                            pa_ty ret, const pa_ty *tparams, size_t ntparams, unsigned flags);
+  typedef struct pa_type_expr_s *pa_type_expr;              /* 每实例不透明句柄；pa_destroy 后失效（AB-18） */
+  pa_type_expr pa_type_expr_runtime_tag(pa_state *st, int tag);       /* AB-63 的取值域 */
+  pa_type_expr pa_type_expr_named(pa_state *st, const char *name);    /* 具名／宿主注册类型（同一性＝类型对象） */
+  pa_type_expr pa_type_expr_list_of(pa_state *st, pa_type_expr elem);
+  pa_type_expr pa_type_expr_dict_of(pa_state *st, pa_type_expr k, pa_type_expr v);
+  pa_type_expr pa_type_expr_optional(pa_state *st, pa_type_expr t);          /* T? */
+  pa_type_expr pa_type_expr_union(pa_state *st, const pa_type_expr *ts, size_t n);
+  pa_type_expr pa_type_expr_callable(pa_state *st, const pa_type_expr *params, size_t n, pa_type_expr ret);
+  pa_type_expr pa_type_expr_var(pa_state *st, const char *name);      /* 类型参数 T（配 tparams） */
+  pa_type_expr pa_type_expr_apply(pa_state *st, pa_type_expr base, const pa_type_expr *args, size_t n); /* 宿主泛型 Result[T] */
+  int pa_func_set_signature(pa_state *st, pa_host_fn f, const pa_type_expr *params, size_t n,
+                            pa_type_expr ret, const pa_type_expr *tparams, size_t ntparams, unsigned flags);
   ```
 
+  **命名**：句柄叫 **`pa_type_expr`**（**不是** `pa_ty`）：`pa_type` 已是 `AB-63` 的运行时标签函数
+  （C 的 typedef 与函数同属一个标识符命名空间）⇒ 签名里的**类型表达式**用全名区分；
+  **`pa_type_expr` ≠ `pa_type()` 的返回值**（前者是签名元数据，后者是运行时值标签）。
+
   **与用户草案的两处必要修正**（`ABI` 未发布 ⇒ 现在定最便宜 ✓）：
-  - `pa_ty` 的构造与 `pa_func_set_signature` 都**收 `pa_state *`**：句柄与签名是**按实例**存的
+  - `pa_type_expr` 的构造与 `pa_func_set_signature` 都**收 `pa_state *`**：句柄与签名是**按实例**存的
     （`AB-64`），无 `state` 版无法满足；
-  - `pa_func_set_signature` **返回 `int` 状态码**（`AB-19`），不返回 `void`；`pa_ty_*` 构造失败返回
+  - `pa_func_set_signature` **返回 `int` 状态码**（`AB-19`），不返回 `void`；`pa_type_expr_*` 构造失败返回
     `NULL` ＋ `pa_errmsg`（与 `AB-58` 的"载荷指针"同口径）。
   - `pa_fn` 在头文件里**不存在**（只有 `pa_host_fn`）⇒ 签名按 **`pa_host_fn` 函数指针**绑定；
     **同一 C 函数可注册多次**（同实现同签名 ✓），声明一次覆盖全部。
@@ -504,23 +508,23 @@
   约束：
   - **与函数同一时刻给** ✓（v1 可执行口径）：必须在该函数**注册之后、任何执行之前**声明——
     注册时记下执行序号，声明时序号必须未变；晚声明 ⇒ `PA_ERR_INVALID` ✗（禁止先注入后补签名）；
-  - `params` 与注册时的 `pa_sig.nparams` **一一对应**：**类型**只在 `pa_ty` 里；**可选／变参的
+  - `params` 与注册时的 `pa_sig.nparams` **一一对应**：**类型**只在 `pa_type_expr` 里；**可选／变参的
     个数语义**仍由 `pa_sig` 的 `PA_PARAM_HAS_DEFAULT`／`PA_PARAM_VARARGS` 表达 ✓；
     `flags` v1 **保留**（必须 0）；
   - **不声明 ＝ 未标注** ✓（按 `object` 处理、**不检查** ✓，行为与今天一致 ✓）；
   - **边界运行期检查** ✓：声明后调用边界核**参数**（个数／类型）与**非 NULL 返回类型**；不符 ⇒
     **脚本侧可捕获的 `TypeError`**（消息带宿主函数名 ⇒ **归责插件** ✓）。**检查期调用点检查**
     （有标注插件在编译期抓错）**仍待** ✗（下一轮，需把宿主签名表接进 `TS-47` 的调用点检查）。
-  - **宿主类型**：`pa_ty_named` 的同一性 ＝ **类型注册得到的那个类型对象** ✓（不按字符串 ✓；
+  - **宿主类型**：`pa_type_expr_named` 的同一性 ＝ **类型注册得到的那个类型对象** ✓（不按字符串 ✓；
     解析时机＝声明签名时 ⇒ 宿主类型须先 `pa_newtype` ✓）；签名含宿主类型**不暴露内部** ✓
     （`CP-10`：只能当不透明句柄传；边界只核类型对象身份 ✓）；
-  - **泛型擦除口径**（沿用 `TS-35`／`TS-30` ✓）：`list[int]`／`dict[K,V]`／`pa_ty_apply` 的宿主
+  - **泛型擦除口径**（沿用 `TS-35`／`TS-30` ✓）：`list[int]`／`dict[K,V]`／`pa_type_expr_apply` 的宿主
     泛型在**边界只核容器／基底身份**，元素类型**不核** ✓（运行期 `isinstance(x, list[int])` 仍按
     `TS-35` 与 CPython 一致报 `TypeError` ✓）；**注解检查不擦除**（`TS-47` 插入点）✓；
     **不做 reified generics** ✗；
-  - **类型变量**（`pa_ty_var`）：同一次调用的同名变量**统一**（首个实参定下类型，后续须相容）；
+  - **类型变量**（`pa_type_expr_var`）：同一次调用的同名变量**统一**（首个实参定下类型，后续须相容）；
     `tparams` 里必须声明参数里用到的变量（未声明 ⇒ `TypeError` 归责插件）✓；
-  - `pa_ty_callable` v1 只核"可调用"（`PA_TFUNCTION` 标签），形参／返回类型暂不核（如实 ✗）。
+  - `pa_type_expr_callable` v1 只核"可调用"（`PA_TFUNCTION` 标签），形参／返回类型暂不核（如实 ✗）。
 
   **实现 ✓（round 272 数据模型＋边界；round 273 检查期）**：
   - **边界运行期**：参数（个数／类型）与返回类型检查、归责插件的 `TypeError`、未声明不检查、

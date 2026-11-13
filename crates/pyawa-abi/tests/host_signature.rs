@@ -1,11 +1,11 @@
-//! **`AB-69`：宿主函数签名（`pa_ty` 句柄版）的边界运行期验收**（round 272）。
+//! **`AB-69`：宿主函数签名（`pa_type_expr` 句柄版）的边界运行期验收**（round 272）。
 //!
 //! 本轮钉 PLAN 验收的 ②–⑦（①"检查期抓错"属编译期调用点检查，下一轮；见台账）：
 //! ② 无标注插件在**边界运行期**抓错并归责插件 ✓；
 //! ③ 不声明 ⇒ 与今天完全一致（不检查）✓；
 //! ④ 签名含宿主不透明类型时仍不暴露内部 ✓；
 //! ⑤ 可选／变参 flags 至少各一个用例 ✓；
-//! ⑥ 宿主类型可进签名（`pa_ty_named` 同一性＝类型对象）✓；
+//! ⑥ 宿主类型可进签名（`pa_type_expr_named` 同一性＝类型对象）✓；
 //! ⑦ 泛型擦除口径（`list[int]` 边界只核 list 身份；元素类型不核）✓。
 //!
 //! 另钉 `pa_func_set_signature` 的**生命周期**：注册后、任何执行之前声明；晚声明 ⇒ `PA_ERR_INVALID`。
@@ -106,7 +106,7 @@ unsafe fn register(
         .map(|(parameter_name, flags)| pa_param {
             size: size_of::<pa_param>(),
             name: parameter_name.as_ptr(),
-            // 类型表达式串留给 `AB-51/52` 的元数据；`AB-69` 的检查走 `pa_ty` ✓
+            // 类型表达式串留给 `AB-51/52` 的元数据；`AB-69` 的检查走 `pa_type_expr` ✓
             type_expr: core::ptr::null(),
             flags: *flags,
             default_handle: core::ptr::null_mut(),
@@ -138,7 +138,7 @@ unsafe fn register(
 ///
 /// # Safety
 ///
-/// `state` 存活；`params`／`ret` 是本实例建的 `pa_ty`。
+/// `state` 存活；`params`／`ret` 是本实例建的 `pa_type_expr`。
 unsafe fn set_signature(
     state: *mut pa_state,
     function: PaHostFn,
@@ -224,7 +224,7 @@ fn boundary_checks_arguments_and_blames_the_plugin() {
     unsafe {
         register(state, "expect_int", host_one, &[param_flags::PA_PARAM_POSITIONAL]);
         // ②：声明 `int` 参数。
-        let int_ty = pa_ty_runtime_tag(state, PA_TINTEGER);
+        let int_ty = pa_type_expr_runtime_tag(state, PA_TINTEGER);
         assert!(!int_ty.is_null());
         let mut params = [int_ty];
         set_signature(state, host_one, &mut params, core::ptr::null_mut());
@@ -308,7 +308,7 @@ fn host_opaque_types_can_appear_in_signatures() {
         register(state, "make_handle", host_make_handle, &[]);
         register(state, "expect_handle", host_one, &[param_flags::PA_PARAM_POSITIONAL]);
         // ⑥：宿主类型进签名（同一性＝类型对象）。
-        let handle_ty = pa_ty_named(state, c_string("OpaqueProbe").as_ptr());
+        let handle_ty = pa_type_expr_named(state, c_string("OpaqueProbe").as_ptr());
         assert!(!handle_ty.is_null(), "{}", error_message(state));
         let mut params = [handle_ty];
         set_signature(state, host_one, &mut params, core::ptr::null_mut());
@@ -340,7 +340,7 @@ fn optional_and_variadic_flags_are_honored() {
             host_one,
             &[param_flags::PA_PARAM_POSITIONAL | param_flags::PA_PARAM_HAS_DEFAULT],
         );
-        let int_ty = pa_ty_runtime_tag(state, PA_TINTEGER);
+        let int_ty = pa_type_expr_runtime_tag(state, PA_TINTEGER);
         let mut params = [int_ty];
         set_signature(state, host_one, &mut params, core::ptr::null_mut());
 
@@ -350,7 +350,7 @@ fn optional_and_variadic_flags_are_honored() {
             host_two,
             &[param_flags::PA_PARAM_VARARGS],
         );
-        let int_ty = pa_ty_runtime_tag(state, PA_TINTEGER);
+        let int_ty = pa_type_expr_runtime_tag(state, PA_TINTEGER);
         let mut params = [int_ty];
         set_signature(state, host_two, &mut params, core::ptr::null_mut());
     }
@@ -388,8 +388,8 @@ fn generic_element_types_are_erased_at_the_boundary() {
     unsafe {
         register(state, "expect_list", host_one, &[param_flags::PA_PARAM_POSITIONAL]);
         // ⑦：`list[int]` 在边界只核 list 身份（TS-35 擦除）⇒ 元素类型不核。
-        let int_ty = pa_ty_runtime_tag(state, PA_TINTEGER);
-        let list_ty = pa_ty_list_of(state, int_ty);
+        let int_ty = pa_type_expr_runtime_tag(state, PA_TINTEGER);
+        let list_ty = pa_type_expr_list_of(state, int_ty);
         let mut params = [list_ty];
         set_signature(state, host_one, &mut params, core::ptr::null_mut());
     }
@@ -420,7 +420,7 @@ fn return_types_are_checked_too() {
     // SAFETY: state 存活。
     unsafe {
         register(state, "returns_str", host_returns_str, &[]);
-        let int_ty = pa_ty_runtime_tag(state, PA_TINTEGER);
+        let int_ty = pa_type_expr_runtime_tag(state, PA_TINTEGER);
         // 返回类型声明 int，但宿主返回 str ⇒ 边界报 TypeError（脚本可捕获）。
         assert_eq!(
             pa_func_set_signature(
@@ -564,7 +564,7 @@ fn signature_argument_validation() {
     // 类型变量未在 `tparams` 声明 ⇒ 边界归责插件（脚本侧 TypeError）。
     // SAFETY: state 存活。
     unsafe {
-        let variable = pa_ty_var(state, c_string("T").as_ptr());
+        let variable = pa_type_expr_var(state, c_string("T").as_ptr());
         assert!(!variable.is_null());
         let mut params = [variable];
         assert_eq!(
@@ -593,19 +593,19 @@ fn signature_argument_validation() {
 }
 
 #[test]
-fn pa_ty_constructors_validate_handles() {
+fn pa_type_expr_constructors_validate_handles() {
     let state = new_state();
     // SAFETY: state 存活。
     unsafe {
         // 不存在的类型名 ⇒ NULL ＋ 消息。
-        assert!(pa_ty_named(state, c_string("不存在的类型").as_ptr()).is_null());
+        assert!(pa_type_expr_named(state, c_string("不存在的类型").as_ptr()).is_null());
         assert!(!error_message(state).is_empty());
         // 非法 tag ⇒ NULL。
-        assert!(pa_ty_runtime_tag(state, 99).is_null());
+        assert!(pa_type_expr_runtime_tag(state, 99).is_null());
         // 空句柄 ⇒ NULL。
-        assert!(pa_ty_list_of(state, core::ptr::null_mut()).is_null());
+        assert!(pa_type_expr_list_of(state, core::ptr::null_mut()).is_null());
         // union 至少要 1 个成员。
-        assert!(pa_ty_union(state, core::ptr::null(), 0).is_null());
+        assert!(pa_type_expr_union(state, core::ptr::null(), 0).is_null());
     }
     // SAFETY: state 由 pa_create 交回、尚未销毁。
     unsafe { pa_destroy(state) };
@@ -622,7 +622,7 @@ fn annotated_call_sites_are_checked_at_compile_time() {
     // SAFETY: state 存活。
     unsafe {
         register(state, "expect_int", host_one, &[param_flags::PA_PARAM_POSITIONAL]);
-        let int_ty = pa_ty_runtime_tag(state, PA_TINTEGER);
+        let int_ty = pa_type_expr_runtime_tag(state, PA_TINTEGER);
         let mut params = [int_ty];
         set_signature(state, host_one, &mut params, core::ptr::null_mut());
     }
