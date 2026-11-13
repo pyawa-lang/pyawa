@@ -653,7 +653,7 @@ schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模�
 > 原先的「`errno` → 异常映射表」缺口已由 §5.1 的 `CM-19`…`CM-21` 关闭；
 > 「Unicode 数据表来源」已由 `CM-13`／`CM-22`…`CM-24` 关闭。
 
-### 5.2.7 `operator`（**第一刀**：比较与真值）
+#### 5.2.7 `operator`（**第一刀**：比较与真值）
 
 **目标**：把参照实现的比较／真值一族先落地（不需要能力域，纯计算）。
 
@@ -765,7 +765,7 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 - **验收**：对拍语料 `tests/conformance/corpus/thread_locks.py`（两侧逐字比，23 条断言）；
   `_imp` 侧的 `is_builtin('_thread')` ⇒ `-1`（该模块在表里、也列在 `sys.builtin_module_names` ✓）。
 
-## 5.9 `binascii`（第 319 轮 ✓）
+### 5.9 `binascii`（第 319 轮 ✓）
 
 **`CM-4` 逐模块合约**（"从 Python 看到的 API 与语义" ✓；实测对照 `python3` ✓）：
 
@@ -785,7 +785,7 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 
 **护栏**：`crates/pyawa-runtime/tests/binascii_module.rs` ✓（三个用例，期望值取自参照 ✓）。
 
-## 5.10 逐模块合约（M3 收尾补；§5.2 续号）
+### 5.10 逐模块合约（M3 收尾补；§5.2 续号）
 
 > 本节是 §5.2 的**续写**（`CM-4`／`CM-14` 的分批补法）：M3 收尾审计出「**自实现、但 §5.2 尚无合约段**」
 > 的模块，逐个补段。审计口径＝`crates/pyawa-stdlib/src/lib.rs` 的 `RUST_MODULES` 模块表 ＋ 特殊装配的
