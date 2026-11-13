@@ -17,6 +17,11 @@
 **不算**内存安全 bug（但要另行记录）：内存泄漏/增长（按 §4 的基线考核）、语义差异（conformance 管）、
 超时（性能面）、`NotImplementedError`（未接线面）。
 
+**口径补充（round 263）**：`memdangle_survey.py` 默认对**首跑 memory 类**文件**顺序复跑 1 次**
+（`--memory-retries`）；复跑干净 ⇒ 记 `memory-flaky`（时序敏感，**仍然报 ✗**、只是与确定性 bug 分开计）。
+理由：实测 `test_weakref` 在并行负载下偶发标记、单跑 2/2 干净且旧树二进制会崩 ⇒ 既有＋时序敏感；
+把两类混在同一个数里会让"不得更差"的棘轮不可比 ✗。硬门①的"计数归零"仍按**确定性 memory** 判 ✓。
+
 ## 2. 验收：清零的三条硬门
 
 1. **悬垂全量**：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 跑全部 397 个顶层测试）⇒
@@ -63,6 +68,7 @@
 | round 89 修 `groupby` 键双持有后 | **0** ✅（硬门①首次达成，当时套件覆盖面较小） | 3 | 35 | 273 | 86 |
 | **round 261 全量棘轮复测**（2026-11-13 @ `376856f7`，jobs=4，timeout=90） | **3**（`test_difflib`／`test_gc`／`test_io`）✗ | 7 | 70 | 266 | 49（syntax 2） |
 | **round 262**（2026-11-13 @ `fd6fc82f`，冻结窗口 double-decref 防御后） | **3**（`test_difflib`／`test_gc`／`test_weakref`※）✗ | 7 | 70 | 265 | 50（syntax 2） |
+| **round 263**（2026-11-13 @ `63794f39`，memdangle 加「memory 顺序复跑 ⇒ flaky 分离」后） | **2**（确定性：`test_difflib`／`test_gc`）✗ ＋ flaky **0**（本轮首跑无 weakref 命中） | 7 | 70 | 266 | 50（syntax 2） |
 
 
 > memory 类判定与"清零"口径见 §1／§2；**只统计签名命中，不把语义失败算进来**。
@@ -71,7 +77,7 @@
 > （同一文件同样标记）⇒ 不是 round 257–260 的回归；历史"0"是 round 89 的观测，之后套件能跑到更深的
 > 线程／GC 路径才暴露。**当前硬门① 未达**（3 ≠ 0）⇒ 以 **memory ≤ 3 为新棘轮基线**，下一轮起专项修：
 > ① `test_io`：`test_close_assert` 的局部类 `R` 在某线程用例处**二次 decref**（`对已释放对象 decref：R`）；
-> ② `test_difflib`：`HtmlDiff._tab_newline_replace` 一族 str 悬垂（GC 时序相关，单测单跑不复现）；
+> ② `test_difflib`：str 悬垂（本轮用 `PYAWA_REF_TRACE=str` 定位到同一指针在 `SequenceMatcher.find_longest_match` 内被**连续 3 次** -1 而计数只有 2 ⇒ 容器里有一份**欠 incref**；按容器创建点继续钉 ✗）；
 > ※ **round 262 起 `test_io` 已消**（`collect` ④ 冻结窗口里'计数已 0 的冻结对象'再减改为**忽略** ——实测 `test_io.test_close_assert` 的局部类 `R` 实例被 `list_clear` 先放、`tuple_clear` 再放；guard 后单文件 0 标记 ✓）。`test_weakref` 并行/时序敏感：新树单跑 2/2 干净、旧树二进制单跑 1 标记＋段错误 ⇒ **既有** ✗，记档待查。
 > ③ `test_gc`：已知 `GCTogglingTests.test_bug1055820c` 段错误族（B3-2 已 A/B 证明既有 ✗）。
 

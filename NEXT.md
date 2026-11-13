@@ -6,7 +6,7 @@
 > **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
 > （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
 
-- **HEAD**：`fd6fc82f`（本笔前；round 262（memory 专项①）collect 冻结窗口 double-decref 防御 ⇒ test_io 内存标记消除；全量 memory 仍 3（difflib／gc／weakref 时序，均 A/B 既有）；下轮续查 difflib 欠 incref＋到第 8 项 ABI 请示）
+- **HEAD**：`63794f39`（本笔前；round 263（memory 专项②）memdangle 加 flaky 分离；确定性 memory 3→2（difflib／gc），test_weakref 时序分离；下轮续查 difflib 欠 incref，再到第 8 项 ABI 请示）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
 - **下一阶段**：M6 后继续抬官方套件跑通面（**报告级口径** ✓，非判据）
 - **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗

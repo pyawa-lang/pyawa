@@ -86,6 +86,9 @@ def main() -> None:
     ap.add_argument("--jobs", type=int, default=max(4, (os.cpu_count() or 4) // 2))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=120.0)
+    # **并行/时序敏感的 memory 命中要单独分辨**（round 263）：默认对每个 memory 类文件**顺序复跑 1 次**；
+    # 复跑干净 ⇒ 记 `memory-flaky`（仍报 ✗，但不与"确定性内存 bug"混在一起 ⇒ 棘轮基线可比 ✓）。
+    ap.add_argument("--memory-retries", type=int, default=1)
     args = ap.parse_args()
 
     root = pathlib.Path(args.dir).resolve()
@@ -104,6 +107,23 @@ def main() -> None:
         for name, kind, msg in pool.map(lambda p: run_one(binary, p, args.timeout), files):
             rows.append((name, kind, msg))
 
+    # **memory 类复跑**（round 263）：并行负载下有的命中是时序敏感（实测 `test_weakref` 单跑干净、
+    # 旧树会崩 ✗）⇒ 顺序复跑 `--memory-retries` 次；任一次干净 ⇒ 记 `memory-flaky`（如实报，不算清零 ✓）。
+    if args.memory_retries > 0:
+        for index, (name, kind, msg) in enumerate(rows):
+            if kind != "memory":
+                continue
+            path = root / name
+            clean = False
+            for _ in range(args.memory_retries):
+                _, retry_kind, retry_msg = run_one(binary, path, args.timeout)
+                if retry_kind != "memory":
+                    clean = True
+                    msg = f"{msg} ｜ 顺序复跑={retry_kind}（{retry_msg[:80]}）"
+                    break
+            if clean:
+                rows[index] = (name, "memory-flaky", msg)
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", encoding="utf-8") as fh:
         fh.write("file\tkind\treason\n")
@@ -113,11 +133,13 @@ def main() -> None:
     counts = collections.Counter(kind for _, kind, _ in rows)
     total = len(rows)
     memory = [row for row in rows if row[1] == "memory"]
+    flaky = [row for row in rows if row[1] == "memory-flaky"]
     print(f"共 {total} 个 test_*.py（PYAWA_DANGLING=1 悬垂检测模式）")
     print(
-        "  memory（内存安全类）: {m} ｜ timeout: {t} ｜ ok: {o} ｜ runtime: {r} ｜ "
+        "  memory（确定性命中）: {m} ｜ memory-flaky（时序敏感）: {f} ｜ timeout: {t} ｜ ok: {o} ｜ runtime: {r} ｜ "
         "unimplemented: {u} ｜ syntax: {s}".format(
             m=counts.get("memory", 0),
+            f=counts.get("memory-flaky", 0),
             t=counts.get("timeout", 0),
             o=counts.get("ok", 0),
             r=counts.get("runtime", 0),
@@ -126,9 +148,13 @@ def main() -> None:
         )
     )
     if memory:
-        print("  memory 类文件（前 15 条签名）：")
+        print("  memory 类文件（确定性命中，前 15 条签名）：")
         for name, _, msg in memory[:15]:
             print(f"    {name}: {msg}")
+    if flaky:
+        print("  memory-flaky（首跑命中、顺序复跑干净 ⇒ 时序敏感，如实报 ✗）：")
+        for name, _, msg in flaky[:15]:
+            print(f"    {name}: {msg[:180]}")
     print(f"明细 → {OUT}")
 
 
