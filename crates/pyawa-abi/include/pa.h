@@ -3,8 +3,9 @@
  * 权威清单：docs/SPEC-c-abi.md §15。函数总数必须 ≤ 120（AB-1）；
  * 禁止导出清单之外的函数、禁止隐式导出（AB-6）。
  *
- * 本头文件声明**已经接线**的部分，以及三条执行入口：`pa_exec_string` 已落地；
- * `pa_exec_file`／`pa_exec_bytecode` 按 `AB-22` 如实报"**未提供**"（`PA_ERR_NOTIMPLEMENTED`）——
+ * 本头文件声明**已经接线**的部分，以及三条执行入口：`pa_exec_string` 与
+ * `pa_exec_bytecode`（`.pyac` 解码 + `BC-29` 校验）已落地；`pa_exec_file` 的文件 I/O 经能力层
+ * （`IM-15`）尚未接线 ⇒ 按 `AB-22` 如实报"**未提供**"（`PA_ERR_NOTIMPLEMENTED`）——
  * 签名在这里固定，宿主不必等实现。
  */
 #ifndef PAWA_PA_H
@@ -137,11 +138,12 @@ int pa_setpath(pa_state *state, const char *const *dirs, size_t n);
  * `len < 0` ⇒ `source` 按 NUL 结尾算（口径同 `pa_pushstring`）；`chunkname` 为空／NULL ⇒
  * 取 `<string>`（它现在还进不了产物）。
  *
- * 另两条**如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）：
+ * 一条**如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）：
  *   - `pa_exec_file`：文件 I/O 经能力层（`IM-15`），能力层尚未接线
- *   - `pa_exec_bytecode`：`.pyac` 装载器尚未接线（`P3-12`）；本条**没有 `mode`、也没有
- *     `pa_options`**（`AB-60`／`AB-61`：模式／优化级／档位三样都随产物头部走，`IM-19`），
- *     宿主**不得**另行指定（否则两个真相）
+ *
+ * `pa_exec_bytecode` **已提供**：按 `.pyac` 容器解码，指令集版本不符 ⇒ `PA_ERR_INVALID`（`BC-29`）；
+ * 本条**没有 `mode`、也没有 `pa_options`**（`AB-60`／`AB-61`：模式／优化级／档位三样都随产物
+ * 头部走，`IM-19`），宿主**不得**另行指定（否则两个真相）。
  */
 typedef struct pa_options {
     size_t size;             /* 本结构体的字节数（AB-61：尺寸标记） */

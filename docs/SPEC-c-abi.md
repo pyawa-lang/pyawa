@@ -405,11 +405,11 @@
 | `pa_newtable(st)` | +1 | 新建表 |
 | `pa_newlist(st, n)` | +1 | 新建长度 n 的列表 |
 | `pa_getfield(st, idx, name)` | ±1 | 属性访问；走 `getattr` 槽位（`TS` §8） |
-| `pa_setfield(st, idx, name)` | ±1 | 属性写入；走 `setattr` 槽位 |
+| `pa_setfield(st, idx, name)` | −1 | 属性写入；走 `setattr` 槽位（值在栈顶、写入即消耗 ⇒ 净 −1） |
 | `pa_gettable(st, idx)` | ±1 | 下标访问；走 `BINARY_OP`＋`NB_SUBSCR` 语义（`BC-39`） |
-| `pa_settable(st, idx)` | ±1 | 下标写入；走 `STORE_SUBSCR` 语义 |
+| `pa_settable(st, idx)` | −2 | 下标写入；走 `STORE_SUBSCR` 语义（键与值都被消耗 ⇒ 净 −2） |
 | `pa_rawget(st, idx)` | ±1 | 下标访问但**不触发**槽位 |
-| `pa_rawset(st, idx)` | ±1 | 下标写入但**不触发**槽位 |
+| `pa_rawset(st, idx)` | −2 | 下标写入但**不触发**槽位（键与值都被消耗 ⇒ 净 −2） |
 | `pa_getglobal(st, name)` | +1 | 读模块全局 |
 | `pa_setglobal(st, name)` | −1 | 写模块全局 |
 | `pa_call(st, nargs, nresults)` | −nargs+nresults | 调用；异常经状态码 ＋ `pa_errmsg`；`nresults` 精确（`0`/`N`，多截少补 `None`，`AB-72`） |
@@ -431,26 +431,29 @@
 
 ### 15.4 辅助层 `paL_`（18 个，**不含**新语义）
 
-| 函数 | 说明 |
+**签名以 `pa.h` 为唯一落地**（下表是规格侧对照，逐字同源；`AB-19`：一律返回状态码，`paL_newstate`
+是唯一例外——它没有实例可承载状态码）。辅助层**不得**引入核心层没有的语义（`AB-4`／`AB-6`）。
+
+| 函数签名（与 `pa.h` 一致） | 说明 |
 |---|---|
-| `paL_newstate()` | `pa_create` ＋ 真实机器 provider 的便捷入口（实现属 `pyawa-runtime`） |
-| `paL_openlibs(st)` | 打开标准库 |
-| `paL_dostring(st, s, mode)` | 执行字符串并统一收尾 |
-| `paL_dofile(st, path, mode)` | 执行文件并统一收尾 |
-| `paL_setfuncs(st, const pa_reg *, n)` | 批量注册 |
-| `paL_checkinteger(st, idx)` | 参数校验：不符即抛错 |
-| `paL_optinteger(st, idx, def)` | 同上，缺省可给 |
-| `paL_checkstring(st, idx)` | 同上 |
-| `paL_optstring(st, idx, def)` | 同上 |
-| `paL_len(st, idx)` | 长度 |
-| `paL_getsubtable(st, idx, name)` | 取或建子表 |
-| `paL_ref(st, idx)` | 把栈项存入注册表，返回整数键 |
-| `paL_unref(st, ref)` | 释放注册表键 |
-| `paL_traceback(st, msg)` | 附加 traceback |
-| `paL_where(st, level)` | 当前位置串 |
-| `paL_error(st, fmt, ...)` | 格式化抛错 |
-| `paL_execresult(st, status)` | 状态码 → 统一收尾 |
-| `paL_requiref(st, name, openf, glb)` | 取或加载模块 |
+| `int paL_checkinteger(pa_state *state, int idx, int64_t *out)` | 参数校验：不符即抛错 |
+| `int paL_optinteger(pa_state *state, int idx, int64_t def, int64_t *out)` | 同上，缺省可给 |
+| `int paL_checkstring(pa_state *state, int idx, const char **out, size_t *len)` | 同上 |
+| `int paL_optstring(pa_state *state, int idx, const char *def, const char **out, size_t *len)` | 同上 |
+| `int paL_len(pa_state *state, int idx, size_t *out)` | 长度 |
+| `int paL_getsubtable(pa_state *state, int idx, const char *name)` | 取或建子表 |
+| `int paL_ref(pa_state *state, int idx, int *out_ref)` | 把栈项存入注册表，返回整数键（从 1 起） |
+| `int paL_unref(pa_state *state, int ref)` | 释放注册表键（幂等） |
+| `int paL_traceback(pa_state *state, const char *msg)` | 附加 traceback |
+| `int paL_where(pa_state *state, int level, const char **out, size_t *len)` | 当前位置串 |
+| `int paL_error(pa_state *state, const char *msg)` | 抛错（C 变参格式化在稳定 Rust 里做不到 ⇒ 只收拼好的消息） |
+| `int paL_execresult(pa_state *state, int status)` | 状态码 → 统一收尾（`PA_OK` ⇒ 压 `True`，`+1`） |
+| `int paL_requiref(pa_state *state, const char *name, const void *openf, int glb)` | 取或加载模块 |
+| `int paL_setfuncs(pa_state *state, const pa_reg *regs, int n)` | 批量注册（`n < 0` ⇒ 以 NULL 名字结尾） |
+| `int paL_openlibs(pa_state *state)` | 打开标准库（缺标准库 ⇒ 如实未实现） |
+| `int paL_dostring(pa_state *state, const char *s, int mode)` | 执行字符串并统一收尾 |
+| `int paL_dofile(pa_state *state, const char *path, int mode)` | 执行文件并统一收尾 |
+| `pa_state *paL_newstate(void)` | `pa_create` ＋ 真实机器 provider 的便捷入口（实现属 `pyawa-runtime`） |
 
 > **禁止**靠辅助层绕过任何硬约束——辅助层**不得**引入核心层没有的语义（`AB-4`／`AB-6`）。
 

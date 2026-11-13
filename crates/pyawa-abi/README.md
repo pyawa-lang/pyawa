@@ -59,19 +59,18 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 而那个解析器（`TS` 的注解面）还没落地；本层现在只**原样保留**表达式字符串（不发明 IDL，`AB-28`），
 导出时也原样写进 `.pyi`。
 
-**辅助层的签名**：`§15.4` **没有给签名**（只给名字与语义）⇒ 本层按 `AB-19` 统一取
-"状态码 ＋ 出参"形态，**`include/pa.h` 是唯一处定义**。这是一处待补的规格缺口。
+**辅助层的签名**：`§15.4` 已于 2026-11-14 按 `include/pa.h` 补齐签名列（**`pa.h` 仍是唯一落地**）；
+本层按 `AB-19` 统一取"状态码 ＋ 出参"形态（`paL_newstate` 是唯一例外：没有实例可承载状态码）。
 
-**栈契约的一处差异（已知）**：规格 §15.3 把 `getfield`／`setfield`／`gettable`／`settable`
-记为 `±1`（就地替换 1 项）；本实现按自然语义取值——`setfield` **−1**（值被消耗，失败也弹）、
-`settable`／`rawset` **−2**（键与值都被消耗，与 `STORE_SUBSCR` 的三元形状一致）。
-`pa.h` 里逐条写明。**这一处待裁**（要么改规格记法，要么改实现）。
+**栈契约（已平方，2026-11-14）**：规格 §15.3 曾把 `setfield`／`settable`／`rawset` 记为 `±1`；
+按用户拍板"改规格记法跟随实现"——`setfield` **−1**（值被消耗，失败也弹）、
+`settable`／`rawset` **−2**（键与值都被消耗，与 `STORE_SUBSCR` 的三元形状一致）；
+`getfield`／`gettable`／`rawget` 维持 **±1**。`pa.h`／§15.3 逐条一致。
 
-**尚未落地**：`pa_exec_file`（文件 I/O 经能力层，`IM-15`）。`pa_exec_bytecode`
-（`.pyac` 装载器）**已于第 404 轮接线** ✓（`AB-60`：模式／优化级／档位随产物头部 ✓，
-本函数不接受 `pa_options` ✓；版本不符按 `BC-29` 返 `PA_ERR_INVALID` ✓）。
-`P3-12`）——两条**已声明并如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）；
-`pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
+**尚未落地**：`pa_exec_file`（文件 I/O 经能力层，`IM-15`；如实报 `PA_ERR_NOTIMPLEMENTED`，`AB-22`）。
+`pa_exec_bytecode` **已于第 404 轮接线** ✓（`AB-60`：模式／优化级／档位随产物头部 ✓，
+本函数不接受 `pa_options` ✓；版本不符按 `BC-29` 返 `PA_ERR_INVALID` ✓）。`pa_call`／`pa_pcall`
+的 `nresults` 语义已定（`AB-72`：**精确**结果数，`0`/`N`，多截、少补 `None`）。
 
 **`pa_exec_string` 已落地**：`mode` 按 `AB-60` 只认 `"python"`／`"pyawa"`（其余含空串与 `NULL`
 ⇒ `PA_ERR_INVALID`），源码解析失败 ⇒ `PA_ERR_SYNTAX`；脚本在实例的**全局命名空间**里跑，
@@ -83,6 +82,7 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 **已落地**（前面几轮陆续接上，别再当缺口）：宿主函数与类型注册（`pa_register`／`pa_newtype`
 ＋ `AB-51`…`AB-54` 的签名元数据；`AB-59` 起 `pa_newtype` 的栈契约是 `+1`，把类型对象压栈）、
 属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／`pa_rawget`／`pa_rawset`）、
+**宿主对象载荷读回**（`pa_tohandle`，`AB-70`）、**执行产物文件名来源**（`pa_set_program_filename`，`AB-71`）、
 执行（`pa_exec_string` ＋ `pa_options`）、`paL_*` 辅助层。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
