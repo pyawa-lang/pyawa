@@ -61,6 +61,7 @@
 | **CX-23** | **`NEXT.md` 是单页交接**：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据；**禁止**在本页写逐轮复盘（历史只进 `docs/rounds/`）。机检：`T-CX-14` |
 | **CX-24** | **`NEXT.md` 的 HEAD 行必须是短哈希**（`git rev-parse --short HEAD` 的输出，且 `git cat-file -e` 能解析）；**禁止**写指针（如「见 `git log -1`」）。机检：`T-CX-15` |
 | `T-CX-16` | **提交正文含可 grep 的决定记录**：`docs/`／`tools/`／`agents-rules/`（含 `Revert`）的提交正文必须有 `决定：<REQUIREMENTS 行名>`，该行名能在 `docs/REQUIREMENTS.md` 找到（`CX-25`） |
+| `T-CX-17` | **核心五 crate 零三方依赖**：`[dependencies]` 只能指向 workspace 内部；第三方只许在 `pyawa-lsp` 且不得被核心反向依赖（`CX-27`） |
 
 - **CX-14** 上表"能"的条目**必须**在 CI 里可执行；"不能"的条目**必须**保持占位，
   **禁止**在实现前写成"已就位"。
@@ -123,6 +124,7 @@
 
 - **`CX-25`** 提交正文必须含「`决定：`＋`docs/REQUIREMENTS.md` 的可 grep 行名」（机检 `T-CX-16`）—— 公开仓库的读者据此回溯决定来源 ✓。
 - **`CX-26`** 对规范下断言必须**当场查证**（`grep`／`read`）并写出「文件:编号」；**禁止**凭记忆断言 ✗。
+- **`CX-27`** **第三方依赖的边界**：`pyawa-core`／`pyawa-abi`／`pyawa-capabilities` **零第三方** ✓；`pyawa-runtime` **只依赖 workspace 内部** ✓；`pyawa-stdlib` 的既有第三方仅限 `regex`／`fancy-regex` ✓（新增须先改本条）；`pyawa-lsp` **允许**第三方（协议/序列化 ✓），但**不得被核心反向依赖** ✗（机检 `T-CX-17` ✓）。
 
 
 ---

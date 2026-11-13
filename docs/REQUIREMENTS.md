@@ -101,6 +101,7 @@ Pyawa 本身不做数据/查询 DSL——它只负责"易嵌入"。具体 DSL �
 | 工具链 | REPL、调试器/`sys.monitoring`、LSP/类型检查器、profiler |
 | **提交纪律（2026-11-13）** | **决定**：①任何提交前先给「**提交预告**」（改什么／为什么／要不要提）；②`docs/`／`tools/`／`agents-rules/` 的提交正文必须含 `决定：<本表某行>`（`CX-25`／`T-CX-16`）；③对规范下断言必须当场查证并写出「文件:编号」，不得凭记忆（`CX-26`）。**理由**：规则无机检必漂（同 `CX-23/24` 的教训）；「救火」不是豁免 ✗。 |
 | **CI 流水线（2026-11-13）** | **决定**：`.github/workflows/ci.yml` 分两档——`fast`（每次 push/PR：`check.py` ＋构建＋ABI/核心测试）与 `full`（PR／手动／每周：`slowcheck` 11 项，含基准闸）。与 `AGENTS.md` 硬线一致：纯文档只需 `check.py` 绿；动代码须 `slowcheck` 全绿。 |
+| **LSP 线（2026-11-13）** | **决定**：三梯开工——① `pyawa check`（只编译不执行、批量诊断、`--format=json`；`.py` 只出语法类、`.pyawa` 出类型类；进 CI 一步）② LSP MVP（`publishDiagnostics` ＋ `hover`，与 ① 同源）③ 补全/跳转按需。**依赖隔离**：第三方依赖只许在 `pyawa-lsp` crate 内（`CX-27`／`T-CX-17`），核心五 crate 仍零三方 ✗。 |
 
 | 兼容性验收 | 暂不定 |
 | 项目节奏 | 探索阶段，暂不谈交付 |
