@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+# 与 AGENTS.md「硬线」一致：
+#  - fast：每次 push/PR —— check.py（16 项，秒级）＋ 构建 ＋ ABI/核心测试
+#  - full：PR／手动／每周 —— slowcheck 11 项（含基准闸：性能回退 + memcheck 子集）
+jobs:
+  fast:
+    name: 快速闸门（check.py ＋ 构建 ＋ 测试）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 环境
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind gcc
+          rustc --version && cargo --version
+      - name: 文档/规格/编号闸门（16 项）
+        run: python3 tests/ci/check.py
+      - name: 构建（release）
+        run: tools/cargo.sh build --release -p pyawa-runtime --bin pyawa
+      - name: ABI ＋ 核心测试（release）
+        run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core
+
+  full:
+    name: 完整闸门（slowcheck 11 项）
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: 环境
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind gcc
+          rustc --version && cargo --version
+      - name: slowcheck（11 项：含基准闸＝性能回退 ＋ memcheck 子集）
+        run: tools/slowcheck.sh --release
+
+  weekly:
+    name: 每周全量（slowcheck ＋ 内存棘轮）
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: 环境
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind gcc
+      - name: slowcheck
+        run: tools/slowcheck.sh --release
+      - name: 全量内存棘轮（memdangle_survey）
+        run: python3 tools/memdangle_survey.py --seconds 3000 || true
