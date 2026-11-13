@@ -21,6 +21,9 @@ cargo build -p pyawa-lsp --bin pyawa-lsp
 | 客户端 → 服务 | `initialize`／`initialized` | 能力：`textDocumentSync = {openClose: true, change: 1}`（**全量同步**）、`hoverProvider: true` |
 | 客户端 → 服务 | `textDocument/didOpen`／`didChange`／`didClose` | 每次重新编译，发 `textDocument/publishDiagnostics`；`didClose` 清空诊断 |
 | 客户端 → 服务 | `textDocument/hover` | 对**已标注的名字**返回 `name: 类型` 的 markdown；找不到 ⇒ `null` |
+| 客户端 → 服务 | `textDocument/completion` | **文档内符号**补全（注解名／`def`／`class`／顶层赋值；kind 3／6）；v1 无上下文敏感、无成员／标准库补全 |
+| 客户端 → 服务 | `textDocument/definition` | 光标下名字 ⇒ 首个定义处（注解／`def`／`class`／顶层赋值）`Location`；找不到 ⇒ `null` |
+| 客户端 → 服务 | `textDocument/rename` | **单文件整词**重命名，返回 `WorkspaceEdit`（客户端应用）；不做跨文件／作用域分析 |
 | 客户端 → 服务 | `shutdown`／`exit` | 正常退出 |
 | 服务 → 客户端 | `textDocument/publishDiagnostics` | 字段 `range`（LSP 0 基 line/character）、`severity: 1`、`code`（`syntax`／`type`／`unsupported`）、`source: "pyawa"`、`message` |
 
@@ -38,6 +41,8 @@ cargo build -p pyawa-lsp --bin pyawa-lsp
   纯 ASCII 等价，非 BMP 字符（如 emoji）会偏（已在 `server.rs` 的 `publish` 文档里标注）。
 - **`publishDiagnostics` 的 range 为 1 字符宽**（起止同行）；精确到 token 的 span 要等 parser
   统一带位点（梯②之后的补齐面）。
+- **completion／definition／rename 只做"文档内符号"的浅层版本**：不做类型推断、成员补全、
+  标准库符号、跨文件跳转；rename 是**单文件整词替换**（同名单文件内全部替换，无作用域分析）。
 - 语法诊断在既有 parser **无位点标记**时 `line/col = 0`（与 `pyawa check` 同口径，如实记录）。
 
 ## 依赖隔离（`CX-27`／`T-CX-17`）

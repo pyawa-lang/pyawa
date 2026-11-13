@@ -119,6 +119,18 @@ impl Server {
                 let result = self.hover(params);
                 respond(outgoing, id, result);
             }
+            "textDocument/completion" => {
+                let result = self.completion(params);
+                respond(outgoing, id, result);
+            }
+            "textDocument/definition" => {
+                let result = self.definition(params);
+                respond(outgoing, id, result);
+            }
+            "textDocument/rename" => {
+                let result = self.rename(params);
+                respond(outgoing, id, result);
+            }
             _ => {
                 if id.is_some() {
                     respond_error(outgoing, id, -32601, "method not found");
@@ -230,6 +242,108 @@ impl Server {
         outgoing.push(notification("textDocument/publishDiagnostics", params));
     }
 
+    /// `textDocument/completion`：**文档内符号**补全（已标注的名字／`def`／`class`／顶层赋值）。
+    ///
+    /// v1 如实边界：不做上下文敏感／成员补全、也没接标准库；只从当前文档文本里搜集符号 ✓。
+    fn completion(&self, params: Option<&Value>) -> String {
+        let Some((uri, _line, _character)) = text_position(params) else {
+            return "null".to_owned();
+        };
+        let Some(source) = self.documents.get(uri) else {
+            return "null".to_owned();
+        };
+        let mut items: Vec<String> = Vec::new();
+        for symbol in document_symbols(source) {
+            let kind = match symbol.kind {
+                SymbolKind::Function | SymbolKind::Class => 3, // CompletionItemKind::Function
+                SymbolKind::Variable => 6,                    // CompletionItemKind::Variable
+            };
+            let detail = symbol
+                .type_text
+                .as_ref()
+                .map(|type_text| format!(",\"detail\":{}", json_string(type_text)))
+                .unwrap_or_default();
+            items.push(format!(
+                "{{\"label\":{},\"kind\":{kind}{detail}}}",
+                json_string(&symbol.name)
+            ));
+        }
+        format!("{{\"isIncomplete\":false,\"items\":[{}]}}", items.join(","))
+    }
+
+    /// `textDocument/definition`：光标下名字的**定义处**（注解／`def`／`class`／顶层赋值的第一处）。
+    fn definition(&self, params: Option<&Value>) -> String {
+        let Some((uri, line, character)) = text_position(params) else {
+            return "null".to_owned();
+        };
+        let Some(source) = self.documents.get(uri) else {
+            return "null".to_owned();
+        };
+        let Some(token) = token_at(source, line, character) else {
+            return "null".to_owned();
+        };
+        let Some(symbol) = document_symbols(source)
+            .into_iter()
+            .find(|symbol| symbol.name == token)
+        else {
+            return "null".to_owned();
+        };
+        let start_character = symbol.character;
+        let end_character = start_character + symbol.name.chars().count() as u32;
+        format!(
+            "{{\"uri\":{},\"range\":{{\"start\":{{\"line\":{},\"character\":{start_character}}},\
+             \"end\":{{\"line\":{},\"character\":{end_character}}}}}}}",
+            json_string(uri),
+            symbol.line,
+            symbol.line
+        )
+    }
+
+    /// `textDocument/rename`：**单文件**整词重命名（返回 `WorkspaceEdit`，由客户端应用）。
+    ///
+    /// v1 如实边界：不做跨文件／作用域分析（同名单文件内全部替换）；名字必须是合法标识符。
+    fn rename(&self, params: Option<&Value>) -> String {
+        let Some(params) = params else {
+            return "null".to_owned();
+        };
+        let Some((uri, line, character)) = text_position(Some(params)) else {
+            return "null".to_owned();
+        };
+        let Some(new_name) = params.get("newName").and_then(Value::as_str) else {
+            return "null".to_owned();
+        };
+        if !is_identifier(new_name) {
+            return "null".to_owned();
+        }
+        let Some(source) = self.documents.get(uri) else {
+            return "null".to_owned();
+        };
+        let Some(token) = token_at(source, line, character) else {
+            return "null".to_owned();
+        };
+        let mut edits: Vec<String> = Vec::new();
+        for (line_index, line_text) in source.lines().enumerate() {
+            for (start, end) in word_occurrences(line_text, &token) {
+                edits.push(format!(
+                    "{{\"range\":{{\"start\":{{\"line\":{line_index},\"character\":{start}}},\
+                     \"end\":{{\"line\":{line_index},\"character\":{end}}}}},\"newText\":{}}}",
+                    json_string(new_name)
+                ));
+            }
+        }
+        if edits.is_empty() {
+            return "null".to_owned();
+        }
+        format!(
+            "{{\"changes\":{{{}}}}}",
+            format!(
+                "{}:[{}]",
+                json_string(uri),
+                edits.join(",")
+            )
+        )
+    }
+
     /// `textDocument/hover`：对**已标注的名字**返回声明类型 markdown；找不到 ⇒ `null`。
     fn hover(&self, params: Option<&Value>) -> String {
         let Some(params) = params else {
@@ -265,8 +379,10 @@ impl Server {
 }
 
 fn initialize_result() -> String {
-    // 只声明**已实现**的能力（②：全量同步 ＋ hover；③ 落地时再追加 completion／definition／rename）。
-    "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1},\"hoverProvider\":true},\
+    // 只声明**已实现**的能力（②：全量同步＋hover；③：completion／definition／rename）。
+    "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1},\"hoverProvider\":true,\
+     \"completionProvider\":{\"triggerCharacters\":[]},\"definitionProvider\":true,\
+     \"renameProvider\":true},\
      \"serverInfo\":{\"name\":\"pyawa-lsp\",\"version\":\"0.0.0\"}}"
         .to_owned()
 }
@@ -392,4 +508,144 @@ fn hover_markdown(source: &str, line: u32, character: u32) -> Option<String> {
 
 fn hover_text(name: &str, type_text: &str) -> String {
     format!("```python\n{name}: {type_text}\n```")
+}
+
+
+/// 光标处位置（`uri`／`line`／`character`；`params.textDocument.uri` ＋ `params.position`）。
+fn text_position(params: Option<&Value>) -> Option<(&str, u32, u32)> {
+    let params = params?;
+    let uri = params
+        .get("textDocument")
+        .and_then(|document| document.get("uri"))
+        .and_then(Value::as_str)?;
+    let position = params.get("position")?;
+    let line = position.get("line").and_then(Value::as_u32)?;
+    let character = position.get("character").and_then(Value::as_u32)?;
+    Some((uri, line, character))
+}
+
+/// 源码里的一类符号（补全／跳转的最小来源；**不做**语义分析）。
+struct DocumentSymbol {
+    name: String,
+    kind: SymbolKind,
+    line: u32,
+    character: u32,
+    type_text: Option<String>,
+}
+
+enum SymbolKind {
+    Function,
+    Class,
+    Variable,
+}
+
+/// 从文档文本里搜集符号：注解（`name: type`）、`def`／`class`、顶层赋值（`name = …`）。
+fn document_symbols(source: &str) -> Vec<DocumentSymbol> {
+    let mut symbols: Vec<DocumentSymbol> = Vec::new();
+    for (line_index, line_text) in source.lines().enumerate() {
+        let line = line_index as u32;
+        let trimmed = line_text.trim_start();
+        let indent = line_text.len() - trimmed.len();
+        if let Some((name, type_text, name_start)) = annotation_on_line(line_text) {
+            push_symbol(
+                &mut symbols,
+                DocumentSymbol {
+                    name,
+                    kind: SymbolKind::Variable,
+                    line,
+                    character: (name_start) as u32,
+                    type_text: Some(type_text),
+                },
+            );
+            continue;
+        }
+        for (keyword, kind) in [("def ", SymbolKind::Function), ("class ", SymbolKind::Class)] {
+            if let Some(rest) = trimmed.strip_prefix(keyword) {
+                let name: String = rest
+                    .chars()
+                    .take_while(|character| character.is_alphanumeric() || *character == '_')
+                    .collect();
+                if !name.is_empty() {
+                    push_symbol(
+                        &mut symbols,
+                        DocumentSymbol {
+                            name,
+                            kind,
+                            line,
+                            character: (indent + keyword.chars().count()) as u32,
+                            type_text: None,
+                        },
+                    );
+                }
+                break;
+            }
+        }
+        // 顶层赋值（缩进为 0；`name = …`）——定义跳转的兜底。
+        if indent == 0 {
+            if let Some((name, _value)) = trimmed.split_once('=') {
+                let name = name.trim();
+                if is_identifier(name) {
+                    push_symbol(
+                        &mut symbols,
+                        DocumentSymbol {
+                            name: name.to_owned(),
+                            kind: SymbolKind::Variable,
+                            line,
+                            character: 0,
+                            type_text: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    symbols
+}
+
+fn push_symbol(symbols: &mut Vec<DocumentSymbol>, symbol: DocumentSymbol) {
+    if symbols.iter().any(|existing| existing.name == symbol.name) {
+        return;
+    }
+    symbols.push(symbol);
+}
+
+/// 光标下的标识符（`source` 的 `line` 行 `character` 列）。
+fn token_at(source: &str, line: u32, character: u32) -> Option<String> {
+    let line_text = source.lines().nth(line as usize)?;
+    identifier_at(line_text, character as usize)
+}
+
+fn is_identifier(text: &str) -> bool {
+    let mut characters = text.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first.is_alphabetic() || first == '_')
+        && characters.all(|character| character.is_alphanumeric() || character == '_')
+}
+
+/// 一行里某标识符的**整词**出现区间（char 下标）——重命名用。
+fn word_occurrences(line: &str, word: &str) -> Vec<(u32, u32)> {
+    let characters: Vec<char> = line.chars().collect();
+    let word_chars: Vec<char> = word.chars().collect();
+    let mut occurrences = Vec::new();
+    if word_chars.is_empty() || characters.len() < word_chars.len() {
+        return occurrences;
+    }
+    let is_identifier_character =
+        |character: char| character.is_alphanumeric() || character == '_';
+    for start in 0..=characters.len() - word_chars.len() {
+        let end = start + word_chars.len();
+        if characters[start..end] != word_chars[..] {
+            continue;
+        }
+        if start > 0 && is_identifier_character(characters[start - 1]) {
+            continue;
+        }
+        if end < characters.len() && is_identifier_character(characters[end]) {
+            continue;
+        }
+        occurrences.push((start as u32, end as u32));
+    }
+    occurrences
 }

@@ -286,3 +286,105 @@ fn unknown_method_gets_a_jsonrpc_error() {
     assert_eq!(code, Some(-32601), "{response:?}");
     client.shutdown();
 }
+
+#[test]
+fn completion_definition_and_rename() {
+    let mut client = Client::start();
+    let initialized = client.request(1, "initialize", "{\"capabilities\":{}}");
+    let capabilities = initialized
+        .get("result")
+        .and_then(|result| result.get("capabilities"))
+        .expect("capabilities");
+    assert!(capabilities.get("completionProvider").is_some());
+    assert_eq!(
+        capabilities.get("definitionProvider").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        capabilities.get("renameProvider").and_then(Value::as_bool),
+        Some(true)
+    );
+    client.notify("initialized", "{}");
+    let uri = "file:///tmp/pyawa-lsp-features.pyawa";
+    client.notify(
+        "textDocument/didOpen",
+        &format!(
+            "{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"pyawa\",\"version\":1,\
+              \"text\":\"x: int = 1\\ny: str = \\\"a\\\"\\ndef f():\\n    return 1\\nz = x\\n\"}}}}"
+        ),
+    );
+    // 打开时可能先来一条 publishDiagnostics（无误报则 0 条），消费掉。
+    let _ = client.wait_notification("textDocument/publishDiagnostics");
+
+    // 补全：文档内符号都在。
+    let completion = client.request(
+        2,
+        "textDocument/completion",
+        &format!("{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":4,\"character\":0}}}}"),
+    );
+    let items = match completion
+        .get("result")
+        .and_then(|result| result.get("items"))
+    {
+        Some(Value::Array(items)) => items,
+        other => panic!("completion 结果不对：{other:?}"),
+    };
+    let labels: Vec<&str> = items
+        .iter()
+        .filter_map(|item| item.get("label").and_then(Value::as_str))
+        .collect();
+    for expected in ["x", "y", "f", "z"] {
+        assert!(labels.contains(&expected), "缺符号 {expected}：{labels:?}");
+    }
+
+    // 定义：第 4 行的 `x` ⇒ 第 0 行注解处。
+    let definition = client.request(
+        3,
+        "textDocument/definition",
+        &format!("{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":4,\"character\":4}}}}"),
+    );
+    let result = definition.get("result").expect("definition result");
+    assert_eq!(result.get("uri").and_then(Value::as_str), Some(uri));
+    let line = result
+        .get("range")
+        .and_then(|range| range.get("start"))
+        .and_then(|start| start.get("line"))
+        .and_then(Value::as_u32);
+    assert_eq!(line, Some(0), "应跳到注释（定义）行：{result:?}");
+
+    // 重命名：`x` ⇒ `counter`，单文件两处（注解行 ＋ 使用行）。
+    let rename = client.request(
+        4,
+        "textDocument/rename",
+        &format!(
+            "{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":4,\"character\":4}},\
+              \"newName\":\"counter\"}}"
+        ),
+    );
+    let edits = match rename
+        .get("result")
+        .and_then(|result| result.get("changes"))
+        .and_then(|changes| changes.get(uri))
+    {
+        Some(Value::Array(edits)) => edits,
+        other => panic!("rename 结果不对：{other:?}"),
+    };
+    assert_eq!(edits.len(), 2, "单文件两处整词替换：{edits:?}");
+    for edit in edits {
+        assert_eq!(
+            edit.get("newText").and_then(Value::as_str),
+            Some("counter")
+        );
+    }
+    // 非法新名字 ⇒ null。
+    let bad_rename = client.request(
+        5,
+        "textDocument/rename",
+        &format!(
+            "{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":4,\"character\":4}},\
+              \"newName\":\"1bad\"}}"
+        ),
+    );
+    assert_eq!(bad_rename.get("result"), Some(&Value::Null));
+    client.shutdown();
+}
