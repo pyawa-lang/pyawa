@@ -811,9 +811,14 @@
 
 **范围**：在**不启用真实信号**的前提下，提供 `_signal` 的最小面，使 `asyncio` 的事件循环可初始化并跑完一个协程：
 `getsignal`／`signal`（**注册为 no-op 或仅记账**，不真正投递）／`set_wakeup_fd`（返回前值或 `-1`）／`SIGCHLD` 等常量的存在性。
-**待定（需用户拍板）**：真实信号是否作为**能力域**提供？
-- 方案 A：**不提供真实信号**，只做记账式 façade（沙箱友好、无宿主副作用）；
-- 方案 B：作为能力域交给宿主（`fs`／`net` 同层），由宿主决定是否允许。
+**已定（2026-11-14，用户选 A）**：**不做真实信号投递**，只做**记账式 façade**。
+- 理由：POSIX 信号处置是**进程级**状态，与 `CP-13`／`OM-1` 的每实例隔离直接冲突；放开真实信号等于把沙箱边界
+  开在宿主进程上（脚本可改写宿主退出路径）。而 asyncio 真正吃信号的场景（子进程 `SIGCHLD`、Ctrl-C 处理）
+  在本层本就非目标（`subprocess`／`fork` 不提供）。
+- **代价（必须如实记录）**：`signal.signal` 注册的 handler **永不触发** ⇒ 实现时**必须**在
+  `tests/conformance/divergences.md` 增一条 `DIV-`（注册不投递），并在 `_signal` 合约里写明"记账式"边界；
+  无法记账的形态一律如实报未实现（`CM-6`／`AB-22`），**禁止假成功**。
+- **留待**：真实信号属 `proc` 域（`SPEC-capabilities.md` §9.3），等该域真正开工时另行设计。
 **验收**：
 ① `asyncio.run(coro())` 返回正确结果；② `await asyncio.sleep(0)` ＋ `async for` ＋ 异步推导式可用；
 ③ `signal.getsignal` 不再抛 `NotImplementedError`，返回记账号；
