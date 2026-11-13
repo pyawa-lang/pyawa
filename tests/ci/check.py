@@ -911,12 +911,41 @@ def check_core_zero_deps() -> list[str]:
     return failures
 
 
+def check_section_numbering() -> list[str]:
+    """**`T-CX-18`**：文档的二级章节编号（`## N. `）在**本文件内唯一且从 1 连续**（`CX-28`）。
+
+    只认 `## N. ` 形式（N 为纯整数＋点＋空格）：`## 3b.`、`## 5.9` 一类子节标题不计入，
+    避免把"子节误用二级标题"与"章节撞号"混为一谈。`docs/rounds/` 为历史台账，不扫描。
+    """
+    pattern = re.compile(r"^## (\d+)\.\s", re.M)
+    targets = sorted((ROOT / "docs").glob("*.md")) + [
+        ROOT / "AGENTS.md", ROOT / "NEXT.md", ROOT / "README.md",
+    ]
+    failures: list[str] = []
+    for path in targets:
+        if not path.is_file():
+            continue
+        nums = [int(x) for x in pattern.findall(path.read_text(encoding="utf-8"))]
+        if not nums:
+            continue
+        seen: set[int] = set()
+        for n in nums:
+            if n in seen:
+                failures.append(f"{relative(path)}: 章节 `## {n}.` 重复")
+            seen.add(n)
+        for n in range(1, max(nums) + 1):
+            if n not in seen:
+                failures.append(f"{relative(path)}: 章节编号缺 `## {n}.`（1..{max(nums)} 应连续）")
+    return failures
+
+
 def build_checks() -> list[Check]:
     checks = [
         Check("T-CX-1", ("CX-1",), "编号零悬空（全库引用）＋ 重复定义", check_spec_ids),
         Check("T-CX-14", ("CX-23",), "NEXT 单页 ≤40 行、禁止逐轮复盘", check_next_page_size),
         Check("T-CX-15", ("CX-24",), "NEXT 的 HEAD 行＝短哈希、可解析", check_next_head_line),
         Check("T-CX-17", ("CX-27",), "核心五 crate 零第三方依赖（LSP 依赖只许在 pyawa-lsp）", check_core_zero_deps),
+        Check("T-CX-18", ("CX-28",), "文档二级章节编号唯一且从 1 连续", check_section_numbering),
         Check("T-CX-2", ("CX-2",), "文档集状态：SPEC-INDEX §1 ↔ README", check_doc_status),
         Check("T-CX-3", ("CX-3",), "禁全局可变状态（VM 核心 crate 的 src/）", check_global_mutable_state),
         Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 ＋ C 层模块 crate 的 src/）", check_platform_dependencies),
