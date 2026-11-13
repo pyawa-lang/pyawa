@@ -641,6 +641,7 @@ schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模�
 | `atexit` | §5.2.30 | VM 侧（退出钩子未接） |
 | `_warnings` | §5.2.31 | VM 侧最小面（名字占位） |
 | `_operator` | §5.2.32 | 纯计算（与 `operator` 同一实现） |
+| `_csv` | §5.2.33 | 纯计算（`Lib/csv.py` 逐字同步；见该节未接面） |
 | `binascii` | §5.9 | 纯计算（正文在 §5.9） |
 | `_io` 的装配半（`_io_module.rs`） | §5.2.16 | `sys.stdout`／`stderr` 文本流的最小面 |
 
@@ -1203,3 +1204,56 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
   `i*` 原地族）——见该节，不在此重述（一处真相）。
 - **验收**：对拍语料 `lib_operator.py`（＋`Lib/hmac.py` 的导入链，判据①）。
 
+#### 5.2.33 `_csv`（**纯计算** —— task-3）
+
+> **编号说明**：工单写的是 §5.2.30，但 §5.2.30／31／32 已被 `atexit`／`_warnings`／`_operator`
+> 占用（`CM-14` 的"只追加"历史）⇒ 这里取**下一个空号** §5.2.33。`Lib/csv.py` 是**逐字同步**的上游
+> 文件，按 `CM-4` 不需要合约；本段只写我们自己实现的 `_csv`。
+
+- **归属**：**纯计算**（不碰平台、不碰能力域）；读的是调用方给的**任何可迭代对象**（每项当"一行"文本），
+  写的是调用方给的**任何带 `write` 属性**的对象 —— 与 `CX-4` 一致。
+- **能 import**：内建模块；`Lib/csv.py` 在导入期 `from _csv import Error, writer, reader, …` 并执行
+  `register_dialect("excel")`／`("excel-tab")`／`("unix")` ⇒ 注册表必须**真记账**（不是空桩）。
+- **已落地面**（导出面照参照 `dir(_csv)`）：`Error`（`Exception` 的**真子类**；`str`／`args`／
+  `__module__ == "_csv"` 照参照，可被 `class Foo(csv.Error)` 继承）／`Dialect`／`Reader`／`Writer`／
+  `reader`／`writer`／`register_dialect`／`unregister_dialect`／`get_dialect`／`list_dialects`／
+  `field_size_limit`／`QUOTE_MINIMAL=0`／`QUOTE_ALL=1`／`QUOTE_NONNUMERIC=2`／`QUOTE_NONE=3`／
+  `QUOTE_STRINGS=4`／`QUOTE_NOTNULL=5`／`_dialects`（dict，插入序即 `list_dialects()` 的次序）。
+  - **读侧**照参照 `Modules/_csv.c` 的 `parse_process_char` 状态机：`delimiter`／`quotechar`／
+    `doublequote`／`escapechar`／`skipinitialspace`／`quoting`／`strict`、引号内换行、`\r\n` 处理、
+    行结束哨兵（EOL）／EOF 的"意外结束"语义、空行 ⇒ `[]`、单列语义；`line_num` 是**物理行**计数
+    （耗尽后不再涨）；`__iter__` 返回自身、`__next__` 返回 `list[str]`（`QUOTE_NOTNULL`／
+    `QUOTE_STRINGS` 的空**未引**字段给 `None`，非空**未引**字段按 `QUOTE_NONNUMERIC`／
+    `QUOTE_STRINGS` 转 `float`）；`StringIO`／普通文件／`list[str]` 行源都能读。
+  - **写侧**照 `join_append_data`：六档 `quoting`、`doublequote`／`escapechar`／`lineterminator`、
+    `delimiter=' '` ＋ `skipinitialspace` 的空字段规则、单空字段记录规则；非 `str` 元素走 `str()`；
+    `writerow` 返回**文件对象 `write()` 的返回值**（不是字符数）、`writerows` 返回 `None`。
+  - **`Dialect`**：8 项属性（`delimiter`／`doublequote`／`escapechar`／`lineterminator`／`quotechar`／
+    `quoting`／`skipinitialspace`／`strict`）的转换与校验**按参照次序**、文案逐字一致（`Lib/csv.py`
+    的 `_validate` 把 `TypeError` 原样包成 `csv.Error`，上游测试逐字比对）；属性只读。
+  - `field_size_limit(limit=None)`：默认 **131072**、返回前值、必须在**恰好 `int`** 上设值；
+    `register_dialect` 的 `fmtparams` 覆盖源方言属性；`get_dialect` 返回**同一实例**（`is` 成立）。
+- **如实未接面 / 已知偏差（`CM-6`；都在 `_csv` 的 C 语义之外）**：
+  - **原生函数的 `__module__` 是 core 统一口径 `"builtins"`**（参照给 `"_csv"`）⇒ 上游
+    `test.support.check__all__` 认不出 `reader`／`writer`／`field_size_limit` 等 7 个名字 ⇒
+    `test_csv.test__all__` **失败 1 条**。修它要动 `pyawa-core`（本任务写域外，且影响所有内建模块）。
+    原生函数也没有 clinic 的 `__text_signature__`（本层给 `None`）。
+  - **三个类型的 `__name__`** 走本层"每实例注册类型"口径 ⇒ `_csv.reader`／`_csv.writer`／
+    `_csv.Dialect`（参照分别是 `reader`／`writer`／`Dialect`）；`isinstance`／`except`／
+    `cannot create '_csv.reader' instances` 面照参照一致。
+  - **实例状态在实例字典的私有键**（`__pyawa_csv_*`；参照是 C 载荷、无 `__dict__`）；模块命名空间
+    多一个私有状态键 `__pyawa_csv_field_limit`（字段上限；`_dialects` 照参照暴露）。
+  - **`QUOTE_*` 的"数值"判定**（写侧 `QUOTE_NONNUMERIC`）按内建数值类型（`int`／`bool`／大整数／
+    `float`／`complex`）近似参照的 `PyNumber_Check` ⇒ 自定义数值类可能判得不同。
+  - 读侧**含孤立代理的 `str` 行** ⇒ `Unsupported`（`P3-38` S3b 的表示缺口；**不静默**转义）。
+  - 上游 `test_csv.test_roundtrip_quoteed_newlines`／`test_roundtrip_escaped_unquoted_newlines` 的
+    `lineterminator='\r'` 两格报 `newline=''` 错误：根因在 `_io`（§5.2.16）—— 本层
+    `TextIOWrapper(newline='')` **不在孤立 `\r` 处断行**（`['a,b\rc,d\r']` 而非两行）⇒ reader 拿到的
+    "一行"含内嵌换行；`_csv` 照参照语义**如实报错**（不偷偷容忍）。`_io` 修好后这两格应自动转绿。
+  - 上游 `TestArrayWrites` 4 格错误：`array.array` 的**元素存储**未接线（§5.2.14），与本模块无关。
+- **验收**：`crates/pyawa-runtime/tests/csv_surface_shapes.rs` —— FACE 双侧（本机 `python3` 3.14.4）
+  逐行对拍（模块面／方言注册表／`Dialect` 校验文案／读侧各族／写侧各族／`DictReader`／
+  `DictWriter`／`Sniffer`），HONEST 面钉住上述 pyawa 独有偏差；`Lib/csv.py` 由
+  `python3 tools/sync_lib.py --check` 保证与上游**逐字节一致**（`CX-8`）。上游
+  `Lib/test/test_csv.py`：接入前 `import csv` 即 `ModuleNotFoundError`（**0 通过**）⇒ 接入后
+  **127 用例：114 通过／1 失败／6 错误／6 跳过**（失败/错误归因见上两段；跳过是 `cpython_only`）。

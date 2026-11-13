@@ -158,6 +158,9 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (pyexpat_module::NAME, pyexpat_module::build),
         (pyexpat_module::ERRORS_NAME, pyexpat_module::build_errors),
         (pyexpat_module::MODEL_NAME, pyexpat_module::build_model),
+        // **`_csv`**（task-3 ✓）：`Lib/csv.py` 的 `from _csv import Error, reader, writer,
+        // register_dialect, …` 的底座 ✓；`csv` 模块从此可 `import`（§12.3 的验收①）。
+        (_csv_module::NAME, _csv_module::build),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
@@ -479,6 +482,9 @@ pub mod unicode_tables;
 pub mod unicode_composition;
 /// **`_hashlib`**（round 20）：纯 Rust md5／sha1／sha256 的最小诚实面（`Lib/hashlib.py` 的底座）。
 pub mod _hashlib_module;
+/// **`_csv`**（task-3，`PLAN-milestones.md` §12.3）：`Lib/csv.py` 的 C 底座 —— 读／写回环、
+/// 方言注册表与 `Dialect` 校验；语义照参照本机 CPython 3.14.4 的 `Modules/_csv.c`。
+pub mod _csv_module;
 /// **`unicodedata`**（round 19）：最小诚实面；数据复用 `unicode_tables`（pdb/doctest 的闸）。
 pub mod unicodedata_module;
 

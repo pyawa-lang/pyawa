@@ -1,40 +1,30 @@
-# NEXT（会话 12 · M6 后 P3 批次）
+# NEXT（会话 13 · §12 需求单收口后）
 
-> **M6 已收口（2026-10-31）**：`MS-14` 407/407 · 已知差异 0 · 新差异 0；`Lib/test` 可编译 397/397＝100%；
-> `main` 已 `--no-ff` 收录 ＋ tag `m6`。**本战役只抬"官方套件能跑通的面"，不动 M6 的 gate ✓**。
-> **本页规矩**（`agents-rules/round-rule.md` §5）：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据；
-> **逐轮复盘只进台账** `docs/rounds/04-post-m6-01.md` ✗ —— 本页不再累积历史
-> （2026-11-10 瘦身：47 353 字符 / 单行 31 743 → 本页 ✓）。
+> **本轮落地（2026-11-14）**：`PLAN` §12 需求单三项全部落地 ✓ —— 12.1 `x = yield`（编译器生成器判定）、
+> 12.2 `_signal` 记账式最小面＋`asyncio` 解锁、12.3 `_csv`＋`Lib/csv.py`。判据与如实边界见 `PLAN` §12 各状态注。
+> **本页规矩**（`agents-rules/round-rule.md` §5）：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据。
 
-- **HEAD**：`6e8d68b4`（本笔前；round 280 修用户函数调用点类型检查 bug：实参/返回纳入 TS-47，用户示例 3 条诊断；下阶段：用户新指令/⑤ ABI 发布等决定）
+- **HEAD**：`079b1685`（本轮前；§12 三项的提交见 `git log`）
 - **工作区**：干净 ✓（`git status --porcelain` 空）
-- **下一阶段**：按 PLAN 收口后次序 —— ① 每实例内存配额 **✓ round 266** → ② 威胁模型与宿主责任 **✓ round 267（DESIGN §7.5）** → ③ `io.open`／`pathlib` 文件面 **✓ round 268** → ④ 通用参考宿主 **✓ round 269**；四项全落地 ✓。⑤ ABI **暂不发布**（等用户决定，不自行发布）。**新工单＝PLAN §10 LSP 线 ① `pyawa check`**（用户 2026-11-13）：core 批量诊断 **✓ round 274** → CLI／JSON／退出码／CI fast **✓ round 275 —— 梯①完成**；② LSP MVP **✓ round 276（pyawa-lsp）** → ③ 按需最小项 **✓ round 277（completion/definition/单文件 rename）** —— **LSP 三梯全部落地 ✓**；round 278 修「做完仍停手」规则 bug（完成口径）。LSP 质量收尾 **✓ round 279**（UTF-16 全链路＋范围外理由）—— LSP 线按完成口径已做完 ✓；round 280 修调用点类型检查 bug。ABI 发布仍等用户决定；memory 深水区两族留作独立专项 ✗
-- **计划次序**：**A 效率**（主线，见 `PLAN` §9.4 的 A→B→C 块 ✓）→ **B 内存守成** → **C 其余排后** ✗
-- **完整工单**：`PLAN` §9.4（2026-11-12 **一次性下达** ✓，逐轮自走 ✗ 不再逐步请示；只对四类请示 ✗）
-- **当前主线（2026-11-12 用户口径 ✓）**：**内存安全 ＋ 执行效率**（解释器硬要求 ✓）；其余**慢慢补** ✗
-  - ① 内存硬门：`tools/memdangle_survey.py` 归零 ＋ 无 abort／segfault
-  - ② 执行效率：`tools/bench_hot.py` 基线入库 ＋ 禁回退（>10% 红）＋ 报 CPython 比值（A2-6 后 18/26/24/15×；本批开工 214/232/208/135×）
-  - ③ 其余（日常库／冷门语义／套件 %）**排后** ✗
-- **官方套件**（报告级，会漂 ✓）：**79 ok / 68 unimplemented / 245 runtime / 5 timeout**（round 180 全量 survey）
-- **内存类硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）⇒ `target/memdangle_survey.tsv`；
-  **memory 类计数收敛到 0** 是本专项第一硬门（**目前非 0** ✗，数字见台账）
-- **未修 bug ＋ 判据**（如实 ✓）：
-  - **编译器**：推导式内嵌生成器表达式引用推导变量 **round 162 已接线**（隐藏形参法 ✓；判据见台账 round 162 §2）
-  - **iter_value 丢异常**（round 171 撤回）：`f(*Plain())` ×2 万仍漏 AttributeError/TypeError 各 2 万；三种修法都会让 test_dict.test_constructor 间歇失败 ⇒ 下一轮先定位 pending 槽副作用链
-  - `test_weakref`：round 256 已收口 **17.3 s（<120 s ✓）**——真根因是 `_remove_dead_weakref`→`dict_remove_key` 线性扫（70k 批量死引用 O(n²)），已改哈希索引；另修「释放链里 gc.collect 重入」双放（`test_callback_gcs`）。剩余 26F/9E 是功能缺口
-  - 形参所有权老账：round 255 探针 9 形态全 0 delta ⇒ 无最小复现、关闭 ✓；残留 `iter_value` 丢异常（有复现，三种修法已撤回 ⇒ 按 3 轮规则停手）· traceback 帧保活 ⇒ 工单第 4 项
-  - 日常面：round 257 已收 `json.load`／`match` 行内 suite＋`as` 守卫／`defaultdict` copy·`|`·`==`／`urllib.request` import·file://；**HTTP 体读**未接（缺 `RawIOBase.read`／`recv_into` 面）✗
-  - `P3-42` KeyError 族／特殊方法派发；`P3-35` 剩余 5 形态；`P3-29`／`P3-37` 剩余面；C2 剩余记档：组 traceback 格式／`sys.exception()` 多层恢复／组子类化／空组与单例细节
-- **下一条命令**：`tools/profile_hot.sh --tier baseline --iters 100000`（**默认 release ✓**）→ 按新头部取 release_one／next_instruction／with_mro 热点 → A4 回退闸（基线入库）
-
-## 关键口径（只留项目特有的；通用规则见 `agents-rules/`）
-
-- **套件体检**：`tools/libtests_survey.py --release`（397 个顶层 `test_*.py`；目录
-  `target/upstream/extracted/usr/lib/python3.14/test`）＋ `tools/libtests_triage.py`；
-  **两个比例是报告级、不当验收**（`CM-15`）
-- **改编译器后清缓存**：`find target Lib -name __pyawa__ -prune -exec rm -rf {} +`
-  ＋ `find target/upstream -name '*.pyac' -delete`
-- **判据①**：`tools/lib_import_ratio.py`（先重建 conformance 二进制；±1 报区间；禁止 `| tail`）
-- **ABI**：`PA_ABI_VERSION`＝**1.9**（追加式：… → `AB-69` `pa_ty` 签名；`AB-41`）；指令集版本 **2**
-- **编号现最大**：`BC-65`／`TS-50`／`T-BC-22`／`CP-39`／`CX-22`／`P3-42`（新增前先查已定义；墓碑算定义）
+- **下一条命令**：`tools/slowcheck.sh --release`（本轮已全绿；下一轮先复跑确认基线未漂）
+- **主线**：`PLAN` §9.4 —— **内存安全 ＋ 执行效率**已收口（效率线关闭 ✓）；其余**慢慢补** ✗。
+- **本轮发现（既有、非本轮引入，已记档待另修；判据即"给定脚本 exit 0／结果正确"）**：
+  - **`StopIteration` 回收崩溃**：`yield from` 耗尽后，模块层先 catch 一次 `StopIteration`、随后出现
+    未捕获 `StopIteration` ⇒ `帧操作失败：StackUnderflow`（确定性）。最小形态：`def g():\n yield from [1]`
+    ＋ 模块层 `while True: try: z.send(None) except StopIteration: break`，再另起生成器 `send` 到耗尽且不捕获。
+  - **`asyncio.gather`／`wait_for` 红**：`Task` 读 `_Future__asyncio_awaited_by` 失败——`pyawa-core` 缺
+    **类体私有名改写**（`__x` → `_C__x`）。判据：`asyncio.gather(coro())` 返回结果。
+  - **内建函数 `__module__` 硬编码 `"builtins"`**：`test.support.check__all__` 认不出 `_csv` 的 7 个名字
+    （`test_csv.test__all__` 1 失败）。判据：`_csv.reader.__module__ == "_csv"`。
+  - **`_io` 的 `TextIOWrapper(newline='')` 不在孤立 `\r` 断行**（`test_csv` 2 错误根因；实测
+    `['a,b\rc,d\r']` vs 参照两行）。判据：该行源切分与参照一致。
+  - **编译期缺"yield 位置非法"检查**（既有）：函数内 class 体／推导式内部／annotation／PEP 695
+    type alias 里的 `yield`，参照报 `SyntaxError`、本层接受（class 体在运行期 abort）。
+    判据：上述四类在 `pyawa check` 出语法类诊断。
+- **未修 bug ＋ 判据**：`iter_value` 丢异常（round 171 撤回，三种修法均致 test_dict 间歇失败）·
+  traceback 帧保活 · dict 哈希化（test_dict 慢）… 详见 `docs/rounds/04-post-m6-01.md` 与 `PLAN` §9.2。
+- **口径**：套件体检 `tools/libtests_survey.py --release`（报告级）；改编译器后清缓存
+  `find target Lib -name __pyawa__ -prune -exec rm -rf {} +` ＋ `find target/upstream -name '*.pyac' -delete`；
+  判据① `tools/lib_import_ratio.py`；ABI `PA_ABI_VERSION`＝**1.9**、指令集 **2**；
+  编号现最大 `BC-65`／`TS-50`／`T-BC-22`／`CP-39`／`CX-22`／`P3-42`。
 - **闸门**：`&&` 只看 exit code；`git commit -F - -- <显式路径>`；slowcheck 十一项全绿才提交
