@@ -83,7 +83,7 @@ step() {
 # 会把 `bench_hot` 读数抬高 → 假红 ✗；放在构建之后量最接近真实能力 ✓）。判定口径不变：退出码非 0 即红 ✓。
 if [ "$PROFILE" = "release" ]; then
   step "基准闸：性能回退（bench_gate）＋ 内存 memcheck 子集（20 例）" \
-    bash -c 'python3 tools/bench_gate.py && tools/memcheck.sh --limit 20' || true
+    bash -c 'python3 tools/bench_gate.py && tools/memcheck.sh --bin target/release/pyawa --limit 20' || true
   if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项：见上）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 fi
 

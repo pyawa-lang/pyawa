@@ -110,6 +110,11 @@ def main() -> int:
         return measure(binary, env)
 
     # **负载守门**（round 262 教训）：并发测量无效 ⇒ 高负载下不判（不误红 ✗，也绝不假装通过 ✓）
+    if os.environ.get("CI"):  # CI＝共享 runner，负载不可控 ⇒ 不判性能（只报数）
+        _ = measure(binary)
+        print("⚠ CI 环境：共享 runner 负载不可控 ⇒ **跳过基准判定**（请在本地空载复测 ✓）")
+        return 0
+
     load, cores = machine_load()
     if load > cores * 0.7:
         print(f"⚠ 机器负载 {load:.2f}／{cores} 核 ⇒ **跳过判定**（bench 对负载敏感、并发测量无效；"
