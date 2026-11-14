@@ -242,6 +242,8 @@ pub(crate) fn parse_statements(
             expect_statement_end(lexed, cursor)?;
             let span = keyword_span.to(value.span());
             statements.push(Statement::TypeAlias {
+                // 源码名（code 名／qualname）；`binding` 由 `compile::mangle` 改写后填。
+                binding: name.clone(),
                 name,
                 name_span,
                 type_params,
@@ -746,6 +748,8 @@ fn parse_statement_class(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fun
                 }
                 statements.push(Statement::Class {
                 decorators: decorators.clone(),
+                    // 源码名（code 名／qualname／类名常量）；`binding` 由 `compile::mangle` 改写。
+                    binding: name.clone(),
                     name,
                     span,
                     first_line,
@@ -1020,6 +1024,8 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                 //（`test.support.run_no_yield_async_fn` 的 "coroutine did not complete" ✓）。
                 let _ = async_def;
                 statements.push(Statement::Def {
+                    // 源码名（code 名／qualname）；`binding` 由 `compile::mangle` 改写后填。
+                    binding: name.clone(),
                     name,
                     decorators,
                     span,

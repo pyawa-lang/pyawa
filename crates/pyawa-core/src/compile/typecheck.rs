@@ -208,7 +208,9 @@ fn collect_class_attributes(
 ) {
     for statement in statements {
         match statement {
-            Statement::Class { name, body, .. } => {
+            Statement::Class {
+                binding, body, ..
+            } => {
                 let mut attributes = HashMap::new();
                 for item in body {
                     if let Statement::Annotation {
@@ -221,7 +223,8 @@ fn collect_class_attributes(
                     }
                 }
                 if !attributes.is_empty() {
-                    out.insert(name.clone(), attributes);
+                    // **私有名改写后的绑定名**（task-5）：`name` 是 code 名／qualname，绑定用 `binding`。
+                    out.insert(binding.clone(), attributes);
                 }
                 // 嵌套类照收（`class Outer: class Inner:` —— 名字按**内层类名**登记）
                 collect_class_attributes(body, out);
@@ -1355,8 +1358,9 @@ fn collect_assigned(statements: &[Statement], out: &mut HashSet<String>) {
                     collect_assigned(&case.body, out);
                 }
             }
-            Statement::Def { name, .. } | Statement::Class { name, .. } => {
-                out.insert(name.clone());
+            Statement::Def { binding, .. } | Statement::Class { binding, .. } => {
+                // **私有名改写后的绑定名**（task-5）：本层的赋值集合要跟改写后的 `Name` 节点一致。
+                out.insert(binding.clone());
             }
             Statement::Import { items, .. } => {
                 for (module, alias) in items {

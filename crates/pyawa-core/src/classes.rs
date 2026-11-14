@@ -467,6 +467,15 @@ fn requalified_method(
     // SAFETY: 函数持有 code 的一份引用，存活。
     let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
     // 已经是限定名（`C.m`）就不必再换
+    // **私有名改写（task-5）**：方法在类命名空间里的**绑定名**可能被改写成 `_C__m`
+    //（`class C: def __m(self)` ⇒ key=`_C__m`），而 `co_qualname` 的分段用的是**源码名**
+    //（实测参照 `C._C__m.__name__ == '__m'`、`__qualname__ == 'C.__m'`）⇒ 用 `code.name()`
+    //（源码名）对一下：已一致就**不要**再按绑定名改写（否则把对的改成 `C._C__m` ✗）。
+    // 普通方法 `code.name() == method_name` ⇒ 与下面那条判据等价、行为不变；函数里定义的类
+    //（qualname 带 `.<locals>.`）照旧走改写，行为不变。
+    if code.qualname() == format!("{class_name}.{}", code.name()) {
+        return None;
+    }
     let expected = format!("{class_name}.{method_name}");
     if code.qualname() == expected {
         return None;

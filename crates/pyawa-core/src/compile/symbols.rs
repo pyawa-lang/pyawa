@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// 把**已改写**的属性名还原成源码原名（见 [`collect_static_attributes`]）。
+fn restore_private_attribute(class_name: &str, name: &str) -> String {
+    match super::mangle::class_prefix(class_name) {
+        Some(prefix) => match name.strip_prefix(&prefix) {
+            Some(rest) => format!("__{rest}"),
+            None => name.to_owned(),
+        },
+        None => name.to_owned(),
+    }
+}
+
 /// **`__static_attributes__` 的静态收集**（实测 3.14 的规则）：
 ///
 /// - 只收**赋值**形态 `self.名字 = …`；只读 `self.名字` 不算
@@ -10,16 +21,25 @@ use super::*;
 /// - **嵌套函数里也算**（方法里的 `def inner(): self.z = 1` ⇒ 收到的 `z`）
 ///
 /// - `if`／`while`／`for` 的体（含各自的 `else` 体）也走进去（实测：`if x: self.a = 1` ⇒ `('a',)`）
-pub(super) fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
+pub(super) fn collect_static_attributes(
+    statements: &[Statement],
+    class_name: &str,
+    out: &mut Vec<String>,
+) {
     for statement in statements {
         match statement {
             Statement::AssignAttr { object, name, .. } => {
                 if matches!(object, Expression::Name(base, _) if base == "self") {
-                    out.push(name.clone());
+                    // **私有名改写还原**（task-5，实测）：`__static_attributes__` 记的是**源码原名**
+                    // （`class C: def m(self): self.__p = 1` ⇒ `C.__static_attributes__ == ('__p',)`），
+                    // 而 AST 里的属性名已被改写（`_C__p`）⇒ 按本类前缀还原回 `__` 前缀的源码名。
+                    // 唯一歧义：源码里**显式写** `self._C__p`（本来就带类前缀）也会被还原成 `__p` ——
+                    // 与参照只差这一格，见 `mangle` 模块头注释。
+                    out.push(restore_private_attribute(class_name, name));
                 }
             }
             // 方法与嵌套函数
-            Statement::Def { body, .. } => collect_static_attributes(body, out),
+            Statement::Def { body, .. } => collect_static_attributes(body, class_name, out),
             // 复合语句的体（实测：`if`／`while`／`for` 体里写 `self.X` 同样会收）
             Statement::For {
                 body, else_body, ..
@@ -27,14 +47,14 @@ pub(super) fn collect_static_attributes(statements: &[Statement], out: &mut Vec<
             | Statement::While {
                 body, else_body, ..
             } => {
-                collect_static_attributes(body, out);
-                collect_static_attributes(else_body, out);
+                collect_static_attributes(body, class_name, out);
+                collect_static_attributes(else_body, class_name, out);
             }
             Statement::If {
                 then_body, else_body, ..
             } => {
-                collect_static_attributes(then_body, out);
-                collect_static_attributes(else_body, out);
+                collect_static_attributes(then_body, class_name, out);
+                collect_static_attributes(else_body, class_name, out);
             }
             Statement::Try {
                 body,
@@ -44,14 +64,14 @@ pub(super) fn collect_static_attributes(statements: &[Statement], out: &mut Vec<
                 ..
             } => {
                 // 与**发射顺序**一致：套体 → `else` → `finally` → 各处理块
-                collect_static_attributes(body, out);
-                collect_static_attributes(else_body, out);
-                collect_static_attributes(finally_body, out);
+                collect_static_attributes(body, class_name, out);
+                collect_static_attributes(else_body, class_name, out);
+                collect_static_attributes(finally_body, class_name, out);
                 for handler in handlers {
-                    collect_static_attributes(&handler.body, out);
+                    collect_static_attributes(&handler.body, class_name, out);
                 }
             }
-            Statement::With { body, .. } => collect_static_attributes(body, out),
+            Statement::With { body, .. } => collect_static_attributes(body, class_name, out),
             // `import` 不改属性；`from … import *` 也别去猜绑定了什么
             Statement::Import { .. } | Statement::ImportFrom { .. } => {}
             _ => {}
@@ -264,7 +284,8 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 pre_intern_expression(emitter, key);
             }
             Statement::Def {
-                name,
+                name: _,
+                binding,
                 parameters,
                 kwonly,
                 decorators,
@@ -284,18 +305,23 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 // **函数里嵌套的 `def`**：名字是**局部**（进 `varnames`，不进 `co_names`）⇒ 不 intern。
                 // 实测 `def outer(): def inner(): …` 的内层单元 `co_names` 是**空**的。
                 if emitter.kind != ScopeKind::Function {
-                    emitter.intern_name(name);
+                    // **私有名改写后的绑定名**（task-5）：`class C: def __m` 的 co_names 里是 `_C__m`。
+                    emitter.intern_name(binding);
                 }
             }
             Statement::Class {
-                name, bases, body: _, ..
+                name: _,
+                binding,
+                bases,
+                body: _,
+                ..
             } => {
                 for base in bases {
                     pre_intern_expression(emitter, base);
                 }
                 // **按作用域** ✓（第 202 轮真 bug 修复 ✗：先前一律 `intern_name` ⇒
                 // 函数里定义类会多出一个 `co_names` 项 ⇒ 与参照对不上 ✓；函数里该进 `varnames` ✓）。
-                pre_intern_target(emitter, name);
+                pre_intern_target(emitter, binding);
             }
             Statement::AssignChained { targets, value, .. } => {
                 // 实测 `a = b = x` 的 `co_names` 是 `('x','a','b')` ✓ ⇒ **值先、目标后** ✓
@@ -1585,8 +1611,9 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
         match statement {
             // **别名语句**（task-24 收口 ③）：**别名的名字是本作用域的局部** ✓
             // （函数里 ⇒ `STORE_FAST` ✓；值表达式在 thunk 里求值 ⇒ 不在这里收 ✓）。
-            Statement::TypeAlias { name, .. } => {
-                declare_local(emitter, name);
+            Statement::TypeAlias { binding, .. } => {
+                // **私有名改写后的绑定名**（task-5）：类体里 `type __X = …` 的局部名是 `_C__X`。
+                declare_local(emitter, binding);
             }
             Statement::Delete { targets, .. } => {
                 // `del x` 在函数里让 `x` 成为**局部**（参照：`co_varnames=('x',)` ＋ `DELETE_FAST` ✓）
@@ -1637,11 +1664,11 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             // **类的名字也是本作用域的局部** ✓（第 202 轮真 bug ✗：先前漏了这一支 ⇒
             // "函数里定义类"会把类名按模块级 `STORE_NAME` 发 ✗ ⇒ 撞"需要命名空间帧" ✓）。
             // **不递归进类体** ✗：那是**另一个作用域** ✓（它的 `STORE_NAME` 落在类字典上 ✓）。
-            Statement::Class { name, .. } => {
-                declare_local(emitter, name);
+            Statement::Class { binding, .. } => {
+                declare_local(emitter, binding);
             }
-            Statement::Def { name, .. } => {
-                declare_local(emitter, name);
+            Statement::Def { binding, .. } => {
+                declare_local(emitter, binding);
             }
             // `import a` 在函数里存的是**局部**（实测 `def f(): import a` ⇒ `STORE_FAST a`）
             // —— 但**`global a` 声明的名字不是局部**（`global heapq; import heapq` ⇒

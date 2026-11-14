@@ -525,6 +525,9 @@ impl Emitter {
     pub(crate) fn emit_class_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）：类体里的 `class __D` 存成 `_C__D`（实测）；
+        // `name` 只管 code 名／qualname／`__qualname__` 常量。
+        binding: &String,
         span: &Span,
         first_line: &u32,
         decorators: &[Expression],
@@ -538,6 +541,7 @@ impl Emitter {
                 if !type_params.is_empty() {
                     return self.emit_generic_class_statement(
                         name,
+                        binding,
                         span,
                         first_line,
                         decorators,
@@ -736,7 +740,8 @@ impl Emitter {
                 }
                 // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒
                 // "函数里定义类"当场撞"需要命名空间帧" ✓ —— 与处理器那两处同族 ✓）。
-                self.emit_store_name(*span, name);
+                // 私有名改写（task-5）：存的是**改写后的绑定名**（code 名仍是 `name`）。
+                self.emit_store_name(*span, binding);
                 // 收尾两条跟整段（与 `def` 同规则，实测）
                 self.epilogue_span = *span;
                 Ok(())
@@ -776,6 +781,9 @@ impl Emitter {
     pub(crate) fn emit_def_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）：类体／class 内作用域里的 `def __m` 存成 `_C__m`
+        //（实测）；`name` 只管 code 名／qualname。
+        binding: &String,
         decorators: &[Expression],
         span: &Span,
         first_line: &u32,
@@ -798,6 +806,7 @@ impl Emitter {
                 if !type_params.is_empty() {
                     return self.emit_generic_def_statement(
                         name,
+                        binding,
                         decorators,
                         span,
                         first_line,
@@ -1036,15 +1045,16 @@ impl Emitter {
                     // （会被内层捕获 ✓），就**从没写进 cell** ✗ ⇒ 后面 `LOAD_DEREF` 读到**空 cell** ✗
                     //（实测 `Lib/os.py` 的 `_create_environ_mapping`：`def encode(...)` 是 cell ✓ ⇒
                     //  读到 `NameError: cannot access free variable 'encode'` ✗）。
-                    if let Some(slot) = self.deref_slot(name) {
+                    // 私有名改写（task-5）：局部名／cell 名都用**改写后的绑定名**。
+                    if let Some(slot) = self.deref_slot(binding) {
                         self.emit_indexed(*span, "STORE_DEREF", slot);
                     } else {
                         // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
-                        let slot = self.slot_of(name);
+                        let slot = self.slot_of(binding);
                         self.emit_indexed(*span, "STORE_FAST", slot);
                     }
                 } else {
-                    let name_index = self.intern_name(name);
+                    let name_index = self.intern_name(binding);
                     self.emit_indexed(*span, "STORE_NAME", name_index);
                 }
                 // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
@@ -1149,13 +1159,16 @@ impl Emitter {
     pub(crate) fn emit_type_alias_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）：类体里 `type __X = …` 存成 `_C__X`（实测）；
+        // `name` 只管 code 名／qualname。
+        binding: &String,
         _name_span: &Span,
         type_params: &[TypeParam],
         value: &Expression,
         span: &Span,
     ) -> Result<(), CompileError> {
         if !type_params.is_empty() {
-            return self.emit_generic_type_alias_statement(name, type_params, value, span);
+            return self.emit_generic_type_alias_statement(name, binding, type_params, value, span);
         }
         let qualname = match self.kind {
             ScopeKind::Module => name.clone(),
@@ -1226,7 +1239,7 @@ impl Emitter {
         self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 1);
         self.emit_indexed(*span, "BUILD_TUPLE", 3);
         self.emit_named(*span, "CALL_INTRINSIC_1", 11);
-        self.emit_store_name(*span, name);
+        self.emit_store_name(*span, binding);
         self.epilogue_span = *span;
         Ok(())
     }
@@ -1240,6 +1253,7 @@ impl Emitter {
     pub(crate) fn emit_generic_type_alias_statement(
         &mut self,
         name: &String,
+        binding: &String,
         type_params: &[TypeParam],
         value: &Expression,
         span: &Span,
@@ -1405,15 +1419,16 @@ impl Emitter {
         self.emit_named(*span, "MAKE_FUNCTION", 0);
         self.emit_named(*span, "PUSH_NULL", 0);
         self.emit_named(*span, "CALL", 0);
+        // 私有名改写（task-5）：局部名／cell 名／命名空间项都用**改写后的绑定名**。
         if self.kind == ScopeKind::Function {
-            if let Some(slot) = self.deref_slot(name) {
+            if let Some(slot) = self.deref_slot(binding) {
                 self.emit_indexed(*span, "STORE_DEREF", slot);
             } else {
-                let slot = self.slot_of(name);
+                let slot = self.slot_of(binding);
                 self.emit_indexed(*span, "STORE_FAST", slot);
             }
         } else {
-            self.emit_store_name(*span, name);
+            self.emit_store_name(*span, binding);
         }
         self.epilogue_span = *span;
         Ok(())
@@ -1428,6 +1443,8 @@ impl Emitter {
     pub(crate) fn emit_generic_class_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）；`name` 只管 code 名／qualname。
+        binding: &String,
         span: &Span,
         first_line: &u32,
         decorators: &[Expression],
@@ -1706,7 +1723,8 @@ impl Emitter {
         for decorator_span in decorator_spans.iter().rev() {
             self.emit_named(*decorator_span, "CALL", 0);
         }
-        self.emit_store_name(*span, name);
+        // 私有名改写（task-5）：存**改写后的绑定名**。
+        self.emit_store_name(*span, binding);
         self.epilogue_span = *span;
         Ok(())
     }
@@ -1718,6 +1736,8 @@ impl Emitter {
     pub(crate) fn emit_generic_def_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）；`name` 只管 code 名／qualname。
+        binding: &String,
         decorators: &[Expression],
         span: &Span,
         first_line: &u32,
@@ -1954,15 +1974,16 @@ impl Emitter {
         for decorator_span in decorator_spans.iter().rev() {
             self.emit_named(*decorator_span, "CALL", 0);
         }
+        // 私有名改写（task-5）：局部名／cell 名／命名空间项都用**改写后的绑定名**。
         if self.kind == ScopeKind::Function {
-            if let Some(slot) = self.deref_slot(name) {
+            if let Some(slot) = self.deref_slot(binding) {
                 self.emit_indexed(*span, "STORE_DEREF", slot);
             } else {
-                let slot = self.slot_of(name);
+                let slot = self.slot_of(binding);
                 self.emit_indexed(*span, "STORE_FAST", slot);
             }
         } else {
-            let name_index = self.intern_name(name);
+            let name_index = self.intern_name(binding);
             self.emit_indexed(*span, "STORE_NAME", name_index);
         }
         self.epilogue_span = *span;

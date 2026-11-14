@@ -89,3 +89,30 @@ nested ('slept', [0, 1, 2, 0, 1])
 fn asyncio_run_and_async_syntax_work() {
     assert_eq!(run("smoke", SCRIPT), EXPECTED);
 }
+
+/// **缺口 1 回归**：`asyncio.run(main())` 里 `await asyncio.gather(coro(), coro())`。
+///
+/// 动因：`Lib/asyncio/futures.py` 的类体写 `__asyncio_awaited_by = None`、方法里写
+/// `self.__asyncio_awaited_by`——CPython 的**类体私有名改写**把两边都改成
+/// `_Future__asyncio_awaited_by`。本层先前没实现 ⇒ `asyncio.gather` 报
+/// `AttributeError: 'Task' object has no attribute '_Future__asyncio_awaited_by'`
+/// （task-5；改写实现在 `crates/pyawa-core/src/compile/mangle.rs`，本用例钉住端到端行为）。
+const GATHER_SCRIPT: &str = r##"import asyncio
+
+async def coro(n):
+    await asyncio.sleep(0)
+    return n * 2
+
+async def main():
+    return await asyncio.gather(coro(1), coro(2), coro(3))
+
+print(asyncio.run(main()))
+"##;
+
+/// 期望（本机 `python3` 3.14.4 跑 `GATHER_SCRIPT` 实测 ✓）。
+const GATHER_EXPECTED: &str = "[2, 4, 6]\n";
+
+#[test]
+fn asyncio_gather_of_coroutines_returns_results() {
+    assert_eq!(run("gather", GATHER_SCRIPT), GATHER_EXPECTED);
+}

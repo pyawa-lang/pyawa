@@ -332,6 +332,9 @@ pub fn compile_interactive(
     let _ = optimization;
     let lexed = lex(source, mode)?;
     let mut statements = parse_module(&lexed)?;
+    // **私有名改写**（`task-5`）：在**所有**下游（typecheck／符号分析／发射）之前做一次。
+    // 交互式显示的包装用 `__pyawa_displayhook__`（dunder ⇒ 不受改写影响）。
+    mangle::mangle_module(&mut statements);
     wrap_interactive_expressions(&mut statements);
     if mode == Mode::Extension {
         typecheck::check(&statements, filename, &[])?;
@@ -482,6 +485,9 @@ pub fn check_source(source: &str, filename: &str, mode: Mode) -> Vec<Diagnostic>
         Ok(statements) => statements,
         Err(error) => return vec![diagnostic_from_error(filename, &error)],
     };
+    let mut statements = statements;
+    // **私有名改写**（`task-5`）：诊断与执行路径看到同一套名字。
+    mangle::mangle_module(&mut statements);
     if mode != Mode::Extension {
         // `.py`：**只语法**（`TS-26`／`MS-19`）——解析通过就 0 诊断。
         return Vec::new();
@@ -564,7 +570,9 @@ pub fn compile_with_host_functions(
     // 口径与 [`compile`] 逐字相同；唯一区别是扩展模式的静态检查多一张宿主函数声明表。
     let _ = optimization;
     let lexed = lex(source, mode)?;
-    let statements = parse_module(&lexed)?;
+    let mut statements = parse_module(&lexed)?;
+    // **私有名改写**（`task-5`）：一次性改写，下游全部看到改写过的一致名字。
+    mangle::mangle_module(&mut statements);
     if mode == Mode::Extension {
         typecheck::check(&statements, filename, host_functions)?;
     }
@@ -594,6 +602,10 @@ mod nfkc;
 mod symbols;
 mod verify;
 use self::symbols::*;
+
+// **类体私有名改写**（`task-5`）：parse 之后、符号分析／typecheck／发射之前对 AST 做**一次**
+// 文本改写（CPython 的 private name mangling）——见 `mangle` 模块头注释的实测口径。
+mod mangle;
 
 mod emitter;
 use self::emitter::*;
@@ -870,7 +882,7 @@ fn compile_class_scope(
     }
     // `__static_attributes__`：**静态收集**方法体里写过的 `self.X`（实测：字母序去重）
     let mut static_names: Vec<String> = Vec::new();
-    collect_static_attributes(body, &mut static_names);
+    collect_static_attributes(body, name, &mut static_names);
     static_names.sort();
     static_names.dedup();
     let attributes = emitter.intern_constant(Constant::Tuple(
@@ -2453,6 +2465,10 @@ enum Statement {
     /// `type` 是**软关键字** ✓（`type(x)`／`type = 1` 照旧当普通表达式 ✓）。
     TypeAlias {
         name: String,
+        /// **私有名改写后的绑定名**（`task-5`）：`type __X = …` 在类体里存成 `_C__X`（实测），
+        /// 而 code 名／qualname 仍是源码名 ⇒ 两个名字分开放（`name` 只做 code 身份）。
+        /// 非类作用域里 `binding == name`。
+        binding: String,
         name_span: Span,
         /// 类型参数（空 ＝ 非泛型别名 ✓）。
         type_params: Vec<TypeParam>,
@@ -2632,6 +2648,10 @@ enum Statement {
     /// `class <名字> [(<基类…>)]: <体>`
     Class {
         name: String,
+        /// **私有名改写后的绑定名**（`task-5`）：`class __D:` 在类体里存成 `_C__D`（实测），
+        /// 而 code 名／qualname／`__qualname__` 常量仍是源码名 ⇒ 两个名字分开放。
+        /// 非类作用域里 `binding == name`。
+        binding: String,
         span: Span,
         first_line: u32,
         /// **装饰器** ✓（第 220 轮）：`@deco class C:` ✓ —— 与 `Def` 同口径 ✓
@@ -2648,6 +2668,9 @@ enum Statement {
     },
     Def {
         name: String,
+        /// **私有名改写后的绑定名**（`task-5`）：`def __m` 在类体里存成 `_C__m`（实测），
+        /// 而 code 名／qualname 仍是源码名 ⇒ 两个名字分开放。非类作用域里 `binding == name`。
+        binding: String,
         /// **装饰器**（`@<表达式>`，**源码序** ✓）：发射时先按序求值、再逆序 `CALL 0` 包上去 ✓
         decorators: Vec<Expression>,
         span: Span,
