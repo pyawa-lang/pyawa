@@ -3186,7 +3186,9 @@ fn create_host_function(
             let ty = state.instance.new_type(
                 "host_function",
                 core::mem::size_of::<host::HostFunction>(),
-                pyawa_core::Slots::new(host_function_dealloc).with_call(host_function_call),
+                pyawa_core::Slots::new(host_function_dealloc)
+                .with_call(host_function_call)
+                .with_getattr(host_function_getattr),
             );
             // **`AB-54`**：给"运行期自描述"两条通用成员（`inspect.signature` 的入口）：
             // - `__call__`：上游 `inspect` 对"非内建函数"的签名分支要求
@@ -3301,6 +3303,38 @@ unsafe fn host_function_descriptor_get(
         }
         // `__get__(None, owner)` ⇒ 未绑定，交回函数本身（同普通函数）。
         _ => Ok(instance.retain(function)),
+    }
+}
+
+/// **`host_function` 的 `getattr` 槽**（2026-11-14）：把 `AB-54` 的 `__text_signature__`
+/// 与来源模块 `__module__` 两条旁表投影**下沉到本类型**（先前在 `attribute_lookup` 的通用
+/// 热路径上做两条名字比较；移到这里后普通对象属性读不再付那两次比较，见 `attribute.rs` 的注）。
+///
+/// 其余名字交回 `None`（继续走类型字典／实例字典，既有语义不变）。
+///
+/// # Safety
+///
+/// `ptr` 必须是本实例里存活的 `host_function` 对象；`instance` 与之匹配。
+unsafe fn host_function_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    match name {
+        "__module__" => {
+            let module = instance
+                .builtin_function_module(object)
+                .unwrap_or_else(|| "builtins".to_owned());
+            Some(instance.new_str(&module))
+        }
+        // 无注册文本签名的宿主函数与参照同形：属性给 `None`（有签名才给字符串）。
+        "__text_signature__" => Some(match instance.text_signature(object) {
+            Some(signature) => instance.new_str(&signature),
+            None => instance.new_none(),
+        }),
+        _ => None,
     }
 }
 

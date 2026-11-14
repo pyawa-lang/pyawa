@@ -153,25 +153,9 @@ pub(crate) fn attribute_lookup(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<Attribute, ExecError> {
-    // **对象级 `__text_signature__` 旁表**（`AB-54`）：内建函数与**宿主函数**共用同一通道。
-    // 宿主函数是 ABI 注册的载荷类型、没有自己的属性分派槽 ⇒ 文本签名由注册时的 `pa_sig`
-    // 投影进旁表，这里直接交回字符串（`inspect.signature` 读的就是这个属性）。
-    if name == "__text_signature__" {
-        if let Some(signature) = instance.text_signature(object) {
-            return Ok(Attribute::Owned(instance.new_str(&signature)));
-        }
-    }
-    // **原生可调用对象的 `__module__` 旁表**（task-6／缺口2）：内建函数与**宿主函数**共用。
-    // - 内建函数还有自己的 `getattr` 槽（[`builtin_function_getattr`](crate::builtin_objects::builtin_function_getattr)）
-    //   兜底 `builtins`；这里先命中登记的来源模块（`_csv.reader` ⇒ `"_csv"`、`math.sqrt` ⇒ `"math"`）；
-    // - 宿主函数（`host_function` 类型）**没有** `getattr` 槽 ⇒ 只能由这里投影旁表值：
-    //   `pa_register` 登记的记 `"builtins"`，`pa_module_addfunction` 记宿主模块的**完整点分名**。
-    // 未登记 ⇒ 什么也不做（继续走类型字典／实例字典，既有语义不变）。
-    if name == "__module__" {
-        if let Some(module) = instance.builtin_function_module(object) {
-            return Ok(Attribute::Owned(instance.new_str(&module)));
-        }
-    }
+    // **性能（2026-11-14）**：`__text_signature__`／`__module__` 两条旁表投影**不在**这里做——
+    // 它们已下沉到**各自类型的 `getattr` 槽**（`builtin_function_getattr`／`host_function_getattr`，
+    // 见下文 ① 类型自己的槽）⇒ 通用属性读路径不再为每个名字付两次字符串比较。
     // **用户 `__getattribute__` 优先**（round 87，参照 `PyObject_GenericGetAttr` 之前的
     // `tp_getattro` 语义）：类型 MRO 上**覆写**了 `__getattribute__` ⇒ `getattr(obj, 名)`／
     // `obj.名` 一律先调它 ✓。守卫：钩子执行期间（`object.__getattribute__` → `attribute_read`）
