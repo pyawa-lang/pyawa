@@ -450,3 +450,13 @@ Rust 层签名依赖值的具体表示（`OM-38`），故签名本身列入 §14
 - **TS-57** **验收**（对应 §13 的 `T-TS-12`／`T-TS-13`／`T-TS-14`，分别覆盖语法矩阵与往返、
   名称解析与 `typing` 求值、`AB-52`↔`AB-69` 同一性与 `.pyi` 不变）：语法层目前由
   `crates/pyawa-core/tests/type_expression.rs` 覆盖；求值层与 ABI 同一性由后续里程碑补齐。
+
+> **实现进度（2026-11-14）**：**求值层已落地** —— `pyawa_core::type_expr::{SemanticType,
+> ResolveScope, resolve_type_expr, evaluate_type_expression}`（`TS-52`/`TS-53`）；语义模型与
+> `AB-69` 的 `TyExpr` 同形（`Named(类型对象)`/`ListOf`/`DictOf`/`Optional`/`Union`/`Callable`/
+> `Var`/`Apply`），`to_static_label()` 与 `AB-69` 的 `static_label` 同口径；名称解析次序
+> globals→builtins→类型注册表、点号属性链、前向引用查不到时给 `Deferred`（可延迟重试）。
+> **边界（如实）**：`typing` 构造按**解析路径名**识别（`Optional`/`Union`/`Callable`/`Annotated`/
+> `List`/`Dict`/`Set`/`Tuple`，大小写名均认）——不要求宿主先 `import typing`；`Annotated` 元数据
+> 不参与类型判定；`Set`/`Tuple`/宿主任意泛型走 `Apply`（`TS-35` 擦除）；`AB-52` 的 ABI 接入
+> 属 M4（`type_expr` 求值状态仍"待"）。
