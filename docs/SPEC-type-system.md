@@ -439,8 +439,10 @@ Rust 层签名依赖值的具体表示（`OM-38`），故签名本身列入 §14
   **禁止**静默造类型。
 - **TS-54** **失败语义**：语法错 ⇒ `CompileError::Syntax`（宿主侧按 `AB-22` 映射
   `PA_ERR_INVALID`，消息可诊断）；宿主在注册/声明处给的 `type_expr` 求值失败 ⇒ **实现但拒绝**
-  （`PA_ERR_INVALID`），**禁止**静默降级成 `Any` 或截断；`.pyi` 导出**仍用原字符串**
-  （导出是投影，不是求值结果；`AB-53`／`AB-54`）。
+  （`PA_ERR_INVALID`），**禁止**静默降级成 `Any` 或截断。**唯一例外是显式前向引用**：注册时
+  暂未解析到（`ResolveError::Deferred`）⇒ 允许按 `TS-52` 延迟，届时登记为**平台类型**
+  （不检查、静态标签为空；`TS-2`／`TS-48`），不是"把坏注解吞掉"；其它任何求值失败都不得
+  降级。`.pyi` 导出**仍用原字符串**（导出是投影，不是求值结果；`AB-53`／`AB-54`）。
 - **TS-55** **可逆文本投影**：`TypeExpr::to_source()`（Pyawa 源形；`T?` 归一为 `T | None`）与
   `to_python_source()`（纯 Python 源形）；同一语法树**往返解析必须得到同一棵树**。投影与
   `.pyi` 文本都**不得**成为第二签名源（`AB-54`）。
@@ -458,5 +460,11 @@ Rust 层签名依赖值的具体表示（`OM-38`），故签名本身列入 §14
 > globals→builtins→类型注册表、点号属性链、前向引用查不到时给 `Deferred`（可延迟重试）。
 > **边界（如实）**：`typing` 构造按**解析路径名**识别（`Optional`/`Union`/`Callable`/`Annotated`/
 > `List`/`Dict`/`Set`/`Tuple`，大小写名均认）——不要求宿主先 `import typing`；`Annotated` 元数据
-> 不参与类型判定；`Set`/`Tuple`/宿主任意泛型走 `Apply`（`TS-35` 擦除）；`AB-52` 的 ABI 接入
-> 属 M4（`type_expr` 求值状态仍"待"）。
+> 不参与类型判定；`Set`/`Tuple`/宿主任意泛型走 `Apply`（`TS-35` 擦除）。
+>
+> **`AB-52` 接入已落地（M4，2026-11-14）**：`pa_register`／`pa_module_addfunction` 在注册时
+> 用本节的求值器把 `pa_sig` 的 `type_expr` 字符串求值成 `AB-69` 的 `TyExpr`（新增
+> `TyExpr::Any`／`TyExpr::Platform` 两变体表示 `Any` 与"未声明/前向引用暂未解析"），并登记进
+> `host_typed_signatures` ⇒ **边界运行期检查**与**编译期宿主调用点检查**对字符串通道同样生效，
+> 同一 C 函数已有 `AB-69` 句柄签名时不覆盖（句柄优先）；`.pyi` 仍用原字符串。`pa_newtype` 的
+> `sig` 字符串目前只作 `.pyi` 文本（其构造调用不经宿主函数边界检查，属 M5 的接线面）。

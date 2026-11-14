@@ -44,6 +44,14 @@ pub enum TyExpr {
     },
     /// 类型变量（`T`；配合 `pa_func_set_signature` 的 `tparams`）。
     Var(String),
+    /// **`Any`**（`AB-52` 的字符串通道求值产物；与一切类型相容）。`AB-69` 句柄 API 不产生它。
+    Any,
+    /// **平台类型**（未声明／前向引用暂未解析）：**不做检查**（`TS-2`／`TS-48`）。
+    ///
+    /// - `AB-52` 的 `type_expr == NULL` ⇒ 该形参未声明类型；
+    /// - 前向引用在注册时未解析到（`ResolveError::Deferred`）⇒ 等价的平台类型；
+    ///   按 `TS-54` 的"不得静默降级"口径，这只发生在**显式前向引用**上（不是把坏注解吞掉）。
+    Platform,
     /// 宿主泛型 `Base[Args…]`：边界**只核基底**（擦除类型身份 ✓）。
     Apply(Box<TyExpr>, Vec<TyExpr>),
 }
@@ -91,6 +99,10 @@ pub fn static_label(expression: &TyExpr) -> Option<String> {
         TyExpr::ListOf(_) => Some("list".to_owned()),
         TyExpr::DictOf(_, _) => Some("dict".to_owned()),
         TyExpr::Apply(base, _) => static_label(base),
+        // `BC-24` 的 `"Any"` 标签：与一切类型相容（编译期按 `Any` 处理）。
+        TyExpr::Any => Some("Any".to_owned()),
+        // 平台类型（未声明/前向引用暂未解析）⇒ 不投影（编译期放行）。
+        TyExpr::Platform => None,
         TyExpr::Optional(_) | TyExpr::Union(_) | TyExpr::Callable { .. } | TyExpr::Var(_) => None,
     }
 }
@@ -139,6 +151,8 @@ fn expected_name(expr: &TyExpr) -> String {
             expected_name(ret)
         ),
         TyExpr::Var(name) => format!("T({name})"),
+        TyExpr::Any => "Any".to_owned(),
+        TyExpr::Platform => "platform".to_owned(),
         TyExpr::Apply(base, args) => format!(
             "{}[{}]",
             expected_name(base),
@@ -180,7 +194,7 @@ fn collect_variables(expression: &TyExpr, out: &mut HashSet<String>) {
                 collect_variables(argument, out);
             }
         }
-        TyExpr::RuntimeTag(_) | TyExpr::Named(_) => {}
+        TyExpr::RuntimeTag(_) | TyExpr::Named(_) | TyExpr::Any | TyExpr::Platform => {}
     }
 }
 
@@ -192,6 +206,8 @@ fn matches(
     bound: &mut HashMap<String, Bound>,
 ) -> bool {
     match expected {
+        // `Any` 与平台类型：**不检查**（`TS-16`／`TS-48`）。
+        TyExpr::Any | TyExpr::Platform => true,
         TyExpr::RuntimeTag(tag) => tag_of(instance, object) == *tag,
         TyExpr::Named(ty) => instance.is_subtype(instance.type_of(object), *ty),
         TyExpr::ListOf(_) => {
@@ -338,5 +354,39 @@ pub fn check_return(
                 actual_name(instance, value)
             ),
         ))
+    }
+}
+
+
+// ---- `AB-52` 字符串通道的语义类型 → `AB-69` 的 `TyExpr`（`TS-56`：同一内部表示） ----
+
+impl From<pyawa_core::SemanticType> for TyExpr {
+    /// **同一表示**（`TS-56`）：`AB-52` 的字符串求值与 `AB-69` 的句柄最终都落到 `TyExpr`。
+    ///
+    /// `NoneType` 落成 `RuntimeTag(PA_TNIL)`（与 `pa_type_expr_runtime_tag` 的句柄同表示）。
+    fn from(value: pyawa_core::SemanticType) -> Self {
+        use pyawa_core::SemanticType;
+        match value {
+            SemanticType::Any => TyExpr::Any,
+            SemanticType::NoneType => TyExpr::RuntimeTag(crate::stack::tag::PA_TNIL),
+            SemanticType::Named(ty) => TyExpr::Named(ty),
+            SemanticType::ListOf(inner) => TyExpr::ListOf(Box::new((*inner).into())),
+            SemanticType::DictOf(key, value) => {
+                TyExpr::DictOf(Box::new((*key).into()), Box::new((*value).into()))
+            }
+            SemanticType::Optional(inner) => TyExpr::Optional(Box::new((*inner).into())),
+            SemanticType::Union(members) => {
+                TyExpr::Union(members.into_iter().map(TyExpr::from).collect())
+            }
+            SemanticType::Callable { params, ret } => TyExpr::Callable {
+                params: params.into_iter().map(TyExpr::from).collect(),
+                ret: Box::new((*ret).into()),
+            },
+            SemanticType::Var(name) => TyExpr::Var(name),
+            SemanticType::Apply(base, arguments) => TyExpr::Apply(
+                Box::new((*base).into()),
+                arguments.into_iter().map(TyExpr::from).collect(),
+            ),
+        }
     }
 }

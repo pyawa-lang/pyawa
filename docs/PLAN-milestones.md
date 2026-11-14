@@ -1006,7 +1006,7 @@ symbols 缺口：annotation-only 外层绑定运行期缺 cell（`NameError`）�
 | **M1 规格与模型** | `TS-51`…`TS-57`（语法范围/两阶段/`BC-24` 映射/失败语义/可逆投影/`AB-52`↔`AB-69` 同一性/验收）；`AB-52` 文本补解析器两阶段与 §16 引用 | ✓（2026-11-14） |
 | **M2 语法层** | `pyawa_core::type_expr::TypeExpr` 语法树＋`compile::parse_type_expression(&str)`（复用 `compile/parser/types.rs` 的 `parse_type_at`；`?` 降级/联合摊平/单实参下标摊平/可逆投影）；`crates/pyawa-core/tests/type_expression.rs`（`T-TS-12`：语法矩阵/往返/错误） | ✓（2026-11-14） |
 | **M3 求值层** | 名称解析（模块 globals→builtins→宿主注册类型、点号属性链、前向引用延迟）＋`typing` 构造（`Callable`/`Optional`/`Union`/`Annotated`/`List`/`Dict`/`Set`/`Tuple`）→ `SemanticType`／`BC-24` 静态标签（`to_static_label`，与 `AB-69` 同口径）；`Deferred`/`Unknown`/`Invalid` 如实分类；`crates/pyawa-core/tests/type_expression_resolve.rs`（7 passed） | ✓（2026-11-14） |
-| **M4 ABI 接入** | `AB-52` `type_expr` 在 `pa_register`/`pa_func_set_signature` 处求值成与 `AB-69` **同一表示**，接入编译期宿主调用点检查；失败按 `TS-54` 报 `PA_ERR_INVALID`；`.pyi` 仍原串（`T-TS-14`） | 待做 |
+| **M4 ABI 接入** | `AB-52` `type_expr` 在 `pa_register`/`pa_module_addfunction` 注册时求值成 `AB-69` 的 `TyExpr`（新增 `Any`/`Platform` 变体），登记进 `host_typed_signatures` ⇒ 边界运行期＋编译期调用点检查对字符串通道生效；同一函数已有句柄签名不覆盖；坏字符串/未知名 ⇒ `PA_ERR_INVALID`，显式前向引用 ⇒ 平台类型；`.pyi` 仍原串；`crates/pyawa-abi/tests/annotation_strings.rs`（6 passed，含字符串↔句柄同行为、`.pyi` 原串） | ✓（2026-11-14） |
 | **M5 编译期扩展** | 注解标签用于 `TS-31`/`TS-47` 注解面（`BC-25`① 的 annotated/unannotated 交界按需）、`TS-32`…`TS-39` 覆盖率按规格收口；边界如实登记 | 待做 |
 | **M6 收口** | `PLAN` §12.4 #1 状态更新（`type_expr` 求值不再"待"）、`NEXT`/文档/机检同步 | 待做 |
 

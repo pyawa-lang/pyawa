@@ -176,9 +176,11 @@
   - `name`：NUL 结尾的 UTF-8；
   - `type_expr`：**注解表达式字符串**（如 `"list[int]"`、`"int | None"`），由 Pyawa **自己的
     注解解析器**求值——**禁止**发明新 IDL（`AB-28`）。解析器分两阶段（语法层/求值层）：
-    语法入口 `pyawa_core::compile::parse_type_expression`（`TypeExpr` 语法树）已落地；
-    求值/求值失败语义/与 `AB-69` 的同一性见 `SPEC-type-system.md` §16 的 `TS-51`…`TS-56`
-    （2026-11-14 起分里程碑落地，`PLAN-milestones.md` §12.9）；
+    语法入口 `pyawa_core::compile::parse_type_expression`（`TypeExpr` 语法树）与求值器
+    `pyawa_core::evaluate_type_expression` 已落地；`pa_register`／`pa_module_addfunction` 在注册时
+    **求值**字符串并登记进 `AB-69` 的同一账本（`TyExpr`：边界运行期检查＋编译期调用点检查同样
+    生效；`.pyi` 仍用原字符串）；失败语义/前向引用策略/同一性见 `SPEC-type-system.md` §16 的
+    `TS-51`…`TS-56`（2026-11-14 起分里程碑落地，`PLAN-milestones.md` §12.9）。
   - `flags`：位置／仅关键字／可变位置／可变关键字／有无默认值（`AB-27` 的七项能力由此表达）；
   - `default_handle`：默认值以**不透明句柄**给出（`AB-14`），无默认时为 NULL。
 - **AB-53** `.pyi` **必须**能由注册信息**导出**（遍历而成）：导出是**单向投影**——运行期与

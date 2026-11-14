@@ -332,6 +332,89 @@ fn same_host_function(left: host::PaHostFn, right: host::PaHostFn) -> bool {
     left == right
 }
 
+/// **`AB-52`／M4**：把注册时 `pa_sig` 里的 `type_expr` 字符串求值成 `TyExpr`
+/// （与 `AB-69` 的句柄**同一表示**，`TS-56`）。
+///
+/// 失败策略（`TS-54`，未发布窗口内严格）：
+/// - 语法错／未知名／形态不合法 ⇒ `Err(可诊断消息)`，调用方回 `PA_ERR_INVALID`（**不静默降级**）；
+/// - **前向引用**暂未解析到（`ResolveError::Deferred`）⇒ 该形参/返回落 [`host_signature::TyExpr::Platform`]
+///   （平台类型：不检查；显式前向引用允许延迟，见 `TS-52`）；
+/// - `type_expr == NULL` ⇒ 未声明类型 ⇒ 同样 `Platform`。
+///
+/// 返回 `(params, ret, has_declared)`；`has_declared=false` ⇒ 整条签名没有任何类型信息
+/// （不必进 `host_typed_signatures`，保持"未声明 ⇒ 与今天完全一致"）。
+fn evaluate_pa_sig_types(
+    state: &pa_state,
+    signature: &host::Signature,
+    scope_globals: Option<NonNull<Header>>,
+) -> Result<(Vec<host_signature::TyExpr>, Option<host_signature::TyExpr>, bool), String> {
+    use pyawa_core::type_expr::{
+        evaluate_type_expression, ResolveError, ResolveScope, TypeAnnotationError,
+    };
+    let scope = ResolveScope {
+        instance: &state.instance,
+        globals: scope_globals,
+        tparams: &[],
+    };
+    let mut has_declared = false;
+    let mut evaluate = |text: &str| -> Result<host_signature::TyExpr, String> {
+        has_declared = true;
+        match evaluate_type_expression(&scope, text) {
+            Ok(semantic) => Ok(host_signature::TyExpr::from(semantic)),
+            // 前向引用延迟：落平台类型（显式延迟，不是"把坏注解吞掉"）。
+            Err(TypeAnnotationError::Resolve(ResolveError::Deferred(_))) => {
+                Ok(host_signature::TyExpr::Platform)
+            }
+            Err(TypeAnnotationError::Syntax(error)) => Err(format!(
+                "`AB-52`：`type_expr` 语法错（{error:?}）"
+            )),
+            Err(TypeAnnotationError::Resolve(error)) => {
+                Err(format!("`AB-52`：`type_expr` 求值失败（{error}）"))
+            }
+        }
+    };
+    let mut params = Vec::with_capacity(signature.params.len());
+    for param in &signature.params {
+        match &param.type_expr {
+            Some(text) => params.push(evaluate(text)?),
+            None => params.push(host_signature::TyExpr::Platform),
+        }
+    }
+    let ret = match &signature.ret_expr {
+        Some(text) => Some(evaluate(text)?),
+        None => None,
+    };
+    Ok((params, ret, has_declared))
+}
+
+/// 把 `AB-52` 字符串求值出的签名登记进 `host_typed_signatures`（`AB-69` 的同一账本）：
+/// - 边界运行期检查与编译期调用点检查由此对字符串通道**同样生效**（`TS-56`）；
+/// - 同一 C 函数已有 `AB-69` 句柄签名 ⇒ **不覆盖**（句柄更精确；两者应同表示，冲突以句柄为准）。
+fn register_pa_sig_typed_signature(
+    state: &mut pa_state,
+    function: host::PaHostFn,
+    params: Vec<host_signature::TyExpr>,
+    ret: Option<host_signature::TyExpr>,
+    flags: u32,
+) {
+    if state
+        .host_typed_signatures
+        .iter()
+        .any(|signature| same_host_function(signature.function, function))
+    {
+        return;
+    }
+    state
+        .host_typed_signatures
+        .push(host_signature::TypedSignature {
+            function,
+            params,
+            ret,
+            tparams: Vec::new(),
+            flags,
+        });
+}
+
 /// **`AB-69`**：把本实例已声明的 `pa_type_expr` 签名投影成编译期声明表（`TS-47` 调用点检查用）。
 ///
 /// 同一 C 函数注册多次 ⇒ 每个注册名都带同一份声明 ✓（同实现同签名）。
@@ -946,6 +1029,19 @@ pub unsafe extern "C" fn pa_module_addfunction(
         let namespace = host_module_record(state, module)
             .and_then(|module| module_namespace(&state.instance, module))
             .expect("gate 已确认句柄有效");
+        // **`AB-52`／M4**：字符串 `type_expr` 求值（作用域＝宿主模块命名空间：
+        // 名字先查模块自己的命名空间，再 builtins/类型注册表）。
+        let (typed_params, typed_ret, has_declared_types) = match evaluate_pa_sig_types(
+            state,
+            &signature,
+            Some(namespace),
+        ) {
+            Ok(evaluated) => evaluated,
+            Err(message) => {
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+        };
         // SAFETY: 调用方按契约给出 sig。
         let text_signature = unsafe { host::text_signature(&state.instance, sig) };
         let created = create_host_function(state, &text, function, &signature, text_signature);
@@ -955,6 +1051,15 @@ pub unsafe extern "C" fn pa_module_addfunction(
             .set_builtin_function_module(created, &module_full_name);
         // `dict_set` 自己加一份引用；`created` 的初始引用由 `host_functions` 账本持有（实例销毁时随堆释放）。
         state.instance.dict_set(namespace, &text, created);
+        if has_declared_types {
+            register_pa_sig_typed_signature(
+                state,
+                function,
+                typed_params,
+                typed_ret,
+                signature.flags,
+            );
+        }
         status::PA_OK
     })
 }
@@ -3150,6 +3255,19 @@ pub unsafe extern "C" fn pa_register(
         let Some(signature) = (unsafe { host::read_signature(sig) }) else {
             return status::PA_ERR_INVALID;
         };
+        // **`AB-52`／M4**：注册时把 `type_expr` 字符串求值成与 `AB-69` 同形的表示
+        // （失败 ⇒ `PA_ERR_INVALID`，不静默降级；前向引用延迟 ⇒ 平台类型）。
+        let (typed_params, typed_ret, has_declared_types) = match evaluate_pa_sig_types(
+            state,
+            &signature,
+            Some(state.globals),
+        ) {
+            Ok(evaluated) => evaluated,
+            Err(message) => {
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+        };
         // SAFETY: 调用方按契约给出 sig。
         let text_signature = unsafe { host::text_signature(&state.instance, sig) };
         let created = create_host_function(state, &text, function, &signature, text_signature);
@@ -3175,6 +3293,15 @@ pub unsafe extern "C" fn pa_register(
         unsafe { state.instance.incref_object(created.as_ptr()) };
         let key = state.instance.new_str(&text);
         mapping.insert_raw(key, created);
+        if has_declared_types {
+            register_pa_sig_typed_signature(
+                state,
+                function,
+                typed_params,
+                typed_ret,
+                signature.flags,
+            );
+        }
         status::PA_OK
     })
 }
