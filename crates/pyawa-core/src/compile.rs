@@ -619,6 +619,17 @@ mod emitter;
 use self::emitter::*;
 
 mod parser;
+
+/// **TS 注解表达式字符串 → [`crate::type_expr::TypeExpr`]**（`SPEC-type-system.md` §16 的
+/// `TS-52`；M2 的公开入口）。
+///
+/// 纯语法层：**与实例无关**（不做名称解析/求值——那是 `TS-53` 的下一层）；语法错误/多余尾巴
+/// 一律 `CompileError::Syntax`（宿主侧按 `AB-22` 映射成 `PA_ERR_INVALID`）。
+pub fn parse_type_expression(
+    text: &str,
+) -> Result<crate::type_expr::TypeExpr, CompileError> {
+    parser::parse_type_expression_text(text)
+}
 use self::parser::*;
 
 mod typecheck;

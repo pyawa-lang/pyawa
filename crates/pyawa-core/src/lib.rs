@@ -83,6 +83,9 @@ mod cell;
 mod classes;
 mod code;
 pub mod compile;
+/// **TS 注解表达式的语法模型**（`SPEC-type-system.md` §16 的 `TS-52`；M1/M2）。
+pub mod type_expr;
+pub use type_expr::TypeExpr;
 /// **`_tokenize` 的词法底层** ✓（task-19 ✓，一处真相：就是编译器的词法器 ✓）。
 pub use compile::lexer::{python_tokens, PythonToken, PythonTokenKind};
 pub mod builtin_types;

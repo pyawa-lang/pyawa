@@ -1,29 +1,34 @@
-# NEXT（会话 13 · 失败路径探针接闸）
+# NEXT（会话 13 · TS 注解解析器 M1/M2）
 
-> **本轮落地（2026-11-14，第四轮）**：把阶段 0 的 **失败路径 GC 收支探针接进闸门**——
-> `tests/ci/failure_path_leaks.py`（11 条失败路径 × N=10000/20000 缩放判据）成为
-> **`tools/slowcheck.sh` 第 12 项**（步骤内先 `cargo build` CLI，release 档 no-op；任何 RED ⇒ 闸门红）；
-> `tools/gate_chunk.sh small` 同步纳入。计数口径「十一项 → **十二项**」已同步到 `AGENTS.md` 硬线、
-> `agents-rules/round-rule.md`、`docs/REQUIREMENTS.md`、`docs/PLAN-milestones.md`（新增 §12.8）
-> 与 `failure_path_leaks.py` 头注。**本页规矩**（`agents-rules/round-rule.md` §5）：**≤ 40 行**；
-> 只写 状态／下一条命令／未修 bug＋判据；评审记录见 `git show`，不逐轮复盘。
+> **本轮落地（2026-11-14，第五轮）**：全口径 **TS 注解解析器**的第一笔 —— **M1 规格与模型** ＋
+> **M2 语法层**（`PLAN` §12.9）：
+> - **M1**：`SPEC-type-system.md` 新增 **§16（`TS-51`…`TS-57`）**——语法范围（类型表达式子集，
+>   任意表达式归 `__annotate__` 通道）／两阶段（语法层 vs 求值层）／`BC-24` 标签映射／失败语义
+>   （语法错 `Syntax`、宿主侧 `PA_ERR_INVALID`）／可逆文本投影／`AB-52`↔`AB-69` **同一表示**；
+>   `SPEC-c-abi` 的 `AB-52` 补解析器两阶段与 §16 引用；§13 新增 `T-TS-12/13/14`。
+> - **M2**：`pyawa_core::type_expr::TypeExpr` 语法树（名字/点号/联合/下标/列表/前向引用/`...`）＋
+>   `pyawa_core::compile::parse_type_expression(&str)`（复用 `compile/parser/types.rs` 的
+>   `parse_type_at`，`?` 降级成联合、联合/单实参下标摊平）；`to_source`/`to_python_source`
+>   可逆投影；新增 `crates/pyawa-core/tests/type_expression.rs`（语法矩阵/往返/错误）。
+> **本页规矩**（`agents-rules/round-rule.md` §5）：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据。
 
-- **HEAD**：`e09a4a37`（本轮前；本轮提交见 `git log`）
-- **工作区**：干净 ✓
-- **下一条命令**：`tools/slowcheck.sh --release`（**十二项**）
-- **闸门（本轮后）**：`check.py` 20/20（含 `T-CX-20`）；`selftest.py` 24 项断言；`slowcheck --release`
-  **十二项全绿**（新增第 12 项实跑 11/11）；`cargo check --workspace --all-targets` 0 警告；
-  `PYAWA_DANGLING=1` 全量测试绿；conformance 408×2；`bench_gate` 四档 ✓。
-- **下一批建议**：①`CX-30` 白名单 C 类 18 处可逐条转显式（低价值，收尾项）②ABI 剩余：`#1`
-  `type_expr` 求值（等 TS 注解解析器）、`#2` `pa_exec_file`（等 IM-15）、**发布**＝用户决定
-  （`DESIGN` §13-22）③官方测试面（`array.array` 元素存储等）与性能主线（dict 哈希化）
-  ④26 笔本地提交待定 push/合并（需授权）。
-- **本轮改动边界**：闸门计数变化是**流程口径**（不是语义）；第 12 项在 release 档与 debug 档都
-  先构建 CLI（debug 档耗时略增）；`gate_chunk small` 也跑该探针（分块命令与慢闸口径一致）。
-- **已知未修（承接上轮，按如实登记）**：账本诊断近似（`*const Instance` 不变量、ptr 复用账）；
-  `CX-30` 在 RAII 后属可审计风格规则；ABI `#1`／`#2` 前置未开工；`array.array` 元素存储、
-  dict 哈希化等既有缺口见 `PLAN` §9.2 与 `NEXT` 历史记录。
+- **HEAD**：`e4fea98f`（本轮前；本轮提交见 `git log`）
+- **工作区**：干净 ✓ · **下一条命令**：`tools/slowcheck.sh --release`（十二项）
+- **闸门**：`check.py` 20/20；`slowcheck --release` 十二项全绿；`cargo check --workspace
+  --all-targets` 0 警告；`PYAWA_DANGLING=1` 全量测试绿；conformance 408×2；`bench_gate` 四档 ✓。
+- **下一步（M3 求值层）**：在 `TypeExpr` 上加求值入口——名称解析（模块 globals → builtins →
+  宿主注册类型；点号按属性链；字符串前向引用**延迟**到求值）＋ `typing` 构造识别
+  （`Callable`/`Optional`/`Union`/`Annotated`/`TypeVar`）→ 语义类型/`BC-24` 标签（`TS-52`/`TS-53`，
+  `T-TS-13`）。依赖：`Lib/typing.py` 已在同步集（`import typing` 可用）；宿主类型经 `pa_newtype`
+  注册。**M4** 再把 `AB-52` 字符串接进 `pa_register`/`pa_func_set_signature`（与 `AB-69` 同一表示、
+  编译期调用点检查、`.pyi` 原串不变）。
+- **已知边界（承接）**：M2 只做**语法层**（无实例/无求值）；`AB-52` 的 `type_expr` 求值仍"待"
+  （M4 才接，`PLAN` §12.4 #1 状态不变）；`T?` 在语法层**降级成 `T | None`**（回写给规范形，
+  不保留"用 `?` 写的"来源信息）；前向引用/点号名在 M3 才解析。
+- **其他待办（承接上轮）**：`CX-30` 白名单 C 类 18 处转显式（低价值）· ABI `#2` `pa_exec_file`
+  （等 IM-15）· ABI **发布**＝用户决定（`DESIGN` §13-22）· 官方测试面（`array.array` 元素存储等）
+  与性能主线（dict 哈希化）· 28 笔本地提交待定 push/合并（需授权）。
 - **口径**：改编译器/AST 后清缓存 `find target Lib -name __pyawa__ -prune -exec rm -rf {} +` ＋
   `find target -name '*.pyac' -delete`；`PA_ABI_VERSION`＝1.10、指令集 **2**；编号现最大
-  `BC-67`／`AB-72`／`TS-50`／`CP-39`／`CX-30`／`P3-42`。
+  `TS-57`／`BC-67`／`AB-72`／`CP-39`／`CX-30`／`P3-42`。
 - **提交纪律**：`git commit -F - -- <显式路径>`；`&&` 只看 exit code；slowcheck 十二项全绿才提交。

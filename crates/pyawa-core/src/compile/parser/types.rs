@@ -324,3 +324,90 @@ pub(crate) fn parse_type_params(
     Ok(params)
 }
 
+
+
+// ---- **TS 注解表达式 → `TypeExpr` 语法树**（`SPEC-type-system.md` §16，M2；2026-11-14）----
+//
+// 复用本文件的 `parse_type_at`（不另造 IDL）：先用**扩展模式**词法（`T?` 是 `TS-46` 语法，
+// 其余词素两模式都合法），再要求**整串吃完**（尾部只允许换行/结束）；然后按"源码常量形状 →
+// 语法树"转换。`Constant` 的 `Ann*` 变体是**字节码发射用**的形状（例如单实参下标压成
+// `Tuple([base, arg])`、`|` 压成右结合二元），本函数把它们**规范化**成用户可读的语法树。
+
+/// **解析注解表达式字符串**（M2 的公开入口；`TS-52` 的语法范围）。
+pub(crate) fn parse_type_expression_text(
+    text: &str,
+) -> Result<crate::type_expr::TypeExpr, CompileError> {
+    let lexed = lex(text, Mode::Extension)?;
+    let (constant, after) = parse_type_at(&lexed, 0)?;
+    match lexed.lexemes.get(after) {
+        Some(Lexeme::Newline) | Some(Lexeme::End) => {}
+        _ => {
+            return Err(CompileError::Syntax(
+                "注解表达式后面还有多余内容（类型表达式必须整串就是它）".to_owned(),
+            ))
+        }
+    }
+    type_expr_from_constant(&constant)
+}
+
+/// 把**编译期注解常量形状**转换成 [`crate::type_expr::TypeExpr`]（`TS-52`；见上方注释）。
+pub(crate) fn type_expr_from_constant(
+    constant: &Constant,
+) -> Result<crate::type_expr::TypeExpr, CompileError> {
+    use crate::type_expr::TypeExpr;
+    match constant {
+        // 词法/语法层只把 `Any` 映射成 `Str("Any")`（见 `parse_type_primary_core`）。
+        Constant::Str(text) if text == "Any" => Ok(TypeExpr::Any),
+        // 防御：类型语法不该产出别的 `Str`；出现就按名字处理（不静默丢）。
+        Constant::Str(text) => Ok(TypeExpr::Name(text.clone())),
+        Constant::Type(name) if name == "NoneType" => Ok(TypeExpr::NoneType),
+        Constant::Type(name) => Ok(TypeExpr::Name(name.clone())),
+        Constant::Ellipsis => Ok(TypeExpr::Ellipsis),
+        Constant::AnnString(text) => Ok(TypeExpr::ForwardRef(text.clone())),
+        Constant::AnnAttribute { base, name } => Ok(TypeExpr::Attribute {
+            base: Box::new(type_expr_from_constant(base)?),
+            name: name.clone(),
+        }),
+        Constant::AnnUnion { left, right } => {
+            let mut items = Vec::new();
+            flatten_union(left, &mut items)?;
+            flatten_union(right, &mut items)?;
+            Ok(TypeExpr::Union(items))
+        }
+        Constant::AnnList(items) => Ok(TypeExpr::List(
+            items.iter().map(type_expr_from_constant).collect::<Result<_, _>>()?,
+        )),
+        Constant::AnnSubscript { base, arguments } => Ok(TypeExpr::Subscript {
+            base: Box::new(type_expr_from_constant(base)?),
+            arguments: arguments
+                .iter()
+                .map(type_expr_from_constant)
+                .collect::<Result<_, _>>()?,
+        }),
+        // **单实参下标**的旧形状：`list[int]` 压成 `Tuple([list, int])`（见 `parse_type_primary_core`）。
+        Constant::Tuple(items) if items.len() == 2 => Ok(TypeExpr::Subscript {
+            base: Box::new(type_expr_from_constant(&items[0])?),
+            arguments: vec![type_expr_from_constant(&items[1])?],
+        }),
+        other => Err(CompileError::Syntax(format!(
+            "注解里出现非类型表达式（{other:?}）——类型表达式只收名字/点号/`|`/`?`/下标/列表/`...`/字符串前向引用"
+        ))),
+    }
+}
+
+/// 把 `AnnUnion` 的右结合二元树**摊平**成 `Vec`（`A | (B | C)` 与 `A | B | C` 同树）。
+fn flatten_union(
+    constant: &Constant,
+    out: &mut Vec<crate::type_expr::TypeExpr>,
+) -> Result<(), CompileError> {
+    match constant {
+        Constant::AnnUnion { left, right } => {
+            flatten_union(left, out)?;
+            flatten_union(right, out)
+        }
+        other => {
+            out.push(type_expr_from_constant(other)?);
+            Ok(())
+        }
+    }
+}
