@@ -97,11 +97,13 @@ fn a_class_body_docstring_and_a_base_class_work() {
         .type_lookup(derived_type, "__doc__")
         .expect("类字典里有 __doc__");
     assert_eq!(vm.instance.text_value(doc).as_deref(), Some("ddoc"));
-    // 划重点：两条都该有 `__qualname__`
+    // 划重点：类的 `__qualname__` 要正确 —— **task-13 #d** 起按参照口径存**私有键**
+    // （`type_new` 把它收进类型槽、类字典里没有公开 `__qualname__` 键）⇒ 走属性通道验值。
     let qualname = vm
         .instance
-        .type_lookup(derived_type, "__qualname__")
-        .expect("类字典里有 __qualname__");
+        .attribute_optional_of(derived, "__qualname__")
+        .expect("读 __qualname__ 不该出错")
+        .expect("类应当有 __qualname__");
     assert_eq!(vm.instance.text_value(qualname).as_deref(), Some("Derived"));
 }
 

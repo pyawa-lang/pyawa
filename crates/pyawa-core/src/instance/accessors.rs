@@ -565,6 +565,76 @@ impl Instance {
         // SAFETY: 调用方保证 ty 是存活的类型对象。
         unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.dict()
     }
+
+    /// **类型对象的 `__name__` 取值**（task-13 #d 的**一处真相**）。
+    ///
+    /// 口径（实测 3.14.4）：用户类可写 `C.__name__ = …`（`type.__dict__['__name__']` 是
+    /// getset 数据描述符）⇒ 本层既有写入口把值写进**类型命名空间**（同名键）⇒ 读时先看它；
+    /// 没有显式值就用注册名（内建类型／`type()` 动态造的类）。`type.__dict__['__name__']`
+    /// 的描述符 `__get__` 与属性通道共用这个函数（**一处真相**）。
+    pub(crate) fn type_name_value(&self, object: NonNull<Header>) -> String {
+        // 先看 **rename 覆盖键**（`C.__name__ = …` 的写入口存这里；参照是 getset setter 进类型槽）；
+        // **不看类字典里的 `__name__`** —— 类体里 `__name__ = …` 是普通类属性，参照的
+        // `type.__getattribute__` 会用类型槽遮住它（实测 `class C: __name__='x'` ⇒ `C.__name__=='C'`）。
+        if let Some(namespace) = self.type_namespace_if_present(object) {
+            if let Some(value) = self.dict_get(namespace, crate::classes::TYPE_NAME_KEY) {
+                if let Some(text) = self.text_of(value) {
+                    return text.to_owned();
+                }
+            }
+        }
+        // SAFETY: 调用方保证 object 是存活的类型对象（`is_type_object` 判过）。
+        unsafe { object.cast::<crate::TypeObject>().as_ref() }
+            .name()
+            .to_owned()
+    }
+
+    /// **类型对象的 `__qualname__` 取值**（task-13 #c/#d 的**一处真相**）。
+    ///
+    /// 编译器按**定义处作用域**把 `__qualname__` 写进类命名空间（`N2.D`／
+    /// `outer.<locals>.K`；实测本层类体里那份值是**对的**，只有属性读法丢了它）⇒ 读命名空间；
+    /// 没有就退回注册名（内建类型、`type("X", (), {})` 动态造的类；参照给同名）。
+    pub(crate) fn type_qualname_value(&self, object: NonNull<Header>) -> String {
+        if let Some(namespace) = self.type_namespace_if_present(object) {
+            // 类创建后的**正式存储**：私有键（参照 3.14 把 `__qualname__` 收进类型槽、类字典
+            // 里没有公开键；键名常量在 `crate::classes::TYPE_QUALNAME_KEY`，一处真相）。
+            if let Some(value) = self.dict_get(namespace, crate::classes::TYPE_QUALNAME_KEY) {
+                if let Some(text) = self.text_of(value) {
+                    return text.to_owned();
+                }
+            }
+            // 类**创建过程中**（迁移之前）值还在命名空间的 `__qualname__` 键上。
+            if let Some(value) = self.dict_get(namespace, "__qualname__") {
+                if let Some(text) = self.text_of(value) {
+                    return text.to_owned();
+                }
+            }
+        }
+        // SAFETY: 调用方保证 object 是存活的类型对象（`is_type_object` 判过）。
+        unsafe { object.cast::<crate::TypeObject>().as_ref() }
+            .name()
+            .to_owned()
+    }
+
+    /// **类型对象的 `__module__` 取值**（task-13 #d 的**一处真相**）：返回类型字典里那个值的
+    /// **新引用**；没有（内建类型）⇒ `None`，调用方按参照回 `"builtins"`。
+    ///
+    /// 用户类的类体写的是 `str`（`__module__` 由 `LOAD_NAME` 写进命名空间）；也允许别的对象
+    /// （实测 `NT.__module__ = collections` ⇒ 读回**模块对象** ✓）。**描述符值要挡掉** ——
+    /// `function` 类型字典里的 `__module__` 是给**函数实例**用的可写描述符 ⇒ 类级读法仍回
+    /// `"builtins"`（与既有 `attribute_lookup_specials` 的口径**一处** ✓）。
+    pub(crate) fn type_module_value(&self, object: NonNull<Header>) -> Option<NonNull<Header>> {
+        let own = self.type_lookup(object.cast::<crate::TypeObject>(), "__module__")?;
+        let is_descriptor = self
+            .type_lookup(self.type_of(own), "__get__")
+            .is_some();
+        if self.text_of(own).is_some() || !is_descriptor {
+            // SAFETY: own 由类型字典持有，存活；借用要变成调用方那份。
+            unsafe { self.incref_object(own.as_ptr()) };
+            return Some(own);
+        }
+        None
+    }
 }
 
 impl Instance {

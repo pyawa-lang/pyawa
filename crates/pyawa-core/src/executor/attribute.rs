@@ -1034,9 +1034,17 @@ fn attribute_lookup_specials(
         return Ok(Attribute::Owned(class.cast::<Header>())).map(Some);
     }
     if (name == "__name__" || name == "__qualname__") && instance.is_type_object(object) {
-        // SAFETY: 刚判过它是类型对象。
-        let info = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
-        return Ok(Attribute::Owned(instance.new_str(info.name()))).map(Some);
+        // **task-13 #c/#d**：`__qualname__` 不能再回 `TypeObject.name` ✗ —— 编译器按定义处作用域
+        // 把**真限定名**写进了类命名空间（`N2.D`／`outer.<locals>.K`），读法却一直只取注册名
+        // ⇒ 嵌套类/函数内类的 `__qualname__` 恒错。`__name__` 同口径（用户可写 `C.__name__`，
+        // 本层写入口写命名空间）。两处**一处真相**：`Instance::type_name_value`／
+        // `type_qualname_value`（`type.__dict__['__name__'/'__qualname__']` 的 `__get__` 也用它 ✓）。
+        let text = if name == "__name__" {
+            instance.type_name_value(object)
+        } else {
+            instance.type_qualname_value(object)
+        };
+        return Ok(Attribute::Owned(instance.new_str(&text))).map(Some);
     }
     // **内建类型的 `__module__`**（第 310 轮）：`object.__module__` 参照给 `'builtins'` ✓ ——
     // 用户类的 `__module__` 由类体自己写进命名空间 ✓（走上面那条通用查找 ✓），内建类型没有 ✗
@@ -1085,21 +1093,11 @@ fn attribute_lookup_specials(
     }
     if name == "__module__" && instance.is_type_object(object) {
         // 类型字典里自己写了就用它 ✓（用户类 ✓）；否则给 `builtins` ✓。
-        // **只认 `str`** ✓（`P3-17` 之后 `function` 类型字典里也有一个 `__module__` 的
-        // **可写描述符对象** ✓ —— 那是给**函数实例**用的 ✗ ⇒ `function.__module__` 这个
-        // **类级**读法仍该回 `'builtins'` ✓，不能把描述符对象交出去 ✗）。
-        if let Some(own) = instance.type_lookup(object.cast::<crate::TypeObject>(), "__module__") {
-            let is_descriptor = instance
-                .type_lookup(instance.type_of(own), "__get__")
-                .is_some();
-            // **照参照原样给**（round 224 真 bug 修 ✗）：`C.__module__ = <module 对象>` 之后
-            // 读回来必须是**那个对象** ✓（`test_collections.TestNamedTuple.test_module_parameter`
-            // 的 `NT.__module__ == collections` ✓）；先前只认 `str` ✗ ⇒ 模块对象被挡掉、回
-            // `'builtins'` ✗。**描述符要挡**（`function` 类型字典里的 `__module__` 是给函数实例
-            // 用的可写描述符 ✗ ⇒ 类级读法仍回 `'builtins'` ✓）。
-            if instance.text_of(own).is_some() || !is_descriptor {
-                return Ok(Attribute::Owned(instance.retain(own))).map(Some);
-            }
+        // 口径（`str` 与"别的对象"如模块对象都收、描述符值挡掉）在
+        // **`Instance::type_module_value` 一处** ✓（task-13 #d：`type.__dict__['__module__']`
+        // 的 `__get__` 与这条属性读法共用它 ✓）。
+        if let Some(own) = instance.type_module_value(object) {
+            return Ok(Attribute::Owned(own)).map(Some);
         }
         return Ok(Attribute::Owned(instance.new_str("builtins"))).map(Some);
     }

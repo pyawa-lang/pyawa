@@ -1895,6 +1895,13 @@ impl Instance {
             ("annotations", "__annotations__"),
             ("dict", "__dict__"),
             ("mro", "__mro__"),
+            // **`type.__dict__` 的类型属性面**（task-13 #d）：参照 3.14.4 里 `__name__`／
+            // `__qualname__`／`__module__`／`__bases__` 都是 `getset_descriptor` 实例
+            // ⇒ 给 `type` 的类型字典补上（`inspect.getattr_static(类, "__name__")` 取到的就是它们）。
+            ("typename", "__name__"),
+            ("qualname", "__qualname__"),
+            ("module", "__module__"),
+            ("bases", "__bases__"),
         ];
         let mut instances = Vec::with_capacity(descriptors.len());
         for (kind, python_name) in descriptors {
@@ -1903,6 +1910,7 @@ impl Instance {
                 kind,
                 python_name,
                 Some(type_object),
+                &[],
             );
             instances.push((python_name, instance));
         }
@@ -1949,7 +1957,17 @@ impl Instance {
         match self.hot_type(hot) {
             Some(existing) => existing,
             None => {
-                let ty = self.new_attribute_type(name);
+                // 自定义 `Slots`（`new_attribute_type` 只有默认 repr）——参照的描述符 repr 是
+                // `<attribute '__name__' of 'type' objects>`／`<member 'g' of 'Dyn' objects>` ✓。
+                let ty = self.new_type(
+                    name,
+                    core::mem::size_of::<crate::builtin_objects::AttributeObject>(),
+                    crate::builtin_objects::AttributeObject::slots()
+                        .with_new(crate::builtin_objects::attribute_new)
+                        .with_repr(crate::builtin_objects::descriptor_repr),
+                );
+                // SAFETY: 刚由本实例分配、存活。
+                unsafe { ty.as_ref() }.mark_has_instance_dict();
                 if let Some(namespace) = self.type_namespace(ty.cast()) {
                     if self.dict_get(namespace, "__get__").is_none() {
                         let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
@@ -1980,6 +1998,7 @@ impl Instance {
         kind: &str,
         python_name: &str,
         owner: Option<NonNull<crate::TypeObject>>,
+        extra: &[(&str, NonNull<Header>)],
     ) -> NonNull<Header> {
         let attributes = self.new_dict();
         let kind_text = self.new_str(kind);
@@ -1990,11 +2009,20 @@ impl Instance {
         self.dict_set(attributes, "__name__", name_text);
         // SAFETY: 同上。
         unsafe { self.release_object(name_text.as_ptr()) };
+        // 参照 getset／member 描述符的 `__doc__` 是 `None`（实测 3.14.4）⇒ 给 none 单例
+        // （`dict_set` 借用 ＋ 自己 retain，单例那份不必还）。
+        let doc = self.singletons().none();
+        self.dict_set(attributes, "__doc__", doc);
         if let Some(owner) = owner {
             let owner_value = self.type_value(owner);
             self.dict_set(attributes, "__objclass__", owner_value);
             // SAFETY: 同上。
             unsafe { self.release_object(owner_value.as_ptr()) };
+        }
+        // **附加属性**（task-13：`__slots__` 的 member_descriptor 要 `__qualname__` 等）：
+        // 值是**借用**（字典自己放一份）；调用方留着自己的那份。
+        for (key, value) in extra {
+            self.dict_set(attributes, key, *value);
         }
         self.alloc(crate::builtin_objects::AttributeObject::new(
             descriptor_type,

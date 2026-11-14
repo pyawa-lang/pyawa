@@ -1722,3 +1722,190 @@ fn consecutive_with_blocks_do_not_overflow_or_hang() {
         "64 个连续 with：函数内"
     );
 }
+
+// --------------------------------------------------------------------------- #
+// task-13：`__slots__` 私有名改写/描述符、嵌套类 `__qualname__`、类型属性 getset 面
+// --------------------------------------------------------------------------- #
+
+/// 类创建期与类型对象面的回归（不依赖 stdlib；`../tests` 的 stdlib 侧另有 `inspect` 对拍）。
+///
+/// 覆盖：
+/// 1. **#c**：嵌套类／函数内类的 `__qualname__`（`N2.D`／`outer.<locals>.K`）与其中方法的
+///    完整限定名（`N2.D.m`／`outer.<locals>.K.km`）——参照 3.14.4；
+/// 2. **#b**：`__slots__ = ('__x','y')` 的私有名改写 ⇒ 类型字典里有 `_S__x`／`y` 的
+///    `member_descriptor`（`__name__`／`__qualname__`／`__objclass__` 照参照），槽读写正常；
+/// 3. **#d**：`type.__dict__` 里 `__name__` 等是 `getset_descriptor` 实例，`__get__` 读 TypeObject/
+///    命名空间（`S.__name__ == "S"`、`D.__qualname__ == "N2.D"`）。
+#[test]
+fn class_surface_slots_qualname_and_type_descriptors() {
+    let vm = Vm::new();
+    let namespace = run_source(
+        &vm,
+        r#"
+class N2:
+    class D:
+        def m(self):
+            pass
+def outer():
+    class K:
+        def km(self):
+            pass
+    return K
+K = outer()
+class S:
+    __slots__ = ("__x", "y")
+    def set_x(self, v):
+        self.__x = v
+    def get_x(self):
+        return self.__x
+s = S()
+s.set_x(7)
+slot_value = s.get_x()
+"#,
+    );
+    // ---- #c：类与方法的 `__qualname__` ----
+    let n2 = namespace_lookup(&vm, namespace, "N2");
+    let d = vm
+        .instance
+        .attribute_optional_of(n2, "D")
+        .expect("取 N2.D 不该出错")
+        .expect("N2 里应当有 D");
+    let d_qualname = vm
+        .instance
+        .attribute_optional_of(d, "__qualname__")
+        .expect("取 __qualname__ 不该出错")
+        .expect("类应当有 __qualname__");
+    assert_eq!(
+        vm.instance.text_value(d_qualname).as_deref(),
+        Some("N2.D"),
+        "task-13 #c：嵌套类的 __qualname__ 要带外层类（参照 3.14.4）"
+    );
+    let d_method = vm
+        .instance
+        .attribute_optional_of(d, "m")
+        .expect("取 N2.D.m 不该出错")
+        .expect("N2.D 里应当有 m");
+    let method_qualname = vm
+        .instance
+        .attribute_optional_of(d_method, "__qualname__")
+        .expect("取方法 __qualname__ 不该出错")
+        .expect("方法应当有 __qualname__");
+    assert_eq!(
+        vm.instance.text_value(method_qualname).as_deref(),
+        Some("N2.D.m"),
+        "task-13 #c：嵌套类里方法的 __qualname__ 要带完整类名前缀"
+    );
+    let k = namespace_lookup(&vm, namespace, "K");
+    let k_qualname = vm
+        .instance
+        .attribute_optional_of(k, "__qualname__")
+        .expect("取 K.__qualname__ 不该出错")
+        .expect("K 应当有 __qualname__");
+    assert_eq!(
+        vm.instance.text_value(k_qualname).as_deref(),
+        Some("outer.<locals>.K"),
+        "task-13 #c：函数内类的 __qualname__ 要带 <locals> 前缀"
+    );
+    let k_method = vm
+        .instance
+        .attribute_optional_of(k, "km")
+        .expect("取 K.km 不该出错")
+        .expect("K 里应当有 km");
+    let k_method_qualname = vm
+        .instance
+        .attribute_optional_of(k_method, "__qualname__")
+        .expect("取 K.km.__qualname__ 不该出错")
+        .expect("K.km 应当有 __qualname__");
+    assert_eq!(
+        vm.instance.text_value(k_method_qualname).as_deref(),
+        Some("outer.<locals>.K.km"),
+        "task-13 #c：函数内类里方法的完整限定名"
+    );
+    // ---- #b：`__slots__` 私有槽名改写 ＋ member_descriptor ----
+    let s_class = namespace_lookup(&vm, namespace, "S");
+    let s_type = vm.instance.as_type(s_class).expect("S 应当是类型对象");
+    let s_namespace = vm
+        .instance
+        .type_namespace(s_class)
+        .expect("S 的命名空间应当拿得到");
+    let slot_descriptor = vm
+        .instance
+        .dict_get(s_namespace, "_S__x")
+        .expect("task-13 #b：私有槽名要按 BC-66 改写成 _S__x 并进类型字典");
+    assert_eq!(
+        vm.instance.type_name(vm.instance.type_of(slot_descriptor)),
+        "member_descriptor",
+        "task-13 #b：槽名在类型字典里是 member_descriptor"
+    );
+    let slot_name = vm
+        .instance
+        .attribute_optional_of(slot_descriptor, "__name__")
+        .expect("取槽描述符 __name__ 不该出错")
+        .expect("槽描述符应当有 __name__");
+    assert_eq!(vm.instance.text_value(slot_name).as_deref(), Some("_S__x"));
+    let slot_qualname = vm
+        .instance
+        .attribute_optional_of(slot_descriptor, "__qualname__")
+        .expect("取槽描述符 __qualname__ 不该出错")
+        .expect("槽描述符应当有 __qualname__");
+    assert_eq!(
+        vm.instance.text_value(slot_qualname).as_deref(),
+        Some("S._S__x"),
+        "task-13 #b：槽描述符的 __qualname__ 是 <类限定名>.<槽名>"
+    );
+    let slot_owner = vm
+        .instance
+        .attribute_optional_of(slot_descriptor, "__objclass__")
+        .expect("取槽描述符 __objclass__ 不该出错")
+        .expect("槽描述符应当有 __objclass__");
+    assert_eq!(
+        slot_owner.as_ptr(),
+        s_class.as_ptr(),
+        "task-13 #b：槽描述符的 __objclass__ 是声明它的类"
+    );
+    assert!(
+        vm.instance.dict_get(s_namespace, "y").is_some(),
+        "task-13 #b：普通槽名也要有 member_descriptor"
+    );
+    let slot_value = namespace_lookup(&vm, namespace, "slot_value");
+    assert_eq!(
+        vm.instance.int_value(slot_value),
+        Some(7),
+        "task-13 #b：改写后的私有槽读写正常（class 体里 `self.__x`）"
+    );
+    let instance = namespace_lookup(&vm, namespace, "s");
+    let stored = vm
+        .instance
+        .attribute_optional_of(instance, "_S__x")
+        .expect("取实例私有槽不该出错")
+        .expect("私有槽应当已写入");
+    assert_eq!(vm.instance.int_value(stored), Some(7));
+    let _ = s_type;
+    // ---- #d：`type.__dict__` 的类型属性 getset 面 ----
+    let type_class = vm.instance.type_named("type").expect("type 已登记");
+    let type_namespace = vm
+        .instance
+        .type_namespace(type_class.cast::<Header>())
+        .expect("type 的命名空间应当拿得到");
+    let name_descriptor = vm
+        .instance
+        .dict_get(type_namespace, "__name__")
+        .expect("task-13 #d：type.__dict__['__name__'] 应当是 getset 描述符");
+    assert_eq!(
+        vm.instance.type_name(vm.instance.type_of(name_descriptor)),
+        "getset_descriptor"
+    );
+    let descriptor_name = vm
+        .instance
+        .attribute_optional_of(name_descriptor, "__name__")
+        .expect("取描述符 __name__ 不该出错")
+        .expect("描述符应当有 __name__");
+    assert_eq!(vm.instance.text_value(descriptor_name).as_deref(), Some("__name__"));
+    // `S.__name__` 与 `N2.D.__qualname__` 经属性通道读到的值（与描述符 `__get__` 同一处真相处）。
+    let s_name = vm
+        .instance
+        .attribute_optional_of(s_class, "__name__")
+        .expect("取 S.__name__ 不该出错")
+        .expect("S 应当有 __name__");
+    assert_eq!(vm.instance.text_value(s_name).as_deref(), Some("S"));
+}

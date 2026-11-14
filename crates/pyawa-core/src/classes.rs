@@ -443,6 +443,106 @@ pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
 
 /// 帧：把命名空间交给类体（供 [`crate::executor::run_class_body`] 用）。
 ///
+/// **类 `__qualname__` 在类型字典里的私有存放键**（task-13 #d，**一处真相**的键名）。
+///
+/// 参照 3.14 的 `type_new` 把类命名空间里的 `__qualname__` 收进**类型槽**（类字典里**没有**
+/// 这个公开键）⇒ 本层没有对应字段（`type_object.rs` 在本任务写域外）⇒ 存进类型字典的
+/// **私有键**（读侧 [`crate::Instance::type_qualname_value`] 一处）。键名以 `__…__` 收尾
+/// ⇒ `enum`／`dataclasses` 一类按"dunder 名"过滤的遍历不会把它当成员/字段（与既有私有键手法一致）。
+pub(crate) const TYPE_QUALNAME_KEY: &str = "__pyawa_qualname__";
+
+/// **类 `__name__` 的 rename 覆盖值存放键**（task-13 #d）：参照里 `C.__name__ = …` 是
+/// `type.__dict__['__name__']` 的 getset `__set__`，**不进类字典**；本层没有类型槽（写域外）
+/// ⇒ 覆盖值存这个私有键（读侧 [`crate::Instance::type_name_value`]）。**类体里**的
+/// `__name__ = …` 仍是普通类属性、留在类字典里（参照也这样：类字典有 `__name__`，
+/// 但 `C.__name__` 读的是类型槽、类字典那份被遮住）。
+pub(crate) const TYPE_NAME_KEY: &str = "__pyawa_name__";
+
+/// **CPython 私有名改写规则**（`BC-66`；与 `compile/mangle.rs` 同一把尺子，**实测校准**）。
+///
+/// `__spam`（至少两个前导下划线、**不以两个下划线结尾**）⇒ `_<类名去前导下划线>__spam`；
+/// 类名全是下划线（`__`／`___`）⇒ 该类体**不改写**。规则细节见 `compile/mangle.rs` 的模块文档
+/// （那里是**标识符**的一次性 AST 改写；本函数用于 `__slots__` 的**字符串槽名** —— 它是数据、
+/// 编译器不改，参照在 `type_new` 里按同一规则改写）。
+fn mangle_slot_name(class_name: &str, name: &str) -> String {
+    let stripped = class_name.trim_start_matches('_');
+    if stripped.is_empty() || !name.starts_with("__") || name.ends_with("__") {
+        return name.to_owned();
+    }
+    format!("_{stripped}__{}", &name[2..])
+}
+
+/// 槽名必须是**标识符**（参照原话：`TypeError: __slots__ must be identifiers`）。
+///
+/// 判据与 `str.isidentifier` 的既有近似口径一致（首字符字母/下划线、其余字母/数字/下划线；
+/// Unicode 表落定后一并收口）—— 两处一致即可，`str.isidentifier` 在 `builtin/str.rs`。
+fn is_identifier_text(text: &str) -> bool {
+    let mut chars = text.chars();
+    match chars.next() {
+        None => false,
+        Some(first) => {
+            (first == '_' || first.is_alphabetic())
+                && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
+        }
+    }
+}
+
+/// 取 `__slots__` 的**源码名字表**（参照 3.14.4 实测语义）：
+///
+/// - `str` ⇒ **一个**名字（`__slots__ = "ab"` 是一个槽；`"a b"` 不是标识符 ⇒
+///   `__slots__ must be identifiers`）；
+/// - 其余按**可迭代对象**取元素（list／tuple／dict／生成器…；不可迭代 ⇒ 迭代器给出参照原话
+///   `'int' object is not iterable`）；
+/// - 每个元素必须是 `str`（否则 `__slots__ items must be strings, not '<type>'`）。
+fn slot_source_names(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Vec<String>, ExecError> {
+    if let Some(text) = instance.text_of(value) {
+        if !is_identifier_text(text) {
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "__slots__ must be identifiers",
+            ));
+        }
+        return Ok(vec![text.to_owned()]);
+    }
+    let iterator = instance.iter_object(value)?;
+    let mut names: Vec<String> = Vec::new();
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(item)) => {
+                let Some(text) = instance.text_of(item) else {
+                    let actual = instance.type_name(instance.type_of(item));
+                    instance.release(iterator);
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        &format!("__slots__ items must be strings, not '{actual}'"),
+                    ));
+                };
+                if !is_identifier_text(text) {
+                    instance.release(iterator);
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        "__slots__ must be identifiers",
+                    ));
+                }
+                names.push(text.to_owned());
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(names)
+}
+
 /// **`BC-4`**：把一个类体条目里的**函数**换成"`co_qualname` 已补成 `C.m`"的新函数。
 ///
 /// 不是函数、或名字读不出来时给 `None`（调用方原样搬）。新函数与旧函数共享默认值／
@@ -450,7 +550,8 @@ pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
 fn requalified_method(
     instance: &Instance,
     class_name: &str,
-    key: NonNull<Header>,
+    class_qualname: &str,
+    _key: NonNull<Header>,
     value: NonNull<Header>,
 ) -> Option<NonNull<Header>> {
     let function_type = instance.hot_type(HotId::Function)?;
@@ -458,26 +559,26 @@ fn requalified_method(
     if unsafe { value.as_ref() }.ty() != function_type {
         return None;
     }
-    // P3-38 S2c：方法名走安全口径（合法 UTF-8 原样；代理 ⇒ 有损，仅用于 qualname 合成，不 panic ✓）
-    // SAFETY: 键是 str（类命名空间的键）。
-    let method_name = instance.text_value(key).unwrap_or_default();
     // SAFETY: 上面刚确认是函数对象。
     let function = unsafe { &*value.as_ptr().cast::<crate::FunctionObject>() };
     let code_header = function.code();
     // SAFETY: 函数持有 code 的一份引用，存活。
     let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
-    // 已经是限定名（`C.m`）就不必再换
-    // **私有名改写（task-5）**：方法在类命名空间里的**绑定名**可能被改写成 `_C__m`
-    //（`class C: def __m(self)` ⇒ key=`_C__m`），而 `co_qualname` 的分段用的是**源码名**
-    //（实测参照 `C._C__m.__name__ == '__m'`、`__qualname__ == 'C.__m'`）⇒ 用 `code.name()`
-    //（源码名）对一下：已一致就**不要**再按绑定名改写（否则把对的改成 `C._C__m` ✗）。
-    // 普通方法 `code.name() == method_name` ⇒ 与下面那条判据等价、行为不变；函数里定义的类
-    //（qualname 带 `.<locals>.`）照旧走改写，行为不变。
-    if code.qualname() == format!("{class_name}.{}", code.name()) {
+    // **已经是完整限定名**（task-13 #c）：完整值取自**类命名空间**的 `__qualname__`
+    //（编译器按定义处作用域写死：`N2.D`／`outer.<locals>.K`；本层方法的 `co_qualname` 只发射了
+    // `<简单类名>.<源名>` ⇒ 这里按完整类名补全，参照里这件事由编译器做 ✓）。
+    // 分段用 **`code.name()`（源码名）** ✓：私有方法绑定名被改写成 `_C__m` 时，参照的
+    // `__qualname__` 用的是源码名 `C.__m`（实测）。
+    let expected = format!("{class_qualname}.{}", code.name());
+    if code.qualname() == expected {
         return None;
     }
-    let expected = format!("{class_name}.{method_name}");
-    if code.qualname() == expected {
+    // 只在两种形态上补前缀：① 本层编译器发射的**简单类名 + 源名**（`D.m`）；
+    // ② 裸名字（`m` —— 手写/合成字节码，或 `MAKE_FUNCTION` 后直接进类字典的形态；`BC-4` 的
+    // 既有测试就钉这条）。其它形态（外部赋进类字典的函数、闭包里定义后被引用的函数）保持原样
+    // —— 参照不改它们（`class C: f = external` ⇒ `f.__qualname__` 仍是外部那个值 ✓）。
+    let compiler_form = format!("{class_name}.{}", code.name());
+    if code.qualname() != compiler_form && code.qualname() != code.name() {
         return None;
     }
     let new_code = instance.code_with_qualname(code, expected);
@@ -1051,36 +1152,47 @@ pub fn build_class_from_parts_with_keywords(
         unsafe { ty.as_ref() }.mark_external_instance_dict();
     }
 
-    // **`__slots__` 登记**（round 147）：槽名表放进 `Instance::type_slots` ⇒ `instance_attribute_set`
-    // 对非槽名报参照的 `AttributeError` ✓（`test_descrtut` 的 tut2 ✓）；值本身仍存在实例字典里
-    // （槽即字典键 ✓，完整"无实例字典"语义随后收 ✓）。
+    // **`__slots__` 处理**（task-13 #b；round 147/150 的既有面保留）：
+    // ① 取**源码名字表**并按参照校验（str＝一个名字；其余按可迭代取；名字必须是标识符；
+    //    元素必须是 str —— 报错文案照 3.14.4 实测）；
+    // ② 按 `BC-66` 规则改写**私有槽名**（`__x` ⇒ `_C__x`；类名剥前导下划线；全下划线类名不改）；
+    // ③ 与类变量冲突照参照报 `ValueError`（类命名空间的键已被编译器按同一规则改写）；
+    // ④ 槽名表放进 `Instance::type_slots` ⇒ `instance_attribute_set` 对非槽名报参照的
+    //    `AttributeError` ✓（`test_descrtut` 的 tut2 ✓）；值本身仍存在实例字典里
+    //    （槽即字典键 ✓，完整"无实例字典"语义随后收 ✓）；
+    // ⑤ 每个槽在**类型字典**里放一个 `member_descriptor`（见下方搬完命名空间后的那段）。
+    let mut slot_names: Option<Vec<String>> = None;
     if let Some(slots_value) = instance.dict_get(namespace, "__slots__") {
-        let mut names: Vec<String> = Vec::new();
-        if let Some(text) = instance.text_of(slots_value) {
-            // 参照：**字符串形态按空白切**（`__slots__ = 'a b'` 是两个槽 ✓）。
-            names.extend(text.split_whitespace().map(|item| item.to_owned()));
-        } else if let Some(items) = instance.list_items(slots_value) {
-            names.extend(items.iter().filter_map(|item| instance.text_of(*item).map(|text| text.to_owned())));
-        } else if let Some(items) = instance.tuple_items(slots_value) {
-            names.extend(items.iter().filter_map(|item| instance.text_of(*item).map(|text| text.to_owned())));
-        }
-        {
-            // **名字改写（`__x` → `_类名__x`）**（round 150 真 bug 修 ✗）：槽名与实例属性写入都走
-            // 编译器改写后的键 ✓ ⇒ 槽表必须用同一套改写后的名字，否则 `__slots__ = ('__num',)`
-            // 的类写 `self.__num` 会撞"非槽名"✗（`test_binop.Rat` 实测 8 格 error ✓）。
-            let owner = unsafe { ty.as_ref() }.name().to_owned();
-            let stripped = owner.trim_start_matches('_');
-            let prefix = format!("_{stripped}");
-            for slot in names.iter_mut() {
-                if slot.starts_with("__") && !slot.ends_with("__") && !stripped.is_empty() {
-                    *slot = format!("{prefix}{slot}");
+        let source_names = slot_source_names(instance, slots_value)?;
+        // **私有名改写**（round 150 真 bug 修 ✗，task-13 #b 补齐）：槽名与实例属性写入都走
+        // 编译器改写后的键 ✓ ⇒ 槽表/描述符名必须用同一套改写后的名字，否则
+        // `__slots__ = ('__num',)` 的类写 `self.__num` 会撞"非槽名"✗（`test_binop.Rat` ✓）。
+        let class_name = unsafe { ty.as_ref() }.name();
+        let mangled: Vec<String> = source_names
+            .iter()
+            .map(|slot| mangle_slot_name(class_name, slot))
+            .collect();
+        // **与类变量冲突**：参照原话 `ValueError: '<名>' in __slots__ conflicts with class variable`
+        // （实测：冲突判据用的是**改写后的槽名**，如 `_Dyn__x`）。
+        if let Some(entries) = instance.dict_entries(namespace) {
+            for slot in &mangled {
+                let conflicts = entries
+                    .iter()
+                    .any(|(key, _)| instance.text_of(*key) == Some(slot.as_str()));
+                if conflicts {
+                    return Err(raise_builtin(
+                        instance,
+                        "ValueError",
+                        &format!("'{slot}' in __slots__ conflicts with class variable"),
+                    ));
                 }
             }
-            // **空 `__slots__` 也要登记**（round 218 真 bug 修 ✗）：`__slots__ = ()` 表示
-            // "**没有**实例字典"⇒ 非槽名属性写入必须报 `AttributeError` ✓；先前空表不登记
-            // ⇒ 放行 ✗（`namedtuple` 的 `p.x = 5` ✓）。
-            instance.register_type_slots(ty, names);
         }
+        // **空 `__slots__` 也要登记**（round 218 真 bug 修 ✗）：`__slots__ = ()` 表示
+        // "**没有**实例字典"⇒ 非槽名属性写入必须报 `AttributeError` ✓；先前空表不登记
+        // ⇒ 放行 ✗（`namedtuple` 的 `p.x = 5` ✓）。
+        instance.register_type_slots(ty, mangled.clone());
+        slot_names = Some(mangled);
     }
 
     // 把类体的命名空间搬进**类型字典**（`OM-11` 的属性通道就是查它）
@@ -1139,19 +1251,32 @@ pub fn build_class_from_parts_with_keywords(
             }
         }
     }
+    // **类自己的限定名**（task-13 #c，**一处真相**：`Instance::type_qualname_value`）：
+    // 编译器把定义处的完整 qualname 写进了类命名空间（`N2.D`／`outer.<locals>.K`）。
+    let class_qualname = instance.type_qualname_value(ty.cast::<Header>());
     for (key, value) in entries {
-        // **`BC-4`**：类体里的**函数**要把 `co_qualname` 补成 `C.m`——参照实现由**编译器**写死，
-        // 编译器**已经有类体**（且会写死 `C.m`）⇒ 这里只在**不匹配**时才补（换一份 code 再包新函数；见
+        // **`BC-4`＋task-13 #c**：类体里的**函数**要把 `co_qualname` 补成**完整**限定名
+        // （`N2.D.m`／`outer.<locals>.K.km`）。参照实现由**编译器**写死；本层编译器只发射
+        // `<简单类名>.<源名>`（`D.m`）⇒ 这里按类的完整 qualname 补前缀（见
         // `Instance::code_with_qualname` 的说明）。
-        let replacement = requalified_method(instance, &name, key, value);
-        // SAFETY: 键值由命名空间持有，各新增一份（insert_raw 是转移语义）；
+        let replacement = requalified_method(instance, &name, &class_qualname, key, value);
+        // **`__qualname__` 的存放位置**（task-13 #d）：参照 3.14 的 `type_new` 把它收进类型槽、
+        // 类字典里**不出现**这个公开键 ⇒ 本层存进私有键（`TYPE_QUALNAME_KEY`）——
+        // 这样 `C.__dict__` 与参照一致，`inspect.getattr_static(C, "__qualname__")` 才会落到
+        // `type.__dict__` 的 getset 描述符上（值由 `Instance::type_qualname_value` 读）。
+        let storage_key = if instance.text_value(key).as_deref() == Some("__qualname__") {
+            instance.new_str(TYPE_QUALNAME_KEY)
+        } else {
+            // SAFETY: 键由命名空间持有，各新增一份（insert_raw 是转移语义）。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            key
+        };
+        // SAFETY: 值由命名空间持有，各新增一份（insert_raw 是转移语义）；
         // 替换出来的新函数**自带一份**，故那时不再 incref。
-        unsafe {
-            instance.incref_object(key.as_ptr());
-            match &replacement {
-                Some(_) => {}
-                None => instance.incref_object(value.as_ptr()),
-            }
+        match &replacement {
+            Some(_) => {}
+            // SAFETY: 同上。
+            None => unsafe { instance.incref_object(value.as_ptr()) },
         }
         let value = replacement.unwrap_or(value);
         // **`type.__new__` 自动把类体里的 `__new__` 包成 `staticmethod`** ✓（第 411 轮，task-22 ✓）：
@@ -1175,9 +1300,40 @@ pub fn build_class_from_parts_with_keywords(
             value
         };
         // SAFETY: type_dict 由类型对象持有，存活。
-        unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
-        items.push((key, value));
+        unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(storage_key, value);
+        items.push((storage_key, value));
     }
+    // **`__slots__` 的 `member_descriptor` 进类型字典**（task-13 #b）：参照 3.14.4 里每个槽名在类
+    // 字典里有一个 `member_descriptor`（`C.__dict__['_C__x']`；`__name__`／`__qualname__`＝
+    // `<类 qualname>.<槽名>`／`__objclass__` ✓）。槽值仍存在**实例字典**的槽键里
+    // （完整"无实例字典"语义未接，如实登记）；`__get__` 分派见 `getset_descriptor_get` 的 "member"。
+    if let Some(slot_names) = slot_names {
+        let member_type = instance
+            .hot_type(HotId::MemberDescriptor)
+            .expect("member_descriptor 在引导期已登记");
+        let class_qualname = instance.type_qualname_value(ty.cast::<Header>());
+        for slot in slot_names {
+            // **重复槽名只建一个描述符**（参照 `__slots__ = ('q','q')` 的类字典只有一个 `q`）。
+            if instance.dict_get(type_dict, &slot).is_some() {
+                continue;
+            }
+            let qualname = instance.new_str(&format!("{class_qualname}.{slot}"));
+            let descriptor = instance.descriptor_instance(
+                member_type,
+                "member",
+                &slot,
+                Some(ty),
+                &[("__qualname__", qualname)],
+            );
+            // SAFETY: `qualname` 是上面刚造的新引用、字典已另存一份。
+            unsafe { instance.release_object(qualname.as_ptr()) };
+            let key = instance.new_str(&slot);
+            // SAFETY: type_dict 由类型对象持有、存活；`insert_raw` 是**转移**语义
+            // （键与描述符各交出一份引用）。
+            unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, descriptor);
+        }
+    }
+
     // **第二遍：`__set_name__`**（实测 3.14）：对**本类自己命名空间**的每一项（按**插入序**），
     // 若它有 `__set_name__` 就调一次 `(类对象, 属性名)`——继承项不在此循环里，故不会重调；
     // 没有该方法的项跳过；**抛错原样传播**（本函数本来就返回 `Result`）。

@@ -286,12 +286,56 @@ pub fn instance_attribute_set(
             }
             return Ok(());
         }
+        // **类型属性的写校验**（task-13 #d，把"没有 `getset.__set__`"的差距收窄到**存储**一处）：
+        // 参照 3.14.4 实测——
+        // - 静态（内建/扩展）类型的 `__name__`／`__qualname__`／`__module__` **不可写** ⇒
+        //   `cannot set '<name>' attribute of immutable type '<类型名>'`（`type` 自己例外：它是 heap 型 ✓）；
+        // - 用户类（heap type）的 `__name__`／`__qualname__` 只收 `str` ⇒
+        //   `can only assign string to C.__name__, not 'int'`；`__module__` 不校验类型 ✓。
+        // 读侧口径在 `Instance::type_name_value`／`type_qualname_value`（**一处真相**）。
+        let target_type = object.cast::<crate::TypeObject>();
+        let is_metatype = target_type == instance.metatype();
+        if matches!(name, "__name__" | "__qualname__" | "__module__")
+            && !is_metatype
+            && !instance.is_user_type_object(target_type)
+        {
+            let current = instance.type_name_value(object);
+            release(instance, value);
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("cannot set '{name}' attribute of immutable type '{current}'"),
+            ));
+        }
+        if name == "__name__" || name == "__qualname__" {
+            if instance.text_of(value).is_none() {
+                let actual = instance.type_name(instance.type_of(value));
+                let current = instance.type_name_value(object);
+                release(instance, value);
+                return Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    &format!("can only assign string to {current}.{name}, not '{actual}'"),
+                ));
+            }
+        }
         let Some(namespace) = instance.type_namespace(object) else {
             release(instance, value);
             return Err(raise_builtin(instance, "TypeError", "类型对象没有命名空间"));
         };
+        // **`__qualname__` 的存放位置**（task-13 #d）：参照 3.14 把它收进类型槽、类字典里没有这个
+        // 公开键 ⇒ 本层存私有键（读侧 `Instance::type_qualname_value` 一处真相）；rename 后
+        // `inspect.getattr_static` 仍能拿到 `type.__dict__` 的描述符。
+        let storage_name = if name == "__qualname__" {
+            crate::classes::TYPE_QUALNAME_KEY
+        } else if name == "__name__" {
+            // 同上：rename 覆盖值不进类字典（读侧 `Instance::type_name_value` 一处真相）。
+            crate::classes::TYPE_NAME_KEY
+        } else {
+            name
+        };
         // **哈希索引写**（round 250 性能，A2-5）：接管 `value`、原位替换/末尾插入 ✓。
-        instance.dict_set_owned_by_name(namespace, name, value);
+        instance.dict_set_owned_by_name(namespace, storage_name, value);
         let _ = opcode;
         return Ok(());
     }
@@ -472,6 +516,25 @@ fn instance_attribute_delete_inner(
                 return Ok(());
             }
         }
+    }
+    // **类型属性的删除**（task-13 #d）：参照里 `del C.__name__` 一律 TypeError ——
+    // heap type（用户类）⇒ `cannot delete '<name>' attribute of immutable type '<名>'`；
+    // 静态类型（含 `type` 自己）⇒ `cannot set '<name>' attribute of immutable type '<名>'`（实测原话是 set）。
+    if instance.is_type_object(object) && matches!(name, "__name__" | "__qualname__" | "__module__") {
+        let current = instance.type_name_value(object);
+        let target_type = object.cast::<crate::TypeObject>();
+        if instance.is_user_type_object(target_type) {
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("cannot delete '{name}' attribute of immutable type '{current}'"),
+            ));
+        }
+        return Err(raise_builtin(
+            instance,
+            "TypeError",
+            &format!("cannot set '{name}' attribute of immutable type '{current}'"),
+        ));
     }
     let mapping = instance_attributes(instance, object).ok_or_else(missing)?;
     // **哈希索引删**（round 250 性能，A2-5）：不再线性扫 ✓。
@@ -1684,15 +1747,15 @@ pub(crate) fn class_object_repr(
     object: NonNull<Header>,
 ) -> String {
     // SAFETY: 调用方保证 object 是类对象（`is_type_object` ✓）。
-    let type_object = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
-    let name = type_object.name().to_owned();
     let text = |key: &str| {
         instance
             .type_lookup(object.cast::<crate::TypeObject>(), key)
             .and_then(|value| instance.text_of(value))
             .map(str::to_owned)
     };
-    let qualname = text("__qualname__").or_else(|| text("__name__")).unwrap_or(name);
+    // **`__qualname__` 的一处口径**（task-13）：编译器按定义处作用域写的完整限定名（`N2.D`／
+    // `outer.<locals>.K`）——存私有键，与属性通道共用 `Instance::type_qualname_value` ✓。
+    let qualname = instance.type_qualname_value(object);
     match text("__module__") {
         Some(module) if module != "builtins" => format!("<class '{module}.{qualname}'>"),
         _ => format!("<class '{qualname}'>"),
@@ -2245,6 +2308,7 @@ fn install_function_dunder_descriptors(instance: &Instance) {
             kind,
             python_name,
             Some(function_type.cast::<crate::TypeObject>()),
+            &[],
         );
         if let Some(previous) = instance.set_type_attribute(function_type, python_name, descriptor) {
             // SAFETY: `set_type_attribute` 交回的是被顶下来的旧值那份引用。

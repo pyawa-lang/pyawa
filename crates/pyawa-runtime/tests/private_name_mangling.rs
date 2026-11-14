@@ -14,10 +14,10 @@
 //! 为什么在 runtime 侧跑：改写发生在**编译期**（`crates/pyawa-core/src/compile/mangle.rs`），
 //! 这里用子进程跑真实 CLI 验证"编译 + 执行"整链与参照逐行一致。
 //!
-//! **已知范围外**：嵌套 class／函数内 class 的 `__qualname__` 目前由运行期类构造按
-//! `__name__` 拼（`classes.rs`），与参照的 `N.__D`／`outer.<locals>.K` 有**与本缺口无关**的
-//! 既有偏差（样例：无私有名的 `class N2: class D` 亦同）⇒ 本矩阵不把这两处 `__qualname__`
-//! 写进期望（另有报告记录，证据在 `target/recon/mangle/`）。
+//! **`__qualname__` 的既有偏差已修**（task-13 #c）：嵌套 class／函数内 class 的限定名由运行期
+//! 类构造按**类命名空间里的完整 qualname** 补全（`classes.rs` 的 `requalified_method`）⇒
+//! `class N2: class D` 现与参照一致（`N2.D`／`outer.<locals>.K`）。本矩阵仍只钉私有名改写本身；
+//! qualname 面由 `task13_class_surface_shapes.rs` 与 `crates/pyawa-core/tests/classes.rs` 钉住。
 
 /// 探针脚本（与 `python3` 3.14.4 跑的是同一段）。
 const SCRIPT: &str = r#"print('== class body variable ==')

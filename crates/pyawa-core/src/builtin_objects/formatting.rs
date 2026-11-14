@@ -292,8 +292,154 @@ pub fn getset_descriptor_get(
         // `f.__code__`／`f.__globals__` **同一处真相**（转发到既有的原生访问器 ✓）。
         "code" => crate::builtin::function::function_code_native(instance, None, args, kwargs),
         "globals" => crate::builtin::function::function_globals_native(instance, None, args, kwargs),
+        // **`type.__dict__` 的类型属性面**（task-13 #d）：`__name__`／`__qualname__`／`__module__`
+        // ／`__bases__` 是真 getset 描述符实例 ⇒ `__get__(类, type)` 读 `TypeObject` 字段／命名空间
+        // （与属性通道 `attribute_lookup_specials` 共用 `Instance::type_*_value` **一处真相**）。
+        "typename" | "qualname" | "module" | "bases" => {
+            type_dunder_descriptor_get(instance, args, &kind)
+        }
+        // **`__slots__` 槽的 `member_descriptor`**（task-13 #b）：本层槽值仍存在**实例字典**的槽键
+        // 里（完整"无实例字典"语义未接，见台账）⇒ `__get__` 从实例字典取；未设置 ⇒ 参照原话。
+        "member" => member_descriptor_get(instance, bound, args),
         _ => annotations_descriptor_get(instance, bound, args, kwargs),
     }
+}
+
+/// `type.__dict__['__name__'/'__qualname__'/'__module__'/'__bases__']` 的 `__get__`（task-13 #d）。
+///
+/// 参照 3.14.4 实测：`descr.__get__(C, type)` 给对应值；目标不是类型对象 ⇒
+/// `TypeError: descriptor '<name>' for 'type' objects doesn't apply to a '<type>' object`。
+/// 值与属性通道共用 [`Instance::type_name_value`]／[`Instance::type_qualname_value`]／
+/// [`Instance::type_module_value`]（**一处真相**）——`__bases__` 直接取注册表里的基类（每项 retain ✓）。
+fn type_dunder_descriptor_get(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    kind: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    let python_name = match kind {
+        "typename" => "__name__",
+        "qualname" => "__qualname__",
+        "module" => "__module__",
+        _ => "__bases__",
+    };
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("descriptor '{python_name}' of 'type' object needs an argument"),
+        ));
+    };
+    if !instance.is_type_object(target) {
+        let actual = instance.type_name(instance.type_of(target));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "descriptor '{python_name}' for 'type' objects doesn't apply to a '{actual}' object"
+            ),
+        ));
+    }
+    match kind {
+        "typename" => Ok(instance.new_str(&instance.type_name_value(target))),
+        "qualname" => Ok(instance.new_str(&instance.type_qualname_value(target))),
+        "module" => match instance.type_module_value(target) {
+            Some(value) => Ok(value),
+            None => Ok(instance.new_str("builtins")),
+        },
+        _ => {
+            // SAFETY: 刚判过 target 是存活的类型对象。
+            let bases = unsafe { target.cast::<crate::TypeObject>().as_ref() }.bases();
+            let items: Vec<NonNull<Header>> = bases
+                .into_iter()
+                .map(|base| {
+                    let header = base.cast::<Header>();
+                    // SAFETY: base 由注册表持有、存活；元组要自己那份。
+                    unsafe { instance.incref_object(header.as_ptr()) };
+                    header
+                })
+                .collect();
+            Ok(instance.new_tuple(items))
+        }
+    }
+}
+
+/// **`__slots__` 槽的 `member_descriptor.__get__`**（task-13 #b）。
+///
+/// 参照：`C.__dict__['slot'].__get__(c, C)` 给槽值（未设置 ⇒
+/// `AttributeError: 'C' object has no attribute 'slot'`；目标类型不符 ⇒ 参照原话）。
+/// 本层槽值存在**实例字典**的槽键里（`__slots__` 登记见 `Instance::register_type_slots`），
+/// 写路径保持既有（实例字典；`member_descriptor` 目前**不带 `__set__`**，见工单边界）。
+fn member_descriptor_get(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(descriptor) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' 需要 member_descriptor 实例",
+        ));
+    };
+    let name = instance
+        .attribute_optional_discarding(descriptor, "__name__")
+        .and_then(|value| instance.text_of(value).map(str::to_owned))
+        .unwrap_or_default();
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' needs an argument",
+        ));
+    };
+    // `__objclass__` 决定"哪些对象能取"（参照原话：`descriptor 'g' for 'Dyn' objects doesn't
+    // apply to a 'int' object`）。
+    let owner_type = instance
+        .attribute_optional_discarding(descriptor, "__objclass__")
+        .and_then(|value| instance.as_type(value));
+    if let Some(owner_type) = owner_type {
+        if !instance.is_subtype(instance.type_of(target), owner_type) {
+            let owner_name = instance.type_name(owner_type);
+            let actual = instance.type_name(instance.type_of(target));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!(
+                    "descriptor '{name}' for '{owner_name}' objects doesn't apply to a '{actual}' object"
+                ),
+            ));
+        }
+    }
+    if let Some(mapping) = crate::mounted_instance_dict(instance, target) {
+        if let Some(value) = instance.dict_get(mapping, &name) {
+            return Ok(instance.retain(value));
+        }
+    }
+    let actual = instance.type_name(instance.type_of(target));
+    Err(instance.raise_builtin_error(
+        "AttributeError",
+        &format!("'{actual}' object has no attribute '{name}'"),
+    ))
+}
+
+/// **getset／member 描述符的 `repr`**（task-13 #b/#d；与参照 3.14.4 同形）：
+/// `<attribute '__name__' of 'type' objects>`／`<member 'g' of 'Dyn' objects>`。
+/// 依据是实例内联属性字典里的 `__name__`／`__objclass__`（`descriptor_instance` 写入；
+/// `_shadowed_dict` 也要这两项 ✓）。
+pub(crate) unsafe fn descriptor_repr(
+    ptr: *mut Header,
+    instance: &Instance,
+) -> Result<String, ExecError> {
+    let Some(object) = NonNull::new(ptr) else {
+        return Ok("<descriptor object>".to_owned());
+    };
+    let name = instance
+        .attribute_optional_discarding(object, "__name__")
+        .and_then(|value| instance.text_of(value).map(str::to_owned))
+        .unwrap_or_else(|| "?".to_owned());
+    let owner = instance
+        .attribute_optional_discarding(object, "__objclass__")
+        .and_then(|value| instance.as_type(value))
+        .map(|owner| instance.type_name_value(owner.cast::<Header>()))
+        .unwrap_or_else(|| "object".to_owned());
+    let kind = instance.type_name(instance.type_of(object));
+    let word = if kind == "member_descriptor" { "member" } else { "attribute" };
+    Ok(format!("<{word} '{name}' of '{owner}' objects>"))
 }
 
 /// **`type.__dict__["__dict__"]` 的 `__get__`** ✓（task-20 第 2 轮 ✓）：`Lib/inspect.py:1674` 的
