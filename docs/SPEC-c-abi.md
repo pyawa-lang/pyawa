@@ -112,6 +112,30 @@
   - `nargs < 0` 或 `nresults < 0` ⇒ `PA_ERR_INVALID`；
   - **v1 边界（如实）**：本层调用只产出 1 个结果 ⇒ 多值形态的"多截"当前不可观测，规则先钉住。
 
+- **AB-73** **宿主类型的属性/方法派发**（"ABI 边界不可感知"的落点）：
+  `pa_newtype` 增加**可选的自带尺寸回调结构** `pa_type_ops`（缺省 `NULL` ⇒ 行为与现在完全一致）：
+  - `getattr_fn(void *payload, const char *name, size_t len, void *context) -> int`：
+    处理 ⇒ 把结果**压栈**并返回 `PA_OK`；不处理 ⇒ 返回新状态码 `PA_ERR_NOTFOUND`；
+    出错 ⇒ 其它 `PA_ERR_*`（`AB-22`：**必须**与"未找到"可区分）。
+  - `setattr_fn(void *payload, const char *name, size_t len, int value_idx, void *context) -> int`：
+    语义同上；值取栈上 `idx`，**不消耗**（`AB-9`）。
+  - 回调**禁止**保存 `context`／`payload` 供后续使用（`AB-36` 同款纪律）。
+  **派发顺序（一处真相）**：VM 先查类型字典与实例字典；**未命中**才回调 `getattr_fn`；
+  `getattr_fn` 返回 `PA_ERR_NOTFOUND` ⇒ 继续走 VM 默认（最终 `AttributeError`）。
+  **绑定**：`getattr_fn` 压入宿主函数后，VM 若在**调用**位置使用它，**自动把实例作为第一个实参**
+  （等价 `self`），使 `obj.method(x)` 与 `obj.method(obj, x)` 都不意外。
+  **协议复用**：`len()`／`for`／`+` 等**不另开钩子** —— 它们本就走属性查找
+  （`__len__`／`__iter__`／`__add__`），因此经同一 `getattr_fn` 自然生效。
+  **验收**（`T-AB-*`）：① `obj.attr` 取到宿主值；② 宿主"不处理"时 VM 回退并正确抛 `AttributeError`；
+  ③ `obj.method(x)` 自动绑定；④ `len(obj)`／`for x in obj` 经 `__len__`／`__iter__` 生效；
+  ⑤ 宿主错误与"未找到"可区分（`AB-22`）；⑥ 未注册 `pa_type_ops` 的类型行为不变（零回归）。
+
+- **AB-74** **宿主异常映射**：宿主可抛**带类型**的异常，而不是只有状态码＋消息（`AB-48`）。
+  最小面：`pa_raise_host_exception(st, type_idx, msg, len)` —— 以栈上宿主异常类型（或其子类）实例抛出；
+  未映射的宿主错误仍走 `PA_ERR_RUNTIME` ＋ `pa_errmsg`（向后兼容）。
+  目的：guest 侧 `except` 能看到真实异常类，traceback 不残留"跨边界"痕迹（`AB-73` 的配套）。
+
+
 ---
 
 ## 7. 错误处理
@@ -151,7 +175,10 @@
 - **AB-52** `pa_param { name, type_expr, flags, default_handle }`：
   - `name`：NUL 结尾的 UTF-8；
   - `type_expr`：**注解表达式字符串**（如 `"list[int]"`、`"int | None"`），由 Pyawa **自己的
-    注解解析器**求值——**禁止**发明新 IDL（`AB-28`）；
+    注解解析器**求值——**禁止**发明新 IDL（`AB-28`）。解析器分两阶段（语法层/求值层）：
+    语法入口 `pyawa_core::compile::parse_type_expression`（`TypeExpr` 语法树）已落地；
+    求值/求值失败语义/与 `AB-69` 的同一性见 `SPEC-type-system.md` §16 的 `TS-51`…`TS-56`
+    （2026-11-14 起分里程碑落地，`PLAN-milestones.md` §12.9）；
   - `flags`：位置／仅关键字／可变位置／可变关键字／有无默认值（`AB-27` 的七项能力由此表达）；
   - `default_handle`：默认值以**不透明句柄**给出（`AB-14`），无默认时为 NULL。
 - **AB-53** `.pyi` **必须**能由注册信息**导出**（遍历而成）：导出是**单向投影**——运行期与
@@ -579,5 +606,5 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格当前无未实现条目**（缺口清空 ✓）：`AB-67`／`AB-68`／`AB-69` 均已实现（round 271／270／272–273）。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
+**本规格当前有 2 条未实现的新增需求**（2026-11-14 新增）：`AB-73`（宿主类型属性/方法派发）与 `AB-74`（宿主异常映射）—— 尚未实现；其余已落地的 `AB-67`／`AB-68`／`AB-69`／`AB-70`／`AB-71`／`AB-72` 见各轮台账。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。
