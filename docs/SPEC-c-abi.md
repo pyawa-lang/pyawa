@@ -219,11 +219,14 @@
   - `base_idx` 为栈索引（`AB-9`），**负值／无基类 ⇒ `object`**；基类必须是类型对象且非终态类型，否则 `PA_ERR_INVALID`；
   - 建立真实继承关系 ⇒ `isinstance`／`except`／MRO 查询对宿主类型天然成立；
   - **用途**：宿主异常类型可真的继承 `ValueError` 等 ⇒ `except ValueError` 不再露边界（`AB-74` 的完整形态）；
-  - `base_idx` 是**负值** ⇒ 等价"无基类"（默认 `object`）；指向非类型对象／终态类型 ⇒
-    `PA_ERR_INVALID`；基类在**注册时**解析并建立真实 MRO（之后不再变）。
+  - `base_idx == 0` ⇒ 无基类（`object`；`0` 本来就不是合法栈索引，`AB-9`，故用作哨兵）；
+    其余按 `AB-9` 的栈索引（正/负均可）指向**类型对象**；非类型对象／终态类型 ⇒ `PA_ERR_INVALID`；
+    基类在**注册时**解析并建立真实 MRO（之后不再变）。**布局**：基类只影响 MRO／身份判定
+    （`isinstance`／`issubclass`）；实例载荷仍按宿主类型的 `payload_size` 由 VM 分配（`AB-58`），
+    基类的 Python 级方法**不**被自动适配到宿主载荷上。
   - 签名变更（ABI 未冻结，`AB-44`）；**不保留**旧签名的第二条路径。**实现窗口**：`PLAN` §12.12
     步 4；落地时 `PA_ABI_VERSION` 次版本 **11 → 12**（追加式之外的签名改写，未发布窗口内）。
-  - **验收**：`T-AB-13`。
+  - **验收**：`T-AB-13`（真实 MRO 的 `issubclass`／`isinstance`；`except` 的宿主异常形态见 `AB-74`／`T-AB-9`，两者组合的布局约束在 `AB-77` 的"布局"句内如实登记）。
 
 - **AB-78** **便捷投影原则**：凡「便捷函数」，语义必须由**主路径**定义，且**可证等价**：
   - `pa_module_addfunction`／`setconst`／`addsubmodule` ＝ 向模块对象写属性的**投影**（属性查找唯一，`AB-75`）；
@@ -396,7 +399,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.11**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **11**；`AB-73` 的 `pa_set_type_ops` 与 `AB-74` 的 `pa_raise_host_exception` 均**追加式**，见 `AB-41`）。**待实现窗口**：`AB-75`…`AB-78` 落地时升至 **1.12**（新增 `pa_set_object_ops`／`pa_typeid` 为追加式；`pa_newtype` 的 `base_idx` 为未发布窗口内的签名改写）——`AB-41` 的追加式改动
+> **当前版本：1.12**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **12**；`AB-76` 的 `pa_typeid` 为**追加式**，`AB-77` 的 `pa_newtype` `base_index` 为**未发布窗口内的签名改写**；`AB-75`／`AB-78` 落地时**不再**升次版本（其函数 `pa_set_object_ops` 属同一窗口，落地前保持 1.12 的 `pa.h` 不变——现状如实登记在 §16）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -429,7 +432,7 @@
 | `T-AB-10` | §12.11 验收演练：宿主把 `list`/`dict`/自定义类包装成宿主对象注入 guest；guest 仅用对象语法完成增删改查与迭代（源码不含 host/handle 字样）；`is`/`id` 的口径与跨界性能作为仅有的可感知痕迹如实登记 |
 | `T-AB-11` | `pa_typeid` 的真实类型身份：宿主对象/模块/普通实例/内建值各自返回其真实类型；`pa_type` 的值类别语义不变（`AB-63`）；`pa_typeid` 借用有效期内可经 `pa_type` 等一致判定；越界/`NULL` 出参 ⇒ `PA_ERR_INVALID`（`AB-76`） |
 | `T-AB-12` | `pa_set_object_ops` 三形态（类型/实例/模块）：各自装/清 ops，回退与三态错误语义同 `AB-73`；类型态与实例态互不外溢；模块未枚举名字可取到（`AB-75`） |
-| `T-AB-13` | `pa_newtype` 的 `base_idx`：真实继承（宿主类型继承 `ValueError` ⇒ guest `except ValueError`／`isinstance` 命中）；负值 ⇒ `object`；非类型/终态基类 ⇒ `PA_ERR_INVALID`；`PA_TYPE_FINAL` 与基类规则不冲突（`AB-77`） |
+| `T-AB-13` | `pa_newtype` 的 `base_index`：真实 MRO（宿主类型继承 `ValueError` ⇒ `issubclass`／`isinstance` 命中）；`0` ⇒ `object`；非类型/终态基类 ⇒ `PA_ERR_INVALID`；载荷布局仍按宿主 `payload_size`（`AB-77`） |
 | `T-AB-14` | 投影等价差分：`pa_set_type_ops`↔`pa_set_object_ops(type)`；模块注入函数↔向模块对象写属性；`pa_tointeger`↔`pa_tointstring`（i64 内）；`pa_raise_host_exception`↔「构造异常实例并记录」逐条对拍（`AB-78`） |
 
 ---
@@ -503,7 +506,7 @@
 | `pa_pushvalue(st, idx)` | +1 | 压入栈上某项的副本（持有一个引用，`AB-10`） |
 | `pa_pop(st, n)` | −n | 弹出并释放（`AB-10`／`OM-20`） |
 | `pa_type(st, idx)` | — | **值类别**标签（`AB-63` 的固定枚举；`PA_THANDLE` 不再用于猜宿主对象）；**类型身份**用 `pa_typeid`（`AB-76`） |
-| `pa_typeid(st, idx, void **typeid_out)` | — | **真实类型身份**（`AB-76`；不透明类型句柄、借用）：宿主对象/模块/普通实例/内建值各自如实；越界／`NULL` ⇒ `PA_ERR_INVALID`（待实现，`PLAN` §12.12 步 1） |
+| `pa_typeid(st, idx, void **typeid_out)` | — | **真实类型身份**（`AB-76`；不透明类型句柄、借用）：宿主对象/模块/普通实例/内建值各自如实；越界／`NULL` ⇒ `PA_ERR_INVALID`（已落地） |
 | `pa_isnil(st, idx)` | — | 类型判定 |
 | `pa_isboolean(st, idx)` | — | 同上 |
 | `pa_isinteger(st, idx)` | — | 同上 |
@@ -548,7 +551,7 @@
 | `pa_module_addsubmodule(st, parent, name, pa_module *out)` | — | 在宿主模块下建子模块（`AB-67`）；登记 `sys.modules["<parent>.<name>"]` 与父属性 |
 | `pa_type_expr_*`（9 个构造：`runtime_tag`／`named`／`list_of`／`dict_of`／`optional`／`union`／`callable`／`var`／`apply`） | — | 建 `AB-69` 的类型表达式句柄（每实例、不透明）；失败 ⇒ `NULL` ＋ `pa_errmsg` |
 | `pa_func_set_signature(st, fn, params, n, ret, tparams, nt, flags)` | — | 给已注册宿主函数声明签名（`AB-69`）；注册后、任何执行前；不符 ⇒ `PA_ERR_INVALID`；声明后边界核参数／返回（脚本侧 `TypeError`，归责插件） |
-| `pa_newtype(st, name, base_idx, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；`base_idx` 指定真实基类（`AB-77`；负值 ⇒ `object`；落地前 `pa.h` 仍为旧签名，待实现）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`）；回调见 `AB-73` 的 `pa_set_type_ops`（待 `AB-75` 收敛为投影） |
+| `pa_newtype(st, name, base_idx, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；`base_idx` 指定真实基类（`AB-77`；`0` ⇒ `object`，其余按栈索引）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`）；回调见 `AB-73` 的 `pa_set_type_ops`（待 `AB-75` 收敛为投影） |
 | `pa_set_type_ops(st, type_idx, const pa_type_ops *ops)` | — | 给 `pa_newtype` 注册的宿主类型装属性/方法派发回调（`AB-73`；追加式，次版本 11）；`type_idx` 栈索引且不消耗；`NULL` ⇒ 清空/不派发；失败 ⇒ `PA_ERR_INVALID` |
 | `pa_set_object_ops(st, idx, const pa_object_ops *ops)` | — | 统一的宿主对象协议钩子（`AB-75`；类型/实例/模块；每对象一份；`NULL` ⇒ 清除；`pa_set_type_ops` 是其类型版投影）；**待实现**（`PLAN` §12.12 步 3） |
 | `pa_raise_host_exception(st, type_idx, msg, len)` | — | 宿主抛**带类型**异常（`AB-74`）：`type_idx` 栈索引指向 `BaseException` 子类（不消耗）；成功 ⇒ `PA_ERR_RUNTIME`（guest 可 `except` 到真实类），非法 ⇒ `PA_ERR_INVALID`；未映射错误仍走 `PA_ERR_RUNTIME`＋`pa_errmsg` |
@@ -708,10 +711,11 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格当前有 4 条未实现的新增需求**（2026-11-14）：`AB-75`（`pa_set_object_ops` 统一协议钩子）、
-`AB-76`（`pa_typeid` 真实类型身份）、`AB-77`（`pa_newtype` 的 `base_idx` 真实继承）、
-`AB-78`（便捷投影等价原则的落地测试）——按 `PLAN` §12.12 五步实施，落地时 ABI 次版本升至 1.12。
-此前 `AB-73`（B1/B2a）与 `AB-74`（B2b）已落地，`§12.11` 验收演练见 `PLAN` §12.11 与
+**本规格当前有 2 条未实现的新增需求**（2026-11-14）：`AB-75`（`pa_set_object_ops` 统一协议钩子）、
+`AB-78`（便捷投影等价原则的落地测试）——按 `PLAN` §12.12 步 3/5 实施（`PA_ABI_MINOR` 已到 **12**，
+`pa_set_object_ops` 落地时同属 1.12 窗口）。`AB-76`（`pa_typeid`）与 `AB-77`（`pa_newtype` 的
+`base_index` 真实继承）已于步 1／步 4 落地（`crates/pyawa-abi/tests/type_identity.rs`）；此前
+`AB-73`（B1/B2a）与 `AB-74`（B2b）已落地，`§12.11` 验收演练见 `PLAN` §12.11 与
 `crates/pyawa-abi/tests/` 的 `host_visibility` 测试；另有 `AB-67`／`AB-68`／`AB-69`／`AB-70`／
 `AB-71`／`AB-72` 见各轮台账。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。

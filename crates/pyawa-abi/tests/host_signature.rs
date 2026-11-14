@@ -293,6 +293,7 @@ fn host_opaque_types_can_appear_in_signatures() {
             pa_newtype(
                 state,
                 type_name.as_ptr(),
+                0,
                 8,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,

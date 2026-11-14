@@ -96,7 +96,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 11;
+pub const PA_ABI_MINOR: u32 = 12;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -2786,6 +2786,39 @@ pub unsafe extern "C" fn pa_type(state: *mut pa_state, index: i32) -> i32 {
     })
 }
 
+/// **`AB-76`**：真实类型身份（`pa_type` 仍只给 `AB-63` 的值类别）。
+///
+/// 对任意值返回其**真实类型对象**的不透明句柄（借用，`AB-15`；实例存活期内有效）：
+/// 宿主对象 → 其注册类型、模块 → 模块类型、普通实例 → 其类、内建值 → 对应内建类型。
+/// 越界／`typeid_out == NULL` ⇒ `PA_ERR_INVALID`。类型身份**不**用 `PA_THANDLE` 猜。
+///
+/// # Safety
+///
+/// `typeid_out` 必须可写；`state` 按 `AB-57`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_typeid(
+    state: *mut pa_state,
+    index: i32,
+    typeid_out: *mut *mut c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if typeid_out.is_null() {
+            state.set_message("`AB-76`：`typeid_out` 为 NULL");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(slot) = state.stack.get(index) else {
+            state.set_message("`AB-76`：栈索引越界");
+            return status::PA_ERR_INVALID;
+        };
+        let ty = state.instance.type_of(slot.object);
+        // 类型对象由注册表持有、实例存活期内有效 ⇒ 借用句柄可直接交回（AB-14／AB-15）。
+        // SAFETY: 调用方保证 typeid_out 可写。
+        unsafe { *typeid_out = ty.cast::<Header>().as_ptr().cast() };
+        status::PA_OK
+    })
+}
+
 /// 判定类函数（`pa_is*`）共用：命中给 1，否则 0；索引非法给 `PA_ERR_INVALID`。
 ///
 /// **不含** `catch_unwind`——边界由下面 7 个导出入口各自显式加（`AB-3`／`CX-11`；
@@ -4156,6 +4189,7 @@ fn drain_stack(state: &mut pa_state, base: usize) {
 pub unsafe extern "C" fn pa_newtype(
     state: *mut pa_state,
     name: *const c_char,
+    base_index: i32,
     payload_size: usize,
     dealloc: host::PaHostDealloc,
     traverse: host::PaHostTraverse,
@@ -4166,6 +4200,31 @@ pub unsafe extern "C" fn pa_newtype(
         // SAFETY: 调用方保证 name 是 NUL 结尾。
         let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
             return status::PA_ERR_INVALID;
+        };
+        // **`AB-77`**：`base_index == 0` ⇒ 无基类（`object`）；其余按 `AB-9` 栈索引
+        // （正/负均可，0 本来就不是合法栈索引）。基类必须是类型对象且非终态。
+        let object_type = state
+            .instance
+            .type_named("object")
+            .expect("object 在引导期已登记");
+        let base = if base_index == 0 {
+            object_type
+        } else {
+            let Some(slot) = state.stack.get(base_index) else {
+                state.set_message("`AB-77`：`base_index` 越界");
+                return status::PA_ERR_INVALID;
+            };
+            if !state.instance.is_type_object(slot.object) {
+                state.set_message("`AB-77`：`base_index` 不是类型对象");
+                return status::PA_ERR_INVALID;
+            }
+            let base = slot.object.cast::<pyawa_core::TypeObject>();
+            // SAFETY: 刚判过是类型对象，且由注册表持有。
+            if unsafe { base.as_ref() }.is_final() {
+                state.set_message("`AB-77`：基类被标记为 `PA_TYPE_FINAL`，不可继承");
+                return status::PA_ERR_INVALID;
+            }
+            base
         };
         // AB-36：注册必须提供签名
         // SAFETY: 调用方按契约给出 sig。
@@ -4199,6 +4258,16 @@ pub unsafe extern "C" fn pa_newtype(
                 .with_host_getattr(host_type_getattr_slot)
                 .with_host_setattr(host_type_setattr_slot),
         );
+        // **`AB-77`**：真实继承（覆盖 `new_type` 默认挂的 `object`）；MRO 由 C3 重算。
+        if base != object_type
+            && state
+                .instance
+                .register_bases(ty, vec![base])
+                .is_none()
+        {
+            state.set_message("`AB-77`：基类 MRO 不一致（C3 失败）");
+            return status::PA_ERR_INVALID;
+        }
         // SAFETY: ty 由注册表持有。
         let info = unsafe { ty.as_ref() };
         // `AB-58`／`OM-14`：宿主的 dealloc／traverse 记在**类型对象**上（子类天然共享）

@@ -118,6 +118,7 @@ fn setup_type_with_ops(state: *mut pa_state, type_name: &[u8], global: &[u8], ca
                 state,
                 type_name.as_ptr().cast(),
                 0,
+                0,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,
                 &signature,
@@ -180,6 +181,7 @@ fn type_without_ops_is_unchanged() {
             pa_newtype(
                 state,
                 b"Plain\0".as_ptr().cast(),
+                0,
                 0,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,
@@ -415,6 +417,7 @@ fn setattr_and_method_binding_and_protocols() {
             pa_newtype(
                 state,
                 b"Thing2\0".as_ptr().cast(),
+                0,
                 0,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,
@@ -749,6 +752,7 @@ fn install_box(state: *mut pa_state, type_name: &[u8], global: &[u8], ops: &pa_t
             pa_newtype(
                 state,
                 type_name.as_ptr().cast(),
+                0,
                 payload_size,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,

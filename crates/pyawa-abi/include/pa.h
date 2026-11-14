@@ -26,9 +26,11 @@
  * 次版本 10：`AB-70` `pa_tohandle`（宿主对象载荷读回）＋ `AB-71` `pa_set_program_filename`
  * （均追加式）；同版补齐 `AB-72` 的 `pa_call`／`pa_pcall` `nresults` 语义（未发布前的补齐）。
  * 次版本 11：`AB-73` 宿主类型属性/方法派发（`pa_set_type_ops`＋新状态码 `PA_ERR_NOTFOUND`）
- * ＋ `AB-74` 宿主异常映射（`pa_raise_host_exception`）—— 均追加式。 */
+ * ＋ `AB-74` 宿主异常映射（`pa_raise_host_exception`）—— 均追加式。
+ * 次版本 12：`AB-76` `pa_typeid`（追加式）＋ `AB-77` `pa_newtype` 的 `base_index`（未发布窗口内
+ * 签名改写；旧签名不留）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 11u
+#define PA_ABI_MINOR 12u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -176,6 +178,9 @@ int pa_settop(pa_state *state, int n);
 int pa_pushvalue(pa_state *state, int idx);
 int pa_pop(pa_state *state, int n);
 int pa_type(pa_state *state, int idx);
+/* AB-76：真实类型身份（不透明类型句柄，借用，AB-15）。pa_type 仍只给 AB-63 的值类别。
+ * 越界 / typeid_out == NULL ⇒ PA_ERR_INVALID。 */
+int pa_typeid(pa_state *state, int idx, void **typeid_out);
 int pa_isnil(pa_state *state, int idx);
 int pa_isboolean(pa_state *state, int idx);
 int pa_isinteger(pa_state *state, int idx);
@@ -363,7 +368,7 @@ typedef void (*pa_host_traverse)(void *payload, void *context, pa_host_visit vis
 
 /* AB-59：注册成功后把**类型对象**压栈（栈契约 +1，不透明句柄，AB-14）——这是宿主拿到类型的
  * 唯一通道：禁止回传类型指针，禁止另立"注册序号"这类第二套标识 */
-int pa_newtype(pa_state *state, const char *name, size_t payload_size,
+int pa_newtype(pa_state *state, const char *name, int base_index, size_t payload_size,
                pa_host_dealloc dealloc, pa_host_traverse traverse, const pa_sig *sig);
 
 /* ---- 属性与下标（§15.3）----

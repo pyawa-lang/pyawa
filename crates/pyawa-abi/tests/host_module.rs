@@ -510,6 +510,7 @@ fn host_returned_objects_are_opaque_handles() {
             pa_newtype(
                 state,
                 type_name.as_ptr(),
+                0,
                 8,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,

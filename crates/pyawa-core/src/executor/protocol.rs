@@ -944,16 +944,109 @@ pub(crate) fn inplace_arithmetic(
 }
 
 
+/// **内建容器自己的比较实现**（`dict.__eq__` 等）：`overrides_compare` 的"跳过"判据。
+///
+/// 它们在本层走**容器递归／原生路径**（[`equality_public`] 的 list／tuple／dict 分支、
+/// [`compare_public`] 的 set 分支），**不**按用户富比较路径派发 —— 否则继承来的容器实现会把
+/// 用户子类的覆写遮住、或把容器递归绕开 ✗。
+const BUILTIN_CONTAINER_OWNERS: [HotId; 8] = [
+    HotId::List,
+    HotId::Tuple,
+    HotId::Dict,
+    HotId::Set,
+    HotId::FrozenSet,
+    HotId::Str,
+    HotId::Bytes,
+    HotId::ByteArray,
+];
+
+/// **一个协议 dunder 的统一解析结果**（`PLAN §12.12` 步 2；`SPEC-c-abi` §17「语义唯一」）。
+///
+/// 一处回答三个问题：
+/// - **是否自有**：`Owned`（owner 不是 `object` 的默认实现）⇒ 可以派发；
+/// - **是否应跳过富比较派发**：[`DunderResolution::overrides`] 为假（`dict.__eq__` 等内建容器
+///   自己的实现）⇒ 走容器递归／原生路径；
+/// - **解析到的函数**：[`DunderResolution::function`]（`Default` 也带着 ⇒ `has_custom_eq` 可
+///   与 `object.__eq__` 逐值比对）。
+///
+/// 解析**只看类型 MRO**（与参照的特殊方法查找口径一致 ✓）：不碰实例字典、不触发
+/// `__getattribute__`／`__getattr__` ⇒ 纯查询可以安全放进热路径的快路判定；
+/// 真正的调用由 [`call_special_method`] 走统一属性通道完成（**唯一调用入口** ✓）。
+pub(crate) enum DunderResolution {
+    /// 类型 MRO 上没有这个名字（连 `object` 默认实现也没有）。
+    Missing,
+    /// 解析到 `object` 的默认实现 ⇒ **不是自有**，富比较路径不得派发。
+    Default { function: NonNull<Header> },
+    /// 解析到某个非 `object` 类型（`owner`）的自有实现。
+    Owned {
+        owner: NonNull<TypeObject>,
+        function: NonNull<Header>,
+    },
+}
+
+impl DunderResolution {
+    /// **自有**（owner 不是 `object` 默认实现）？—— 原 `type_has_own_dunder` 的判据。
+    #[inline]
+    pub(crate) fn is_owned(&self) -> bool {
+        matches!(self, DunderResolution::Owned { .. })
+    }
+
+    /// **内建容器自己的实现**？—— 原 `overrides_compare` 里"跳过"那一半的判据。
+    #[inline]
+    pub(crate) fn is_builtin_container(&self, instance: &Instance) -> bool {
+        match self {
+            DunderResolution::Owned { owner, .. } => {
+                instance.hot_type_is_any(*owner, &BUILTIN_CONTAINER_OWNERS)
+            }
+            _ => false,
+        }
+    }
+
+    /// **按用户富比较派发**？—— 原 `overrides_compare` 的完整判据（自有且不是内建容器）。
+    #[inline]
+    fn overrides(&self, instance: &Instance) -> bool {
+        self.is_owned() && !self.is_builtin_container(instance)
+    }
+
+    /// 解析到的函数（`Missing` ⇒ `None`）。
+    #[inline]
+    fn function(&self) -> Option<NonNull<Header>> {
+        match self {
+            DunderResolution::Missing => None,
+            DunderResolution::Default { function } | DunderResolution::Owned { function, .. } => {
+                Some(*function)
+            }
+        }
+    }
+}
+
+/// **统一解析一个协议 dunder**（`PLAN §12.12` 步 2）。
+///
+/// `object` 是**接收者**（实例或类对象）；`name` 是 dunder 名（如 `"__eq__"`）。解析沿
+/// `type(object)` 的类型 MRO（类对象即元类 MRO ✓，与 [`call_special_method`] 的类对象口径
+/// 一致 ✓），**不**走属性通道 ⇒ 不产生副作用、不会被重复调用 ✗。
+pub(crate) fn resolve_dunder(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> DunderResolution {
+    let ty = instance.type_of(object);
+    let Some((owner, function)) = instance.type_lookup_owner(ty, name) else {
+        return DunderResolution::Missing;
+    };
+    if Some(owner) == instance.hot_type(HotId::Object) {
+        return DunderResolution::Default { function };
+    }
+    DunderResolution::Owned { owner, function }
+}
+
 /// **类型的"自有" dunder**（`__eq__`／`__ne__`）：只有**不是 `object` 默认实现**才算 ✓。
 ///
 /// `object.__eq__`／`__ne__` 在本层是挂上去的原生实现（转调 `values_equal`）⇒ 若无条件按
-/// dunder 派发就会**无限递归** ⇒ 必须先看 owner ✓。
+/// dunder 派发就会**无限递归** ⇒ 必须先看 owner ✓。判据已收敛到 [`resolve_dunder`]。
+#[inline]
 fn type_has_own_dunder(instance: &Instance, object: NonNull<Header>, name: &str) -> bool {
-    let ty = instance.type_of(object);
-    match instance.type_lookup_owner(ty, name) {
-        Some((owner, _)) => Some(owner) != instance.hot_type(HotId::Object),
-        None => false,
-    }
+    resolve_dunder(instance, object, name).is_owned()
 }
 
 /// 调一次比较 dunder（`__eq__`／`__ne__`）：没有、或返回 `NotImplemented` ⇒ `None` ✓（交给下一跳）。
@@ -966,7 +1059,7 @@ fn call_compare_dunder(
     if !type_has_own_dunder(instance, object, name) {
         return Ok(None);
     }
-    let Some(result) = call_object_method(instance, object, name, &[other])? else {
+    let Some(result) = call_special_method(instance, object, name, &[other])? else {
         return Ok(None);
     };
     if result == instance.not_implemented() {
@@ -1023,11 +1116,7 @@ pub fn equality_compare_result(
             if type_has_own_dunder(instance, operand, "__ne__") {
                 break;
             }
-            let operand_type = instance.type_of(operand);
-            let has_own_eq = instance
-                .type_lookup_owner(operand_type, "__eq__")
-                .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Object));
-            if has_own_eq {
+            if type_has_own_dunder(instance, operand, "__eq__") {
                 return Ok(None);
             }
         }
@@ -1052,13 +1141,9 @@ pub fn equality_compare_result(
             // 但有 `__eq__` ⇒ 参照走"委托 `__eq__` 再取反"（**只问这个操作数自己的 `__eq__`** ✓；
             // `test_compare.test_ne_low_priority` 钉住：`Base() != Derived()` 期望
             // `['Derived.__ne__', 'Base.__eq__']` —— 先前这里直接跳过 ⇒ 少一次 `Base.__eq__` ✗）。
-            let operand_type = instance.type_of(operand);
-            let has_own_eq = instance
-                .type_lookup_owner(operand_type, "__eq__")
-                .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Object));
-            if has_own_eq {
+            if type_has_own_dunder(instance, operand, "__eq__") {
                 attempted = true;
-                if let Some(result) = call_object_method(instance, operand, "__eq__", &[other])? {
+                if let Some(result) = call_special_method(instance, operand, "__eq__", &[other])? {
                     if result == instance.not_implemented() {
                         release(instance, result);
                     } else {
@@ -1075,7 +1160,7 @@ pub fn equality_compare_result(
             continue;
         }
         attempted = true;
-        let Some(result) = call_object_method(instance, operand, name, &[other])? else {
+        let Some(result) = call_special_method(instance, operand, name, &[other])? else {
             continue;
         };
         if result == instance.not_implemented() {
@@ -1122,12 +1207,13 @@ pub fn order_compare_result(
     };
     let mut attempted = false;
     for (name, operand, other) in order {
-        // **只派发"自己的"实现** ✓（`object` 的默认 `__lt__` 只返回 `NotImplemented` ✓）。
-        if !overrides_compare(instance, operand, name) {
+        // **只派发"自己的"实现** ✓（`object` 的默认 `__lt__` 只返回 `NotImplemented` ✓；
+        // 内建容器自己的实现走容器递归／原生路径 ✓）。
+        if !resolve_dunder(instance, operand, name).overrides(instance) {
             continue;
         }
         attempted = true;
-        let Some(result) = call_object_method(instance, operand, name, &[other])? else {
+        let Some(result) = call_special_method(instance, operand, name, &[other])? else {
             continue;
         };
         if result == instance.not_implemented() {
@@ -1149,36 +1235,23 @@ pub fn order_compare_result(
 ///
 /// 为什么必须有这一层：先前 `==` 一直是"纯结构" ⇒ `UserString('ab') == 'ab'` 为 **False** ✗
 /// （参照 True ✓）⇒ `test_userstring` 一行断言全红、`unittest.assertEqual` 也跟着失真 ✓。
+#[inline]
 fn overrides_compare(instance: &Instance, object: NonNull<Header>, name: &str) -> bool {
-    let ty = instance.type_of(object);
-    let owner = match instance.type_lookup_owner(ty, name) {
-        Some((owner, _)) if Some(owner) != instance.hot_type(HotId::Object) => owner,
-        _ => return false,
-    };
-    // 内建容器自己的 `__eq__`（`dict_eq_native` 等）走我们自己的容器递归路 ✓；**用户子类覆写**
-    // 才优先（`class D(dict): def __eq__…` ✓）。
-    !instance.hot_type_is_any(
-        owner,
-        &[
-            HotId::List,
-            HotId::Tuple,
-            HotId::Dict,
-            HotId::Set,
-            HotId::FrozenSet,
-            HotId::Str,
-            HotId::Bytes,
-            HotId::ByteArray,
-        ],
-    )
+    resolve_dunder(instance, object, name).overrides(instance)
 }
 
 /// 这个值**自己**覆写了 `__eq__`（不是 `object` 的默认实现）吗？（round 66：容器去重要按参照的
 /// **完整相等协议**走用户 `__eq__` ✓ —— 只在覆写时才走可失败路径 ✓，纯内建值仍走快路 ✓）。
+///
+/// 判据已收敛到 [`resolve_dunder`]：解析到的**函数值**与 `object.__eq__` 不同 ⇒ 自定义
+/// （这与"owner 不是 `object`"略有差别：显式 `__eq__ = object.__eq__` 的类在此**不算**自定义，
+/// 保持原有行为 ✓）。
 pub(crate) fn has_custom_eq(instance: &Instance, value: NonNull<Header>) -> bool {
-    let object_eq = instance.hot_type(HotId::Object)
+    let object_eq = instance
+        .hot_type(HotId::Object)
         .and_then(|object| instance.type_lookup(object, "__eq__"));
-    instance
-        .type_lookup(instance.type_of(value), "__eq__")
+    resolve_dunder(instance, value, "__eq__")
+        .function()
         .is_some_and(|found| Some(found) != object_eq)
 }
 
@@ -1418,14 +1491,10 @@ pub fn compare_public(
                 }
                 // 否则走 `object.__ne__` 默认：**只有自己有 `__eq__`** 才委托它再取反 ✓
                 // （`object.__eq__` 的默认是"身份相等否则 NotImplemented" ⇒ 不能把它当普通 eq 用 ✗）。
-                let operand_type = instance.type_of(operand);
-                let has_own_eq = instance
-                    .type_lookup_owner(operand_type, "__eq__")
-                    .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Object));
-                if !has_own_eq {
+                if !type_has_own_dunder(instance, operand, "__eq__") {
                     continue;
                 }
-                if let Some(result) = call_object_method(instance, operand, "__eq__", &[other])? {
+                if let Some(result) = call_special_method(instance, operand, "__eq__", &[other])? {
                     if result == instance.not_implemented() {
                         release(instance, result);
                         continue;

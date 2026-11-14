@@ -1065,6 +1065,7 @@ fn a_host_type_is_registered_as_a_real_type() {
             pa_newtype(
                 state,
                 name.as_ptr().cast(),
+                0,
                 size_of::<u64>(),
                 dealloc,
                 traverse,
@@ -1082,6 +1083,7 @@ fn a_host_type_is_registered_as_a_real_type() {
             pa_newtype(
                 state,
                 b"Widget2\0".as_ptr().cast(),
+                0,
                 size_of::<u64>(),
                 dealloc,
                 traverse,
@@ -1114,6 +1116,7 @@ fn host_type_accepts_the_final_flag() {
             pa_newtype(
                 state,
                 b"Gadget\0".as_ptr().cast(),
+                0,
                 size_of::<u64>(),
                 host_dealloc,
                 host_traverse,
@@ -1537,6 +1540,7 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
             pa_newtype(
                 state,
                 b"Gadget\0".as_ptr().cast(),
+                0,
                 size_of::<u64>(),
                 dealloc,
                 traverse,
@@ -1611,6 +1615,7 @@ fn newhandle_hands_out_a_vm_allocated_payload() {
             pa_newtype(
                 state,
                 type_name.as_ptr().cast(),
+                0,
                 size_of::<u64>(),
                 dealloc,
                 traverse,
@@ -1675,6 +1680,7 @@ fn one_registration_builds_many_instances() {
             pa_newtype(
                 state,
                 name.as_ptr().cast(),
+                0,
                 size_of::<u64>(),
                 quiet_dealloc,
                 quiet_traverse,
@@ -1722,7 +1728,8 @@ fn a_zero_size_payload_gives_null() {
     let name = b"Empty\0";
     // SAFETY: 按契约传参。
     assert_eq!(
-        unsafe { pa_newtype(state, name.as_ptr().cast(), 0, dealloc, traverse, &signature) },
+        unsafe { pa_newtype(state, name.as_ptr().cast(), 0,
+                0, dealloc, traverse, &signature) },
         PA_OK
     );
     // SAFETY: state 存活。
@@ -2138,6 +2145,7 @@ fn tohandle_reads_back_the_vm_payload_after_container_roundtrip() {
             pa_newtype(
                 state,
                 b"Gadget\0".as_ptr().cast(),
+                0,
                 size_of::<u64>(),
                 dealloc,
                 traverse,

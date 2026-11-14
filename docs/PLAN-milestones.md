@@ -1105,10 +1105,15 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
 | 4 | `pa_newtype` 支持 `base_idx`（`AB-77`）：负值 ⇒ `object`；非类型/终态基类 ⇒ `PA_ERR_INVALID`；真实 MRO | `T-AB-13`；`crates/pyawa-abi/tests/host_visibility.rs` 扩（继承 `ValueError` ⇒ `except`/`isinstance` 命中） |
 | 5 | 投影等价测试（`AB-78`） | `T-AB-14`；差分：`pa_set_type_ops`↔`pa_set_object_ops(type)`、模块函数↔属性写、`pa_tointeger`↔`pa_tointstring`（i64 内）、`pa_raise_host_exception`↔构造+记录 |
 
-**依赖与版本**：步 2 与 1/3/4 可并行；步 5 在 1/3/4 之后。全部落地时 `PA_ABI_VERSION` 次版本
-**11 → 12**（`pa_set_object_ops`／`pa_typeid` 追加式；`pa_newtype` 的 `base_idx` 为未发布窗口内
-签名改写），`pa.h`／§15.3／§16 同步；`AB-78` 的"宿主类型异常"形态依赖步 4（此前只支持 guest
-声明的异常类，`T-AB-9` 已验收）。
+**依赖与版本**：步 2 与 1/3/4 可并行；步 5 在 1/3/4 之后。`PA_ABI_VERSION` 次版本已升
+**11 → 12**（`pa_typeid` 追加式；`pa_newtype` 的 `base_index` 为未发布窗口内签名改写；
+`pa_set_object_ops` 落地时同属 1.12 窗口）。**进度（2026-11-14）**：**步 1 ✓**（`pa_typeid`；`crates/pyawa-abi/tests/type_identity.rs` 的
+T-AB-11）、**步 2 ✓**（新增 `resolve_dunder` 统一解析＋`call_special_method` 唯一调用入口；
+`type_has_own_dunder`／`overrides_compare`／`has_custom_eq`／`call_compare_dunder` 收敛为薄委托；
+比较 dunder 不再走独立的 `call_object_method` 路径；新增 `crates/pyawa-core/tests/protocol_unified.rs`
+5 passed；core 套件 601 passed 零回归）、**步 4 ✓**（`pa_newtype` 的 `base_index` 真实 MRO：
+`ValueError` 的 `issubclass`／`isinstance`；**布局边界**：基类只影响 MRO/身份，不自动适配宿主
+载荷方法）；**步 3／5 待做**（`pa_set_object_ops` 三形态＋投影等价差分）。
 
 **不变量（机检法）**：给宿主对象挂一个**记录所有被查名字的 `getattr_fn`**，跑参考测试集；
 凡是「VM 支持但记录里从未出现」的 dunder，即证明存在绕过 `resolve_dunder` 的协议解析路径。

@@ -308,6 +308,7 @@ fn newtype_sig_type_expr_is_validated() {
             pa_newtype(
                 state,
                 b"GoodPayload\0".as_ptr().cast(),
+                0,
                 8,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,
@@ -328,6 +329,7 @@ fn newtype_sig_type_expr_is_validated() {
             pa_newtype(
                 state,
                 b"BadPayload\0".as_ptr().cast(),
+                0,
                 8,
                 noop_dealloc as PaHostDealloc,
                 noop_traverse as PaHostTraverse,
