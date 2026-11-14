@@ -1208,3 +1208,27 @@ oracle 用例；**含同步＋异步**：`__await__`／`__aiter__`／`__anext__`
 3. **CI**：workspace 测试自动跑；`slowcheck` 步骤 5 与 `gate_chunk small` 显式再跑两份测试。
 **边界如实**：oracle 证明"问了"，行为生效由 `protocol_host_dispatch.rs` 的固定返回值用例覆盖；
 属性/描述符协议不在本清单；若未来新增协议必须先加清单条目＋片段（oracle 会红）。
+
+### 12.16 `pa_writetobytes`（冻结前唯一要补的 buffer 面，2026-11-14）
+
+**背景**：`SPEC-c-abi` §17「语义唯一」＋ ABI/SDK 分层：ABI 只给原语，SDK 负责惯用面。
+buffer 面在冻结前只补**一项**——一次性写回；**不做**长期可写视图（`pa_tobytes_mut`／pin），因为那会把
+"宿主可写 VM 内存"与"对象不可搬家"两类风险请进来，且真正的共享内存需求应作为能力域单独设计。
+
+**规格**：`AB-80`（见 `SPEC-c-abi`）。要点：
+- 只对 `bytearray` 成功；`bytes` 不可写 ⇒ `PA_ERR_INVALID`；
+- 只写**数据区**，参数边界校验（`offset + len ≤ 当前长度`），禁止扩容；
+- **不借出任何 VM 内存** ⇒ 无 UAF 面、不限制 GC 设计、不新增类型标签。
+
+**验收**（`T-AB-20`）：
+① `bytearray` 写入成功，guest 随后读到新内容；
+② `offset + len` 越界 ⇒ `PA_ERR_INVALID`（不截断、不扩展）；
+③ 对 `bytes`（不可变）⇒ `PA_ERR_INVALID`；
+④ 对非字节类型 ⇒ `PA_ERR_INVALID`；
+⑤ `p == NULL` 且 `len > 0` ⇒ `PA_ERR_INVALID`；`len == 0` ⇒ 无操作 `PA_OK`；
+⑥ valgrind 下 0 错误（含"写后 guest 立即读"与"写后触发 GC"两种顺序）。
+
+**落地位置**：`crates/pyawa-abi`（新函数）＋ `pa.h`（原型，次版本 14 窗口）＋ `tests/write_tobytes.rs`；
+`PLAN §12.13` 的内存验证方法沿用。
+
+**不在本单**：`pa_tobytes_mut`／pin 语义、`memoryview` 类型、多维/格式 buffer 协议 —— 需真实场景再评估。

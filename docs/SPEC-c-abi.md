@@ -244,6 +244,18 @@
   - 与 `paL_getref` 的区别：后者压**注册表键**的值，本函数专用于模块句柄（不需要宿主先枚举键）。
   - **验收**：`T-AB-15`。追加式（未发布窗口，`PA_ABI_MINOR` 1.12→**1.13** 时落地）。
 
+- **AB-80** **一次性写回字节数据**（`AB-63`／`AB-15` 的配套；**不做**长期可写视图）：
+  `int pa_writetobytes(pa_state *st, int idx, size_t offset, const void *p, size_t len)`（栈契约 `—`）：
+  - `idx`（栈索引，`AB-9`）指向**字节类对象**：`bytes` **不可写** ⇒ `PA_ERR_INVALID`；`bytearray` 可写；
+  - **只写数据区**：不触及对象头、长度、引用计数 ⇒ 宿主无法借它破坏 VM 不变量；**禁止**隐式扩容；
+  - 范围校验：`offset + len > 当前长度` ⇒ `PA_ERR_INVALID`（**不截断、不扩展**）；`p == NULL && len > 0` ⇒ `PA_ERR_INVALID`；
+    `len == 0` ⇒ 无操作，`PA_OK`；
+  - **不保留任何借用**：调用返回后 `p` 对 VM 无效 —— 本函数根本**不借出** VM 内存，因此无 `AB-15`／`AB-17` 的借用义务，
+    也无 UAF 面（对比：长期可写视图会让 VM 对象必须可钉住/不可搬家）；
+  - **不新增类型标签**：宿主无需预先知道目标是否可变，按返回值处理即可（`bytearray`／`memoryview` 的独立标签仍**不引入**，
+    避免 `AB-63` 已有的"用标签猜类型＝第二个真相"问题）。
+  **验收**：`T-AB-20`。
+
 ---
 
 ## 8. 宿主函数注册
@@ -447,6 +459,7 @@
 | `T-AB-17` | `pa_newtype` 的 `NULL dealloc`／`traverse` ⇒ 当场 `PA_ERR_INVALID` 且 `pa_errmsg` 可诊断；合法注册不受影响（`AB-36`／§12.13 #2） |
 | `T-AB-18` | 宿主可用性：组合根产物（`pyawa-runtime` cdylib／静态库）交出的 `paL_newstate`／`paL_openlibs` 实例上 builtins／`import` 可用；`pyawa-abi` 裸实例保持"语言骨架"且失败带 `pa_errmsg`；**仓库内有不含 numpy 的最小探针**可复跑（§12.13 #1） |
 | `T-AB-19` | **协议唯一入口 oracle**：记录式 `getattr_fn` 对 `pyawa_core::PROTOCOL_CASES` **全清单**（含异步协议）跑用例，断言每个协议的 dunder 都被问过（缺席即旁路）；清单↔片段双向一致（禁止只覆盖已实现协议）；另测宿主 dunder 行为生效＋内建/用户类快路等价（`protocol_oracle.rs`／`protocol_host_dispatch.rs`，**无 numpy**，进 CI） |
+| `T-AB-20` | **一次性写回**（`AB-80`）：`bytearray` 写入成功且 guest 读到新内容；`offset+len` 越界拒绝；`bytes`（不可变）拒绝；非字节类型拒绝；`p == NULL` 且 `len > 0` 拒绝；`len == 0` 为无操作；valgrind 0 错误 |
 
 ---
 
