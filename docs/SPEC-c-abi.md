@@ -246,14 +246,21 @@
 
 - **AB-80** **一次性写回字节数据**（`AB-63`／`AB-15` 的配套；**不做**长期可写视图）：
   `int pa_writetobytes(pa_state *st, int idx, size_t offset, const void *p, size_t len)`（栈契约 `—`）：
-  - `idx`（栈索引，`AB-9`）指向**字节类对象**：`bytes` **不可写** ⇒ `PA_ERR_INVALID`；`bytearray` 可写；
-  - **只写数据区**：不触及对象头、长度、引用计数 ⇒ 宿主无法借它破坏 VM 不变量；**禁止**隐式扩容；
-  - 范围校验：`offset + len > 当前长度` ⇒ `PA_ERR_INVALID`（**不截断、不扩展**）；`p == NULL && len > 0` ⇒ `PA_ERR_INVALID`；
-    `len == 0` ⇒ 无操作，`PA_OK`；
-  - **不保留任何借用**：调用返回后 `p` 对 VM 无效 —— 本函数根本**不借出** VM 内存，因此无 `AB-15`／`AB-17` 的借用义务，
-    也无 UAF 面（对比：长期可写视图会让 VM 对象必须可钉住/不可搬家）；
-  - **不新增类型标签**：宿主无需预先知道目标是否可变，按返回值处理即可（`bytearray`／`memoryview` 的独立标签仍**不引入**，
-    避免 `AB-63` 已有的"用标签猜类型＝第二个真相"问题）。
+  - **接受的唯一对象**：`idx`（栈索引，`AB-9`）指向**恰好 `bytearray` 类型**的对象（**子类也拒绝**——
+    与 core 的 `Instance::write_bytearray_at` 同一口径）；`bytes`（不可变）／`memoryview`／其它
+    非字节类型／宿主对象一律 `PA_ERR_INVALID`（不新增类型标签、不靠 `pa_type` 猜类型）；
+  - **只写数据区**：不触及对象头、长度、引用计数 ⇒ 宿主无法借它破坏 VM 不变量；**禁止**隐式扩容／
+    重分配（不改变对象身份与长度）；
+  - **校验顺序（失败都写 `pa_errmsg`，`AB-48`）**：`state` → `idx` 越界 → 对象类型（必须恰好
+    `bytearray`）→ `p == NULL && len > 0` ⇒ `PA_ERR_INVALID` → 范围（见下）；
+  - **范围**：用**带溢出检查**的 `offset.checked_add(len)`；`None` 或 `offset + len > 当前长度` ⇒
+    `PA_ERR_INVALID`（**不截断、不扩展、不部分写**）；`len == 0` 且 `offset <= 当前长度` ⇒ 无操作
+    `PA_OK`（`p` 可为 `NULL`）；
+  - **不保留任何借用**：调用返回后 `p` 对 VM 无效 —— 本函数根本**不借出** VM 内存，因此无 `AB-15`／
+    `AB-17` 的借用义务，也无 UAF 面（对比：长期可写视图会让 VM 对象必须可钉住/不可搬家）；
+  - **不新增类型标签**（`bytearray`／`memoryview` 的独立标签仍**不引入**，避免 `AB-63` 已有的
+    "用标签猜类型＝第二个真相"问题）。
+  - **落地窗口**：追加式；`PA_ABI_MINOR` **13 → 14**（`PLAN` §12.16）。
   **验收**：`T-AB-20`。
 
 ---
@@ -419,7 +426,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.13**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **13**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地）——`AB-41` 的追加式改动
+> **当前版本：1.13**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **13**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；**`AB-80` 落地时 13→14**）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -459,7 +466,7 @@
 | `T-AB-17` | `pa_newtype` 的 `NULL dealloc`／`traverse` ⇒ 当场 `PA_ERR_INVALID` 且 `pa_errmsg` 可诊断；合法注册不受影响（`AB-36`／§12.13 #2） |
 | `T-AB-18` | 宿主可用性：组合根产物（`pyawa-runtime` cdylib／静态库）交出的 `paL_newstate`／`paL_openlibs` 实例上 builtins／`import` 可用；`pyawa-abi` 裸实例保持"语言骨架"且失败带 `pa_errmsg`；**仓库内有不含 numpy 的最小探针**可复跑（§12.13 #1） |
 | `T-AB-19` | **协议唯一入口 oracle**：记录式 `getattr_fn` 对 `pyawa_core::PROTOCOL_CASES` **全清单**（含异步协议）跑用例，断言每个协议的 dunder 都被问过（缺席即旁路）；清单↔片段双向一致（禁止只覆盖已实现协议）；另测宿主 dunder 行为生效＋内建/用户类快路等价（`protocol_oracle.rs`／`protocol_host_dispatch.rs`，**无 numpy**，进 CI） |
-| `T-AB-20` | **一次性写回**（`AB-80`）：`bytearray` 写入成功且 guest 读到新内容；`offset+len` 越界拒绝；`bytes`（不可变）拒绝；非字节类型拒绝；`p == NULL` 且 `len > 0` 拒绝；`len == 0` 为无操作；valgrind 0 错误 |
+| `T-AB-20` | **一次性写回**（`AB-80`）：恰好 `bytearray` 写入成功且 guest 读到新内容、栈不变；`offset+len` 越界／**usize 溢出**⇒ `PA_ERR_INVALID` 且不部分写；`bytes`／`memoryview`／**`bytearray` 子类**／非字节类型／非法 `idx` ⇒ `PA_ERR_INVALID`；`p == NULL` 且 `len > 0` 拒绝；合法 `bytearray` 上 `len == 0`（`offset <= len`）为 `PA_OK` no-op；失败 `pa_errmsg` 非空；valgrind 0 错误 |
 
 ---
 
@@ -502,7 +509,7 @@
 | 8 | `PA_ERR_NOTFOUND` | 属性/方法派发回调的"**未处理**"（`AB-73`）；VM 在**内部回退**，不直接暴露给 guest |
 | 9–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
 
-### 15.3 核心层 `pa_`（80 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
+### 15.3 核心层 `pa_`（81 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
 
 | 函数 | 栈契约 | 说明 |
 |---|---|---|
@@ -555,6 +562,7 @@
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
 | `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
 | `pa_tobytes(st, idx, len*)` | — | 取只读字节视图（**借用**） |
+| `pa_writetobytes(st, idx, offset, p, len)` | — | 一次性写回 `bytearray` 数据区（`AB-80`；恰好 `bytearray`；越界/溢出/不可变/非字节拒绝；不借出 VM 内存）**（待实现）** |
 | `pa_tohandle(st, idx, payload_out)` | — | **宿主对象**载荷读回（`AB-70`；借用、仅宿主对象；NULL／类型不符 ⇒ `PA_ERR_INVALID`） |
 | `pa_newtable(st)` | +1 | 新建表 |
 | `pa_newlist(st, n)` | +1 | 新建长度 n 的列表 |
@@ -738,7 +746,8 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格无未实现的 `AB-` 条款**：`AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
+**本规格当前有 1 条未实现的新增需求**：**`AB-80`**（`pa_writetobytes`，一次性写回 buffer 面；
+规格已定、实现待做；`PA_ABI_MINOR` 落地时 13→**14**；`T-AB-20`）。其余已落地：`AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
 当场拒绝）、#3（`pa_getglobal` 缺失名 `PA_ERR_INVALID`）、#4（模块句柄上栈）已随 **1.13** 落地
 （`crates/pyawa-abi/tests/host_usability.rs` 的 `T-AB-15/16/17`）。**§12.13 #1**（组合根 stdlib
 可用性）也已按路线 **A** 落地：`pyawa-runtime` 的 C 产物是单一库（`pa_*`＋`paL_*`），
