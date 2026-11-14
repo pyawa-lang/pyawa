@@ -102,7 +102,13 @@ impl Instance {
             0,
         )
         .map_err(|error| {
-            self.raise_builtin_error("SyntaxError", &format!("eval: {error:?}"))
+            // **`SyntaxError.msg` 对齐参照**（2026-11-14）：编译期诊断的 `Syntax(message)` 直接
+            // 交回消息（参照 `exec("...")` 的 `.msg` 就是语法错误原文，不带 `Syntax(...)` 包装）。
+            let message = match &error {
+                crate::compile::CompileError::Syntax(message) => message.clone(),
+                _ => format!("{error:?}"),
+            };
+            self.raise_builtin_error("SyntaxError", &message)
         })?;
         let code = crate::compile::instantiate(self, &unit);
         let frame_type = self.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
@@ -140,7 +146,13 @@ impl Instance {
             0,
         )
         .map_err(|error| {
-            self.raise_builtin_error("SyntaxError", &format!("exec: {error:?}"))
+            // **`SyntaxError.msg` 对齐参照**（2026-11-14）：编译期诊断的 `Syntax(message)` 直接
+            // 交回消息（参照 `exec("...")` 的 `.msg` 就是语法错误原文，不带 `Syntax(...)` 包装）。
+            let message = match &error {
+                crate::compile::CompileError::Syntax(message) => message.clone(),
+                _ => format!("{error:?}"),
+            };
+            self.raise_builtin_error("SyntaxError", &message)
         })?;
         let code = crate::compile::instantiate(self, &unit);
         let frame_type = self.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {

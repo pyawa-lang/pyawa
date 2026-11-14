@@ -335,6 +335,8 @@ pub fn compile_interactive(
     // **私有名改写**（`task-5`）：在**所有**下游（typecheck／符号分析／发射）之前做一次。
     // 交互式显示的包装用 `__pyawa_displayhook__`（dunder ⇒ 不受改写影响）。
     mangle::mangle_module(&mut statements);
+    // **`nonlocal` 绑定的编译期校验**（task-12）：改写之后做 ⇒ 报错名是改写后的名字（参照同）。
+    validate_nonlocal_bindings(&statements)?;
     wrap_interactive_expressions(&mut statements);
     if mode == Mode::Extension {
         typecheck::check(&statements, filename, &[])?;
@@ -488,6 +490,10 @@ pub fn check_source(source: &str, filename: &str, mode: Mode) -> Vec<Diagnostic>
     let mut statements = statements;
     // **私有名改写**（`task-5`）：诊断与执行路径看到同一套名字。
     mangle::mangle_module(&mut statements);
+    // **`nonlocal` 绑定的编译期校验**（task-12）：`check` 也报同一条 SyntaxError 诊断。
+    if let Err(error) = validate_nonlocal_bindings(&statements) {
+        return vec![diagnostic_from_error(filename, &error)];
+    }
     if mode != Mode::Extension {
         // `.py`：**只语法**（`TS-26`／`MS-19`）——解析通过就 0 诊断。
         return Vec::new();
@@ -573,6 +579,8 @@ pub fn compile_with_host_functions(
     let mut statements = parse_module(&lexed)?;
     // **私有名改写**（`task-5`）：一次性改写，下游全部看到改写过的一致名字。
     mangle::mangle_module(&mut statements);
+    // **`nonlocal` 绑定的编译期校验**（task-12）：与参照同——编译期、在符号分析之前报错。
+    validate_nonlocal_bindings(&statements)?;
     if mode == Mode::Extension {
         typecheck::check(&statements, filename, host_functions)?;
     }
