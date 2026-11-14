@@ -271,6 +271,21 @@ acc ??= 0                             # 只在 None 时赋值
     （`TS-47`：**`TypeError`** 的子类；与 `BC-26`／`TS-12` 的边界异常**同族、分工不同**）。
   - 发射规则：**只**出现在扩展模式编译出的代码里（`TS-5`／`BC-25`② 同款）；
     编号取空闲编号、不进 instrumented 区段（`BC-31`）。
+- **BC-66** **类体私有名改写**（`private name mangling`；**语言语义**，不是 Pyawa 专有）：
+  - **类定义内**（含其方法体、嵌套 `def`／`lambda`／推导式；嵌套 `class` 用**嵌套类自己的名字**）
+    形如 `__spam` 的**标识符**（≥2 前导下划线且**不以两个下划线结尾**）**必须**文本替换为
+    `_<类名去前导下划线>__spam`：`__x_` **改写**、`__x__` **不改写**、单下划线不改写。
+  - 改写面：变量名（load／store／del）、**属性名**、`import` 的模块/成员名、`global`／`nonlocal`
+    名、`match` 捕获名；**不改**：关键字实参名、字符串内容；类体**外**的代码不改写。
+  - **名字分离**：`co_name`／`co_qualname`／类名常量／`__static_attributes__` 用**源码名**；
+    绑定面（命名空间键、`co_varnames`／`co_names` 等）用**改写名**——与参照一致
+    （`M._M__m.__name__ == "__m"`、`__qualname__ == "M.__m"`）。
+  - **实现口径**：在 **AST 上一次性改写**（parse 之后、typecheck／符号分析／发射之前）⇒ 下游
+    （探针编译、闭包分析、`code` 属性、注解单元）看到同一套名字（`compile/mangle.rs`）。
+  - **验收**：`crates/pyawa-runtime/tests/private_name_mangling.rs` 与 `python3` 3.14.4
+    逐字节矩阵（类体变量、方法内 `self.__x`、显式 `_C__x`、尾部下划线、dunder、嵌套类/def/lambda、
+    形参、`global`/`nonlocal`、`import`、属性、推导式、`match`、walrus、增广赋值、注解键、
+    `__static_attributes__`、类名前导下划线、类外不改写）。
 
 ---
 

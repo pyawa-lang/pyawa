@@ -994,6 +994,11 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
       **一次**写出、返回 `None`；`flush()` 在本层**无缓冲**下是**真 no-op**（`write` 已落 `fs`，
       无事可刷；返回 `None`）。用途（`P3-32`）：官方 `unittest` 的 `TextTestRunner`／`TextTestResult`
       **直接写这两个流**（报告通道）
+    - `newline=` 的**读**口径（缺口3，2026-11-14）：`open()` 第 6 位置实参/关键字与
+      `TextIOWrapper.__init__` 第 4 位置实参/关键字共五档（`None`／`''`／`'\n'`／`'\r'`／`'\r\n'`）；
+      `read`／`readline`／`readlines`／`__next__` 按档断行/翻译（`None` ⇒ 三档断行并译成 `\n`；
+      `''` ⇒ 三档断行**不翻译**；其余只按给出的那个断）。**写**侧 `newline=` 翻译、`.newlines`
+      属性、`StringIO(newline=…)` 仍未接（如实）。e2e：`crates/pyawa-runtime/tests/io_newline_shapes.rs`
     - `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）
     - `FileIO`（经 `fs` 域）：`open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现
   - **占位类型**（可当基类、可 `isinstance`；**实例化按 CM-6 报错**）：`_IOBase`／`_RawIOBase`／
@@ -1247,13 +1252,13 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
     `float`／`complex`）近似参照的 `PyNumber_Check` ⇒ 自定义数值类可能判得不同。
   - 读侧**含孤立代理的 `str` 行** ⇒ `Unsupported`（`P3-38` S3b 的表示缺口；**不静默**转义）。
   - 上游 `test_csv.test_roundtrip_quoteed_newlines`／`test_roundtrip_escaped_unquoted_newlines` 的
-    `lineterminator='\r'` 两格报 `newline=''` 错误：根因在 `_io`（§5.2.16）—— 本层
-    `TextIOWrapper(newline='')` **不在孤立 `\r` 处断行**（`['a,b\rc,d\r']` 而非两行）⇒ reader 拿到的
-    "一行"含内嵌换行；`_csv` 照参照语义**如实报错**（不偷偷容忍）。`_io` 修好后这两格应自动转绿。
+    `lineterminator='\r'` 两格已**转 PASS**（缺口3＝`_io` 的 `TextIOWrapper(newline='')` 已如实
+    按 `\r` 断行，§5.2.16）；`_csv` 仍照参照语义**如实报错**（不偷偷容忍）。
   - 上游 `TestArrayWrites` 4 格错误：`array.array` 的**元素存储**未接线（§5.2.14），与本模块无关。
 - **验收**：`crates/pyawa-runtime/tests/csv_surface_shapes.rs` —— FACE 双侧（本机 `python3` 3.14.4）
   逐行对拍（模块面／方言注册表／`Dialect` 校验文案／读侧各族／写侧各族／`DictReader`／
   `DictWriter`／`Sniffer`），HONEST 面钉住上述 pyawa 独有偏差；`Lib/csv.py` 由
   `python3 tools/sync_lib.py --check` 保证与上游**逐字节一致**（`CX-8`）。上游
   `Lib/test/test_csv.py`：接入前 `import csv` 即 `ModuleNotFoundError`（**0 通过**）⇒ 接入后
-  **127 用例：114 通过／1 失败／6 错误／6 跳过**（失败/错误归因见上两段；跳过是 `cpython_only`）。
+  **127 用例：117 通过／0 失败／4 错误／6 跳过**（4 个错误都是 `array.array` 元素存储未接线，
+  §5.2.14；跳过是 `cpython_only`）。

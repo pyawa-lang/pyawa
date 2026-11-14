@@ -1,35 +1,34 @@
-# NEXT（会话 13 · ABI 收口完成）
+# NEXT（会话 13 · 解释器缺口收口完成）
 
-> **本轮落地（2026-11-14）**：`PLAN-milestones.md` §12.4 的 ABI 收口收尾 —— **#4** `AB-70`
-> `pa_tohandle`（宿主对象载荷读回）· **#8** `AB-71` `pa_set_program_filename` 进 `pa.h`／规格
-> （影子导出清零）· **#3** `AB-72` `pa_call`／`pa_pcall` 的 `nresults` 精确语义（0/N，多截少补
-> `None`）· **#5** §15.4 的 18 个 `paL_*` 签名补齐 · **#6** 栈契约记法跟随实现（`setfield` −1、
-> `settable`／`rawset` −2）· **#7** `pa.h` 过时注释修正。**ABI 次版本 9→10**（追加式 ＋ 未发布前
-> 的语义补齐）；**ABI 仍不发布**（用户 2026-11-13：等钩子族定稿）。`#1`／`#2` 维持合规现状。
+> **本轮落地（2026-11-14）**：§12.4 收口时记的**五项既有缺口**全部修完 —
+> **①** `asyncio.gather`（`pyawa-core` **类体私有名改写** `BC-66`／`compile/mangle.rs`；
+> `__qualname__` 定点修复）· **②** 原生函数 `__module__` 来源模块（每实例旁表＋`install`
+> 集中登记；`_csv.*` ⇒ `_csv`）· **③** `_io` `newline=` **读**口径五档（上游两 roundtrip 转 PASS）·
+> **④** `inspect.getattr_static`（`getset_descriptor`／`member_descriptor` 真描述符面）·
+> **⑤** `StopIteration` 回收 `StackUnderflow`（处理块异常表区间止于出口清理 `POP_EXCEPT`）。
+> 三项提交：`7ee2990b`／`e9a8d06d`／`e6c4a9ac`（本页刷新随文档提交）。**ABI 面未动**。
 > **本页规矩**（`agents-rules/round-rule.md` §5）：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据。
 
-- **HEAD**：`9a028e85`（本轮前；ABI 收口的三笔提交见 `git log`）
-- **工作区**：干净 ✓（`git status --porcelain` 空）
+- **HEAD**：`e6c4a9ac`（本轮代码最后一笔；文档提交见 `git log`）
+- **工作区**：干净 ✓
 - **下一条命令**：`tools/slowcheck.sh --release`
-- **主线**：`PLAN` §9.4 —— **内存安全 ＋ 执行效率**已收口；其余**慢慢补** ✗。
+- **闸门**：`check.py` 19/19；`slowcheck --release` 十一项全绿（464 s）；408 条对拍绿；
+  `cargo test -p pyawa-core`／`-p pyawa-runtime` 全绿；上游 `test_csv` 127 例：117 通过／0 失败／4 错误／6 跳过。
 - **ABI 剩余**：**#1** `AB-52` 的 `type_expr` 求值（等 `TS` 注解解析器；现"原样保留"合规）·
   **#2** `pa_exec_file`（等 `IM-15`；现如实 `PA_ERR_NOTIMPLEMENTED` 合规）· **发布**＝用户决定
-  （`DESIGN` §13-22；发布前须确认钩子族是否还要加）。`T-CX-19`（`CX-29`）过渡清单为空，棘轮在。
-- **本轮发现（既有、非本轮引入，已记档待修；判据即"给定脚本 exit 0／结果正确"）**：
-  - **`StopIteration` 回收崩溃**：模块层先 catch 一次、再出现未捕获 `StopIteration` ⇒
-    `帧操作失败：StackUnderflow`（确定性）。
-  - **`asyncio.gather`／`wait_for` 红**：`Task` 读 `_Future__asyncio_awaited_by` 失败——`pyawa-core`
-    缺**类体私有名改写**（`__x` → `_C__x`）。
-  - **内建函数 `__module__` 硬编码 `"builtins"`**（`_csv.reader.__module__` 应为 `"_csv"`）。
-  - **`_io` 的 `TextIOWrapper(newline='')` 不在孤立 `\r` 断行**（`test_csv` 2 错误的根因）。
-  - **`inspect.getattr_static` 对类查找恒 `MISSING`**（`types.GetSetDescriptorType` 由
-    `type(FunctionType.__code__)` 算出、本层把函数 `__code__` 暴露成原生函数 ⇒ 上游 inspect 的
-    `_shadowed_dict` 判定失效；`AB-54` 的宿主函数自描述已绕开它）。
-  - **`tests/ci/selftest.py` 基线在临时副本里不干净**（既有）：副本不含 `NEXT.md`／`target/conformance`
-    且无 `.git` ⇒ `T-CX-14/15`／`M3-COVERAGE ④⑤` 恒红；需另修 harness（不影响 `check.py`）。
-- **未修 bug ＋ 判据**：`iter_value` 丢异常（round 171 撤回）· traceback 帧保活 · dict 哈希化；
-  详见 `docs/rounds/04-post-m6-01.md` 与 `PLAN` §9.2。
-- **口径**：改编译器后清缓存 `find target Lib -name __pyawa__ -prune -exec rm -rf {} +`；
-  判据① `tools/lib_import_ratio.py`；ABI `PA_ABI_VERSION`＝**1.10**、指令集 **2**；
-  编号现最大 `AB-72`／`BC-65`／`TS-50`／`CP-39`／`CX-29`／`P3-42`。
-- **闸门**：`&&` 只看 exit code；`git commit -F - -- <显式路径>`；slowcheck 十一项全绿才提交
+  （`DESIGN` §13-22；发布前确认钩子族）。`T-CX-19`（`CX-29`）过渡清单为空，棘轮在。
+- **本轮新发现（先于本轮，未修 — 建议单开工单）**：`_sre_module.rs` 进程级 `static Mutex` 表跨
+  `Instance` 串对象 ⇒ 同进程第二实例 `import re`／`json` 栈溢出（`posix_module.rs` 有同款已修先例）。
+  判据：同一进程建两个 `PaState`、A `import json`、B 再 `import json` ⇒ 不崩且行为一致。
+- **已知边界（如实；判据即"给定脚本行为与 3.14.4 一致"）**：
+  - 嵌套类/函数内类的 `__qualname__` 仍用 `__name__` 拼（既有偏差）；`nonlocal` 无外层绑定的
+    编译期 `SyntaxError` 仍报运行期 `UnboundLocalError`；`__static_attributes__` 显式预改写名歧义；
+    `__slots__` 字符串槽名不改写；PEP 695 dunder 类型参数内部 cell 名沿用源码名。
+  - `newline=` **写**翻译、`.newlines`、`StringIO(newline=…)` 仍未接；文本 `tell`/`seek` 非 cookie。
+  - 类型对象自身的 `__name__` 等不在 `type.__dict__`；`inspect.getattr_static(用户类, "__name__")` 仍 AttributeError。
+  - 更早的未修 bug：`iter_value` 丢异常（round 171 撤回）· traceback 帧保活 · dict 哈希化
+    （`docs/rounds/04-post-m6-01.md`、`PLAN` §9.2）。
+- **口径**：改编译器后清缓存 `find target Lib -name __pyawa__ -prune -exec rm -rf {} +` ＋
+  `find target -name '*.pyac' -delete`；`PA_ABI_VERSION`＝1.10、指令集 **2**；
+  编号现最大 `BC-66`／`AB-72`／`TS-50`／`CP-39`／`CX-29`／`P3-42`。
+- **提交纪律**：`git commit -F - -- <显式路径>`；`&&` 只看 exit code；slowcheck 十一项全绿才提交。
