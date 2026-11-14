@@ -215,15 +215,13 @@
   - **验收**：`T-AB-11`。
 
 - **AB-77** **`pa_newtype` 指定基类**：
-  `int pa_newtype(pa_state *st, const char *name, int base_idx, size_t payload_size, pa_host_dealloc, pa_host_traverse, const pa_sig *sig)`：
-  - `base_idx` 为栈索引（`AB-9`），**负值／无基类 ⇒ `object`**；基类必须是类型对象且非终态类型，否则 `PA_ERR_INVALID`；
-  - 建立真实继承关系 ⇒ `isinstance`／`except`／MRO 查询对宿主类型天然成立；
-  - **用途**：宿主异常类型可真的继承 `ValueError` 等 ⇒ `except ValueError` 不再露边界（`AB-74` 的完整形态）；
-  - `base_idx == 0` ⇒ 无基类（`object`；`0` 本来就不是合法栈索引，`AB-9`，故用作哨兵）；
+  `int pa_newtype(pa_state *st, const char *name, int base_index, size_t payload_size, pa_host_dealloc, pa_host_traverse, const pa_sig *sig)`：
+  - `base_index == 0` ⇒ 无基类（`object`；`0` 本来就不是合法栈索引，`AB-9`，故用作哨兵）；
     其余按 `AB-9` 的栈索引（正/负均可）指向**类型对象**；非类型对象／终态类型 ⇒ `PA_ERR_INVALID`；
-    基类在**注册时**解析并建立真实 MRO（之后不再变）。**布局**：基类只影响 MRO／身份判定
-    （`isinstance`／`issubclass`）；实例载荷仍按宿主类型的 `payload_size` 由 VM 分配（`AB-58`），
-    基类的 Python 级方法**不**被自动适配到宿主载荷上。
+  - 基类在**注册时**解析并建立真实 MRO（之后不再变）⇒ `isinstance`／`issubclass`／MRO 查询对宿主
+    类型天然成立；宿主异常类型可真的继承 `ValueError` 等（`AB-74` 的完整形态）；
+  - **布局**：基类只影响 MRO／身份判定；实例载荷仍按宿主类型的 `payload_size` 由 VM 分配
+    （`AB-58`），基类的 Python 级方法**不**被自动适配到宿主载荷上。
   - 签名变更（ABI 未冻结，`AB-44`）；**不保留**旧签名的第二条路径。**实现窗口**：`PLAN` §12.12
     步 4；落地时 `PA_ABI_VERSION` 次版本 **11 → 12**（追加式之外的签名改写，未发布窗口内）。
   - **验收**：`T-AB-13`（真实 MRO 的 `issubclass`／`isinstance`；`except` 的宿主异常形态见 `AB-74`／`T-AB-9`，两者组合的布局约束在 `AB-77` 的"布局"句内如实登记）。
@@ -236,6 +234,15 @@
   - **依赖如实**：`pa_raise_host_exception` 的"宿主类型异常"形态依赖 `AB-77` 的真实基类；
     在 `AB-77` 落地前，它只对 **guest 声明的异常类**成立（`AB-74` 现状，`T-AB-9` 已验收）。
   - **验收**：`T-AB-14`。
+
+- **AB-79** **模块句柄上栈**（`AB-75` 模块态的 C 宿主入口；§12.13 #4）：
+  `int pa_pushmodule(pa_state *st, pa_module module)`（栈契约 **+1**）：
+  - 把 `module` 对应的**模块对象**压栈（VM/模块记录持有对象，宿主得到的是**借用→栈持有**），
+    从而可用 `pa_set_object_ops`／`pa_setfield` 等按普通对象操作它；
+  - `module` **必须**是本实例 `pa_add_host_module`／`pa_module_addsubmodule` 交回的句柄；
+    否则 `PA_ERR_INVALID`（`AB-22`）；同一句柄可多次上栈；
+  - 与 `paL_getref` 的区别：后者压**注册表键**的值，本函数专用于模块句柄（不需要宿主先枚举键）。
+  - **验收**：`T-AB-15`。追加式（未发布窗口，`PA_ABI_MINOR` 1.12→**1.13** 时落地）。
 
 ---
 
@@ -371,7 +378,8 @@
 
 - **AB-35** 宿主类型**必须**注册为**真实类型**（`OM-14`）；**禁止**另立一套对象表示。
 - **AB-36** 注册**必须**提供 `dealloc` 与 `traverse`（`OM-34`／`OM-36`）、**载荷尺寸**（`AB-58`）
-  以及 §9 的签名。
+  以及 §9 的签名。**NULL `dealloc`／`traverse` ⇒ `pa_newtype` 当场返回 `PA_ERR_INVALID` 并写
+  `pa_errmsg`**（`AB-22`／`AB-48`；不得拖到 `pa_newhandle` 才以空消息拒绝——§12.13 #2 决策）。
 - **AB-37** 宿主类型**可被脚本继承**（`§13-1` **已决**）：`pa_newtype` 注册的类型
   **默认可作基类**。因此 vtable **必须**含**子类分派槽位**——`tp_new`／`tp_dealloc`／`tp_traverse`
   得能被 Python 覆写；且注册时**必须**能声明该类型是否需要**实例字典**
@@ -399,7 +407,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.12**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **12**；`AB-76` 的 `pa_typeid` 为**追加式**，`AB-77` 的 `pa_newtype` `base_index` 为**未发布窗口内的签名改写**；`AB-75`／`AB-78` 落地时**不再**升次版本（其函数 `pa_set_object_ops` 属同一窗口，落地前保持 1.12 的 `pa.h` 不变——现状如实登记在 §16）——`AB-41` 的追加式改动
+> **当前版本：1.12**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **12**；`AB-76` 的 `pa_typeid` 为**追加式**，`AB-77` 的 `pa_newtype` `base_index` 为**未发布窗口内的签名改写**；`AB-75`／`AB-78` 落地时**不再**升次版本（其函数 `pa_set_object_ops` 属同一窗口，落地前保持 1.12 的 `pa.h` 不变——现状如实登记在 §16）。**§12.13 窗口**：`AB-79`（`pa_pushmodule`，追加式）落地时升至 **1.13**；`pa_getglobal` 缺失名语义改为 `PA_ERR_INVALID`、`AB-36` 的 NULL hooks 当场拒绝同属该窗口（未发布窗口内可改）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -434,6 +442,10 @@
 | `T-AB-12` | `pa_set_object_ops` 三形态（类型/实例/模块）：各自装/清 ops，回退与三态错误语义同 `AB-73`；类型态与实例态互不外溢；模块未枚举名字可取到（`AB-75`） |
 | `T-AB-13` | `pa_newtype` 的 `base_index`：真实 MRO（宿主类型继承 `ValueError` ⇒ `issubclass`／`isinstance` 命中）；`0` ⇒ `object`；非类型/终态基类 ⇒ `PA_ERR_INVALID`；载荷布局仍按宿主 `payload_size`（`AB-77`） |
 | `T-AB-14` | 投影等价差分：`pa_set_type_ops`↔`pa_set_object_ops(type)`；模块注入函数↔向模块对象写属性；`pa_tointeger`↔`pa_tointstring`（i64 内）；`pa_raise_host_exception`↔「构造异常实例并记录」逐条对拍（`AB-78`） |
+| `T-AB-15` | `pa_pushmodule`：模块句柄上栈（+1）后可 `pa_set_object_ops` 挂模块态；C/ctypes 宿主能取到未枚举的 `np.<x>`；非法句柄 ⇒ `PA_ERR_INVALID`（`AB-79`） |
+| `T-AB-16` | `pa_getglobal` 缺失名 ⇒ `PA_ERR_INVALID` **不压栈**（此前压 nil 作废）；存在名照旧 `PA_OK`（§12.13 #3） |
+| `T-AB-17` | `pa_newtype` 的 `NULL dealloc`／`traverse` ⇒ 当场 `PA_ERR_INVALID` 且 `pa_errmsg` 可诊断；合法注册不受影响（`AB-36`／§12.13 #2） |
+| `T-AB-18` | 宿主可用性：组合根产物（`pyawa-runtime` cdylib／静态库）交出的 `paL_newstate`／`paL_openlibs` 实例上 builtins／`import` 可用；`pyawa-abi` 裸实例保持"语言骨架"且失败带 `pa_errmsg`；**仓库内有不含 numpy 的最小探针**可复跑（§12.13 #1） |
 
 ---
 
@@ -476,7 +488,7 @@
 | 8 | `PA_ERR_NOTFOUND` | 属性/方法派发回调的"**未处理**"（`AB-73`）；VM 在**内部回退**，不直接暴露给 guest |
 | 9–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
 
-### 15.3 核心层 `pa_`（79 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
+### 15.3 核心层 `pa_`（80 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
 
 | 函数 | 栈契约 | 说明 |
 |---|---|---|
@@ -538,7 +550,7 @@
 | `pa_settable(st, idx)` | −2 | 下标写入；走 `STORE_SUBSCR` 语义（键与值都被消耗 ⇒ 净 −2） |
 | `pa_rawget(st, idx)` | ±1 | 下标访问但**不触发**槽位 |
 | `pa_rawset(st, idx)` | −2 | 下标写入但**不触发**槽位（键与值都被消耗 ⇒ 净 −2） |
-| `pa_getglobal(st, name)` | +1 | 读模块全局 |
+| `pa_getglobal(st, name)` | +1 | 读模块全局；**缺失名 ⇒ `PA_ERR_INVALID`（不压栈）**（§12.13 #3 决策；此前"压 nil"作废） |
 | `pa_setglobal(st, name)` | −1 | 写模块全局 |
 | `pa_call(st, nargs, nresults)` | −nargs+nresults | 调用；异常经状态码 ＋ `pa_errmsg`；`nresults` 精确（`0`/`N`，多截少补 `None`，`AB-72`） |
 | `pa_pcall(st, nargs, nresults)` | −nargs+nresults | 受保护调用（语义同 `pa_call`，显式区分调用点；`AB-72`） |
@@ -549,6 +561,7 @@
 | `pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` | — | 往宿主模块装函数（`AB-67`）；签名必须同时给（`AB-25`／`AB-51`） |
 | `pa_module_setconst(st, module, name)` | — | 往宿主模块装常量（`AB-67`）；值取自**栈顶**并消费 |
 | `pa_module_addsubmodule(st, parent, name, pa_module *out)` | — | 在宿主模块下建子模块（`AB-67`）；登记 `sys.modules["<parent>.<name>"]` 与父属性 |
+| `pa_pushmodule(st, module)` | +1 | 把模块句柄对应的**模块对象**压栈（`AB-79`；`AB-75` 模块态入口）；非法句柄 ⇒ `PA_ERR_INVALID`（待实现） |
 | `pa_type_expr_*`（9 个构造：`runtime_tag`／`named`／`list_of`／`dict_of`／`optional`／`union`／`callable`／`var`／`apply`） | — | 建 `AB-69` 的类型表达式句柄（每实例、不透明）；失败 ⇒ `NULL` ＋ `pa_errmsg` |
 | `pa_func_set_signature(st, fn, params, n, ret, tparams, nt, flags)` | — | 给已注册宿主函数声明签名（`AB-69`）；注册后、任何执行前；不符 ⇒ `PA_ERR_INVALID`；声明后边界核参数／返回（脚本侧 `TypeError`，归责插件） |
 | `pa_newtype(st, name, base_idx, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；`base_idx` 指定真实基类（`AB-77`；`0` ⇒ `object`，其余按栈索引）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`）；回调见 `AB-73` 的 `pa_set_type_ops`（待 `AB-75` 收敛为投影） |
@@ -582,7 +595,7 @@
 | `int paL_execresult(pa_state *state, int status)` | 状态码 → 统一收尾（`PA_OK` ⇒ 压 `True`，`+1`） |
 | `int paL_requiref(pa_state *state, const char *name, const void *openf, int glb)` | 取或加载模块 |
 | `int paL_setfuncs(pa_state *state, const pa_reg *regs, int n)` | 批量注册（`n < 0` ⇒ 以 NULL 名字结尾） |
-| `int paL_openlibs(pa_state *state)` | 打开标准库（缺标准库 ⇒ 如实未实现） |
+| `int paL_openlibs(pa_state *state)` | 打开标准库（**提供方＝组合根**：`pyawa-runtime` 的产物；`pyawa-abi` 的占位实现保持 `PA_ERR_NOTIMPLEMENTED` 且**必须**写 `pa_errmsg`。落地见 §12.13 #1） |
 | `int paL_dostring(pa_state *state, const char *s, int mode)` | 执行字符串并统一收尾 |
 | `int paL_dofile(pa_state *state, const char *path, int mode)` | 执行文件并统一收尾 |
 | `pa_state *paL_newstate(void)` | `pa_create` ＋ 真实机器 provider 的便捷入口（实现属 `pyawa-runtime`） |
@@ -711,7 +724,11 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格当前无未实现条目**：`AB-75`（`pa_set_object_ops`）与 `AB-78`（投影等价差分）于步 3/5
+**本规格当前有 1 条新增未实现需求**（§12.13 批次）：`AB-79`（`pa_pushmodule`，模块句柄上栈）
+— 连同 §12.13 #1（组合根 stdlib 可用性）、#2（`AB-36` 的 NULL hooks 当场拒绝）、#3
+（`pa_getglobal` 缺失名语义）的实现一起排在 §12.13；**规格层已定**（`AB-36`／§15.3／`AB-79`／
+`T-AB-15…18`），落地时 `PA_ABI_MINOR` 1.12→**1.13**。此前：
+**`AB-75`…`AB-78` 全部落地**（`AB-75` `pa_set_object_ops` 与 `AB-78` 投影等价差分于步 3/5
 落地（`crates/pyawa-abi/tests/object_ops.rs` 的 T-AB-12／T-AB-14）；`AB-76`（`pa_typeid`）与
 `AB-77`（`pa_newtype` 的 `base_index`）于步 1/4 落地（`crates/pyawa-abi/tests/type_identity.rs`）；
 此前 `AB-73`（B1/B2a）与 `AB-74`（B2b）已落地，`§12.11` 验收演练见 `PLAN` §12.11 与
