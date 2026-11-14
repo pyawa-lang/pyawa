@@ -220,7 +220,13 @@ fn step_exceptions_with_except_start<'a>(instance: &'a Instance, frame: &Owned<'
                 let callable = frame.get().peek_from_top(5)?;
                 let _ = lasti;
                 let exception_type = unsafe { exception.as_ref() }.ty();
-                // `__exit__(type, exc, tb)`：`tb` 本层给 `None`（`__traceback__` 尚无对象，`DIV-6`）
+                // `__exit__(type, exc, tb)`：`tb` 照参照给 `exc.__traceback__` ✓（`BC-60` 的
+                // traceback 面落地后就不是 `None` 了；先前这里写死 `None` 是 `DIV-6` 时期的
+                // 临时口径，已过时 ✗ —— `contextlib`／`unittest` 一类会读第三参）。
+                // 取不到（探测失败）⇒ 仍给 `None`（不因探针把 with 的异常出口弄崩）。
+                let traceback = instance
+                    .attribute_optional_discarding(exception, "__traceback__")
+                    .unwrap_or_else(|| instance.new_none());
                 let mut arguments: Vec<NonNull<Header>> = Vec::with_capacity(3);
                 unsafe {
                     instance.incref_object(exception_type.cast::<Header>().as_ptr());
@@ -228,7 +234,7 @@ fn step_exceptions_with_except_start<'a>(instance: &'a Instance, frame: &Owned<'
                 }
                 arguments.push(exception_type.cast::<Header>());
                 arguments.push(exception);
-                arguments.push(instance.new_none());
+                arguments.push(traceback);
                 let result = call_callable(
                     instance,
                     callable,

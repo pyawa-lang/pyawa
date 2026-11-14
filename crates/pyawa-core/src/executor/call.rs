@@ -533,8 +533,31 @@ pub(crate) fn call_callable(
                 }
                 constructor_kwargs.push((key, value));
             }
-            let created =
-                call_callable(instance, constructor, None, call_args, constructor_kwargs, opcode)?;
+            // **构造器抛错 ⇒ 本次调用自己那份实参要还**（task-14 #f 同族真泄漏）：
+            // `call_args`／`constructor_kwargs` 是给构造器的**新增**引用（转移给 `call_callable`
+            // 由它按约归还 ✓），而**外层** `args`／`kwargs` 仍归本函数 ⇒ 先前 `?` 直接上抛，
+            // 这两份没还 ⇒ 每失败一次漏一份（实测 `tuple(Plain())` ×2 千漏 2 千个 `Plain`：
+            // `tuple_new_native` 不在 `is_default_new` 的名单里 ⇒ 走这条覆写支 ✓）。
+            let created = match call_callable(
+                instance,
+                constructor,
+                None,
+                call_args,
+                constructor_kwargs,
+                opcode,
+            ) {
+                Ok(created) => created,
+                Err(error) => {
+                    for argument in args.iter().copied() {
+                        release(instance, argument);
+                    }
+                    for (key, value) in kwargs.iter().copied() {
+                        release(instance, key);
+                        release(instance, value);
+                    }
+                    return Err(error);
+                }
+            };
             // SAFETY: created 是新引用，存活。
             let is_instance = instance.is_subtype(unsafe { created.as_ref() }.ty(), class);
             if is_instance {
@@ -566,7 +589,23 @@ pub(crate) fn call_callable(
                     init_args.push(created);
                     // 原实参与关键字实参转交给 `__init__`
                     init_args.extend(args.iter().copied());
-                    let result = call_callable(instance, initializer, None, init_args, kwargs, opcode)?;
+                    // **`__init__` 抛错 ⇒ 本函数持有的 `created` 要还**（`init_args`／`kwargs`
+                    // 已转移给 `call_callable`，由它按约归还 ✓；`created` 是构造函数交出的新引用，
+                    // 先前 `?` 上抛时漏还 ⇒ 每失败一次漏一个实例）。
+                    let result = match call_callable(
+                        instance,
+                        initializer,
+                        None,
+                        init_args,
+                        kwargs,
+                        opcode,
+                    ) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            release(instance, created);
+                            return Err(error);
+                        }
+                    };
                     release(instance, result);
                     // 形参所有权（round 98 起默认）：帧已归还实参 ⇒ 不再补这一份（`PYAWA_FRAME_OWN=0` 才补）。
                     if !crate::instance::frame_own_params() {
@@ -628,14 +667,22 @@ pub(crate) fn call_callable(
             unsafe { instance.incref_object(created.as_ptr()) };
             call_args.push(created);
             call_args.extend(args.iter().copied());
-            let result = call_callable(
+            // **`__init__` 抛错 ⇒ 本函数持有的 `created` 要还**（同覆写支的口径：`call_args`／
+            // `kwargs` 已转移给 `call_callable`，它按约归还；`created` 是槽位交出的新引用）。
+            let result = match call_callable(
                 instance,
                 initializer,
                 None,
                 call_args,
                 kwargs,
                 opcode,
-            )?;
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    release(instance, created);
+                    return Err(error);
+                }
+            };
             // `__init__` 必须返回 None（`T`／参照实现如此）；返回值丢掉那份引用
             release(instance, result);
             // 形参所有权（round 98 起默认）：帧已归还实参 ⇒ 不再补这一份（`PYAWA_FRAME_OWN=0` 才补）。

@@ -99,6 +99,15 @@ impl Instance {
                 if has_iter || has_getitem {
                     return Err(error);
                 }
+                // **`iter_value` 的 `Err(Raised)` 这份引用必须还**（task-14 #f）：本函数把它当
+                // "不是可迭代"的信号吞掉 ⇒ 上面两颗探针（`__iter__`／`__getitem__` 的
+                // AttributeError）已各自 `discard_attribute_error` ✓，但**原始那颗**（`iter_value`
+                // 报的 `TypeError`，`raise()` 给 `Err` 与 `pending` 各一份）不还就每探一次漏一颗
+                // —— 实测 `f(*Plain())` ×2 万 ⇒ `tb_created−tb_freed` 净增 2 万（`PYAWA_GC_LOG`）。
+                // 病根（round 195 的 `mappingproxy_live` 陈旧登记）已修 ⇒ 这里可以安全
+                // `discard_error`（释放 `Err` 那份 ＋ 若 `pending` 仍是它则清槽，与
+                // `discard_attribute_error` 同一处真相）。
+                crate::executor::runtime::discard_error(self, &error);
                 return Ok(None);
             }
         };

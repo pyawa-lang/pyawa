@@ -541,15 +541,27 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                                     if is_package {
                                         if let Some(modules) = instance.modules() {
                                             let full = format!("{module_name}.{name}");
-                                            if crate::executor::import::load_module(
+                                            // **`load_module` 失败的那颗异常要还**（task-14 #f 同族，
+                                            // 写域内顺带修）：这里的语义是"尝试导入子模块，失败就算了"
+                                            // ✓ ⇒ 但 `.is_ok()` 把 `Err(Raised)` 整个丢掉 ⇒ 每失败
+                                            // 一次漏一颗 `ModuleNotFoundError→traceback→帧` 链
+                                            // （实测 `from pkg import *`（`__all__` 里有不存在的名字）
+                                            // ×5000 ⇒ `tb_created−tb_freed` 净增 5000，直方图
+                                            // `ModuleNotFoundError=5000`）。照 `discard_error` 口径还掉。
+                                            match crate::executor::import::load_module(
                                                 instance,
                                                 modules,
                                                 &full,
                                                 opcode_number,
-                                            )
-                                            .is_ok()
-                                            {
-                                                found = instance.dict_get(attributes, &name);
+                                            ) {
+                                                Ok(_) => {
+                                                    found = instance.dict_get(attributes, &name);
+                                                }
+                                                Err(error) => {
+                                                    crate::executor::runtime::discard_error(
+                                                        instance, &error,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
