@@ -356,6 +356,71 @@ impl Instance {
             .cloned()
     }
 
+    /// **登记一个原生可调用对象的来源模块**（task-6／缺口2）。
+    ///
+    /// 参照的 `builtin_function_or_method.__module__` 报告**来源 C 模块**（实测 3.14.4：
+    /// `_csv.reader.__module__ == "_csv"`、`math.sqrt.__module__ == "math"`、`len.__module__ == "builtins"`）；
+    /// 本层对象只存名字与函数指针 ⇒ 安装时按对象地址登记一份。后来者**覆盖**先前者
+    /// （宿主模块重新登记同一对象时以最后登记为准 —— 调用方各自只有一处写入口）。
+    pub fn set_builtin_function_module(&self, function: NonNull<Header>, module: &str) {
+        self.builtin_function_modules
+            .borrow_mut()
+            .insert(function.as_ptr() as usize, module.to_owned());
+    }
+
+    /// 取原生可调用对象的来源模块（`None` ⇒ 没登记 ⇒ 调用方按既有 `builtins` 口径）。
+    pub fn builtin_function_module(&self, function: NonNull<Header>) -> Option<String> {
+        self.builtin_function_modules
+            .borrow()
+            .get(&(function.as_ptr() as usize))
+            .cloned()
+    }
+
+    /// **按模块命名空间集中登记原生函数的来源模块**（task-6／缺口2，**一处登记入口**）。
+    ///
+    /// 口径（实测参照 3.14.4）：
+    /// - 命名空间里**直接放的** `builtin_function_or_method` ⇒ 记本模块名
+    ///   （`_csv.reader`／`math.sqrt`／`sys.exit` 一类）；
+    /// - 值若是**类型对象**，再走一层它的类型字典（`_csv.reader.__init__` 这类原生方法也如实归属；
+    ///   **不**递归进实例生成物）——`type_namespace_if_present` 不惰性建字典 ✓；
+    /// - **先登记者优先**：同一对象被多个模块重导出时按模块表的构建顺序取**第一个**
+    ///   （与"创建处"一致；不让后装模块把先建模块的归属改掉）。
+    ///
+    /// 未登记 ⇒ 默认 `builtins`（`builtin_function_getattr` 的既有口径 ✓），故 `len` 一类不受影响。
+    pub fn register_namespace_native_modules(&self, namespace: NonNull<Header>, module_name: &str) {
+        let Some(entries) = self.dict_entries(namespace) else {
+            return;
+        };
+        let Some(builtin_function_type) = self.hot_type(HotId::BuiltinFunctionOrMethod) else {
+            return;
+        };
+        // **只在归零时插入**：遍历期间不许持有 `borrow_mut`（`type_of`／`dict_entries` 不碰它，但仍保持短借用）。
+        let register = |value: NonNull<Header>| {
+            if self.type_of(value) != builtin_function_type {
+                return false;
+            }
+            self.builtin_function_modules
+                .borrow_mut()
+                .entry(value.as_ptr() as usize)
+                .or_insert_with(|| module_name.to_owned());
+            true
+        };
+        for (_key, value) in entries {
+            if register(value) {
+                continue;
+            }
+            let Some(type_namespace) = self.is_type_object(value)
+                .then(|| self.type_namespace_if_present(value))
+                .flatten()
+            else {
+                continue;
+            };
+            for (_member, member_value) in self.dict_entries(type_namespace).unwrap_or_default() {
+                register(member_value);
+            }
+        }
+    }
+
     /// **Python 级终结器旁表**（round 82）：是否已跑过 `__del__` ✓。
     pub(crate) fn python_finalized_contains(&self, pointer: usize) -> bool {
         self.python_finalized.borrow().contains(&pointer)

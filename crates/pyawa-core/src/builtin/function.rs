@@ -44,26 +44,38 @@ pub fn function_code_native(
 /// `_check_for_existing_members_` 报 `TypeError: <enum 'IntFlag'> cannot extend <flag 'Flag'>` ✗）。
 ///
 /// 语义照参照：`f.__get__(None, owner)` ⇒ **f 本身** ✓；`f.__get__(obj, owner)` ⇒ 绑定方法 ✓。
+/// **也接未绑定形态** `FunctionType.__get__(f, obj, owner)` ✓（`type(f).__get__` 取到的是
+/// **未绑定**的原生方法；`Lib/inspect.py` 的 `_descriptor_get` 正是
+/// `get = getattr(type(descriptor), '__get__'); get(descriptor, obj, type(obj))` ✓ ——
+/// `getattr_static` 修好后 `inspect.signature(用户类)` 第一次走到这条 ✓ ⇒ 必须支持 ✓）。
 pub fn function_descriptor_get(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(function) = bound else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "descriptor '__get__' of 'function' object needs an argument",
-        ));
+    // **绑定形态**（`f.__get__(…)`：`bound` 是 f）与**未绑定形态**（`FunctionType.__get__(f, …)`：
+    // 第一个实参是 f）都要认 ✓。
+    let (function, rest) = match bound {
+        Some(function) => (function, args),
+        None => match args.split_first() {
+            Some((first, remaining)) => (*first, remaining),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "descriptor '__get__' of 'function' object needs an argument",
+                ))
+            }
+        },
     };
-    // SAFETY: 槽位契约保证 bound 是存活函数对象（函数类型字典里的这个方法只经函数实例调用 ✓）。
+    // SAFETY: 槽位契约保证 function 是存活对象。
     if instance.type_name(instance.type_of(function)) != "function" {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "descriptor '__get__' for 'function' objects doesn't apply to a different type",
         ));
     }
-    let Some(this) = args.first().copied() else {
+    let Some(this) = rest.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "function.__get__() takes 2 arguments (1 given)",

@@ -262,6 +262,22 @@ pub fn getset_descriptor_get(
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`descr.__get__(None, owner)` ⇒ 交回描述符自己**（参照 getset／member 描述符的 C 口径：
+    // `obj` 为空时返回描述符本身；类级取用 `FunctionType.__code__` 这一类就走这里 ✓）；
+    // `None, None` ⇒ 参照原话报错 ✓（与既有 `function_attribute_descriptor_get` 同款 ✓）。
+    let none = instance.singletons().none();
+    if args.first() == Some(&none) {
+        let owner_missing = args.len() < 2 || args[1] == none;
+        if owner_missing {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "__get__(None, None) is invalid",
+            ));
+        }
+        if let Some(descriptor) = bound {
+            return Ok(instance.retain(descriptor));
+        }
+    }
     let kind = bound
         .and_then(|this| instance.attribute_optional_discarding(this, "_kind"))
         .and_then(|value| instance.text_of(value))
@@ -270,6 +286,12 @@ pub fn getset_descriptor_get(
     match kind.as_str() {
         "mro" => mro_descriptor_get(instance, bound, args, kwargs),
         "dict" => dunder_dict_descriptor_get(instance, bound, args, kwargs),
+        // **`function.__code__`／`function.__globals__` 的 getset／member 描述符**（task-8）：
+        // 类属性是描述符实例（`Lib/types.py` 的 `GetSetDescriptorType`／`MemberDescriptorType`
+        // 就是这两个的 `type(...)`）⇒ `.__get__(f, function)` 走这里，语义与
+        // `f.__code__`／`f.__globals__` **同一处真相**（转发到既有的原生访问器 ✓）。
+        "code" => crate::builtin::function::function_code_native(instance, None, args, kwargs),
+        "globals" => crate::builtin::function::function_globals_native(instance, None, args, kwargs),
         _ => annotations_descriptor_get(instance, bound, args, kwargs),
     }
 }

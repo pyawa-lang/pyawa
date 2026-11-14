@@ -17,6 +17,7 @@ impl Instance {
             python_finalized: RefCell::new(crate::fast_hash::FastSet::default()),
             ast_parser: core::cell::Cell::new(None),
             text_signatures: RefCell::new(std::collections::HashMap::new()),
+            builtin_function_modules: RefCell::new(std::collections::HashMap::new()),
             type_text_signatures: RefCell::new(std::collections::HashMap::new()),
             getattribute_dispatching: Cell::new(false),
             trace_dispatching: Cell::new(false),
@@ -1879,48 +1880,38 @@ impl Instance {
         let Some(type_object) = self.hot_type(HotId::Type) else {
             return;
         };
-        let descriptor_type = match self.hot_type(HotId::GetSetDescriptor) {
-            Some(existing) => existing,
-            None => {
-                let ty = self.new_attribute_type("getset_descriptor");
-                if let Some(namespace) = self.type_namespace(ty.cast()) {
-                    let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
-                        .expect("builtin_function_or_method 在引导期已登记");
-                    let function = self.alloc(BuiltinFunctionObject::new(
-                        function_type,
-                        "__get__",
-                        Cell::new(
-                            crate::builtin_objects::getset_descriptor_get as crate::NativeFn,
-                        ),
-                    ));
-                    self.dict_set(namespace, "__get__", function.into_raw().cast::<Header>());
-                }
-                ty
-            }
-        };
-        let annotations_kind = self.new_dict();
-        let kind = self.new_str("annotations");
-        self.dict_set(annotations_kind, "_kind", kind);
-        let descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
-            descriptor_type,
-            core::cell::RefCell::new(Some(annotations_kind)),
-        ));
-        let descriptor = descriptor.into_raw().cast::<Header>();
-        if let Some(namespace) = self.type_namespace(type_object.cast()) {
-            self.dict_set(namespace, "__annotations__", descriptor);
+        // **`getset_descriptor` 类型**（task-8）：`Lib/types.py` 的
+        // `GetSetDescriptorType = type(FunctionType.__code__)` 必须落到它上面；
+        // 它同时也是 `type.__dict__['__dict__']`／`['__annotations__']`／`['__mro__']` 的类型 ✓。
+        let descriptor_type = self.ensure_descriptor_type("getset_descriptor");
+        // **`member_descriptor` 类型**（task-8）：`MemberDescriptorType = type(FunctionType.__globals__)` 的落点。
+        let _member_type = self.ensure_descriptor_type("member_descriptor");
+        // **三个类型级描述符**（内联属性字典带 `_kind` ＋ `__name__` ＋ `__objclass__`）：
+        // `Lib/inspect.py` 的 `_shadowed_dict` 按
+        // `type(class_dict) is types.GetSetDescriptorType and class_dict.__name__ == "__dict__"
+        //  and class_dict.__objclass__ is entry` 判 `type.__dict__['__dict__']` 未被遮蔽 ⇒
+        // 这三项是 `inspect.getattr_static` 之所以能工作的最小面 ✓。
+        let descriptors = [
+            ("annotations", "__annotations__"),
+            ("dict", "__dict__"),
+            ("mro", "__mro__"),
+        ];
+        let mut instances = Vec::with_capacity(descriptors.len());
+        for (kind, python_name) in descriptors {
+            let instance = self.descriptor_instance(
+                descriptor_type,
+                kind,
+                python_name,
+                Some(type_object),
+            );
+            instances.push((python_name, instance));
         }
-        // **`type.__dict__["__mro__"]`** ✓（task-20 第 2 轮）：`Lib/inspect.py:1673` 的
-        // `_static_getmro = type.__dict__['__mro__'].__get__` 要它 ✓（同一类描述符 ✓）。
-        let dict_kind = self.new_dict();
-        let kind = self.new_str("dict");
-        self.dict_set(dict_kind, "_kind", kind);
-        let dict_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
-            descriptor_type,
-            core::cell::RefCell::new(Some(dict_kind)),
-        ));
-        let dict_descriptor = dict_descriptor.into_raw().cast::<Header>();
         if let Some(namespace) = self.type_namespace(type_object.cast()) {
-            self.dict_set(namespace, "__dict__", dict_descriptor);
+            for (python_name, instance) in instances {
+                self.dict_set(namespace, python_name, instance);
+                // SAFETY: `dict_set` 是**借用**口径（字典自己另存一份）⇒ 这份初始引用由本函数归还。
+                unsafe { self.release_object(instance.as_ptr()) };
+            }
         }
         // **`types.GenericAlias.__mro_entries__`** ✓（task-20 第 2 轮，PEP 560）：类型下标的结果当基类
         // （`class T(Mapping[str, str])` ✓）要靠它换出真正的基类 ✓。
@@ -1942,17 +1933,75 @@ impl Instance {
                 }
             }
         }
-        let mro_kind = self.new_dict();
-        let kind = self.new_str("mro");
-        self.dict_set(mro_kind, "_kind", kind);
-        let mro_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
-            descriptor_type,
-            core::cell::RefCell::new(Some(mro_kind)),
-        ));
-        let mro_descriptor = mro_descriptor.into_raw().cast::<Header>();
-        if let Some(namespace) = self.type_namespace(type_object.cast()) {
-            self.dict_set(namespace, "__mro__", mro_descriptor);
+    }
+
+    /// **造／取一个描述符类型的专属类型**（task-8，幂等）：`new_attribute_type` ＋ `__get__`。
+    ///
+    /// `getset_descriptor` 与 `member_descriptor` 共用同一份 `__get__`（按实例的 `_kind` 分派，
+    /// 与 `_tuplegetter` 记 `_index` 同一手法 ✓）⇒ 两种描述符的 `.__get__` 都走
+    /// [`crate::builtin_objects::getset_descriptor_get`] 的**一处真相**。
+    fn ensure_descriptor_type(&self, name: &'static str) -> NonNull<crate::TypeObject> {
+        let hot = if name == "getset_descriptor" {
+            HotId::GetSetDescriptor
+        } else {
+            HotId::MemberDescriptor
+        };
+        match self.hot_type(hot) {
+            Some(existing) => existing,
+            None => {
+                let ty = self.new_attribute_type(name);
+                if let Some(namespace) = self.type_namespace(ty.cast()) {
+                    if self.dict_get(namespace, "__get__").is_none() {
+                        let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
+                            .expect("builtin_function_or_method 在引导期已登记");
+                        let function = self.alloc(BuiltinFunctionObject::new(
+                            function_type,
+                            "__get__",
+                            Cell::new(
+                                crate::builtin_objects::getset_descriptor_get as crate::NativeFn,
+                            ),
+                        ));
+                        self.dict_set(namespace, "__get__", function.into_raw().cast::<Header>());
+                    }
+                }
+                ty
+            }
         }
+    }
+
+    /// **造一个描述符实例**（task-8）：`AttributeObject` ＋**内联属性字典**：
+    /// `_kind`（`__get__` 分派用）＋ `__name__`／`__objclass__`（参照 getset／member 描述符的
+    /// 公开属性面；`Lib/inspect.py` 的 `_shadowed_dict` 逐字检查后两项）。
+    ///
+    /// `owner` 是 `__objclass__` 的值（参照里每个类的描述符指向**那个类**）。
+    pub(crate) fn descriptor_instance(
+        &self,
+        descriptor_type: NonNull<crate::TypeObject>,
+        kind: &str,
+        python_name: &str,
+        owner: Option<NonNull<crate::TypeObject>>,
+    ) -> NonNull<Header> {
+        let attributes = self.new_dict();
+        let kind_text = self.new_str(kind);
+        self.dict_set(attributes, "_kind", kind_text);
+        // SAFETY: `dict_set` 借用口径 ⇒ 这份初始引用由本函数归还。
+        unsafe { self.release_object(kind_text.as_ptr()) };
+        let name_text = self.new_str(python_name);
+        self.dict_set(attributes, "__name__", name_text);
+        // SAFETY: 同上。
+        unsafe { self.release_object(name_text.as_ptr()) };
+        if let Some(owner) = owner {
+            let owner_value = self.type_value(owner);
+            self.dict_set(attributes, "__objclass__", owner_value);
+            // SAFETY: 同上。
+            unsafe { self.release_object(owner_value.as_ptr()) };
+        }
+        self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(Some(attributes)),
+        ))
+        .into_raw()
+        .cast::<Header>()
     }
 
 }

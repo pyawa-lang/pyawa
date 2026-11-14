@@ -161,6 +161,17 @@ pub(crate) fn attribute_lookup(
             return Ok(Attribute::Owned(instance.new_str(&signature)));
         }
     }
+    // **原生可调用对象的 `__module__` 旁表**（task-6／缺口2）：内建函数与**宿主函数**共用。
+    // - 内建函数还有自己的 `getattr` 槽（[`builtin_function_getattr`](crate::builtin_objects::builtin_function_getattr)）
+    //   兜底 `builtins`；这里先命中登记的来源模块（`_csv.reader` ⇒ `"_csv"`、`math.sqrt` ⇒ `"math"`）；
+    // - 宿主函数（`host_function` 类型）**没有** `getattr` 槽 ⇒ 只能由这里投影旁表值：
+    //   `pa_register` 登记的记 `"builtins"`，`pa_module_addfunction` 记宿主模块的**完整点分名**。
+    // 未登记 ⇒ 什么也不做（继续走类型字典／实例字典，既有语义不变）。
+    if name == "__module__" {
+        if let Some(module) = instance.builtin_function_module(object) {
+            return Ok(Attribute::Owned(instance.new_str(&module)));
+        }
+    }
     // **用户 `__getattribute__` 优先**（round 87，参照 `PyObject_GenericGetAttr` 之前的
     // `tp_getattro` 语义）：类型 MRO 上**覆写**了 `__getattribute__` ⇒ `getattr(obj, 名)`／
     // `obj.名` 一律先调它 ✓。守卫：钩子执行期间（`object.__getattribute__` → `attribute_read`）

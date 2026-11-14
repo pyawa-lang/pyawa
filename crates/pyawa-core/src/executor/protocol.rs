@@ -2200,6 +2200,59 @@ fn install_function_attribute_descriptors(instance: &Instance) {
     }
 }
 
+/// **`function.__code__`／`__globals__` 的类属性换成真正的描述符实例**（task-8／缺口4）。
+///
+/// 为什么必须换：`Lib/types.py:63-64` 的
+/// `GetSetDescriptorType = type(FunctionType.__code__)` 与
+/// `MemberDescriptorType = type(FunctionType.__globals__)` 原先取到的是**原生函数**
+/// （`builtin_function_or_method`）✗ ⇒ `types` 的两个别名都错 ✗ ⇒ 上游 `inspect._shadowed_dict`
+/// 的 `type(class_dict) is types.GetSetDescriptorType` 永假 ⇒ `_check_class` 恒返回 sentinel
+/// ⇒ `inspect.getattr_static` 恒 MISSING ✗。
+///
+/// 换成 `getset_descriptor`／`member_descriptor` 实例（**与 `type.__dict__['__dict__']` 同类型** ✓）
+/// 后：`type(FunctionType.__code__).__name__ == "getset_descriptor"`、
+/// `type(FunctionType.__globals__).__name__ == "member_descriptor"`（与参照 3.14.4 实测一致 ✓）。
+///
+/// **实例属性语义不变**：`f.__code__`／`f.__globals__` 仍走 `function` 的 `getattr` 槽
+/// （[`crate::builtin::function::function_getattr`]）——类型字典这几项只在**类级取用**与
+/// `type(...)` 上可见 ✓；`.__get__` 走 [`getset_descriptor_get`](crate::builtin_objects::getset_descriptor_get)
+/// 的 `code`／`globals` 分派，与实例读**同一处真相** ✓。
+fn install_function_dunder_descriptors(instance: &Instance) {
+    let Some(function_type) = instance.hot_type(HotId::Function) else {
+        return;
+    };
+    let Some(getset_type) = instance.hot_type(HotId::GetSetDescriptor) else {
+        return;
+    };
+    let Some(member_type) = instance.hot_type(HotId::MemberDescriptor) else {
+        return;
+    };
+    for (python_name, kind, descriptor_type) in [
+        ("__code__", "code", getset_type),
+        ("__globals__", "globals", member_type),
+    ] {
+        // **幂等**：已经是本类型字典自己的、且类型正确的描述符 ⇒ 不重装 ✓。
+        let already = instance
+            .type_lookup_owner(function_type, python_name)
+            .is_some_and(|(owner, value)| {
+                owner == function_type && instance.type_of(value) == descriptor_type
+            });
+        if already {
+            continue;
+        }
+        let descriptor = instance.descriptor_instance(
+            descriptor_type,
+            kind,
+            python_name,
+            Some(function_type.cast::<crate::TypeObject>()),
+        );
+        if let Some(previous) = instance.set_type_attribute(function_type, python_name, descriptor) {
+            // SAFETY: `set_type_attribute` 交回的是被顶下来的旧值那份引用。
+            unsafe { instance.release_object(previous.as_ptr()) };
+        }
+    }
+}
+
 /// **property 的数据描述符面**：`__set__`／`__delete__`（`__get__` 若 stdlib 已装则不重复 ✓）。
 fn install_property_descriptors(instance: &Instance) {
     let Some(property_type) = instance.hot_type(HotId::Property) else {
@@ -2263,6 +2316,7 @@ fn install_static_and_classmethod_descriptors(instance: &Instance) {
 /// 所以**不能**做成进程级一次性 ✓）。
 pub fn install_builtin_descriptors(instance: &Instance) {
     install_function_attribute_descriptors(instance);
+    install_function_dunder_descriptors(instance);
     install_property_descriptors(instance);
     install_static_and_classmethod_descriptors(instance);
 }

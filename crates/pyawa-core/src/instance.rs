@@ -191,6 +191,13 @@ pub struct Instance {
     /// `inspect.signature` 解析内建可调用对象（`object.__init__`／`__new__`／`__init_subclass__`
     /// 以及宿主函数）的文本签名入口 ✓。
     text_signatures: RefCell<std::collections::HashMap<usize, String>>,
+    /// **原生可调用对象的来源模块旁表**（task-6／缺口2）：参照的 `builtin_function_or_method`
+    /// 报告**来源 C 模块**（`_csv.reader.__module__ == "_csv"`、`math.sqrt.__module__ == "math"`），
+    /// 而本层对象只存名字与函数指针（`BuiltinFunctionObject`）⇒ 由**模块安装的集中路径**
+    /// （`pyawa-stdlib` 的 `install`／ABI 的宿主函数注册）按对象地址登记一份来源模块名。
+    /// 未登记（内建命名空间里创建的原生函数、core 自造的原生函数）⇒ `builtins`（既有口径）。
+    /// 与 `text_signatures` 同一模式：值用 `String`（运行期数据）、按地址登记，条目随实例销毁。
+    builtin_function_modules: RefCell<std::collections::HashMap<usize, String>>,
     /// **`mappingproxy` 的活视图来源**（round 125）：键/值/项视图的 `.mapping` 要是**源字典的活视图** ✓
     /// ⇒ 按代理地址记源 dict 指针；等价比较等入口先同步快照 ✓（`test_dict.test_views_mapping` ✓）。
     mappingproxy_live: RefCell<crate::fast_hash::FastMap<usize, NonNull<Header>>>,

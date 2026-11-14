@@ -544,6 +544,15 @@ impl Instance {
         type_object.mark_external_instance_dict();
         Some(created)
     }
+
+    /// 取类型的命名空间字典，**没有就交 `None`**（**不惰性创建**）。
+    ///
+    /// 给"只读遍历"的场合用（task-6：模块安装时登记原生函数的来源模块）——那里遍历到的类型
+    /// 大多数不需要命名空间，若走 [`Self::type_namespace`] 会为每个内建类型白建一个空 dict。
+    pub fn type_namespace_if_present(&self, ty: NonNull<Header>) -> Option<NonNull<Header>> {
+        // SAFETY: 调用方保证 ty 是存活的类型对象。
+        unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.dict()
+    }
 }
 
 impl Instance {

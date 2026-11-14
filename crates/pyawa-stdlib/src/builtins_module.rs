@@ -212,15 +212,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.release(classmethod);
         }
     }
-    // **`function.__code__`／`__globals__` 进 `function` 的类型字典** ✓（第 214 轮）：
-    // `Lib/types.py` 要 `type(FunctionType.__code__)` ✓ 与 `type(FunctionType.__globals__)` ✓
-    // —— 类级取法先前取不到 ✗（与 `str.join` **同款** ✓）。
+    // **`function.__code__`／`__globals__`**（第 214 轮起在**类型字典**里；task-8／缺口4 改成
+    // **真正的描述符实例**）：`Lib/types.py` 的 `type(FunctionType.__code__)`／
+    // `type(FunctionType.__globals__)` 要分别落到 `getset_descriptor`／`member_descriptor` ✓
+    // ⇒ 安装点在 **core** 的 `executor::protocol::install_builtin_descriptors`（本函数末尾调用 ✓）：
+    // 那里能取到 `AttributeObject` 载荷与原生的 `__get__` 分派（stdlib 不许 `unsafe` ⇒ 只做组织 ✓）。
     if let Some(function_type) = instance.type_named("function") {
         if let Some(type_namespace) = instance.type_namespace(function_type.cast()) {
-            let code_method = make_native(instance, "__code__", pyawa_core::function_code_native as pyawa_core::NativeFn);
-            instance.dict_set(type_namespace, "__code__", code_method);
-            let globals_method = make_native(instance, "__globals__", pyawa_core::function_globals_native as pyawa_core::NativeFn);
-            instance.dict_set(type_namespace, "__globals__", globals_method);
             // **`function.__get__`** ✓（第 410 轮，task-21 ✓）：`enum.py` 的 `_is_descriptor` 靠
             // `hasattr(obj, '__get__')` 把类体里的**普通函数**认成描述符 ✓（否则 `Flag._get_value`
             // 会被当成枚举成员 ✗）。

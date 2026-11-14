@@ -697,7 +697,11 @@ pub fn set_module_search_path(instance: &pyawa_core::Instance, directories: &[St
 /// 本函数只做装配，不碰平台 ✓（`CX-4`）。
 pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[String]) {
     let builtins = builtins_module::build(instance);
+    // **原生函数的来源模块**（task-6／缺口2）：`import builtins` 里的函数参照报 `builtins`
+    // （`len.__module__ == "builtins"`）⇒ 在**装模块的集中路径**统一登记 ✓。
+    instance.register_namespace_native_modules(builtins, "builtins");
     let sys = sys_module::build(instance);
+    instance.register_namespace_native_modules(sys, "sys");
     let stdout = instance
         .dict_get(sys, "stdout")
         .expect("`sys.stdout` 由 `sys_module::build` 装好");
@@ -781,6 +785,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     {
         let constants = instance.platform_constants();
         let namespace = errno_module::build(instance, &constants);
+        instance.register_namespace_native_modules(namespace, errno_module::NAME);
         let module = instance
             .alloc(AttributeObject::new(
                 module_type,
@@ -790,6 +795,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
             .cast::<pyawa_core::Header>();
         instance.dict_set(modules, errno_module::NAME, module);
 let namespace = _sre_module::build(instance);
+        instance.register_namespace_native_modules(namespace, _sre_module::NAME);
         let module = instance
             .alloc(AttributeObject::new(
                 module_type,
@@ -815,6 +821,11 @@ let namespace = _sre_module::build(instance);
     for (name, build) in RUST_MODULES {
 
         let namespace = build(instance);
+        // **原生函数的来源模块登记**（task-6／缺口2）——**唯一集中入口**：模块表里的每个模块
+        // 建完名字空间后，把其中的 `builtin_function_or_method`（以及类型字典里的原生方法）
+        // 按模块名登记进每实例旁表 ⇒ `__module__` 如实报告来源（`_csv.reader ⇒ "_csv"`、
+        // `math.sqrt ⇒ "math"`）。未登记（内建命名空间／core 自造）默认仍是 `builtins`。
+        instance.register_namespace_native_modules(namespace, name);
         let module = instance
             .alloc(AttributeObject::new(
                 module_type,

@@ -938,12 +938,21 @@ pub unsafe extern "C" fn pa_module_addfunction(
         let Some(signature) = (unsafe { host::read_signature(sig) }) else {
             return status::PA_ERR_INVALID;
         };
+        // **宿主模块的完整点分名**（task-6／缺口2：`__module__` 要报**所在模块**，
+        // 子模块取 `parent.child` —— 与 `sys.modules` 的键同一口径）。
+        let module_full_name = host_module_record(state, module)
+            .map(|module| module.full_name.clone())
+            .expect("gate 已确认句柄有效");
         let namespace = host_module_record(state, module)
             .and_then(|module| module_namespace(&state.instance, module))
             .expect("gate 已确认句柄有效");
         // SAFETY: 调用方按契约给出 sig。
         let text_signature = unsafe { host::text_signature(&state.instance, sig) };
         let created = create_host_function(state, &text, function, &signature, text_signature);
+        // **来源模块**（task-6／缺口2）：`pa_module_addfunction` 装的函数如实报宿主模块名。
+        state
+            .instance
+            .set_builtin_function_module(created, &module_full_name);
         // `dict_set` 自己加一份引用；`created` 的初始引用由 `host_functions` 账本持有（实例销毁时随堆释放）。
         state.instance.dict_set(namespace, &text, created);
         status::PA_OK
@@ -3136,6 +3145,11 @@ pub unsafe extern "C" fn pa_register(
         // SAFETY: 调用方按契约给出 sig。
         let text_signature = unsafe { host::text_signature(&state.instance, sig) };
         let created = create_host_function(state, &text, function, &signature, text_signature);
+        // **来源模块**（task-6／缺口2）：`pa_register` 把宿主函数装进**全局命名空间**
+        // ⇒ 参照的 `builtin_function_or_method` 口径是 `"builtins"`（与内建 `len` 同档）。
+        state
+            .instance
+            .set_builtin_function_module(created, "builtins");
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping

@@ -334,13 +334,23 @@ pub unsafe fn builtin_function_getattr(
 ) -> Option<NonNull<Header>> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<BuiltinFunctionObject>() };
-    // **`__module__`**（round 69）：参照的 `builtin_function_or_method` 有它（`len.__module__`
-    // ⇒ `'builtins'` ✓）。本层没记每个原生函数的来源模块 ⇒ 统一报 `builtins` ✓ ——
-    // 这让 `inspect.getmodule`／`doctest.DocTestSuite` 不再在 `_from_module` 里抛
+    // **`__module__`**（round 69 起有；task-6 起**如实报告来源模块** ✓）：参照的
+    // `builtin_function_or_method` 报告**来源 C 模块**（实测 3.14.4：`len.__module__ == 'builtins'`、
+    // `_csv.reader.__module__ == '_csv'`、`math.sqrt.__module__ == 'math'`、`sys.exit.__module__ == 'sys'`）。
+    //
+    // 本层对象只存名字与函数指针 ⇒ 来源模块由**模块安装的集中路径**登记进每实例旁表
+    // （[`Instance::register_namespace_native_modules`]）；没登记 ⇒ 沿用既有 `builtins` 口径 ✓
+    // （内建命名空间里创建的函数、core 自造的原生函数都是这一档）。
+    // `builtins` 这个默认值让 `inspect.getmodule`／`doctest.DocTestSuite` 不再在 `_from_module` 里抛
     // `ValueError: object must be a class or function` ✗（`test_collections`／`test_itertools`／
     // `test_metaclass` 的 `load_tests` 都卡在这里 ✓；跳过这些内建函数的递归即可 ✓）。
     if name == "__module__" {
-        return Some(instance.new_str("builtins"));
+        // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+        let pointer = unsafe { NonNull::new_unchecked(ptr) };
+        let module = instance
+            .builtin_function_module(pointer)
+            .unwrap_or_else(|| "builtins".to_owned());
+        return Some(instance.new_str(&module));
     }
     // **`__text_signature__`**（round 86）：`inspect.signature` 解析内建可调用对象的入口 ✓。
     if name == "__text_signature__" {
@@ -656,6 +666,13 @@ pub unsafe fn method_getattr(
                 };
                 if from_getattr.is_some() {
                     return from_getattr;
+                }
+            }
+            // **原生函数的 `__module__`**（task-6／缺口2）：绑定形态（`m = some_native`）也按
+            // 来源模块旁表如实报告；未登记 ⇒ 继续走类型字典（既有口径）。
+            if name == "__module__" {
+                if let Some(module) = instance.builtin_function_module(function) {
+                    return Some(instance.new_str(&module));
                 }
             }
             instance.type_lookup(function_type, name).map(|found| instance.retain(found))

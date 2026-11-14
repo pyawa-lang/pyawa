@@ -13,9 +13,9 @@
 //!   `DictReader`／`DictWriter`（含 `restkey`／`restval`／`extrasaction`／`writeheader` 返回值）、
 //!   以及 `Sniffer.sniff`／`has_header`。期望值由**本机 `python3` 3.14.4 跑同一段脚本**取得 ✓。
 //! * **`HONEST_SCRIPT`**：pyawa 侧**独有**的实现边界（如实钉住，避免以后漂移）：
-//!   - 原生函数的 `__module__` 是 core 的统一口径 `"builtins"`（参照给 `"_csv"`）⇒
-//!     `test.support.check__all__` 认不出这 7 个名字（上游 `test_csv.test__all__` 的唯一失败点）；
-//!     原生函数也没有 clinic 的 `__text_signature__`（`None`）。
+//!   - 原生函数的 `__module__` 已如实报告**来源模块**（task-6／缺口2：`_csv.reader ⇒ "_csv"`；
+//!     与参照一致 ⇒ `test.support.check__all__` 认得出这 7 个名字，上游 `test_csv.test__all__`
+//!     转 PASS）；仍无 clinic 的 `__text_signature__`（`None`）。
 //!   - 三个类型是**每实例注册**的原生类型 ⇒ `__name__` 是 `_csv.reader`／`_csv.writer`／
 //!     `_csv.Dialect`（参照分别是 `reader`／`writer`／`Dialect`）；`isinstance` 面照参照一致。
 //!   - 实例状态放**实例字典的私有键**（`__pyawa_csv_*`；参照是 C 载荷、无 `__dict__`）；
@@ -23,16 +23,18 @@
 //!   - 只读 `Dialect` 属性用 `property` ⇒ `setattr`／`delattr` 报 `AttributeError`（类型一致；
 //!     文案是 property 的，不是参照 C getset 的）。
 //!
-//! **为什么 `test__all__` 失败不修**（如实归因，不是 `_csv` 的语义问题）：`check__all__` 按
-//! `obj.__module__ in ('csv', '_csv')` 认公共名，而本层 `builtin_function_or_method.__module__`
-//! 在 `pyawa-core` 里**统一**报 `builtins`（`crates/pyawa-core/src/builtin_objects/callables.rs`
-//! 的 `builtin_function_getattr`）—— 修它要动 core（本任务写域外）且影响所有内建模块。
+//! **`test__all__` 的归因已收口**（task-6／缺口2）：`check__all__` 按 `obj.__module__ in
+//! ('csv', '_csv')` 认公共名；`builtin_function_or_method.__module__` 现在由模块安装的集中路径
+//! （`pyawa-core` 的 `Instance::register_namespace_native_modules` ＋ `pyawa-stdlib::install`）
+//! 如实登记来源模块 ⇒ 7 个 `_csv` 函数报 `"_csv"`，上游 `test_csv.test__all__` 转 PASS。
+//! （其余 pytest 面的失败仍按各自的如实归因处理。）
 //!
-//! **另一个上游子测试组的如实归因**：`test_roundtrip_quoteed_newlines`／
-//! `test_roundtrip_escaped_unquoted_newlines` 的 `lineterminator='\r'` 两格报 `newline=''` 错误，
-//! 根因不在 `_csv`：本层 `_io` 的 `TextIOWrapper(newline='')` **不在孤立 `\r` 处断行**
-//! （`['a,b\rc,d\r']` 而不是 `['a,b\r','c,d\r']`）⇒ reader 拿到的"一行"里含内嵌换行；`_csv`
-//! 照参照语义如实报错（不偷偷容忍）。
+//! **另一个上游子测试组已收口**（缺口3，`_io` universal newline）：`test_roundtrip_quoteed_newlines`／
+//! `test_roundtrip_escaped_unquoted_newlines` 的 `lineterminator='\r'` 两格先前报 `newline=''` 错误，
+//! 根因不在 `_csv`：`_io` 的文本 IO **不在孤立 `\r` 处断行**（`['a,b\rc,d\r']` 而不是
+//! `['a,b\r','c,d\r']`）⇒ reader 拿到的"一行"里含内嵌换行。缺口3 已在 `_io` 侧修好
+//! （`crates/pyawa-stdlib/src/io_module.rs` 的 `NewlineMode`；e2e 见 `io_newline_shapes.rs`）⇒ 两格转 PASS；
+//! `_csv` 仍照参照语义如实报错（不偷偷容忍）✓。
 
 fn run(name: &str, script: &str) -> String {
     let root = std::env::temp_dir().join(format!("pyawa-csv-{}-{name}", std::process::id()));
@@ -360,8 +362,7 @@ has-header True False
 /// pyawa 侧独有边界（见文件头 ✓；参照侧无对应物）。
 const HONEST_SCRIPT: &str = r#"import csv, io, _csv
 
-# 1) 原生函数的 `__module__`：本层 core 统一给 "builtins"（参照给 "_csv"）⇒
-#    `test.support.check__all__` 认不出这 7 个名字（上游 test_csv.test__all__ 的唯一失败点）。
+# 1) 原生函数的 `__module__`：来源模块已如实登记（task-6）⇒ 与参照一致（"_csv"）。
 print("native-module", _csv.reader.__module__, _csv.writer.__module__, _csv.field_size_limit.__module__)
 print("native-text-signature", _csv.reader.__text_signature__)
 
@@ -388,7 +389,7 @@ print("writerow-return", csv.writer(Sink()).writerow(["ab"]))
 "#;
 
 /// pyawa 侧期望（实跑取得 ✓，逐行）。
-const HONEST_EXPECTED: &str = r#"native-module builtins builtins builtins
+const HONEST_EXPECTED: &str = r#"native-module _csv _csv _csv
 native-text-signature None
 type-names _csv.reader _csv.writer _csv.Dialect
 reader-dict ['__pyawa_csv_dialect', '__pyawa_csv_input', '__pyawa_csv_line_num']
