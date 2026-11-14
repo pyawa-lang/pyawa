@@ -847,6 +847,17 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
         let value = rotated as i64;
         return Ok(if value == -1 { -2 } else { value });
     }
+    // **宿主对象**（`PLAN` §12.12 oracle）：`attribute_optional_of` 会先在类型 MRO 命中
+    // `object.__hash__`，永远走不到宿主回退 ⇒ 先走统一协议入口（宿主优先）。
+    if instance.has_host_object_ops(object) {
+        if let Some(result) = instance.call_protocol_method(object, "__hash__", &[])? {
+            let value = instance.int_value(result);
+            instance.release(result);
+            if let Some(value) = value {
+                return Ok(value);
+            }
+        }
+    }
     // 用户类：参照走 `object.__hash__`（身份哈希）⇒ 本层调它的 `__hash__`（同一协议面）。
     let is_builtin = pyawa_core::builtin_types::BUILTIN_TYPES
         .iter()
@@ -1391,6 +1402,12 @@ fn abs_native(
     // **`abs(complex)` ⇒ 模（float）**（task-31；参照 `abs(1+2j)` ⇒ `2.23606797749979` ✓）。
     if let Some((real, imag)) = instance.complex_value(value) {
         return Ok(instance.new_float(real.hypot(imag)));
+    }
+    // **宿主对象**：统一协议入口（宿主 `getattr_fn` 优先，`PLAN` §12.12 oracle）。
+    if instance.has_host_object_ops(value) {
+        if let Some(result) = instance.call_protocol_method(value, "__abs__", &[])? {
+            return Ok(result);
+        }
     }
     let message = format!("bad operand type for abs(): '{}'", type_name(instance, value));
     Err(instance.raise_builtin_error("TypeError", &message))
@@ -2090,16 +2107,28 @@ fn format_native(
         .and_then(|value| instance.text_of(value))
         .unwrap_or("")
         .to_owned();
-    if !spec.is_empty() {
-        if let Ok(Some(method)) = instance.attribute_optional_of(value, "__format__") {
-            let spec_value = instance.new_str(&spec);
-            let outcome = pyawa_core::executor::call::call_value(instance, method, &[spec_value], &[]);
-            instance.release(spec_value);
-            instance.release(method);
-            if let Ok(result) = outcome {
-                return Ok(result);
-            }
+    // **宿主对象**：统一协议入口（宿主 `getattr_fn` 优先；`attribute_optional_of` 会先命中
+    // `object.__format__` 的默认实现而永远走不到宿主回退）。
+    if instance.has_host_object_ops(value) {
+        let spec_value = instance.new_str(&spec);
+        let outcome = instance.call_protocol_method(value, "__format__", &[spec_value]);
+        instance.release(spec_value);
+        if let Ok(Some(result)) = outcome {
+            return Ok(result);
         }
+    }
+    // **属性通道唯一入口**（`PLAN` §12.12 机检）：空 spec 也必须先问 `__format__`（宿主
+    // `getattr_fn` 可能就是唯一实现）；只有"内建数值/int 快路"保留原位（等价测试在 stdlib）。
+    if let Ok(Some(method)) = instance.attribute_optional_of(value, "__format__") {
+        let spec_value = instance.new_str(&spec);
+        let outcome = pyawa_core::executor::call::call_value(instance, method, &[spec_value], &[]);
+        instance.release(spec_value);
+        instance.release(method);
+        if let Ok(result) = outcome {
+            return Ok(result);
+        }
+    }
+    if !spec.is_empty() {
         if let Some(number) = instance.int_of(value).and_then(|number| number.to_i64()) {
             if let Some(text) = format_int_spec(&spec, number) {
                 return Ok(instance.new_str(&text));

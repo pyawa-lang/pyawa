@@ -513,6 +513,31 @@ pub(crate) fn key_hash_checked(
             return Ok(None);
         }
     }
+    // **宿主 `__hash__`**（`PLAN` §12.12 oracle）：`attribute_lookup` 会在类型 MRO 命中
+    // `object.__hash__` 后停止、永远走不到宿主回退 ⇒ 这里先直接问宿主钩子（`AB-75` 读序）。
+    if instance.has_host_object_ops(object) {
+        if let Some(found) = instance.host_object_getattr(object, "__hash__")? {
+            // 宿主 getattr 返回已绑定方法 ⇒ 不再补 self。
+            let outcome = crate::executor::call::call_callable(
+                instance,
+                found,
+                None,
+                Vec::new(),
+                Vec::new(),
+                0,
+            );
+            // SAFETY: `found` 是属性通道交出的新引用。
+            unsafe { instance.release_object(found.as_ptr()) };
+            let returned = outcome?;
+            let hash = instance.int_of(returned).and_then(|value| value.to_i64());
+            // SAFETY: 返回值是新引用，这里消费。
+            unsafe { instance.release_object(returned.as_ptr()) };
+            let Some(hash) = hash else {
+                return Ok(None);
+            };
+            return Ok(Some(hash as u64));
+        }
+    }
     // 其余按**身份**（与 `values_equal` 的"其余按身份"一致 ✓）。
     Ok(Some(mix64(object.as_ptr() as usize as u64)))
 }

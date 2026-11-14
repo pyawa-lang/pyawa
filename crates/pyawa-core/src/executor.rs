@@ -679,23 +679,9 @@ pub fn unary_public(
         _ => "",
     };
     if !dunder.is_empty() {
-        if let Ok(Attribute::Method { function, this }) =
-            crate::executor::attribute::attribute_lookup(instance, operand, dunder)
-        {
-            // SAFETY: 两者分别由类型字典／实例持有，存活。
-            unsafe {
-                instance.incref_object(function.as_ptr());
-                instance.incref_object(this.as_ptr());
-            }
-            let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
-                instance.hot_type(HotId::Method).expect("method 已登记"),
-                function,
-                this,
-            ));
-            let bound = bound.into_raw().cast::<Header>();
-            let outcome = crate::executor::call::call_value(instance, bound, &[], &[]);
-            release(instance, bound);
-            return outcome;
+        // **属性通道统一派发**（用户方法／宿主 `getattr_fn` 都走这里）；`None` ⇒ 没有实现。
+        if let Some(result) = crate::executor::protocol::call_protocol_method(instance, operand, dunder, &[])? {
+            return Ok(result);
         }
     }
     let name = instance.type_name(instance.type_of(operand));

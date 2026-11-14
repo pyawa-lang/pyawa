@@ -85,6 +85,7 @@ mod code;
 pub mod compile;
 /// **TS 注解表达式的语法模型**（`SPEC-type-system.md` §16 的 `TS-52`；M1/M2）。
 pub mod type_expr;
+pub mod protocols;
 pub use type_expr::{
     evaluate_type_expression, resolve_type_expr, ResolveError, ResolveScope, SemanticType,
     TypeAnnotationError, TypeExpr,
@@ -131,6 +132,7 @@ pub(crate) use instance::HotId;
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 pub use instance::{HostObjectGetAttr, HostObjectOps, HostObjectSetAttr};
+pub use protocols::{ProtocolCase, PROTOCOL_CASES};
 pub use type_object::{
     HostDealloc, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
     HAS_INSTANCE_DICT,

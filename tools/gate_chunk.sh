@@ -23,6 +23,7 @@ case "$MODE" in
       run python3 tools/check_corpus_floor.py
       run python3 tests/ci/failure_path_leaks.py --binary target/release/pyawa
       run python3 tests/ci/host_usability_probe.py --release
+      run cargo test --release -p pyawa-abi --test protocol_oracle --test protocol_host_dispatch
     } >"$LOG" 2>&1
     RC=$?
     ;;

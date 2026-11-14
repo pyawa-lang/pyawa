@@ -797,6 +797,20 @@ pub(crate) fn contains(
     // 实测：`'X' in os.environ`（`os._Environ`，`collections.abc.MutableMapping` 的子类 ✓）先前直接报
     // `argument of type '_Environ' is not a container or iterable` ✗ ⇒ 这一条压着
     // `xml.sax`（5 个 ✓）＋ `xml.dom.pulldom` ✓（`tools/next_work.py` 的队列 ✓）。
+    // **`AB-73`/`AB-75`**：宿主对象没有类型字典条目，但 `getattr_fn` 可能就是唯一实现 ⇒
+    // 在"类型自带 `__contains__`"与迭代回退之前，先走统一属性通道问一次。
+    if instance.has_host_object_ops(container) {
+        if let Some(returned) = crate::executor::protocol::call_protocol_method(
+            instance,
+            container,
+            "__contains__",
+            &[item],
+        )? {
+            let truth = crate::executor::truthiness(instance, returned, opcode)?;
+            crate::executor::release(instance, returned);
+            return Ok(truth);
+        }
+    }
     if let Some(found) = instance.type_lookup(container_type, "__contains__") {
         // **`__contains__ = None` 会阻断迭代回退** ✓（参照口径；`test_contains.test_block_fallback`
         // 钉住）：此时报"不是容器"的 TypeError ✓，**不**再按 `__iter__` 回退 ✓。

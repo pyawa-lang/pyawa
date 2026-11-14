@@ -580,12 +580,14 @@ fn inplace_dunder(
     right: NonNull<Header>,
     dunder: &str,
 ) -> Result<Option<NonNull<Header>>, ExecError> {
-    let ty = instance.type_of(left);
-    let Some((_owner, _func)) = instance.type_lookup_owner(ty, dunder) else {
+    // **宿主对象**：类型 MRO 没有 `__iadd__` 等条目，但 `getattr_fn` 可能就是唯一实现。
+    if !(instance.has_host_object_ops(left)
+        || resolve_dunder(instance, left, dunder).overrides(instance))
+    {
         return Ok(None);
-    };
+    }
     // 容器快路（list／set／dict）没在类型字典里登记这些 dunder ⇒ 到这里只会是**用户覆写** ✓。
-    let Some(result) = call_special_method(instance, left, dunder, &[right])? else {
+    let Some(result) = call_protocol_method(instance, left, dunder, &[right])? else {
         return Ok(None);
     };
     if result == instance.not_implemented() {
@@ -1054,10 +1056,10 @@ fn call_compare_dunder(
     name: &str,
     other: NonNull<Header>,
 ) -> Result<Option<bool>, ExecError> {
-    if !type_has_own_dunder(instance, object, name) {
+    if !type_has_own_dunder(instance, object, name) && !instance.has_host_object_ops(object) {
         return Ok(None);
     }
-    let Some(result) = call_special_method(instance, object, name, &[other])? else {
+    let Some(result) = call_protocol_method(instance, object, name, &[other])? else {
         return Ok(None);
     };
     if result == instance.not_implemented() {
@@ -1158,7 +1160,7 @@ pub fn equality_compare_result(
             continue;
         }
         attempted = true;
-        let Some(result) = call_special_method(instance, operand, name, &[other])? else {
+        let Some(result) = call_protocol_method(instance, operand, name, &[other])? else {
             continue;
         };
         if result == instance.not_implemented() {
@@ -1207,11 +1209,13 @@ pub fn order_compare_result(
     for (name, operand, other) in order {
         // **只派发"自己的"实现** ✓（`object` 的默认 `__lt__` 只返回 `NotImplemented` ✓；
         // 内建容器自己的实现走容器递归／原生路径 ✓）。
-        if !resolve_dunder(instance, operand, name).overrides(instance) {
+        if !(resolve_dunder(instance, operand, name).overrides(instance)
+            || instance.has_host_object_ops(operand))
+        {
             continue;
         }
         attempted = true;
-        let Some(result) = call_special_method(instance, operand, name, &[other])? else {
+        let Some(result) = call_protocol_method(instance, operand, name, &[other])? else {
             continue;
         };
         if result == instance.not_implemented() {
@@ -1235,7 +1239,10 @@ pub fn order_compare_result(
 /// （参照 True ✓）⇒ `test_userstring` 一行断言全红、`unittest.assertEqual` 也跟着失真 ✓。
 #[inline]
 fn overrides_compare(instance: &Instance, object: NonNull<Header>, name: &str) -> bool {
+    // **宿主对象**没有类型 MRO 条目，但 `getattr_fn` 可能就是唯一实现（`AB-73`/`AB-75`）；
+    // 有宿主钩子 ⇒ 一律尝试属性通道（`call_special_method`），`PA_ERR_NOTFOUND` 会自然落回默认。
     resolve_dunder(instance, object, name).overrides(instance)
+        || instance.has_host_object_ops(object)
 }
 
 /// 这个值**自己**覆写了 `__eq__`（不是 `object` 的默认实现）吗？（round 66：容器去重要按参照的
@@ -1463,6 +1470,8 @@ pub fn compare_public(
             // ⇒ 快路把它拉回阈值内 ✓）。
             let overrides_ne = |object: NonNull<Header>| {
                 type_has_own_dunder(instance, object, "__ne__")
+                    // **宿主对象**必须进完整协议（快路会走 `values_equal_public`、绕过 `getattr_fn`）。
+                    || instance.has_host_object_ops(object)
             };
             if !overrides_ne(left) && !overrides_ne(right) {
                 return Ok(!equality_public(instance, left, right)?);
@@ -1480,6 +1489,16 @@ pub fn compare_public(
                 [(left, right), (right, left)]
             };
             for (operand, other) in order {
+                // **宿主对象**：类型 MRO 没有 `__ne__` 条目，但 `getattr_fn` 可能就是唯一实现
+                // （`object.__ne__` 的默认会先命中类型通道、永远走不到宿主回退）⇒ 先问统一入口。
+                if instance.has_host_object_ops(operand) {
+                    if let Some(verdict) =
+                        call_compare_dunder(instance, operand, "__ne__", other)?
+                    {
+                        return Ok(verdict);
+                    }
+                    continue;
+                }
                 // 有**自己的** `__ne__` ⇒ 调它 ✓。
                 if type_has_own_dunder(instance, operand, "__ne__") {
                     if let Some(verdict) = call_compare_dunder(instance, operand, "__ne__", other)? {
@@ -1773,6 +1792,37 @@ fn rich_compare(
 /// `__repr__`**（那是给**成员实例**用的 ✓）⇒ 里面 `self.__class__._value_repr_` 把类当成实例读 ✗
 /// ⇒ `AttributeError: 'type' object has no attribute '_value_repr_'` ✗（真 `enum.py` 第 39 条
 /// `class IntFlag(...)` 当场炸 —— 调试信息里当前帧是 `Flag.__repr__` ✓）。
+/// **协议派发的统一入口（含宿主对象）**：先问宿主属性钩子（`AB-73`／`AB-75` 的读序：
+/// 对象自身条目 → 类型态条目），宿主 `PA_ERR_NOTFOUND` 才落回类型/实例属性通道
+/// （[`call_special_method`]）。
+///
+/// 为什么不能只靠 `call_special_method`：属性查找在**类型 MRO 命中 `object` 的默认方法**时就会
+/// 返回（`object.__eq__`＆C.），**不会**再走到宿主回退 ⇒ 宿主 `__eq__`／`__hash__`／`__contains__`
+/// 等永远没机会被问（`PLAN` §12.12 oracle 抓到的旁路）。本函数把"问宿主"提到默认实现之前。
+pub(crate) fn call_protocol_method(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    if instance.has_host_object_ops(object) {
+        if let Some(found) = instance.host_object_getattr(object, name)? {
+            let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+            for argument in args {
+                // SAFETY: 调用方保证实参存活；`call_callable` 自会 retain。
+                unsafe { instance.incref_object(argument.as_ptr()) };
+                call_args.push(*argument);
+            }
+            // 宿主 getattr 交出的是**已绑定**方法（`AB-73` 的 `HostBoundMethod`）⇒ 不再补 self。
+            let outcome = call_callable(instance, found, None, call_args, Vec::new(), 0);
+            // SAFETY: `found` 是属性通道交出的新引用。
+            unsafe { instance.release_object(found.as_ptr()) };
+            return Ok(Some(outcome?));
+        }
+    }
+    call_special_method(instance, object, name, args)
+}
+
 pub(crate) fn call_special_method(
     instance: &Instance,
     object: NonNull<Header>,
@@ -1849,26 +1899,41 @@ pub(crate) fn override_text(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<Option<String>, ExecError> {
+    // **对象语义唯一入口＝属性查找**（`PLAN` §12.12 机检）：**不能**先按类型 MRO 判门 ✗——
+    // 宿主对象没有 `__str__`／`__repr__` 的类型字典条目，但它的 `getattr_fn` 可能就是唯一实现。
+    // 顺序：类型上**用户自有**实现 → 宿主协议钩子 → 默认（`object.__str__`／`__repr__` 不算覆写）。
     let ty = instance.type_of(object);
-    // 类型字典里没有这个名字 ⇒ 没有覆写，直接走槽位路径（**不是**"调用失败"）
-    let Some((owner, _)) = instance.type_lookup_owner(ty, name) else {
-        return Ok(None);
-    };
-    // **`object` 自己那条不算覆写** ✓（第 211 轮 ✗）：`object.__str__`／`object.__repr__` 是本层新挂的
-    // **属性面**（`Lib/types.py` 的 `type(object.__str__)` 要它 ✓）⇒ 若当覆写 ⇒ **每个**对象都会命中
-    // 它 ⇒ 把 `str`／`int` 自带的 `str` 槽带跑 ✗（实测 `f"{x}"` 给 `\'1\'` ✗、四条 f-string 语料红 ✓）。
-    if Some(owner) == instance.hot_type(HotId::Object) {
-        return Ok(None);
+    let user_owner = instance
+        .type_lookup_owner(ty, name)
+        .is_some_and(|(owner, _)| Some(owner) != instance.hot_type(HotId::Object));
+    if user_owner {
+        return match call_special_method(instance, object, name, &[])? {
+            Some(result) => {
+                // SAFETY: result 是新引用，存活。
+                let text = instance.text_value(result);
+                release(instance, result);
+                Ok(text)
+            }
+            None => Ok(None),
+        };
     }
-    match call_special_method(instance, object, name, &[])? {
-        Some(result) => {
-            // SAFETY: result 是新引用，存活。
-            let text = instance.text_value(result);
-            release(instance, result);
-            Ok(text)
-        }
-        None => Ok(None),
+    // **宿主对象**：直接问属性钩子（`AB-73`／`AB-75` 的统一入口；`Owned` 是已绑定方法/值）。
+    if instance.has_host_object_ops(object) {
+        let Some(found) = instance.host_object_getattr(object, name)? else {
+            return Ok(None);
+        };
+        // 宿主返回值按"无额外 self"调用（`AB-73` 的 getattr 返回已绑定方法；参数个数由宿主
+        // 回调自己验，`AB-25`）——与 `host_binary_dunder` 的 `Owned` 口径一致。
+        let outcome = call_callable(instance, found, None, Vec::new(), Vec::new(), 0);
+        // SAFETY: `found` 是属性通道交出的新引用。
+        unsafe { instance.release_object(found.as_ptr()) };
+        let result = outcome?;
+        // SAFETY: result 是新引用，存活。
+        let text = instance.text_value(result);
+        release(instance, result);
+        return Ok(text);
     }
+    Ok(None)
 }
 
 /// **`TS-44`**：元素的 `repr` —— 先走属性通道的 `__repr__`，没有才落到原生槽位／默认实现。

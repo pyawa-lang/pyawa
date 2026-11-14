@@ -170,6 +170,30 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                                 push(instance, frame.get(), iterator)?;
                                 release(instance, iterator);
                             }
+                            // **宿主 getattr 槽交出的已绑定方法**（`AB-73`/`AB-75`）：直接调用。
+                            Ok(Attribute::Owned(bound)) => {
+                                let iterator =
+                                    call_callable(instance, bound, None, Vec::new(), Vec::new(), opcode_number)?;
+                                release(instance, bound);
+                                push(instance, frame.get(), iterator)?;
+                                release(instance, iterator);
+                            }
+                            Ok(Attribute::Value(method)) => {
+                                // SAFETY: value 由调用方持有（本帧栈刚弹出，close 前不释放）。
+                                unsafe { instance.incref_object(value.as_ptr()) };
+                                let iterator = call_callable(
+                                    instance,
+                                    method,
+                                    Some(value),
+                                    Vec::new(),
+                                    Vec::new(),
+                                    opcode_number,
+                                );
+                                // SAFETY: 刚新增的那份引用。
+                                unsafe { instance.release_object(value.as_ptr()) };
+                                release(instance, value);
+                                push(instance, frame.get(), iterator?)?;
+                            }
                             _ => {
                                 release(instance, value);
                                 return Err(raise_builtin(

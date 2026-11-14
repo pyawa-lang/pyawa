@@ -15,6 +15,23 @@ pub(super) fn step_format<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                         push(instance, frame.get(), value)?;
                         return Ok(Step::Continue);
                     }
+                    // **协议唯一入口**（`PLAN` §12.12）：`FORMAT_SIMPLE` 就是
+                    // `format(value, "")` ⇒ 用户/宿主覆写 `__format__` 必须生效；只有内建标量
+                    // 保留 `object_str` 快路（等价测试在 `protocol_host_dispatch.rs`）。
+                    let fast_scalar = {
+                        // SAFETY: value 是存活对象。
+                        let ty = unsafe { value.as_ref() }.ty();
+                        [HotId::Int, HotId::Float, HotId::Str, HotId::Bool, HotId::Complex,
+                         HotId::Bytes, HotId::ByteArray]
+                            .into_iter()
+                            .any(|id| instance.hot_type_is(id, ty))
+                    };
+                    if !fast_scalar {
+                        let formatted = format_value_with_spec(instance, value, "", opcode_number);
+                        release(instance, value);
+                        frame.get().push(formatted?)?;
+                        return Ok(Step::Continue);
+                    }
                     // **直接走 `object_str`** ✓（第 210 轮修正 ✗）：它自己就是"**槽位优先** ＋ 覆写通道 ＋
                     // 兜底" ✓ —— 与参照的默认 `object.__format__`（= `str(self)` ✓）同序 ✓。
                     // 先前这里"**先查 `__str__` 覆写**" ✗ ⇒ 一旦 `object.__str__` 存在（本轮起 ✓），

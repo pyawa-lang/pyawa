@@ -76,7 +76,7 @@ impl Instance {
     }
 
     /// 该对象是否可能有宿主协议钩子（自身或类型态）——`iter`/`arithmetic` 的快路预筛用。
-    pub(crate) fn has_host_object_ops(&self, object: NonNull<Header>) -> bool {
+    pub fn has_host_object_ops(&self, object: NonNull<Header>) -> bool {
         // **一次借用**（避免 `||` 两侧各借一次 ⇒ `RefCell` 已借用 panic）。
         let table = self.object_ops.borrow();
         if table.contains_key(&(object.as_ptr() as usize)) {
@@ -128,5 +128,18 @@ impl Instance {
         self.object_ops
             .borrow_mut()
             .remove(&(object.as_ptr() as usize));
+    }
+}
+
+impl Instance {
+    /// **协议派发统一入口（宿主优先）**：供 stdlib（`format`／`hash`／`abs` 等宿主内建）复用。
+    /// 宿主 `PA_ERR_NOTFOUND` 才落回类型/实例属性通道（`call_special_method`）。
+    pub fn call_protocol_method(
+        &self,
+        object: NonNull<Header>,
+        name: &str,
+        args: &[NonNull<Header>],
+    ) -> Result<Option<NonNull<Header>>, ExecError> {
+        crate::executor::protocol::call_protocol_method(self, object, name, args)
     }
 }

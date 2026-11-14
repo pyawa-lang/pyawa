@@ -123,6 +123,16 @@ pub(crate) fn format_value_with_spec(
             }
         }
     }
+    // **宿主对象**：统一协议入口（宿主 `getattr_fn` 优先；`attribute_lookup` 会先命中
+    // `object.__format__` 默认而走不到宿主回退）。
+    if instance.has_host_object_ops(value) {
+        let spec = instance.new_str(spec_text);
+        let outcome = instance.call_protocol_method(value, "__format__", &[spec]);
+        instance.release(spec);
+        if let Ok(Some(result)) = outcome {
+            return Ok(result);
+        }
+    }
     // SAFETY: value 由调用方保证存活。
     let value_type = unsafe { value.as_ref() }.ty();
     // SAFETY: 类型名由注册表持有。

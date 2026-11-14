@@ -1117,8 +1117,14 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
 5 passed：三形态/NULL/隔离、`pa_set_type_ops`↔`pa_set_object_ops(type)`、模块注入↔属性写、
 `pa_tointeger`↔`pa_tointstring`、`pa_raise_host_exception`↔构造+记录）。
 
-**不变量（机检法）**：给宿主对象挂一个**记录所有被查名字的 `getattr_fn`**，跑参考测试集；
-凡是「VM 支持但记录里从未出现」的 dunder，即证明存在绕过 `resolve_dunder` 的协议解析路径。
+**不变量（机检法；2026-11-14 已落地 = `T-AB-19`）**：给宿主对象挂一个**记录所有被查名字的
+`getattr_fn`**，对 `pyawa_core::PROTOCOL_CASES`（唯一协议清单，`crates/pyawa-core/src/protocols.rs`）
+的**每条**协议跑用例，断言对应 dunder 出现在记录里——缺席即证明存在绕过属性通道的协议解析路径。
+oracle 在 `crates/pyawa-abi/tests/protocol_oracle.rs`（清单↔片段双向一致，**禁止**只覆盖已实现协议）；
+行为生效与快路等价在 `protocol_host_dispatch.rs`；两者随 workspace 测试与 slowcheck 步骤 5 进 CI。
+**落地时抓到并修掉的旁路**：`str`／`repr`（`override_text` 的类型 MRO 预判）、`format`（空 spec
+短路＋f-string `FORMAT_SIMPLE`）、`hash`（stdlib 先命中 `object.__hash__`）、`==`/`!=`（比较快路与
+`__ne__` 默认）、`contains`、`abs`、全部原位算术 dunder（见下方 §12.14）。
 
 ### 12.13 宿主可用性与诊断缺口（2026-11-14，真 numpy 压测所出）
 
@@ -1169,3 +1175,24 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
 不得用"测试里只覆盖已实现协议"来让 oracle 变绿（清单必须是**VM 支持的全集**）。
 
 **关联**：`AB-73`／`AB-75`／`AB-79`；`SPEC-c-abi.md` §17；`PLAN §12.12` 的不变量机检并入本单第 3 步（不再单列）。
+
+### 12.14 宿主协议唯一入口（对象语义不变量，2026-11-14）
+
+**需求**：对象语义的唯一入口是**属性查找**；VM 支持的每种协议都走同一条解析，宿主对象只需实现
+`getattr_fn` 就自动获得全部协议（不得为宿主加专用分支／类型特判）。§12.12 末尾的机检并入本单。
+
+**清单（一处真相）**：`crates/pyawa-core/src/protocols.rs` 的 `PROTOCOL_CASES`（协议 → dunder →
+oracle 用例；**含同步＋异步**：`__await__`／`__aiter__`／`__anext__`／`__aenter__`／`__aexit__`）；
+属性钩子（`__getattr__` 等）与描述符不在表内（前者就是属性通道本身，后两者是类属性机制），边界
+写在模块注释里。
+
+**步骤与状态（2026-11-14，全部 ✓）**：
+1. **清洗旁路**：`str`／`repr`／`format`（含 f-string）首个必修；`hash`／比较（`==`/`!=` 快路与
+   `__ne__` 默认）／`contains`／`abs`／原位算术统一经"宿主优先 → 类型/实例属性通道"
+   （`Instance::call_protocol_method`）。**快路保留**（内建标量按 `object_str`/原生路径），
+   `protocol_host_dispatch.rs::builtin_and_user_fast_paths_unchanged` 钉等价。
+2. **oracle**：`protocol_oracle.rs` 记录式 `getattr_fn`（一律 `NOTFOUND`，`with` 的 `__exit__`
+   除外以走到 `__enter__`）逐条断言"被问过"；清单↔片段双向一致；**无 numpy**。
+3. **CI**：workspace 测试自动跑；`slowcheck` 步骤 5 与 `gate_chunk small` 显式再跑两份测试。
+**边界如实**：oracle 证明"问了"，行为生效由 `protocol_host_dispatch.rs` 的固定返回值用例覆盖；
+属性/描述符协议不在本清单；若未来新增协议必须先加清单条目＋片段（oracle 会红）。

@@ -202,7 +202,7 @@
   - `pa_set_type_ops` 保留为**类型版的便捷投影**（语义等价于 `pa_set_object_ops(type)`，
     须有等价测试，见 `AB-78`）。
   **理由（语义唯一）**：模块与对象不得有两套「按名字取属性」的机制 —— 否则 `np.<没枚举到的>` 会露边界。
-  - **验收**：`T-AB-12`；与 `pa_set_type_ops` 的投影等价见 `T-AB-14`。
+  - **验收**：`T-AB-12`；与 `pa_set_type_ops` 的投影等价见 `T-AB-14`；**协议唯一入口**（每个协议都必须经属性通道问宿主）的机检见 `T-AB-19`。
 
 - **AB-76** **真实类型身份**：新增 `pa_typeid`（不破坏 `AB-63` 的值类别标签）：
   `int pa_typeid(pa_state *st, int idx, void **typeid_out)`（栈契约 `—`）：
@@ -446,6 +446,7 @@
 | `T-AB-16` | `pa_getglobal` 缺失名 ⇒ `PA_ERR_INVALID` **不压栈**（此前压 nil 作废）；存在名照旧 `PA_OK`（§12.13 #3） |
 | `T-AB-17` | `pa_newtype` 的 `NULL dealloc`／`traverse` ⇒ 当场 `PA_ERR_INVALID` 且 `pa_errmsg` 可诊断；合法注册不受影响（`AB-36`／§12.13 #2） |
 | `T-AB-18` | 宿主可用性：组合根产物（`pyawa-runtime` cdylib／静态库）交出的 `paL_newstate`／`paL_openlibs` 实例上 builtins／`import` 可用；`pyawa-abi` 裸实例保持"语言骨架"且失败带 `pa_errmsg`；**仓库内有不含 numpy 的最小探针**可复跑（§12.13 #1） |
+| `T-AB-19` | **协议唯一入口 oracle**：记录式 `getattr_fn` 对 `pyawa_core::PROTOCOL_CASES` **全清单**（含异步协议）跑用例，断言每个协议的 dunder 都被问过（缺席即旁路）；清单↔片段双向一致（禁止只覆盖已实现协议）；另测宿主 dunder 行为生效＋内建/用户类快路等价（`protocol_oracle.rs`／`protocol_host_dispatch.rs`，**无 numpy**，进 CI） |
 
 ---
 

@@ -106,7 +106,7 @@ if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙
 # ⑤ 绿则 ③ 必然绿 ✓（旧版这里串行重跑一遍纯属浪费 ≈109 s；判定口径不变 ✓）。
 STEP_NO=$((STEP_NO + 1))
 [ "$QUIET" = "0" ] && printf '%2d/12 ✓ %-58s %3s（由 ⑤ 覆盖：同一命令 3 次全绿）\n' "$STEP_NO" "cargo test --workspace" "(0)"
-step "python3 tests/ci/check.py ＋ C 参考宿主 ＋ 宿主可用性探针" bash -c 'python3 tests/ci/check.py && python3 tests/ci/t_ref_host.py && if [ "$PROFILE" = "release" ]; then python3 tests/ci/host_usability_probe.py --release; else cargo build -p pyawa-runtime --lib && python3 tests/ci/host_usability_probe.py; fi' || true
+step "python3 tests/ci/check.py ＋ C 参考宿主 ＋ 宿主可用性/协议 oracle" bash -c 'python3 tests/ci/check.py && python3 tests/ci/t_ref_host.py && if [ "$PROFILE" = "release" ]; then python3 tests/ci/host_usability_probe.py --release && cargo test -p pyawa-abi --release --test protocol_oracle --test protocol_host_dispatch; else cargo build -p pyawa-runtime --lib && python3 tests/ci/host_usability_probe.py && cargo test -p pyawa-abi --test protocol_oracle --test protocol_host_dispatch; fi' || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 step "python3 tests/ci/stability.py" python3 tests/ci/stability.py "${PY_PROFILE_ARGS[@]}" || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
