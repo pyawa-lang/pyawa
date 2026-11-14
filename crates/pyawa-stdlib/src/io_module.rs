@@ -1085,8 +1085,9 @@ fn io_base_flush(
 // - 读模式在 `open()` 时把**整个文件**读进实例字典 ✓（不做流式 ✓ —— 我们不做真缓冲 ✓）；
 // - 写模式**先在内存里改** ✓，`flush()`／`close()` 时才**整段落盘** ✓（`w` 用 `O_TRUNC` ✓ ⇒ 落盘即全文 ✓）；
 // - `seek`／`tell` 对**文本**模式不做参照的"只能 0 偏移"限制 ✓（更宽 ✓，不是更窄 ✗）；
-// - `encoding` 只认 `decode_with_encoding` 的四档 ✓（其余报 `LookupError` ✓）；`errors`／`newline`／
+// - `encoding` 只认 `decode_with_encoding` 的四档 ✓（其余报 `LookupError` ✓）；`errors`／
 //   `buffering`／`opener` 如实**未实现** ✗（收了不报错，也不假装生效 ✗）；
+//   `newline=` 的**读**口径已接 ✓（缺口3，见 [`NewlineMode`]），**写**翻译仍未接 ✗；
 // - `type(open(...))` 一律是 `_io.FileIO` ✓（参照文本模式给 `TextIOWrapper` ✗ —— 如实记 ✓）。
 
 /// 打开模式（`r`／`w`／`a`／`x` 四选一 ✓）。
@@ -1152,6 +1153,239 @@ fn parse_mode(mode: &str) -> Result<ModeSpec, String> {
     let readable = kind == ModeKind::Read || plus;
     let writable = kind != ModeKind::Read || plus;
     Ok(ModeSpec { kind, binary, readable, writable })
+}
+
+// ==== universal newline（缺口3 ✓）：文本 IO 的**读**路径 ==========================================
+//
+// 参照口径（本机 `python3` 3.14.4 实测 ✓，见 `target/recon/io_nl/` 的逐字节对拍）：
+// - `newline=None`（`open()` 默认）：`\r`／`\n`／`\r\n` **三档都断行**，读出时**翻译成 `\n`**
+//   （`\r\n` 与孤立 `\r` 各算一个 `\n`）；
+// - `newline=''`：三档都断行，**不翻译**（`\r\n` 原样保留两个字符）；
+// - `newline='\n'`／`'\r'`／`'\r\n'`：**只按给出的那一个**断行、不翻译（其余换行符留在行内）；
+// - `read(n)`：`newline=None` 的 `n` 按**翻译后**字符数算（`\r\n` 计 1 个字符，但两个原字符一起
+//   吃掉）；其余档按原字符数算。`readline(size)` 同口径，且**可以切在 `\r\n` 中间**
+//   （`newline=''` 的 `readline(1)` 对 `\r\n` 给 `'\r'`，下一行给 `'\n'`）；
+//   `newline=None` 的 `readline(1)` 对 `\r\n` 给 `'\n'`（整对已消费）。
+// - 尾行没换行照常返回；EOF 返回 `''`；`read(0)`／`readline(0)` 返回 `''` 且不吃字符 ✓。
+//
+// **实现口径**：`_data` 存**原文**（不改写）⇒ 读时按模式在内存里扫描／翻译 ✓ —— `_pos` 因此是
+// **原文字符下标**（与既有 `tell` 口径一致 ✓），且 `w+` 写完再读也能正确翻译 ✓。写侧一字不动
+// （既有行为不回退 ✓；本层 `newline=` 的**写**翻译仍未接 ✗，见本节头注）。
+
+/// universal newline 的**读**口径（`newline=` 形参的五档 ✓）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NewlineMode {
+    /// `newline=None`：三档断行、翻译成 `\n`。
+    Universal,
+    /// `newline=''`：三档断行、不翻译。
+    NoTranslation,
+    /// `newline='\n'`：只按 `\n` 断行、不翻译。
+    Lf,
+    /// `newline='\r'`：只按 `\r` 断行、不翻译。
+    Cr,
+    /// `newline='\r\n'`：只按 `\r\n` 断行、不翻译。
+    CrLf,
+}
+
+impl NewlineMode {
+    /// 实例字典里的整数码（`_newline` ✓）。
+    fn code(self) -> i64 {
+        match self {
+            NewlineMode::Universal => 0,
+            NewlineMode::NoTranslation => 1,
+            NewlineMode::Lf => 2,
+            NewlineMode::Cr => 3,
+            NewlineMode::CrLf => 4,
+        }
+    }
+
+    /// 从实例字典的整数码还原 ✓（缺省＝`Universal`，即 `open()`／`TextIOWrapper` 的默认 ✓）。
+    fn from_code(code: i64) -> Self {
+        match code {
+            1 => NewlineMode::NoTranslation,
+            2 => NewlineMode::Lf,
+            3 => NewlineMode::Cr,
+            4 => NewlineMode::CrLf,
+            _ => NewlineMode::Universal,
+        }
+    }
+}
+
+/// 解析并校验 `newline=` 实参 ✓（`None`／`''`／`'\n'`／`'\r'`／`'\r\n'` ✓；类型／取值文案照参照 ✓）。
+///
+/// 校验**次序**照参照实测 ✓：先类型（`TypeError`），再二进制档（`binary` ⇒ 非 `None` 报
+/// `ValueError: binary mode doesn't take a newline argument`），最后才是取值
+/// （`ValueError: illegal newline value: …`）。
+fn newline_mode_of_value(
+    instance: &Instance,
+    value: Option<NonNull<Header>>,
+    context: &str,
+    binary: bool,
+) -> Result<NewlineMode, ExecError> {
+    let Some(value) = value else {
+        return Ok(NewlineMode::Universal);
+    };
+    if value == instance.singletons().none() {
+        return Ok(NewlineMode::Universal);
+    }
+    let Some(text) = instance.text_of(value) else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{context}() argument 'newline' must be str or None, not {name}"),
+        ));
+    };
+    if binary {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "binary mode doesn't take a newline argument",
+        ));
+    }
+    match text {
+        "" => Ok(NewlineMode::NoTranslation),
+        "\n" => Ok(NewlineMode::Lf),
+        "\r" => Ok(NewlineMode::Cr),
+        "\r\n" => Ok(NewlineMode::CrLf),
+        other => Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("illegal newline value: {other}"),
+        )),
+    }
+}
+
+/// 实例上的 universal newline 读口径 ✓（`_newline` 整数码；缺省＝`Universal` ✓）。
+fn newline_mode_of(instance: &Instance, this: NonNull<Header>) -> NewlineMode {
+    attr_of(instance, this, "_newline")
+        .and_then(|value| instance.int_of(value))
+        .and_then(|value| value.to_i64())
+        .map(NewlineMode::from_code)
+        .unwrap_or(NewlineMode::Universal)
+}
+
+/// `read(n)` 的文本口径 ✓：返回 `(片段, 下一原文字符下标)`。
+///
+/// `Universal` 边读边翻译（`\r\n`／`\r` ⇒ `\n`，`\r\n` 两字符只产出 1 个）；其余档按原字符切片。
+fn text_read_from(chars: &[char], start: usize, limit: i64, mode: NewlineMode) -> (String, usize) {
+    let start = start.min(chars.len());
+    if mode != NewlineMode::Universal {
+        let end = if limit < 0 {
+            chars.len()
+        } else {
+            (start + limit.max(0) as usize).min(chars.len())
+        };
+        return (chars[start..end].iter().collect(), end);
+    }
+    let mut out = String::new();
+    let mut index = start;
+    let mut produced = 0usize;
+    while index < chars.len() && (limit < 0 || produced < limit as usize) {
+        let character = chars[index];
+        if character == '\r' {
+            out.push('\n');
+            produced += 1;
+            index += 1;
+            // `\r\n` 是一个换行 ⇒ 整对一起消费（即使已经撞到 `limit` ✓）。
+            if index < chars.len() && chars[index] == '\n' {
+                index += 1;
+            }
+        } else {
+            out.push(character);
+            produced += 1;
+            index += 1;
+        }
+    }
+    (out, index)
+}
+
+/// `readline(size)` 的文本口径 ✓：返回 `(片段, 下一原文字符下标)`（含行尾换行 ✓，EOF 给剩余段 ✓）。
+fn text_readline_from(chars: &[char], start: usize, limit: i64, mode: NewlineMode) -> (String, usize) {
+    let start = start.min(chars.len());
+    let mut out = String::new();
+    let mut index = start;
+    let mut produced = 0usize;
+    // `newline='\r\n'` 专用：本**次**调用内上一个字符是不是 `\r`（跨调用的 `\r`+`\n` 不算一对 ✓
+    // —— 参照实测：上一次 `readline(2)` 停在 `\r` 之后，下一次从 `\n` 起读时 `\n` 不是行尾 ✓）。
+    let mut previous_cr = false;
+    while index < chars.len() {
+        if limit >= 0 && produced >= limit as usize {
+            break;
+        }
+        let character = chars[index];
+        match mode {
+            // `newline=None`：三档断行、翻译成 `\n`。
+            NewlineMode::Universal => {
+                index += 1;
+                produced += 1;
+                match character {
+                    '\r' => {
+                        out.push('\n');
+                        if index < chars.len() && chars[index] == '\n' {
+                            index += 1;
+                        }
+                        break;
+                    }
+                    '\n' => {
+                        out.push('\n');
+                        break;
+                    }
+                    _ => out.push(character),
+                }
+            }
+            // `newline=''`：三档断行、不翻译（`\r\n` 两字符都留在行里 ✓）。
+            NewlineMode::NoTranslation => {
+                index += 1;
+                produced += 1;
+                match character {
+                    '\r' => {
+                        out.push('\r');
+                        // `size` 只够 `\r` 时，`\n` 留给下一次 `readline` ✓（参照实测 ✓）。
+                        if (limit < 0 || produced < limit as usize)
+                            && index < chars.len()
+                            && chars[index] == '\n'
+                        {
+                            out.push('\n');
+                            index += 1;
+                        }
+                        break;
+                    }
+                    '\n' => {
+                        out.push('\n');
+                        break;
+                    }
+                    _ => out.push(character),
+                }
+            }
+            // 显式档：只认那一个换行、不翻译。
+            NewlineMode::Lf => {
+                out.push(character);
+                produced += 1;
+                index += 1;
+                if character == '\n' {
+                    break;
+                }
+            }
+            NewlineMode::Cr => {
+                out.push(character);
+                produced += 1;
+                index += 1;
+                if character == '\r' {
+                    break;
+                }
+            }
+            NewlineMode::CrLf => {
+                if character == '\n' && previous_cr {
+                    out.push('\n');
+                    index += 1;
+                    break;
+                }
+                out.push(character);
+                produced += 1;
+                index += 1;
+                previous_cr = character == '\r';
+            }
+        }
+    }
+    (out, index)
 }
 
 /// 关键字实参取值 ✓（native 的 `kwargs` 是 `(名字, 值)` 序列 ✓）。
@@ -1484,7 +1718,8 @@ fn text_encoding_native(
 
 /// **`open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, …)`** ✓（task-18 ✓）。
 ///
-/// 见本节的"口径（如实 ✗）"——`buffering`／`errors`／`newline`／`closefd`／`opener` 未实现 ✓。
+/// 见本节的"口径（如实 ✗）"——`buffering`／`errors`／`closefd` 未实现 ✓；
+/// `newline=` 的**读**口径已接（缺口3 ✓，见 [`NewlineMode`]）；**写**翻译仍未接 ✗。
 pub fn open_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1524,6 +1759,16 @@ pub fn open_native(
     if encoding == "locale" {
         encoding = "utf-8".to_owned();
     }
+    // **`newline`**（缺口3 ✓）：第 6 个位置实参／关键字 ✓。`None`＝universal（默认）✓。
+    // 校验次序照参照实测 ✓：类型（`TypeError`）⇒ 二进制档不许给非 `None`（`ValueError`）⇒ 取值。
+    let newline_value = args
+        .get(5)
+        .copied()
+        .or_else(|| kwarg_of(instance, kwargs, "newline"));
+    let newline_mode = match newline_mode_of_value(instance, newline_value, "open", spec.binary) {
+        Ok(mode) => mode,
+        Err(error) => return Err(error),
+    };
     let kind = match spec.kind {
         ModeKind::Read => open_flag::RDONLY,
         ModeKind::Write | ModeKind::Append | ModeKind::Create => open_flag::WRONLY,
@@ -1641,6 +1886,9 @@ pub fn open_native(
         let flag = instance.new_bool(value);
         instance.dict_set(attributes, name, flag);
     }
+    // **universal newline 读口径**（缺口3 ✓）：整数码，见 [`NewlineMode`] ✓。
+    let newline_attr = instance.new_int(newline_mode.code());
+    instance.dict_set(attributes, "_newline", newline_attr);
     // **`f.name`**：路径形状跟实参走（str ⇒ str、bytes ⇒ bytes）；不拿 repr 显示形冒充。
     let name_value = if path.want_bytes {
         instance.new_bytes(&path.bytes)
@@ -1663,8 +1911,9 @@ pub fn open_native(
 //
 // **动因** ✓：`Lib/tokenize.py::open` 就是 `TextIOWrapper(buffer, encoding, line_buffering=True)` ✓
 // （`buffer` 是 `builtins.open(name,'rb')` 的二进制层 ✓）⇒ `linecache.updatecache` 一族（⇒ `traceback`
-// 的源码行 ✓）都要它 ✓。**如实范围** ✗：只接**读**（`read`／`readline`／`readlines`／迭代／`with` ✓）；
-// **写路径**（`write`／`flush` 落盘 ✓）、`newline=` 的通用换行、`buffering` 语义如实立支 ✓。
+// 的源码行 ✓）都要它 ✓。**如实范围** ✗：只接**读**（`read`／`readline`／`readlines`／迭代／`with` ✓；
+// `newline=` 的**读**口径已接 ✓，见 [`NewlineMode`]）；**写路径**（`write`／`flush` 落盘 ✓）、
+// `newline=` 的**写**翻译、`buffering` 语义如实立支 ✓。
 //
 // 口径 ✓：解码走 [`Instance::decode_with_encoding`] **一处真相** ✓（与 `bytes.decode` 同一处 ✓）；
 // 状态全在**实例字典** ✓（`_buffer`／`_encoding`／`_text`／`_pos`／`_closed` ✓，不新增载荷类型 ✓）。
@@ -1731,8 +1980,17 @@ fn text_wrapper_init(
         .map(|text| text.to_owned())
         .or_else(|| text_wrapper_kwarg(instance, kwargs, "encoding"))
         .unwrap_or_else(|| "utf-8".to_owned());
+    // **`newline`**（缺口3 ✓）：第 4 个位置实参／关键字 ✓（`TextIOWrapper(buffer, encoding,
+    // errors, newline, line_buffering, …)`）；`None`＝universal（默认）✓。
+    let newline_value = rest
+        .get(3)
+        .copied()
+        .or_else(|| kwarg_of(instance, kwargs, "newline"));
+    let newline_mode = newline_mode_of_value(instance, newline_value, "TextIOWrapper", false)?;
     let buffer = instance.retain(buffer);
     set_attr(instance, this, "_buffer", buffer);
+    let newline_attr = instance.new_int(newline_mode.code());
+    set_attr(instance, this, "_newline", newline_attr);
     let encoding_value = instance.new_str(&encoding);
     set_attr(instance, this, "_encoding", encoding_value);
     let encoding_mirror = instance.new_str(&encoding);
@@ -1825,7 +2083,7 @@ fn text_wrapper_position(instance: &Instance, this: NonNull<Header>) -> usize {
         .max(0) as usize
 }
 
-/// `read(size=-1)` ✓。
+/// `read(size=-1)` ✓（universal newline 按 `newline=` 口径断／译，见 [`NewlineMode`] ✓）。
 fn text_wrapper_read(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1843,18 +2101,14 @@ fn text_wrapper_read(
     let characters: Vec<char> = all.chars().collect();
     let start = text_wrapper_position(instance, this).min(characters.len());
     let size = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
-    let end = if size < 0 {
-        characters.len()
-    } else {
-        (start + size as usize).min(characters.len())
-    };
-    let piece: String = characters[start..end].iter().collect();
+    let mode = newline_mode_of(instance, this);
+    let (piece, end) = text_read_from(&characters, start, size, mode);
     let position = instance.new_int(end as i64);
     set_attr(instance, this, "_pos", position);
     Ok(instance.new_str(&piece))
 }
 
-/// `readline(size=-1)` ✓（按 `\n` 收尾 ✓；末尾没换行也给这一段 ✓）。
+/// `readline(size=-1)` ✓（universal newline 按 `newline=` 口径断／译；末尾没换行也给这一段 ✓）。
 fn text_wrapper_readline(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1871,19 +2125,9 @@ fn text_wrapper_readline(
     };
     let characters: Vec<char> = all.chars().collect();
     let start = text_wrapper_position(instance, this).min(characters.len());
-    let mut end = characters.len();
-    for index in start..characters.len() {
-        if characters[index] == '\n' {
-            end = index + 1;
-            break;
-        }
-    }
-    if let Some(limit) = rest.first().and_then(|value| instance.int_value(*value)) {
-        if limit >= 0 && start + limit as usize <= end {
-            end = start + limit as usize;
-        }
-    }
-    let piece: String = characters[start..end].iter().collect();
+    let limit = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
+    let mode = newline_mode_of(instance, this);
+    let (piece, end) = text_readline_from(&characters, start, limit, mode);
     let position = instance.new_int(end as i64);
     set_attr(instance, this, "_pos", position);
     Ok(instance.new_str(&piece))
@@ -2098,8 +2342,9 @@ fn file_read(
         let text = file_text(instance, this, "_data").unwrap_or_default();
         let characters: Vec<char> = text.chars().collect();
         let start = position.min(characters.len());
-        let end = if size < 0 { characters.len() } else { (start + size as usize).min(characters.len()) };
-        let piece: String = characters[start..end].iter().collect();
+        // **universal newline**（缺口3 ✓）：文本档按 `open(newline=…)` 的读口径断／译。
+        let mode = newline_mode_of(instance, this);
+        let (piece, end) = text_read_from(&characters, start, size, mode);
         let new_position = instance.new_int(end as i64);
         set_attr(instance, this, "_pos", new_position);
         Ok(instance.new_str(&piece))
@@ -2141,14 +2386,9 @@ fn file_readline(
         let text = file_text(instance, this, "_data").unwrap_or_default();
         let characters: Vec<char> = text.chars().collect();
         let start = position.min(characters.len());
-        let mut end = characters.len();
-        if let Some(offset) = characters[start..].iter().position(|character| *character == '\n') {
-            end = start + offset + 1;
-        }
-        if size >= 0 {
-            end = end.min(start + size as usize);
-        }
-        let piece: String = characters[start..end].iter().collect();
+        // **universal newline**（缺口3 ✓）：文本档按 `open(newline=…)` 的读口径断／译。
+        let mode = newline_mode_of(instance, this);
+        let (piece, end) = text_readline_from(&characters, start, size, mode);
         let new_position = instance.new_int(end as i64);
         set_attr(instance, this, "_pos", new_position);
         Ok(instance.new_str(&piece))

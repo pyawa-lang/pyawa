@@ -13,7 +13,8 @@
 //!    （`read`／`readline`／`readlines`／迭代／`with`／`close`／`encoding` ✓；解码走
 //!    `decode_with_encoding` **一处真相** ✓）⇒ `tokenize.open` 端到端 ✓。
 //!
-//! **如实范围** ✗：`TextIOWrapper` 只接**读**（写路径／`newline=`／`buffering` 立支 ✓）；
+//! **如实范围** ✗：`TextIOWrapper` 只接**读**（写路径／`buffering` 立支 ✓）；`newline=` 的**读**
+//! 口径已接（缺口3 ✓，口径见 `io_newline_shapes.rs`；本节探针不含 `\r`）—— **写**翻译仍未接 ✗；
 //! `type(sys.stdout) is _io.TextIOWrapper` 不再为真 ✓（`sys.stdout` 仍是那个占位文本流类型 ✓）。
 
 fn run(name: &str, script: &str) -> String {
