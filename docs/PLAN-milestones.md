@@ -1234,3 +1234,23 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 `PLAN §12.13` 的内存验证方法沿用。
 
 **不在本单**：`pa_tobytes_mut`／pin 语义、`memoryview` 类型、多维/格式 buffer 协议 —— 需真实场景再评估。
+
+### 12.17 能力域 vtable 的 C 布局（冻结前唯一必补项，2026-11-14）
+
+**问题**：能力域（`fs`／`net`／`proc`／`clock`／`random`／`env`／`tty`／`locale`／`ipc`，共 9 个）的
+**vtable C 布局三份文档互相踢皮球**：`pa.h` 推给 `SPEC-capabilities`；`CP-30` 又推给 `SPEC-c-abi`；
+`SPEC-c-abi` 再推回 `CP-`。结果**谁都没写**，且全仓**没有任何示例构造 vtable**（`examples/reference_host.c`
+只演示宿主函数，`pa_setcapability` 一次都没被调用）。⇒ **任何 C 宿主今天都实现不了能力域**。
+
+**为什么是冻结前必补**：补齐是**追加式**（新增头文件）；冻结后宿主已按"无布局"编译，再补就是破坏性。
+
+| 步 | 内容 | 验收 |
+|---|---|---|
+| 1 | 新增 `pa_capabilities.h`：9 域 vtable 结构体，每个带 `version: u32`＋`size: u32` 公共头（`CP-30`）；字段类型/顺序与 Rust `repr(C)` **逐字段一致**；`pa.h` include 它 | C 宿主能 `#include` 并构造 vtable；`static_assert` 校验尺寸 |
+| 2 | `examples/reference_host.c` 增加**最小 `clock` 域**实现（`now`／`monotonic` 两槽够用）并 `pa_setcapability(PA_DOMAIN_CLOCK, …)` | 示例真编译真运行；guest 经 `time`/`clock` 拿到宿主时间 |
+| 3 | **布局一致性机检**（新增）：C 头文件结构体尺寸/字段名 ↔ Rust `repr(C)` 布局对照，任一漂移即红 | 故意改一个字段 ⇒ 机检红；还原 ⇒ 绿 |
+| 4 | 文档交叉引用修正（本次已改）：`CP-30` 不再循环引用、不再引"§13-2 未定"（已决 `AB-39/40/41`） | `grep` 无循环引用 |
+
+**不在本单**：新增能力域、异步能力分类（`PA_ASYNC_*` 已有面）。
+
+**如实边界**：`CP-30` 只规定了"公共头有版本/尺寸"；**字段具体编码**由本单第 1 步钉死，钉死后随 ABI 一起冻结。

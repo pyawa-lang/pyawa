@@ -18,7 +18,7 @@
 
 | 内容 | 归属 |
 |---|---|
-| 能力接口 vtable 的**形状**（有哪些函数、可否取消、如何表达"未实现"） | `SPEC-capabilities.md`（`CP-`）——本文件只写"如何注册它"（`SPEC-INDEX.md` §4） |
+| 能力接口 vtable 的**C 布局**（字段类型/顺序/公共头） | **`pa_capabilities.h`（唯一处定义）**；**语义**（有哪些槽、未实现如何表达）归 `SPEC-capabilities.md`（`CP-`）；本文件写"如何注册它"（`SPEC-INDEX.md` §4） |
 | 对象模型内部（头部、类型对象、引用计数） | `SPEC-object-model.md`；**头部禁止出现在本 ABI 里**（`OM-6`） |
 | 宿主对象的**表示**与生命周期 | `OM-34`…`OM-37`；本文件定**注册调用** |
 | 用 C 写扩展模块 | **不做**（`REQUIREMENTS.md`：只做嵌入，不做扩展） |
@@ -432,7 +432,7 @@
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
 > `AB-67` 宿主模块四函数、`AB-68` `pa_setpath`、`AB-69` 签名句柄、`AB-70` `pa_tohandle`／
 > `AB-71` `pa_set_program_filename`）。`CP-30` 的注册校验口径**不变**：公共头的 version／size
-> 规则不动（vtable 的形状归 `CP-`，本文件只管"如何注册"）。
+> 规则不动（vtable 的 **C 布局**以 `pa_capabilities.h` 为唯一处定义；**语义**归 `CP-`；本文件只管"如何注册"）。
 
 - **AB-45** 头文件**必须**是**单一** `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
   **禁止**分层头。
