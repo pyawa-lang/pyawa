@@ -1,4 +1,4 @@
-/* Pyawa 稳定 C ABI —— 单一头文件（AB-45：禁止分层头）。
+/* Pyawa 稳定 C ABI —— 单一公开入口头（AB-45；能力域 vtable 布局在伴随头 pa_capabilities.h）。
  *
  * 权威清单：docs/SPEC-c-abi.md §15。函数总数必须 ≤ 120（AB-1）；
  * 禁止导出清单之外的函数、禁止隐式导出（AB-6）。
@@ -13,6 +13,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+/* **AB-45（§12.17 A1）**：公开入口头仍是 `pa.h`；能力域 vtable 的 C 布局由**唯一伴随头**
+ * `pa_capabilities.h` 承载（自动生成，3 个已实现域）。宿主只需 include 本头即可。 */
+#include "pa_capabilities.h"
 
 /* AB-45：版本宏。编码：主版本在高 16 位（见 crates/pyawa-abi/src/lib.rs）。
  * 次版本 2：fs 域 vtable 表尾追加 stat_times 槽（AB-41：旧宿主仍可用）。
@@ -75,7 +79,7 @@ typedef enum pa_tag {
     PA_TSTRING = 4,
     PA_TTABLE = 5,     /* 本层就是 dict */
     PA_TFUNCTION = 6,
-    PA_THANDLE = 7,    /* 宿主对象句柄（OM-34，尚未接线） */
+    PA_THANDLE = 7,    /* 宿主对象句柄（OM-34；AB-70 的 pa_tohandle 读载荷、AB-76 的 pa_typeid 取身份） */
     PA_TBYTES = 8      /* bytes（AB-63 追加；bytearray/memoryview 将来只能继续往后取） */
 } pa_tag;
 

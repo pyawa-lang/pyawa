@@ -9,14 +9,16 @@
  *   2. **宿主定义脚本 API**：`pa_register` 注入 `host_sum`/`host_echo`/`host_read`/`host_tick`
  *      （AB-24／AB-51）；脚本 → 宿主回调 → 再回脚本。
  *   3. **沙箱拒绝越界**：`host_read` 只允许宿主根目录下的**单段名字**（`..`／`/`／绝对路径⇒
- *      `pa_error` ⇒ 脚本收到 `RuntimeError`）。**如实边界** ✗：C 宿主当前没有标准库
- *      （`paL_openlibs` 未接线，P3-14）⇒ 示例脚本不调 `open()`；"能力域 vtable"的完整样例是
- *      CLI 的 Rust provider（形状见 `SPEC-capabilities.md`）。
+ *      `pa_error` ⇒ 脚本收到 `RuntimeError`）。**如实边界**：最小 ABI 产物不装 stdlib（`paL_openlibs`
+ *      在组合根产物里，`§12.13 #1`）⇒ 示例脚本不调 `open()`/`import`；能力域 vtable 样例见本文件
+ *      第 7 项（`clock` 域）。
  *   4. **超时由宿主兜**：VM 只有协作式中断（AB-5①）——`host_tick` 检查单调时钟，超预算
  *      `pa_interrupt` ⇒ `pa_exec_string` 返回 `PA_ERR_INTERRUPT`（不是 abort ✓）。
  *   5. **每实例内存配额**：创建后 `pa_set_memory_limit`（AB-65），脚本里超限是**可捕获的**
  *      `MemoryError`；`pa_memory_used`（AB-66）用于看门狗/指标。
  *   6. **实例隔离与销毁**：两个实例互不可见（OM-1）；`pa_destroy` 释放实例（AB-57）。
+ *   7. **能力域 vtable**（§12.17 A2）：注册最小 `clock` 域（`pa_capabilities.h` 的
+ *      `pa_clock_vtable`），宿主函数 `host_now_ns()` 调它的 `now_ns` 槽（不依赖 guest 标准库）。
  *
  * 构建与运行（与 `tests/ci/t_ref_host.py` 同一串；缺 `cc` 就是红）：
  *   cargo build -p pyawa-abi
@@ -69,6 +71,31 @@ static int push_ok_string(pa_state *state, const char *text)
     return pa_pushstring(state, text, (ptrdiff_t)strlen(text));
 }
 
+/* ---- 能力域 vtable（§12.17 A2）：最小 `clock` 域实现 ----------------------------- */
+/* 布局来自 `pa_capabilities.h`（自动生成，与 Rust `CpClockVtable` 逐字段一致）。
+ * A2 取舍：参考宿主**不换产物**（仍链最小 ABI 静态库）⇒ 不依赖 guest `import time`；
+ * guest 通过 `host_now_ns()` 调本 vtable 的 `now_ns` 槽取回时间。 */
+static pa_cap_status host_clock_now_ns(void *state, int64_t *out_ns)
+{
+    (void)state; /* provider 状态：本示例无 */
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return PA_CAP_MACHINE;
+    *out_ns = (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+    return PA_CAP_OK;
+}
+
+static pa_clock_vtable g_clock_vtable = {
+    PA_ABI_VERSION,          /* version：CP-30／AB-39（三份契约共用的号） */
+    (uint32_t)sizeof(pa_clock_vtable), /* size：旧宿主有界读取 */
+    NULL,                    /* state：本示例无 provider 状态 */
+    host_clock_now_ns,       /* now_ns */
+    NULL,                    /* monotonic_ns（本示例不给） */
+    NULL,                    /* sleep_ns */
+    NULL,                    /* localtime */
+    NULL,                    /* strftime */
+    NULL,                    /* mktime */
+};
+
 /* ---- 宿主函数：脚本可以调用的 API（AB-24；参数借用，返回值压栈） ------------------ */
 
 /* `host_sum(left, right) -> int`：最小回调示例。 */
@@ -113,6 +140,16 @@ static int host_read(pa_state *state)
     fclose(file);
     content[read] = '\0';
     return push_ok_string(state, content);
+}
+
+/* `host_now_ns() -> int`：A2 的验收点 —— 宿主函数内部调 clock vtable 的 `now_ns` 槽。 */
+static int host_now_ns(pa_state *state)
+{
+    int64_t now_ns = 0;
+    if (g_clock_vtable.now_ns == NULL) return PA_ERR_NOTIMPLEMENTED;
+    if (g_clock_vtable.now_ns(g_clock_vtable.state, &now_ns) != PA_CAP_OK)
+        return PA_ERR_RUNTIME;
+    return pa_pushinteger(state, now_ns);
 }
 
 /* `host_tick() -> int`：**协作式超时** —— 第一次调用开始计时；超预算就 `pa_interrupt`。
@@ -193,6 +230,10 @@ int main(void)
     if ((pa_abi_version() >> 16) != PA_ABI_MAJOR || pa_abi_version() < PA_ABI_VERSION) return 2;
     printf("abi=ok\n");
 
+    /* ⑦ 能力域 vtable（§12.17 A2）：先声明异步分类（CP-25／AB-34），再注册 clock 域。 */
+    if (pa_setcapability_async(state, PA_DOMAIN_CLOCK, PA_ASYNC_OK) != PA_OK) return 20;
+    if (pa_setcapability(state, PA_DOMAIN_CLOCK, &g_clock_vtable) != PA_OK) return 20;
+
     /* ② 宿主定义脚本 API（脚本 → 宿主 → 脚本） */
     static const char *const one_arg[] = { "text" };
     static const char *const two_args[] = { "left", "right" };
@@ -200,6 +241,7 @@ int main(void)
     if (register_api(state, "host_echo", host_echo, 1, one_arg) != PA_OK) return 4;
     if (register_api(state, "host_read", host_read, 1, one_arg) != PA_OK) return 5;
     if (register_api(state, "host_tick", host_tick, 0, NULL) != PA_OK) return 6;
+    if (register_api(state, "host_now_ns", host_now_ns, 0, NULL) != PA_OK) return 20;
 
     /* ③⑤ 内存配额：脚本超限时是**可捕获的** MemoryError（AB-65）。 */
     if (pa_set_memory_limit(state, 4 * 1024 * 1024) != PA_OK) return 7;
@@ -219,7 +261,8 @@ int main(void)
         "try:\n"
         "    big = \"x\" * (1 << 30)\n"
         "except:\n"
-        "    quota = \"caught\"\n";
+        "    quota = \"caught\"\n"
+        "now_ns = host_now_ns()\n";
     int main_status = run_python(state, main_script, "reference-host");
     if (main_status != PA_OK) {
         fprintf(stderr, "main_script status=%d msg=%s\n", main_status, pa_errmsg(state));
@@ -233,11 +276,14 @@ int main(void)
     if (read_text_global(state, "escape", escape, sizeof escape) != PA_OK) return 11;
     if (read_text_global(state, "inside", inside, sizeof inside) != PA_OK) return 12;
     if (read_text_global(state, "quota", quota, sizeof quota) != PA_OK) return 14;
+    int64_t now_ns = 0;
+    if (read_int_global(state, "now_ns", &now_ns) != PA_OK || now_ns <= 0) return 20;
     printf("callback=%lld\n", (long long)callback);
     printf("echoed=%s\n", echoed);
     printf("sandbox-escape=%s\n", escape);
     printf("sandbox-inside=%s\n", inside);
     printf("quota=%s\n", quota);
+    printf("clock=ok\n");
 
     /* ⑤ 指标：每实例占用（宿主可做看门狗）。 */
     uint64_t used = 0;

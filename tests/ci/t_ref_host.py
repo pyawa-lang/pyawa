@@ -9,8 +9,9 @@
 3. `pa.h` 里确实声明了本示例用到的配额两函数（`AB-65`／`AB-66`）——头文件与实现同步，
    下游宿主才能"照抄"。
 
-示例覆盖（对应 `DESIGN.md` §7.5）：创建／宿主脚本 API 回调／沙箱拒绝越界（宿主 API 白名单）／
-超时（协作式中断）／每实例内存配额（`MemoryError` 可捕获）／实例隔离／销毁。
+示例覆盖（对应 `DESIGN.md` §7.5）：创建／宿主脚本 API 回调／沙箱拒绝越界（宿主 API 白名单）／clock 能力域 vtable（§12.17 A2）／
+超时（协作式中断）／每实例内存配额（`MemoryError` 可捕获）／实例隔离／销毁／
+`clock` 能力域 vtable（§12.17 A2）。
 
 用法::
 
@@ -36,6 +37,7 @@ echoed=hello
 sandbox-escape=rejected
 sandbox-inside=hello from host
 quota=caught
+clock=ok
 memory-used=positive
 instances=isolated
 timeout=interrupted
@@ -56,6 +58,11 @@ def main(argv: list[str]) -> int:
     if not HEADER.is_file():
         return fail(f"头文件不在：{HEADER}")
     header = HEADER.read_text(encoding="utf-8")
+    capability_header = INCLUDE / "pa_capabilities.h"
+    if not capability_header.is_file():
+        return fail("能力域头文件不在：crates/pyawa-abi/include/pa_capabilities.h")
+    if "pa_clock_vtable" not in capability_header.read_text(encoding="utf-8"):
+        return fail("pa_capabilities.h 缺 pa_clock_vtable")
     for declaration in ("pa_set_memory_limit", "pa_memory_used"):
         if declaration not in header:
             return fail(f"pa.h 缺 `{declaration}` 声明（AB-65／AB-66；下游无法照抄）")
@@ -110,7 +117,7 @@ def main(argv: list[str]) -> int:
             print(EXPECTED)
             return fail("stdout 与期望不一致（示例/文档漂移？）")
 
-    print("[T-REF-HOST] 绿：参考宿主真编译真运行，六项演示逐行符合期望")
+    print("[T-REF-HOST] 绿：参考宿主真编译真运行，七项演示逐行符合期望")
     return 0
 
 

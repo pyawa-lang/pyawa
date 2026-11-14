@@ -55,7 +55,10 @@ FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
 #: `CX-29`：ABI 的**符号面**——cdylib 导出 ⊆ `pa.h` 声明 ⊆ `SPEC-c-abi` 提及；总数 ≤ `AB-1` 的预算。
 #: `pyawa-abi` 与 `pyawa-runtime` 两个 crate 的 `#[no_mangle] extern "C"` 都算"导出"：前者是 cdylib，
 #: 后者是 `paL_newstate`（`§15.4` 指定由组合根实现）。
-ABI_HEADER = "crates/pyawa-abi/include/pa.h"
+ABI_HEADERS = (
+    "crates/pyawa-abi/include/pa.h",
+    "crates/pyawa-abi/include/pa_capabilities.h",
+)
 ABI_SPEC = "docs/SPEC-c-abi.md"
 ABI_EXPORT_SOURCE_DIRS = ("crates/pyawa-abi/src", "crates/pyawa-runtime/src")
 ABI_FUNCTION_BUDGET = 120
@@ -980,22 +983,36 @@ def check_fake_gaps() -> list[str]:
     return failures
 
 
+def _strip_c_aggregates(text: str) -> str:
+    """去掉注释与 struct/enum 的 `{...}` 体（A3：只扫**文件作用域**的 `pa_*` 函数原型）。
+
+    能力头里的函数指针字段形如 `pa_cap_status (*now_ns)(...)`，若直接套函数正则会把
+    `pa_cap_status` 误认成函数名；因此先剥聚合体，再做声明扫描。
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", "", text)
+    return re.sub(r"(?:typedef\s+)?(?:struct|enum)\s+\w*\s*\{[^{}]*\}", "", text, flags=re.S)
+
+
 def check_abi_export_surface() -> list[str]:
     """**`T-CX-19`**：ABI 符号面三面一致（`CX-29`）。
 
-    - **导出 ⊆ `pa.h` 声明**：`#[no_mangle] extern "C"` 的函数名必须都能在头文件找到声明
+    - **导出 ⊆ 两个 ABI 头声明**（`pa.h`＋`pa_capabilities.h`，后者只含 vtable 结构）：`#[no_mangle] extern "C"` 的函数名必须都能在头文件找到声明
       （禁止"影子导出"；当前唯一过渡项是 `PLAN-milestones.md` §12.4 #8 的待裁项，显式列出）；
-    - **`pa.h` ⊆ 规格提及**：头文件里每个函数名都必须在 `SPEC-c-abi.md` 里出现
+    - **两个 ABI 头 ⊆ 规格提及**：头文件里每个函数名都必须在 `SPEC-c-abi.md` 里出现
       （权威清单是规格，头文件只是它的落地）；
     - **预算**：导出与声明总数都不超过 `AB-1` 的 120。
 
     只扫源码与文本，不构建 cdylib（`AB-6` 的清单规则是纯符号名比对）。
     """
     failures: list[str] = []
-    header_path = ROOT / ABI_HEADER
-    if not header_path.is_file():
-        return [f"{ABI_HEADER} 不存在"]
-    declared = set(ABI_HEADER_DECL.findall(header_path.read_text(encoding="utf-8")))
+    declared: set[str] = set()
+    for relative in ABI_HEADERS:
+        header_path = ROOT / relative
+        if not header_path.is_file():
+            return [f"{relative} 不存在"]
+        text = _strip_c_aggregates(header_path.read_text(encoding="utf-8"))
+        declared |= set(ABI_HEADER_DECL.findall(text))
     exported: set[str] = set()
     for directory in ABI_EXPORT_SOURCE_DIRS:
         for path in sorted((ROOT / directory).rglob("*.rs")):
@@ -1013,7 +1030,7 @@ def check_abi_export_surface() -> list[str]:
 
     shadow = exported - declared
     for name in sorted(shadow - ABI_PENDING_SHADOW_EXPORTS):
-        failures.append(f"{ABI_HEADER}：导出 {name!r} 不在头文件里（禁止影子导出）")
+        failures.append(f"两个 ABI 头：导出 {name!r} 不在头文件里（禁止影子导出）")
     stale = ABI_PENDING_SHADOW_EXPORTS - shadow
     for name in sorted(stale):
         failures.append(
@@ -1023,7 +1040,7 @@ def check_abi_export_surface() -> list[str]:
 
     mentioned = set(ABI_SPEC_MENTION.findall((ROOT / ABI_SPEC).read_text(encoding="utf-8")))
     for name in sorted(declared - mentioned):
-        failures.append(f"{ABI_HEADER} 声明了 {name!r}，但 {ABI_SPEC} 没有提及（权威清单缺项）")
+        failures.append(f"两个 ABI 头声明了 {name!r}，但 {ABI_SPEC} 没有提及（权威清单缺项）")
 
     if len(exported) > ABI_FUNCTION_BUDGET:
         failures.append(f"导出 {len(exported)} 个 > `AB-1` 的预算 {ABI_FUNCTION_BUDGET}")

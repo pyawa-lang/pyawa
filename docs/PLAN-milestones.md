@@ -1251,6 +1251,19 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 | 3 | **机检扩面**：① 布局一致性检查（C 头 ↔ Rust `repr(C)`，字段名/顺序/尺寸/偏移任一漂移即红）；② `T-CX-19` 扫描面扩到**两个头**，且**只扫文件作用域（先剥 struct 体）的 `pa_*` 函数原型**（结构体成员与函数指针字段不得被函数正则误判），结构体**不计入** `AB-1` 的 ≤120 函数预算；③ 加**注入自检**："声明了但规格未提及"必须红；④ `pa_cap_status` 用 `typedef enum`（`0`＝Ok／`1`＝Machine／`2`＝Unimplemented，与 Rust `CapStatus` 同值）；⑤ 头文件可独立 include（guard／`extern "C"`／`<stdint.h>`／`<stddef.h>`） | 故意改字段/加未在规格的声明 ⇒ 机检红；还原 ⇒ 绿；枚举值与 Rust 一致；C 探针/Rust 测试布局逐行一致 |
 | 4 | 文档交叉引用修正（本次已改）：`CP-30` 不再循环引用、不再引"§13-2 未定"（已决 `AB-39/40/41`） | `grep` 无循环引用 |
 
+**状态（2026-11-14，A1–A3 ✓ 已落地）**：
+- **A1 ✓**：新增 `crates/pyawa-abi/include/pa_capabilities.h`（3 域 vtable＋`pa_cap_status`，
+  由 `tools/gen_pa_capabilities.py` 从 Rust `repr(C)` **生成**；`pa.h` include 它；C5
+  `PA_THANDLE` 注释同笔修正）。
+- **A2 ✓**：`examples/reference_host.c` 增加最小 `clock` 域（`now_ns`/`monotonic_ns`）＋
+  `pa_setcapability(PA_DOMAIN_CLOCK, …)`＋宿主函数 `host_now_ns()`；`t_ref_host.py` 的
+  `EXPECTED` 增 `clock=ok`（不换产物、不依赖 guest `import time`）。
+- **A3 ✓**：`tests/ci/check_capability_layout.py`（需 cc）：`tools/gen_pa_capabilities.py --check`
+  ＋ C 探针 ↔ Rust 测试逐行对照（56 行：3 域全部字段的 offset/size/结构尺寸）＋ C/C++ 独立
+  include；`T-CX-19` 扫描面扩到两个头（先剥 struct 体，只扫文件作用域 `pa_*` 原型；结构体
+  不入 `AB-1` 预算）；`tests/ci/selftest.py` 新增"第二头注入未提及声明 ⇒ 红"用例；
+  `slowcheck` 步骤 5／`gate_chunk small` 均跑 A3。
+
 **不在本单**：新增能力域、异步能力分类（`PA_ASYNC_*` 已有面）。
 
 **如实边界**：`CP-30` 只规定了"公共头有版本/尺寸"；**字段具体编码**由本单第 1 步钉死，钉死后随 ABI 一起冻结。
@@ -1260,6 +1273,9 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 范围：**只列 ABI 相关**未完成项。非 ABI（SDK 交付、插件仓、性能主线、第二平台等）按用户口径暂缓，不在本单。
 
 #### A. 冻结前必做（唯一破坏性风险）
+
+> **状态（2026-11-14）**：A1–A3 **✓ 已落地**（见 §12.17 的状态段；`check_capability_layout.py`
+> 与 `t_ref_host` 已接入 slowcheck 步骤 5／gate_chunk small）。
 
 | # | 项 | 归属 | 依赖 | 验收 |
 |---|---|---|---|---|

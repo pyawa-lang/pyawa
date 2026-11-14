@@ -18,7 +18,7 @@
 
 | 内容 | 归属 |
 |---|---|
-| 能力接口 vtable 的**C 布局**（字段类型/顺序/公共头） | **`pa_capabilities.h`（拟新增；唯一处定义，见 `PLAN §12.17`）**；**语义**（有哪些槽、未实现如何表达）归 `SPEC-capabilities.md`（`CP-`）；本文件写"如何注册它"（`SPEC-INDEX.md` §4） |
+| 能力接口 vtable 的**C 布局**（字段类型/顺序/公共头） | **`pa_capabilities.h`（已落地，§12.17 A1；唯一处定义）**；**语义**（有哪些槽、未实现如何表达）归 `SPEC-capabilities.md`（`CP-`）；本文件写"如何注册它"（`SPEC-INDEX.md` §4） |
 | 对象模型内部（头部、类型对象、引用计数） | `SPEC-object-model.md`；**头部禁止出现在本 ABI 里**（`OM-6`） |
 | 宿主对象的**表示**与生命周期 | `OM-34`…`OM-37`；本文件定**注册调用** |
 | 用 C 写扩展模块 | **不做**（`REQUIREMENTS.md`：只做嵌入，不做扩展） |
@@ -432,7 +432,7 @@
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
 > `AB-67` 宿主模块四函数、`AB-68` `pa_setpath`、`AB-69` 签名句柄、`AB-70` `pa_tohandle`／
 > `AB-71` `pa_set_program_filename`）。`CP-30` 的注册校验口径**不变**：公共头的 version／size
-> 规则不动（vtable 的 **C 布局**以拟新增的 `pa_capabilities.h` 为唯一处定义（`PLAN §12.17`）；**语义**归 `CP-`；本文件只管"如何注册"）。
+> 规则不动（vtable 的 **C 布局**以 `pa_capabilities.h` 为唯一处定义（§12.17 A1 已落地）；**语义**归 `CP-`；本文件只管"如何注册"）。
 
 - **AB-45** ABI 的**公开入口头**必须是单一 `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
   **允许且仅允许**一个同发行集的伴随头 `pa_capabilities.h` 承载能力域 vtable 的 **C 布局**
@@ -763,7 +763,9 @@
 `crates/pyawa-abi/tests/` 的 `host_visibility` 测试；另有 `AB-67`／`AB-68`／`AB-69`／`AB-70`／
 `AB-71`／`AB-72` 见各轮台账。其余无未写小节，也无未决推迟项。
 
-> **生效条件（§12.17 A1）**：`AB-45` 的「`pa.h` 必须 include `pa_capabilities.h`」一句**自 §12.17 A1 落地起生效**；在该文件出现之前，A1 是 `AB-45` 允许的**唯一例外**（规格与现状不得矛盾：此前只允许单一 `pa.h`）。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
+> **§12.17 A1 已落地（2026-11-14）**：`pa_capabilities.h` 存在（3 域 vtable＋`pa_cap_status`，
+> 由 `tools/gen_pa_capabilities.py` 从 Rust `repr(C)` 生成），`pa.h` 已 include 它 ⇒ `AB-45` 的
+> 伴随头形态是当前**唯一允许**的形态；`T-CX-19` 已扫两个头。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。
 
 ## 17. 设计原则（2026-11-14 起生效）

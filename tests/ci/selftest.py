@@ -246,6 +246,17 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
             encoding="utf-8",
         ),
     ),
+    (
+        "T-CX-19",
+        "crates/pyawa-abi/include/pa_capabilities.h",
+        lambda path: path.write_text(
+            # 第二个头也必须被扫（A3 的"声明了但规格未提及 ⇒ 红"）
+            path.read_text(encoding="utf-8").rstrip()
+            + "\n/* 自检注入：第二头未在规格的声明 ⇒ T-CX-19 必须红 */\n"
+            + "int pa_self_test_unmentioned_second_header(pa_state *state);\n",
+            encoding="utf-8",
+        ),
+    ),
 )
 
 
