@@ -1144,6 +1144,18 @@ oracle 在 `crates/pyawa-abi/tests/protocol_oracle.rs`（清单↔片段双向�
 **复跑**：修复后必须能在**仓库内**以不含 numpy 的最小编译探针复跑（真 numpy 桥只作宿主侧压测、
 不入库）；#2/#3/#4 各自有 `T-AB-15…17` 的可执行用例。
 
+**内存验证（2026-11-14，文档侧独立复核）**：把 `AB-73`…`AB-79` 的新路径放进 valgrind（3.26，`--error-exitcode=99`，只看非法访问）：
+
+| 目标 | 结果 |
+|---|---|
+| `host_visibility`／`object_ops`／`protocol_oracle`／`protocol_host_dispatch`／`host_usability`／`host_module`（6 个 ABI 测试二进制） | **0 errors**（`ERROR SUMMARY: 0 errors from 0 contexts`） |
+| **真 numpy 端到端**（CPython ＋ ctypes 桥：建 state→建类型→建句柄→模块注入→派发→销毁） | **0 errors，rc=0** |
+| `PYAWA_DANGLING=1 cargo test --release -p pyawa-abi` | **0 failed** |
+
+**未覆盖（如实）**：① 407 语料的 memcheck 子集（`slowcheck` 第 1 项）仍是旧基线，本轮未重跑；
+② `memdangle` 全量 survey 未重跑（已知基线 2 条：`test_difflib`／`test_gc`）；
+③ **宿主内存不占 VM 配额**（`OM-41` 管不到宿主侧 numpy 数组）属策略缺口，不是内存安全问题。
+
 ### 12.14 `getattr_fn` 必须是对象语义的单一来源（2026-11-14）
 
 **问题**：`AB-73`／`AB-75` 只保证了**一部分**协议经属性查找。实测：宿主对象交给 `print()`／`str()`／`repr()`
