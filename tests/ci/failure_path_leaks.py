@@ -18,7 +18,7 @@ core 的若干**失败路径**会漏掉一份引用（`Err(Raised)` bundle、或
 已验证 GREEN 的（task-14 修过的回归面）：`f(*Plain())`／`tuple(Plain())`／坏 `__new__`／
 坏 `__init__`／坏 `__exit__`。
 
-用法（**尚未接进闸门**；要接 `slowcheck.sh` 的 11 项清单需与 Lead 协商 —— `task-16` 原话）：
+用法（**已接闸**：`tools/slowcheck.sh` 第 12 项 / `tools/gate_chunk.sh small`，2026-11-14）：
 
     python3 tests/ci/failure_path_leaks.py                  # 默认 ./target/release/pyawa
     python3 tests/ci/failure_path_leaks.py --binary target/debug/pyawa
