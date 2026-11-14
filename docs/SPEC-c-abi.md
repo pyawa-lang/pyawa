@@ -434,11 +434,13 @@
 > `AB-71` `pa_set_program_filename`）。`CP-30` 的注册校验口径**不变**：公共头的 version／size
 > 规则不动（vtable 的 **C 布局**以拟新增的 `pa_capabilities.h` 为唯一处定义（`PLAN §12.17`）；**语义**归 `CP-`；本文件只管"如何注册"）。
 
-- **AB-45** 头文件**必须**是**单一** `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
-  **禁止**分层头。
-- **AB-46** `pa.h` **必须**能被 **C 与 C++** 同时包含：**必须**有 `extern "C"` 守卫
-  （`#ifdef __cplusplus`），且版本宏在 C 下也可用——**禁止**让 `PA_ABI_VERSION`／`PA_ABI_SIZE`
-  依赖 C++ 特性。
+- **AB-45** ABI 的**公开入口头**必须是单一 `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
+  **允许且仅允许**一个同发行集的伴随头 `pa_capabilities.h` 承载能力域 vtable 的 **C 布局**
+  （`CP-30`；`PLAN §12.17`）；**禁止**其它分层头。`pa.h` **必须** `#include "pa_capabilities.h"`，
+  使宿主只 include `pa.h` 即可用（单入口的意图不变）。
+- **AB-46** **两个头**（`pa.h` 与 `pa_capabilities.h`）**必须**能被 **C 与 C++** 同时包含：
+  **必须**有 `extern "C"` 守卫（`#ifdef __cplusplus`），且版本宏在 C 下也可用——
+  **禁止**让 `PA_ABI_VERSION`／`PA_ABI_SIZE` 依赖 C++ 特性。
 - ~~AB-42~~ **作废**：其内容（"禁止在本规格里先定具体方案"）随 `§13-2` 裁决失效；编号保留，不重用。
 
 ---

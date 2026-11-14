@@ -1246,9 +1246,9 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 
 | 步 | 内容 | 验收 |
 |---|---|---|
-| 1 | 新增 `pa_capabilities.h`：9 域 vtable 结构体，每个带 `version: u32`＋`size: u32` 公共头（`CP-30`）；字段类型/顺序与 Rust `repr(C)` **逐字段一致**；`pa.h` include 它 | C 宿主能 `#include` 并构造 vtable；`static_assert` 校验尺寸 |
+| 1 | 新增 `pa_capabilities.h`：**只承载已实现且已有 Rust `repr(C)` 布局的 3 个域**（`fs`／`clock`／`net`），每个带 `version: u32`＋`size: u32` 公共头（`CP-30`），字段与 Rust **逐字段一致**；`pa.h` include 它。其余 6 域（`proc`／`random`／`env`／`tty`／`locale`／`ipc`）**保持"未提供"**（`CP-2`／`CP-3`），其布局设计**不在本单**（追加式，后续单独领号） | C 宿主能 `#include` 并构造 3 域 vtable；`static_assert` 校验尺寸；6 域调用时如实"未实现" |
 | 2 | `examples/reference_host.c` 增加**最小 `clock` 域**实现（`now`／`monotonic` 两槽够用）并 `pa_setcapability(PA_DOMAIN_CLOCK, …)` | 示例真编译真运行；guest 经 `time`/`clock` 拿到宿主时间 |
-| 3 | **布局一致性机检**（新增）：C 头文件结构体尺寸/字段名 ↔ Rust `repr(C)` 布局对照，任一漂移即红 | 故意改一个字段 ⇒ 机检红；还原 ⇒ 绿 |
+| 3 | **机检扩面**：① 新增布局一致性检查（C 头 ↔ Rust `repr(C)`，任一漂移即红）；② `T-CX-19` 的扫描面从单头扩到**两个头**（`pa.h`＋`pa_capabilities.h` 的声明 ⊆ 规格），且**不把结构体当函数**计入 `AB-1` 的 ≤120 预算 | 故意改一个字段/加一个未在规格的声明 ⇒ 机检红；还原 ⇒ 绿 |
 | 4 | 文档交叉引用修正（本次已改）：`CP-30` 不再循环引用、不再引"§13-2 未定"（已决 `AB-39/40/41`） | `grep` 无循环引用 |
 
 **不在本单**：新增能力域、异步能力分类（`PA_ASYNC_*` 已有面）。
