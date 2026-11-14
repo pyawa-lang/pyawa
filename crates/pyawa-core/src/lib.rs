@@ -130,8 +130,9 @@ pub use instance::{Instance, INT_MAX_STR_DIGITS_DEFAULT, INT_MAX_STR_DIGITS_THRE
 pub(crate) use instance::HotId;
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
+pub use instance::{HostObjectGetAttr, HostObjectOps, HostObjectSetAttr};
 pub use type_object::{
-    HostDealloc, HostGetAttrFn, HostSetAttrFn, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
+    HostDealloc, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
     HAS_INSTANCE_DICT,
 };
 pub use value::Value;

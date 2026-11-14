@@ -242,9 +242,15 @@ typedef struct pa_type_ops {
     pa_type_setattr setattr_fn;  /* 可为 NULL */
 } pa_type_ops;
 
+/* AB-75：统一的宿主对象协议钩子。回调字段与 pa_type_ops 相同（AB-78 的等价投影）。 */
+typedef pa_type_ops pa_object_ops;
+
 /* AB-73：给 pa_newtype 注册的类型装回调（NULL ⇒ 清空/不派发）；type_index 是栈索引且不消耗。
- * 失败（越界/不是宿主类型/size 非法）⇒ PA_ERR_INVALID。 */
+ * 失败（越界/不是宿主类型/size 非法）⇒ PA_ERR_INVALID。AB-75 起它是 pa_set_object_ops 的类型版投影。 */
 int pa_set_type_ops(pa_state *state, int type_index, const pa_type_ops *ops);
+/* AB-75：给**任意对象**（类型/实例/模块）装统一协议钩子；idx 栈索引且不消耗；每对象一份；
+ * NULL ⇒ 清除；失败 ⇒ PA_ERR_INVALID。 */
+int pa_set_object_ops(pa_state *state, int index, const pa_object_ops *ops);
 
 /* AB-74：宿主抛**带类型**的异常（追加式，次版本 11）。
  * type_index 是栈索引（AB-9），指向 BaseException 子类（不消耗）；VM 以该类型＋ msg 实例化并

@@ -112,11 +112,16 @@ pub enum CapabilityCallError {
 /// **如实登记**：参照默认 1000 且可用 `sys.setrecursionlimit` 调 ✗ —— 本层上限更低、且该接口还没接 ✗。
 pub const MAX_CALL_DEPTH: usize = 64;
 
+mod host_ops;
+pub use host_ops::{HostObjectGetAttr, HostObjectOps, HostObjectSetAttr};
+
 pub struct Instance {
     /// **当前帧对象**（第 230 轮；`sys._getframe()` ✓）。
     current_frame: core::cell::Cell<Option<NonNull<Header>>>,
     /// **`NotImplemented` 单例**（第 215 轮）。
     not_implemented_singleton: core::cell::Cell<Option<NonNull<Header>>>,
+    /// **`AB-75`**：宿主对象协议钩子（键＝对象地址；类型/实例/模块同一张表，每对象一份）。
+    object_ops: RefCell<crate::fast_hash::FastMap<usize, crate::instance::HostObjectOps>>,
     /// **Python 级终结器旁表**（round 82，照 `OM-20` 的参照语义 ＝ at-most-once）：
     /// 地址 → 已跑过 `__del__` ✓。`header` 的 bit 4–7 是**禁止占用**的保留位（`OM-7`）⇒ 不能加标志
     /// ⇒ 用旁表 ✓；对象释放时同步摘除（地址复用不会串味 ✓）。

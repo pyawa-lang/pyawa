@@ -13,6 +13,7 @@ impl Instance {
             memory_hit: Cell::new(false),
             memory_ceiling: Cell::new(0),
             current_frame: core::cell::Cell::new(None),
+            object_ops: RefCell::new(crate::fast_hash::FastMap::default()),
             not_implemented_singleton: core::cell::Cell::new(None),
             python_finalized: RefCell::new(crate::fast_hash::FastSet::default()),
             ast_parser: core::cell::Cell::new(None),

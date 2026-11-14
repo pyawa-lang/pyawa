@@ -571,16 +571,12 @@ pub(crate) fn attribute_lookup(
         return Ok(Attribute::Value(instance.singletons().none()));
     }
 
-    // **`AB-73`**：宿主类型的**属性回退槽**——普通规则（类型字典/数据描述符/实例字典/内建
-    // `getattr` 槽）**全未命中**才到这里。槽位有错误通道：`Err` 原样上抛（宿主错误不得静默
-    // 回退成 `AttributeError`），`Ok(None)` 继续走默认（最终 `AttributeError`）。
-    // SAFETY: object 是存活对象。
-    let host_object_type = unsafe { object.as_ref() }.ty();
-    if let Some(slot) = unsafe { host_object_type.as_ref() }.slots().host_getattr {
-        // SAFETY: 槽位由类型提供，契约见 `HostGetAttrFn`。
-        if let Some(value) = unsafe { slot(object.as_ptr(), name, instance)? } {
-            return Ok(Attribute::Owned(value));
-        }
+    // **`AB-73`／`AB-75`**：宿主对象的**属性回退钩子**——普通规则（类型字典/数据描述符/
+    // 实例字典/内建 `getattr` 槽）**全未命中**才到这里。入口统一（自身条目 → 类型态条目）且
+    // 有错误通道：`Err` 原样上抛（宿主错误不得静默回退成 `AttributeError`），`Ok(None)` 继续
+    // 默认（最终 `AttributeError`）。
+    if let Some(value) = instance.host_object_getattr(object, name)? {
+        return Ok(Attribute::Owned(value));
     }
 
     // 实测消息：`'int' object has no attribute 'nope'`（类型名取自对象的类型）

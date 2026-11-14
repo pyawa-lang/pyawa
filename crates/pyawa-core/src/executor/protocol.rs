@@ -384,13 +384,11 @@ pub fn instance_attribute_set(
             }
         }
     }
-    // **`AB-73`**：宿主类型的**属性回退写**——普通规则（类型数据描述符/`__slots__` 等）已处理完，
-    // 默认实例字典写之前给宿主一次机会。`Ok(false)` ＝ 未处理（继续默认）；`Err` 原样上抛。
-    // SAFETY: object 是存活对象。
-    let host_object_type = unsafe { object.as_ref() }.ty();
-    if let Some(slot) = unsafe { host_object_type.as_ref() }.slots().host_setattr {
-        // SAFETY: 槽位由类型提供，契约见 `HostSetAttrFn`。
-        if unsafe { slot(object.as_ptr(), name, Some(value), instance)? } {
+    // **`AB-73`／`AB-75`**：宿主对象的**属性回退写**——普通规则（类型数据描述符/`__slots__` 等）
+    // 已处理完，默认实例字典写之前给宿主一次机会（自身条目 → 类型态条目，统一入口）。
+    // `None`／`Ok(false)` ＝ 未处理（继续默认）；`Err` 原样上抛。
+    if let Some(handled) = instance.host_object_setattr(object, name, Some(value))? {
+        if handled {
             // 宿主已处理：传给它的那份值是**借用**（AB-15）⇒ 这里归还；
             // 写入本身由宿主负责（载荷归宿主逻辑管理，AB-58）。
             // SAFETY: value 是调用方交出的新引用。

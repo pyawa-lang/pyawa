@@ -132,8 +132,8 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
         let object_type = instance.type_of(iterable);
         instance.type_lookup(object_type, "__iter__").is_some()
             || unsafe { object_type.as_ref() }.slots().getattr.is_some()
-            // **`AB-73`**：宿主类型的 `__iter__` 可能只经属性回退槽给出。
-            || unsafe { object_type.as_ref() }.slots().host_getattr.is_some()
+            // **`AB-73`／`AB-75`**：宿主对象的 `__iter__` 可能只经属性回退钩子给出。
+            || instance.has_host_object_ops(iterable)
     };
     let special_lookup = if has_special_iter {
         crate::executor::attribute::attribute_lookup_special(instance, iterable, "__iter__")

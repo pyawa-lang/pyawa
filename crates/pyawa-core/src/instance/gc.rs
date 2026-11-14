@@ -233,6 +233,8 @@ impl Instance {
         let _releasing_guard = ReleasingGuard::new(self);
         let ty = unsafe { ptr.as_ref() }.ty();
         self.unregister_user_instance(ty, ptr);
+        // **`AB-75`**：对象释放 ⇒ 摘掉它的宿主协议钩子（地址复用不会串味）。
+        self.forget_object_ops(ptr);
         // **终结延迟判定的重放**（round 82）：`release_one` 正常情况下只在计数 0 时被调用；
         // 但 "终结器自身帧的形参延迟释放" 那条路会把对象**先入队、后重放** —— 重放时计数若已
         // 回不到 0，就是**真复活** ⇒ 只清 `FINALIZING`、不释放（照 `OM-20` 复活语义，之后再死
@@ -370,6 +372,8 @@ impl Instance {
         self.unregister_user_instance(unsafe { header.as_ref() }.ty(), header);
         // 旁表条目随对象释放摘掉 ✓（round 82）。
         self.forget_python_finalized(header.as_ptr() as usize);
+        // **`AB-75`**：宿主对象协议钩子的条目也随对象释放摘掉（地址复用不会串味 ✓）。
+        self.forget_object_ops(header);
         let ty = unsafe { header.as_ref() }.ty();
         // **弱引用失效**（round 59，GC 路径）：回调**排队**，等整个回收循环结束再调 ✓
         // （避免在 clear／free 的借用窗口里跑任意 Python 代码 ✗）。

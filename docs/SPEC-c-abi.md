@@ -524,7 +524,7 @@
 | `pa_pushhandle(st, h)` | +1 | 压入已有对象句柄（不透明，`AB-14`） |
 | `pa_newhandle(st, type, void **payload_out)` | +1 | 新建宿主对象句柄，**交 VM 记账**（`OM-3`）；载荷由 **VM 分配**并经出参交回（`AB-58`）。`type` 是**栈索引**，指向类型对象句柄，**不消耗**（`AB-59`） |
 | `pa_toboolean(st, idx)` | — | 真值转换 |
-| `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID`。**越 `i64` 必须如实失败**（禁止截断）——任意精度走 `pa_tointstring`（`AB-62`） |
+| `pa_tointeger(st, idx)` | — | 整数转换；非整数 ⇒ `PA_ERR_INVALID`。**越 `i64` 必须如实失败**（禁止截断；当前如实报 `PA_ERR_NOTIMPLEMENTED`，大整数 ABI 通道待 `TS-45`，`AB-62`）——任意精度走 `pa_tointstring` |
 | `pa_tointstring(st, idx, len*)` | — | 取**任意整数**的十进制只读**借用**视图（`AB-62`）；**非整数 ⇒ `PA_ERR_INVALID`** |
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
 | `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
@@ -553,7 +553,7 @@
 | `pa_func_set_signature(st, fn, params, n, ret, tparams, nt, flags)` | — | 给已注册宿主函数声明签名（`AB-69`）；注册后、任何执行前；不符 ⇒ `PA_ERR_INVALID`；声明后边界核参数／返回（脚本侧 `TypeError`，归责插件） |
 | `pa_newtype(st, name, base_idx, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；`base_idx` 指定真实基类（`AB-77`；`0` ⇒ `object`，其余按栈索引）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`）；回调见 `AB-73` 的 `pa_set_type_ops`（待 `AB-75` 收敛为投影） |
 | `pa_set_type_ops(st, type_idx, const pa_type_ops *ops)` | — | 给 `pa_newtype` 注册的宿主类型装属性/方法派发回调（`AB-73`；追加式，次版本 11）；`type_idx` 栈索引且不消耗；`NULL` ⇒ 清空/不派发；失败 ⇒ `PA_ERR_INVALID` |
-| `pa_set_object_ops(st, idx, const pa_object_ops *ops)` | — | 统一的宿主对象协议钩子（`AB-75`；类型/实例/模块；每对象一份；`NULL` ⇒ 清除；`pa_set_type_ops` 是其类型版投影）；**待实现**（`PLAN` §12.12 步 3） |
+| `pa_set_object_ops(st, idx, const pa_object_ops *ops)` | — | 统一的宿主对象协议钩子（`AB-75`；类型/实例/模块；每对象一份；`NULL` ⇒ 清除；`pa_set_type_ops` 是其类型版投影）（已落地，`crates/pyawa-abi/tests/object_ops.rs` 的 T-AB-12） |
 | `pa_raise_host_exception(st, type_idx, msg, len)` | — | 宿主抛**带类型**异常（`AB-74`）：`type_idx` 栈索引指向 `BaseException` 子类（不消耗）；成功 ⇒ `PA_ERR_RUNTIME`（guest 可 `except` 到真实类），非法 ⇒ `PA_ERR_INVALID`；未映射错误仍走 `PA_ERR_RUNTIME`＋`pa_errmsg` |
 | `pa_setcapability(st, domain, impl)` | — | 注册能力域实现（`AB-32`／`AB-33`） |
 | `pa_setcapability_async(st, domain, cls)` | — | 异步分类声明；**缺失即注册失败**（`AB-34`） |
@@ -711,11 +711,10 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格当前有 2 条未实现的新增需求**（2026-11-14）：`AB-75`（`pa_set_object_ops` 统一协议钩子）、
-`AB-78`（便捷投影等价原则的落地测试）——按 `PLAN` §12.12 步 3/5 实施（`PA_ABI_MINOR` 已到 **12**，
-`pa_set_object_ops` 落地时同属 1.12 窗口）。`AB-76`（`pa_typeid`）与 `AB-77`（`pa_newtype` 的
-`base_index` 真实继承）已于步 1／步 4 落地（`crates/pyawa-abi/tests/type_identity.rs`）；此前
-`AB-73`（B1/B2a）与 `AB-74`（B2b）已落地，`§12.11` 验收演练见 `PLAN` §12.11 与
+**本规格当前无未实现条目**：`AB-75`（`pa_set_object_ops`）与 `AB-78`（投影等价差分）于步 3/5
+落地（`crates/pyawa-abi/tests/object_ops.rs` 的 T-AB-12／T-AB-14）；`AB-76`（`pa_typeid`）与
+`AB-77`（`pa_newtype` 的 `base_index`）于步 1/4 落地（`crates/pyawa-abi/tests/type_identity.rs`）；
+此前 `AB-73`（B1/B2a）与 `AB-74`（B2b）已落地，`§12.11` 验收演练见 `PLAN` §12.11 与
 `crates/pyawa-abi/tests/` 的 `host_visibility` 测试；另有 `AB-67`／`AB-68`／`AB-69`／`AB-70`／
 `AB-71`／`AB-72` 见各轮台账。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。

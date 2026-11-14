@@ -380,9 +380,8 @@ fn host_binary_dunder(
         return Ok(None);
     };
     for (receiver, other, name) in [(left, right, dunder), (right, left, reflected)] {
-        let receiver_type = instance.type_of(receiver);
-        // SAFETY: receiver_type 由注册表持有。
-        if unsafe { receiver_type.as_ref() }.slots().host_getattr.is_none() {
+        // **`AB-73`／`AB-75`**：只有装了宿主协议钩子的对象才可能经属性通道给出 dunder。
+        if !instance.has_host_object_ops(receiver) {
             continue;
         }
         let Some(found) = crate::executor::attribute::attribute_lookup_swallowing(
