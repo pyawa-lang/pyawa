@@ -121,7 +121,7 @@ fn ascii_tolower_native(
 }
 
 
-// **已编译模式表**（第 565 轮 ✓）：Python 侧只拿**不透明 id** ✓ ⇒ **不新增载荷类型** ✗（`complex` 的教训 ✓）。
+// **每实例状态（`CX-3`／`T-CX-3`：禁止进程级对象表）** —— 见本文件"状态归属"一节（`ensure_class` 之前）。
 use std::sync::Mutex;
 
 // ==== 两档引擎（task-17 ✓）=========================================================================
@@ -243,7 +243,82 @@ fn build_engine(normalized: &str, flags: i64) -> Result<Engine, String> {
         .map_err(|error| error.to_string())
 }
 
-static REGISTRY: Mutex<Vec<Engine>> = Mutex::new(Vec::new());
+/// **编译引擎缓存的键**：`"<flags>\u{1f}<规范化模式>"` ✓（flags 与模式之间用 `U+001F`，
+/// 正则源码里不可能出现的控制字符 ⇒ 拆分无歧义 ✓）。
+const ENGINE_KEY_SEPARATOR: char = '\u{1f}';
+
+/// **引擎缓存上限**（条）。取参照 `Lib/re/__init__.py` 的 `_MAXCACHE`（512 ✓）同量级：
+/// 缓存无限长会把"编过的每个模式"永久钉在进程里；512 条覆盖 `Lib/` 的热模式 ✓。
+const ENGINE_CACHE_LIMIT: usize = 512;
+
+/// **已编译引擎的缓存** —— 本文件**唯一**剩下的进程级结构，且它是**纯值缓存**（不是实例状态）：
+///
+/// - 键是**规范化模式串 ＋ flags**（都是 `str`／`int` 的纯值 ✓），值是**不可变**的 [`Engine`] ✓；
+/// - **不含任何 Python 对象、类型指针或 `Instance` 指针** ⇒ 跨实例共享**在语义上不可观察**
+///   （同源同 flags 编出来的引擎本来就该是同一个函数 ✓）⇒ 不可能再出现"第二个实例拿到第一个
+///   实例的 `re.Pattern` 类型"那一类串对象 ✗；
+/// - 有界（`ENGINE_CACHE_LIMIT`，FIFO 淘汰 ✓）⇒ 不会随编译次数无限增长 ✓（旧实现
+///   `REGISTRY: Vec<Engine>` 是**无界**的 ✓）。
+///
+/// 为什么不能像另外三张表那样放进对象自身 ✗：`regex`／`fancy-regex` 的引擎是 **Rust 载荷**
+/// （无对应 Python 对象），而 `pyawa-stdlib` 是 `#![forbid(unsafe_code)]`、core 也没有"按
+/// 对象读写不透明载荷"的安全接口 ⇒ 本 crate 无法把引擎挂到 `re.Pattern` 实例上 ✓ —— 这是
+/// **如实的技术边界**，不是把实例状态留在了全局 ✓（表里的东西与实例身份无关 ✓）。
+static ENGINE_CACHE: Mutex<Option<EngineCache>> = Mutex::new(None);
+
+/// 引擎缓存本体（`Option` 只是为了让 `static` 能 `const` 初始化 —— `HashMap::new` 不是 `const`）。
+#[derive(Default)]
+struct EngineCache {
+    entries: std::collections::HashMap<String, Engine>,
+    /// 插入顺序（FIFO 淘汰用 ✓；命中不改变顺序 —— 简单、可预期 ✓）。
+    order: std::collections::VecDeque<String>,
+}
+
+impl EngineCache {
+    /// 取引擎（命中 ✓）或编译并缓存（未命中／被淘汰 ✓）。
+    ///
+    /// **淘汰后仍可用** ✓：键里带着"规范化模式 ＋ flags"两个纯值 ⇒ 回退到**重新编译**即可
+    /// （同源同 flags 编出来的引擎与缓存里那份等价 ✓）⇒ 淘汰只是性能事件，不是正确性事件 ✓。
+    fn engine(&mut self, key: &str) -> Result<Engine, String> {
+        if let Some(found) = self.entries.get(key) {
+            return Ok(found.clone());
+        }
+        let (flags, normalized) = key
+            .split_once(ENGINE_KEY_SEPARATOR)
+            .ok_or_else(|| "坏掉的引擎键（缺 flags 分隔符）".to_owned())?;
+        let flags: i64 = flags.parse().map_err(|_| "坏掉的引擎键（flags 不是整数）".to_owned())?;
+        let built = build_engine(normalized, flags)?;
+        while self.entries.len() >= ENGINE_CACHE_LIMIT {
+            let Some(oldest) = self.order.pop_front() else { break };
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(key.to_owned(), built.clone());
+        self.order.push_back(key.to_owned());
+        Ok(built)
+    }
+}
+
+/// 规范化模式 ＋ flags ⇒ 引擎缓存的键 ✓。
+fn engine_key(normalized: &str, flags: i64) -> String {
+    let mut key = String::with_capacity(normalized.len() + 12);
+    key.push_str(&flags.to_string());
+    key.push(ENGINE_KEY_SEPARATOR);
+    key.push_str(normalized);
+    key
+}
+
+/// 按引擎键取引擎（未命中 ⇒ 编译并缓存 ✓）；编译错误报 `ValueError`（与旧 `build_engine`
+/// 调用点同一档 ✓）。
+fn engine_for_key(instance: &Instance, key: &str) -> Result<Engine, ExecError> {
+    let built = {
+        let mut table = ENGINE_CACHE
+            .lock()
+            .map_err(|_| instance.raise_builtin_error("RuntimeError", "引擎缓存被毒化"))?;
+        let cache = table.get_or_insert_with(EngineCache::default);
+        cache.engine(key)
+    };
+    built.map_err(|error| instance.raise_builtin_error("ValueError", &error))
+}
 
 /// 把参照里合法、Rust `regex` 里**非法**的**字符类开头 `]`** 规范化 ✓（第 722 轮 ✓）。
 ///
@@ -400,7 +475,11 @@ fn strip_verbose_whitespace(pattern: &str) -> String {
     out
 }
 
-/// `compile_raw(pattern, flags) -> id` ✓：**直接编译 `pattern` 源串**（忽略 `_compiler` 给的 SRE 字节码 ✓）。
+/// `compile_raw(pattern, flags) -> key` ✓：**直接编译 `pattern` 源串**（忽略 `_compiler` 给的 SRE 字节码 ✓）。
+///
+/// **返回纯值引擎键**（`str`：`"<flags>\u{1f}<规范化模式>"`）—— 不是进程级 `REGISTRY` 的下标 ✓
+/// （task-10 删表：同进程两个实例不再共用一张模式表 ✓）。键自带还原信息 ⇒ `match_raw` 即使
+/// 遇到缓存淘汰也能**重新编译**出等价引擎 ✓（见 [`EngineCache::engine`]）。
 fn compile_raw_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -420,13 +499,10 @@ fn compile_raw_native(
     } else {
         normalized
     };
-    let built = build_engine(&normalized, flags)
-        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?;
-    let mut registry = REGISTRY.lock().map_err(|_| {
-        instance.raise_builtin_error("RuntimeError", "compile_raw: 模式表被毒化")
-    })?;
-    registry.push(built);
-    Ok(instance.new_int(registry.len() as i64 - 1))
+    let key = engine_key(&normalized, flags);
+    // **立刻编译**：编译错误与旧口径同一时点抛出（`ValueError` ✓），不是等 `match_raw` 才报 ✓。
+    let _ = engine_for_key(instance, &key)?;
+    Ok(instance.new_str(&key))
 }
 
 
@@ -446,15 +522,21 @@ fn char_offset(text: &str, byte: usize) -> i64 {
     }
 }
 
-/// `match_raw(id, string, kind) -> "s,e;g1s,g1e;…" | None` ✓（未匹配的分组写 `-1,-1` ✓）。
-/// `kind`：`match`（锚头 ✓）／`fullmatch`（锚头尾 ✓）／`search`（任意位置 ✓）。
+/// `match_raw(key, string, kind) -> "s,e;g1s,g1e;…" | None` ✓（未匹配的分组写 `-1,-1` ✓）。
+/// `key` 是 `compile_raw` 交回的**纯值引擎键** ✓；`kind`：`match`（锚头 ✓）／`fullmatch`（锚头尾 ✓）／
+/// `search`（任意位置 ✓）。
 fn match_raw_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let id = args.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
+    let Some(key) = args.first().and_then(|value| instance.text_of(*value)).map(str::to_owned) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "match_raw: 第一个实参要是 compile_raw 交回的引擎键（str）",
+        ));
+    };
     let Some(text) = args.get(1).and_then(|value| instance.text_of(*value)) else {
         return Err(instance.raise_builtin_error("TypeError", "match_raw: 第二个实参要是 str"));
     };
@@ -462,12 +544,7 @@ fn match_raw_native(
         .get(2)
         .and_then(|value| instance.text_of(*value))
         .unwrap_or("search");
-    let registry = REGISTRY
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match_raw: 模式表被毒化"))?;
-    let Some(built) = registry.get(usize::try_from(id).unwrap_or(usize::MAX)) else {
-        return Err(instance.raise_builtin_error("ValueError", "match_raw: 模式 id 越界"));
-    };
+    let built = engine_for_key(instance, &key)?;
     let caps = built
         .captures_from(text, 0)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?;
@@ -507,13 +584,13 @@ fn match_raw_native(
 // ==== `re.Pattern`／`re.Match`（第 582 轮 ✓）====================================================
 //
 // **为什么在 Rust 侧** ✓：`SPEC-c-modules.md:470` 写明「`_sre`（`re` 没有纯 Python 备份）必须用 Rust 重写」✓
-// ⇒ 两个类与它们的方法都建在这里 ✓，**仍然不新增载荷类型** ✗：数据放在**按对象地址索引**的静态表里 ✓
-// （`re` 侧只看见普通实例 ✓）。
+// ⇒ 两个类与它们的方法都建在这里 ✓，**仍然不新增载荷类型** ✗：数据放在**对象自己的实例属性字典**里
+// （每实例 ✓ —— task-10 起；先前是按对象地址索引的进程级静态表 ✗，见"状态归属"一节 ✓）。
 //
 // **如实范围** ✗（本轮的先落面）：Pattern 先给 `match`／`search`／`fullmatch` ✓、Match 先给
 // `span`／`start`／`end` ✓；`group`／`groups`／`groupdict`／`findall`／`finditer`／`split`／`sub`／`subn`
 // 与 `_sre.template` 随后补 ✓（`re` 要全了才算通 ✓）。`pos`／`endpos` 实参暂按"不切片"处理 ✗（随后补 ✓）。
-// 表项不回收 ✗（模式数量有限 ✓，随后随对象释放一起清 ✓）。
+// 状态随对象释放 ⇒ 不再有"表项不回收"的问题 ✓（task-10 ✓）。
 
 /// `re.Pattern` 的方法表 ✓（`re/__init__.py` 至少要 `match/search/fullmatch` ✓，其余随后补 ✓）。
 const PATTERN_METHODS: &[(&str, NativeFn)] = &[
@@ -544,48 +621,117 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
     ("__str__", match_repr_native as NativeFn),
 ];
 
-/// 一个已编译模式的全部数据（`re.Pattern` 实例 ↔ 这张表 ✓）。
-#[allow(dead_code)] // `groupindex`／`groups` 本轮先存着 ✓（`group`／`groups` 随后用 ✓）
-struct PatternData {
-    /// 该模式**对象**的地址 ✓（`Match.re` 要它 ✓）。
-    object: usize,
-    built: Engine,
-    groupindex: Vec<(String, i64)>,
-    groups: i64,
+// ==== 状态归属（task-10：`_sre` 的五张进程级表 → 每实例）=========================================
+//
+// **真 bug（先于 task-10 存在）** ✗：先前这里有三张**进程级** `static Mutex` 对象表
+// （`PATTERNS`／`MATCHES`／`TEMPLATES`）、一张**类型对象地址**表（`CLASSES`）和一个**无界**引擎
+// `REGISTRY`。同进程**第二个** `Instance` 首次编译正则时，`CLASSES` 会命中**第一个实例**的
+// `re.Pattern` 类型（它的 MRO 指回第一个实例的 `object`）⇒ `call_callable` 无限递归／栈溢出 ✗。
+//
+// **一处真相** ✓：实例状态一律**挂在 Python 对象自身**（`re.Pattern`／`re.Match`／`_sre.Template`
+// 的实例属性字典；类对象则由**本实例的类型注册表**管） ⇒ 随实例生死，跨实例天然不串 ✓：
+//
+// - `CLASSES` → 删表；`ensure_class` 走 `instance.type_named(name)`（每个实例各有自己的类型注册表 ✓）。
+//   这与 `posix_module.rs` 的 `stat_result_type`（round 727 的同款修复 ✓）是**同一手法** ✓。
+// - `PATTERNS` → 删表；引擎键／bytes 标志／`groupindex`／`groups` 都在 `re.Pattern` 的实例属性字典里 ✓
+//   （`Engine` 是 Rust 载荷、进不了 Python 对象 ⇒ 只把**纯值键**放进对象，引擎本身走下面的纯值缓存 ✓）。
+// - `MATCHES` → 删表；跨度在 `re.Match` 的隐藏属性里（`__pyawa_sre_spans__`），主语／模式对象本来就在
+//   可见属性 `string`／`re` 里 ✓。
+// - `TEMPLATES` → 删表；`_sre.Template` 本来就有一份可见属性 `_parsed`（`template_native` 写的 ✓）。
+// - `REGISTRY` → 删表；`compile_raw` 现在返回**纯值引擎键**（`str`），`match_raw` 按该键从纯值缓存取引擎 ✓。
+//
+// **唯一保留的进程级结构**是 [`ENGINE_CACHE`]：它是**纯值缓存**（键／值都不含 Python 对象或实例
+// 指针，有界 FIFO）⇒ 共享在语义上不可观察、也不可能串对象 ✓（理由与边界见该 `static` 的注释 ✓）。
+
+/// `re.Pattern` 实例属性字典里的**引擎键**隐藏属性（纯值：`"<flags>\u{1f}<规范化模式>"`）。
+/// 不在 `dir()`／`__all__` 的语义面里；可观察偏差只到 `vars(pattern)`（与 `_signal` 的隐藏键同款口径 ✓）。
+const ENGINE_KEY_ATTRIBUTE: &str = "__pyawa_sre_engine_key__";
+
+/// `re.Match` 实例属性字典里的**跨度表**隐藏属性（`list`，`[s0, e0, s1, e1, …]`，字符下标 ✓）。
+const SPANS_ATTRIBUTE: &str = "__pyawa_sre_spans__";
+
+/// 一个 `re.Pattern` 实例的取数结果（**借用**；对象活着 ⇒ 数据活着 ✓）。
+struct PatternState {
+    /// 该模式对象本身 ✓（`Match.re` 要用 ✓）。
+    object: NonNull<Header>,
+    /// 从纯值缓存取到的引擎（clone ✓）。
+    engine: Engine,
     /// **bytes 模式** ✓（第 722 轮 ✓）：pattern 是 `bytes` ⇒ 主语也必须是 `bytes` ✓，
     /// 且所有产出（组文本／`findall`／`split`／`sub`）都交回 `bytes` ✓。
     is_bytes: bool,
 }
 
-/// 一次匹配的跨度（`re.Match` 实例 ↔ 这张表 ✓）：下标**从 0 起**（第 0 项是整体 ✓）。
-#[allow(dead_code)] // `pattern` 本轮先存着 ✓（按名字取组随后用 ✓）
+/// 一次匹配的数据（**借用** `re.Match` 对象自己的属性；不另存旁表 ✓）。
 struct MatchData {
     spans: Vec<(i64, i64)>,
-    text: String,
-    /// 对应 `PatternData` 的键（对象地址 ✓）——给按名字取组用 ✓。
-    pattern: usize,
-    /// 本匹配来自 **bytes 模式** ✓ ⇒ `group()` 一族交回 `bytes` ✓（见 `PatternData::is_bytes` ✓）。
+    /// 原始主语对象（与 `Match.string` 是同一个对象 ✓，借用）。
+    subject: NonNull<Header>,
+    /// 对应 `re.Pattern` 对象（与 `Match.re` 是同一个对象 ✓，借用）——按名字取组用 ✓。
+    pattern: NonNull<Header>,
+    /// 本匹配来自 **bytes 模式** ✓ ⇒ `group()` 一族交回 `bytes` ✓。
     is_bytes: bool,
 }
 
-static PATTERNS: Mutex<Option<std::collections::HashMap<usize, PatternData>>> = Mutex::new(None);
-static MATCHES: Mutex<Option<std::collections::HashMap<usize, MatchData>>> = Mutex::new(None);
+/// 取对象的**实例属性字典**（我们的 `Pattern`／`Match` 都是带内联字典的普通实例 ✓）。
+fn instance_attributes(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+    pyawa_core::mounted_instance_dict(instance, object)
+}
 
-/// 两个类对象（按名字索引对象地址 ✓）。**本 crate 是 `#![forbid(unsafe_code)]`** ✓ ⇒
-/// 不自己解 `TypeObject` 指针 ✗，而是走 core 的**安全**入口 `build_class_from_parts` ✓
-/// —— 与 `class` 语句**同一条路** ✓（一处真相 ✓：类字典、方法绑定、名字登记都由它负责 ✓）。
-static CLASSES: Mutex<Option<std::collections::HashMap<&'static str, usize>>> = Mutex::new(None);
+/// 读 `re.Pattern` 的**引擎键**（借用 ⇒ 复制成 `String`，出锁后用 ✓）。
+fn pattern_engine_key(instance: &Instance, pattern: NonNull<Header>) -> Option<String> {
+    let attributes = instance_attributes(instance, pattern)?;
+    let key = instance.dict_get(attributes, ENGINE_KEY_ATTRIBUTE)?;
+    instance.text_of(key).map(str::to_owned)
+}
 
-/// 建 `re.Pattern`／`re.Match` 两个类（幂等 ✓），方法挂进**类命名空间** ✓。
+/// 读 `re.Pattern` 的**bytes 标志**（由可见属性 `pattern` 的类型判定 ✓ —— 与 `pattern_source`
+/// 收进来的两种载荷一一对应 ✓：`str` ⇒ Unicode 模式；`bytes` ⇒ bytes 模式）。
+fn pattern_is_bytes(instance: &Instance, pattern: NonNull<Header>) -> bool {
+    let Some(attributes) = instance_attributes(instance, pattern) else { return false };
+    let Some(pattern_value) = instance.dict_get(attributes, "pattern") else { return false };
+    instance.text_of(pattern_value).is_none() && instance.bytes_value(pattern_value).is_some()
+}
+
+/// 读 `re.Pattern` 的 `groupindex`（可见属性 `{名字: 组号}` ✓ —— `re/_compiler.py` 给的那份 ✓）。
+fn pattern_groupindex(instance: &Instance, pattern: NonNull<Header>) -> Vec<(String, i64)> {
+    let Some(attributes) = instance_attributes(instance, pattern) else { return Vec::new() };
+    let Some(mapping) = instance.dict_get(attributes, "groupindex") else { return Vec::new() };
+    instance
+        .dict_entries(mapping)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, value)| Some((instance.text_of(key)?.to_owned(), instance.int_value(value)?)))
+        .collect()
+}
+
+/// 取一个 `re.Pattern` 实例的取数结果（`bound` 是本实例 ✓）。
+fn pattern_state(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<PatternState, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "需要 re.Pattern 实例"));
+    };
+    let Some(key) = pattern_engine_key(instance, this) else {
+        return Err(instance.raise_builtin_error("TypeError", "不是已编译的 re.Pattern 实例"));
+    };
+    let engine = engine_for_key(instance, &key)?;
+    Ok(PatternState { object: this, engine, is_bytes: pattern_is_bytes(instance, this) })
+}
+
+/// 建 `re.Pattern`／`re.Match`／`_sre.Template` 类（幂等 ✓，**每实例一份** ✓），方法挂进类命名空间 ✓。
+///
+/// **一处真相** ✓：类对象的登记／查找由**本实例的类型注册表**负责（`new_type` 的 `types_by_name`
+/// 先登记者优先 ✓）⇒ 先 `type_named` 查、没有才建 ✓ —— 不再有进程级 `CLASSES` 表 ✗。
+/// 类型被孤儿回收时（`Instance::reclaim_orphan_user_types` 会同步摘掉名字索引 ✓）这里会重建一个 ✓；
+/// 反过来，只要还有活实例／`re` 模块的 `Pattern` 引用，类就不会被回收 ✓。
 fn ensure_class(
     instance: &Instance,
     name: &'static str,
     methods: &[(&str, NativeFn)],
 ) -> Option<NonNull<Header>> {
-    let mut table = CLASSES.lock().ok()?;
-    let map = table.get_or_insert_with(std::collections::HashMap::new);
-    if let Some(existing) = map.get(name) {
-        return NonNull::new(*existing as *mut Header);
+    if let Some(existing) = instance.type_named(name) {
+        return Some(existing.cast::<Header>());
     }
     let base = instance.type_named("object")?.cast::<Header>();
     let namespace = instance.new_dict();
@@ -603,21 +749,16 @@ fn ensure_class(
         None,
     )
     .ok()?;
-    map.insert(name, class.as_ptr() as usize);
     Some(class)
 }
 
-/// 造一个类的实例（**不建**实例字典 ✓ —— 数据在静态表里 ✓）。
+/// 造一个类的实例（**不建**实例字典 —— 调用方给的那份 `attributes` 就是实例字典 ✓）。
 fn new_instance_with(
     instance: &Instance,
     class_name: &str,
     attributes: NonNull<Header>,
 ) -> Option<NonNull<Header>> {
-    let pointer = {
-        let table = CLASSES.lock().ok()?;
-        *table.as_ref()?.get(class_name)?
-    };
-    let class = NonNull::new(pointer as *mut Header)?;
+    let class = instance.type_named(class_name)?.cast::<Header>();
     let ty = class.cast::<pyawa_core::TypeObject>();
     let object = instance.alloc(pyawa_core::AttributeObject::new(
         ty,
@@ -729,18 +870,6 @@ fn subject_text(
     }
 }
 
-/// 读模式的 **bytes 标志** ✓（模式表的一处真相 ✓）。
-fn pattern_is_bytes(instance: &Instance, key: usize) -> Result<bool, ExecError> {
-    let table = PATTERNS
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-    Ok(table
-        .as_ref()
-        .and_then(|map| map.get(&key))
-        .map(|pattern| pattern.is_bytes)
-        .unwrap_or(false))
-}
-
 /// 跑一次匹配 ✓（`kind`: `match`／`fullmatch`／`search` ✓）⇒ 跨度（**字符**下标 ✓）。
 ///
 /// 两档引擎共用 ✓（task-17）：`Engine::captures_from` 交回的字节跨度在这里唯一地换算成字符下标 ✓；
@@ -773,13 +902,14 @@ fn run_match(
     ))
 }
 
-/// 把 `MatchData` 装成 `re.Match` 实例 ✓。
+/// 把一次匹配装成 `re.Match` 实例 ✓（**数据放进对象自己的属性字典**，不另存旁表 ✓）。
+///
+/// 隐藏属性 `__pyawa_sre_spans__` 是**纯值**（`list[int]`）；主语／模式对象分别就是可见属性
+/// `string`／`re`（一处真相 ✓，`group()` 切片与按名字取组都从它们还原 ✓）。
 fn make_match(
     instance: &Instance,
-    pattern_key: usize,
-    text: &str,
+    pattern: NonNull<Header>,
     subject: NonNull<Header>,
-    is_bytes: bool,
     spans: Vec<(i64, i64)>,
     pos: i64,
     endpos: i64,
@@ -795,19 +925,8 @@ fn make_match(
     instance.dict_set(attributes, "pos", pos_value);
     let endpos_value = instance.new_int(endpos);
     instance.dict_set(attributes, "endpos", endpos_value);
-    let pattern_object = {
-        let table = PATTERNS
-            .lock()
-            .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-        table
-            .as_ref()
-            .and_then(|map| map.get(&pattern_key))
-            .map(|pattern| pattern.object)
-    };
-    if let Some(pointer) = pattern_object.and_then(|address| NonNull::new(address as *mut Header)) {
-        let kept = instance.retain(pointer);
-        instance.dict_set(attributes, "re", kept);
-    }
+    let kept = instance.retain(pattern);
+    instance.dict_set(attributes, "re", kept);
     // **`lastindex`／`lastgroup`**（第 595 轮）✓：最后一个**匹配上的**捕获组 ✓（参照语义 ✓）
     let mut lastindex: i64 = -1;
     for (index, (start, _)) in spans.iter().enumerate().skip(1) {
@@ -815,16 +934,7 @@ fn make_match(
             lastindex = index as i64;
         }
     }
-    let groupindex_of_pattern = {
-        let table = PATTERNS
-            .lock()
-            .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-        table
-            .as_ref()
-            .and_then(|map| map.get(&pattern_key))
-            .map(|pattern| pattern.groupindex.clone())
-            .unwrap_or_default()
-    };
+    let groupindex_of_pattern = pattern_groupindex(instance, pattern);
     let lastgroup = groupindex_of_pattern
         .iter()
         .find(|(_, index)| *index == lastindex)
@@ -849,31 +959,18 @@ fn make_match(
             instance.dict_set(attributes, "lastgroup", none);
         }
     }
+    // **跨度表（隐藏属性，纯值）**：`[s0, e0, s1, e1, …]`（字符下标；未匹配组写 `-1, -1` ✓）。
+    let mut flat: Vec<NonNull<Header>> = Vec::with_capacity(spans.len() * 2);
+    for (start, end) in &spans {
+        flat.push(instance.new_int(*start));
+        flat.push(instance.new_int(*end));
+    }
+    let spans_value = instance.new_list(flat);
+    // **接管**那份新引用（`dict_set` 是"借用＋自己加一份" ⇒ 这里若用它就会多留一份 ⇒ 用 owned 入口 ✓）。
+    instance.dict_set_owned_by_name(attributes, SPANS_ATTRIBUTE, spans_value);
     let object = new_instance_with(instance, "re.Match", attributes)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Match 未登记"))?;
-    let mut table = MATCHES
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match 表被毒化"))?;
-    table.get_or_insert_with(std::collections::HashMap::new).insert(
-        object.as_ptr() as usize,
-        MatchData { spans, text: text.to_owned(), pattern: pattern_key, is_bytes },
-    );
     Ok(object)
-}
-
-/// Pattern 方法共用的取数（`bound` 是本实例 ✓）。
-fn pattern_of(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<(usize, Engine), ExecError> {
-    let Some(this) = bound else {
-        return Err(instance.raise_builtin_error("TypeError", "需要 re.Pattern 实例"));
-    };
-    let key = this.as_ptr() as usize;
-    let table = PATTERNS
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-    let Some(data) = table.as_ref().and_then(|map| map.get(&key)) else {
-        return Err(instance.raise_builtin_error("TypeError", "不是已编译的 re.Pattern 实例"));
-    };
-    Ok((key, data.built.clone()))
 }
 
 /// `Pattern.<kind>(string, pos=0, endpos=…) -> Match | None` ✓（`pos`／`endpos` 暂不切片 ✗，随后补 ✓）。
@@ -883,25 +980,15 @@ fn pattern_kind_native(
     args: &[NonNull<Header>],
     kind: &str,
 ) -> Result<NonNull<Header>, ExecError> {
-    let (key, built) = pattern_of(instance, bound)?;
-    let is_bytes = pattern_is_bytes(instance, key)?;
+    let state = pattern_state(instance, bound)?;
     let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
-    let (text, subject) = subject_text(instance, is_bytes, subject)?;
+    let (text, subject) = subject_text(instance, state.is_bytes, subject)?;
     let (window, start, pos, endpos) = match_window(instance, &text, args);
-    match run_match(&built, window, start, kind) {
+    match run_match(&state.engine, window, start, kind) {
         // 跨度已是**整串**下标 ✓（窗口是整串前缀 ✓ ⇒ 字符下标不用平移 ✓）。
-        Ok(Some(spans)) => make_match(
-            instance,
-            key,
-            &text,
-            subject,
-            is_bytes,
-            spans,
-            pos,
-            endpos,
-        ),
+        Ok(Some(spans)) => make_match(instance, state.object, subject, spans, pos, endpos),
         Ok(None) => Ok(instance.retain(instance.singletons().none())),
         Err(error) => Err(instance.raise_builtin_error("ValueError", &error)),
     }
@@ -921,16 +1008,7 @@ fn pattern_fullmatch_native(instance: &Instance, bound: Option<NonNull<Header>>,
 
 /// 取 `MatchData` 里第 `group` 组的跨度 ✓（-1,-1 ⇒ 未匹配 ✓）。
 fn match_span_at(instance: &Instance, bound: Option<NonNull<Header>>, group: i64) -> Result<Option<(i64, i64)>, ExecError> {
-    let Some(this) = bound else {
-        return Err(instance.raise_builtin_error("TypeError", "需要 re.Match 实例"));
-    };
-    let key = this.as_ptr() as usize;
-    let table = MATCHES
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match 表被毒化"))?;
-    let Some(data) = table.as_ref().and_then(|map| map.get(&key)) else {
-        return Err(instance.raise_builtin_error("TypeError", "不是 re.Match 实例"));
-    };
+    let data = match_data(instance, bound)?;
     let index = usize::try_from(group).unwrap_or(usize::MAX);
     let Some(span) = data.spans.get(index) else {
         return Err(instance.raise_builtin_error("IndexError", "no such group"));
@@ -982,23 +1060,6 @@ fn match_end_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &
 
 
 
-/// 取模式表里的一份（clone ✓，不在锁里调进解释器 ✓）。
-fn pattern_data(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-) -> Result<(usize, Engine, Vec<(String, i64)>), ExecError> {
-    let (key, built) = pattern_of(instance, bound)?;
-    let table = PATTERNS
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-    let groupindex = table
-        .as_ref()
-        .and_then(|map| map.get(&key))
-        .map(|data| data.groupindex.clone())
-        .unwrap_or_default();
-    Ok((key, built, groupindex))
-}
-
 /// 扫出**全部**匹配的跨度 ✓（`Vec[0]` 是整体 ✓；空匹配由共用游标推进 ✓）。
 ///
 /// 两档引擎共用 ✓（task-17）：`Engine::scan_from` 交回的字节跨度在这里唯一地换算成字符下标 ✓。
@@ -1026,8 +1087,8 @@ fn pattern_findall_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let (key, built, _groupindex) = pattern_data(instance, bound)?;
-    let is_bytes = pattern_is_bytes(instance, key)?;
+    let state = pattern_state(instance, bound)?;
+    let is_bytes = state.is_bytes;
     let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
@@ -1035,9 +1096,9 @@ fn pattern_findall_native(
     // **截尾前缀 ＋ 引擎 pos** ✓（task-17 第 2 轮）：跨度直接就是**整串**字符下标 ✓ ⇒ 不再平移 ✓；
     // 切片一律用**原文** ✓（第 585 轮踩过"把 text 覆盖成窗口"的坑 ✗）。
     let (window, start, _pos, _endpos) = match_window(instance, &text, args);
-    let groups = built.captures_len().saturating_sub(1);
+    let groups = state.engine.captures_len().saturating_sub(1);
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    for spans in scan_spans(&built, window, start)
+    for spans in scan_spans(&state.engine, window, start)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
         if groups == 0 {
@@ -1068,18 +1129,10 @@ fn match_groupdict_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let data = match_data(instance, bound)?;
     let default = args.first().copied();
-    let table = PATTERNS
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-    let groupindex = table
-        .as_ref()
-        .and_then(|map| map.get(&data.pattern))
-        .map(|pattern| pattern.groupindex.clone())
-        .unwrap_or_default();
-    drop(table);
+    let groupindex = pattern_groupindex(instance, data.pattern);
     let result = instance.new_dict();
     for (name, index) in groupindex {
-        let value = match group_text(&data, index) {
+        let value = match group_text(instance, &data, index) {
             Some(text) => text_object(instance, &text, data.is_bytes),
             None => match default {
                 Some(value) => instance.retain(value),
@@ -1141,29 +1194,36 @@ fn resolve_group(
     let Some(name) = instance.text_of(value) else {
         return Err(instance.raise_builtin_error("IndexError", "no such group"));
     };
-    let table = PATTERNS
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-    let found = table
-        .as_ref()
-        .and_then(|map| map.get(&data.pattern))
-        .and_then(|pattern| {
-            pattern
-                .groupindex
-                .iter()
-                .find(|(key, _)| key == name)
-                .map(|(_, index)| *index)
-        });
-    found.ok_or_else(|| instance.raise_builtin_error("IndexError", "no such group"))
+    pattern_groupindex(instance, data.pattern)
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, index)| *index)
+        .ok_or_else(|| instance.raise_builtin_error("IndexError", "no such group"))
 }
 
 /// 取一组的**文本** ✓（未匹配 ⇒ `None` ✓）。
-fn group_text(data: &MatchData, index: i64) -> Option<String> {
+///
+/// **一处真相** ✓：从 `re.Match` 自己的可见属性还原 —— 主语取 `Match.string`（`data.subject`），
+/// bytes 模式按原字节切片（span 就是字节下标 ✓），str 模式按字符切片（孤立代理走哨兵映射 ✓）。
+fn group_text(instance: &Instance, data: &MatchData, index: i64) -> Option<String> {
     let span = *data.spans.get(usize::try_from(index).ok()?)?;
     if span.0 < 0 {
         return None;
     }
-    Some(slice_chars(&data.text, span.0, span.1))
+    if data.is_bytes {
+        let bytes = instance.bytes_value(data.subject)?;
+        let start = usize::try_from(span.0).ok()?;
+        let end = usize::try_from(span.1).ok()?;
+        return Some(decode_subject(bytes.get(start..end)?));
+    }
+    // str 模式：合法 UTF-8 直接按字符切；孤立代理的 str 先映射成哨兵串再切（round 107 同口径 ✓）。
+    match instance.text_of(data.subject) {
+        Some(text) => Some(slice_chars(text, span.0, span.1)),
+        None => {
+            let text = wtf8_to_sentinel_string(instance.wtf8_of(data.subject)?);
+            Some(slice_chars(&text, span.0, span.1))
+        }
+    }
 }
 
 
@@ -1173,25 +1233,25 @@ fn group_text(data: &MatchData, index: i64) -> Option<String> {
 ///
 /// 造一批 `re.Match` ✓ 再用 core 的公共入口 `iter_value` 包成**真迭代器** ✓
 /// （`itertools` 也在用同一个入口 ✓ ⇒ 不是新通道 ✓）；窗口与 `findall` 同款 ✓：
-/// **截尾前缀 ＋ 引擎 pos** ✓（task-17 第 2 轮），`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓。
+/// **截尾前缀 ＋ 引擎 pos** ✓（task-17 第 2 轮），`Match.string` 存**原文** ✓ ⇒ `group()` 切片才对 ✓。
 fn pattern_finditer_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let (key, built, _groupindex) = pattern_data(instance, bound)?;
-    let is_bytes = pattern_is_bytes(instance, key)?;
+    let state = pattern_state(instance, bound)?;
+    let is_bytes = state.is_bytes;
     let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
     let (text, subject) = subject_text(instance, is_bytes, subject)?;
     let (window, start, pos, endpos) = match_window(instance, &text, args);
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    for spans in scan_spans(&built, window, start)
+    for spans in scan_spans(&state.engine, window, start)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
-        items.push(make_match(instance, key, &text, subject, is_bytes, spans, pos, endpos)?);
+        items.push(make_match(instance, state.object, subject, spans, pos, endpos)?);
     }
     let list = instance.new_list(items);
     pyawa_core::executor::iter::iter_value(instance, list)
@@ -1213,7 +1273,7 @@ fn match_getitem_native(
     if args.len() == 1 && kwargs.is_empty() {
         if let Some(index) = instance.int_of(args[0]).and_then(|value| value.to_i64()) {
             let data = match_data(instance, bound)?;
-            return match group_text(&data, index) {
+            return match group_text(instance, &data, index) {
                 Some(text) => Ok(text_object(instance, &text, data.is_bytes)),
                 None => Ok(instance.retain(instance.singletons().none())),
             };
@@ -1233,16 +1293,7 @@ fn match_expand_native(
         return Err(instance.raise_builtin_error("TypeError", "expand: 实参要是 str"));
     };
     let (template, _) = subject_text(instance, data.is_bytes, template_object)?;
-    let groupindex = {
-        let table = PATTERNS
-            .lock()
-            .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-        table
-            .as_ref()
-            .and_then(|map| map.get(&data.pattern))
-            .map(|pattern| pattern.groupindex.clone())
-            .unwrap_or_default()
-    };
+    let groupindex = pattern_groupindex(instance, data.pattern);
     let rendered = expand_template(instance, &data, &groupindex, &template)?;
     Ok(text_object(instance, &rendered, data.is_bytes))
 }
@@ -1294,7 +1345,7 @@ fn expand_template(
                         instance.raise_builtin_error("IndexError", "unknown group name")
                     })?,
             };
-            out.push_str(&group_text(data, index).unwrap_or_default());
+            out.push_str(&group_text(instance, data, index).unwrap_or_default());
         } else if escape.is_ascii_digit() {
             let mut digits = escape.to_string();
             if let Some(next) = chars.peek().copied() {
@@ -1304,7 +1355,7 @@ fn expand_template(
                 }
             }
             let index = digits.parse::<i64>().unwrap_or(0);
-            out.push_str(&group_text(data, index).unwrap_or_default());
+            out.push_str(&group_text(instance, data, index).unwrap_or_default());
         } else {
             match escape {
                 'n' => out.push('\n'),
@@ -1327,8 +1378,9 @@ fn substitute(
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
 ) -> Result<(String, i64, bool), ExecError> {
-    let (key, built, groupindex) = pattern_data(instance, bound)?;
-    let is_bytes = pattern_is_bytes(instance, key)?;
+    let state = pattern_state(instance, bound)?;
+    let is_bytes = state.is_bytes;
+    let groupindex = pattern_groupindex(instance, state.object);
     // 替换可以是**字符串模板** ✓ 也可以是**可调用对象** ✓（`re.sub` 两种都收 ✓，第 588 轮）；
     // **bytes 模式**下模板必须同口径（bytes ✓）—— 不同口径的 str／bytes 一律当**可调用**试 ✗（不是可调用就由调用期报错 ✓）。
     let repl = args.first().copied();
@@ -1363,7 +1415,7 @@ fn substitute(
     let mut out = String::new();
     let mut last = 0_i64;
     let mut replaced = 0_i64;
-    for spans in scan_spans(&built, &text, 0)
+    for spans in scan_spans(&state.engine, &text, 0)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
         if count > 0 && replaced >= count {
@@ -1371,8 +1423,12 @@ fn substitute(
         }
         let (start, end) = spans[0];
         out.push_str(&slice_chars(&text, last, start));
-        let data =
-            MatchData { spans: spans.clone(), text: text.to_owned(), pattern: key, is_bytes };
+        let data = MatchData {
+            spans: spans.clone(),
+            subject: subject_object,
+            pattern: state.object,
+            is_bytes,
+        };
         let piece = match &template {
             Some(template) => expand_template(instance, &data, &groupindex, template)?,
             None => {
@@ -1385,10 +1441,8 @@ fn substitute(
                 // 可调用替换 ✓：造一个 `re.Match` 交给它 ✓（与参照一致 ✓）
                 let matched = make_match(
                     instance,
-                    key,
-                    &text,
+                    state.object,
                     subject_object,
-                    is_bytes,
                     spans.clone(),
                     0,
                     text.chars().count() as i64,
@@ -1471,8 +1525,8 @@ fn pattern_split_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let (key, built, _groupindex) = pattern_data(instance, bound)?;
-    let is_bytes = pattern_is_bytes(instance, key)?;
+    let state = pattern_state(instance, bound)?;
+    let is_bytes = state.is_bytes;
     let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
@@ -1481,7 +1535,7 @@ fn pattern_split_native(
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let mut last = 0_i64;
     let mut cuts = 0_i64;
-    for spans in scan_spans(&built, &text, 0)
+    for spans in scan_spans(&state.engine, &text, 0)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
         if maxsplit > 0 && cuts >= maxsplit {
@@ -1531,7 +1585,7 @@ fn match_group_native(
         }
     };
     for index in indices {
-        match group_text(&data, index) {
+        match group_text(instance, &data, index) {
             Some(text) => values.push(text_object(instance, &text, data.is_bytes)),
             None => values.push(instance.retain(instance.singletons().none())),
         }
@@ -1553,7 +1607,7 @@ fn match_groups_native(
     let default = args.first().copied();
     let mut values: Vec<NonNull<Header>> = Vec::new();
     for index in 1..data.spans.len() {
-        match group_text(&data, index as i64) {
+        match group_text(instance, &data, index as i64) {
             Some(text) => values.push(text_object(instance, &text, data.is_bytes)),
             None => match default {
                 Some(value) => values.push(instance.retain(value)),
@@ -1564,7 +1618,10 @@ fn match_groups_native(
     Ok(instance.new_tuple(values))
 }
 
-/// 取 `MatchData`（借用本实例的表项 ✓，调用方clone 出需要的字段 ✓）。
+/// 取 `MatchData`：**从 `re.Match` 对象自己的属性字典还原** ✓（不查进程级表 ✓）。
+///
+/// 隐藏属性 `__pyawa_sre_spans__` 是 `list[int]`（纯值）；主语／模式对象借可见属性 `string`／`re` ✓
+/// （`this` 是调用期间的 `self` ⇒ 这两个对象由它保活 ✓，返回的 `MatchData` 只借用、不持引用 ✓）。
 fn match_data(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1572,18 +1629,33 @@ fn match_data(
     let Some(this) = bound else {
         return Err(instance.raise_builtin_error("TypeError", "需要 re.Match 实例"));
     };
-    let key = this.as_ptr() as usize;
-    let table = MATCHES
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match 表被毒化"))?;
-    let Some(data) = table.as_ref().and_then(|map| map.get(&key)) else {
+    let Some(attributes) = instance_attributes(instance, this) else {
         return Err(instance.raise_builtin_error("TypeError", "不是 re.Match 实例"));
     };
+    let (Some(subject), Some(pattern), Some(spans_value)) = (
+        instance.dict_get(attributes, "string"),
+        instance.dict_get(attributes, "re"),
+        instance.dict_get(attributes, SPANS_ATTRIBUTE),
+    ) else {
+        return Err(instance.raise_builtin_error("TypeError", "不是 re.Match 实例"));
+    };
+    let Some(items) = instance.list_items(spans_value) else {
+        return Err(instance.raise_builtin_error("TypeError", "不是 re.Match 实例"));
+    };
+    let mut spans = Vec::with_capacity(items.len() / 2);
+    for pair in items.chunks_exact(2) {
+        let (Some(start), Some(end)) =
+            (instance.int_value(pair[0]), instance.int_value(pair[1]))
+        else {
+            return Err(instance.raise_builtin_error("TypeError", "不是 re.Match 实例"));
+        };
+        spans.push((start, end));
+    }
     Ok(MatchData {
-        spans: data.spans.clone(),
-        text: data.text.clone(),
-        pattern: data.pattern,
-        is_bytes: data.is_bytes,
+        spans,
+        subject,
+        pattern,
+        is_bytes: instance.bytes_value(subject).is_some(),
     })
 }
 
@@ -1600,18 +1672,11 @@ fn compile_native(
     let Some(pattern_object) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "compile: 第一个实参要是 str"));
     };
-    let (pattern, is_bytes) = pattern_source(instance, pattern_object)?;
+    // `_is_bytes`：bytes 模式由可见属性 `pattern` 的类型**当场判定**（`pattern_is_bytes` ✓）
+    // ⇒ 不再另存一份标志 ✓（一处真相 ✓）。
+    let (pattern, _is_bytes) = pattern_source(instance, pattern_object)?;
     let flags = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
     let groups = args.get(3).and_then(|value| instance.int_value(*value)).unwrap_or(0);
-    let mut groupindex = Vec::new();
-    if let Some(mapping) = args.get(4) {
-        // `groupindex` 是 `{名字: 组号}` ✓（`re/_compiler.py` 的 `p.state.groupdict` ✓）
-        for (key, value) in instance.dict_entries(*mapping).unwrap_or_default() {
-            if let (Some(name), Some(index)) = (instance.text_of(key), instance.int_value(value)) {
-                groupindex.push((name.to_owned(), index));
-            }
-        }
-    }
     // **字符类规范化** ✓（第 722 轮）：同 `compile_raw` ✓（`re.compile` 走的是这一支 ✓）。
     let normalized = normalize_character_classes(&pattern);
     // **VERBOSE 自己剥** ✓（第 722 轮）：Rust 的 `ignore_whitespace` 会连**类内**空白一起吞 ✗。
@@ -1620,8 +1685,11 @@ fn compile_native(
     } else {
         normalized
     };
-    let built = build_engine(&normalized, flags)
-        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?;
+    let engine_key = engine_key(&normalized, flags);
+    // **立刻编译**：编译失败与旧口径同一时点抛 `ValueError` ✓（引擎进纯值缓存 ✓）。
+    let _ = engine_for_key(instance, &engine_key)?;
+    // `groups`／`groupindex`（名字 ⇒ 组号 ✓）都留在**可见属性**里 ⇒ 按名字取组从对象自己读 ✓
+    // （不再存进程级表 ✓）。
     ensure_class(instance, "re.Pattern", PATTERN_METHODS)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Pattern 建类失败"))?;
     // **用户可见的属性**（第 591 轮）✓：`re/__init__.py` 会读 `Pattern.pattern`／`.flags` ✓
@@ -1641,15 +1709,11 @@ fn compile_native(
             instance.dict_set(attributes, "groupindex", empty);
         }
     }
+    // **引擎键（隐藏属性，纯值）**：`pattern_state` 从它还原引擎 ✓（对象自带状态 ⇒ 跨实例不串 ✓）。
+    let key_value = instance.new_str(&engine_key);
+    instance.dict_set_owned_by_name(attributes, ENGINE_KEY_ATTRIBUTE, key_value);
     let object = new_instance_with(instance, "re.Pattern", attributes)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Pattern 未登记"))?;
-    let mut table = PATTERNS
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
-    table.get_or_insert_with(std::collections::HashMap::new).insert(
-        object.as_ptr() as usize,
-        PatternData { object: object.as_ptr() as usize, built, groupindex, groups, is_bytes },
-    );
     Ok(object)
 }
 
@@ -1661,9 +1725,8 @@ fn compile_native(
 // `parse_template` 的产物形状**已实测** ✓（本机 3.14 ✓）：`['[', 1, ']']` —— **字面量与组号交替的列表** ✓
 // （转义已展开 ✓、名字已换成号 ✓ ⇒ 我们不必再解析字符串 ✓）。
 
-/// 模板对象 ↔ 它那份**解析列表**（都按对象地址索引 ✓；列表另有实例字典那一份保活 ✓）。
-static TEMPLATES: Mutex<Option<std::collections::HashMap<usize, usize>>> = Mutex::new(None);
-
+/// **模板对象的解析列表**就存在它自己的实例字典里（`template_native` 写的可见属性 `_parsed` ✓）
+/// —— task-10 删掉了原先按对象地址索引的进程级 `TEMPLATES` 表 ✓。
 
 /// `Match.__repr__` ✓（第 596 轮）：参照形状 `<re.Match object; span=(s, e), match='文本'>` ✓
 /// （未匹配到的那次调用到不了这里 ✓；文本用参照的**单引号**形状 ✓）。
@@ -1675,7 +1738,11 @@ fn match_repr_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let data = match_data(instance, bound)?;
     let (start, end) = data.spans.first().copied().unwrap_or((-1, -1));
-    let text = if start < 0 { String::new() } else { slice_chars(&data.text, start, end) };
+    let text = if start < 0 {
+        String::new()
+    } else {
+        group_text(instance, &data, 0).unwrap_or_default()
+    };
     // 参照的 `repr`：能用单引号就用单引号 ✓；含单引号而**不含**双引号时改用双引号 ✓（`OM` 的 str repr 口径 ✓）
     let quoted = if text.contains('\'') && !text.contains('"') {
         format!("\"{text}\"")
@@ -1697,16 +1764,9 @@ fn template_call_native(
     let Some(this) = bound else {
         return Err(instance.raise_builtin_error("TypeError", "模板对象要有 self"));
     };
-    let parsed = {
-        let table = TEMPLATES
-            .lock()
-            .map_err(|_| instance.raise_builtin_error("RuntimeError", "模板表被毒化"))?;
-        table
-            .as_ref()
-            .and_then(|map| map.get(&(this.as_ptr() as usize)))
-            .copied()
-    };
-    let Some(parsed) = parsed.and_then(|address| NonNull::new(address as *mut Header)) else {
+    let parsed = instance_attributes(instance, this)
+        .and_then(|attributes| instance.dict_get(attributes, "_parsed"));
+    let Some(parsed) = parsed else {
         return Err(instance.raise_builtin_error("TypeError", "不是 _sre 模板对象"));
     };
     let Some(matched) = args.first().copied() else {
@@ -1721,7 +1781,7 @@ fn template_call_native(
         if let Some(text) = instance.text_of(item) {
             out.push_str(text);
         } else if let Some(index) = instance.int_value(item) {
-            out.push_str(&group_text(&data, index).unwrap_or_default());
+            out.push_str(&group_text(instance, &data, index).unwrap_or_default());
         } else {
             return Err(instance.raise_builtin_error("TypeError", "模板项要是 str 或 int"));
         }
@@ -1745,12 +1805,6 @@ fn template_native(
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "_sre.Template 建类失败"))?;
     let object = new_instance_with(instance, "_sre.Template", attributes)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "_sre.Template 未登记"))?;
-    let mut table = TEMPLATES
-        .lock()
-        .map_err(|_| instance.raise_builtin_error("RuntimeError", "模板表被毒化"))?;
-    table
-        .get_or_insert_with(std::collections::HashMap::new)
-        .insert(object.as_ptr() as usize, parsed.as_ptr() as usize);
     Ok(object)
 }
 
