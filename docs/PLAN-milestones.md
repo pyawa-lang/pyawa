@@ -1119,3 +1119,18 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
 
 **不变量（机检法）**：给宿主对象挂一个**记录所有被查名字的 `getattr_fn`**，跑参考测试集；
 凡是「VM 支持但记录里从未出现」的 dunder，即证明存在绕过 `resolve_dunder` 的协议解析路径。
+
+### 12.13 宿主可用性与诊断缺口（2026-11-14，真 numpy 压测所出）
+
+**背景**：用 CPython（ctypes 桥）＋ 真 numpy 2.5.4 做宿主侧压测。**机制已通**——`a.sum()`／`__len__`／
+`a[1]`／`a + a` 全部经 ABI 正确往返（宿主侧临时 ctypes 桥；桥脚本不入库）。
+但撞出 4 个阻塞/缺陷，全部要修。
+
+| # | 问题 | 证据（实测） | 验收 |
+|---|---|---|---|
+| 1 | **ABI 创建的实例没有 builtins／stdlib**：`print`／`len`／`ValueError`／`import` 均未定义 | `pa_exec_string("print(1)")` ⇒ `NameError`；`paL_openlibs` 在 `pa_create` 裸实例上**失败且 `pa_errmsg` 为空**；`paL_newstate` 在 `pa.h` 声明但**未从 cdylib 导出**（实现仅在 `pyawa-runtime`，只进 CLI） | C／ctypes 宿主 `pa_create` 后一条命令即得到可用实例：builtins 可用、`import` 可用；`paL_newstate` 从 cdylib 导出或提供等价入口；失败时 `pa_errmsg` 给出原因 |
+| 2 | **`pa_newtype` 缺 dealloc／traverse（`AB-36` 要求给）时类型非 host layout** ⇒ `pa_newhandle` 返回 `PA_ERR_INVALID` 且**消息为空** | ctypes 探针：`pa_newtype(..., NULL, NULL, sig)` ⇒ `pa_newhandle` ⇒ rc=6、`pa_errmsg` 为 NULL | 拒绝时必须带消息（`AB-22`／`AB-48`）；或 `pa_newtype` 当场拒绝并说明原因 |
+| 3 | **`pa_getglobal` 对不存在的名字返回 `PA_OK` 并压 nil** | 探针：`pa_getglobal("_ndarray")` ⇒ rc=0、栈上 nil | 缺失名返回 `PA_ERR_INVALID`（或在 `pa.h`／规格里明确"压 nil"并给出判定方法） |
+| 4 | **模块对象无法从 C 宿主上栈** ⇒ `AB-75` 的模块态（懒 `np.*`）在真实宿主不可达 | `abi/tests/object_ops.rs` 用 Rust 内部 API 造模块对象；`pa.h` 无 `pa_pushmodule` 一类入口 | 新增把模块句柄压栈的入口（`pa_pushmodule` 或等价），使 C 宿主可给注入模块挂 `getattr_fn`，`np.<未枚举名>` 可取到 |
+
+**复跑方式**：宿主侧 ctypes 桥压测（宿主装 numpy；Pyawa 侧不含 numpy）。探针属临时脚本、**不入库**；本节四项的实测证据即其失败点，修复后按同样的调用序列复跑。
