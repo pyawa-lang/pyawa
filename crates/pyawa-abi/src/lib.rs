@@ -3701,6 +3701,13 @@ pub unsafe extern "C" fn pa_newtype(
         let Some(signature) = (unsafe { host::read_signature(sig) }) else {
             return status::PA_ERR_INVALID;
         };
+        // **`AB-52`／M5**：`pa_newtype` 的 `sig` 字符串也按同一解析器**校验**（坏类型表达式
+        // 在注册处即拒绝，`TS-54`）；其构造调用不经宿主函数边界，故只校验、不进 `host_typed_signatures`
+        // （`.pyi` 仍用原字符串，`AB-53`）。
+        if let Err(message) = evaluate_pa_sig_types(state, &signature, Some(state.globals)) {
+            state.set_message(&message);
+            return status::PA_ERR_INVALID;
+        }
         // `AB-37`：`PA_TYPE_FINAL` 反向选择"不可继承"
         let final_type = signature.flags & host::PA_TYPE_FINAL != 0;
         // `AB-58`：instance_size = 头部 ＋ 宿主载荷

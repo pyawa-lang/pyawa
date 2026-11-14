@@ -9,7 +9,7 @@
 
 use core::mem::size_of;
 
-use pyawa_abi::host::{pa_param, pa_sig};
+use pyawa_abi::host::{pa_param, pa_sig, PaHostDealloc, PaHostTraverse};
 use pyawa_abi::tag::*;
 use pyawa_abi::status::*;
 use pyawa_abi::*;
@@ -281,4 +281,61 @@ fn string_and_handle_channels_behave_identically() {
     assert_eq!(string_boundary, handle_boundary, "边界行为不一致");
     assert_eq!(string_compile, handle_compile, "编译期行为不一致");
     assert_eq!(string_compile, PA_ERR_SYNTAX);
+}
+
+unsafe extern "C" fn noop_dealloc(_payload: *mut core::ffi::c_void) {}
+
+unsafe extern "C" fn noop_traverse(
+    _payload: *mut core::ffi::c_void,
+    _context: *mut core::ffi::c_void,
+    _visit: unsafe extern "C" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
+) {
+}
+
+#[test]
+fn newtype_sig_type_expr_is_validated() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // 好字符串：接受。
+    let (mut signature, params) =
+        signature_with_one_parameter(b"value\0", Some(b"int\0"), None);
+    signature.params = params.as_ptr();
+    // SAFETY: state 存活；dealloc/traverse 是合法函数指针。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                b"GoodPayload\0".as_ptr().cast(),
+                8,
+                noop_dealloc as PaHostDealloc,
+                noop_traverse as PaHostTraverse,
+                &signature,
+            )
+        },
+        PA_OK,
+        "合法 type_expr 应当接受：{}",
+        message_of(state)
+    );
+    // 坏字符串：注册处拒绝（`TS-54`，与 `pa_register` 同口径）。
+    let (mut bad_signature, bad_params) =
+        signature_with_one_parameter(b"value\0", Some(b"list[\0"), None);
+    bad_signature.params = bad_params.as_ptr();
+    // SAFETY: 同上。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                b"BadPayload\0".as_ptr().cast(),
+                8,
+                noop_dealloc as PaHostDealloc,
+                noop_traverse as PaHostTraverse,
+                &bad_signature,
+            )
+        },
+        PA_ERR_INVALID
+    );
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }

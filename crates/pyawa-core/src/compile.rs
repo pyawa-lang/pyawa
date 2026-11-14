@@ -619,6 +619,7 @@ mod emitter;
 use self::emitter::*;
 
 mod parser;
+mod coverage;
 
 /// **TS 注解表达式字符串 → [`crate::type_expr::TypeExpr`]**（`SPEC-type-system.md` §16 的
 /// `TS-52`；M2 的公开入口）。
@@ -630,6 +631,24 @@ pub fn parse_type_expression(
 ) -> Result<crate::type_expr::TypeExpr, CompileError> {
     parser::parse_type_expression_text(text)
 }
+
+/// **标注覆盖率与严格档位**（`SPEC-type-system.md` §10 的 `TS-23`／`TS-24`／`TS-25`；M5）。
+///
+/// 纯编译期（`TS-24`）：词法→语法→遍历 AST，按 `TS-39` 分列统计（位置参数／仅关键字／
+/// `*args`／`**kwargs`／返回／变量）＋模式（`IM-1`）＋档位（`TS-31`）。语法错 ⇒ `CompileError`
+/// （与 `compile` 同一档；不跑类型检查、不发射，供宿主"不加载脚本先查覆盖率"）。
+pub fn annotation_coverage(
+    source: &str,
+    _filename: &str,
+    mode: Mode,
+    tier: CheckTier,
+) -> Result<coverage::AnnotationCoverage, CompileError> {
+    let lexed = lex(source, mode)?;
+    let statements = parse_module(&lexed)?;
+    Ok(coverage::collect(&statements, mode, tier))
+}
+
+pub use coverage::{AnnotationCoverage, AnnotationTally};
 use self::parser::*;
 
 mod typecheck;
