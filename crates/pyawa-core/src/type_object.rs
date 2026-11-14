@@ -76,6 +76,17 @@ pub type SetAttrFn =
 pub type HostGetAttrFn =
     unsafe fn(*mut Header, &str, &crate::Instance) -> Result<Option<NonNull<Header>>, crate::ExecError>;
 
+/// **`AB-73`**：宿主类型的**属性回退写**槽（普通规则未处理时调用；有错误通道）。
+///
+/// `Ok(true)` ⇒ 宿主已处理（VM 负责释放传给它的那份值）；`Ok(false)` ⇒ 未处理（继续 VM 默认）；
+/// `Err` ⇒ 原样上抛（宿主错误不得静默回退）。
+pub type HostSetAttrFn = unsafe fn(
+    *mut Header,
+    &str,
+    Option<NonNull<Header>>,
+    &crate::Instance,
+) -> Result<bool, crate::ExecError>;
+
 #[derive(Clone, Copy)]
 pub struct Slots {
     pub(crate) dealloc: unsafe fn(*mut Header),
@@ -88,6 +99,8 @@ pub struct Slots {
     pub(crate) setattr: Option<SetAttrFn>,
     /// **`AB-73`**：宿主类型的属性回退读槽（普通规则未命中时才调；有错误通道）。
     pub(crate) host_getattr: Option<HostGetAttrFn>,
+    /// **`AB-73`**：宿主类型的属性回退写槽（普通规则未处理时才调；有错误通道）。
+    pub(crate) host_setattr: Option<HostSetAttrFn>,
     /// 实例化槽（`OM-11` 的 `new`）。
     pub(crate) new: Option<NewFn>,
     /// `OM-11` 的 `repr` 槽。
@@ -109,6 +122,7 @@ impl Slots {
             getattr: None,
             setattr: None,
             host_getattr: None,
+            host_setattr: None,
             new: None,
             repr: None,
             str: None,
@@ -133,6 +147,7 @@ impl Slots {
             traverse: self.traverse,
             clear: self.clear,
             host_getattr: self.host_getattr,
+            host_setattr: self.host_setattr,
             ..Self::new(self.dealloc)
         }
     }
@@ -191,6 +206,12 @@ impl Slots {
     /// **`AB-73`**：宿主类型的属性回退读槽（普通规则未命中时才调；有错误通道）。
     pub fn with_host_getattr(mut self, host_getattr: HostGetAttrFn) -> Self {
         self.host_getattr = Some(host_getattr);
+        self
+    }
+
+    /// **`AB-73`**：宿主类型的属性回退写槽（普通规则未处理时才调；有错误通道）。
+    pub fn with_host_setattr(mut self, host_setattr: HostSetAttrFn) -> Self {
+        self.host_setattr = Some(host_setattr);
         self
     }
 

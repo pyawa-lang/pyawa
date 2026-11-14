@@ -180,6 +180,39 @@ pub struct HostFunction {
 }
 }
 
+pyawa_core::py_object! {
+/// **`AB-73`**：宿主函数经属性回调返回时的**绑定方法**对象（实例自动作为第一个实参）。
+///
+/// 与 Python 的 `method` 分开一个内部类型：core 的 `MethodObject` 调用路径假设内层是
+/// `function` 载荷（会读 `__defaults__` 一类），而这里的可调用是 ABI 宿主函数（走 call 槽）。
+/// 本对象只持两份引用（函数、接收者），调用时把接收者前插到实参表再交给宿主函数调用路径。
+pub struct HostBoundMethod {
+    /// 被绑定的宿主函数对象（**持有一份**）。
+    function: NonNull<Header>,
+    /// 绑定的实例（**持有一份**）。
+    receiver: NonNull<Header>,
+    /// 所属实例句柄（调用时交给宿主函数）。
+    state: *mut crate::pa_state,
+}
+}
+
+impl HostBoundMethod {
+    /// 被绑定的宿主函数对象（借用）。
+    pub fn function(&self) -> NonNull<Header> {
+        self.function
+    }
+
+    /// 绑定的实例（借用）。
+    pub fn receiver(&self) -> NonNull<Header> {
+        self.receiver
+    }
+
+    /// 所属实例句柄（调用时交给宿主函数）。
+    pub fn state(&self) -> *mut crate::pa_state {
+        self.state
+    }
+}
+
 /// 注册时拷贝下来的一个参数。
 #[derive(Clone, Debug)]
 pub struct HostParam {

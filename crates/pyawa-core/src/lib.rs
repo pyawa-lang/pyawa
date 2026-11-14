@@ -131,7 +131,7 @@ pub(crate) use instance::HotId;
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 pub use type_object::{
-    HostDealloc, HostGetAttrFn, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
+    HostDealloc, HostGetAttrFn, HostSetAttrFn, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
     HAS_INSTANCE_DICT,
 };
 pub use value::Value;

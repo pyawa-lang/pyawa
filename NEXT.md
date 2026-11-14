@@ -1,6 +1,10 @@
 # NEXT（会话 13 · ABI 边界不可感知 · B1 属性派发）
 
-> **本轮落地（2026-11-14，第十轮）**：用户定向「ABI 边界不可感知」的 **B1 实现**（`PLAN` §12.11）——
+> **本轮落地（2026-11-14，第十一轮）**：**B2a：`AB-73` 收口**（`PLAN` §12.11）——core
+> `host_setattr` 写回退槽＋ABI `host_type_setattr_slot`（借用值、`value_index=-1`）；宿主函数
+> 绑定方法用 ABI `HostBoundMethod`（call 槽前插接收者，`pa_sig` 含 `self`）；`len`/`for`/`+`
+> 协议经属性通道生效（`for` 探测位补 `host_getattr`；`+` 走宿主 dunder 回退）；测试
+> `host_visibility` 3 passed（写/读往返、方法绑定、三协议、错误三态、零回归）。上一轮 B1：
 > `PA_ERR_NOTFOUND=8`（预留改 9–31）＋`PA_ABI_MINOR=11`；`pa_type_ops`/回调类型（自带尺寸界读）；
 > core `Slots.host_getattr`（**有错误通道**）＋`TypeObject.host_data`；**追加式** `pa_set_type_ops`
 > （`NULL` ⇒ 清空/不派发）＋`host_type_getattr_slot`（`PA_OK` 恰好一值／`PA_ERR_NOTFOUND` 回退／
@@ -16,16 +20,14 @@
 > `PA_ABI_VERSION` 1.10→1.11（未发布窗口签名改写，发布后只许追加）；`PLAN` §12.11 补实施分解。
 > **本页规矩**：≤ 40 行；只写 状态／下一条命令／未修 bug＋判据。
 
-- **HEAD**：`7dff9780`（本轮前；本轮提交见 `git log`）· **工作区**：干净 ✓
+- **HEAD**：`08f41338`（本轮前；本轮提交见 `git log`）· **工作区**：干净 ✓
 - **下一条命令**：`tools/cargo.sh check --workspace --all-targets`（B 阶段开工前确认基线 0 警告）
 - **闸门**：本轮纯文档 → `check.py` 20/20 即可提交；**B 阶段动代码后**须 `slowcheck --release`
   十二项全绿＋`check.py` 全绿＋`cargo check` 0 警告。
-- **下一步（B2）**：①`setattr_fn` 接线（core 写槽 `host_setattr`＋`PA_ERR_NOTFOUND` 回退）；
-  ②宿主函数**自动绑定**（getattr 结果为宿主函数 ⇒ `MethodObject`；`pa_sig` 含 `self`）＋
-  `paL_getref` 的方法用例；③`AB-74` `pa_raise_host_exception`（记录异常→边界重抛，guest
-  `except` 可捕获、traceback 无跨边界帧、非法 `PA_ERR_INVALID`）；④`len`/`for`/`+` 协议链路测试；
-  ⑤`PLAN` §12.11 验收演练（`list`/`dict`/自定义类注入 guest、guest 源码不含 host|handle）＋
-  `SPEC-c-abi` §16 未实现清零＋`NEXT` 收口。
+- **下一步（B2b）**：①`AB-74` `pa_raise_host_exception`（记录异常→边界重抛；`type_idx` 栈索引
+  指向 `BaseException` 子类；成功返 `PA_ERR_RUNTIME`；非法 `PA_ERR_INVALID`；guest `except`
+  可捕获、traceback 无跨边界帧）；②`PLAN` §12.11 验收演练（`list`/`dict`/自定义类注入 guest、
+  guest 源码不含 host|handle）；③`SPEC-c-abi` §16 全清零、`NEXT` 收口、`slowcheck` 双跑。
 - **已知边界（A 阶段决策，如实）**：`pa_newtype` 加末参属**未发布窗口内签名改写**（发布后只许
   追加，`AB-41`）；`getattr` 返回的函数绑定后 `pa_sig` **含 `self`**；`AB-73`/`AB-74` 仍标
   "尚未实现"（`SPEC-c-abi` §16）直到 B 阶段落地。

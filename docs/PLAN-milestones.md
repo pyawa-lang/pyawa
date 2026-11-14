@@ -1067,9 +1067,17 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
   `TypeObject` 不透明 `host_data`；`pa_set_type_ops`（追加式，`NULL` ⇒ 清空）＋
   `host_type_getattr_slot`（`PA_OK` 恰好一个值／`PA_ERR_NOTFOUND` 回退／其它 ⇒ `RuntimeError`）＋
   `paL_getref`；`pa.h` 结构/原型/状态码；**测试** `crates/pyawa-abi/tests/host_visibility.rs`
-  （属性派发/回退/错误三态/零回归，2 passed）。**B2 待做**：`setattr_fn` 接线（core 写槽）、
-  宿主函数自动绑定（`MethodObject`）、`AB-74` 的 `pa_raise_host_exception`＋traceback 验收、
-  `paL_getref` 的方法绑定用例、`§12.11` 验收演练（`list`/`dict`/自定义类）、`§16` 清零。
+  （属性派发/回退/错误三态/零回归，2 passed）。
+  **B2a（2026-11-14 已落，`AB-73` 收口）**：core `Slots.host_setattr`（有错误通道）＋
+  `instance_attribute_set` 回退钩子（数据描述符之后、默认实例字典写之前；`Ok(false)` ⇒ 默认，
+  `Err` ⇒ 上抛）；ABI `host_type_setattr_slot`（值以**借用**槽压栈、`value_index=-1`、回调不得
+  消耗/压弹栈）；**绑定方法**用 ABI 内部对象 `HostBoundMethod`（函数 ＋ 接收者；call 槽前插
+  接收者后走宿主函数调用路径，`pa_sig` 含 `self`），不用 core `MethodObject`（其调用路径假设
+  内层是 Python 函数载荷）；`len`/`for`/`+` 协议经属性通道生效（`for` 的探测位补
+  `host_getattr`；`+` 的宿主 dunder 走 `attribute_lookup`）。测试扩到 **3 passed**：
+  `setattr`/`getattr` 往返、`obj.method(5)` 绑定、`len`、`for`、`+`、宿主错误三态。
+  **B2b 待做**：`AB-74` 的 `pa_raise_host_exception`＋traceback 验收、`§12.11` 验收演练
+  （`list`/`dict`/自定义类注入 guest、guest 源码不含 host|handle）、`§16` 全清零。
 - **C 验收演练与收口**：`crates/pyawa-abi/tests/` 下新增 `host_visibility` 测试（派发→回退→协议→零回归；
   异常映射；§12.11 演练：宿主把 `list`/`dict`/自定义类包成宿主对象注入 guest，guest 源码
   **不含** "host"/"handle" 字样或宿主函数名，完成增删改查与迭代；`is`/`id` 口径登记）；

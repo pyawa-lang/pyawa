@@ -525,6 +525,8 @@ pub struct pa_state {
     host_function_type: Option<NonNull<pyawa_core::TypeObject>>,
     /// 本实例注册过的宿主函数对象（**持有一份引用**，便于签名查询与析构时归还）。
     host_functions: Vec<NonNull<Header>>,
+    /// **`AB-73`**：绑定方法对象（`HostBoundMethod`）的类型（每实例一次，惰性创建）。
+    host_bound_method_type: Option<NonNull<pyawa_core::TypeObject>>,
     /// 本实例注册过的宿主类型（`AB-35`；`kind` → 类型）。
     host_types: Vec<host::RegisteredType>,
     /// **`AB-32`／`AB-33`**：九个能力域的注册状态（域索引见 [`capability`]）。
@@ -620,6 +622,7 @@ impl pa_state {
             host_tys: Vec::new(),
             host_typed_signatures: Vec::new(),
             host_type_ops: Vec::new(),
+            host_bound_method_type: None,
             host_function_serials: Vec::new(),
             exec_serial: 0,
         }
@@ -655,6 +658,7 @@ impl pa_state {
             host_tys: Vec::new(),
             host_typed_signatures: Vec::new(),
             host_type_ops: Vec::new(),
+            host_bound_method_type: None,
             host_function_serials: Vec::new(),
             exec_serial: 0,
         }
@@ -1718,9 +1722,193 @@ unsafe fn host_type_getattr_slot(
                 // SAFETY: 借用槽位；交回给调用方前要持有。
                 unsafe { state_ref.instance.incref_object(slot.object.as_ptr()) };
             }
+            // **`AB-73` 绑定**：`getattr_fn` 返回的是**宿主函数对象** ⇒ 包成绑定方法
+            // （实例自动作第一个实参）。`pa_sig` 因此**含 `self`**；显式 `obj.m(obj, x)` 会多传
+            // 一个实参 ⇒ 实参个数/边界检查如实报错（不做双形态猜测）。
+            // SAFETY: slot.object 是从栈上弹出的存活对象。
+            let value_type = unsafe { slot.object.as_ref() }.ty();
+            if let Some(host_function_type) = state_ref.host_function_type {
+                if value_type == host_function_type {
+                    let method_type = match state_ref.host_bound_method_type {
+                        Some(method_type) => method_type,
+                        None => {
+                            let method_type = state_ref.instance.new_type(
+                                "host_bound_method",
+                                core::mem::size_of::<host::HostBoundMethod>(),
+                                pyawa_core::Slots::new(host_bound_method_dealloc)
+                                    .with_traverse(host_bound_method_traverse)
+                                    .with_clear(host_bound_method_clear)
+                                    .with_call(host_bound_method_call),
+                            );
+                            state_ref.host_bound_method_type = Some(method_type);
+                            method_type
+                        }
+                    };
+                    // SAFETY: object 是当前存活实例，先持有一份交给绑定方法。
+                    unsafe { state_ref.instance.incref_object(object.as_ptr()) };
+                    let bound = state_ref.instance.alloc(host::HostBoundMethod::new(
+                        method_type,
+                        slot.object,
+                        object,
+                        state.as_ptr(),
+                    ));
+                    return Ok(Some(bound.into_raw().cast::<Header>()));
+                }
+            }
             Ok(Some(slot.object))
         }
         status::PA_ERR_NOTFOUND => Ok(None),
+        other => Err(raise_runtime(
+            _instance,
+            &format!("宿主属性回调失败（状态码 {other}；`AB-73`）"),
+        )),
+    }
+}
+
+/// **`AB-73`** 绑定方法对象（`HostBoundMethod`）的 `dealloc`：只释放载荷本身。
+///
+/// # Safety
+///
+/// 槽位契约见 `pyawa_core::Slots`。
+unsafe fn host_bound_method_dealloc(ptr: *mut Header) {
+    // 子引用由 `clear` 释放（`OM-14`／`OM-20` 的分工）。
+    unsafe { pyawa_core::free_fixed_layout(ptr) };
+}
+
+unsafe fn host_bound_method_traverse(
+    ptr: *mut Header,
+    visit: &mut dyn FnMut(*mut Header),
+) {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let method = unsafe { &*ptr.cast::<host::HostBoundMethod>() };
+    visit(method.function().as_ptr());
+    visit(method.receiver().as_ptr());
+}
+
+unsafe fn host_bound_method_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 同上。
+    let method = unsafe { &*ptr.cast::<host::HostBoundMethod>() };
+    // SAFETY: 两份引用都由本对象持有。
+    unsafe {
+        instance.release_object(method.function().as_ptr());
+        instance.release_object(method.receiver().as_ptr());
+    }
+}
+
+/// **`AB-73`**：绑定方法的 `call` 槽——把接收者前插到实参表，再走宿主函数的调用路径
+/// （边界检查看到的正是 `pa_sig` 声明的完整形参，含 `self`）。
+///
+/// # Safety
+///
+/// 契约见 `pyawa_core::CallFn`。
+unsafe fn host_bound_method_call(
+    ptr: *mut Header,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    instance: &Instance,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let method = unsafe { &*ptr.cast::<host::HostBoundMethod>() };
+    let mut combined: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
+    combined.push(method.receiver());
+    combined.extend_from_slice(args);
+    // SAFETY: 函数对象由本对象持有、存活；`combined` 借用视图。
+    unsafe {
+        host_function_call(
+            method.function().as_ptr(),
+            None,
+            &combined,
+            kwargs,
+            instance,
+        )
+    }
+}
+
+/// **`AB-73`** 的 `setattr` 回退槽实现：值以**借用**槽压栈（`value_index = -1`），
+/// 回调**不消耗**它；`PA_OK` ⇒ 宿主已处理（VM 归还传入值的那份引用）；`PA_ERR_NOTFOUND` ⇒
+/// 未处理（VM 继续默认写）；其它 ⇒ 脚本可捕获 `RuntimeError`（**不静默回退**）。
+///
+/// # Safety
+///
+/// 槽位契约见 `pyawa_core::HostSetAttrFn`。
+unsafe fn host_type_setattr_slot(
+    pointer: *mut Header,
+    name: &str,
+    value: Option<NonNull<Header>>,
+    _instance: &Instance,
+) -> Result<bool, pyawa_core::ExecError> {
+    // `AB-73` 没有 delete 回调（`__delattr__` 不在本层）⇒ 删除原样交回默认。
+    let Some(value) = value else {
+        return Ok(false);
+    };
+    // SAFETY: 调用方保证 pointer 是存活对象。
+    let object = unsafe { NonNull::new_unchecked(pointer) };
+    // SAFETY: 对象存活 ⇒ 类型对象由注册表持有。
+    let ty = unsafe { object.as_ref() }.ty();
+    let info = unsafe { ty.as_ref() };
+    let data = info.host_data();
+    if data == 0 {
+        return Ok(false);
+    }
+    // SAFETY: 同 getattr 槽（记录由 `pa_state.host_type_ops` 持有到实例销毁）。
+    let record = unsafe { &*(data as *const HostTypeOpsRecord) };
+    let Some(setattr_fn) = record.ops.setattr_fn else {
+        return Ok(false);
+    };
+    let Some(mut state) = NonNull::new(record.state) else {
+        return Ok(false);
+    };
+    let payload = if info.payload_size() == 0 {
+        core::ptr::null_mut()
+    } else {
+        // SAFETY: 宿主载荷由 VM 分配（`AB-58`），偏移由类型给出。
+        unsafe {
+            pointer
+                .cast::<u8>()
+                .add(info.payload_offset())
+                .cast::<core::ffi::c_void>()
+        }
+    };
+    // SAFETY: state 由记录持有、实例存活。
+    let state_ref = unsafe { state.as_mut() };
+    let c_name = CString::new(name).map_err(|_| {
+        raise_runtime(_instance, "宿主属性回调的名字里有 NUL（`AB-73`）")
+    })?;
+    let before = state_ref.stack.len();
+    // 值以**借用**槽压栈（回调不得消耗，`AB-9`／`AB-15`）。
+    if state_ref.stack.push_borrowed(value) != status::PA_OK {
+        return Err(raise_runtime(_instance, "宿主属性回调的栈已满（`AB-73`）"));
+    }
+    // SAFETY: 回调契约见 `pa.h`。
+    let code = unsafe {
+        setattr_fn(
+            state.as_ptr(),
+            payload,
+            c_name.as_ptr(),
+            name.len(),
+            -1,
+            record.ops.context,
+        )
+    };
+    // 恢复栈：回调只许读 `-1`，不许压/弹（多出来的按持有释放；被弹掉 ⇒ 宿主违约，如实报错）。
+    if state_ref.stack.len() < before + 1 {
+        return Err(raise_runtime(
+            _instance,
+            "宿主属性回调弹掉了栈上的值（`AB-73`）",
+        ));
+    }
+    while state_ref.stack.len() > before {
+        if let Some(extra) = state_ref.stack.pop_slot() {
+            if extra.owned {
+                // SAFETY: 槽位持有这份引用。
+                unsafe { state_ref.instance.release_object(extra.object.as_ptr()) };
+            }
+        }
+    }
+    match code {
+        status::PA_OK => Ok(true),
+        status::PA_ERR_NOTFOUND => Ok(false),
         other => Err(raise_runtime(
             _instance,
             &format!("宿主属性回调失败（状态码 {other}；`AB-73`）"),
@@ -3900,7 +4088,8 @@ pub unsafe extern "C" fn pa_newtype(
                 .with_finalize(pyawa_core::python_level_finalize)
                 // **`AB-73`**：宿主属性回退槽（没有 `pa_set_type_ops` 时槽在、但记录为空 ⇒ 不派发，
                 // 行为与今天完全一致）。
-                .with_host_getattr(host_type_getattr_slot),
+                .with_host_getattr(host_type_getattr_slot)
+                .with_host_setattr(host_type_setattr_slot),
         );
         // SAFETY: ty 由注册表持有。
         let info = unsafe { ty.as_ref() };

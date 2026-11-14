@@ -43,6 +43,13 @@ pub fn arithmetic_public(
     // 定义 `__or__`／`__and__`／`__xor__` 一族 ⇒ 参照先查 `type(left).__or__` ✓、命中就以 Python
     // 语义调用 ✓；先前这里按**载荷**（int）直接走原生运算 ✗ ⇒ `Flags.X | Flags.Y` 得到**普通 int**
     // （缺 `.value`／`._name_`）✗ ⇒ `IntFlag` 组合值全错 ✓。
+    // **`AB-73`**：宿主类型经**属性回退槽**提供二元运算（`__add__`／`__radd__` 一类）。
+    // 普通用户类由下面的 `binary_override` 走类型字典；宿主类型的 dunder 只经 `getattr` 槽给出，
+    // 所以这里显式问一次属性通道（只在**该类型确有宿主回退槽**时，避免改变其它对象的路径）。
+    if let Some(result) = host_binary_dunder(instance, left, right, symbol, opcode)? {
+        return Ok(result);
+    }
+
     let (overridden, had_override) = binary_override(instance, left, right, symbol, opcode)?;
     if let Some(result) = overridden {
         return Ok(result);
@@ -358,6 +365,46 @@ pub fn int_add_descriptor(
 }
 
 /// 运算符号 ⇒ （左操作数 dunder，右操作数反射 dunder）。
+/// **`AB-73`**：宿主类型的二元运算 dunder（经属性回退槽）。
+///
+/// 只对"该类型的 `Slots` 带 `host_getattr`"的一侧发问；找不到／返回 `NotImplemented` ⇒ `None`
+/// 交回原生路径（不改变非宿主类型的行为）。
+fn host_binary_dunder(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let Some((dunder, reflected)) = binary_dunder(symbol) else {
+        return Ok(None);
+    };
+    for (receiver, other, name) in [(left, right, dunder), (right, left, reflected)] {
+        let receiver_type = instance.type_of(receiver);
+        // SAFETY: receiver_type 由注册表持有。
+        if unsafe { receiver_type.as_ref() }.slots().host_getattr.is_none() {
+            continue;
+        }
+        let Some(found) = crate::executor::attribute::attribute_lookup_swallowing(
+            instance, receiver, name,
+        ) else {
+            continue;
+        };
+        let (callable, bound) = match found {
+            crate::executor::Attribute::Method { function, this } => (function, Some(this)),
+            crate::executor::Attribute::Value(value) | crate::executor::Attribute::Owned(value) => (value, None),
+        };
+        let args = vec![instance.retain(other)];
+        let result = crate::executor::call::call_callable(instance, callable, bound, args, Vec::new(), opcode)?;
+        if result == instance.not_implemented() {
+            instance.release(result);
+            continue;
+        }
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
 fn binary_dunder(symbol: &str) -> Option<(&'static str, &'static str)> {
     Some(match symbol {
         "+" => ("__add__", "__radd__"),
