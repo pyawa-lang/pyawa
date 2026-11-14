@@ -72,8 +72,10 @@ pub mod status {
     pub const PA_ERR_INVALID: i32 = 6;
     /// ABI 版本或尺寸不兼容（`AB-40`）。
     pub const PA_ERR_ABI: i32 = 7;
-    /// 预留区起点（`AB-20`：新增状态码**必须**落在 `8..=31`）。
-    pub const PA_ERR_RESERVED_FIRST: i32 = 8;
+    /// 属性/方法派发回调的"**未处理**"（`AB-73`；VM 内部回退，不直接暴露给 guest）。
+    pub const PA_ERR_NOTFOUND: i32 = 8;
+    /// 预留区起点（`AB-20`：新增状态码**必须**落在 `9..=31`）。
+    pub const PA_ERR_RESERVED_FIRST: i32 = 9;
     /// 预留区终点。
     pub const PA_ERR_RESERVED_LAST: i32 = 31;
 }
@@ -94,7 +96,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 10;
+pub const PA_ABI_MINOR: u32 = 11;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -496,12 +498,20 @@ macro_rules! state_or {
 
 // ---- 实例生命周期（`AB-55`／`AB-56`／`AB-57`）----
 
+/// **`AB-73`**：一个宿主类型的回调记录（`pa_set_type_ops` 写入；类型对象只存不透明字）。
+struct HostTypeOpsRecord {
+    /// 所属实例（回调拿到 `pa_state *` 用；实例存活期间有效）。
+    state: *mut pa_state,
+    /// 回调副本（按自带尺寸读；`AB-43`）。
+    ops: host::TypeOps,
+}
+
 /// 实例句柄（`AB-14`：宿主只见**不透明**指针；头部与类型对象**禁止**出现在签名里）。
 ///
 /// 名字照 C 侧（`AB-45` 的单一头文件里就写作 `pa_state`），故这里显式关掉命名检查。
-#[allow(non_camel_case_types)]
 ///
 /// 字段是本 crate 私有的；宿主拿到的只是 `*mut pa_state`。
+#[allow(non_camel_case_types)]
 pub struct pa_state {
     /// 被驱动的实例（`OM-15`：类型注册表与对象堆都按实例存放）。
     instance: Instance,
@@ -540,6 +550,9 @@ pub struct pa_state {
     host_tys: Vec<Box<host_signature::TyExpr>>,
     /// **`AB-69`**：已声明的宿主函数签名（按宿主 C 函数指针查；每个函数至多一条）。
     host_typed_signatures: Vec<host_signature::TypedSignature>,
+    /// **`AB-73`**：宿主类型的 `pa_type_ops` 记录（类型对象的不透明字指向 `Box` 内容；
+    /// `pa_destroy` 时随实例释放）。
+    host_type_ops: Vec<Box<HostTypeOpsRecord>>,
     /// **`AB-69`**："签名与函数同一时刻给"的判据：每次注册记下当时的执行序号；
     /// 声明签名时序号必须**未变**（说明注册后还没跑过任何脚本）✓。
     host_function_serials: Vec<(host::PaHostFn, u64)>,
@@ -606,6 +619,7 @@ impl pa_state {
             in_host_callback: false,
             host_tys: Vec::new(),
             host_typed_signatures: Vec::new(),
+            host_type_ops: Vec::new(),
             host_function_serials: Vec::new(),
             exec_serial: 0,
         }
@@ -640,6 +654,7 @@ impl pa_state {
             in_host_callback: false,
             host_tys: Vec::new(),
             host_typed_signatures: Vec::new(),
+            host_type_ops: Vec::new(),
             host_function_serials: Vec::new(),
             exec_serial: 0,
         }
@@ -1556,6 +1571,166 @@ pub unsafe extern "C" fn pa_func_set_signature(
             });
         status::PA_OK
     })
+}
+
+/// **`AB-73`**：给 `pa_newtype` 注册的宿主类型装 `pa_type_ops`（属性/方法派发）。
+///
+/// `type_index` 是**栈索引**（`AB-9`），指向本实例 `pa_newtype` 刚压入的类型对象（**不消耗**）；
+/// `ops == NULL` ⇒ 清空（回到"不派发"，行为与旧类型一致）。失败 ⇒ `PA_ERR_INVALID`（`AB-22`）。
+///
+/// # Safety
+///
+/// `ops` 要么 `NULL`、要么指向宿主按 `pa.h` 布局给出的 `pa_type_ops`（自带尺寸，界读 `AB-43`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_set_type_ops(
+    state: *mut pa_state,
+    type_index: i32,
+    ops: *const host::pa_type_ops,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(slot) = state.stack.get(type_index) else {
+            state.set_message("`AB-73`：`type_index` 越界");
+            return status::PA_ERR_INVALID;
+        };
+        if !state.instance.is_type_object(slot.object) {
+            state.set_message("`AB-73`：`type_index` 不是类型对象");
+            return status::PA_ERR_INVALID;
+        }
+        let ty = slot.object.cast::<pyawa_core::TypeObject>();
+        // SAFETY: 刚判过是类型对象，且由注册表持有。
+        let info = unsafe { ty.as_ref() };
+        if !info.is_host_layout() {
+            state.set_message("`AB-73`：该类型不是 `pa_newtype` 注册的宿主类型");
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方按契约给出 ops 指针。
+        let read = match unsafe { host::read_type_ops(ops) } {
+            Ok(read) => read,
+            Err(()) => {
+                state.set_message("`AB-73`：`pa_type_ops.size` 盖不住 `size` 字段");
+                return status::PA_ERR_INVALID;
+            }
+        };
+        match read {
+            // `NULL` ⇒ 清空（类型对象里那一格置 0；旧记录留在账本里，随实例释放）。
+            None => info.set_host_data(0),
+            Some(ops) => {
+                let record = Box::new(HostTypeOpsRecord { state, ops });
+                // `Box` 内容稳定 ⇒ 指针在实例销毁前有效（记录由 `host_type_ops` 账本持有）。
+                let pointer = (&*record as *const HostTypeOpsRecord) as usize;
+                state.host_type_ops.push(record);
+                info.set_host_data(pointer);
+            }
+        }
+        status::PA_OK
+    })
+}
+
+/// **`AB-73`** 的 `getattr` 回退槽实现：把宿主回调接到 VM 的属性通道上。
+///
+/// 契约：回调 `PA_OK` ⇒ 恰好压入一个值（VM 弹出并作为属性值）；`PA_ERR_NOTFOUND` ⇒
+/// `Ok(None)`（VM 继续默认）；其它 ⇒ 脚本可捕获的 `RuntimeError`（**不静默回退**）。
+///
+/// # Safety
+///
+/// 槽位契约见 `pyawa_core::HostGetAttrFn`。
+unsafe fn host_type_getattr_slot(
+    pointer: *mut Header,
+    name: &str,
+    _instance: &Instance,
+) -> Result<Option<NonNull<Header>>, pyawa_core::ExecError> {
+    // SAFETY: 调用方保证 pointer 是存活对象。
+    let object = unsafe { NonNull::new_unchecked(pointer) };
+    // SAFETY: 对象存活 ⇒ 类型对象由注册表持有。
+    let ty = unsafe { object.as_ref() }.ty();
+    let info = unsafe { ty.as_ref() };
+    let data = info.host_data();
+    if data == 0 {
+        return Ok(None);
+    }
+    // SAFETY: 非 0 的 host_data 只由本模块写入，且记录由 `pa_state.host_type_ops` 持有到实例销毁。
+    let record = unsafe { &*(data as *const HostTypeOpsRecord) };
+    let Some(getattr_fn) = record.ops.getattr_fn else {
+        return Ok(None);
+    };
+    let Some(mut state) = NonNull::new(record.state) else {
+        return Ok(None);
+    };
+    let payload = if info.payload_size() == 0 {
+        core::ptr::null_mut()
+    } else {
+        // SAFETY: 宿主载荷由 VM 分配（`AB-58`），偏移由类型给出。
+        unsafe {
+            pointer
+                .cast::<u8>()
+                .add(info.payload_offset())
+                .cast::<core::ffi::c_void>()
+        }
+    };
+    let c_name = CString::new(name).map_err(|_| {
+        raise_runtime(
+            _instance,
+            "宿主属性回调的名字里有 NUL（`AB-73`）",
+        )
+    })?;
+    // SAFETY: state 由记录持有、实例存活。
+    let before = unsafe { state.as_ref() }.stack.len();
+    // SAFETY: `record.state` 是创建该类型的实例；回调契约见 `pa.h`。
+    let code = unsafe {
+        getattr_fn(
+            state.as_ptr(),
+            payload,
+            c_name.as_ptr(),
+            name.len(),
+            record.ops.context,
+        )
+    };
+    // SAFETY: state 由记录持有、实例存活。
+    let state_ref = unsafe { state.as_mut() };
+    match code {
+        status::PA_OK => {
+            let after = state_ref.stack.len();
+            if after != before + 1 {
+                // 栈纪律被破坏：把多压的值收掉，再如实报错（不静默）。
+                while state_ref.stack.len() > before {
+                    if let Some(extra) = state_ref.stack.pop_slot() {
+                        if extra.owned {
+                            // SAFETY: 槽位持有这份引用。
+                            unsafe {
+                                state_ref.instance.release_object(extra.object.as_ptr())
+                            };
+                        }
+                    }
+                }
+                return Err(raise_runtime(
+                    _instance,
+                    "宿主属性回调返回 `PA_OK` 但压栈个数不是 1（`AB-73`）",
+                ));
+            }
+            let Some(slot) = state_ref.stack.pop_slot() else {
+                return Err(raise_runtime(
+                    _instance,
+                    "宿主属性回调返回 `PA_OK` 但没有值（`AB-73`）",
+                ));
+            };
+            if !slot.owned {
+                // SAFETY: 借用槽位；交回给调用方前要持有。
+                unsafe { state_ref.instance.incref_object(slot.object.as_ptr()) };
+            }
+            Ok(Some(slot.object))
+        }
+        status::PA_ERR_NOTFOUND => Ok(None),
+        other => Err(raise_runtime(
+            _instance,
+            &format!("宿主属性回调失败（状态码 {other}；`AB-73`）"),
+        )),
+    }
+}
+
+/// 造一条**脚本侧可捕获**的 `RuntimeError`（`AB-73` 的"不得静默回退"落点）。
+fn raise_runtime(instance: &Instance, message: &str) -> pyawa_core::ExecError {
+    instance.raise_builtin_error("RuntimeError", message)
 }
 
 /// `pa_destroy(pa_state *state)`：销毁实例（`AB-57`：**释放实例本身**）。
@@ -3722,7 +3897,10 @@ pub unsafe extern "C" fn pa_newtype(
             pyawa_core::Slots::new(host::host_object_dealloc)
                 .with_traverse(host::host_object_traverse)
                 // `OM-14`／`AB-37`：`tp_dealloc` 得能被 Python 覆写（`__del__`）⇒ 挂 Python 级终结器
-                .with_finalize(pyawa_core::python_level_finalize),
+                .with_finalize(pyawa_core::python_level_finalize)
+                // **`AB-73`**：宿主属性回退槽（没有 `pa_set_type_ops` 时槽在、但记录为空 ⇒ 不派发，
+                // 行为与今天完全一致）。
+                .with_host_getattr(host_type_getattr_slot),
         );
         // SAFETY: ty 由注册表持有。
         let info = unsafe { ty.as_ref() };

@@ -1,7 +1,11 @@
-# NEXT（会话 13 · ABI 边界不可感知 · A 规格补丁）
+# NEXT（会话 13 · ABI 边界不可感知 · B1 属性派发）
 
-> **本轮落地（2026-11-14，第九轮）**：用户定向「ABI 边界不可感知」的 **A 规格补丁**（阶段 A，
-> `PLAN` §12.11）——`AB-73` 重写：`pa_type_ops`（`size`/`context`/`getattr_fn`/`setattr_fn`，
+> **本轮落地（2026-11-14，第十轮）**：用户定向「ABI 边界不可感知」的 **B1 实现**（`PLAN` §12.11）——
+> `PA_ERR_NOTFOUND=8`（预留改 9–31）＋`PA_ABI_MINOR=11`；`pa_type_ops`/回调类型（自带尺寸界读）；
+> core `Slots.host_getattr`（**有错误通道**）＋`TypeObject.host_data`；**追加式** `pa_set_type_ops`
+> （`NULL` ⇒ 清空/不派发）＋`host_type_getattr_slot`（`PA_OK` 恰好一值／`PA_ERR_NOTFOUND` 回退／
+> 其它 ⇒ 脚本 `RuntimeError`）＋`paL_getref`；测试 `crates/pyawa-abi/tests/host_visibility.rs`
+> （派发/回退/错误三态/零回归，2 passed）。**上一轮 A 规格补丁**——`AB-73` 重写：`pa_type_ops`（`size`/`context`/`getattr_fn`/`setattr_fn`，
 > 回调**必须**带 `pa_state *state`；`setattr_fn` 的 `value_idx` 借用不消耗；派发顺序＋
 > `PA_ERR_NOTFOUND` 回退＋错误**不静默**；getattr 返回宿主函数 ⇒ 包成**绑定方法**且 `pa_sig`
 > 含 `self`，显式传 `self` 如实报错；协议复用引实现位置）；`AB-74` 重写：完整签名
@@ -12,16 +16,16 @@
 > `PA_ABI_VERSION` 1.10→1.11（未发布窗口签名改写，发布后只许追加）；`PLAN` §12.11 补实施分解。
 > **本页规矩**：≤ 40 行；只写 状态／下一条命令／未修 bug＋判据。
 
-- **HEAD**：`7959a171`（本轮前；本轮提交见 `git log`）· **工作区**：干净 ✓
+- **HEAD**：`7dff9780`（本轮前；本轮提交见 `git log`）· **工作区**：干净 ✓
 - **下一条命令**：`tools/cargo.sh check --workspace --all-targets`（B 阶段开工前确认基线 0 警告）
 - **闸门**：本轮纯文档 → `check.py` 20/20 即可提交；**B 阶段动代码后**须 `slowcheck --release`
   十二项全绿＋`check.py` 全绿＋`cargo check` 0 警告。
-- **下一步（B 实现）**：①`status`/`pa.h`：`PA_ERR_NOTFOUND`、`PA_ABI_MINOR=11`；②`host.rs`：
-  `pa_type_ops`/回调类型＋`HostTypeInfo` 存 ops 与 state 桥接；③`lib.rs`：`pa_newtype` 收 `ops`
-  并装 `getattr`/`setattr` 槽、getattr 结果为宿主函数 ⇒ `MethodObject` 绑定、`pa_raise_host_exception`
-  （记录异常→边界重抛，guest `except` 可捕获）、`paL_getref`；④`pa.h` 结构与原型；⑤测试
-  `host_visibility`（派发/回退/协议/零回归/异常映射/§12.11 演练：guest 源码不含 host|handle
-  字样、`is`/`id` 口径登记）。
+- **下一步（B2）**：①`setattr_fn` 接线（core 写槽 `host_setattr`＋`PA_ERR_NOTFOUND` 回退）；
+  ②宿主函数**自动绑定**（getattr 结果为宿主函数 ⇒ `MethodObject`；`pa_sig` 含 `self`）＋
+  `paL_getref` 的方法用例；③`AB-74` `pa_raise_host_exception`（记录异常→边界重抛，guest
+  `except` 可捕获、traceback 无跨边界帧、非法 `PA_ERR_INVALID`）；④`len`/`for`/`+` 协议链路测试；
+  ⑤`PLAN` §12.11 验收演练（`list`/`dict`/自定义类注入 guest、guest 源码不含 host|handle）＋
+  `SPEC-c-abi` §16 未实现清零＋`NEXT` 收口。
 - **已知边界（A 阶段决策，如实）**：`pa_newtype` 加末参属**未发布窗口内签名改写**（发布后只许
   追加，`AB-41`）；`getattr` 返回的函数绑定后 `pa_sig` **含 `self`**；`AB-73`/`AB-74` 仍标
   "尚未实现"（`SPEC-c-abi` §16）直到 B 阶段落地。

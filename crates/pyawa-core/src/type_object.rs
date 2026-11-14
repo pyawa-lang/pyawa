@@ -69,6 +69,13 @@ pub type CallFn = unsafe fn(
 pub type SetAttrFn =
     unsafe fn(*mut Header, &str, Option<NonNull<Header>>, &crate::Instance) -> bool;
 
+/// **`AB-73`**：宿主类型的**属性回退读**槽（普通规则全未命中时调用）。
+///
+/// 与内建槽 [`GetAttrFn`] 的区别：**有错误通道**（宿主回调可能出错，必须能转成脚本可捕获异常，
+/// 不能静默回退）。`Ok(None)` ⇒ 回退继续（宿主"不处理"）；`Err` ⇒ 原样上抛。
+pub type HostGetAttrFn =
+    unsafe fn(*mut Header, &str, &crate::Instance) -> Result<Option<NonNull<Header>>, crate::ExecError>;
+
 #[derive(Clone, Copy)]
 pub struct Slots {
     pub(crate) dealloc: unsafe fn(*mut Header),
@@ -79,6 +86,8 @@ pub struct Slots {
     pub(crate) getattr: Option<GetAttrFn>,
     /// 属性写槽（`OM-11` 的 `setattr`）。
     pub(crate) setattr: Option<SetAttrFn>,
+    /// **`AB-73`**：宿主类型的属性回退读槽（普通规则未命中时才调；有错误通道）。
+    pub(crate) host_getattr: Option<HostGetAttrFn>,
     /// 实例化槽（`OM-11` 的 `new`）。
     pub(crate) new: Option<NewFn>,
     /// `OM-11` 的 `repr` 槽。
@@ -99,6 +108,7 @@ impl Slots {
             clear: None,
             getattr: None,
             setattr: None,
+            host_getattr: None,
             new: None,
             repr: None,
             str: None,
@@ -122,6 +132,7 @@ impl Slots {
             finalize: self.finalize,
             traverse: self.traverse,
             clear: self.clear,
+            host_getattr: self.host_getattr,
             ..Self::new(self.dealloc)
         }
     }
@@ -174,6 +185,12 @@ impl Slots {
     /// 属性写槽（`OM-11` 的 `setattr`）。
     pub fn with_setattr(mut self, setattr: SetAttrFn) -> Self {
         self.setattr = Some(setattr);
+        self
+    }
+
+    /// **`AB-73`**：宿主类型的属性回退读槽（普通规则未命中时才调；有错误通道）。
+    pub fn with_host_getattr(mut self, host_getattr: HostGetAttrFn) -> Self {
+        self.host_getattr = Some(host_getattr);
         self
     }
 
@@ -281,6 +298,9 @@ py_object! {
             /// `is_subtype` 变成"下标＋位与"O(1) ✓（先前每判一次都要 `mro()` **clone** 一个 Vec ✗）。
             /// 空 ⇒ 还没建（调用方回退线性扫 ✓）。
             mro_ids: RefCell<Vec<u64>>,
+            /// **`AB-73`** 宿主层的**不透明字**（core 只存不用；ABI 侧放 `pa_type_ops` 记录指针）。
+            /// `0` ＝ 没有宿主回退槽。
+            host_data: Cell<usize>,
         }
     }
 }
@@ -309,6 +329,16 @@ impl TypeObject {
     /// 槽位表（只读副本；槽位表在类型创建后不再改动）。
     pub fn slots(&self) -> Slots {
         self.slots
+    }
+
+    /// **`AB-73`**：宿主层的**不透明字**（core 只存不用；`0` ＝ 没有）。
+    pub fn host_data(&self) -> usize {
+        self.host_data.get()
+    }
+
+    /// 记下宿主层的不透明字（注册宿主类型时由 ABI 层写一次）。
+    pub fn set_host_data(&self, value: usize) {
+        self.host_data.set(value);
     }
 
     /// **round 248 性能（A2-3）**：这个类型的命名空间可能命中"用户覆写 dunder"（见 [`DUNDER_CAPABLE`]）。

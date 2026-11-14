@@ -1061,6 +1061,15 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
   `*mut pa_state` 桥接）＋`lib.rs`（`pa_newtype` 收 ops 并装 `getattr`/`setattr` 槽、getattr 结果
   若为宿主函数 ⇒ `MethodObject` 绑定、`pa_raise_host_exception`、`paL_getref`、`PA_ERR_NOTFOUND`）
   ＋`crates/pyawa-abi/include/pa.h`（结构/原型/状态码/版本）＋`PA_ABI_MINOR=11`。
+
+  **B1（2026-11-14 已落）**：`PA_ERR_NOTFOUND=8`（预留改 9–31）＋`PA_ABI_MINOR=11`；`host.rs`
+  的 `pa_type_ops`/回调类型/自带尺寸界读；core `Slots.host_getattr`（**有错误通道**）＋
+  `TypeObject` 不透明 `host_data`；`pa_set_type_ops`（追加式，`NULL` ⇒ 清空）＋
+  `host_type_getattr_slot`（`PA_OK` 恰好一个值／`PA_ERR_NOTFOUND` 回退／其它 ⇒ `RuntimeError`）＋
+  `paL_getref`；`pa.h` 结构/原型/状态码；**测试** `crates/pyawa-abi/tests/host_visibility.rs`
+  （属性派发/回退/错误三态/零回归，2 passed）。**B2 待做**：`setattr_fn` 接线（core 写槽）、
+  宿主函数自动绑定（`MethodObject`）、`AB-74` 的 `pa_raise_host_exception`＋traceback 验收、
+  `paL_getref` 的方法绑定用例、`§12.11` 验收演练（`list`/`dict`/自定义类）、`§16` 清零。
 - **C 验收演练与收口**：`crates/pyawa-abi/tests/` 下新增 `host_visibility` 测试（派发→回退→协议→零回归；
   异常映射；§12.11 演练：宿主把 `list`/`dict`/自定义类包成宿主对象注入 guest，guest 源码
   **不含** "host"/"handle" 字样或宿主函数名，完成增删改查与迭代；`is`/`id` 口径登记）；

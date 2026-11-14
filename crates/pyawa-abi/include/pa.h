@@ -24,9 +24,11 @@
  * 次版本 8：`AB-67` 宿主模块注入四函数（追加式）。
  * 次版本 9：`AB-69` 宿主函数签名（`pa_type_expr` 句柄版，追加式）。
  * 次版本 10：`AB-70` `pa_tohandle`（宿主对象载荷读回）＋ `AB-71` `pa_set_program_filename`
- * （均追加式）；同版补齐 `AB-72` 的 `pa_call`／`pa_pcall` `nresults` 语义（未发布前的补齐）。 */
+ * （均追加式）；同版补齐 `AB-72` 的 `pa_call`／`pa_pcall` `nresults` 语义（未发布前的补齐）。
+ * 次版本 11：`AB-73` 宿主类型属性/方法派发（`pa_set_type_ops`＋新状态码 `PA_ERR_NOTFOUND`）
+ * ＋ `AB-74` 宿主异常映射（`pa_raise_host_exception`）—— 均追加式。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 10u
+#define PA_ABI_MINOR 11u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -49,7 +51,8 @@ typedef enum pa_status {
     PA_ERR_NOTIMPLEMENTED = 5, /* 未提供该能力槽位（CP-5）——必须与"已实现但拒绝"区分（AB-22） */
     PA_ERR_INVALID = 6,
     PA_ERR_ABI = 7,
-    PA_ERR_RESERVED_FIRST = 8,
+    PA_ERR_NOTFOUND = 8,   /* AB-73：属性派发回调“未处理”（VM 内部回退，不暴露给 guest） */
+    PA_ERR_RESERVED_FIRST = 9,
     PA_ERR_RESERVED_LAST = 31
 } pa_status;
 
@@ -215,6 +218,28 @@ int pa_newtable(pa_state *state);
 int pa_newlist(pa_state *state, int n);
 int pa_retain(pa_state *state, int idx);
 int pa_release(pa_state *state, int idx);
+
+/* ---- 宿主类型属性/方法派发（AB-73；追加式，次版本 11）----
+ *
+ * 回调用途：getattr_fn 处理 ⇒ 恰好压入 1 个值（净 +1）并返回 PA_OK；不处理 ⇒ PA_ERR_NOTFOUND
+ * （不压栈，VM 回退到默认，最终 AttributeError）；出错 ⇒ 其它 PA_ERR_*（VM 抛脚本可捕获异常，
+ * 不静默回退）。setattr_fn 的值取栈上 value_index（借用、不消耗）。
+ * 回调禁止保存 payload／context／state 供返回后使用（AB-17）；payload 归 VM（AB-58）。 */
+typedef int (*pa_type_getattr)(pa_state *state, void *payload,
+                               const char *name, size_t len, void *context);
+typedef int (*pa_type_setattr)(pa_state *state, void *payload,
+                               const char *name, size_t len, int value_index, void *context);
+
+typedef struct pa_type_ops {
+    size_t size;                 /* 本结构体字节数（自带尺寸，AB-43 界读） */
+    void *context;               /* 透传给回调；禁止保存 */
+    pa_type_getattr getattr_fn;  /* 可为 NULL */
+    pa_type_setattr setattr_fn;  /* 可为 NULL */
+} pa_type_ops;
+
+/* AB-73：给 pa_newtype 注册的类型装回调（NULL ⇒ 清空/不派发）；type_index 是栈索引且不消耗。
+ * 失败（越界/不是宿主类型/size 非法）⇒ PA_ERR_INVALID。 */
+int pa_set_type_ops(pa_state *state, int type_index, const pa_type_ops *ops);
 
 /* ---- 宿主函数与签名（AB-24…AB-26、AB-51／AB-52）----
  *
@@ -407,6 +432,8 @@ int paL_optstring(pa_state *state, int idx, const char *def, const char **out, s
 int paL_len(pa_state *state, int idx, size_t *out);
 int paL_getsubtable(pa_state *state, int idx, const char *name);
 int paL_ref(pa_state *state, int idx, int *out_ref);       /* 注册表键从 1 起 */
+/* AB-73：把注册表键的值压栈（+1，新引用）；非法键 ⇒ PA_ERR_INVALID。 */
+int paL_getref(pa_state *state, int ref);
 int paL_unref(pa_state *state, int ref);                   /* 幂等 */
 int paL_traceback(pa_state *state, const char *msg);
 int paL_where(pa_state *state, int level, const char **out, size_t *len);

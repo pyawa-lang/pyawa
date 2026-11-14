@@ -24,9 +24,12 @@ fn status_codes_match_the_spec_table() {
     assert_eq!(PA_ERR_NOTIMPLEMENTED, 5);
     assert_eq!(PA_ERR_INVALID, 6);
     assert_eq!(PA_ERR_ABI, 7);
-    assert_eq!(PA_ERR_RESERVED_FIRST, 8);
+    // `AB-73`：属性派发回调的"未处理"（追加到预留区起点，`AB-20`）。
+    assert_eq!(PA_ERR_NOTFOUND, 8);
+    assert_eq!(PA_ERR_RESERVED_FIRST, 9);
     assert_eq!(PA_ERR_RESERVED_LAST, 31);
     assert!(PA_ERR_RESERVED_FIRST > PA_ERR_ABI, "AB-20：新增必须落在预留区");
+    assert!(PA_ERR_RESERVED_FIRST <= PA_ERR_RESERVED_LAST);
 }
 
 #[test]

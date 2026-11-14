@@ -317,6 +317,33 @@ pub unsafe extern "C" fn paL_ref(state: *mut pa_state, index: i32, out: *mut i32
     })
 }
 
+/// **`AB-73`**：`paL_getref(st, ref)` —— 把注册表里的值**压栈**（`+1`，新引用）。
+///
+/// 供宿主"属性回调返回已保存的可调用值"（例如方法函数）用：注册阶段 `paL_ref` 保存，
+/// 回调里 `paL_getref` 压回。非法键 ⇒ `PA_ERR_INVALID`。
+///
+/// # Safety
+///
+/// 同 [`paL_checkinteger`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paL_getref(state: *mut pa_state, reference: i32) -> i32 {
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        if reference < 1 || reference as usize > state_ref.registry.len() {
+            return PA_ERR_INVALID;
+        }
+        let Some(object) = state_ref.registry[reference as usize - 1] else {
+            return PA_ERR_INVALID;
+        };
+        // 借用 → 持有（`AB-15`）：压栈交 VM 一份引用。
+        // SAFETY: 注册表持有这份引用。
+        unsafe { state_ref.instance.incref_object(object.as_ptr()) };
+        state_ref.stack.push_owned(object)
+    })
+}
+
 /// `paL_unref(st, ref)`：释放注册表里的键（**1 起**；与 `paL_ref` 的返回值对应）。
 ///
 /// # Safety
