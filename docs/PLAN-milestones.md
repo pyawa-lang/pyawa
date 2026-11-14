@@ -1097,13 +1097,18 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
 
 **目标**：让「宿主对象在 guest 里零差异」成为**推论**，而不是逐条打补丁。
 
-| 步 | 内容 | 验收 |
+| 步 | 内容 | 验收／测试落点 |
 |---|---|---|
-| 1 | `pa_type` 返回真实类型身份（`AB-76`；修订 `AB-63` 粗标签） | 宿主对象／模块／内建值都能被如实区分；不再需要 `pa_tohandle` 猜类型 |
-| 2 | VM 内协议收敛成 `resolve_dunder` ＋ `call_special` 两个原语；删除 `type_has_own_dunder`／`overrides_compare`／`has_custom_eq`／`call_compare_dunder` 各自的判定 | 全部协议入口只经这两个原语；行为测试零回归 |
-| 3 | `pa_set_object_ops`（`AB-75`）：类型／实例／模块统一挂钩子；模块注入函数降级为投影 | `np.linalg`／`np.float64`／未预先枚举的 `np.<x>` 都能取到 |
-| 4 | `pa_newtype` 支持基类（`AB-77`） | 宿主异常类继承 `ValueError` ⇒ guest 的 `except ValueError` 命中；`isinstance` 正确 |
-| 5 | 投影等价测试（`AB-78`） | `pa_set_type_ops`↔`pa_set_object_ops`、模块函数↔属性写、`pa_tointeger`↔`pa_tointstring`（i64 内）逐条差分 |
+| 1 | **新增 `pa_typeid`**（`AB-76`）返回真实类型身份；**`pa_type` 保留 `AB-63` 的值类别**（不破既有枚举/测试），`PA_THANDLE` 只作值类别、不再用于猜宿主对象 | `T-AB-11`；`crates/pyawa-abi/tests/host_visibility.rs` 扩（宿主对象/模块/实例/内建值）；既有 `abi.rs` 的 `PA_THANDLE` 断言**不改语义**、只补身份查询 |
+| 2 | VM 内协议收敛：**新增 `resolve_dunder`**（统一解析 dunder）＋ 复用并收敛 `call_special_method`（统一调用；保留现有函数名作为实现入口）；删除 `type_has_own_dunder`／`overrides_compare`／`has_custom_eq`／`call_compare_dunder` 各自的判定 | 全部协议入口只经这两个原语；`crates/pyawa-core/tests/` 下新增协议一致性测试 ＋ 既有行为测试**零回归** |
+| 3 | `pa_set_object_ops`（`AB-75`）：类型／实例／模块统一挂钩子（每对象一份、互不外溢）；模块注入函数降级为投影 | `T-AB-12`；`crates/pyawa-abi/tests/host_visibility.rs` 扩（三形态/NULL/回退/未枚举名字） |
+| 4 | `pa_newtype` 支持 `base_idx`（`AB-77`）：负值 ⇒ `object`；非类型/终态基类 ⇒ `PA_ERR_INVALID`；真实 MRO | `T-AB-13`；`crates/pyawa-abi/tests/host_visibility.rs` 扩（继承 `ValueError` ⇒ `except`/`isinstance` 命中） |
+| 5 | 投影等价测试（`AB-78`） | `T-AB-14`；差分：`pa_set_type_ops`↔`pa_set_object_ops(type)`、模块函数↔属性写、`pa_tointeger`↔`pa_tointstring`（i64 内）、`pa_raise_host_exception`↔构造+记录 |
+
+**依赖与版本**：步 2 与 1/3/4 可并行；步 5 在 1/3/4 之后。全部落地时 `PA_ABI_VERSION` 次版本
+**11 → 12**（`pa_set_object_ops`／`pa_typeid` 追加式；`pa_newtype` 的 `base_idx` 为未发布窗口内
+签名改写），`pa.h`／§15.3／§16 同步；`AB-78` 的"宿主类型异常"形态依赖步 4（此前只支持 guest
+声明的异常类，`T-AB-9` 已验收）。
 
 **不变量（机检法）**：给宿主对象挂一个**记录所有被查名字的 `getattr_fn`**，跑参考测试集；
 凡是「VM 支持但记录里从未出现」的 dunder，即证明存在绕过 `resolve_dunder` 的协议解析路径。
