@@ -419,7 +419,7 @@
 > 7. **全量内存棘轮**（阶段边界做一次）：全量 valgrind（分批）＋ 全量套件 memdangle ⇒ 记基线 ＋ 「不得更差」。
 > 8. **ABI 发布** ＝ **用户决定** ✗（到点先报，不自行发布）。
 > **测量纪律（2026-11-13）** ✓：**bench／profile／slowcheck／全量 survey 只在机器空载时跑** ✓；观察 `cat /proc/loadavg`，负载 > 核数×0.7 一律**跳过并明说** ✗（并发测量无效，硬判会误红 ✗；`bench_gate.py` 已内置该守门 ✓）。
-> **每轮固定动作**：仪器（`profile_hot`／`memcheck --limit 20`／`bench_gate`）＋ 闸门（`check.py` 16 项 ＋ `slowcheck --release` **11 项**）＋ 同笔提交（代码＋台账＋`NEXT`，`NEXT` ≤40 行）＋ 报告三行（做了什么／可测单位前→后／未修与下一步）。
+> **每轮固定动作**：仪器（`profile_hot`／`memcheck --limit 20`／`bench_gate`）＋ 闸门（`check.py` 16 项 ＋ `slowcheck --release` **12 项**）＋ 同笔提交（代码＋台账＋`NEXT`，`NEXT` ≤40 行）＋ 报告三行（做了什么／可测单位前→后／未修与下一步）。
 > **只需请示四种** ✗：设计决策（ABI 发布、immortal 之类）／突破安全边界／需要用户权限或工具／同一处 3 轮不成。**其余一律自走** ✓（选题顺序、实现方案、拆几笔提交，只要满足「一轮一落地」）。
 > **停止条件**：同墙 3 轮停手升级 ✗；每 2–3 轮重跑 survey／bench／memcheck 并报三数 ✓。
 
@@ -980,8 +980,18 @@ symbols 缺口：annotation-only 外层绑定运行期缺 cell（`NameError`）�
 
 **验收**：`PYAWA_DANGLING=1` 下 `cargo test --workspace --release` 全绿；conformance **408×2**
 （普通＋悬垂）绿；`check.py` 20/20；`selftest.py` 24 项断言全绿；`cargo check --workspace
---all-targets` 0 警告；`bench_gate` 四档 ✓；`slowcheck --release` 十一项全绿。
+--all-targets` 0 警告；`bench_gate` 四档 ✓；`slowcheck --release` 十二项全绿。
 
 **边界（如实）**：账本是诊断近似（"对象存活＋连续两次 flush"判未消费；ptr 复用留 `overwritten` 账）；
 `RaiseRef` 存 `*const Instance`（不变量：错误只在本实例执行栈内传播/消费，与改动前"裸指针＋实例
 存活"同契约）；副作用上 A 不动 ABI（`pa_*` 边界仍按状态码映射，`AB-21` 不变）。
+
+
+### 12.8 失败路径 GC 探针接闸（2026-11-14）
+
+`tests/ci/failure_path_leaks.py`（阶段 0 的 D 探针集，11 条失败路径 × N=10000/20000 缩放判据）
+**接进 `tools/slowcheck.sh` 作为第 12 项**：步骤内先 `cargo build` CLI（release 档是 no-op），再跑
+`--binary target/<profile>/pyawa`；任何 RED ⇒ 闸门红。`tools/gate_chunk.sh small` 同步纳入（分块
+命令也能跑到）。计数口径从「十一项」更新为「十二项」（`AGENTS.md` 硬线、`agents-rules/round-rule.md`、
+`docs/REQUIREMENTS.md`、`tests/ci/README.md`、`NEXT.md`）。验收：`slowcheck --release` **十二项全绿**
+（第 12 项实跑 11/11 绿）；`check.py` 全绿。
