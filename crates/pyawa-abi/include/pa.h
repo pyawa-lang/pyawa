@@ -30,9 +30,10 @@
  * 次版本 12：`AB-76` `pa_typeid`（追加式）＋ `AB-77` `pa_newtype` 的 `base_index`（未发布窗口内
  * 签名改写；旧签名不留）。
  * 次版本 13：`AB-79` `pa_pushmodule`（追加式）＋ §12.13 的语义修正（`pa_getglobal` 缺失名
- * ⇒ `PA_ERR_INVALID`；`pa_newtype` 的 NULL `dealloc`/`traverse` ⇒ 当场拒绝）。 */
+ * ⇒ `PA_ERR_INVALID`；`pa_newtype` 的 NULL `dealloc`/`traverse` ⇒ 当场拒绝）。
+ * 次版本 14：`AB-80` `pa_writetobytes`（追加式；一次性写回恰好 `bytearray` 的数据区）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 13u
+#define PA_ABI_MINOR 14u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -215,7 +216,12 @@ int pa_tointeger(pa_state *state, int idx, int64_t *out);
 const char *pa_tointstring(pa_state *state, int idx, size_t *len);
 int pa_tonumber(pa_state *state, int idx, double *out);
 const char *pa_tostring(pa_state *state, int idx, size_t *len);    /* 只读视图（借用，AB-15） */
-const char *pa_tobytes(pa_state *state, int idx, size_t *len);     /* 只读字节视图（借用） */
+const char *pa_tobytes(pa_state *state, int idx, size_t *len);
+/* AB-80：一次性写回恰好 bytearray 的数据区（不扩容/不借出 VM 内存）。
+ * 唯一接受恰好 bytearray（bytes/memoryview/子类/非字节 ⇒ PA_ERR_INVALID）；
+ * offset+len checked：溢出/越界拒绝且不部分写；p==NULL && len>0 拒绝；
+ * len==0 且 offset<=长度 ⇒ no-op PA_OK；失败经 pa_errmsg 可诊断。 */
+int pa_writetobytes(pa_state *state, int idx, size_t offset, const void *p, size_t len);
 /* AB-70：**宿主对象**的载荷读回（栈契约 `—`）。成功 ⇒ *payload_out 指向 VM 分配的载荷
  * （AB-58；payload_size == 0 ⇒ NULL）；**只借出、不转移**（AB-15／AB-17，宿主禁止 free）。
  * 栈上不是宿主对象／idx 越界／payload_out == NULL ⇒ PA_ERR_INVALID。

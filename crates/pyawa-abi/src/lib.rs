@@ -96,7 +96,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 13;
+pub const PA_ABI_MINOR: u32 = 14;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -3445,6 +3445,73 @@ pub unsafe extern "C" fn pa_tobytes(
     };
     // SAFETY: 调用方保证 state 是 pa_create 交回且尚未销毁的指针；boundary_ptr 只用它回填消息。
     unsafe { boundary_ptr(state, read_view) }
+}
+
+/// **`AB-80`**：一次性把 `p[0..len]` 写回 `idx` 指向的 **`bytearray`** 数据区（栈契约 `—`）。
+///
+/// 唯一接受**恰好 `bytearray` 类型**的对象（子类也拒绝，与 core `Instance::write_bytearray_at`
+/// 同口径）；`bytes`／`memoryview`／非字节类型 ⇒ `PA_ERR_INVALID`。只写数据区、不扩容/不重分配；
+/// 范围用 `checked_add`（溢出/越界都拒绝，**不部分写**）；`len == 0` 且 `offset <= 当前长度`
+/// ⇒ no-op `PA_OK`；失败写 `pa_errmsg`（`AB-48`）。**不借出 VM 内存**。
+///
+/// # Safety
+///
+/// `state` 按 `AB-57` 存活；`p` 在 `len > 0` 时必须可读 `len` 字节（本函数只读、不保留）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_writetobytes(
+    state: *mut pa_state,
+    index: i32,
+    offset: usize,
+    p: *const c_void,
+    len: usize,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(slot) = state.stack.get(index) else {
+            state.set_message("`AB-80`：`idx` 越界");
+            return status::PA_ERR_INVALID;
+        };
+        // **恰好 `bytearray`**（子类拒绝；`bytes` 不可写）。
+        let bytearray = state.instance.type_named("bytearray").expect("bytearray 已登记");
+        if state.instance.type_of(slot.object) != bytearray {
+            let type_name = state.instance.type_name(state.instance.type_of(slot.object)).to_owned();
+            state.set_message(&format!(
+                "`AB-80`：只接受恰好 `bytearray`（当前是 `{type_name}`；`bytes`/子类/非字节均拒绝）"
+            ));
+            return status::PA_ERR_INVALID;
+        }
+        if p.is_null() && len > 0 {
+            state.set_message("`AB-80`：`p == NULL` 且 `len > 0`");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(end) = offset.checked_add(len) else {
+            state.set_message("`AB-80`：`offset + len` 溢出 usize");
+            return status::PA_ERR_INVALID;
+        };
+        // 当前长度（只用于范围校验；写回仍走 core 的同一把尺）。
+        let Some(current) = state.instance.bytes_like_value(slot.object) else {
+            state.set_message("`AB-80`：目标不是可写字节对象");
+            return status::PA_ERR_INVALID;
+        };
+        if end > current.len() {
+            state.set_message(&format!(
+                "`AB-80`：写入范围越界（offset {offset} + len {len} > 长度 {}）",
+                current.len()
+            ));
+            return status::PA_ERR_INVALID;
+        }
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            // SAFETY: 调用方按 Safety 段保证 p 在 len>0 时可读 len 字节。
+            unsafe { core::slice::from_raw_parts(p.cast::<u8>(), len) }
+        };
+        if !state.instance.write_bytearray_at(slot.object, offset, bytes) {
+            state.set_message("`AB-80`：写回失败（目标不是恰好 bytearray 或范围不符）");
+            return status::PA_ERR_INVALID;
+        }
+        status::PA_OK
+    })
 }
 
 /// `pa_newtable(st)`：新建表（本层就是 `dict`）（+1）。

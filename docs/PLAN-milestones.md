@@ -1228,8 +1228,8 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 ⑤ `p == NULL` 且 `len > 0` ⇒ `PA_ERR_INVALID`；`len == 0` ⇒ 无操作 `PA_OK`；
 ⑥ valgrind 下 0 错误（含"写后 guest 立即读"与"写后触发 GC"两种顺序）。
 
-**状态（2026-11-14）**：规格已定（`SPEC-c-abi`：恰好 `bytearray`／子类拒绝、checked 范围、
-校验顺序、`len==0` no-op、1.14 窗口）；**实现待做**。
+**状态（2026-11-14）**：**✓ 已落地**（`SPEC-c-abi` 1.14；`crates/pyawa-abi/tests/write_tobytes.rs`
+4 passed；valgrind 3.26（`--error-exitcode=99`）**ERROR SUMMARY: 0 errors**）。
 **落地位置**：`crates/pyawa-abi`（新函数）＋ `pa.h`（原型，次版本 14 窗口）＋ `tests/write_tobytes.rs`；
 `PLAN §12.13` 的内存验证方法沿用。
 

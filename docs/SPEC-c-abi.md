@@ -260,7 +260,7 @@
     `AB-17` 的借用义务，也无 UAF 面（对比：长期可写视图会让 VM 对象必须可钉住/不可搬家）；
   - **不新增类型标签**（`bytearray`／`memoryview` 的独立标签仍**不引入**，避免 `AB-63` 已有的
     "用标签猜类型＝第二个真相"问题）。
-  - **落地窗口**：追加式；`PA_ABI_MINOR` **13 → 14**（`PLAN` §12.16）。
+  - **落地**：追加式；已随 `PA_ABI_MINOR` **13 → 14** 落地（`PLAN` §12.16；`tests/write_tobytes.rs`）。
   **验收**：`T-AB-20`。
 
 ---
@@ -426,7 +426,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.13**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **13**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；**`AB-80` 落地时 13→14**）——`AB-41` 的追加式改动
+> **当前版本：1.14**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **14**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -562,7 +562,7 @@
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
 | `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
 | `pa_tobytes(st, idx, len*)` | — | 取只读字节视图（**借用**） |
-| `pa_writetobytes(st, idx, offset, p, len)` | — | 一次性写回 `bytearray` 数据区（`AB-80`；恰好 `bytearray`；越界/溢出/不可变/非字节拒绝；不借出 VM 内存）**（待实现）** |
+| `pa_writetobytes(st, idx, offset, p, len)` | — | 一次性写回 `bytearray` 数据区（`AB-80`；恰好 `bytearray`；越界/溢出/不可变/非字节拒绝；不借出 VM 内存）（已落地，`tests/write_tobytes.rs`） |
 | `pa_tohandle(st, idx, payload_out)` | — | **宿主对象**载荷读回（`AB-70`；借用、仅宿主对象；NULL／类型不符 ⇒ `PA_ERR_INVALID`） |
 | `pa_newtable(st)` | +1 | 新建表 |
 | `pa_newlist(st, n)` | +1 | 新建长度 n 的列表 |
@@ -746,8 +746,9 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格当前有 1 条未实现的新增需求**：**`AB-80`**（`pa_writetobytes`，一次性写回 buffer 面；
-规格已定、实现待做；`PA_ABI_MINOR` 落地时 13→**14**；`T-AB-20`）。其余已落地：`AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
+**本规格无未实现的 `AB-` 条款**：`AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**
+落地（`crates/pyawa-abi/tests/write_tobytes.rs` 的 `T-AB-20`；valgrind 0 错误）。此前已落地：
+`AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
 当场拒绝）、#3（`pa_getglobal` 缺失名 `PA_ERR_INVALID`）、#4（模块句柄上栈）已随 **1.13** 落地
 （`crates/pyawa-abi/tests/host_usability.rs` 的 `T-AB-15/16/17`）。**§12.13 #1**（组合根 stdlib
 可用性）也已按路线 **A** 落地：`pyawa-runtime` 的 C 产物是单一库（`pa_*`＋`paL_*`），
