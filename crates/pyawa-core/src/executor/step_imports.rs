@@ -166,7 +166,7 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                             let is_missing = match &error {
                                 ExecError::Raised { exception } => {
                                     // SAFETY: 抛出的异常由实例持有，存活。
-                                    unsafe { exception.as_ref() }.ty() == attribute_error
+                                    unsafe { exception.get().as_ref() }.ty() == attribute_error
                                 }
                                 _ => false,
                             };

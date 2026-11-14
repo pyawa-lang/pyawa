@@ -49,7 +49,7 @@ fn raised(
     outcome: Result<NonNull<Header>, ExecError>,
 ) -> (String, String) {
     match outcome {
-        Err(ExecError::Raised { exception }) => describe(instance, exception),
+        Err(ExecError::Raised { exception }) => describe(instance, exception.get()),
         other => panic!("应当抛异常，实际 {other:?}"),
     }
 }
@@ -62,7 +62,7 @@ fn compare_raised(
     symbol: &str,
 ) -> (String, String) {
     match pyawa_core::executor::compare_public(instance, left, right, symbol, 0) {
-        Err(ExecError::Raised { exception }) => describe(instance, exception),
+        Err(ExecError::Raised { exception }) => describe(instance, exception.get()),
         Ok(flag) => panic!("`{symbol}` 对复数应当抛 TypeError，实际给 {flag}"),
         Err(other) => panic!("`{symbol}` 应当抛 Raised，实际 {other:?}"),
     }

@@ -123,12 +123,15 @@ fn syntax_error(
         ("end_lineno", end_lineno_value),
         ("end_offset", end_offset_value),
     ] {
-        let _ = instance.set_attribute_value(exception, name, value);
+        crate::executor::runtime::discard_exec_result(
+            instance,
+            instance.set_attribute_value(exception, name, value),
+        );
         instance.release(value);
     }
     // **`compile()` 的 SyntaxError 也要挂回溯** ✓（round 49；见 `attach_traceback` 的注释）。
     crate::executor::runtime::attach_traceback(instance, exception);
-    ExecError::Raised { exception }
+    ExecError::Raised { exception: crate::raise_guard::RaiseRef::from_owned(instance, exception) }
 }
 
 /// 从"测试路径"的 code 模板复制出一个**带给定 filename** 的 code 对象 ✓。

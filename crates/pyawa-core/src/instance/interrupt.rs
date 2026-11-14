@@ -88,6 +88,7 @@ impl Instance {
     /// 抛一个内建异常（按名字），返回可直接上抛的执行错误。
     ///
     /// 给**槽位实现**用（宿主函数一类要在 core 之外抛 Python 异常）。
+    #[track_caller]
     pub fn raise_builtin_error(&self, name: &str, message: &str) -> crate::ExecError {
         crate::executor::runtime::raise_builtin(self, name, message)
     }

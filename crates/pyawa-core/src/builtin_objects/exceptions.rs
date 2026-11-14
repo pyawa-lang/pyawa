@@ -126,7 +126,8 @@ pub(crate) fn stop_iteration(instance: &Instance, value: Option<NonNull<Header>>
         RefCell::new(None),
     ));
     ExecError::Raised {
-        exception: object.into_raw().cast::<Header>(),
+        // RAII 守卫接管这份新引用（`stop_iteration` 的异常对象由调用方消费/Drop 归还）。
+        exception: crate::raise_guard::RaiseRef::from_owned(instance, object.into_raw().cast::<Header>()),
     }
 }
 
@@ -990,7 +991,10 @@ pub(crate) fn add_exception_note(
     let text = instance.new_str(note);
     items.push(text);
     let list = instance.new_list(items);
-    let _ = instance.set_attribute_value(exception, "__notes__", list);
+    crate::executor::runtime::discard_exec_result(
+        instance,
+        instance.set_attribute_value(exception, "__notes__", list),
+    );
     // SAFETY: list 的那份引用交给实例字典（set_attribute_value 已 retain ✓）⇒ 这里归还新建那份 ✓。
     unsafe { instance.release_object(list.as_ptr()) };
     true

@@ -677,7 +677,10 @@ impl Instance {
             self.release(one);
             match outcome {
                 Ok(value) => value,
-                Err(_) => return None,
+                Err(error) => {
+                    crate::executor::runtime::discard_error(self, &error);
+                    return None;
+                }
             }
         } else {
             self.new_dict()

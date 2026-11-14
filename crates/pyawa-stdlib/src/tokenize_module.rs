@@ -800,7 +800,7 @@ fn read_source(instance: &Instance, reader: NonNull<Header>, encoding: &str) -> 
         let line = match pyawa_core::executor::call::call_value(instance, reader, &[], &[]) {
             Ok(value) => value,
             Err(ExecError::Raised { exception }) => {
-                let raised = instance.type_of(exception);
+                let raised = instance.type_of(exception.get());
                 let stop = instance.type_named("StopIteration");
                 if stop.is_some_and(|base| raised == base || instance.is_subtype(raised, base)) {
                     break;

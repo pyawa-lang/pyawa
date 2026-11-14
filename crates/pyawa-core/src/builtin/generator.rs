@@ -220,7 +220,9 @@ pub(crate) unsafe fn generator_throw_native(
     let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
     if object.finished() || !object.started() {
         // 还没进去（或已经结束）⇒ 抛在调用处
-        return Err(ExecError::Raised { exception });
+        return Err(ExecError::Raised {
+            exception: crate::raise_guard::RaiseRef::from_owned(instance, exception),
+        });
     }
     match crate::executor::resume_generator_with_raise(instance, generator, exception)? {
         crate::executor::GeneratorOutcome::Yielded(value) => Ok(value),
@@ -272,29 +274,29 @@ pub(crate) unsafe fn generator_close_native(
         Ok(crate::executor::GeneratorOutcome::Returned(value)) => Ok(value),
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             let generator_exit = instance.hot_type(HotId::GeneratorExit)
                 .expect("异常层次在引导期已登记");
             if instance.is_subtype(ty, generator_exit) {
                 // SAFETY: 这一份由本函数持有。
-                unsafe { instance.release_object(exception.as_ptr()) };
+                unsafe { instance.release_object(exception.get().as_ptr()) };
                 Ok(none())
             } else if instance.type_name(ty) == "StopIteration" {
                 // 生成器内部抛 `StopIteration` ⇒ `close` 交出它的返回值（有就取第一个实参）
                 // SAFETY: 类型身份已确认。
-                let exception_object = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
+                let exception_object = unsafe { &*exception.get().as_ptr().cast::<ExceptionObject>() };
                 let value = exception_object.args().first().copied();
                 match value {
                     Some(value) => {
                         // SAFETY: 值由异常对象持有，这里新增一份交给调用方。
                         unsafe { instance.incref_object(value.as_ptr()) };
                         // SAFETY: 异常那份由本函数持有。
-                        unsafe { instance.release_object(exception.as_ptr()) };
+                        unsafe { instance.release_object(exception.get().as_ptr()) };
                         Ok(value)
                     }
                     None => {
                         // SAFETY: 同上。
-                        unsafe { instance.release_object(exception.as_ptr()) };
+                        unsafe { instance.release_object(exception.get().as_ptr()) };
                         Ok(none())
                     }
                 }

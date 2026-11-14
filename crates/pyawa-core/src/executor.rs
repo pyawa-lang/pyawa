@@ -69,7 +69,10 @@ enum Step<'a> {
 }
 
 /// 执行失败的形态。
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// **不再 `Clone`**（阶段 2/A）：`Raised` 携带一份**拥有**的异常引用（[`RaiseRef`]），
+/// 裸克隆会复制所有权 ⇒ 只允许 move；`PartialEq` 按异常指针比较。
+#[derive(Debug, PartialEq, Eq)]
 pub enum ExecError {
     /// 解码失败（`BC-32`…`BC-36`）。
     Decode(DecodeError),
@@ -85,8 +88,11 @@ pub enum ExecError {
     UnboundLocal { slot: usize },
     /// 抛出了一个 Python 异常（**异常对象由实例的 `pending_exception` 保活**）。
     ///
-    /// `BC-60` ②：异常状态按实例存；这里只带一个借用的裸引用。
-    Raised { exception: NonNull<Header> },
+    /// `BC-60` ②：异常状态按实例存。`exception` 是**拥有一份引用**的 RAII 守卫
+    /// （[`crate::raise_guard::RaiseRef`]）：`Drop` 自动按"丢弃"归还（还 `Err` 那份，若
+    /// `pending` 仍指向它则一并清槽）⇒ **忘记处理也不会泄漏**；显式消费走
+    /// `into_pending()`／`discard()`。
+    Raised { exception: crate::raise_guard::RaiseRef },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
 }
@@ -525,12 +531,12 @@ pub(crate) fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<S
             Ok(0) => break,
             Ok(count) => bytes.extend_from_slice(&buffer[..count]),
             Err(_) => {
-                let _ = instance.fs_close(handle);
+                crate::executor::runtime::discard_capability_result(instance.fs_close(handle));
                 return None;
             }
         }
     }
-    let _ = instance.fs_close(handle);
+    crate::executor::runtime::discard_capability_result(instance.fs_close(handle));
     if crate::diag::flag_site!("PYAWA_TRACE_IMPORT") {
         // **诊断** ✓（第 200 轮）：读出多少字节 ✓（好与磁盘上的大小对照 ✗）。
         let path_text = String::from_utf8_lossy(path);
@@ -932,7 +938,10 @@ fn new_union_of(instance: &Instance, members: Vec<NonNull<Header>>) -> NonNull<H
         .cast::<Header>();
     let args = instance.new_tuple(members);
     // `set_attribute_value` 收**借用** ⇒ 交出去的元组引用随后还掉（字典自己持一份）。
-    let _ = instance.set_attribute_value(object, "__args__", args);
+    crate::executor::runtime::discard_exec_result(
+        instance,
+        instance.set_attribute_value(object, "__args__", args),
+    );
     release(instance, args);
     object
 }
@@ -1200,7 +1209,10 @@ pub(crate) fn bind_arguments(
                 match str_text(instance, *name, opcode) {
                     Ok(text) => (0..kwonly)
                         .any(|offset| code.varname(argcount + offset) == Some(text.as_str())),
-                    Err(_) => false,
+                    Err(error) => {
+                        crate::executor::runtime::discard_error(instance, &error);
+                        false
+                    }
                 }
             })
             .count();
@@ -1460,7 +1472,7 @@ fn dispatch_raise(
     frame: &Frame,
     exceptiontable: &[u8],
     offset_bytes: usize,
-    exception: NonNull<Header>,
+    exception: crate::raise_guard::RaiseRef,
     decoder: &mut Decoder,
 ) -> Result<(), ExecError> {
     let table = parse_exception_table(exceptiontable).map_err(ExecError::Decode)?;
@@ -1468,6 +1480,7 @@ fn dispatch_raise(
         .iter()
         .find(|entry| entry.start <= offset_bytes && offset_bytes < entry.end);
     let Some(entry) = handler else {
+        // 没有处理块 ⇒ 把守卫**原样 move** 给调用方（继续往外抛）。
         return Err(ExecError::Raised { exception });
     };
     if crate::diag::flag_site!("PYAWA_TRY_DEPTH_DEBUG") {
@@ -1484,13 +1497,12 @@ fn dispatch_raise(
     if entry.lasti {
         push_int(instance, frame, (offset_bytes / 2) as i64)?;
     }
-    push(instance, frame, exception)?;
-    // **`Err(Raised)` 那一份引用要归还**（round 124 A 族真 bug 修 ✗）：`push` 是**借用**接口
-    // （内部 `own` 会新增一份）⇒ 调用方自己那份仍归自己 ✗。先前这里没还 ⇒ 每个被处理的异常都
-    // **多留一份引用** ⇒ rc 永不归零 ⇒ 异常→`__traceback__`→帧→局部变量整条链泄漏 ✗
-    //（实测：`try: raise E except E: pass` 之后 E 的 rc 停在 1、帧与局部对象都不回收 ✓ ——
-    // `test_dict`／`test_list` 的 `test_free_after_iterating`、`test_weakref` 超时的根 ✓）。
-    release(instance, exception);
+    // `push` 是**借用**接口（内部 `own` 新增一份）⇒ 守卫自己的那份要归还。
+    // **RAII**：`discard`（幂等）＝ 旧"`record_consumed` ＋ `release`"；这就是"被处理块接住"
+    // 的标准消费点，随后的 Drop 不再重复。
+    push(instance, frame, exception.get())?;
+    // 只还 `Err` 那份，**保留 `pending` 槽**（旧 `dispatch_raise` 口径：槽是实例可见状态）。
+    exception.release_keeping_pending();
     decoder.set_position(entry.target / 2);
     Ok(())
 }
@@ -1571,7 +1583,7 @@ pub(crate) fn resume_generator(
             // 那里 `StopIteration` 是**返回值**机制。
             if let ExecError::Raised { exception } = &error {
                 // SAFETY: exception 是存活对象。
-                let ty = unsafe { exception.as_ref() }.ty();
+                let ty = unsafe { exception.get().as_ref() }.ty();
                 let stop_iteration = instance.hot_type(HotId::StopIteration).expect("StopIteration 已登记");
                 // SAFETY: generator 是本实例里存活的对象。
                 let is_coroutine =
@@ -1610,19 +1622,21 @@ pub(crate) fn resume_generator(
                             vec![instance.new_str(&message)],
                         );
                         unsafe {
-                            instance.incref_object(exception.as_ptr());
-                            instance.incref_object(exception.as_ptr());
+                            instance.incref_object(exception.get().as_ptr());
+                            instance.incref_object(exception.get().as_ptr());
                         }
                         let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
                             instance,
                             wrapper,
-                            Some(*exception),
-                            Some(*exception),
+                            Some(exception.get()),
+                            Some(exception.get()),
                             true,
                         );
-                        // SAFETY: 原异常那份引用由错误里持有，这里消费 ✓。
-                        unsafe { instance.release_object(exception.as_ptr()) };
-                        return Err(ExecError::Raised { exception: wrapper });
+                        // **RAII**：原异常那份由 `error` 守卫在返回时 Drop 归还（cause/context 各持
+                        // 一份 ⇒ 手工 incref 两次后不再显式 release）。
+                        return Err(ExecError::Raised {
+                            exception: crate::raise_guard::RaiseRef::from_owned(instance, wrapper),
+                        });
                     }
                 }
                 if instance.is_subtype(ty, stop_iteration) && (is_coroutine || iterable_coroutine) {
@@ -1637,19 +1651,21 @@ pub(crate) fn resume_generator(
                     // 原异常要给**两份**引用（cause 与 context 各一份 ✓）+ 错误自己那份
                     // = **3 份** ⇒ 先各加一份（两次 ✓），下面再还错误自己那份 ✓。
                     unsafe {
-                        instance.incref_object(exception.as_ptr());
-                        instance.incref_object(exception.as_ptr());
+                        instance.incref_object(exception.get().as_ptr());
+                        instance.incref_object(exception.get().as_ptr());
                     }
                     let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
                         instance,
                         wrapper,
-                        Some(*exception),
-                        Some(*exception),
+                        Some(exception.get()),
+                        Some(exception.get()),
                         true,
                     );
-                    // SAFETY: 原异常那份引用由错误里持有，这里消费 ✓。
-                    unsafe { instance.release_object(exception.as_ptr()) };
-                    return Err(ExecError::Raised { exception: wrapper });
+                    // **RAII**：原异常那份由 `error` 守卫在返回时 Drop 归还（cause/context 各持
+                    // 一份 ⇒ 手工 incref 两次后不再显式 release）。
+                    return Err(ExecError::Raised {
+                        exception: crate::raise_guard::RaiseRef::from_owned(instance, wrapper),
+                    });
                 }
             }
             Err(error)
@@ -2166,12 +2182,13 @@ pub fn execute<'a>(
         // **`throw`／`close` 的待抛异常**（恢复点上有就按本帧异常表派发 ✓；先前被本轮配额
         // 改动误删，此处恢复 ✓）。
         if let Some(exception) = forced_raise.take() {
+            // `take_pending_raise` 交回的是**一份裸引用**（帧的待抛槽）⇒ 交给 RAII 守卫接管。
             dispatch_raise(
                 instance,
                 frame.get(),
                 code.exceptiontable(),
                 frame.get().instruction_pointer() * 2,
-                exception,
+                crate::raise_guard::RaiseRef::from_owned(instance, exception),
                 &mut decoder,
             )?;
             continue;

@@ -161,7 +161,7 @@ fn a_compiled_annotated_def_carries_a_callable_annotate() {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             assert_eq!(vm.instance.type_name(ty), "NotImplementedError");
         }
         other => panic!("应当是脚本异常，实际 {other:?}"),

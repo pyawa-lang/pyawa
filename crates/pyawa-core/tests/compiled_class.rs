@@ -509,7 +509,7 @@ fn set_name_errors_propagate() {
     match outcome {
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // 传播的应当是**用户那个** ValueError（类名对得上就行）
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             assert_eq!(unsafe { ty.as_ref() }.name(), "NameError");
         }
         Ok(_) => panic!("应当把 `__set_name__` 的异常抛出来，却正常跑完了"),
@@ -547,7 +547,7 @@ fn raise_propagates_the_user_exception() {
     let frame = vm.instance.alloc(frame);
     match pyawa_core::execute(&vm.instance, &frame) {
         Err(pyawa_core::ExecError::Raised { exception }) => {
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             assert_eq!(unsafe { ty.as_ref() }.name(), "ValueError");
         }
         Ok(_) => panic!("`raise` 应当把异常抛出来"),

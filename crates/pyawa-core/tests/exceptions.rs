@@ -740,7 +740,7 @@ fn raised_message(instance: &Instance, outcome: Result<NonNull<Header>, ExecErro
     match outcome {
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 由异常机制持有，存活。
-            unsafe { &*exception.as_ptr().cast::<ExceptionObject>() }
+            unsafe { &*exception.get().as_ptr().cast::<ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default()
         }
@@ -948,7 +948,7 @@ h.send(None)
     match outcome {
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 由实例持有，存活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             assert_eq!(
                 unsafe { ty.as_ref() }.name(),

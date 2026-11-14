@@ -21,6 +21,7 @@ impl Instance {
             type_text_signatures: RefCell::new(std::collections::HashMap::new()),
             getattribute_dispatching: Cell::new(false),
             trace_dispatching: Cell::new(false),
+            raised_ledger: RefCell::new(crate::error_ledger::RaisedLedger::new()),
             traceback_created: Cell::new(0),
             traceback_freed: Cell::new(0),
             global_trace: RefCell::new(None),

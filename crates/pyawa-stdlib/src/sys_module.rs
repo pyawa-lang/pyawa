@@ -840,10 +840,11 @@ fn getsizeof_native(
             }
             Err(pyawa_core::ExecError::Raised { exception }) => {
                 // stdlib `forbid(unsafe_code)` ⇒ 只走安全访问器（`type_of`／`type_name`）✓。
-                let exception_name = instance.type_name(instance.type_of(exception));
+                let exception_name = instance.type_name(instance.type_of(exception.get()));
                 if exception_name == "TypeError" {
                     if let Some(default) = default {
-                        instance.release(exception);
+                        // **RAII**：还 `Err` 那份（清槽口径同旧 `discard_raised`），再走缺省值。
+                        exception.discard();
                         return Ok(instance.retain(default));
                     }
                 }

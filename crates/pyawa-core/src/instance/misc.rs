@@ -623,6 +623,9 @@ impl Instance {
                 self.traceback_freed.get()
             );
         }
+        // **B 引用账本 flush**（task-16）：自动/显式回收都走这里；`PYAWA_GC_LOG=4` 才干活
+        // （关闭时一次 `OnceLock` 读 + 空表早退）。
+        crate::error_ledger::flush(self);
         freed
     }
 

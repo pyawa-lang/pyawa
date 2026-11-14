@@ -22,7 +22,13 @@ from collections.abc import Callable
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 #: 检查要读的文件（不含 `target/` 之类的构建产物）。
-COPY = ("README.md", "AGENTS.md", "docs", "agents-rules", "crates", "tests", "tools")
+#:
+#: **`NEXT.md`／`Cargo.toml` 必须带上**（`T-CX-14`／`T-CX-15`／`T-CX-18` 要读它们）；
+#: `T-CX-15` 还要 `git cat-file` 解析 NEXT 的 HEAD 短哈希 ⇒ 副本里用**软链**指向真实 `.git`。
+COPY = ("README.md", "AGENTS.md", "NEXT.md", "Cargo.toml", "docs", "agents-rules", "crates", "tests", "tools")
+
+#: 外挂仪器（`M3-COVERAGE`）要读的对拍报告：小文件，直接复制（不复制整个 `target/`）。
+COPY_FROM_TARGET = ("target/conformance/report.md", "target/conformance/self-check.md")
 
 Mutation = Callable[[pathlib.Path], None]
 
@@ -214,6 +220,22 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
     ),
     ("T-CX-13", "crates/pyawa-stdlib/src/sys_module.rs", leak_a_layout_type),
     (
+        "T-CX-20",
+        "crates/pyawa-core/src/executor/call.rs",
+        # `CX-30`：core 四个模块里裸丢弃 `Result`（catch-all `Err(_) =>` 臂）⇒ `T-CX-20` 必须红。
+        lambda path: path.write_text(
+            path.read_text(encoding="utf-8")
+            + "\n// `CX-30` 的自检注入：下面这个 catch-all 臂裸丢弃 `Result`（必须让 T-CX-20 变红）\n"
+            + "fn cx30_injected(result: Result<(), ()>) {\n"
+            + "    match result {\n"
+            + "        Ok(()) => {}\n"
+            + "        Err(_) => {}\n"
+            + "    }\n"
+            + "}\n",
+            encoding="utf-8",
+        ),
+    ),
+    (
         "T-CX-19",
         "crates/pyawa-abi/include/pa.h",
         lambda path: path.write_text(
@@ -291,6 +313,18 @@ def snapshot(destination: pathlib.Path) -> pathlib.Path:
             shutil.copytree(source, target)
         else:
             shutil.copy2(source, target)
+    for relative in COPY_FROM_TARGET:
+        source = ROOT / relative
+        if not source.is_file():
+            continue
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    # `T-CX-15` 要 `git cat-file -e <HEAD 短哈希>`：副本不是仓库 ⇒ 软链真实 `.git`
+    # （只读用途；检查脚本不改仓库）。
+    repository = ROOT / ".git"
+    if repository.is_dir():
+        (destination / ".git").symlink_to(repository, target_is_directory=True)
     return destination
 
 

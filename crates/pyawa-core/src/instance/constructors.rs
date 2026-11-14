@@ -120,7 +120,10 @@ impl Instance {
             .cast::<Header>();
         // 两元 `tuple` ✓（`new_tuple` 接管传入的引用 ✓）。
         let args = self.new_tuple(vec![left, right]);
-        let _ = self.set_attribute_value(object, "__args__", args);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__args__", args),
+        );
         unsafe { self.release_object(args.as_ptr()) };
         object
     }
@@ -193,7 +196,10 @@ impl Instance {
             .into_raw()
             .cast::<Header>();
         // `set_attribute_value` 收**借用** ✓ ⇒ 不额外加减 ✓。
-        let _ = self.set_attribute_value(object, "__origin__", origin);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__origin__", origin),
+        );
         // **`__args__` 恒是 `tuple`**（round 224 重落 round 222 的本体 ✓）：参照
         // `list[int].__args__ == (int,)` ✓（`Group[int, list[int]].__args__ == (int, list[int])` ✓）；
         // round 222 版曾被误判为"堆损坏源"撤回 —— round 224 查明真凶是
@@ -202,11 +208,17 @@ impl Instance {
         // 引用账：`new_tuple` 吃**新引用** ⇒ 先补一份；`set_attribute_value` 收借用、自己再计一份 ✓
         // ⇒ 装完还掉构造器这份 ✓。
         if self.tuple_items(args).is_some() {
-            let _ = self.set_attribute_value(object, "__args__", args);
+            crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__args__", args),
+        );
         } else {
             unsafe { self.incref_object(args.as_ptr()) };
             let args_tuple = self.new_tuple(vec![args]);
-            let _ = self.set_attribute_value(object, "__args__", args_tuple);
+            crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__args__", args_tuple),
+        );
             unsafe { self.release_object(args_tuple.as_ptr()) };
         }
         object

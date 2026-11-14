@@ -355,8 +355,7 @@ fn subscripts_follow_code_points_including_negative_indices() {
         let key = int_key(index);
         match subscript_read(&instance, object, key) {
             Err(pyawa_core::ExecError::Raised { exception }) => {
-                let text = instance.object_str(exception).expect("异常对象的 str");
-                unsafe { instance.release_object(exception.as_ptr()) };
+                let text = instance.object_str(exception.get()).expect("异常对象的 str");
                 assert!(
                     text.contains("string index out of range"),
                     "越界文案：{text}"

@@ -288,7 +288,7 @@ fn dividing_a_big_integer_by_zero_raises_the_reference_message() {
         match error {
             pyawa_core::ExecError::Raised { exception } => {
                 // SAFETY: 异常对象由实例保活。
-                let ty = unsafe { exception.as_ref() }.ty();
+                let ty = unsafe { exception.get().as_ref() }.ty();
                 assert_eq!(unsafe { ty.as_ref() }.name(), "ZeroDivisionError", "{symbol}");
             }
             other => panic!("{symbol} 应当抛 ZeroDivisionError，得到 {other:?}"),
@@ -315,9 +315,9 @@ fn error_message(vm: &common::Vm, error: pyawa_core::ExecError) -> String {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: 异常对象由实例保活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             let name = unsafe { ty.as_ref() }.name().to_owned();
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(&vm.instance);
             match message {
                 Some(text) => format!("{name}: {text}"),

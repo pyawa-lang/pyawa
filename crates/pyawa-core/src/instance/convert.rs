@@ -355,9 +355,13 @@ impl Instance {
             Ok(false) => match crate::executor::compare_public(self, left, right, ">", 0) {
                 Ok(true) => return Some(core::cmp::Ordering::Greater),
                 Ok(false) => return Some(core::cmp::Ordering::Equal),
-                Err(_) => {}
+                Err(error) => {
+                    crate::executor::runtime::discard_error(self, &error);
+                }
             },
-            Err(_) => {}
+            Err(error) => {
+                crate::executor::runtime::discard_error(self, &error);
+            }
         }
         None
     }

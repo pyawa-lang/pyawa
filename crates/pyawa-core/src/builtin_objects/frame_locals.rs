@@ -501,10 +501,11 @@ fn proxy_get_native(
         Ok(value) => Ok(value),
         Err(error) => {
             if let Some(default) = args.get(1).copied() {
-                crate::discard_raised(instance, match error {
-                    ExecError::Raised { exception } => exception,
-                    _ => return Ok(instance.singletons().none()),
-                });
+                // **RAII**：按旧 `discard_raised` 口径显式归还（`RaiseRef::discard` 幂等，
+                // 随后的 Drop 不再重复）。
+                if let ExecError::Raised { exception } = &error {
+                    exception.discard();
+                }
                 Ok(instance.retain(default))
             } else {
                 Err(error)
@@ -589,11 +590,12 @@ fn proxy_update_native(
                     // SAFETY: 迭代器引用由本函数持有。
                     unsafe { instance.release_object(iterator.as_ptr()) };
                 }
-                Err(_) => {
+                Err(error) => {
+                    crate::executor::runtime::discard_error(instance, &error);
                     return Err(instance.raise_builtin_error(
                         "TypeError",
                         "update() 的实参既不是映射也不是键值对序列",
-                    ))
+                    ));
                 }
             }
         }
@@ -660,7 +662,8 @@ fn proxy_pop_native(
             proxy_delete(instance, proxy, key)?;
             Ok(value)
         }
-        Err(_) => {
+        Err(error) => {
+            crate::executor::runtime::discard_error(instance, &error);
             if let Some(default) = args.get(1).copied() {
                 Ok(instance.retain(default))
             } else {

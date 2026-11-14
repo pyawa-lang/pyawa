@@ -1363,7 +1363,7 @@ pub fn build_class_from_parts_with_keywords(
                                     "Error calling __set_name__ on '{describing}' instance '{attribute}' in '{name}'"
                                 );
                                 crate::builtin_objects::add_exception_note(
-                                    instance, *exception, &note,
+                                    instance, exception.get(), &note,
                                 );
                             }
                             return Err(error);

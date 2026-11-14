@@ -154,14 +154,12 @@ fn exception_is(instance: &Instance, exception: NonNull<Header>, name: &str) -> 
 /// 吞掉一个「预期内」的 `ExecError::Raised`（两份引用都还：`pending_exception` 与 `Err` 那份）。
 ///
 /// 照 `crates/pyawa-stdlib/src/builtins_module.rs` 的 `swallow_attribute_error` 口径（`T-CX-1`）。
-fn swallow_raised(instance: &Instance, error: &ExecError) -> bool {
+fn swallow_raised(_instance: &Instance, error: &ExecError) -> bool {
     let ExecError::Raised { exception } = error else {
         return false;
     };
-    if let Some(previous) = instance.set_pending_exception(None) {
-        instance.release(previous);
-    }
-    instance.release(*exception);
+    // **RAII**：`discard` ＝ 旧"清槽（还旧 pending）＋还 `Err` 那份"。
+    exception.discard();
     true
 }
 
@@ -205,7 +203,7 @@ fn raise_csv_error(instance: &Instance, message: &str) -> ExecError {
                 arguments,
                 0,
             );
-            ExecError::Raised { exception }
+            ExecError::Raised { exception: pyawa_core::RaiseRef::from_owned(instance, exception) }
         }
         Err(error) => error,
     }
@@ -245,7 +243,7 @@ fn registry_lookup(
     match outcome {
         Ok(value) => Ok(Some(value)),
         Err(ExecError::Raised { exception }) => {
-            if !exception_is(instance, exception, "KeyError") {
+            if !exception_is(instance, exception.get(), "KeyError") {
                 return Err(ExecError::Raised { exception });
             }
             let error = ExecError::Raised { exception };
@@ -263,7 +261,7 @@ fn registry_delete(instance: &Instance, name: NonNull<Header>) -> Result<bool, E
     match outcome {
         Ok(()) => Ok(true),
         Err(ExecError::Raised { exception }) => {
-            if !exception_is(instance, exception, "KeyError") {
+            if !exception_is(instance, exception.get(), "KeyError") {
                 return Err(ExecError::Raised { exception });
             }
             let error = ExecError::Raised { exception };
@@ -1652,7 +1650,7 @@ fn iter_for_row(
     match instance.iter_object(row) {
         Ok(iter) => Ok(iter),
         Err(ExecError::Raised { exception }) => {
-            if !exception_is(instance, exception, "TypeError") {
+            if !exception_is(instance, exception.get(), "TypeError") {
                 return Err(ExecError::Raised { exception });
             }
             let name = type_display_name(instance, row);

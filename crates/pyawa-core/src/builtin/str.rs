@@ -498,7 +498,15 @@ pub(crate) fn str_translate_native(
         let key = instance.new_int(ch as i64);
         // **用统一的取值口** ✓（`subscript_read` ✓ —— 表就是普通映射 ✓）；**查不到 ⇒ 原字符留下** ✓
         // ⇒ 把 `Err`（`KeyError` 一类）也当"没有这一项" ✓（`translate` 的语义正是"缺省保留" ✓）。
-        let found = crate::executor::subscript::subscript_read(instance, *table, key).ok();
+        // **`Err` 也要还**（task-18 `.ok()` 族）：`translate` 的语义是"查不到就原样保留"。
+        // 先前 `.ok()` 把 `Err(Raised)` 的异常引用丢掉（用户映射的 `__getitem__` 抛错时漏一颗）。
+        let found = match crate::executor::subscript::subscript_read(instance, *table, key) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                crate::executor::runtime::discard_error(instance, &error);
+                None
+            }
+        };
         // SAFETY: key 由本函数持有（新引用 ✓）⇒ 用完交还 ✓。
         unsafe { instance.release_object(key.as_ptr()) };
         let Some(value) = found else {
@@ -1451,8 +1459,9 @@ pub(crate) fn str_join_native(
     // ② 元素不是 str 时报文没有下标与类型（参照 `sequence item 0: expected str instance, int found` ✓）。
     let iterator = match instance.iter_object(*iterable) {
         Ok(iterator) => iterator,
-        Err(_) => {
-            return Err(instance.raise_builtin_error("TypeError", "can only join an iterable"))
+        Err(error) => {
+            crate::executor::runtime::discard_error(instance, &error);
+            return Err(instance.raise_builtin_error("TypeError", "can only join an iterable"));
         }
     };
     let mut result = String::new();

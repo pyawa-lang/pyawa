@@ -167,7 +167,16 @@ pub fn make_simple_namespace(
         // **统一属性写通道**（外挂字典按需建 ✓）；它接管一份引用 ⇒ 先添一份（调用方那份仍归它 ✓）。
         // SAFETY: value 由调用方保证存活。
         unsafe { instance.incref_object(value.as_ptr()) };
-        crate::executor::protocol::instance_attribute_set(instance, object, name, *value, 0).ok()?;
+        // **属性写失败要还异常引用、并归还刚建的实例**（task-18 `.ok()` 族）：本函数返回
+        // `Option`（调用方有回退），失败时不能把 `Err(Raised)` 丢掉。
+        if let Err(error) =
+            crate::executor::protocol::instance_attribute_set(instance, object, name, *value, 0)
+        {
+            crate::executor::runtime::discard_error(instance, &error);
+            // SAFETY: `object` 是本函数刚分配的新引用，失败路径上无人持有。
+            unsafe { instance.release_object(object.as_ptr()) };
+            return None;
+        }
     }
     Some(object)
 }

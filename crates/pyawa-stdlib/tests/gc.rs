@@ -44,11 +44,11 @@ fn error_text(instance: &Instance, error: ExecError) -> String {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             let name = unsafe { ty.as_ref() }.name().to_owned();
             // SAFETY: exception 是存活对象。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default();
             format!("{name}: {message}")

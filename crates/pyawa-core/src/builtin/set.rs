@@ -496,7 +496,17 @@ pub unsafe fn set_new(
         }
         _ => {
             borrowed = false;
-            let iterator = instance.iter_object(*source)?;
+            let iterator = match instance.iter_object(*source) {
+                Ok(iterator) => iterator,
+                Err(error) => {
+                    // **本次调用已分配的 `empty` 要还**（task-18 真泄漏修）：先前 `?` 直接上抛
+                    // ⇒ 每失败一次漏一个 set/frozenset（实测 `set(Plain())`／`frozenset(Plain())`
+                    // ×10000 各漏 10000 个）。错误语义不变：照样把 `iter_object` 的错误上抛。
+                    // SAFETY: `empty` 是本函数此前刚分配的新引用（此路径上无人再持有）。
+                    unsafe { instance.release_object(empty.as_ptr()) };
+                    return Err(error);
+                }
+            };
             loop {
                 match instance.advance_iterator(iterator)? {
                     Some(item) => items.push(item),

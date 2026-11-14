@@ -507,12 +507,13 @@ fn eval_error(vm: &Vm, source: &str) -> (String, String) {
     match pyawa_core::execute(&vm.instance, &frame) {
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // SAFETY: exception 由实例保活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: 同上。
             let type_name = unsafe { ty.as_ref() }.name().to_owned();
             // SAFETY: 同上。
             let message = unsafe {
                 &*exception
+                    .get()
                     .as_ptr()
                     .cast::<pyawa_core::ExceptionObject>()
             }

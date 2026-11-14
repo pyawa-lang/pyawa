@@ -5,7 +5,7 @@
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
 use crate::HotId;
-use crate::executor::{instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, release, super_lookup};
+use crate::executor::{instance_attribute_set, instance_attributes, mounted_instance_dict, raise_builtin, super_lookup};
 use crate::executor::Attribute;
 use crate::executor::ExecError;
 use crate::header::Header;
@@ -89,9 +89,9 @@ pub(crate) fn discard_attribute_error(instance: &Instance, error: &ExecError) {
     discard_lookup_error(instance, error);
 }
 
-fn discard_lookup_error(instance: &Instance, error: &ExecError) {
+fn discard_lookup_error(_instance: &Instance, error: &ExecError) {
     if let ExecError::Raised { exception } = error {
-        crate::discard_raised(instance, *exception);
+        exception.discard();
     }
 }
 
@@ -688,14 +688,9 @@ pub(crate) fn attribute_lookup_swallowing(
     match attribute_lookup(instance, object, name) {
         Ok(found) => Some(found),
         Err(ExecError::Raised { exception }) => {
-            // **只核指针、不解引用**（先放引用，异常可能就此归零 ✓）。
-            let pointer = exception.as_ptr() as usize;
-            release(instance, exception);
-            if instance.pending_exception().map(|value| value.as_ptr() as usize) == Some(pointer) {
-                if let Some(previous) = instance.set_pending_exception(None) {
-                    release(instance, previous);
-                }
-            }
+            // **RAII 后一处真相**：`discard` ＝ 旧 `discard_raised`（还 `Err` 那份；
+            // `pending` 槽若仍是它则清槽并还槽里那份）。
+            exception.discard();
             None
         }
         Err(_) => None,
@@ -715,20 +710,11 @@ pub fn attribute_optional(
         Ok(value) => Ok(Some(value)),
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             if instance.is_subtype(ty, instance.hot_type(HotId::AttributeError).expect("AttributeError 已登记")) {
-                // **`pending_exception` 槽那份一并摘掉**（round 80 真泄漏修 ✗）：`raise()` 给
-                // "最近一次抛出"槽加过一份保活；探针吞掉异常时只放 `Err` 那份 ⇒ 槽里那份把
-                // **异常＋回溯＋帧**永久钉住 ✗（`hasattr` 一族探针每探一次漏一组）。只核指针、不解引用 ✓。
-                let pointer = exception.as_ptr() as usize;
-                release(instance, exception);
-                if instance.pending_exception().map(|value| value.as_ptr() as usize)
-                    == Some(pointer)
-                {
-                    if let Some(previous) = instance.set_pending_exception(None) {
-                        release(instance, previous);
-                    }
-                }
+                // **RAII 后一处真相**：`discard` ＝ 旧 `discard_raised`（还 `Err` 那份；
+                // `pending` 槽若仍是它则清槽并还槽里那份）——`hasattr` 一族探针不再钉死异常链。
+                exception.discard();
                 Ok(None)
             } else {
                 Err(ExecError::Raised { exception })

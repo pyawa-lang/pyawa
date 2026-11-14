@@ -1888,7 +1888,7 @@ pub(crate) fn fs_error_with_display(
             instance.release(filename_value);
             let _ = filename_is_bytes;
             match exception {
-                Ok(exception) => ExecError::Raised { exception },
+                Ok(exception) => ExecError::Raised { exception: pyawa_core::RaiseRef::from_owned(instance, exception) },
                 Err(error) => error,
             }
         }

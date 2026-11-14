@@ -5,7 +5,7 @@
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
 use crate::HotId;
-use crate::executor::{mounted_instance_dict, read_file_through_fs, release};
+use crate::executor::{mounted_instance_dict, read_file_through_fs};
 use crate::executor::Attribute;
 use crate::executor::ExecError;
 use crate::frame::Frame;
@@ -141,13 +141,19 @@ fn raise_syntax_error(instance: &Instance, message: &str, chunk: &str) -> ExecEr
     unsafe { instance.release_object(filename_value.as_ptr()) };
     if let Some(line) = lineno {
         let value = instance.new_int(line as i64);
-        let _ = instance.set_attribute_value(exception, "lineno", value);
+        crate::executor::runtime::discard_exec_result(
+            instance,
+            instance.set_attribute_value(exception, "lineno", value),
+        );
         // SAFETY: 同上。
         unsafe { instance.release_object(value.as_ptr()) };
     }
     if let Some(column) = offset {
         let value = instance.new_int(column as i64);
-        let _ = instance.set_attribute_value(exception, "offset", value);
+        crate::executor::runtime::discard_exec_result(
+            instance,
+            instance.set_attribute_value(exception, "offset", value),
+        );
         // SAFETY: 同上。
         unsafe { instance.release_object(value.as_ptr()) };
     }
@@ -343,7 +349,7 @@ pub fn import_through_bridge(
         // 桥用 `Unsupported` 表示"这形态还没接线" ⇒ 对 finder 也是"我没找到" ✓。
         Err(ExecError::Unsupported { .. }) => Ok(None),
         Err(ExecError::Raised { exception }) => {
-            let type_name = instance.type_name(instance.type_of(exception));
+            let type_name = instance.type_name(instance.type_of(exception.get()));
             if type_name == "ModuleNotFoundError" || type_name == "ImportError" {
                 Ok(None)
             } else {
@@ -661,12 +667,18 @@ fn module_not_found(instance: &Instance, name: &str) -> ExecError {
     if let ExecError::Raised { exception } = &error {
         // 两处都按 `instance_attribute_set` 的契约交**新引用** ✓（它由属性字典接手 ✓）。
         let name_object = instance.new_str(name);
-        let _ = crate::executor::protocol::instance_attribute_set(
-            instance, *exception, "name", name_object, 0,
+        crate::executor::runtime::discard_exec_result(
+            instance,
+            crate::executor::protocol::instance_attribute_set(
+                instance, exception.get(), "name", name_object, 0,
+            ),
         );
         let path_object = instance.retain(instance.singletons().none());
-        let _ = crate::executor::protocol::instance_attribute_set(
-            instance, *exception, "path", path_object, 0,
+        crate::executor::runtime::discard_exec_result(
+            instance,
+            crate::executor::protocol::instance_attribute_set(
+                instance, exception.get(), "path", path_object, 0,
+            ),
         );
     }
     error
@@ -774,10 +786,8 @@ pub(crate) fn handle_fromlist(
                 }
                 // **吞掉它** ✓（照参照的 `continue` ✓）：异常状态一份、`Err` 一份，**两份都要还** ✓
                 if let ExecError::Raised { exception } = error {
-                    if let Some(previous) = instance.set_pending_exception(None) {
-                        release(instance, previous);
-                    }
-                    release(instance, exception);
+                    // **RAII**：`discard` ＝ 旧"清槽（还旧 pending）＋ 还 `Err` 那份"。
+                    exception.discard();
                 }
             }
         }
@@ -829,7 +839,7 @@ pub(crate) fn ignore_missing_submodule(
     let ExecError::Raised { exception } = error else {
         return false;
     };
-    let exception = *exception;
+    let exception = exception.get();
     if instance.type_name(instance.type_of(exception)) != "ModuleNotFoundError" {
         return false;
     }

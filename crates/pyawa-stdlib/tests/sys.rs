@@ -231,7 +231,7 @@ fn message_of(instance: &Instance, error: pyawa_core::ExecError) -> String {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default()
         }
@@ -251,10 +251,10 @@ fn error_text(instance: &Instance, error: pyawa_core::ExecError) -> String {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             let name = unsafe { ty.as_ref() }.name().to_owned();
             // SAFETY: 同上。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default();
             format!("{name}: {message}")

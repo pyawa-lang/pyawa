@@ -259,7 +259,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let stop_async_iteration = instance.hot_type(HotId::StopAsyncIteration)
                         .expect("异常层次在引导期已登记");
                     if instance.is_subtype(ty, stop_async_iteration) {
-                        crate::discard_raised(instance, exception);
+                        release(instance, exception);
                         // 迭代器那一格也丢掉
                         release(instance, frame.get().pop()?);
                         if let Some(target) = instruction.jump_target() {
@@ -267,7 +267,9 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         }
                     } else {
                         release(instance, frame.get().pop()?);
-                        return Err(ExecError::Raised { exception });
+                        return Err(ExecError::Raised {
+                            exception: crate::raise_guard::RaiseRef::from_owned(instance, exception),
+                        });
                     }
                 }
                 "CLEANUP_THROW" => {
@@ -286,12 +288,12 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                             Some(value) => {
                                 // SAFETY: 值由异常对象持有，新增一份交给值栈。
                                 unsafe { instance.incref_object(value.as_ptr()) };
-                                crate::discard_raised(instance, exception);
+                                release(instance, exception);
                                 push(instance, frame.get(), value)?;
                                 release(instance, value);
                             }
                             None => {
-                                crate::discard_raised(instance, exception);
+                                release(instance, exception);
                                 push(instance, frame.get(), instance.singletons().none())?;
                             }
                         }
@@ -419,13 +421,13 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                                     }
                                     Err(ExecError::Raised { exception }) => {
                                         // SAFETY: exception 是存活对象。
-                                        let ty = unsafe { exception.as_ref() }.ty();
+                                        let ty = unsafe { exception.get().as_ref() }.ty();
                                         let is_swallowed = instance.hot_type(HotId::GeneratorExit)
                                             .is_some_and(|base| instance.is_subtype(ty, base))
                                             || instance.hot_type(HotId::StopAsyncIteration)
                                                 .is_some_and(|base| instance.is_subtype(ty, base));
                                         if is_swallowed {
-                                            crate::discard_raised(instance, exception);
+                                            exception.discard();
                                             break;
                                         }
                                         return Err(ExecError::Raised { exception });

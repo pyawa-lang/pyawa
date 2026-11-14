@@ -150,17 +150,17 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             ensure_iterator_result(instance, result)
         }
         Err(lookup_error) => {
-            // **把探针异常按 `discard_raised` 口径还掉**（round 195 真泄漏修）：
+            // **把探针异常按 `RaiseRef::discard` 口径还掉**（round 195 真泄漏修；阶段 2/A 起由 RAII 守卫提供）：
             // round 171/172 的三版"就地还"都因 `test_dict` 偶发失败而撤回——**本轮找到并修掉了那个
             // 真正的病根**（`mappingproxy_live` 用裸指针登记、代理地址被新 dict 复用 ⇒ 陈旧内容）。
-            // 病根修掉后这里可以安全地 `discard_raised`（release `Err` 那份 ＋ 若 `pending` 仍是它则清槽）✓。
+            // 病根修掉后这里可以安全地 `exception.discard()`（release `Err` 那份 ＋ 若 `pending` 仍是它则清槽）✓。
             if let crate::ExecError::Raised { exception } = lookup_error {
                 if crate::diag::flag_site!("PYAWA_ITER_ERR_DEBUG") {
                     // SAFETY: 只读计数。
-                    let rc = unsafe { exception.as_ref() }.refcount();
+                    let rc = unsafe { exception.get().as_ref() }.refcount();
                     eprintln!("[iter-err] rc={rc}");
                 }
-                crate::discard_raised(instance, exception);
+                exception.discard();
             }
             // **旧式序列协议** ✓（第 675 轮）：没有 `__iter__` 但**有 `__getitem__`** 的对象，参照按
             // `0,1,2,…` 依次取、遇 `IndexError` 收尾 ✓（`re._compiler` 的 `_compile` 迭代
@@ -332,7 +332,15 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, _opcode: u8)
     // —— 先 `__bool__` ✓（用它的返回值判真值 ✓），没有就 `__len__` ✓（非零为真 ✓），
     // 两者都没有 ⇒ **默认为真** ✓（照参照 ✓，不是报错 ✗ —— 先前这里直接 `Unsupported` ✗）。
     if let Some(method) = crate::executor::attribute_optional(instance, raw, "__bool__")? {
-        let result = call_value(instance, method, &[], &[])?;
+        // **调用抛错时 `method` 这份新引用也要还**（task-18：`?` 直接上抛会漏一个绑定方法对象
+        // ⇒ 它持有 `self` ⇒ 每失败一次漏 2 个对象；实测 `bool(BadBool())` ×5000 漏 10000）。
+        let result = match call_value(instance, method, &[], &[]) {
+            Ok(result) => result,
+            Err(error) => {
+                release(instance, method);
+                return Err(error);
+            }
+        };
         release(instance, method);
         // **`__bool__` 必须返回 `bool`** ✓（参照实测：`self`／`"Yes"`／`1` 都报 `TypeError`，
         // 文案 `__bool__ should return bool, returned <类型名>`）。先前对返回值**再取一次真值** ✗
@@ -353,7 +361,14 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, _opcode: u8)
         ));
     }
     if let Some(method) = crate::executor::attribute_optional(instance, raw, "__len__")? {
-        let result = call_value(instance, method, &[], &[])?;
+        // 同 `__bool__`：调用抛错时 `method` 也要还（否则漏绑定方法 ＋ self）。
+        let result = match call_value(instance, method, &[], &[]) {
+            Ok(result) => result,
+            Err(error) => {
+                release(instance, method);
+                return Err(error);
+            }
+        };
         release(instance, method);
         // **`__len__` 的返回值**：整数（含大整数 ⇒ `OverflowError`）且 `>= 0`（否则 `ValueError`）✓
         // —— 参照实测：`-1` ⇒ `ValueError: __len__() should return >= 0`；`"x"` ⇒
@@ -819,11 +834,11 @@ pub(crate) fn contains(
             // **那个异常**，不是"不是容器"的 TypeError ✗（`test_iter.test_in_and_not_in` ✓）。
             // 只有**`TypeError`**（"不可迭代"那一档）才吞掉、落到本函数末尾统一报 ✓。
             // SAFETY: exception 是存活对象。
-            let raised = unsafe { exception.as_ref() }.ty();
+            let raised = unsafe { exception.get().as_ref() }.ty();
             let type_error = instance.hot_type(HotId::TypeError)
                 .expect("TypeError 在引导期已登记");
             if instance.is_subtype(raised, type_error) {
-                crate::discard_raised(instance, exception);
+                exception.discard();
                 None
             } else {
                 return Err(crate::ExecError::Raised { exception });

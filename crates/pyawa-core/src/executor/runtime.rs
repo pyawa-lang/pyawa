@@ -479,6 +479,10 @@ pub(crate) fn unsupported_operand(
 }
 
 /// 抛一个异常：记在实例上（借它保活）并交出错误（`BC-60` ②）。
+///
+/// `#[track_caller]`：B 引用账本（task-16）用它把"生成点"记到 `raise()` 的**调用者**
+/// （`raise_builtin` 一族同样 `#[track_caller]` ⇒ 能穿透到真正的创建处）。
+#[track_caller]
 pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
     // **按"站点"盯异常**（round 192 诊断）：`PYAWA_WATCH_SITE=<site 子串>` 时，
     // 该站点抛出的异常打回溯（找泄漏的 AttributeError 是哪条 Rust 路径造的 ✓）。
@@ -513,10 +517,15 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
     // SAFETY: exception 由调用方保证存活。
     unsafe { instance.incref_object(exception.as_ptr()) };
     attach_traceback(instance, exception);
-    if let Some(previous) = instance.set_pending_exception(Some(exception)) {
-        release(instance, previous);
+    // 旧 pending 由 `PendingRef` 的 Drop 归还（阶段 2/A：不再有"交回裸指针要记得还"）。
+    let _previous = instance.replace_pending(Some(exception));
+    // **B 引用账本**（task-16）：`PYAWA_GC_LOG=4` 时记"生成一次 ＋ 移交 pending 一次"；
+    // 关闭时本调用只是一次 `OnceLock` 读（在异常路径上，正常路径零分支）。
+    crate::error_ledger::record_raised(instance, exception);
+    // **RAII 守卫接管 `Err` 那份所有权**（阶段 2/A）：调用方丢弃错误时 Drop 自动归还。
+    ExecError::Raised {
+        exception: crate::raise_guard::RaiseRef::from_owned(instance, exception),
     }
-    ExecError::Raised { exception }
 }
 
 /// **丢弃一个"已交出去的"未捕获异常**（round 81）：`Err(Raised)` 那一份引用 + `pending_exception`
@@ -527,20 +536,30 @@ pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecErro
 /// **丢掉一个 `ExecError`**（round 198）：「有就调用、没有就算了」一类的探针分支里，
 /// `Err(Raised)` 里那份异常引用**必须还**（否则每探一次泄漏"异常＋回溯＋帧" ✗）。
 /// 统一走 `discard_raised`（release `Err` 那份 ＋ 若 `pending` 仍是它则清槽）✓。
-pub(crate) fn discard_error(instance: &Instance, error: &ExecError) {
+pub(crate) fn discard_error(_instance: &Instance, error: &ExecError) {
+    // **RAII 后这里只是"提前丢弃"**：`RaiseRef::discard` 幂等，Drop 也走同一条路。
     if let ExecError::Raised { exception } = error {
-        discard_raised(instance, *exception);
+        exception.discard();
     }
 }
 
-pub fn discard_raised(instance: &Instance, exception: NonNull<Header>) {
-    let pointer = exception.as_ptr() as usize;
-    release(instance, exception);
-    if instance.pending_exception().map(|value| value.as_ptr() as usize) == Some(pointer) {
-        if let Some(previous) = instance.set_pending_exception(None) {
-            release(instance, previous);
-        }
+/// **显式丢弃一个 `Result<(), ExecError>`**（`CX-30`／task-18）：给"错误确实可忽略、但**不许泄漏
+/// 异常引用**"的调用点用（`set_attribute_value`／`instance_attribute_set`／探针失败等）。
+///
+/// `Err(Raised)` 的异常引用走 [`discard_error`] 还清（`Err` 那份 ＋ `pending` 槽若仍是它）；
+/// 其余变体无引用载荷，直接忘掉。**语义不变**：调用方本来就不处理这个错误。
+pub(crate) fn discard_exec_result(instance: &Instance, result: Result<(), ExecError>) {
+    if let Err(error) = result {
+        discard_error(instance, &error);
     }
+}
+
+/// **显式丢弃一个 `Result<(), CapabilityCallError>`**（`CX-30` 的"统一显式丢弃入口"）：
+/// 能力调用错误**无引用载荷**，命名化只为把"裸 `let _ =`"变成可审计的入口。
+pub(crate) fn discard_capability_result(
+    result: Result<(), crate::CapabilityCallError>,
+) {
+    let _ = result;
 }
 
 /// **发一条 `DeprecationWarning`**（round 48）：从核心侧**惰性**走 Python 的 `warnings.warn` ✓ ——
@@ -582,7 +601,7 @@ pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
         release(instance, result);
     } else if let Err(ExecError::Raised { exception }) = outcome {
         // SAFETY: 错误里那份引用在这里消费。
-        unsafe { instance.release_object(exception.as_ptr()) };
+        unsafe { instance.release_object(exception.get().as_ptr()) };
     }
 }
 
@@ -623,10 +642,11 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
     // 就被释放 ⇒ 那条链上的帧/代码对象与调用栈/GC 相互踩踏 ⇒ `test_extcall` 稳定堆损坏
     // （`PYAWA_NO_TRACEBACK_ATTACH=1` 或"只挂第一次"都不崩，round 52/53 实测 ✓）。
     // 现在旧回溯由新回溯的 `tb_next` **继续持有** ⇒ 替换/释放都安全 ✓，`tb_next` 也终于成链 ✓。
+    // **可选属性探针走"丢弃即还"的统一口**（task-18 `.ok()` 族）：先前 `.ok().flatten()` 把
+    // `Err(Raised)` 那份异常引用丢掉（异常无实例字典 / 探针抛错时漏一颗）。这里用
+    // `attribute_optional_discarding`（探针失败 ⇒ 内部 `discard_error`，返回 `None`）✓。
     let previous = instance
-        .attribute_optional_of(exception, "__traceback__")
-        .ok()
-        .flatten()
+        .attribute_optional_discarding(exception, "__traceback__")
         .filter(|value| *value != instance.singletons().none());
     // **同一帧不重复入链**（round 188）：异常在协议层（`iter()`／`next()`）里被"重新抛出"时，
     // 本层会再走一次 `raise()` ⇒ 先前给**同一个帧**又接一节 tb ✗（`__init__` 会出现两节 ✓ 参照只一节 ✗）。
@@ -642,19 +662,9 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
                 unsafe { instance.release_object(previous_frame.as_ptr()) };
                 // SAFETY: previous 是上面探针交出的新引用。
                 unsafe { instance.release_object(previous.as_ptr()) };
-                // **恢复"最近一次抛出"槽的口径与主路径一致**（round 193 真泄漏修 ✗）：
-                // 先前这里直接 `set_pending_exception(Some(saved))` 并**丢掉返回值** ⇒ 槽里
-                // 原来那颗异常（`raise()` 刚放进去的**本颗**）**没释放** ✗ ⇒ 异常→回溯→帧链
-                // 漏一份（实测 `iter(A(0))` 之后多颗 dict／tuple／frame 成根 ✓）。
-                // 先清空（释放旧值），再把开头那份自有引用**转交**给槽 ✓。
-                if let Some(current) = instance.set_pending_exception(None) {
-                    // SAFETY: 被换下来的那份由实例槽持有。
-                    unsafe { instance.release_object(current.as_ptr()) };
-                }
-                if let Some(pointer) = saved_pending {
-                    debug_assert!(instance.pending_exception().is_none());
-                    instance.set_pending_exception(Some(pointer));
-                }
+                // **恢复"最近一次抛出"槽**（阶段 2/A）：一次性换回开头保住的那份——
+                // 被顶下来的当前值由 `PendingRef` 的 Drop 归还。
+                let _restored = instance.replace_pending(saved_pending);
                 return;
             }
             // SAFETY: 探针交出的新引用，比较完即还。
@@ -663,27 +673,26 @@ pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) 
     }
     let traceback = instance.new_traceback(frame);
     if let Some(previous) = previous {
-        let _ = instance.set_attribute_value(traceback, "tb_next", previous);
+        crate::executor::runtime::discard_exec_result(
+        instance,
+        instance.set_attribute_value(traceback, "tb_next", previous),
+    );
         // SAFETY: previous 是 `attribute_optional_of` 交出的新引用。
         unsafe { instance.release_object(previous.as_ptr()) };
     }
     // **尽力而为**（异常实例若没有实例字典，如实不挂 ✓）。
-    let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
+    crate::executor::runtime::discard_exec_result(
+        instance,
+        instance.set_attribute_value(exception, "__traceback__", traceback),
+    );
     release(instance, traceback);
-    // 恢复"最近一次抛出"槽（见开头 ✓）：先清空（探针可能把槽换成 `AttributeError`），
-    // 再把开头那份**自有引用转交**给槽 ⇒ 槽与末尾各持一份，账平 ✓。
-    if let Some(current) = instance.set_pending_exception(None) {
-        // SAFETY: 被换下来的那份由实例槽持有。
-        unsafe { instance.release_object(current.as_ptr()) };
-    }
-    if let Some(pointer) = saved_pending {
-        // **转交**（不归还）：这份引用现在归槽 ✓。
-        debug_assert!(instance.pending_exception().is_none());
-        instance.set_pending_exception(Some(pointer));
-    }
+    // 恢复"最近一次抛出"槽（见开头 ✓）：一次性换回开头保住的那份（探针可能把槽换成
+    // `AttributeError`，被顶下来的由 `PendingRef` 的 Drop 归还）。
+    let _restored = instance.replace_pending(saved_pending);
 }
 
 /// 抛一个内建异常（带消息）。
+#[track_caller]
 pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> ExecError {
     let exception = new_exception(instance, exception_type(instance, name), message);
     raise(instance, exception)
@@ -693,6 +702,7 @@ pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> E
 ///
 /// 给 `pyawa-stdlib` 用（`CX-22`：stdlib 侧不能碰异常载荷布局）——`sys.exit` 要造
 /// `SystemExit(载荷)`，而载荷的**读取**在 [`uncaught_system_exit`] 里（同一处真相）。
+#[track_caller]
 pub fn raise_builtin_with_args_public(
     instance: &Instance,
     name: &str,

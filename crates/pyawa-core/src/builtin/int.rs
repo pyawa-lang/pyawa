@@ -28,7 +28,10 @@ fn dunder_int_value(
     for name in ["__int__", "__index__"] {
         let found = match attribute_lookup(instance, object, name) {
             Ok(found) => found,
-            Err(_) => continue,
+            Err(error) => {
+                crate::executor::runtime::discard_error(instance, &error);
+                continue;
+            }
         };
         let (callable, this, owned) = match found {
             Attribute::Method { function, this } => (function, this, false),

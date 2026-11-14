@@ -36,7 +36,7 @@ fn message_of(instance: &Instance, error: pyawa_core::ExecError) -> String {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default()
         }

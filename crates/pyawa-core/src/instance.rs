@@ -172,6 +172,9 @@ pub struct Instance {
     getattribute_dispatching: Cell<bool>,
     /// **本地追踪回调执行中**（round 181）：防追踪函数自己被追踪（递归）。
     trace_dispatching: Cell<bool>,
+    /// **B 引用账本**（task-16，`PYAWA_GC_LOG=4`）：`ExecError::Raised` 的生成／移交 pending／
+    /// 显式丢弃记账 ＋ 未消费（泄漏）点名；默认关闭时所有入口只多一次 bool 读，正常路径零分支。
+    pub(crate) raised_ledger: RefCell<crate::error_ledger::RaisedLedger>,
     /// **`traceback` 对象计数**（round 191 诊断）：创建数／释放数（GC_LOG 时打印）。
     traceback_created: Cell<usize>,
     /// 已释放的 `traceback` 对象数。

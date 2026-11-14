@@ -30,10 +30,10 @@ fn error_text(instance: &Instance, error: ExecError) -> String {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             let type_name = unsafe { ty.as_ref() }.name().to_owned();
-            let message = instance.object_str(exception).unwrap_or_default();
+            let message = instance.object_str(exception.get()).unwrap_or_default();
             format!("{type_name}: {message}")
         }
         other => panic!("期望 Python 异常，实际 {other:?}"),

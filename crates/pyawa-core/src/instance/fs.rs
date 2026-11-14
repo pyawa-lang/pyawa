@@ -488,7 +488,7 @@ impl Instance {
             }
         })();
         // 目录句柄用完即还（与 `_io` 的 `open` 同口径：能力表引用计数归零才调 provider close）。
-        let _ = self.fs_close(fd);
+        crate::executor::runtime::discard_capability_result(self.fs_close(fd));
         outcome
     }
 

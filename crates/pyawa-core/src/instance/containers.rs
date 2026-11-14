@@ -549,12 +549,17 @@ impl Instance {
         self.int_max_str_digits.set(value);
     }
 
-    /// 记下最近一次抛出的异常（**新引用**，由实例接手；旧的那份交出去由调用方释放）。
-    pub fn set_pending_exception(
+    /// 记下最近一次抛出的异常（**新引用**，由实例接手）。
+    ///
+    /// 返回**旧 pending 的 RAII 守卫**（Drop 自动释放）——取代旧 API
+    /// `set_pending_exception(..) -> Option<NonNull<Header>>`（那份"由调用方记得还"的义务，
+    /// 正是终结器泄漏的根；阶段 2/A 收口）。
+    pub fn replace_pending(
         &self,
         exception: Option<NonNull<Header>>,
-    ) -> Option<NonNull<Header>> {
-        self.pending_exception.replace(exception)
+    ) -> crate::raise_guard::PendingRef {
+        let old = self.pending_exception.replace(exception);
+        crate::raise_guard::PendingRef::from_old(self, old)
     }
 
     /// **OM-3**：本实例当前占用的字节数（能力接口不承担预算，见 `CP-8`）。

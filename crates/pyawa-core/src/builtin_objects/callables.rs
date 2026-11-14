@@ -471,8 +471,10 @@ pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
         }
         Ok(None) => {}
         Err(crate::ExecError::Raised { exception }) => {
-            // 吞掉并记在实例上（`pending_exception`），供宿主随后查看
-            let _ = instance.set_pending_exception(Some(exception));
+            // 吞掉并记在实例上（`pending_exception`），供宿主随后查看。
+            // **RAII**：把 `Err` 那份所有权**移交 pending 槽**；被顶下来的旧 pending 由返回的
+            // `PendingRef` 在 Drop 时归还（task-18 终结器真泄漏的结构性修法）。
+            let _previous = exception.into_pending();
         }
         Err(_) => {}
     }

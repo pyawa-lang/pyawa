@@ -55,10 +55,10 @@ fn not_iterable_type_name(
         return None;
     };
     let type_error = instance.hot_type(HotId::TypeError)?;
-    if !instance.is_subtype(instance.type_of(*exception), type_error) {
+    if !instance.is_subtype(instance.type_of(exception.get()), type_error) {
         return None;
     }
-    let message = instance.exception_message_of(*exception)?;
+    let message = instance.exception_message_of(exception.get())?;
     let name = instance.type_name(instance.type_of(source)).to_owned();
     if message == format!("'{name}' object is not iterable") {
         Some(name)

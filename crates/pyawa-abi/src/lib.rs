@@ -1769,18 +1769,22 @@ pub unsafe extern "C" fn pa_exec_string(
         let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
             Ok(_) => (status::PA_OK, None),
             Err(ExecError::Raised { exception }) => {
-                let message = Some(exception_message(&state.instance, exception));
-                // **归还异常引用**（round 81）：见 `pyawa_core::discard_raised` 的注释 ✓。
+                let message = Some(exception_message(&state.instance, exception.get()));
+                // **归还异常引用**（round 81）：见 `pyawa_core::RaiseRef::discard`（RAII，阶段 2/A）✓。
                 // **`SystemExit` 不能丢** ✗：宿主之后按它决定进程退出码／stderr 文本
                 //（`uncaught_system_exit` 读 `pending_exception` ✓）。
                 // SAFETY: exception 是存活对象；类型查表都在本实例内 ✓。
-                let raised_type = unsafe { exception.as_ref() }.ty();
+                let raised_type = unsafe { exception.get().as_ref() }.ty();
                 let is_system_exit = state
                     .instance
                     .type_named("SystemExit")
                     .is_some_and(|base| state.instance.is_subtype(raised_type, base));
-                if !is_system_exit {
-                    pyawa_core::discard_raised(&state.instance, exception);
+                if is_system_exit {
+                    // **保留 `pending` 槽**（CLI 还要读它决定退出码），只归还 `Err` 那份。
+                    exception.release_keeping_pending();
+                } else {
+                    // RAII：还 `Err` 那份；`pending` 槽若仍是它则清槽（同旧 `discard_raised`）。
+                    exception.discard();
                 }
                 (status::PA_ERR_RUNTIME, message)
             }
@@ -1988,18 +1992,22 @@ pub unsafe extern "C" fn pa_exec_bytecode(
         let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
             Ok(_) => (status::PA_OK, None),
             Err(ExecError::Raised { exception }) => {
-                let message = Some(exception_message(&state.instance, exception));
-                // **归还异常引用**（round 81）：见 `pyawa_core::discard_raised` 的注释 ✓。
+                let message = Some(exception_message(&state.instance, exception.get()));
+                // **归还异常引用**（round 81）：见 `pyawa_core::RaiseRef::discard`（RAII，阶段 2/A）✓。
                 // **`SystemExit` 不能丢** ✗：宿主之后按它决定进程退出码／stderr 文本
                 //（`uncaught_system_exit` 读 `pending_exception` ✓）。
                 // SAFETY: exception 是存活对象；类型查表都在本实例内 ✓。
-                let raised_type = unsafe { exception.as_ref() }.ty();
+                let raised_type = unsafe { exception.get().as_ref() }.ty();
                 let is_system_exit = state
                     .instance
                     .type_named("SystemExit")
                     .is_some_and(|base| state.instance.is_subtype(raised_type, base));
-                if !is_system_exit {
-                    pyawa_core::discard_raised(&state.instance, exception);
+                if is_system_exit {
+                    // **保留 `pending` 槽**（CLI 还要读它决定退出码），只归还 `Err` 那份。
+                    exception.release_keeping_pending();
+                } else {
+                    // RAII：还 `Err` 那份；`pending` 槽若仍是它则清槽（同旧 `discard_raised`）。
+                    exception.discard();
                 }
                 (status::PA_ERR_RUNTIME, message)
             }
@@ -2472,7 +2480,7 @@ pub unsafe extern "C" fn pa_pushintstring(
         match outcome {
             Ok(value) => state.stack.push_owned(value),
             Err(pyawa_core::ExecError::Raised { exception }) => {
-                let message = exception_message(&state.instance, exception);
+                let message = exception_message(&state.instance, exception.get());
                 state.set_message(&message);
                 if over_limit {
                     status::PA_ERR_RUNTIME
@@ -3069,7 +3077,7 @@ unsafe fn call_inner(
         }
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // 异常不跨边界逃逸（AB-21）：转成状态码 ＋ 可由宿主取回的信息
-            let message = exception_message(&state.instance, exception);
+            let message = exception_message(&state.instance, exception.get());
             state.message = std::ffi::CString::new(message).ok();
             status::PA_ERR_RUNTIME
         }
@@ -3712,7 +3720,7 @@ pub unsafe extern "C" fn pa_getfield(
         match pyawa_core::attribute_read(&state.instance, object, &text) {
             Ok(value) => replace_top(&mut state.stack, &state.instance, value),
             Err(pyawa_core::ExecError::Raised { exception }) => {
-                state.message = std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                state.message = std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
                 status::PA_ERR_RUNTIME
             }
             Err(_) => status::PA_ERR_RUNTIME,
@@ -3760,7 +3768,7 @@ pub unsafe extern "C" fn pa_setfield(
             Ok(()) => status::PA_OK,
             Err(pyawa_core::ExecError::Raised { exception }) => {
                 state.message =
-                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                    std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
                 status::PA_ERR_RUNTIME
             }
             Err(_) => status::PA_ERR_RUNTIME,
@@ -3796,7 +3804,7 @@ pub unsafe extern "C" fn pa_gettable(state: *mut pa_state, index: i32) -> i32 {
             }
             Err(pyawa_core::ExecError::Raised { exception }) => {
                 state.message =
-                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                    std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
                 status::PA_ERR_RUNTIME
             }
             Err(_) => status::PA_ERR_RUNTIME,
@@ -3850,7 +3858,7 @@ unsafe fn settable_inner(state: *mut pa_state, index: i32) -> i32 {
         Ok(()) => status::PA_OK,
         Err(pyawa_core::ExecError::Raised { exception }) => {
             state.message =
-                std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
             status::PA_ERR_RUNTIME
         }
         Err(_) => status::PA_ERR_RUNTIME,

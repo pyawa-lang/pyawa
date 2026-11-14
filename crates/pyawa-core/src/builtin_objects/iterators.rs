@@ -621,7 +621,7 @@ unsafe fn asend_getattr(
                             "StopIteration",
                             vec![value],
                         );
-                        Err(crate::ExecError::Raised { exception })
+                        Err(crate::ExecError::Raised { exception: crate::raise_guard::RaiseRef::from_owned(instance, exception) })
                     }
                     crate::executor::GeneratorOutcome::Returned(_value) => {
                         Err(crate::executor::async_generator_exhausted(instance))

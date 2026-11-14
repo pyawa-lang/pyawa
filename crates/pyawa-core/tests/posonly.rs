@@ -66,7 +66,7 @@ fn positional_only_parameters_reject_keyword_arguments() {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(&vm.instance)
                 .unwrap_or_default();
             assert_eq!(

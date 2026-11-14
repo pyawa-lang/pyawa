@@ -272,7 +272,7 @@ fn with_update_note(
 ) -> crate::ExecError {
     if let crate::ExecError::Raised { exception } = &error {
         let note = format!("Cannot convert dictionary update sequence element #{index} to a sequence");
-        crate::builtin_objects::add_exception_note(instance, *exception, &note);
+        crate::builtin_objects::add_exception_note(instance, exception.get(), &note);
     }
     error
 }
@@ -1071,7 +1071,8 @@ fn mapping_keys(
     };
     let iterator = match crate::executor::iter::iter_value(instance, view) {
         Ok(iterator) => iterator,
-        Err(_) => {
+        Err(error) => {
+            crate::executor::runtime::discard_error(instance, &error);
             // 参照实测（3.14.4）：`{}.update(M())` 且 `M.keys()` 返回非可迭代 ⇒
             // `TypeError: M.keys() returned a non-iterable (type int)` ✓
             let object_name = instance.type_name(instance.type_of(object));

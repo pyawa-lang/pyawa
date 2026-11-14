@@ -64,6 +64,11 @@ pub use builtin::thread::thread_get_ident_native;
 pub use builtin::function::function_code_native;
 pub use builtin::function::function_globals_native;
 mod diag;
+/// **B 引用账本**（task-16）：`ExecError::Raised` 生成/移交/消费诊断（`PYAWA_GC_LOG=4`，默认零成本）。
+pub(crate) mod error_ledger;
+/// **RAII 异常引用守卫**（阶段 2/A）：`ExecError::Raised`/`pending` 旧值的所有权由 Drop 兜底。
+pub mod raise_guard;
+pub use raise_guard::{PendingRef, RaiseRef};
 /// **内部集合的快速哈希**（round 248 性能，A2-3）：见模块文档。
 pub(crate) mod fast_hash;
 pub mod argdecode;
@@ -107,7 +112,7 @@ pub use builtin_objects::{
 };
 pub use cell::CellObject;
 pub use code::{code_getattr, CodeObject};
-pub use executor::{discard_raised, mounted_instance_dict, 
+pub use executor::{mounted_instance_dict, 
     attribute_read, attribute_write, call_value, execute, subscript_read, subscript_write,
     values_equal_public, ExecError, ExecOutcome,
 };

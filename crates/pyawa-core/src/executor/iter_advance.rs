@@ -142,11 +142,11 @@ pub(crate) fn advance_iterator(
             Ok(value) => Ok(Some(value)),
             Err(ExecError::Raised { exception }) => {
                 // SAFETY: exception 是存活对象。
-                let raised = unsafe { exception.as_ref() }.ty();
+                let raised = unsafe { exception.get().as_ref() }.ty();
                 if instance.is_subtype(raised, instance.hot_type(HotId::StopIteration).expect("StopIteration 已登记")) {
                     // **吞异常要连 `pending_exception` 槽那份一起还**（round 169）：`raise()` 给槽加过
                     // 一份保活；只还 `Err` 那份 ⇒ 槽永久钉住"异常＋回溯＋帧" ✗（`discard_raised` 一处真相 ✓）。
-                    crate::discard_raised(instance, exception);
+                    exception.discard();
                     Ok(None)
                 } else {
                     Err(ExecError::Raised { exception })
@@ -188,7 +188,7 @@ pub(crate) fn advance_iterator(
                 Ok(Some(value))
             }
             Err(ExecError::Raised { exception }) => {
-                let raised = unsafe { exception.as_ref() }.ty();
+                let raised = unsafe { exception.get().as_ref() }.ty();
                 let index_error = instance.hot_type(HotId::IndexError).expect("IndexError 已登记");
                 // **`StopIteration` 也当耗尽**（round 187）：序列协议里 `__getitem__` 抛
                 // `StopIteration` 的旧式序列照参照**结束循环** ✓（`test_iter.test_stop_sequence` ✓）。
@@ -198,7 +198,7 @@ pub(crate) fn advance_iterator(
                 if instance.is_subtype(raised, index_error)
                     || instance.is_subtype(raised, stop_iteration)
                 {
-                    crate::discard_raised(instance, exception);
+                    exception.discard();
                     // **标记永久耗尽**（round 187）。
                     object.set_exhausted();
                     Ok(None)

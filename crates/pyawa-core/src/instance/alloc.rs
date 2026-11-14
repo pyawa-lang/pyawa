@@ -209,10 +209,16 @@ impl Instance {
             .cast::<Header>();
         // `set_attribute_value` 收的是**借用** ✓ ⇒ 这里每项自己那份用完即还 ✓（口径见第 209 轮 ✓）。
         // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_frame", frame);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "tb_frame", frame),
+        );
         let none = self.new_none();
         // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_next", none);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "tb_next", none),
+        );
         unsafe { self.release_object(none.as_ptr()) };
         // **P3-38 S3e-3**：`tb_lineno`／`tb_lasti` 从**抛出处的帧**算真值（先前恒 0 ✗ ——
         // `traceback` 格式化与官方 `test_raise`／`test_dis` 都读它们）。`tb_lasti` 是
@@ -263,11 +269,17 @@ impl Instance {
         };
         let lineno = self.new_int(lineno_value);
         // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_lineno", lineno);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "tb_lineno", lineno),
+        );
         unsafe { self.release_object(lineno.as_ptr()) };
         let lasti = self.new_int(lasti_value);
         // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_lasti", lasti);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "tb_lasti", lasti),
+        );
         unsafe { self.release_object(lasti.as_ptr()) };
         object
     }

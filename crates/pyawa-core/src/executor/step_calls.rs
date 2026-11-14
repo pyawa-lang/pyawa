@@ -162,7 +162,14 @@ fn callee_display(instance: &Instance, callable: NonNull<Header>) -> Option<Stri
             });
         }
     }
-    instance.object_repr(callable).ok()
+    match instance.object_repr(callable) {
+        Ok(text) => Some(text),
+        Err(error) => {
+            // `repr` 抛错时这份 `Err(Raised)` 也要还（task-18 `.ok()` 族；这里本就要"取不到就算了"）。
+            crate::executor::runtime::discard_error(instance, &error);
+            None
+        }
+    }
 }
 
 /// `DICT_MERGE | DICT_UPDATE` 的分派臂（从 `step_calls` 原样搬来）。
@@ -765,7 +772,10 @@ fn step_calls_call_intrinsic_2<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let params = frame.get().pop()?;
                         let function = frame.get().pop()?;
                         // 挂不上就**原样放过** ✓（轮 2 的外壳走的是函数对象 ✓）。
-                        let _ = instance.set_attribute_value(function, "__type_params__", params);
+                        crate::executor::runtime::discard_exec_result(
+                            instance,
+                            instance.set_attribute_value(function, "__type_params__", params),
+                        );
                         release(instance, params);
                         push(instance, frame.get(), function)?;
                         release(instance, function);

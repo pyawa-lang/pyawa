@@ -720,12 +720,15 @@ pub(crate) fn call_callable(
             if overrides_new && !args.is_empty() {
                 if let Some(name) = instance.text_of(args[0]).map(|text| text.to_owned()) {
                     let value = instance.new_str(&name);
-                    let _ = crate::executor::protocol::instance_attribute_set(
+                    crate::executor::runtime::discard_exec_result(
                         instance,
-                        created,
-                        "__name__",
-                        value,
-                        0,
+                        crate::executor::protocol::instance_attribute_set(
+                            instance,
+                            created,
+                            "__name__",
+                            value,
+                            0,
+                        ),
                     );
                 }
             }
@@ -982,7 +985,7 @@ pub(crate) fn call_callable(
             // `make_frames` 沿 tb_next 走不到 outer/inner ⇒ 多格红 ✓）。
             // 时机：`execute` 返回时 `CurrentFrameGuard` 已把 `current_frame` 还原成**调用者**
             // ⇒ 这条 tb 的 `tb_frame` 正是调用者、行号停在 CALL 位置 ✓。
-            crate::executor::runtime::attach_traceback(instance, exception);
+            crate::executor::runtime::attach_traceback(instance, exception.get());
             Err(ExecError::Raised { exception })
         }
         Err(other) => Err(other),

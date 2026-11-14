@@ -70,9 +70,7 @@ fn step_exceptions_pop_except<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
                     if instance.pending_exception().map(|value| value.as_ptr() as usize)
                         == Some(pointer)
                     {
-                        if let Some(previous) = instance.set_pending_exception(None) {
-                            release(instance, previous);
-                        }
+                        let _previous = instance.replace_pending(None);
                     }
                 }
                 if unsafe { previous.as_ref() }.ty() == instance.singletons().none_type() {
@@ -352,8 +350,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                 }
                                 // 非 `ExceptionObject` 载荷 ⇒ 走**实例字典** ✓（它有 `__dict__` ✓）。
                                 None => {
-                                    let _ = instance.set_attribute_value(
-                                        exception, "__context__", current,
+                                    crate::executor::runtime::discard_exec_result(
+                                        instance,
+                                        instance.set_attribute_value(
+                                            exception, "__context__", current,
+                                        ),
                                     );
                                     release(instance, current);
                                 }
@@ -377,8 +378,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                         }
                                     }
                                     None => {
-                                        let _ = instance.set_attribute_value(
-                                            exception, "__cause__", cause,
+                                        crate::executor::runtime::discard_exec_result(
+                                            instance,
+                                            instance.set_attribute_value(
+                                                exception, "__cause__", cause,
+                                            ),
                                         );
                                         release(instance, cause);
                                     }
@@ -404,8 +408,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                         }
                                     }
                                     None => {
-                                        let _ = instance.set_attribute_value(
-                                            exception, "__cause__", created,
+                                        crate::executor::runtime::discard_exec_result(
+                                            instance,
+                                            instance.set_attribute_value(
+                                                exception, "__cause__", created,
+                                            ),
                                         );
                                         release(instance, created);
                                     }
@@ -423,8 +430,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                 Some(object) => object.set_suppress_context(true),
                                 None => {
                                     let flag = instance.retain(instance.singletons().boolean(true));
-                                    let _ = instance.set_attribute_value(
-                                        exception, "__suppress_context__", flag,
+                                    crate::executor::runtime::discard_exec_result(
+                                        instance,
+                                        instance.set_attribute_value(
+                                            exception, "__suppress_context__", flag,
+                                        ),
                                     );
                                     release(instance, flag);
                                 }
@@ -434,7 +444,10 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                                 // **挂 `traceback`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `tb_frame` ＝ 抛出处的帧 ✓。
                         let traceback = instance.new_traceback(frame.as_ptr().cast::<Header>());
                         // **尽力而为** ✓（异常类型若没有实例字典，如实不挂 ✓）。
-                        let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
+                        crate::executor::runtime::discard_exec_result(
+                        instance,
+                        instance.set_attribute_value(exception, "__traceback__", traceback),
+                    );
                         release(instance, traceback);
 Err(raise(instance, exception))
                     }

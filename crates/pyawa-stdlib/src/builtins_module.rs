@@ -2870,9 +2870,8 @@ fn getattr_native(
 /// 把 `ExecError::Raised` 里的 **AttributeError 完整吞掉**（参照的"探测"口径）。
 ///
 /// 返回 `true` ＝ 确实是 AttributeError 且已吞；`false` ＝ 不是（调用方原样上抛）。
-/// **两份所有权都要还**：`executor::runtime::raise` 给"实例状态"与 `Err(Raised)` 各一份引用 ⇒
-/// 先 `set_pending_exception(None)` 取回状态那份并归还，再归还 `Err` 里的那份
-/// （同 `executor/import.rs` 的 `ignore_missing_submodule` 先例 ✓）。
+/// **阶段 2/A 起**：`Err(Raised)` 里那份是 `RaiseRef` 守卫——`discard()` 一处还清
+/// （`Err` 那份 ＋ 若 `pending` 槽仍是它则清槽还槽里那份），不再有"两份所有权手工对齐"。
 fn swallow_attribute_error(instance: &Instance, error: &ExecError) -> bool {
     let ExecError::Raised { exception } = error else {
         return false;
@@ -2881,13 +2880,11 @@ fn swallow_attribute_error(instance: &Instance, error: &ExecError) -> bool {
         return false;
     };
     // SAFETY: `Raised` 里的异常对象由实例的 `pending_exception` 保活（存活）。
-    if !instance.is_subtype(instance.type_of(*exception), attribute_error) {
+    if !instance.is_subtype(instance.type_of(exception.get()), attribute_error) {
         return false;
     }
-    if let Some(previous) = instance.set_pending_exception(None) {
-        instance.release(previous);
-    }
-    instance.release(*exception);
+    // **RAII**：`discard` ＝ 旧"清槽（还旧 pending）＋还 `Err` 那份"（幂等，随后的 Drop 不重复）。
+    exception.discard();
     true
 }
 
