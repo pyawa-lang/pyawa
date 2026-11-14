@@ -1246,9 +1246,9 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 
 | 步 | 内容 | 验收 |
 |---|---|---|
-| 1 | 新增 `pa_capabilities.h`：**只承载已实现且已有 Rust `repr(C)` 布局的 3 个域**（`fs`／`clock`／`net`），每个带 `version: u32`＋`size: u32` 公共头（`CP-30`），字段与 Rust **逐字段一致**；`pa.h` include 它。其余 6 域（`proc`／`random`／`env`／`tty`／`locale`／`ipc`）**保持"未提供"**（`CP-2`／`CP-3`），其布局设计**不在本单**（追加式，后续单独领号） | C 宿主能 `#include` 并构造 3 域 vtable；`static_assert` 校验尺寸；6 域调用时如实"未实现" |
-| 2 | `examples/reference_host.c` 增加**最小 `clock` 域**实现（`now`／`monotonic` 两槽够用）并 `pa_setcapability(PA_DOMAIN_CLOCK, …)`。**取舍（已定）**：该示例**不换产物**（继续链接最小 ABI 静态库、保持"最小 ABI 示例"定位），因此**不依赖 guest `import time`**；顺带改掉头注释里过时的"C 宿主没有标准库（`paL_openlibs` 未接线）"表述 | 示例真编译真运行；**宿主回调真被调用**（guest 调一个宿主函数取回时间值即可）；`tests/ci/t_ref_host.py` 验收同步 |
-| 3 | **机检扩面**：① 布局一致性检查（C 头 ↔ Rust `repr(C)`，字段名/尺寸/偏移任一漂移即红）；② `T-CX-19` 扫描面扩到**两个头**，且**只扫文件作用域的 `pa_*` 函数原型**（结构体成员与函数指针字段不得被函数正则误判），结构体**不计入** `AB-1` 的 ≤120 函数预算；③ 加**注入自检**："声明了但规格未提及"必须红。C 头须定义 `pa_cap_status`（`0`＝Ok／`1`＝Machine／`2`＝Unimplemented，与 Rust `CapStatus` 同值） | 故意改字段/加未在规格的声明 ⇒ 机检红；还原 ⇒ 绿；枚举值与 Rust 一致 |
+| 1 | 新增 `pa_capabilities.h`：**只承载已实现且已有 Rust `repr(C)` 布局的 3 个域**（`fs`／`clock`／`net`），每个带 `version: u32`＋`size: u32` 公共头（`CP-30`），字段与 Rust **逐字段一致**；`pa.h` include 它。其余 6 域（`proc`／`random`／`env`／`tty`／`locale`／`ipc`）**保持"未提供"**（`CP-2`／`CP-3`），其布局设计**不在本单**（追加式，后续单独领号） | C 宿主能 `#include` 并构造 3 域 vtable；`static_assert` 校验尺寸；6 域只能传 `NULL`（本 ABI 不定义其布局；非 `NULL` 注册不在冻结面） |
+| 2 | `examples/reference_host.c` 增加**最小 `clock` 域**实现（`now_ns`／`monotonic_ns` 两槽够用）并 `pa_setcapability(PA_DOMAIN_CLOCK, …)`。**取舍（已定）**：该示例**不换产物**（继续链接最小 ABI 静态库、保持"最小 ABI 示例"定位），因此**不依赖 guest `import time`**；新增宿主函数 `host_now_ns()`（内部调 clock vtable 的 `now_ns`），guest 调它取回时间；顺带改掉头注释里过时的"C 宿主没有标准库（`paL_openlibs` 未接线）"表述 | 示例真编译真运行；`host_now_ns()` 返回非负时间值且被 guest 断言；`tests/ci/t_ref_host.py` 的 `EXPECTED` 增加该行 |
+| 3 | **机检扩面**：① 布局一致性检查（C 头 ↔ Rust `repr(C)`，字段名/顺序/尺寸/偏移任一漂移即红）；② `T-CX-19` 扫描面扩到**两个头**，且**只扫文件作用域（先剥 struct 体）的 `pa_*` 函数原型**（结构体成员与函数指针字段不得被函数正则误判），结构体**不计入** `AB-1` 的 ≤120 函数预算；③ 加**注入自检**："声明了但规格未提及"必须红；④ `pa_cap_status` 用 `typedef enum`（`0`＝Ok／`1`＝Machine／`2`＝Unimplemented，与 Rust `CapStatus` 同值）；⑤ 头文件可独立 include（guard／`extern "C"`／`<stdint.h>`／`<stddef.h>`） | 故意改字段/加未在规格的声明 ⇒ 机检红；还原 ⇒ 绿；枚举值与 Rust 一致；C 探针/Rust 测试布局逐行一致 |
 | 4 | 文档交叉引用修正（本次已改）：`CP-30` 不再循环引用、不再引"§13-2 未定"（已决 `AB-39/40/41`） | `grep` 无循环引用 |
 
 **不在本单**：新增能力域、异步能力分类（`PA_ASYNC_*` 已有面）。
