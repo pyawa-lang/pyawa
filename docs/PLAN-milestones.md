@@ -1090,3 +1090,20 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
   `SPEC-c-abi` §16 未实现条目清零、`PLAN` 台账、`NEXT` 同步；`check.py`＋`slowcheck` 十二项。
 - **判据映射**：判据 1 ⇒ `T-AB-10` 的 `is`/`id`/性能登记；判据 2 ⇒ `T-AB-10` 的源码扫描断言；
   判据 3 ⇒ `T-AB-8` ⑤/`T-AB-9` ④；`T-AB-8`/`T-AB-9` 覆盖两条规格的验收细则。
+
+### 12.12 协议派发唯一化与 ABI 收敛（2026-11-14）
+
+**依据**：`SPEC-c-abi.md` §17 的设计原则（语义唯一／表示可多但须可证等价／对外表面唯一）与 `AB-75`…`AB-78`。
+
+**目标**：让「宿主对象在 guest 里零差异」成为**推论**，而不是逐条打补丁。
+
+| 步 | 内容 | 验收 |
+|---|---|---|
+| 1 | `pa_type` 返回真实类型身份（`AB-76`；修订 `AB-63` 粗标签） | 宿主对象／模块／内建值都能被如实区分；不再需要 `pa_tohandle` 猜类型 |
+| 2 | VM 内协议收敛成 `resolve_dunder` ＋ `call_special` 两个原语；删除 `type_has_own_dunder`／`overrides_compare`／`has_custom_eq`／`call_compare_dunder` 各自的判定 | 全部协议入口只经这两个原语；行为测试零回归 |
+| 3 | `pa_set_object_ops`（`AB-75`）：类型／实例／模块统一挂钩子；模块注入函数降级为投影 | `np.linalg`／`np.float64`／未预先枚举的 `np.<x>` 都能取到 |
+| 4 | `pa_newtype` 支持基类（`AB-77`） | 宿主异常类继承 `ValueError` ⇒ guest 的 `except ValueError` 命中；`isinstance` 正确 |
+| 5 | 投影等价测试（`AB-78`） | `pa_set_type_ops`↔`pa_set_object_ops`、模块函数↔属性写、`pa_tointeger`↔`pa_tointstring`（i64 内）逐条差分 |
+
+**不变量（机检法）**：给宿主对象挂一个**记录所有被查名字的 `getattr_fn`**，跑参考测试集；
+凡是「VM 支持但记录里从未出现」的 dunder，即证明存在绕过 `resolve_dunder` 的协议解析路径。
