@@ -934,3 +934,54 @@
 `builtin_objects/callables.rs` 终结器（每颗新错误漏上一颗）；判据 `PYAWA_GC_LOG` 收支。⑥ 既有
 symbols 缺口：annotation-only 外层绑定运行期缺 cell（`NameError`）；类 `__annotations__` 读取报
 `AttributeError: '__annotations__' 只接类型对象与模块对象`。
+
+
+### 12.7 引用泄漏结构性收口（2026-11-14，第三轮）
+
+用户口径：「A（RAII）也要」＋「全部按阶段做（B+C+D → 6 处 → A）」。本轮把"`Err(Raised)` 那份
+异常引用被静默丢掉"从**纪律**变成**类型上不可能**（不是逐分支打补丁）：
+
+**阶段 0（诊断与防线）**
+- **B 引用账本**：`crates/pyawa-core/src/error_ledger.rs`（每实例、无全局态；开关 `PYAWA_GC_LOG=4`，
+  默认零成本）。`#[track_caller]` 把生成点记到真正的创建处；计数 `generated/pending/discarded/
+  transferred/implicit/leaked/suspects/overwritten/untracked_consumed`；恒等式
+  `generated == pending`、`generated == discarded + transferred + implicit + leaked + suspects + overwritten`；
+  未消费项连打**生成点＋示例 Rust 栈**。测试 `crates/pyawa-runtime/tests/error_ledger_shapes.rs`（4 passed）。
+- **D 失败路径探针集**：`tests/ci/failure_path_leaks.py`（11 探针，`tb_created−tb_freed` ＋
+  N=10000/20000 缩放 `|Δlive|≤512`）＋ `crates/pyawa-runtime/tests/failure_path_leaks.rs`（10 passed）。
+  修前基线 **6/11 RED**。
+- **C 静态规则**：`CX-30`／`T-CX-20`（`tests/ci/check.py`）——core 四模块禁止裸丢弃 `Result`
+  （`Err(_) =>`／`if let Err(_)`／`.is_ok()` 当语句／`let _ = <Result 调用>`），合法丢弃必须走
+  `discard_error`／`discard_exec_result`／`discard_capability_result`；白名单逐条锚点＋**棘轮**
+  （修好不删也红、只许缩）。**注意**：阶段 2/A 之后 RAII 让"裸丢弃"不再泄漏引用，本规则保留为
+  **可审计风格规则**（防复制旧的"交回裸指针"模式），不再是内存正确性的必需。
+- 顺带修好 `tests/ci/selftest.py` 的既有基线不干净（副本缺 `NEXT.md`／`Cargo.toml`／`.git`／
+  conformance 报告 ⇒ 5 项假红）。
+
+**阶段 1（6 处已知泄漏 + 同族扫描）**：`CX-30` 白名单 **55 → 18**（A 类 33 处全清为显式
+`discard_exec_result`，B 类 4 处能力错误显式化；C 类 18 处无引用载荷保留），并修掉：
+`builtin/int.rs` 的 `__int__/__index__` 探针、`builtin/set.rs::set_new`（set/frozenset）、
+`instance/convert.rs` 排序比较探针、`instance/accessors.rs` 惰性注解、`builtin_objects/callables.rs`
+终结器（旧 pending 未还）、`executor/iter.rs` 的 `truthiness` 绑定方法泄漏，以及 4 处风险 `.ok()`
+（`attach_traceback`／`object_repr`／`str.translate`／`namespace`）。**D 探针 6/11 RED → 11/11 PASS**
+（`f(*Plain())` N=20000：tb 净漏 20002⇒2、live 207295⇒7348）。
+
+**阶段 2 / A（RAII `RaiseRef`／`PendingRef`）**
+- `crates/pyawa-core/src/raise_guard.rs`：`RaiseRef`（持 `Err` 那份 owned 引用；**Drop 只还 `Err`
+  那份、不动 `pending` 槽**；`discard()`＝旧 `discard_raised`；`into_pending()` 移交槽；
+  `release_keeping_pending()` 供 `SystemExit` 等"宿主后读槽"路径；全部幂等）；`PendingRef`
+  （`replace_pending` 交回的旧 pending，Drop 自动释放）。
+- `ExecError::Raised { exception: RaiseRef }`（**删除 `Clone`**：裸克隆复制所有权；`PartialEq`
+  按异常指针）；迁移 **83 构造点／45 解构点**；`Instance::set_pending_exception`（返回裸指针、
+  旧值由调用方释放）→ `replace_pending`（返回自动释放的 `PendingRef`），迁移 13 调用点。
+- 结构性收益：任何"忘记处理 `Err(Raised)`"的路径在 Drop 时自动还引用（不再靠 `discard_error`
+  纪律）；终结器/旧 pending 一类同型泄漏在类型上消失。新增 `crates/pyawa-core/tests/raise_guard.rs`
+  （4 passed：Drop 保留槽、`discard` 清槽、`into_pending` 移交、`PendingRef` Drop 释放旧值）。
+
+**验收**：`PYAWA_DANGLING=1` 下 `cargo test --workspace --release` 全绿；conformance **408×2**
+（普通＋悬垂）绿；`check.py` 20/20；`selftest.py` 24 项断言全绿；`cargo check --workspace
+--all-targets` 0 警告；`bench_gate` 四档 ✓；`slowcheck --release` 十一项全绿。
+
+**边界（如实）**：账本是诊断近似（"对象存活＋连续两次 flush"判未消费；ptr 复用留 `overwritten` 账）；
+`RaiseRef` 存 `*const Instance`（不变量：错误只在本实例执行栈内传播/消费，与改动前"裸指针＋实例
+存活"同契约）；副作用上 A 不动 ABI（`pa_*` 边界仍按状态码映射，`AB-21` 不变）。
