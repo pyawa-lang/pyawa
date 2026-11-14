@@ -903,3 +903,59 @@ after_all = snapshot()
         "脚本跑完后 `exception_state` 应当是空的（PUSH/POP 配对 ✓）"
     );
 }
+
+/// **处理块"出口清理"的异常表区间**（2026-11-14 真 bug 修 ✗）：`except: break` 的出口会
+/// **就地重放"循环余部"副本**；区间若把副本圈进来，副本里再抛的异常会被派发到清理块
+/// （`depth` 比实际栈深浅一格）⇒ `帧操作失败：StackUnderflow`。
+///
+/// 最小复现（本机实测）：`while True: try: … except StopIteration: break` 之后接一个
+/// `try/except`，再让另一个生成器耗尽且**不捕获** StopIteration ⇒ 旧代码报
+/// `Frame(StackUnderflow)`、参照报未捕获 `StopIteration`。
+#[test]
+fn handler_exit_cleanup_region_does_not_swallow_replayed_rest() {
+    let vm = Vm::new();
+    let builtins = vm.instance.new_dict();
+    for name in ["StopIteration", "ValueError"] {
+        let value = vm
+            .instance
+            .type_value(vm.instance.type_named(name).expect("内建表里应当有"));
+        vm.instance.dict_set(builtins, name, value);
+    }
+    vm.instance.set_builtins(Some(builtins));
+    let outcome = run_source(
+        &vm,
+        r#"
+def gen():
+    yield 1
+
+g = gen()
+while True:
+    try:
+        g.send(None)
+    except StopIteration:
+        break
+
+try:
+    x = 1
+except ValueError:
+    pass
+
+h = gen()
+h.send(None)
+h.send(None)
+"#,
+    );
+    match outcome {
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 由实例持有，存活。
+            let ty = unsafe { exception.as_ref() }.ty();
+            // SAFETY: ty 由注册表持有。
+            assert_eq!(
+                unsafe { ty.as_ref() }.name(),
+                "StopIteration",
+                "未捕获的应当是 StopIteration"
+            );
+        }
+        other => panic!("参照行为是未捕获 StopIteration，而不是 {other:?}"),
+    }
+}

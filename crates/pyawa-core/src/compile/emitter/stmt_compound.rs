@@ -482,7 +482,10 @@ impl Emitter {
                     // **压一层处理器** ✓（第 203 轮）：里面的 `return` 要按参照收尾 ✓。
                     self.handler_stack.push(handler.name.clone());
                     self.handler_depth += 1;
+                    // 处理块出口清理的落点（`break`／`continue` 发射时记进来；见 Emitter 字段注释）。
+                    self.handler_exit_cleanups.push(usize::MAX);
                     self.emit_block(&handler.body, false)?;
+                    let exit_cleanup_mark = self.handler_exit_cleanups.pop().unwrap_or(usize::MAX);
                     self.handler_depth -= 1;
                     self.handler_stack.pop();
                     if !finally_body.is_empty() {
@@ -500,18 +503,27 @@ impl Emitter {
                     // （`POP_EXCEPT` ＋ 循环后代码）✓ —— 参照把那份副本放在处理块段**之外**（段止于
                     // 出口那条 `POP_EXCEPT` ✓）⇒ 这里把段尾回退到**最后一条 `POP_EXCEPT`** 的位置 ✓
                     //（否则副本里再抛的异常会落到清理三连、栈少一格 ⇒ `COPY 3` 下溢 ✗）。
-                    let handler_body_end = if block_terminates(&handler.body) {
-                        let mut cut = handler_body_end;
-                        let mut word = handler_body_end / 2;
-                        while word > segment_start / 2 {
-                            word -= 1;
-                            let op = u16::from(self.unit.code[word * 2]);
-                            if crate::opcode::opname(op) == Some("POP_EXCEPT") {
-                                cut = word * 2;
-                                break;
+                    let handler_body_end = if super::stmt_misc::block_exits_via_jump(&handler.body) {
+                        if exit_cleanup_mark != usize::MAX {
+                            // **首选**：出口清理那条 `POP_EXCEPT` 的精确偏移（`break`／`continue` 发射时
+                            // 记下）——它天然排除掉"就地重放的循环余部副本"（副本里可能有嵌套
+                            // `try` 的 `POP_EXCEPT`，旧的回扫法会把副本圈进区间 ⇒ 副本里再抛的
+                            // 异常被派发到清理块、少一格栈 ⇒ `StackUnderflow`）。
+                            exit_cleanup_mark
+                        } else {
+                            // 兜底：`return`／`raise` 一类出口没记落点（旧口径原样保留）。
+                            let mut cut = handler_body_end;
+                            let mut word = handler_body_end / 2;
+                            while word > segment_start / 2 {
+                                word -= 1;
+                                let op = u16::from(self.unit.code[word * 2]);
+                                if crate::opcode::opname(op) == Some("POP_EXCEPT") {
+                                    cut = word * 2;
+                                    break;
+                                }
                             }
+                            cut
                         }
-                        cut
                     } else {
                         handler_body_end
                     };

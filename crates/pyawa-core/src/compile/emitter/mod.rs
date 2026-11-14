@@ -215,6 +215,15 @@ pub(super) struct Emitter {
     /// 三层都补 ✓，而后面还有 `return` 时**一层都不补** ✓）。
     pub(super) block_tail: bool,
     pub(super) handler_depth: usize,
+    /// **当前处理块体的"出口清理"位置**（`break`／`continue` 逃出处理器时记下其 `POP_EXCEPT`
+    /// 的**字节偏移**；`usize::MAX` ＝ 还没记）。
+    ///
+    /// 用途：处理块异常表区间的右端必须止于这条 `POP_EXCEPT` **之前**。**不能**靠"从体尾往回找
+    /// 最后一条 `POP_EXCEPT`"：`break` 的出口会**就地发一份"循环余部"副本**，副本里可能还有
+    /// 嵌套 `try` 的 `POP_EXCEPT` ⇒ 区间把副本圈进来 ⇒ 副本里再抛的异常被派发到清理块、栈少
+    /// 一格 ⇒ `帧操作失败：StackUnderflow`（2026-11-14 修，最小复现：`while True: try: raise
+    /// StopIteration except StopIteration: break` 后接 `try/except` 与未捕获异常）。
+    pub(super) handler_exit_cleanups: Vec<usize>,
     /// **待补的 `async for`／异步推导式耗尽异常表条目**（round 241/242）：`(region_start, region_end, depth)`；
     /// 收尾处发 `END_ASYNC_FOR` 时才知道目标偏移 ⇒ 那时补 `record_exception` ✓（嵌套用栈 ✓）。
     pub(super) pending_async_for: Vec<(usize, usize, usize)>,
