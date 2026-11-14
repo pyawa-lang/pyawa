@@ -1076,8 +1076,14 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
   内层是 Python 函数载荷）；`len`/`for`/`+` 协议经属性通道生效（`for` 的探测位补
   `host_getattr`；`+` 的宿主 dunder 走 `attribute_lookup`）。测试扩到 **3 passed**：
   `setattr`/`getattr` 往返、`obj.method(5)` 绑定、`len`、`for`、`+`、宿主错误三态。
-  **B2b 待做**：`AB-74` 的 `pa_raise_host_exception`＋traceback 验收、`§12.11` 验收演练
-  （`list`/`dict`/自定义类注入 guest、guest 源码不含 host|handle）、`§16` 全清零。
+  **B2b（2026-11-14 已落，`AB-74` 收口）**：`pa_raise_host_exception`（`type_idx` 栈索引指向
+  `BaseException` 子类；`msg` 借用、`len=-1` 允许；VM 用 `call_value` 按普通构造语义实例化，
+  构造异常也记录；宿主函数返回边界经 `raise_object_public` 重抛，guest 可 `except`）；
+  **`§12.11` 验收演练**：三个宿主对象（列表式/字典式/自定义式）注入 guest，guest 只用对象语法
+  完成增删改查与迭代，源码断言**不含** `host`／`handle`／`pa_` 字样；`host_visibility` 测试
+  **5 passed**；`SPEC-c-abi` §16 未实现条目清零。**`§12.11` 三条判据全部成立**：
+  ① 可感知痕迹只剩跨界性能与 `is`/`id`（演练里对象身份即宿主对象身份；无额外包装可见）；
+  ② guest 源码对象语法（机检断言）；③ 三态（成功/未处理/出错）可区分（`T-AB-8` ⑤/`T-AB-9` ④）。
 - **C 验收演练与收口**：`crates/pyawa-abi/tests/` 下新增 `host_visibility` 测试（派发→回退→协议→零回归；
   异常映射；§12.11 演练：宿主把 `list`/`dict`/自定义类包成宿主对象注入 guest，guest 源码
   **不含** "host"/"handle" 字样或宿主函数名，完成增删改查与迭代；`is`/`id` 口径登记）；

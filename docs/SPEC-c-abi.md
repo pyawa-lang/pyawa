@@ -155,7 +155,7 @@
     "未找到"、成功三态可区分（`AB-22`）；⑥ 未注册 `pa_type_ops` 的类型行为不变（零回归）。
 
 - **AB-74** **宿主异常映射**：宿主可抛**带类型**的异常，而不是只有状态码＋消息（`AB-48`）。
-  最小面：`int pa_raise_host_exception(pa_state *state, int type_idx, const char *msg, size_t len)`
+  最小面：`int pa_raise_host_exception(pa_state *state, int type_idx, const char *msg, ptrdiff_t len)`
   （栈契约 `—`）：
   - `type_idx` 是**栈索引**（`AB-9`），指向一个**类型对象**（不消耗）；该类型**必须**是
     `BaseException` 的子类（guest 侧定义的异常类也合法，宿主可经 `pa_getglobal`／`paL_getref`
@@ -169,6 +169,10 @@
   - `type_idx` 越界／不是类型对象／不是 `BaseException` 子类／`msg` 非 UTF-8 ⇒ `PA_ERR_INVALID`
     （`AB-22`："已实现但拒绝"）。
   - **未映射的宿主错误仍走 `PA_ERR_RUNTIME` ＋ `pa_errmsg`**（向后兼容，不是"假成功"）。
+  - **实现口径**：VM 用 `call_value` 以该类型＋消息按**普通构造语义**实例化（用户 `__init__`
+    抛错 ⇒ 那个构造异常同样记录并重抛）；宿主函数返回边界时经 `raise_object_public` 作为 guest
+    异常重抛（`pending` 槽与 `Err` 各持一份，RAII 归还）。traceback 由 guest 侧异常处理生成，
+    **不含**宿主函数帧（宿主函数不是 Python 帧）。
   - **验收**（`T-AB-9`）：① guest `try: host_fn() except MyError as e:` 捕获到真实类；
     ② `e.args` 为传入消息；③ traceback 无跨边界帧；④ 非法 `type_idx` ⇒ `PA_ERR_INVALID`；
     ⑤ 未调用本入口的宿主错误路径与今天一致。
@@ -650,5 +654,7 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格当前有 1 条未实现的新增需求**（2026-11-14 新增）：`AB-74`（宿主异常映射）—— 尚未实现（`AB-73` 已在 B1/B2 落地：属性读/写回退、方法绑定、`len`/`for`/`+` 协议链路、零回归）；其余已落地的 `AB-67`／`AB-68`／`AB-69`／`AB-70`／`AB-71`／`AB-72` 见各轮台账。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
+**本规格当前无未实现条目**（`AB-73` 于 B1/B2a、`AB-74` 于 B2b 落地，2026-11-14；`§12.11`
+验收演练见 `PLAN` §12.11 与 `crates/pyawa-abi/tests/` 的 `host_visibility` 测试），另有
+`AB-67`／`AB-68`／`AB-69`／`AB-70`／`AB-71`／`AB-72` 见各轮台账。其余无未写小节，也无未决推迟项。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。

@@ -527,6 +527,8 @@ pub struct pa_state {
     host_functions: Vec<NonNull<Header>>,
     /// **`AB-73`**：绑定方法对象（`HostBoundMethod`）的类型（每实例一次，惰性创建）。
     host_bound_method_type: Option<NonNull<pyawa_core::TypeObject>>,
+    /// **`AB-74`**：宿主经 `pa_raise_host_exception` 记录的类型化异常（边界处重抛；新引用）。
+    host_exception: Option<NonNull<Header>>,
     /// 本实例注册过的宿主类型（`AB-35`；`kind` → 类型）。
     host_types: Vec<host::RegisteredType>,
     /// **`AB-32`／`AB-33`**：九个能力域的注册状态（域索引见 [`capability`]）。
@@ -623,6 +625,7 @@ impl pa_state {
             host_typed_signatures: Vec::new(),
             host_type_ops: Vec::new(),
             host_bound_method_type: None,
+            host_exception: None,
             host_function_serials: Vec::new(),
             exec_serial: 0,
         }
@@ -659,6 +662,7 @@ impl pa_state {
             host_typed_signatures: Vec::new(),
             host_type_ops: Vec::new(),
             host_bound_method_type: None,
+            host_exception: None,
             host_function_serials: Vec::new(),
             exec_serial: 0,
         }
@@ -1921,6 +1925,100 @@ fn raise_runtime(instance: &Instance, message: &str) -> pyawa_core::ExecError {
     instance.raise_builtin_error("RuntimeError", message)
 }
 
+/// **`AB-74`**：宿主抛**带类型**的异常（`SPEC-c-abi.md` 的 `AB-74`）。
+///
+/// `type_index` 是**栈索引**（`AB-9`），指向一个**类型对象**（不消耗），该类型必须是
+/// `BaseException` 的子类；VM 以该类型＋一个 `str` 实参（消息）**按普通构造语义**实例化并记录；
+/// 成功返回 **`PA_ERR_RUNTIME`**（宿主函数应直接 `return` 它），VM 在边界处把它作为 guest 异常
+/// 重抛（`except <类型>` 可捕获、traceback 不含跨边界帧）。非法 `type_index`／非异常类型／
+/// 非 UTF-8 消息 ⇒ `PA_ERR_INVALID`（`AB-22`）。
+///
+/// # Safety
+///
+/// `msg` 要么 `NULL`、要么可读 `len` 字节（`len < 0` ⇒ 以 NUL 结尾计长）；`state` 按 `AB-57`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_raise_host_exception(
+    state: *mut pa_state,
+    type_index: i32,
+    msg: *const c_char,
+    len: isize,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(slot) = state.stack.get(type_index) else {
+            state.set_message("`AB-74`：`type_index` 越界");
+            return status::PA_ERR_INVALID;
+        };
+        if !state.instance.is_type_object(slot.object) {
+            state.set_message("`AB-74`：`type_index` 不是类型对象");
+            return status::PA_ERR_INVALID;
+        }
+        let ty = slot.object.cast::<pyawa_core::TypeObject>();
+        let Some(base_exception) = state.instance.type_named("BaseException") else {
+            state.set_message("`AB-74`：引导期没有 `BaseException`");
+            return status::PA_ERR_RUNTIME;
+        };
+        if !state.instance.is_subtype(ty, base_exception) {
+            state.set_message("`AB-74`：`type_index` 不是 `BaseException` 的子类");
+            return status::PA_ERR_INVALID;
+        }
+        // 消息：`NULL` ⇒ 空串；`len < 0` ⇒ 以 NUL 结尾计长；否则恰好 `len` 字节（UTF-8）。
+        let message = if msg.is_null() {
+            String::new()
+        } else if len < 0 {
+            // SAFETY: 调用方保证 NUL 结尾。
+            match unsafe { host::read_c_string(msg, 4096) } {
+                Some(text) => text,
+                None => {
+                    state.set_message("`AB-74`：`msg` 超长或非法");
+                    return status::PA_ERR_INVALID;
+                }
+            }
+        } else {
+            // SAFETY: 调用方保证至少 len 字节可读。
+            let bytes = unsafe { core::slice::from_raw_parts(msg.cast::<u8>(), len as usize) };
+            match String::from_utf8(bytes.to_vec()) {
+                Ok(text) => text,
+                Err(_) => {
+                    state.set_message("`AB-74`：`msg` 不是合法 UTF-8");
+                    return status::PA_ERR_INVALID;
+                }
+            }
+        };
+        // 按普通构造语义实例化（`MyError(msg)`）：用户 `__init__` 抛错 ⇒ 那个异常作为 guest 异常。
+        let text = state.instance.new_str(&message);
+        let instantiated = pyawa_core::call_value(&state.instance, slot.object, &[text], &[]);
+        // SAFETY: text 是本函数持有的新引用（call_value 借用实参）。
+        unsafe { state.instance.release_object(text.as_ptr()) };
+        match instantiated {
+            Ok(exception) => {
+                if let Some(previous) = state.host_exception.replace(exception) {
+                    // SAFETY: 旧记录由本状态持有。
+                    unsafe { state.instance.release_object(previous.as_ptr()) };
+                }
+                status::PA_ERR_RUNTIME
+            }
+            Err(error) => {
+                // 构造失败：把构造异常也记录为宿主异常（guest 侧同样可捕获）；其它错误如实报。
+                if let pyawa_core::ExecError::Raised { exception } = &error {
+                    let pointer = exception.get();
+                    // SAFETY: 异常存活；记录要自己一份。
+                    unsafe { state.instance.incref_object(pointer.as_ptr()) };
+                    if let Some(previous) = state.host_exception.replace(pointer) {
+                        // SAFETY: 旧记录由本状态持有。
+                        unsafe { state.instance.release_object(previous.as_ptr()) };
+                    }
+                    // `error` 的 Drop 归还 `Err` 那份（`pending` 槽由下一次 raise 覆盖）。
+                    status::PA_ERR_RUNTIME
+                } else {
+                    state.set_message("`AB-74`：实例化宿主异常失败");
+                    status::PA_ERR_RUNTIME
+                }
+            }
+        }
+    })
+}
+
 /// `pa_destroy(pa_state *state)`：销毁实例（`AB-57`：**释放实例本身**）。
 ///
 /// 此后 `pa_state *` **不可用**（禁止解引用或复用），实例内全部句柄同时失效（`AB-18`）。
@@ -1936,6 +2034,11 @@ pub unsafe extern "C" fn pa_destroy(state: *mut pa_state) -> i32 {
             return status::PA_ERR_INVALID;
         }
         // SAFETY: 由调用方保证这是 pa_create 交回且尚未销毁的指针。
+        let state = unsafe { &mut *state };
+        if let Some(exception) = state.host_exception.take() {
+            // SAFETY: 记录持有那份引用。
+            unsafe { state.instance.release_object(exception.as_ptr()) };
+        }
         drop(unsafe { Box::from_raw(state) });
         status::PA_OK
     })
@@ -3931,6 +4034,11 @@ unsafe fn host_function_call(
     }))
     .unwrap_or(status::PA_ERR_RUNTIME);
     state_ref.in_host_callback = false;
+    // **`AB-74`**：宿主记录了类型化异常 ⇒ 把它作为 guest 异常重抛（优先于状态码/结果）。
+    if let Some(exception) = state_ref.host_exception.take() {
+        drain_stack(state_ref, base);
+        return Err(pyawa_core::raise_object_public(instance, exception));
+    }
     // 收栈：宿主函数把结果留在**栈顶**
     let result = match outcome {
         status::PA_OK => {

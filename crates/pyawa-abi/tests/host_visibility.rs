@@ -456,3 +456,394 @@ fn setattr_and_method_binding_and_protocols() {
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
+
+// ---- B2b：`AB-74` 宿主异常映射 ----
+
+/// 宿主函数：取 guest 侧定义的 `MyError` 类，抛一个带类型的异常（`AB-74`）。
+unsafe extern "C-unwind" fn host_raise(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回；名字 NUL 结尾。
+    unsafe {
+        if pa_getglobal(state, b"MyError\0".as_ptr().cast()) != PA_OK {
+            return PA_ERR_RUNTIME;
+        }
+        // 类型在栈顶（-1，不消耗）；消息借用（len = -1 ⇒ NUL 结尾）。
+        pa_raise_host_exception(state, -1, b"boom\0".as_ptr().cast(), -1)
+    }
+}
+
+/// 宿主函数：用**非异常类型**尝试抛（`AB-74` 的非法路径 ⇒ `PA_ERR_INVALID`）。
+unsafe extern "C-unwind" fn host_raise_bad(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回。
+    unsafe {
+        if pa_pushinteger(state, 1) != PA_OK {
+            return PA_ERR_RUNTIME;
+        }
+        let code = pa_raise_host_exception(state, -1, b"x\0".as_ptr().cast(), -1);
+        pa_pop(state, 1);
+        code
+    }
+}
+
+#[test]
+fn typed_host_exception_is_catchable() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: state 由 pa_create 交回、尚未销毁。
+    unsafe { pyawa_stdlib::install((&*state).instance(), "probe", &[]) };
+    let signature = empty_signature();
+    // SAFETY: 名字/函数/签名都有效。
+    assert_eq!(
+        unsafe { pa_register(state, b"host_raise\0".as_ptr().cast(), host_raise, &signature) },
+        PA_OK
+    );
+    // SAFETY: 同上。
+    assert_eq!(
+        unsafe { pa_register(state, b"host_raise_bad\0".as_ptr().cast(), host_raise_bad, &signature) },
+        PA_OK
+    );
+    let script = br#"
+class MyError(Exception):
+    pass
+
+caught = 0
+message = None
+try:
+    host_raise()
+except MyError as error:
+    caught = 1
+    message = error.args[0]
+assert caught == 1 and message == "boom"
+
+bad = 0
+try:
+    host_raise_bad()
+except TypeError:
+    bad = 1
+assert bad == 1
+"#;
+    assert_eq!(exec(state, script), PA_OK, "AB-74 异常映射失败：{}", message_of(state));
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// ---- B2b／`T-AB-10`：§12.11 验收演练（三个宿主对象，guest 只用对象语法） ----
+
+/// 一个"盒子"载荷：列表式（`values`）、字典式（`keys`/`vals`）与一个普通属性共用一份定长存储。
+#[repr(C)]
+struct BoxPayload {
+    len: i64,
+    values: [i64; 8],
+    keys: [i64; 8],
+    vals: [i64; 8],
+    pair_len: i64,
+    note: i64,
+}
+
+impl BoxPayload {
+    fn empty() -> Self {
+        Self {
+            len: 0,
+            values: [0; 8],
+            keys: [0; 8],
+            vals: [0; 8],
+            pair_len: 0,
+            note: 0,
+        }
+    }
+}
+
+/// 演练用的注册表键（`append`／`set`／`get`／`size`／`iter`）。
+struct BoxRefs {
+    refs: [i32; 5],
+}
+
+/// 宿主对象读回调：方法名 → 已保存的宿主函数；`note` → 载荷里的普通属性。
+unsafe extern "C" fn box_getattr(
+    state: *mut pa_state,
+    payload: *mut c_void,
+    name: *const c_char,
+    len: usize,
+    context: *mut c_void,
+) -> i32 {
+    // SAFETY: 契约保证 name 至少 len 字节可读。
+    let name = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) };
+    // SAFETY: context 是测试里泄漏的 `BoxRefs`。
+    let refs = unsafe { &*(context as *const BoxRefs) };
+    match name {
+        b"append" => unsafe { paL_getref(state, refs.refs[0]) },
+        b"set" => unsafe { paL_getref(state, refs.refs[1]) },
+        b"get" => unsafe { paL_getref(state, refs.refs[2]) },
+        b"size" | b"__len__" => unsafe { paL_getref(state, refs.refs[3]) },
+        b"__iter__" => unsafe { paL_getref(state, refs.refs[4]) },
+        b"note" => {
+            // SAFETY: payload 是 VM 分配的宿主载荷（`AB-58`）。
+            let payload = unsafe { &*(payload as *const BoxPayload) };
+            unsafe { pa_pushinteger(state, payload.note) }
+        }
+        _ => PA_ERR_NOTFOUND,
+    }
+}
+
+/// 宿主对象写回调：`note` → 载荷里的普通属性。
+unsafe extern "C" fn box_setattr(
+    state: *mut pa_state,
+    payload: *mut c_void,
+    name: *const c_char,
+    len: usize,
+    value_index: i32,
+    _context: *mut c_void,
+) -> i32 {
+    // SAFETY: 契约保证 name 至少 len 字节可读。
+    let name = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) };
+    if name != b"note" {
+        return PA_ERR_NOTFOUND;
+    }
+    let mut value = 0i64;
+    // SAFETY: state 由回调契约交回。
+    if unsafe { pa_tointeger(state, value_index, &mut value) } != PA_OK {
+        return PA_ERR_INVALID;
+    }
+    // SAFETY: payload 是 VM 分配的宿主载荷（`AB-58`）。
+    unsafe { (*(payload as *mut BoxPayload)).note = value };
+    PA_OK
+}
+
+/// 取当前宿主对象的载荷（`self` 在 `self_index`）。
+unsafe fn payload_of(state: *mut pa_state, self_index: i32) -> Option<*mut BoxPayload> {
+    let mut payload: *mut c_void = core::ptr::null_mut();
+    // SAFETY: 回调契约；`pa_tohandle` 只对宿主对象成功。
+    if unsafe { pa_tohandle(state, self_index, &mut payload) } != PA_OK {
+        return None;
+    }
+    (!payload.is_null()).then_some(payload.cast::<BoxPayload>())
+}
+
+/// 宿主方法 `append(value)`：列表式追加。
+unsafe extern "C-unwind" fn box_append(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回。
+    unsafe {
+        let Some(payload) = payload_of(state, -2) else {
+            return PA_ERR_INVALID;
+        };
+        let mut value = 0i64;
+        if pa_tointeger(state, -1, &mut value) != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        let payload = &mut *payload;
+        if payload.len >= 8 {
+            return PA_ERR_RUNTIME;
+        }
+        payload.values[payload.len as usize] = value;
+        payload.len += 1;
+        pa_pop(state, 2);
+        pa_pushnil(state)
+    }
+}
+
+/// 宿主方法 `set(key, value)`：字典式写入。
+unsafe extern "C-unwind" fn box_set(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回。
+    unsafe {
+        let Some(payload) = payload_of(state, -3) else {
+            return PA_ERR_INVALID;
+        };
+        let mut key = 0i64;
+        let mut value = 0i64;
+        if pa_tointeger(state, -2, &mut key) != PA_OK || pa_tointeger(state, -1, &mut value) != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        let payload = &mut *payload;
+        let position = (0..payload.pair_len as usize).find(|&position| payload.keys[position] == key);
+        let position = match position {
+            Some(position) => position,
+            None => {
+                if payload.pair_len >= 8 {
+                    return PA_ERR_RUNTIME;
+                }
+                let position = payload.pair_len as usize;
+                payload.keys[position] = key;
+                payload.pair_len += 1;
+                position
+            }
+        };
+        payload.vals[position] = value;
+        pa_pop(state, 3);
+        pa_pushnil(state)
+    }
+}
+
+/// 宿主方法 `get(key)`：字典式读取（没有 ⇒ `None`）。
+unsafe extern "C-unwind" fn box_get(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回。
+    unsafe {
+        let Some(payload) = payload_of(state, -2) else {
+            return PA_ERR_INVALID;
+        };
+        let mut key = 0i64;
+        if pa_tointeger(state, -1, &mut key) != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        let payload = &*payload;
+        let found = (0..payload.pair_len as usize)
+            .find(|&position| payload.keys[position] == key)
+            .map(|position| payload.vals[position]);
+        pa_pop(state, 2);
+        match found {
+            Some(value) => pa_pushinteger(state, value),
+            None => pa_pushnil(state),
+        }
+    }
+}
+
+/// 宿主方法 `__len__`/`size`：列表式长度。
+unsafe extern "C-unwind" fn box_len(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回。
+    unsafe {
+        let Some(payload) = payload_of(state, -1) else {
+            return PA_ERR_INVALID;
+        };
+        let len = (*payload).len;
+        pa_pop(state, 1);
+        pa_pushinteger(state, len)
+    }
+}
+
+/// 宿主方法 `__iter__`：按列表式内容造迭代器。
+unsafe extern "C-unwind" fn box_iter(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回。
+    unsafe {
+        let Some(payload) = payload_of(state, -1) else {
+            return PA_ERR_INVALID;
+        };
+        pa_pop(state, 1);
+        let payload = &*payload;
+        let instance = (&*state).instance();
+        let items: Vec<NonNull<pyawa_core::Header>> = payload.values[..payload.len as usize]
+            .iter()
+            .map(|value| instance.new_int(*value))
+            .collect();
+        let list = instance.new_list(items);
+        let iterator = match instance.iter_object(list) {
+            Ok(iterator) => iterator,
+            Err(_) => {
+                instance.release_object(list.as_ptr());
+                return PA_ERR_RUNTIME;
+            }
+        };
+        instance.release_object(list.as_ptr());
+        let status = pa_pushhandle(state, iterator.as_ptr().cast());
+        instance.release_object(iterator.as_ptr());
+        status
+    }
+}
+
+/// 建一个"盒子"宿主对象并注入全局名。
+fn install_box(state: *mut pa_state, type_name: &[u8], global: &[u8], ops: &pa_type_ops) {
+    let signature = empty_signature();
+    let payload_size = size_of::<BoxPayload>();
+    // SAFETY: 名字/函数/签名都有效；`pa_newtype` 压入类型对象（+1）。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                type_name.as_ptr().cast(),
+                payload_size,
+                noop_dealloc as PaHostDealloc,
+                noop_traverse as PaHostTraverse,
+                &signature,
+            )
+        },
+        PA_OK,
+        "注册宿主类型失败：{}",
+        message_of(state)
+    );
+    // SAFETY: 类型在栈顶（-1）。
+    assert_eq!(unsafe { pa_set_type_ops(state, -1, ops) }, PA_OK, "{}", message_of(state));
+    let mut payload: *mut c_void = core::ptr::null_mut();
+    // SAFETY: 契约见 `pa_newhandle`。
+    assert_eq!(unsafe { pa_newhandle(state, -1, &mut payload) }, PA_OK);
+    // SAFETY: 载荷是 VM 分配的 `payload_size` 字节（`AB-58`）。
+    unsafe { payload.cast::<BoxPayload>().write(BoxPayload::empty()) };
+    // 实例在栈顶 ⇒ 写成全局（消费栈顶）。
+    // SAFETY: 名字 NUL 结尾。
+    assert_eq!(unsafe { pa_setglobal(state, global.as_ptr().cast()) }, PA_OK);
+    // SAFETY: 类型还在栈上 ⇒ 收掉。
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+}
+
+#[test]
+fn visibility_exercise_guest_uses_only_object_syntax() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: state 由 pa_create 交回、尚未销毁。
+    unsafe { pyawa_stdlib::install((&*state).instance(), "probe", &[]) };
+
+    // 注册五个宿主方法函数并保存注册表键。
+    let (mut append_sig, append_params) = signature_with_two_positional(b"self\0", b"value\0");
+    append_sig.params = append_params.as_ptr();
+    let append_ref = register_and_ref(state, b"box_append\0", box_append, append_sig);
+    let (mut set_sig, set_params) = signature_with_two_positional(b"self\0", b"pair\0");
+    set_sig.params = set_params.as_ptr();
+    let set_ref = register_and_ref(state, b"box_set\0", box_set, set_sig);
+    let (mut get_sig, get_params) = signature_with_two_positional(b"self\0", b"key\0");
+    get_sig.params = get_params.as_ptr();
+    let get_ref = register_and_ref(state, b"box_get\0", box_get, get_sig);
+    let (mut len_sig, len_params) = signature_with_one_positional(b"self\0");
+    len_sig.params = len_params.as_ptr();
+    let len_ref = register_and_ref(state, b"box_len\0", box_len, len_sig);
+    let (mut iter_sig, iter_params) = signature_with_one_positional(b"self\0");
+    iter_sig.params = iter_params.as_ptr();
+    let iter_ref = register_and_ref(state, b"box_iter\0", box_iter, iter_sig);
+
+    let refs = Box::leak(Box::new(BoxRefs {
+        refs: [append_ref, set_ref, get_ref, len_ref, iter_ref],
+    }));
+    let ops = pa_type_ops {
+        size: size_of::<pa_type_ops>(),
+        context: refs as *mut BoxRefs as *mut c_void,
+        getattr_fn: Some(box_getattr),
+        setattr_fn: Some(box_setattr),
+    };
+
+    // 三个宿主对象：列表式 / 字典式 / 自定义式（guest 只按对象语法使用）。
+    install_box(state, b"HostListBox\0", b"guest_list\0", &ops);
+    install_box(state, b"HostDictBox\0", b"guest_dict\0", &ops);
+    install_box(state, b"HostCustomBox\0", b"guest_custom\0", &ops);
+
+    // **验收演练**：guest 源码不含 "host"／"handle"／"pa_" 等边界字样，只出现对象语法。
+    let script = br#"
+guest_list.append(5)
+guest_list.append(7)
+total = 0
+for value in guest_list:
+    total += value
+assert total == 12
+assert len(guest_list) == 2
+
+guest_dict.set(1, 10)
+guest_dict.set(2, 20)
+assert guest_dict.get(1) == 10
+assert guest_dict.get(2) == 20
+assert guest_dict.get(3) is None
+
+guest_custom.append(3)
+guest_custom.note = 9
+assert guest_custom.note == 9
+assert len(guest_custom) == 1
+"#;
+    let lowered = script.to_ascii_lowercase();
+    for forbidden in [b"host".as_slice(), b"handle".as_slice(), b"pa_".as_slice()] {
+        assert!(
+            !lowered.windows(forbidden.len()).any(|window| window == forbidden),
+            "guest 源码不得出现边界字样：{}",
+            String::from_utf8_lossy(forbidden)
+        );
+    }
+    assert_eq!(exec(state, script), PA_OK, "§12.11 演练失败：{}", message_of(state));
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}

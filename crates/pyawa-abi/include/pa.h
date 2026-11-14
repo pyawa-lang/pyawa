@@ -241,6 +241,12 @@ typedef struct pa_type_ops {
  * 失败（越界/不是宿主类型/size 非法）⇒ PA_ERR_INVALID。 */
 int pa_set_type_ops(pa_state *state, int type_index, const pa_type_ops *ops);
 
+/* AB-74：宿主抛**带类型**的异常（追加式，次版本 11）。
+ * type_index 是栈索引（AB-9），指向 BaseException 子类（不消耗）；VM 以该类型＋ msg 实例化并
+ * 作为 guest 异常重抛。成功 ⇒ PA_ERR_RUNTIME（宿主直接 return）；非法 ⇒ PA_ERR_INVALID。
+ * msg 借用、UTF-8；len < 0 ⇒ 以 NUL 结尾计长，msg == NULL ⇒ 空串。 */
+int pa_raise_host_exception(pa_state *state, int type_index, const char *msg, ptrdiff_t len);
+
 /* ---- 宿主函数与签名（AB-24…AB-26、AB-51／AB-52）----
  *
  * AB-25：注册必须同时提供签名，禁止无名签名的宿主函数。
