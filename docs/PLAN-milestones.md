@@ -1048,3 +1048,22 @@ symbols 缺口：annotation-only 外层绑定运行期缺 cell（`NameError`）�
 
 **验收演练**：Python 宿主把 `list`／`dict`／一个自定义类包成宿主对象注入 guest，
 guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与迭代。
+
+**实施分解（2026-11-14 用户授权"先做补丁，然后实现规格"）**：
+- **A 规格补丁（docs，已落）**：`AB-73` 重写（`pa_type_ops` 自带尺寸结构／回调带
+  `pa_state *state`／派发与 `PA_ERR_NOTFOUND` 回退／错误映射／getattr 返回宿主函数自动包成
+  绑定方法且 `pa_sig` 含 `self`／协议复用引实现位置）；`AB-74` 重写（完整签名/栈契约/类型
+  要求/返回 `PA_ERR_RUNTIME`/非法 `PA_ERR_INVALID`）；`§15.2` 新增 `PA_ERR_NOTFOUND=8`；
+  `§15.3` 函数清单 75→76（`pa_newtype` 加 `ops` 末参、`pa_raise_host_exception`）；
+  `§15.4` 辅助层 18→19（`paL_getref`）；`§13` 新增 `T-AB-8`／`T-AB-9`／`T-AB-10`；
+  `PA_ABI_VERSION` 1.10→1.11（未发布窗口内的签名改写，发布后只许追加）。
+- **B 实现**：`crates/pyawa-abi/src/host.rs`（`pa_type_ops`/回调类型/`HostTypeInfo` 存 ops 与
+  `*mut pa_state` 桥接）＋`lib.rs`（`pa_newtype` 收 ops 并装 `getattr`/`setattr` 槽、getattr 结果
+  若为宿主函数 ⇒ `MethodObject` 绑定、`pa_raise_host_exception`、`paL_getref`、`PA_ERR_NOTFOUND`）
+  ＋`crates/pyawa-abi/include/pa.h`（结构/原型/状态码/版本）＋`PA_ABI_MINOR=11`。
+- **C 验收演练与收口**：`crates/pyawa-abi/tests/` 下新增 `host_visibility` 测试（派发→回退→协议→零回归；
+  异常映射；§12.11 演练：宿主把 `list`/`dict`/自定义类包成宿主对象注入 guest，guest 源码
+  **不含** "host"/"handle" 字样或宿主函数名，完成增删改查与迭代；`is`/`id` 口径登记）；
+  `SPEC-c-abi` §16 未实现条目清零、`PLAN` 台账、`NEXT` 同步；`check.py`＋`slowcheck` 十二项。
+- **判据映射**：判据 1 ⇒ `T-AB-10` 的 `is`/`id`/性能登记；判据 2 ⇒ `T-AB-10` 的源码扫描断言；
+  判据 3 ⇒ `T-AB-8` ⑤/`T-AB-9` ④；`T-AB-8`/`T-AB-9` 覆盖两条规格的验收细则。
