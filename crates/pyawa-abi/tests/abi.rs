@@ -1067,10 +1067,9 @@ fn a_host_type_is_registered_as_a_real_type() {
                 name.as_ptr().cast(),
                 0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                &signature,
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1085,10 +1084,9 @@ fn a_host_type_is_registered_as_a_real_type() {
                 b"Widget2\0".as_ptr().cast(),
                 0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                core::ptr::null(),
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                core::ptr::null(),)
         },
         PA_ERR_INVALID
     );
@@ -1118,10 +1116,9 @@ fn host_type_accepts_the_final_flag() {
                 b"Gadget\0".as_ptr().cast(),
                 0,
                 size_of::<u64>(),
-                host_dealloc,
-                host_traverse,
-                &signature,
-            )
+                    Some(host_dealloc),
+                    Some(host_traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1542,10 +1539,9 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
                 b"Gadget\0".as_ptr().cast(),
                 0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                &type_signature,
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                &type_signature,)
         },
         PA_OK
     );
@@ -1617,10 +1613,9 @@ fn newhandle_hands_out_a_vm_allocated_payload() {
                 type_name.as_ptr().cast(),
                 0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                &signature,
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1682,10 +1677,9 @@ fn one_registration_builds_many_instances() {
                 name.as_ptr().cast(),
                 0,
                 size_of::<u64>(),
-                quiet_dealloc,
-                quiet_traverse,
-                &signature,
-            )
+                    Some(quiet_dealloc),
+                    Some(quiet_traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1728,8 +1722,17 @@ fn a_zero_size_payload_gives_null() {
     let name = b"Empty\0";
     // SAFETY: 按契约传参。
     assert_eq!(
-        unsafe { pa_newtype(state, name.as_ptr().cast(), 0,
-                0, dealloc, traverse, &signature) },
+        unsafe {
+            pa_newtype(
+                state,
+                name.as_ptr().cast(),
+                0,
+                0,
+                Some(dealloc),
+                Some(traverse),
+                &signature,
+            )
+        },
         PA_OK
     );
     // SAFETY: state 存活。
@@ -2147,10 +2150,9 @@ fn tohandle_reads_back_the_vm_payload_after_container_roundtrip() {
                 b"Gadget\0".as_ptr().cast(),
                 0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                &type_signature,
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                &type_signature,)
         },
         PA_OK
     );

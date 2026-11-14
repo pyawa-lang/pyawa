@@ -1129,11 +1129,11 @@ guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与�
 
 | # | 项 | 规格/验收 | 优先级 | 状态 | 依赖／测试落点 |
 |---|---|---|---|---|---|
-| 1 | ABI 实例无 builtins／stdlib；`paL_openlibs` 失败无消息；`paL_newstate` 未从 cdylib 导出 | `§15.4`：`paL_openlibs` 的**提供方＝组合根**（`pyawa-runtime` 产物）；`pyawa-abi` 裸实例保持语言骨架，失败须写 `pa_errmsg`（`AB-48`）；`T-AB-18` | **P1（架构）** | **待用户拍板路线**：A）C 宿主链 `pyawa-runtime` 的 cdylib/静态库获得电池版；B）`pa_host` 增 `install_stdlib` 回调（ABI 升版）；C）宿主自行链接 stdlib C-ABI 库。推荐 **A**（`CX-4` 分层不变） | 拍板后落 `pyawa-runtime` 导出面＋`pa.h` 注释；仓库内**不含 numpy 的最小探针**（`tests/ci/`，numpy 可选 skip） |
-| 2 | `pa_newtype` 缺 dealloc/traverse ⇒ 非 host layout，`pa_newhandle` 空消息 `PA_ERR_INVALID` | `AB-36`：**NULL 当场拒绝**＋`pa_errmsg`（`AB-22`/`AB-48`）；`T-AB-17` | P2 | 规格已定，待实现 | `pa_newtype` 参数校验；`crates/pyawa-abi/tests/abi.rs`（NULL hooks 用例）＋既有 non-hook 零回归 |
-| 3 | `pa_getglobal` 缺失名 `PA_OK`＋nil | `§15.3`：**缺失 ⇒ `PA_ERR_INVALID`（不压栈）**（压 nil 作废）；`T-AB-16` | P2 | 规格已定，待实现 | `crates/pyawa-abi/src/lib.rs` 的 `pa_getglobal`；`abi.rs` 用例；检查既有测试无"缺失名依赖 nil" |
-| 4 | 模块对象无法从 C 宿主上栈 ⇒ `AB-75` 模块态不可达 | 新增 **`AB-79`** `pa_pushmodule(st, module)`（+1；非法句柄 `PA_ERR_INVALID`）；`T-AB-15` | P2 | 规格已定，待实现（1.13） | `pa.h` 原型＋`lib.rs`；`crates/pyawa-abi/tests/host_module.rs`（C 宿主路径）＋`object_ops.rs` 的模块态从 Rust 内部 API 改为公共 API |
+| 1 | ABI 实例无 builtins／stdlib；`paL_openlibs` 失败无消息；`paL_newstate` 未从 cdylib 导出 | `§15.4`：`paL_openlibs` 的**提供方＝组合根**（`pyawa-runtime` 产物）；`pyawa-abi` 裸实例保持语言骨架，失败须写 `pa_errmsg`（`AB-48`）；`T-AB-18` | **P1（架构）** | **路线 A 已拍板（2026-11-14）**：C 宿主链 `pyawa-runtime` 的 cdylib/静态库获得电池版（`CX-4` 分层不变）；实现待做 | 落 `pyawa-runtime` 导出面＋`pa.h` 注释；仓库内**不含 numpy 的最小探针**（`tests/ci/`，numpy 可选 skip） |
+| 2 | `pa_newtype` 缺 dealloc/traverse ⇒ 非 host layout，`pa_newhandle` 空消息 `PA_ERR_INVALID` | `AB-36`：**NULL 当场拒绝**＋`pa_errmsg`（`AB-22`/`AB-48`）；`T-AB-17` | P2 | **✓（2026-11-14）** | `pa_newtype` 的 `Option<fn>` 校验；`crates/pyawa-abi/tests/host_usability.rs` 3 passed；`pa_newhandle` 空消息同步修正 |
+| 3 | `pa_getglobal` 缺失名 `PA_OK`＋nil | `§15.3`：**缺失 ⇒ `PA_ERR_INVALID`（不压栈）**（压 nil 作废）；`T-AB-16` | P2 | **✓（2026-11-14）** | `lib.rs` 的 `pa_getglobal`；`host_usability.rs` 用例（缺失不压栈＋消息）；既有测试零回归 |
+| 4 | 模块对象无法从 C 宿主上栈 ⇒ `AB-75` 模块态不可达 | 新增 **`AB-79`** `pa_pushmodule(st, module)`（+1；非法句柄 `PA_ERR_INVALID`）；`T-AB-15` | P2 | **✓（2026-11-14，1.13）** | `pa.h` 原型＋`lib.rs`；`host_usability.rs` 的 `pushmodule_exposes_module_object_to_c_hosts`（C 宿主 `pa_pushmodule`→`pa_set_object_ops`→`import` 未枚举名） |
 
-**执行顺序**：#2／#3（小修，互不依赖）→ #4（新 AB，1.13）→ #1（架构拍板后实施）。
+**执行顺序**：#2／#3（小修，互不依赖）→ #4（新 AB，1.13）→ #1（架构路线 A 已定，待实施）。
 **复跑**：修复后必须能在**仓库内**以不含 numpy 的最小编译探针复跑（真 numpy 桥只作宿主侧压测、
 不入库）；#2/#3/#4 各自有 `T-AB-15…17` 的可执行用例。

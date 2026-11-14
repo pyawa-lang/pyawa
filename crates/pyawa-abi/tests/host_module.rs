@@ -512,10 +512,9 @@ fn host_returned_objects_are_opaque_handles() {
                 type_name.as_ptr(),
                 0,
                 8,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &sig,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &sig,)
         },
         PA_OK
     );

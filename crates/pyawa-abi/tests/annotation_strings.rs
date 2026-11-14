@@ -310,10 +310,9 @@ fn newtype_sig_type_expr_is_validated() {
                 b"GoodPayload\0".as_ptr().cast(),
                 0,
                 8,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK,
         "合法 type_expr 应当接受：{}",
@@ -331,10 +330,9 @@ fn newtype_sig_type_expr_is_validated() {
                 b"BadPayload\0".as_ptr().cast(),
                 0,
                 8,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &bad_signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &bad_signature,)
         },
         PA_ERR_INVALID
     );

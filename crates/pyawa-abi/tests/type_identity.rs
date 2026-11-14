@@ -117,10 +117,9 @@ fn typeid_reports_real_type_identity() {
                 b"IdentityProbe\0".as_ptr().cast(),
                 0,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK,
         "{}",
@@ -178,10 +177,9 @@ fn newtype_base_index_creates_real_inheritance() {
                 b"HostValueError\0".as_ptr().cast(),
                 -1,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK,
         "{}",
@@ -241,10 +239,9 @@ fn newtype_base_index_creates_real_inheritance() {
                 b"PlainHostType\0".as_ptr().cast(),
                 0,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK
     );
@@ -267,10 +264,9 @@ fn newtype_base_index_creates_real_inheritance() {
                 b"FinalHostType\0".as_ptr().cast(),
                 0,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &final_signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &final_signature,)
         },
         PA_OK
     );
@@ -282,10 +278,9 @@ fn newtype_base_index_creates_real_inheritance() {
             b"DerivedFromFinal\0".as_ptr().cast(),
             -1,
             0,
-            noop_dealloc as PaHostDealloc,
-            noop_traverse as PaHostTraverse,
-            &signature,
-        )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+            &signature,)
     };
     assert_eq!(rejected, PA_ERR_INVALID, "终态基类必须拒绝：{}", message_of(state));
     // SAFETY: 收掉终态类型。

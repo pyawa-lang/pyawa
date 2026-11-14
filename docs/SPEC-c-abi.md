@@ -407,7 +407,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.12**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **12**；`AB-76` 的 `pa_typeid` 为**追加式**，`AB-77` 的 `pa_newtype` `base_index` 为**未发布窗口内的签名改写**；`AB-75`／`AB-78` 落地时**不再**升次版本（其函数 `pa_set_object_ops` 属同一窗口，落地前保持 1.12 的 `pa.h` 不变——现状如实登记在 §16）。**§12.13 窗口**：`AB-79`（`pa_pushmodule`，追加式）落地时升至 **1.13**；`pa_getglobal` 缺失名语义改为 `PA_ERR_INVALID`、`AB-36` 的 NULL hooks 当场拒绝同属该窗口（未发布窗口内可改）——`AB-41` 的追加式改动
+> **当前版本：1.13**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **13**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -561,7 +561,7 @@
 | `pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` | — | 往宿主模块装函数（`AB-67`）；签名必须同时给（`AB-25`／`AB-51`） |
 | `pa_module_setconst(st, module, name)` | — | 往宿主模块装常量（`AB-67`）；值取自**栈顶**并消费 |
 | `pa_module_addsubmodule(st, parent, name, pa_module *out)` | — | 在宿主模块下建子模块（`AB-67`）；登记 `sys.modules["<parent>.<name>"]` 与父属性 |
-| `pa_pushmodule(st, module)` | +1 | 把模块句柄对应的**模块对象**压栈（`AB-79`；`AB-75` 模块态入口）；非法句柄 ⇒ `PA_ERR_INVALID`（待实现） |
+| `pa_pushmodule(st, module)` | +1 | 把模块句柄对应的**模块对象**压栈（`AB-79`；`AB-75` 模块态入口）；非法句柄 ⇒ `PA_ERR_INVALID`（已落地） |
 | `pa_type_expr_*`（9 个构造：`runtime_tag`／`named`／`list_of`／`dict_of`／`optional`／`union`／`callable`／`var`／`apply`） | — | 建 `AB-69` 的类型表达式句柄（每实例、不透明）；失败 ⇒ `NULL` ＋ `pa_errmsg` |
 | `pa_func_set_signature(st, fn, params, n, ret, tparams, nt, flags)` | — | 给已注册宿主函数声明签名（`AB-69`）；注册后、任何执行前；不符 ⇒ `PA_ERR_INVALID`；声明后边界核参数／返回（脚本侧 `TypeError`，归责插件） |
 | `pa_newtype(st, name, base_idx, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；`base_idx` 指定真实基类（`AB-77`；`0` ⇒ `object`，其余按栈索引）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`）；回调见 `AB-73` 的 `pa_set_type_ops`（待 `AB-75` 收敛为投影） |
@@ -724,10 +724,11 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格当前有 1 条新增未实现需求**（§12.13 批次）：`AB-79`（`pa_pushmodule`，模块句柄上栈）
-— 连同 §12.13 #1（组合根 stdlib 可用性）、#2（`AB-36` 的 NULL hooks 当场拒绝）、#3
-（`pa_getglobal` 缺失名语义）的实现一起排在 §12.13；**规格层已定**（`AB-36`／§15.3／`AB-79`／
-`T-AB-15…18`），落地时 `PA_ABI_MINOR` 1.12→**1.13**。此前：
+**本规格无未实现的 `AB-` 条款**：`AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
+当场拒绝）、#3（`pa_getglobal` 缺失名 `PA_ERR_INVALID`）、#4（模块句柄上栈）已随 **1.13** 落地
+（`crates/pyawa-abi/tests/host_usability.rs` 的 `T-AB-15/16/17`）。**§12.13 #1**（组合根 stdlib
+可用性）不是 AB 条款、仍是实现项：路线 **A** 已由用户拍板（C 宿主链 `pyawa-runtime` 产物），
+待实施（`T-AB-18`）。此前：
 **`AB-75`…`AB-78` 全部落地**（`AB-75` `pa_set_object_ops` 与 `AB-78` 投影等价差分于步 3/5
 落地（`crates/pyawa-abi/tests/object_ops.rs` 的 T-AB-12／T-AB-14）；`AB-76`（`pa_typeid`）与
 `AB-77`（`pa_newtype` 的 `base_index`）于步 1/4 落地（`crates/pyawa-abi/tests/type_identity.rs`）；

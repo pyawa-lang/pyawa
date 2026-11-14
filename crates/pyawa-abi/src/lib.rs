@@ -96,7 +96,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 12;
+pub const PA_ABI_MINOR: u32 = 13;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -1112,6 +1112,31 @@ pub unsafe extern "C" fn pa_module_addfunction(
             );
         }
         status::PA_OK
+    })
+}
+
+/// **`AB-79`**：把模块句柄对应的**模块对象**压栈（栈契约 **+1**；§12.13 #4）。
+///
+/// 使 C 宿主可对模块对象调用 `pa_set_object_ops`／`pa_setfield` 等普通对象 API（`AB-75` 模块态）。
+/// `module` 必须是本实例 `pa_add_host_module`／`pa_module_addsubmodule` 交回的句柄，否则
+/// `PA_ERR_INVALID`（`AB-22`）；同一句柄可多次上栈。
+///
+/// # Safety
+///
+/// `state`／`module` 按 `AB-67` 契约；`state` 存活。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushmodule(state: *mut pa_state, module: *mut c_void) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(record) = host_module_record(state, module) else {
+            state.set_message("`AB-79`：模块句柄无效（只认本实例交回的模块）");
+            return status::PA_ERR_INVALID;
+        };
+        let object = record.object;
+        // 模块对象由模块记录持有；栈要自己那份。
+        // SAFETY: object 由 host_modules 账本持有，实例存活期内有效。
+        unsafe { state.instance.incref_object(object.as_ptr()) };
+        state.stack.push_owned(object)
     })
 }
 
@@ -3605,10 +3630,9 @@ pub unsafe extern "C" fn pa_getglobal(state: *mut pa_state, name: *const c_char)
                 state.stack.push_owned(value)
             }
             None => {
-                let nil = state.instance.singletons().none();
-                // SAFETY: 单例由实例持有。
-                unsafe { state.instance.incref_object(nil.as_ptr()) };
-                state.stack.push_owned(nil)
+                // **§12.13 #3**：缺失名 ⇒ `PA_ERR_INVALID`（**不压栈**）；原"压 nil"作废。
+                state.set_message(&format!("`AB-15`：全局名 `{text}` 不存在"));
+                status::PA_ERR_INVALID
             }
         }
     })
@@ -4247,14 +4271,24 @@ pub unsafe extern "C" fn pa_newtype(
     name: *const c_char,
     base_index: i32,
     payload_size: usize,
-    dealloc: host::PaHostDealloc,
-    traverse: host::PaHostTraverse,
+    // **`AB-36`**：C 的 `NULL` 经 `Option<extern fn>` 的 niche 映射为 `None`（函数指针宿主的
+    // 标准 FFI 形态）⇒ 可安全判定并当场拒绝，而不是把 NULL 当可调用指针存下来。
+    dealloc: Option<host::PaHostDealloc>,
+    traverse: Option<host::PaHostTraverse>,
     sig: *const host::pa_sig,
 ) -> i32 {
     boundary(|| {
         let state = state_or!(state);
         // SAFETY: 调用方保证 name 是 NUL 结尾。
         let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        // **`AB-36`**：`dealloc`／`traverse` **必须**非 NULL（§12.13 #2：当场拒绝并给消息，
+        // 不得拖到 `pa_newhandle` 才以空消息失败）。
+        let (Some(dealloc), Some(traverse)) = (dealloc, traverse) else {
+            state.set_message(
+                "`AB-36`：`pa_newtype` 的 `dealloc`／`traverse` 必须非 NULL（宿主类型必须提供生命周期钩子）",
+            );
             return status::PA_ERR_INVALID;
         };
         // **`AB-77`**：`base_index == 0` ⇒ 无基类（`object`）；其余按 `AB-9` 栈索引
@@ -4376,13 +4410,18 @@ pub unsafe extern "C" fn pa_newhandle(
     boundary(|| {
         let state = state_or!(state);
         let Some(object) = state.stack.get(index).map(|slot| slot.object) else {
+            state.set_message("`AB-59`：`pa_newhandle` 的 `type_index` 越界");
             return status::PA_ERR_INVALID;
         };
         let Some(type_object) = state.instance.as_type(object) else {
+            state.set_message("`AB-59`：`pa_newhandle` 的 `type_index` 不是类型对象");
             return status::PA_ERR_INVALID;
         };
         // SAFETY: type_object 由注册表持有。
         if !unsafe { type_object.as_ref() }.is_host_layout() {
+            state.set_message(
+                "`AB-58`：该类型不是 `pa_newtype` 注册的宿主类型（缺 `dealloc`／`traverse` 或非宿主布局）",
+            );
             return status::PA_ERR_INVALID;
         }
         let (created, payload) = state.instance.alloc_host_object(type_object);

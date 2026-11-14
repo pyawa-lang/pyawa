@@ -111,10 +111,9 @@ fn register_type(state: *mut pa_state, name: &'static [u8], global: &'static [u8
                 name.as_ptr().cast(),
                 0,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK,
         "注册类型失败：{}",

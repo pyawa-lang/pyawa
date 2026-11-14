@@ -119,10 +119,9 @@ fn setup_type_with_ops(state: *mut pa_state, type_name: &[u8], global: &[u8], ca
                 type_name.as_ptr().cast(),
                 0,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK,
         "注册宿主类型失败：{}",
@@ -183,10 +182,9 @@ fn type_without_ops_is_unchanged() {
                 b"Plain\0".as_ptr().cast(),
                 0,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK
     );
@@ -419,10 +417,9 @@ fn setattr_and_method_binding_and_protocols() {
                 b"Thing2\0".as_ptr().cast(),
                 0,
                 0,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK,
         "注册宿主类型失败：{}",
@@ -754,10 +751,9 @@ fn install_box(state: *mut pa_state, type_name: &[u8], global: &[u8], ops: &pa_t
                 type_name.as_ptr().cast(),
                 0,
                 payload_size,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &signature,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &signature,)
         },
         PA_OK,
         "注册宿主类型失败：{}",

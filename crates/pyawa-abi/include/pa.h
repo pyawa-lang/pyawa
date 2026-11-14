@@ -28,9 +28,11 @@
  * 次版本 11：`AB-73` 宿主类型属性/方法派发（`pa_set_type_ops`＋新状态码 `PA_ERR_NOTFOUND`）
  * ＋ `AB-74` 宿主异常映射（`pa_raise_host_exception`）—— 均追加式。
  * 次版本 12：`AB-76` `pa_typeid`（追加式）＋ `AB-77` `pa_newtype` 的 `base_index`（未发布窗口内
- * 签名改写；旧签名不留）。 */
+ * 签名改写；旧签名不留）。
+ * 次版本 13：`AB-79` `pa_pushmodule`（追加式）＋ §12.13 的语义修正（`pa_getglobal` 缺失名
+ * ⇒ `PA_ERR_INVALID`；`pa_newtype` 的 NULL `dealloc`/`traverse` ⇒ 当场拒绝）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 12u
+#define PA_ABI_MINOR 13u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -296,6 +298,8 @@ typedef struct pa_sig {
 /* pa_sig.flags 的保留位（AB-37）：宿主用它反向选择"本类型不可继承" */
 #define PA_TYPE_FINAL (1u << 0)
 
+/* AB-15／§12.13 #3：读模块全局（+1）。名字不存在 ⇒ PA_ERR_INVALID 且**不压栈**；
+ * 存在 ⇒ PA_OK 并压入值（新引用）。 */
 int pa_getglobal(pa_state *state, const char *name);
 int pa_setglobal(pa_state *state, const char *name);
 int pa_register(pa_state *state, const char *name, pa_host_fn fn, const pa_sig *sig);
@@ -312,6 +316,9 @@ int pa_register(pa_state *state, const char *name, pa_host_fn fn, const pa_sig *
  */
 typedef struct pa_module_s *pa_module;
 int pa_add_host_module(pa_state *state, const char *name, pa_module *out);
+/* AB-79：把模块句柄对应的模块对象压栈（+1）；非法句柄 ⇒ PA_ERR_INVALID。
+ * 之后可用 pa_set_object_ops／pa_setfield 等普通对象 API 操作该模块。 */
+int pa_pushmodule(pa_state *state, pa_module module);
 int pa_module_addfunction(pa_state *state, pa_module module, const char *name,
                           pa_host_fn fn, const pa_sig *sig);
 int pa_module_setconst(pa_state *state, pa_module module, const char *name);
@@ -374,6 +381,8 @@ typedef void (*pa_host_traverse)(void *payload, void *context, pa_host_visit vis
 
 /* AB-59：注册成功后把**类型对象**压栈（栈契约 +1，不透明句柄，AB-14）——这是宿主拿到类型的
  * 唯一通道：禁止回传类型指针，禁止另立"注册序号"这类第二套标识 */
+/* AB-36／§12.13 #2：dealloc 与 traverse **必须非 NULL**（NULL ⇒ 当场 PA_ERR_INVALID 并写
+ * pa_errmsg）；base_index == 0 ⇒ 无基类（object），其余按栈索引（AB-9）。 */
 int pa_newtype(pa_state *state, const char *name, int base_index, size_t payload_size,
                pa_host_dealloc dealloc, pa_host_traverse traverse, const pa_sig *sig);
 

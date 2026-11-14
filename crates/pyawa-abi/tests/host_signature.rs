@@ -295,10 +295,9 @@ fn host_opaque_types_can_appear_in_signatures() {
                 type_name.as_ptr(),
                 0,
                 8,
-                noop_dealloc as PaHostDealloc,
-                noop_traverse as PaHostTraverse,
-                &empty_sig,
-            )
+                    Some(noop_dealloc as PaHostDealloc),
+                    Some(noop_traverse as PaHostTraverse),
+                &empty_sig,)
         },
         PA_OK
     );
