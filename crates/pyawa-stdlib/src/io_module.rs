@@ -1087,7 +1087,8 @@ fn io_base_flush(
 // - `seek`／`tell` 对**文本**模式不做参照的"只能 0 偏移"限制 ✓（更宽 ✓，不是更窄 ✗）；
 // - `encoding` 只认 `decode_with_encoding` 的四档 ✓（其余报 `LookupError` ✓）；`errors`／
 //   `buffering`／`opener` 如实**未实现** ✗（收了不报错，也不假装生效 ✗）；
-//   `newline=` 的**读**口径已接 ✓（缺口3，见 [`NewlineMode`]），**写**翻译仍未接 ✗；
+//   `newline=` 的**读／写**口径都已接 ✓（缺口3，见 [`NewlineMode`]），`.newlines` 属性也已接
+//   （整块口径，见 [`scan_newlines_once`] ✓）；
 // - `type(open(...))` 一律是 `_io.FileIO` ✓（参照文本模式给 `TextIOWrapper` ✗ —— 如实记 ✓）。
 
 /// 打开模式（`r`／`w`／`a`／`x` 四选一 ✓）。
@@ -1155,7 +1156,7 @@ fn parse_mode(mode: &str) -> Result<ModeSpec, String> {
     Ok(ModeSpec { kind, binary, readable, writable })
 }
 
-// ==== universal newline（缺口3 ✓）：文本 IO 的**读**路径 ==========================================
+// ==== universal newline（缺口3 ✓）：文本 IO 的**读／写**路径与 `.newlines` =======================
 //
 // 参照口径（本机 `python3` 3.14.4 实测 ✓，见 `target/recon/io_nl/` 的逐字节对拍）：
 // - `newline=None`（`open()` 默认）：`\r`／`\n`／`\r\n` **三档都断行**，读出时**翻译成 `\n`**
@@ -1168,11 +1169,22 @@ fn parse_mode(mode: &str) -> Result<ModeSpec, String> {
 //   `newline=None` 的 `readline(1)` 对 `\r\n` 给 `'\n'`（整对已消费）。
 // - 尾行没换行照常返回；EOF 返回 `''`；`read(0)`／`readline(0)` 返回 `''` 且不吃字符 ✓。
 //
-// **实现口径**：`_data` 存**原文**（不改写）⇒ 读时按模式在内存里扫描／翻译 ✓ —— `_pos` 因此是
-// **原文字符下标**（与既有 `tell` 口径一致 ✓），且 `w+` 写完再读也能正确翻译 ✓。写侧一字不动
-// （既有行为不回退 ✓；本层 `newline=` 的**写**翻译仍未接 ✗，见本节头注）。
+// **写**翻译（本轮 ✓，同文件 `probe_write.py` 对拍）：
+// - `newline=None`：只把 `'\n'` 译成 `os.linesep`；**Linux 上 `os.linesep == '\n'` ⇒ 恒等** ✓；
+// - `newline=''`／`'\n'`：恒等；
+// - `newline='\r'`／`'\r\n'`：**每个** `'\n'` 换成对应串（既有 `'\r'` 一字不动 ⇒ `"\r\n"` 变
+//   `"\r\r"`／`"\r\r\n"` ✓）。写进 `_data` 的是**翻译后**文本 ⇒ `w+` 回读看到的即落盘原文 ✓；
+//   `write()` 返回**实参字符数**，`_pos`（＝本层 `tell`）按翻译后长度推进 ✓。
+//
+// **`.newlines`**（本轮 ✓）：只读属性；`None`／`''` 两档在**首次真读**时把整块原文扫一遍
+// （`read(0)` 不触发、`readline(0)` 触发 ✓），掩码映射次序 CR、LF、CRLF ⇒ `None`／串／元组 ✓；
+// 显式三档恒 `None`；写不追踪（`w+` 写后读数才追踪）✓。
+//
+// **实现口径**：`_data` 存**原文**（读侧不改写；写侧存**翻译后**文本）⇒ 读时按模式在内存里
+// 扫描／翻译 ✓ —— `_pos` 因此是**字符下标**（写侧是翻译后文本的下标，与参照的字节 cookie 不同：
+// 纯 ASCII 一致，非 ASCII 写后 `tell` 本层更小 ✗ —— 既有边界，见 [`NewlineMode`] ✓）。
 
-/// universal newline 的**读**口径（`newline=` 形参的五档 ✓）。
+/// universal newline 的**读／写**口径（`newline=` 形参的五档 ✓）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NewlineMode {
     /// `newline=None`：三档断行、翻译成 `\n`。
@@ -1188,6 +1200,27 @@ enum NewlineMode {
 }
 
 impl NewlineMode {
+    /// **写**翻译口径 ✓（本机 `python3` 3.14.4 实测，`target/recon/io_nl/probe_write.py`）。
+    ///
+    /// - `None`：把 `'\n'` 译成 `os.linesep`；Linux 上 `os.linesep == '\n'` ⇒ **恒等** ✓
+    ///   （只译 `'\n'`，既有 `'\r'` 一字不动 ✓）；
+    /// - `''`／`'\n'`：**不翻译** ✓；
+    /// - `'\r'`／`'\r\n'`：**每个** `'\n'` 换成对应串 ✓（不合并、不对既有 `'\r'` 做配对 ——
+    ///   `"a\r\n"` ⇒ `"a\r\r"`／`"a\r\r\n"`，照参照 ✓）。
+    fn translate_write(self, text: &str) -> String {
+        match self {
+            NewlineMode::Universal | NewlineMode::NoTranslation | NewlineMode::Lf => text.to_owned(),
+            NewlineMode::Cr => text.replace('\n', "\r"),
+            NewlineMode::CrLf => text.replace('\n', "\r\n"),
+        }
+    }
+
+    /// 这一档是否**追踪 `.newlines`** ✓：只有 universal 读档（`None`／`''`）追；
+    /// 显式三档（`'\n'`／`'\r'`／`'\r\n'`）恒 `None`（照参照实测 ✓）。
+    fn tracks_newlines(self) -> bool {
+        matches!(self, NewlineMode::Universal | NewlineMode::NoTranslation)
+    }
+
     /// 实例字典里的整数码（`_newline` ✓）。
     fn code(self) -> i64 {
         match self {
@@ -1262,34 +1295,75 @@ fn newline_mode_of(instance: &Instance, this: NonNull<Header>) -> NewlineMode {
         .unwrap_or(NewlineMode::Universal)
 }
 
-/// `read(n)` 的文本口径 ✓：返回 `(片段, 下一原文字符下标)`。
+/// 换行单元的**最小视图**：`char` 文本流与 `StringIO` 的码点缓冲共用同一套扫描逻辑 ✓
+///（**一处真相** ✓：读／写翻译与 `.newlines` 追踪的判定都收在 [`NewlineMode`] 与这里 ✓）。
+trait NewlineUnit: Copy {
+    fn is_cr(self) -> bool;
+    fn is_lf(self) -> bool;
+    fn line_feed() -> Self;
+}
+
+impl NewlineUnit for char {
+    fn is_cr(self) -> bool {
+        self == '\r'
+    }
+
+    fn is_lf(self) -> bool {
+        self == '\n'
+    }
+
+    fn line_feed() -> Self {
+        '\n'
+    }
+}
+
+impl NewlineUnit for u32 {
+    fn is_cr(self) -> bool {
+        self == u32::from(b'\r')
+    }
+
+    fn is_lf(self) -> bool {
+        self == u32::from(b'\n')
+    }
+
+    fn line_feed() -> Self {
+        u32::from(b'\n')
+    }
+}
+
+/// `read(n)` 的通用文本口径 ✓：返回 `(片段, 下一原文字符下标)`。
 ///
-/// `Universal` 边读边翻译（`\r\n`／`\r` ⇒ `\n`，`\r\n` 两字符只产出 1 个）；其余档按原字符切片。
-fn text_read_from(chars: &[char], start: usize, limit: i64, mode: NewlineMode) -> (String, usize) {
-    let start = start.min(chars.len());
+/// `Universal` 边读边翻译（`\r\n`／`\r` ⇒ `\n`，`\r\n` 两字符只产出 1 个）；其余档按原单元切片。
+fn text_read_units<T: NewlineUnit>(
+    units: &[T],
+    start: usize,
+    limit: i64,
+    mode: NewlineMode,
+) -> (Vec<T>, usize) {
+    let start = start.min(units.len());
     if mode != NewlineMode::Universal {
         let end = if limit < 0 {
-            chars.len()
+            units.len()
         } else {
-            (start + limit.max(0) as usize).min(chars.len())
+            (start + limit.max(0) as usize).min(units.len())
         };
-        return (chars[start..end].iter().collect(), end);
+        return (units[start..end].to_vec(), end);
     }
-    let mut out = String::new();
+    let mut out: Vec<T> = Vec::new();
     let mut index = start;
     let mut produced = 0usize;
-    while index < chars.len() && (limit < 0 || produced < limit as usize) {
-        let character = chars[index];
-        if character == '\r' {
-            out.push('\n');
+    while index < units.len() && (limit < 0 || produced < limit as usize) {
+        let unit = units[index];
+        if unit.is_cr() {
+            out.push(T::line_feed());
             produced += 1;
             index += 1;
             // `\r\n` 是一个换行 ⇒ 整对一起消费（即使已经撞到 `limit` ✓）。
-            if index < chars.len() && chars[index] == '\n' {
+            if index < units.len() && units[index].is_lf() {
                 index += 1;
             }
         } else {
-            out.push(character);
+            out.push(unit);
             produced += 1;
             index += 1;
         }
@@ -1297,95 +1371,231 @@ fn text_read_from(chars: &[char], start: usize, limit: i64, mode: NewlineMode) -
     (out, index)
 }
 
-/// `readline(size)` 的文本口径 ✓：返回 `(片段, 下一原文字符下标)`（含行尾换行 ✓，EOF 给剩余段 ✓）。
-fn text_readline_from(chars: &[char], start: usize, limit: i64, mode: NewlineMode) -> (String, usize) {
-    let start = start.min(chars.len());
-    let mut out = String::new();
+/// `readline(size)` 的通用文本口径 ✓：返回 `(片段, 下一原文字符下标)`（含行尾换行 ✓，EOF 给剩余段 ✓）。
+fn text_readline_units<T: NewlineUnit>(
+    units: &[T],
+    start: usize,
+    limit: i64,
+    mode: NewlineMode,
+) -> (Vec<T>, usize) {
+    let start = start.min(units.len());
+    let mut out: Vec<T> = Vec::new();
     let mut index = start;
     let mut produced = 0usize;
     // `newline='\r\n'` 专用：本**次**调用内上一个字符是不是 `\r`（跨调用的 `\r`+`\n` 不算一对 ✓
     // —— 参照实测：上一次 `readline(2)` 停在 `\r` 之后，下一次从 `\n` 起读时 `\n` 不是行尾 ✓）。
     let mut previous_cr = false;
-    while index < chars.len() {
+    while index < units.len() {
         if limit >= 0 && produced >= limit as usize {
             break;
         }
-        let character = chars[index];
+        let unit = units[index];
         match mode {
             // `newline=None`：三档断行、翻译成 `\n`。
             NewlineMode::Universal => {
                 index += 1;
                 produced += 1;
-                match character {
-                    '\r' => {
-                        out.push('\n');
-                        if index < chars.len() && chars[index] == '\n' {
-                            index += 1;
-                        }
-                        break;
+                if unit.is_cr() {
+                    out.push(T::line_feed());
+                    if index < units.len() && units[index].is_lf() {
+                        index += 1;
                     }
-                    '\n' => {
-                        out.push('\n');
-                        break;
-                    }
-                    _ => out.push(character),
+                    break;
+                } else if unit.is_lf() {
+                    out.push(T::line_feed());
+                    break;
+                } else {
+                    out.push(unit);
                 }
             }
             // `newline=''`：三档断行、不翻译（`\r\n` 两字符都留在行里 ✓）。
             NewlineMode::NoTranslation => {
                 index += 1;
                 produced += 1;
-                match character {
-                    '\r' => {
-                        out.push('\r');
-                        // `size` 只够 `\r` 时，`\n` 留给下一次 `readline` ✓（参照实测 ✓）。
-                        if (limit < 0 || produced < limit as usize)
-                            && index < chars.len()
-                            && chars[index] == '\n'
-                        {
-                            out.push('\n');
-                            index += 1;
-                        }
-                        break;
+                if unit.is_cr() {
+                    out.push(unit);
+                    // `size` 只够 `\r` 时，`\n` 留给下一次 `readline` ✓（参照实测 ✓）。
+                    if (limit < 0 || produced < limit as usize)
+                        && index < units.len()
+                        && units[index].is_lf()
+                    {
+                        out.push(units[index]);
+                        index += 1;
                     }
-                    '\n' => {
-                        out.push('\n');
-                        break;
-                    }
-                    _ => out.push(character),
+                    break;
+                } else if unit.is_lf() {
+                    out.push(unit);
+                    break;
+                } else {
+                    out.push(unit);
                 }
             }
             // 显式档：只认那一个换行、不翻译。
             NewlineMode::Lf => {
-                out.push(character);
+                out.push(unit);
                 produced += 1;
                 index += 1;
-                if character == '\n' {
+                if unit.is_lf() {
                     break;
                 }
             }
             NewlineMode::Cr => {
-                out.push(character);
+                out.push(unit);
                 produced += 1;
                 index += 1;
-                if character == '\r' {
+                if unit.is_cr() {
                     break;
                 }
             }
             NewlineMode::CrLf => {
-                if character == '\n' && previous_cr {
-                    out.push('\n');
+                if unit.is_lf() && previous_cr {
+                    out.push(unit);
                     index += 1;
                     break;
                 }
-                out.push(character);
+                out.push(unit);
                 produced += 1;
                 index += 1;
-                previous_cr = character == '\r';
+                previous_cr = unit.is_cr();
             }
         }
     }
     (out, index)
+}
+
+/// `char` 文本流的 `read(n)` 口径 ✓（包一层 [`text_read_units`]）。
+fn text_read_from(chars: &[char], start: usize, limit: i64, mode: NewlineMode) -> (String, usize) {
+    let (units, end) = text_read_units(chars, start, limit, mode);
+    (units.into_iter().collect(), end)
+}
+
+/// `char` 文本流的 `readline(size)` 口径 ✓。
+fn text_readline_from(chars: &[char], start: usize, limit: i64, mode: NewlineMode) -> (String, usize) {
+    let (units, end) = text_readline_units(chars, start, limit, mode);
+    (units.into_iter().collect(), end)
+}
+
+/// **`.newlines` 的位掩码** ✓（参照 `_io` 的 `SEEN_CR=1`／`SEEN_LF=2`／`SEEN_CRLF=4`）。
+///
+/// 掩码来自**原文**（只有 `newline=None`／`''` 两档追踪）：`\r\n` 记 CRLF、不成对的 `\r` 记 CR、
+/// `\n` 记 LF ✓（次序固定 CR、LF、CRLF —— 照参照的 getter ✓）。
+fn newline_mask_of_text(text: &str) -> i64 {
+    let mut mask = 0i64;
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        if character == '\r' {
+            if chars.clone().next() == Some('\n') {
+                chars.next();
+                mask |= 4;
+            } else {
+                mask |= 1;
+            }
+        } else if character == '\n' {
+            mask |= 2;
+        }
+    }
+    mask
+}
+
+/// 码点缓冲版的 [`newline_mask_of_text`]（`StringIO` 的 `_buf` ✓）。
+fn newline_mask_of_points(points: &[u32]) -> i64 {
+    let mut mask = 0i64;
+    let mut index = 0usize;
+    while index < points.len() {
+        if points[index] == u32::from(b'\r') {
+            index += 1;
+            if index < points.len() && points[index] == u32::from(b'\n') {
+                index += 1;
+                mask |= 4;
+            } else {
+                mask |= 1;
+            }
+        } else {
+            if points[index] == u32::from(b'\n') {
+                mask |= 2;
+            }
+            index += 1;
+        }
+    }
+    mask
+}
+
+/// 实例上已积累的换行掩码 ✓（缺省 `0`）。
+fn newlines_mask_of(instance: &Instance, this: NonNull<Header>) -> i64 {
+    attr_of(instance, this, "_newlines_mask")
+        .and_then(|value| instance.int_of(value))
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0)
+        & 7
+}
+
+/// 记一条换行种类 ✓（**按位或**累计 —— 参照的 decoder 只增不减 ✓）。
+fn record_newlines_mask(instance: &Instance, this: NonNull<Header>, mask: i64) {
+    if mask == 0 {
+        return;
+    }
+    let combined = newlines_mask_of(instance, this) | mask & 7;
+    let value = instance.new_int(combined);
+    set_attr(instance, this, "_newlines_mask", value);
+}
+
+/// 掩码 ⇒ 参照 `.newlines` 的值 ✓：`0` ⇒ `None`；一种 ⇒ 该串；多种 ⇒ 元组（CR、LF、CRLF 次序 ✓）。
+fn newlines_value(instance: &Instance, mask: i64) -> NonNull<Header> {
+    let mask = mask & 7;
+    let string = |text: &str| instance.new_str(text);
+    match mask {
+        0 => instance.retain(instance.singletons().none()),
+        1 => string("\r"),
+        2 => string("\n"),
+        4 => string("\r\n"),
+        _ => {
+            let mut parts: Vec<NonNull<Header>> = Vec::new();
+            if mask & 1 != 0 {
+                parts.push(string("\r"));
+            }
+            if mask & 2 != 0 {
+                parts.push(string("\n"));
+            }
+            if mask & 4 != 0 {
+                parts.push(string("\r\n"));
+            }
+            instance.new_tuple(parts)
+        }
+    }
+}
+
+/// 首次读时把**整块**原文扫一遍记掩码 ✓（`_newlines_scanned` 防重扫；写后置回 `false` 再扫 ✓）。
+///
+/// **如实边界** ✗：参照是"解码到哪块看到哪块"的流式口径（`TextIOWrapper` 的块大小 8192）；
+/// 本层整个文件／缓冲都在内存 ⇒ 以**整块**为准（小文件逐字节一致；跨块次序差异不建模）。
+fn scan_newlines_once(instance: &Instance, this: NonNull<Header>, text: &str) {
+    if attr_of(instance, this, "_newlines_scanned")
+        .map(|value| instance.truth_of(value))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let mask = newline_mask_of_text(text);
+    record_newlines_mask(instance, this, mask);
+    let scanned = instance.new_bool(true);
+    set_attr(instance, this, "_newlines_scanned", scanned);
+}
+
+/// 造一个**只读** `property`（`fget` 用 native；照 `_csv_module::readonly_property` 手法 ✓）——
+/// 让 `.newlines` 与参照一样**只读**（赋值 ⇒ `AttributeError` ✓）。
+fn readonly_property(instance: &Instance, getter: NativeFn) -> Option<NonNull<Header>> {
+    let property_type = instance.type_named("property")?;
+    let function = make_native(instance, "fget", getter);
+    let type_value = instance.type_value(property_type).cast::<Header>();
+    let outcome = pyawa_core::call_value(instance, type_value, &[function], &[]);
+    instance.release(type_value);
+    instance.release(function);
+    outcome.ok()
+}
+
+/// `property` getter 的 `self` ✓（描述符协议把实例放在 `args[0]`）。
+fn property_self(args: &[NonNull<Header>]) -> Option<NonNull<Header>> {
+    args.first().copied()
 }
 
 /// 关键字实参取值 ✓（native 的 `kwargs` 是 `(名字, 值)` 序列 ✓）。
@@ -1719,7 +1929,7 @@ fn text_encoding_native(
 /// **`open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, …)`** ✓（task-18 ✓）。
 ///
 /// 见本节的"口径（如实 ✗）"——`buffering`／`errors`／`closefd` 未实现 ✓；
-/// `newline=` 的**读**口径已接（缺口3 ✓，见 [`NewlineMode`]）；**写**翻译仍未接 ✗。
+/// `newline=` 的**读／写**口径都已接（缺口3 ✓，见 [`NewlineMode`]）；`.newlines` 也已接 ✓。
 pub fn open_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1889,6 +2099,11 @@ pub fn open_native(
     // **universal newline 读口径**（缺口3 ✓）：整数码，见 [`NewlineMode`] ✓。
     let newline_attr = instance.new_int(newline_mode.code());
     instance.dict_set(attributes, "_newline", newline_attr);
+    // **`.newlines` 追踪状态**（本轮 ✓）：掩码 ＋ "整块已扫" 标志（首次读才扫，见 [`scan_newlines_once`]）。
+    let mask_attr = instance.new_int(0);
+    instance.dict_set(attributes, "_newlines_mask", mask_attr);
+    let scanned_attr = instance.new_bool(false);
+    instance.dict_set(attributes, "_newlines_scanned", scanned_attr);
     // **`f.name`**：路径形状跟实参走（str ⇒ str、bytes ⇒ bytes）；不拿 repr 显示形冒充。
     let name_value = if path.want_bytes {
         instance.new_bytes(&path.bytes)
@@ -1907,16 +2122,18 @@ pub fn open_native(
     Ok(object.into_raw().cast::<Header>())
 }
 
-// ==== `_io.TextIOWrapper`（task-19 第 3 轮 ✓）：**读路径最小面** ✓ ==================================
+// ==== `_io.TextIOWrapper`（task-19 第 3 轮 ✓）：读路径 ＋ 写翻译 ✓ ================================
 //
 // **动因** ✓：`Lib/tokenize.py::open` 就是 `TextIOWrapper(buffer, encoding, line_buffering=True)` ✓
 // （`buffer` 是 `builtins.open(name,'rb')` 的二进制层 ✓）⇒ `linecache.updatecache` 一族（⇒ `traceback`
-// 的源码行 ✓）都要它 ✓。**如实范围** ✗：只接**读**（`read`／`readline`／`readlines`／迭代／`with` ✓；
-// `newline=` 的**读**口径已接 ✓，见 [`NewlineMode`]）；**写路径**（`write`／`flush` 落盘 ✓）、
-// `newline=` 的**写**翻译、`buffering` 语义如实立支 ✓。
+// 的源码行 ✓）都要它 ✓。**范围** ✓：读（`read`／`readline`／`readlines`／迭代／`with` ✓）；
+// 写（`write`／`writelines`：按 `newline=` 翻译后编码写底层 ✓，`flush`／`seek`／`tell` 仍委派二进制层 ✓）；
+// `newline=` 的读写口径、`.newlines` 属性（本轮 ✓，见 [`NewlineMode`]／[`scan_newlines_once`]）；
+// **如实边界** ✗：`buffering` 语义／文本层自己的 seek cookie 未建模（`seek`／`tell` 走底层 ✓）。
 //
 // 口径 ✓：解码走 [`Instance::decode_with_encoding`] **一处真相** ✓（与 `bytes.decode` 同一处 ✓）；
-// 状态全在**实例字典** ✓（`_buffer`／`_encoding`／`_text`／`_pos`／`_closed` ✓，不新增载荷类型 ✓）。
+// 状态全在**实例字典** ✓（`_buffer`／`_encoding`／`_text`／`_pos`／`_closed`／`_newlines_mask` ✓，
+// 不新增载荷类型 ✓）。
 
 /// 取 `(self, 其余实参)` 或报"缺 self" ✓。
 fn text_wrapper_self<'a>(
@@ -2007,6 +2224,11 @@ fn text_wrapper_init(
     set_attr(instance, this, "closed", mirror);
     let nothing = instance.singletons().none();
     set_attr(instance, this, "_text", nothing);
+    // **`.newlines` 追踪状态**（本轮 ✓）：掩码 ＋ "整块已扫" 标志（读触发，见 [`scan_newlines_once`]）。
+    let mask_attr = instance.new_int(0);
+    set_attr(instance, this, "_newlines_mask", mask_attr);
+    let scanned_attr = instance.new_bool(false);
+    set_attr(instance, this, "_newlines_scanned", scanned_attr);
     Ok(instance.retain(this))
 }
 
@@ -2102,6 +2324,10 @@ fn text_wrapper_read(
     let start = text_wrapper_position(instance, this).min(characters.len());
     let size = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
     let mode = newline_mode_of(instance, this);
+    // **`.newlines` 追踪**（本轮 ✓）：`read(0)` 不触发；其余读档首次真读扫整块（见 [`scan_newlines_once`]）。
+    if size != 0 && mode.tracks_newlines() {
+        scan_newlines_once(instance, this, &all);
+    }
     let (piece, end) = text_read_from(&characters, start, size, mode);
     let position = instance.new_int(end as i64);
     set_attr(instance, this, "_pos", position);
@@ -2127,6 +2353,10 @@ fn text_wrapper_readline(
     let start = text_wrapper_position(instance, this).min(characters.len());
     let limit = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
     let mode = newline_mode_of(instance, this);
+    // **`.newlines` 追踪**（本轮 ✓）：`readline(0)` 也触发（参照实测 ✓）。
+    if mode.tracks_newlines() {
+        scan_newlines_once(instance, this, &all);
+    }
     let (piece, end) = text_readline_from(&characters, start, limit, mode);
     let position = instance.new_int(end as i64);
     set_attr(instance, this, "_pos", position);
@@ -2212,7 +2442,123 @@ fn text_wrapper_exit(
     Ok(instance.singletons().none())
 }
 
-/// 建 `_io.TextIOWrapper` **真类** ✓（读路径 ✓）。
+/// `TextIOWrapper.write(s)` ✓（本轮 ✓）：按 `newline=` 做**写翻译**、编码后写进底层二进制层 ✓。
+///
+/// 口径照本机 `python3` 3.14.4 实测（`target/recon/io_nl/probe_write.py`）：返回**实参字符数** ✓；
+/// `s.write` 立即到底层（`tell` 是底层字节位置 ✓）；写后丢弃已解码缓存 `_text`（`w+` 回读要重取 ✓）。
+fn text_wrapper_write(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = text_wrapper_self(instance, bound, args)?;
+    if text_wrapper_closed(instance, this) {
+        return closed_error(instance);
+    }
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "TextIOWrapper.write() takes no keyword arguments",
+        ));
+    }
+    if rest.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "TextIOWrapper.write() takes exactly one argument ({} given)",
+                rest.len()
+            ),
+        ));
+    }
+    let Some(text) = instance.text_of(rest[0]) else {
+        let name = instance.type_name(instance.type_of(rest[0]));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("write() argument must be str, not {name}"),
+        ));
+    };
+    let translated = newline_mode_of(instance, this).translate_write(text);
+    let written = text.chars().count();
+    let encoding = text_wrapper_text(instance, this, "_encoding").unwrap_or_else(|| "utf-8".to_owned());
+    let encoded = instance.encode_with_encoding(&translated, &encoding)?;
+    let outcome = (|| -> Result<NonNull<Header>, ExecError> {
+        let buffer = instance
+            .attribute_optional_of(this, "_buffer")?
+            .ok_or_else(|| instance.raise_builtin_error("ValueError", "I/O operation on closed file."))?;
+        let Some(writer) = instance.attribute_optional_of(buffer, "write")? else {
+            return Err(unsupported_error(instance, "write"));
+        };
+        pyawa_core::executor::call::call_value(instance, writer, &[encoded], &[])
+    })();
+    instance.release(encoded);
+    let bytes_written = outcome?;
+    instance.release(bytes_written);
+    // 底层缓冲变了 ⇒ 已解码缓存作废（下次读重新取／解码；`.newlines` 也重扫）。
+    let nothing = instance.singletons().none();
+    set_attr(instance, this, "_text", nothing);
+    let stale = instance.new_bool(false);
+    set_attr(instance, this, "_newlines_scanned", stale);
+    Ok(instance.new_int(written as i64))
+}
+
+/// `TextIOWrapper.writelines(lines)` ✓（本轮 ✓）：逐个 [`text_wrapper_write`]，返回 `None` ✓。
+fn text_wrapper_writelines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = text_wrapper_self(instance, bound, args)?;
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_IOBase.writelines() takes no keyword arguments",
+        ));
+    }
+    if rest.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "_IOBase.writelines() takes exactly one argument ({} given)",
+                rest.len()
+            ),
+        ));
+    }
+    let iterator = pyawa_core::executor::iter::iter_value(instance, rest[0])?;
+    loop {
+        let outcome = instance.advance_iterator(iterator);
+        match outcome {
+            Ok(Some(line)) => {
+                let written = text_wrapper_write(instance, Some(this), &[line], &[]);
+                instance.release(line);
+                let written = written?;
+                instance.release(written);
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `.newlines` getter（`TextIOWrapper` ✓）：掩码 ⇒ `None`／串／元组；**关闭后仍可读**（照参照 ✓）。
+fn text_wrapper_newlines_getter(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = property_self(args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor 'newlines' needs an argument"))?;
+    Ok(newlines_value(instance, newlines_mask_of(instance, this)))
+}
+
+/// 建 `_io.TextIOWrapper` **真类** ✓（读／写路径 ✓）。
 fn build_text_io(instance: &Instance, namespace: NonNull<Header>) {
     let base = instance
         .type_named("_TextIOBase")
@@ -2226,6 +2572,9 @@ fn build_text_io(instance: &Instance, namespace: NonNull<Header>) {
         ("read", text_wrapper_read as NativeFn),
         ("readline", text_wrapper_readline as NativeFn),
         ("readlines", text_wrapper_readlines as NativeFn),
+        // **写路径**（本轮 ✓）：`write` 按 `newline=` 翻译后写底层二进制层；`writelines` 逐个转发。
+        ("write", text_wrapper_write as NativeFn),
+        ("writelines", text_wrapper_writelines as NativeFn),
         ("__iter__", text_wrapper_self_ref as NativeFn),
         ("__next__", text_wrapper_next as NativeFn),
         ("__enter__", text_wrapper_self_ref as NativeFn),
@@ -2249,8 +2598,30 @@ fn build_text_io(instance: &Instance, namespace: NonNull<Header>) {
         class_namespace,
         None,
     ) {
+        // **`.newlines` 只读属性**（本轮 ✓）：getter 走掩码 ⇒ `None`／串／元组（**一处真相** ✓）。
+        if let Some(property) = readonly_property(instance, text_wrapper_newlines_getter as NativeFn) {
+            instance.set_type_attribute(class.cast::<pyawa_core::TypeObject>(), "newlines", property);
+        }
         instance.dict_set(namespace, "TextIOWrapper", class);
     }
+}
+
+/// `.newlines` getter（`open()` 的文本档 ✓）：掩码 ⇒ `None`／串／元组。
+///
+/// **如实边界** ✗：参照的二进制档（`open(..., 'rb')` ⇒ `BufferedReader`）**没有** `newlines`；
+/// 本层二进制档也用同一个 `FileIO` 类 ⇒ 这里按 `_binary` 报 `AttributeError`（名字同参照 ✓）。
+fn file_newlines_getter(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = property_self(args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor 'newlines' needs an argument"))?;
+    if file_flag(instance, this, "_binary") {
+        return Err(instance.raise_builtin_error("AttributeError", "newlines"));
+    }
+    Ok(newlines_value(instance, newlines_mask_of(instance, this)))
 }
 
 /// 建 `_io.FileIO` 真类 ✓（状态全放**实例字典** ✓，不新增载荷类型 ✓）。
@@ -2298,6 +2669,10 @@ fn build_file_io(instance: &Instance, namespace: NonNull<Header>) {
         class_namespace,
         None,
     ) {
+        // **`.newlines` 只读属性**（本轮 ✓）：仅文本档有意义（二进制档 getter 报 `AttributeError` ✓）。
+        if let Some(property) = readonly_property(instance, file_newlines_getter as NativeFn) {
+            instance.set_type_attribute(class.cast::<pyawa_core::TypeObject>(), "newlines", property);
+        }
         instance.dict_set(namespace, "FileIO", class);
     }
 }
@@ -2344,6 +2719,11 @@ fn file_read(
         let start = position.min(characters.len());
         // **universal newline**（缺口3 ✓）：文本档按 `open(newline=…)` 的读口径断／译。
         let mode = newline_mode_of(instance, this);
+        // **`.newlines` 追踪**（本轮 ✓）：`read(0)` 不解码、不追踪（照参照实测 ✓）；
+        // 其余读档在首次真读时把整块原文扫一遍（整块口径见 [`scan_newlines_once`] ✓）。
+        if size != 0 && mode.tracks_newlines() {
+            scan_newlines_once(instance, this, &text);
+        }
         let (piece, end) = text_read_from(&characters, start, size, mode);
         let new_position = instance.new_int(end as i64);
         set_attr(instance, this, "_pos", new_position);
@@ -2388,6 +2768,10 @@ fn file_readline(
         let start = position.min(characters.len());
         // **universal newline**（缺口3 ✓）：文本档按 `open(newline=…)` 的读口径断／译。
         let mode = newline_mode_of(instance, this);
+        // **`.newlines` 追踪**（本轮 ✓）：`readline(0)` 也触发（参照实测 ✓）。
+        if mode.tracks_newlines() {
+            scan_newlines_once(instance, this, &text);
+        }
         let (piece, end) = text_readline_from(&characters, start, size, mode);
         let new_position = instance.new_int(end as i64);
         set_attr(instance, this, "_pos", new_position);
@@ -2429,13 +2813,19 @@ fn file_writelines(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let this = file_receiver(instance, bound, args)?;
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_IOBase.writelines() takes no keyword arguments",
+        ));
+    }
     let Some(lines) = args.get(1).copied().or_else(|| args.first().copied()) else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "writelines() takes exactly one argument (0 given)",
+            "_IOBase.writelines() takes exactly one argument (0 given)",
         ));
     };
     // 若 `args` 的第一项就是 self（未绑定调用）⇒ 第二个及其后是实参；正常绑定调用 `args[0]` 是 lines。
@@ -2526,7 +2916,17 @@ fn file_write(
         if !file_flag(instance, this, "_writable") {
             return Err(unsupported_error(instance, "not writable"));
         }
-        let insertion: Vec<char> = text.chars().collect();
+        // **写翻译**（本轮 ✓）：`None`（Linux 上 `os.linesep == '\n'`）／`''`／`'\n'` 恒等；
+        // `'\r'`／`'\r\n'` 把**每个** `'\n'` 换成对应串（参照实测 ✓）。写进 `_data` 的是**翻译后**
+        // 的文本 ⇒ `w+` 回读看到的就是落盘原文 ✓；返回值仍是**实参字符数**（不是翻译后长度 ✓）。
+        let translated = newline_mode_of(instance, this).translate_write(text);
+        let written = text.chars().count();
+        let insertion: Vec<char> = translated.chars().collect();
+        // 缓冲内容变了 ⇒ 下次真读要重扫 `.newlines`（`w+` 回读口径 ✓）。
+        if file_flag(instance, this, "_readable") {
+            let stale = instance.new_bool(false);
+            set_attr(instance, this, "_newlines_scanned", stale);
+        }
         let current = file_text(instance, this, "_data").unwrap_or_default();
         let mut characters: Vec<char> = current.chars().collect();
         let at = if append { characters.len() } else { position };
@@ -2539,11 +2939,10 @@ fn file_write(
         for (offset, character) in insertion.iter().enumerate() {
             characters[at + offset] = *character;
         }
-        let written = insertion.len();
         let updated: String = characters.into_iter().collect();
         let data_value = instance.new_str(&updated);
         set_attr(instance, this, "_data", data_value);
-        let new_position = instance.new_int((at + written) as i64);
+        let new_position = instance.new_int((at + insertion.len()) as i64);
         set_attr(instance, this, "_pos", new_position);
         let dirty = instance.new_bool(true);
         set_attr(instance, this, "_dirty", dirty);
@@ -2772,13 +3171,21 @@ fn file_next(
     Ok(line)
 }
 
-// ==== `_io.StringIO` 真实现（`P3-39` 第 2 轮）=========================================
+// ==== `_io.StringIO` 真实现（`P3-39` 第 2 轮；`newline=` 第 3 轮 ✓）==================
 //
 // **为什么真做** ✓：`TypeError: cannot create 'StringIO' instances` 是分诊里的头号签名之一
 //（15 个官方测试阻塞；`unittest` 的失败消息格式化、`pprint.pformat`、`test.support.captured_stderr`
-// 一族都压在它上面）。**口径（如实 ✗）**：文本缓冲放**实例字典**（`_buf` 是 `str`、`_pos` 是
-// **码点下标**、`_closed`）；`newline` 形参**收下但不做换行翻译** ✗；`encoding`／`errors`／
-// `newlines` 未接（`encoding` 给 `None`，与参照实测同 ✓）；不做真缓冲/流式（本来就在内存 ✓）。
+// 一族都压在它上面）。**口径**：文本缓冲放**实例字典**（`_buf` 是 `str`、`_pos` 是**码点下标**、
+// `_closed`）；`encoding`／`errors` 给 `None`、"`line_buffering` False"（参照实测同 ✓）。
+//
+// **`newline=`（本轮 ✓，照本机 `python3` 3.14.4 实测，`target/recon/io_nl/probe_stringio_nl.py`）**：
+// - 构造档 `StringIO(initial_value='', newline='\n')`：**初始值按写口径翻译**；默认档 `'\n'` 恒等；
+// - **写**：`None` 把**三档**换行（`\r\n`／`\r`／`\n`）都译成 `\n`（与 `TextIOWrapper` 只译 `\n`
+//   不同 ✓）；`''`／`'\n'` 恒等；`'\r'`／`'\r\n'` 把每个 `\n` 换成对应串；
+// - **读**：`None` 三档断行并翻译、`''` 三档断行不翻译、显式档只认那一个（与 `TextIOWrapper` 同口径 ✓）；
+//   区别在**存储**：`None` 的缓冲已是翻译后的文本 ⇒ 读＝普通切片，`tell` 是**翻译后**码点下标 ✓；
+// - **`.newlines`**：只读属性；`None`／`''` 两档从**实参原文**累计（构造／写），显式三档恒 `None` ✓；
+//   关闭后读它报 `ValueError: I/O operation on closed file`（无句点 ✓）。
 //
 // 语义照本机 CPython 3.14.4 实测：`StringIO("abc").tell()`＝0；`seek(5)` 后 `write("x")` 用
 // `'\x00'` 补齐；`write(b"x")` ⇒ `TypeError: string argument expected, got 'bytes'`；
@@ -2809,6 +3216,104 @@ fn stringio_text_from_points(instance: &Instance, points: &[u32]) -> NonNull<Hea
     instance
         .new_str_wtf8(&bytes)
         .unwrap_or_else(|| instance.new_str(""))
+}
+
+/// `StringIO` 的 `newline=` 校验 ✓（**文案与 `open`／`TextIOWrapper` 不同**，照参照实测）：
+/// 先类型（`TypeError: newline must be str or None, not int`）；再取值
+/// （`ValueError: illegal newline value: 'x'` —— 带 **repr** ✓）。缺省档是 `'\n'`（恒等 ✓）。
+fn stringio_newline_mode_of_value(
+    instance: &Instance,
+    value: Option<NonNull<Header>>,
+) -> Result<NewlineMode, ExecError> {
+    let Some(value) = value else {
+        return Ok(NewlineMode::Lf);
+    };
+    if value == instance.singletons().none() {
+        return Ok(NewlineMode::Universal);
+    }
+    let Some(text) = instance.text_of(value) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "newline must be str or None, not {}",
+                instance.type_name(instance.type_of(value))
+            ),
+        ));
+    };
+    match text {
+        "" => Ok(NewlineMode::NoTranslation),
+        "\n" => Ok(NewlineMode::Lf),
+        "\r" => Ok(NewlineMode::Cr),
+        "\r\n" => Ok(NewlineMode::CrLf),
+        other => Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("illegal newline value: {}", str_repr_for_message(other)),
+        )),
+    }
+}
+
+/// Python `repr(str)` 的消息形态（只用于非法 `newline` 值的报错；覆盖常见转义 ✓）。
+fn str_repr_for_message(text: &str) -> String {
+    let mut out = String::from("'");
+    for character in text.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other if (other as u32) < 0x20 || other as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", other as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// 把每个 `\n` 码点换成 `replacement`（`StringIO` 的显式写档 ✓）。
+fn stringio_replace_line_feeds(points: &[u32], replacement: &[u32]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::with_capacity(points.len());
+    for &point in points {
+        if point == u32::from(b'\n') {
+            out.extend_from_slice(replacement);
+        } else {
+            out.push(point);
+        }
+    }
+    out
+}
+
+/// **StringIO 写翻译** ✓（本机 3.14.4 实测）：
+/// - `None`：**三档**换行（`\r\n`／`\r`／`\n`）都译成 `\n`（与 `TextIOWrapper` 只译 `\n` 不同 ✓）；
+/// - `''`／`'\n'`：恒等；
+/// - `'\r'`／`'\r\n'`：每个 `\n` 换成对应串（不配对既有 `\r` ✓）。
+fn stringio_translate_write(points: &[u32], mode: NewlineMode) -> Vec<u32> {
+    match mode {
+        NewlineMode::Universal => {
+            let mut out: Vec<u32> = Vec::with_capacity(points.len());
+            let mut index = 0usize;
+            while index < points.len() {
+                if points[index] == u32::from(b'\r') {
+                    out.push(u32::from(b'\n'));
+                    index += 1;
+                    if index < points.len() && points[index] == u32::from(b'\n') {
+                        index += 1;
+                    }
+                } else {
+                    out.push(points[index]);
+                    index += 1;
+                }
+            }
+            out
+        }
+        NewlineMode::NoTranslation | NewlineMode::Lf => points.to_vec(),
+        NewlineMode::Cr => stringio_replace_line_feeds(points, &[u32::from(b'\r')]),
+        NewlineMode::CrLf => {
+            stringio_replace_line_feeds(points, &[u32::from(b'\r'), u32::from(b'\n')])
+        }
+    }
 }
 
 /// 写回 StringIO 状态（`_buf`／`_pos`／`_closed` ＋ 属性读用的 `closed` 镜像 ✓）。
@@ -2853,48 +3358,99 @@ fn stringio_check_open_period(instance: &Instance, this: NonNull<Header>) -> Res
     Ok(())
 }
 
-/// `StringIO(initial_value='', newline='\n')` ✓（`newline` 收下不生效 ✗，见本节头注）。
+/// `StringIO(initial_value='', newline='\n')` ✓（本轮接 `newline=`：构造收档、读写同口径 ✓）。
 fn stringio_init(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let Some((this, rest)) = this_of(bound, args) else {
         return Err(instance.raise_builtin_error("TypeError", "StringIO.__init__ 缺少 self"));
     };
+    if rest.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("StringIO() takes at most 2 arguments ({} given)", rest.len()),
+        ));
+    }
+    let mut initial_value = rest.first().copied();
+    let mut newline_value = rest.get(1).copied();
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            continue;
+        };
+        match name {
+            "initial_value" => {
+                if initial_value.is_some() && !rest.is_empty() {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "StringIO() got multiple values for argument 'initial_value'",
+                    ));
+                }
+                initial_value = Some(*value);
+            }
+            "newline" => {
+                if newline_value.is_some() && rest.len() > 1 {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "StringIO() got multiple values for argument 'newline'",
+                    ));
+                }
+                newline_value = Some(*value);
+            }
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("StringIO() got an unexpected keyword argument '{other}'"),
+                ))
+            }
+        }
+    }
+    // **校验次序照参照** ✓：先 `newline`，再 `initial_value` 类型（实测 `StringIO(b"x", newline="x")`
+    // ⇒ `ValueError: illegal newline value` 而不是 initial_value 的 `TypeError` ✓）。
+    let mode = stringio_newline_mode_of_value(instance, newline_value)?;
     let none = instance.singletons().none();
-    let points: Vec<u32> = match rest.first() {
+    let points: Vec<u32> = match initial_value {
         None => Vec::new(),
-        Some(value) if *value == none => Vec::new(),
-        Some(value) => match instance.wtf8_of(*value) {
+        Some(value) if value == none => Vec::new(),
+        Some(value) => match instance.wtf8_of(value) {
             Some(raw) => pyawa_core::wtf8::decode(raw).unwrap_or_default(),
             None => {
                 return Err(instance.raise_builtin_error(
                     "TypeError",
                     &format!(
                         "initial_value must be str or None, not {}",
-                        instance.type_name(instance.type_of(*value))
+                        instance.type_name(instance.type_of(value))
                     ),
                 ))
             }
         },
     };
-    stringio_store(instance, this, &points, 0, false);
+    // **初始值按写口径翻译** ✓（`None`：三档译成 `\n`；显式档：每个 `\n` 换成对应串；`''`／`'\n'` 恒等）。
+    let translated = stringio_translate_write(&points, mode);
+    stringio_store(instance, this, &translated, 0, false);
+    // **`newline` 档 ＋ `.newlines` 掩码**（`None`／`''` 两档从**实参原文**追踪 ✓）。
+    let newline_attr = instance.new_int(mode.code());
+    set_attr(instance, this, "_newline", newline_attr);
+    let zero_mask = instance.new_int(0);
+    set_attr(instance, this, "_newlines_mask", zero_mask);
+    if mode.tracks_newlines() {
+        record_newlines_mask(instance, this, newline_mask_of_points(&points));
+    }
     // **文本流属性面**（`test_memoryio` 的 `test_textio_properties` ✓）：参照实测
-    // `encoding is None`／`errors is None`／`newlines is None`／`line_buffering is False` ✓。
+    // `encoding is None`／`errors is None`／`line_buffering is False` ✓（`newlines` 本轮改成只读属性 ✓）。
     let none_value = instance.retain(instance.singletons().none());
     set_attr(instance, this, "encoding", none_value);
     let errors = instance.retain(instance.singletons().none());
     set_attr(instance, this, "errors", errors);
-    let newlines = instance.retain(instance.singletons().none());
-    set_attr(instance, this, "newlines", newlines);
     let line_buffering = instance.new_bool(false);
     set_attr(instance, this, "line_buffering", line_buffering);
     Ok(instance.retain(instance.singletons().none()))
 }
 
-/// `StringIO.write(s)` ⇒ 写入的**字符数** ✓（在 `_pos` 处覆盖；越过末尾用 `'\x00'` 补齐 ✓）。
+/// `StringIO.write(s)` ⇒ 写入的**字符数** ✓（在 `_pos` 处覆盖；越过末尾用 `'\x00'` 补齐 ✓；
+/// **写翻译**见 [`stringio_translate_write`] ✓，返回值是**实参字符数**、位置按翻译后长度推进 ✓）。
 fn stringio_write(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -2921,7 +3477,9 @@ fn stringio_write(
         ));
     };
     let written = pyawa_core::wtf8::decode(raw).unwrap_or_default();
-    let length = written.len();
+    let mode = newline_mode_of(instance, this);
+    let translated = stringio_translate_write(&written, mode);
+    let length = translated.len();
     let mut points = stringio_code_points(instance, this);
     let start = state_pos(instance, this).max(0) as usize;
     if start > points.len() {
@@ -2930,9 +3488,13 @@ fn stringio_write(
     if start + length > points.len() {
         points.resize(start + length, 0);
     }
-    points[start..start + length].copy_from_slice(&written);
+    points[start..start + length].copy_from_slice(&translated);
+    // **`.newlines` 从实参原文累计** ✓（`None`／`''` 两档；写后内容变了，掩码只增不减 ✓）。
+    if mode.tracks_newlines() {
+        record_newlines_mask(instance, this, newline_mask_of_points(&written));
+    }
     stringio_store(instance, this, &points, (start + length) as i64, false);
-    Ok(instance.new_int(length as i64))
+    Ok(instance.new_int(written.len() as i64))
 }
 
 /// `StringIO.getvalue()` ⇒ 整个缓冲 ✓（**关闭后**报 `ValueError`，照参照实测 ✓）。
@@ -2952,7 +3514,7 @@ fn stringio_getvalue(
     }
 }
 
-/// `StringIO.read([size])` ✓。
+/// `StringIO.read([size])` ✓（`newline=` 五档读口径，与 `TextIOWrapper` 同一套扫描 ✓）。
 fn stringio_read(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -2969,17 +3531,13 @@ fn stringio_read(
         .unwrap_or(-1);
     let points = stringio_code_points(instance, this);
     let start = (state_pos(instance, this).max(0) as usize).min(points.len());
-    let count = if size < 0 {
-        points.len() - start
-    } else {
-        (size as usize).min(points.len() - start)
-    };
-    let result = stringio_text_from_points(instance, &points[start..start + count]);
-    stringio_store(instance, this, &points, (start + count) as i64, false);
-    Ok(result)
+    let mode = newline_mode_of(instance, this);
+    let (piece, end) = text_read_units(&points, start, size, mode);
+    stringio_store(instance, this, &points, end as i64, false);
+    Ok(stringio_text_from_points(instance, &piece))
 }
 
-/// `StringIO.readline([size])` ✓（含行尾 `'\n'` ✓）。
+/// `StringIO.readline([size])` ✓（`newline=` 五档断行口径；含行尾换行 ✓、EOF 给剩余段 ✓）。
 fn stringio_readline(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -2996,16 +3554,10 @@ fn stringio_readline(
         .unwrap_or(-1);
     let points = stringio_code_points(instance, this);
     let start = (state_pos(instance, this).max(0) as usize).min(points.len());
-    let mut end = points.len();
-    if let Some(offset) = points[start..].iter().position(|point| *point == b'\n' as u32) {
-        end = start + offset + 1;
-    }
-    if size >= 0 {
-        end = end.min(start + size as usize);
-    }
-    let result = stringio_text_from_points(instance, &points[start..end]);
+    let mode = newline_mode_of(instance, this);
+    let (piece, end) = text_readline_units(&points, start, size, mode);
     stringio_store(instance, this, &points, end as i64, false);
-    Ok(result)
+    Ok(stringio_text_from_points(instance, &piece))
 }
 
 /// `StringIO.readlines()` ✓。
@@ -3219,16 +3771,22 @@ fn stringio_writelines(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let Some((this, rest)) = this_of(bound, args) else {
         return Err(instance.raise_builtin_error("TypeError", "StringIO.writelines 缺少 self"));
     };
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_IOBase.writelines() takes no keyword arguments",
+        ));
+    }
     stringio_check_open(instance, this)?;
     let Some(lines) = rest.first() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "writelines() takes exactly one argument (0 given)",
+            "_IOBase.writelines() takes exactly one argument (0 given)",
         ));
     };
     let iterator = pyawa_core::executor::iter::iter_value(instance, *lines)?;
@@ -3257,6 +3815,20 @@ fn stringio_detach(
         return Err(instance.raise_builtin_error("TypeError", "StringIO.detach 缺少 self"));
     };
     Err(unsupported_error(instance, "detach"))
+}
+
+/// `.newlines` getter（`StringIO` ✓）：**关闭后**报 `ValueError: I/O operation on closed file`
+///（无句点 —— 照参照实测 ✓）。
+fn stringio_newlines_getter(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = property_self(args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor 'newlines' needs an argument"))?;
+    stringio_check_open(instance, this)?;
+    Ok(newlines_value(instance, newlines_mask_of(instance, this)))
 }
 
 /// 建 `_io.StringIO` 真类 ✓（状态在实例字典 ✓；基类取 `_TextIOBase` 占位类型 ⇒ `isinstance` 成立 ✓）。
@@ -3301,6 +3873,10 @@ fn build_string_io(instance: &Instance, namespace: NonNull<Header>) {
         class_namespace,
         None,
     ) {
+        // **`.newlines` 只读属性**（本轮 ✓；关闭后读 ⇒ `ValueError` ✓）。
+        if let Some(property) = readonly_property(instance, stringio_newlines_getter as NativeFn) {
+            instance.set_type_attribute(class.cast::<pyawa_core::TypeObject>(), "newlines", property);
+        }
         instance.dict_set(namespace, "StringIO", class);
     }
 }
