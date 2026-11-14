@@ -997,8 +997,13 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
     - `newline=` 的**读**口径（缺口3，2026-11-14）：`open()` 第 6 位置实参/关键字与
       `TextIOWrapper.__init__` 第 4 位置实参/关键字共五档（`None`／`''`／`'\n'`／`'\r'`／`'\r\n'`）；
       `read`／`readline`／`readlines`／`__next__` 按档断行/翻译（`None` ⇒ 三档断行并译成 `\n`；
-      `''` ⇒ 三档断行**不翻译**；其余只按给出的那个断）。**写**侧 `newline=` 翻译、`.newlines`
-      属性、`StringIO(newline=…)` 仍未接（如实）。e2e：`crates/pyawa-runtime/tests/io_newline_shapes.rs`
+      `''` ⇒ 三档断行**不翻译**；其余只按给出的那个断）。**写**侧 `newline=` 翻译：`None` 在 Linux
+      上 os.linesep=`\n` ⇒ 恒等、`''`／`'\n'` 不翻译、`'\r'`／`'\r\n'` 把 `\n` 换掉；
+      `.newlines` 只读属性（掩码 CR/LF/CRLF，首次真读扫整块；显式三档恒 `None`）；
+      `StringIO(initial_value, newline=…)` 构造收档、初始值按写口径翻译、读写五档（2026-11-14 落地）。
+      e2e：`crates/pyawa-runtime/tests/io_newline_shapes.rs`（读）＋`io_newline_write_shapes.rs`（写/
+      `.newlines`/`StringIO`）。**边界**：`.newlines` 为整块追踪（参照 8192 字节块）；文本 `tell`
+      仍是字符下标（参照字节 cookie）。
     - `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）
     - `FileIO`（经 `fs` 域）：`open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现
   - **占位类型**（可当基类、可 `isinstance`；**实例化按 CM-6 报错**）：`_IOBase`／`_RawIOBase`／

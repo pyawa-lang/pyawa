@@ -286,6 +286,24 @@ acc ??= 0                             # 只在 None 时赋值
     逐字节矩阵（类体变量、方法内 `self.__x`、显式 `_C__x`、尾部下划线、dunder、嵌套类/def/lambda、
     形参、`global`/`nonlocal`、`import`、属性、推导式、`match`、walrus、增广赋值、注解键、
     `__static_attributes__`、类名前导下划线、类外不改写）。
+- **BC-67** **类对象的运行期配套**（`BC-66` 的运行期另一半；2026-11-14 落地）：
+  - `__slots__` 里的**字符串**槽名按 `BC-66` 规则改写（`__slots__ = ('__x',)` ⇒ 槽/描述符名
+    `_C__x`；类名前导下划线剥掉）；非 str 元素报 `__slots__ items must be strings, not '…'`、
+    非标识符报 `__slots__ must be identifiers`、与类变量冲突报 `ValueError`；每个槽在类型字典里
+    是 `member_descriptor`（`__name__`／`__qualname__=<类 qualname>.<槽>`／`__objclass__`／`__doc__=None`）。
+  - **类的 `__qualname__`**：类命名空间里的 `__qualname__`（编译器按定义处写，如 `N2.D`／
+    `outer.<locals>.K`）是唯一来源；方法/嵌套定义的 `__qualname__` 在类创建时按**类的完整
+    qualname** 补全；类字典**不得**保留公开 `__qualname__` 键（参照 3.14：`getattr_static` 取到
+    的是 getset 描述符）。
+  - **`type.__dict__` 的类型属性**：`__name__`／`__qualname__`／`__module__`／`__bases__` **必须**
+    是 `getset_descriptor` 实例（带 `__name__`／`__objclass__ is type`／`__doc__=None`／参照 repr），
+    `__get__` 与属性通道**一处真相**；写/删按参照校验（heap 类型只收 str、静态类型
+    `cannot set … immutable type`、`del` TypeError）。⇒ `inspect.getattr_static(用户类, "__name__")`
+    返回描述符而非 `AttributeError`。
+  - **验收**：`crates/pyawa-runtime/tests/task13_class_surface_shapes.rs`（对拍 3.14.4）、
+    `private_name_mangling.rs`、`crates/pyawa-core/tests/classes.rs`。
+  - **已知边界**：`getset_descriptor`／`member_descriptor` 暂无 `__set__`／`__delete__`
+    （`inspect.isdatadescriptor` 为 False；补数据描述符需改 `TypeObject`／`FunctionObject` 存储字段）。
 
 ---
 
