@@ -857,7 +857,7 @@
 
 | # | 项 | 收法 | 验收 |
 |---|---|---|---|
-| 1 | `AB-52` 的 `type_expr` **不求值**（只原样保留表达式字符串） | 落 `TS` 注解解析器；未落前保持"原样保留"（合规） | 注解表达式可求值；`.pyi` 导出正确 |
+| 1 | `AB-52` 的 `type_expr` **不求值**（只原样保留表达式字符串） | **已落地（M4，2026-11-14）**：落 `TS` 注解解析器（`SPEC-type-system.md` §16 的 `TS-51`…`TS-57`；`pyawa_core::parse_type_expression`／`evaluate_type_expression`）；`pa_register`／`pa_module_addfunction` 注册时求值成 `AB-69` 的 `TyExpr`（**同一账本**：边界运行期＋编译期调用点检查；`Any`/`Platform` 变体；坏字符串/未知名 ⇒ `PA_ERR_INVALID`；`.pyi` 仍原串） | 注解表达式可求值 ✓（`crates/pyawa-abi/tests/annotation_strings.rs` 7 passed）；`.pyi` 导出正确 ✓ |
 | 2 | `pa_exec_file` **未提供**（文件 I/O 经能力层 `IM-15`） | 接 `IM-15` 后提供；未接时如实 `PA_ERR_NOTIMPLEMENTED`（现状合规） | 提供后文件执行可用；未提供时与"已实现但拒绝"可区分（`AB-22`） |
 | 3 | `pa_call` 的 `nresults != 1` **未定** | **已定**：**精确**结果数（`0`/`N`，多截、少补 `None`）⇒ 落 `AB-72` | 多返回值用例；单返回值不回退 |
 | 4 | **宿主对象句柄不可读回**（复核：`pa_type` **本来就在**如实报 `PA_THANDLE`——审计此句为误记；缺的只有 `pa_tohandle`） | **已实现**：新增 `AB-70` `int pa_tohandle(pa_state*, int idx, void **payload_out)`——栈契约 `—`，仅对宿主对象成功，类型不符 `PA_ERR_INVALID`（`AB-22`）；借用照 `AB-15`／`AB-17` | 脚本把句柄当参数传给宿主函数能取回载荷；经 `list`／`dict` 往返后仍能取回；类型不符如实报错；规格 §15.3 表格同步 |
@@ -875,7 +875,7 @@
 - **#6** 已拍板（改规格记法跟随实现）并落地：`setfield` **−1**、`settable`／`rawset` **−2**（`getfield`／`gettable`／`rawget` 维持 ±1）；
 - **#7** 已落地：`pa.h` 顶部总述与执行入口注释都改为"`pa_exec_string`／`pa_exec_bytecode` 已落地；只有 `pa_exec_file` 如实报未提供（`IM-15`）"；
 - **#8** 已拍板（补进头／规格）并落地：`pa_set_program_filename` 进 `pa.h` ＋ **`AB-71`**；`T-CX-19` 的过渡清单已清空（棘轮仍在：将来新增影子导出立即红）；
-- **#1／#2** 维持合规现状（等 `TS` 注解解析器／`IM-15`），边界已如实写在各处；
+- **#1** **已落地（M4，2026-11-14）**：`AB-52` 的 `type_expr` 求值接通（见上表 row 1 与 `SPEC-type-system.md` §16、`PLAN` §12.9）；**#2** 维持合规现状（等 `IM-15`），边界已如实写在各处；
 - **ABI 版本**：次版本 **9→10**（`AB-70`／`AB-71` 为**追加式**；`AB-72` 是**未发布前**的语义补齐，旧宿主不存在）。**ABI 仍不发布**（用户 2026-11-13 口径：等钩子族定稿）。
 
 
@@ -1007,8 +1007,31 @@ symbols 缺口：annotation-only 外层绑定运行期缺 cell（`NameError`）�
 | **M2 语法层** | `pyawa_core::type_expr::TypeExpr` 语法树＋`compile::parse_type_expression(&str)`（复用 `compile/parser/types.rs` 的 `parse_type_at`；`?` 降级/联合摊平/单实参下标摊平/可逆投影）；`crates/pyawa-core/tests/type_expression.rs`（`T-TS-12`：语法矩阵/往返/错误） | ✓（2026-11-14） |
 | **M3 求值层** | 名称解析（模块 globals→builtins→宿主注册类型、点号属性链、前向引用延迟）＋`typing` 构造（`Callable`/`Optional`/`Union`/`Annotated`/`List`/`Dict`/`Set`/`Tuple`）→ `SemanticType`／`BC-24` 静态标签（`to_static_label`，与 `AB-69` 同口径）；`Deferred`/`Unknown`/`Invalid` 如实分类；`crates/pyawa-core/tests/type_expression_resolve.rs`（7 passed） | ✓（2026-11-14） |
 | **M4 ABI 接入** | `AB-52` `type_expr` 在 `pa_register`/`pa_module_addfunction` 注册时求值成 `AB-69` 的 `TyExpr`（新增 `Any`/`Platform` 变体），登记进 `host_typed_signatures` ⇒ 边界运行期＋编译期调用点检查对字符串通道生效；同一函数已有句柄签名不覆盖；坏字符串/未知名 ⇒ `PA_ERR_INVALID`，显式前向引用 ⇒ 平台类型；`.pyi` 仍原串；`crates/pyawa-abi/tests/annotation_strings.rs`（6 passed，含字符串↔句柄同行为、`.pyi` 原串） | ✓（2026-11-14） |
-| **M5 编译期扩展** | **已落地**：①`TS-23`/`TS-24`/`TS-25`/`TS-39` 的**标注覆盖率与档位报告**（`compile::annotation_coverage`＋`AnnotationCoverage::to_report`；分列位置/仅关键字/`*args`/`**kwargs`/返回/变量，`x: T = v` 只算一格；`crates/pyawa-core/tests/annotation_coverage.rs` 4 passed）②`pa_newtype` 的 `sig` 字符串注册时**校验**（坏表达式 ⇒ `PA_ERR_INVALID`；`annotation_strings.rs` 7 passed）。**边界如实登记（未做，理由）**：③`BC-25`① 需**全程序信息**——`BC-23` 在**被调用方序言**发射，而"两侧都已标注 ⇒ 禁止发射"要求知道全部调用点（跨模块），单个编译单元不可判定；当前按"带标注保守发射"（`P3-13` 已登记）④`TS-37` 批量诊断：`typecheck` 现首错即止（`Result` 控制流），批量化需重构诊断收集（下一窗口）⑤`TS-38` 产物内嵌/`TS-39` 独立文件导出：需改 `IM-18`/`IM-19` 产物要素与黄金字节（另一窗口；运行期仍不读 fs） | 部分 ✓（2026-11-14），余项按上述边界登记 |
-| **M6 收口** | `PLAN` §12.4 #1 状态更新（`type_expr` 求值不再"待"）、`NEXT`/文档/机检同步 | 待做 |
+| **M5 编译期扩展** | **已落地**：①`TS-23`/`TS-24`/`TS-25`/`TS-39` 的**标注覆盖率与档位报告**（`compile::annotation_coverage`＋`AnnotationCoverage::to_report`；分列位置/仅关键字/`*args`/`**kwargs`/返回/变量，`x: T = v` 只算一格；`crates/pyawa-core/tests/annotation_coverage.rs` 4 passed）②`pa_newtype` 的 `sig` 字符串注册时**校验**（坏表达式 ⇒ `PA_ERR_INVALID`；`annotation_strings.rs` 7 passed）。**边界如实登记（未做，理由）**：③`BC-25`① 需**全程序信息**——`BC-23` 在**被调用方序言**发射，而"两侧都已标注 ⇒ 禁止发射"要求知道全部调用点（跨模块），单个编译单元不可判定；当前按"带标注保守发射"（`P3-13` 已登记）④`TS-37` 批量诊断：**已落地**（既有 `compile::check_source`＋`typecheck::check_diagnostics`，PLAN §10.1；执行路径 `compile` 仍首错即止属"不能继续执行"的合理口径）⑤`TS-38` 产物内嵌/`TS-39` 独立文件导出：需改 `IM-18`/`IM-19` 产物要素与黄金字节（另一窗口；运行期仍不读 fs） | 部分 ✓（2026-11-14），余项按上述边界登记 |
+| **M6 收口** | `PLAN` §12.4 #1 状态更新（`type_expr` 求值不再"待"：已落地 M4）、`AB-52`/`§12.4` 交叉引用清理、`NEXT`/文档/机检同步；M1…M5 边界清单复核 | ✓（2026-11-14） |
 
 **边界**：M2 只做**语法层**（不做实例相关判断/名称解析/求值）；`AB-52` 的字符串求值在 M4 才接；
 `.pyi` 导出始终是**原字符串**（`AB-53`/`AB-54`，不得成为第二签名源）。
+
+
+### 12.10 TS 注解解析器收口（2026-11-14）
+
+用户口径「全口径（分多轮）」；**M1…M6 全部收口**（`SPEC-type-system.md` §16 的 `TS-51`…`TS-57`
+是规格；`AB-52` 的"由 Pyawa 自己的注解解析器求值"已成可执行义务）：
+
+| 里程碑 | 交付 | 验收 |
+|---|---|---|
+| M1 规格与模型 | `TS-51`…`TS-57`；`AB-52` 文本 | `check.py`（`T-CX-1` 编号/`T-CX-10` 连续） |
+| M2 语法层 | `TypeExpr`＋`parse_type_expression` | `tests/type_expression.rs` 3 passed |
+| M3 求值层 | `SemanticType`＋名称解析/typing 构造/标签投影 | `tests/type_expression_resolve.rs` 7 passed |
+| M4 ABI 接入 | `AB-52` 注册时求值 ＝ `AB-69` 同一账本 | `tests/annotation_strings.rs` 7 passed（两通道同行为/`.pyi` 原串） |
+| M5 编译期扩展 | 标注覆盖率/档位报告（`TS-23`/`24`/`25`/`39`）；`pa_newtype` sig 校验 | `tests/annotation_coverage.rs` 4 passed |
+| M6 收口 | `§12.4 #1` 状态清零、交叉引用/`NEXT` 同步 | 本文档＋`git log` |
+
+**未收进本工程的项（范围外＋诊断证据，均不影响"注解解析器"本身）**：
+- `BC-25`①（"两侧都已标注 ⇒ 禁止发射"）：需**全程序**调用点信息（`BC-23` 在**被调用方序言**
+  发射），单编译单元不可判定；现维持"带标注保守发射"（`P3-13` 已登记）——不是"默认关闭"。
+- `TS-38`／`TS-39` 的**产物内嵌/独立文件导出**：需改 `IM-18`／`IM-19` 的 `.pyac` 产物要素与
+  黄金字节（跨格式变更窗口）；运行期仍**不读**伴随文件（`TS-38` 的运行时约束保持），报告由
+  `compile::annotation_coverage` 给出。
+- `TS-34` 诊断缓存：`check_source` 是纯函数（`TS-33` 成立），缓存属 LSP/工具链步骤（未落）。
