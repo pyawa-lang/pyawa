@@ -595,10 +595,10 @@
 | `int paL_execresult(pa_state *state, int status)` | 状态码 → 统一收尾（`PA_OK` ⇒ 压 `True`，`+1`） |
 | `int paL_requiref(pa_state *state, const char *name, const void *openf, int glb)` | 取或加载模块 |
 | `int paL_setfuncs(pa_state *state, const pa_reg *regs, int n)` | 批量注册（`n < 0` ⇒ 以 NULL 名字结尾） |
-| `int paL_openlibs(pa_state *state)` | 打开标准库（**提供方＝组合根**：`pyawa-runtime` 的产物；`pyawa-abi` 的占位实现保持 `PA_ERR_NOTIMPLEMENTED` 且**必须**写 `pa_errmsg`。落地见 §12.13 #1） |
+| `int paL_openlibs(pa_state *state)` | 打开标准库（**提供方＝组合根**：`pyawa-runtime` 的 C 产物；`pyawa-abi` 的最小产物**不导出**本符号）。实现在组合根：装 builtins／`sys`（幂等）；**不**注册能力域（`fs` 等由宿主按 `AB-33`／`AB-34` 决定）；`state == NULL` ⇒ `PA_ERR_INVALID`（§12.13 #1，已落地） |
 | `int paL_dostring(pa_state *state, const char *s, int mode)` | 执行字符串并统一收尾 |
 | `int paL_dofile(pa_state *state, const char *path, int mode)` | 执行文件并统一收尾 |
-| `pa_state *paL_newstate(void)` | `pa_create` ＋ 真实机器 provider 的便捷入口（实现属 `pyawa-runtime`） |
+| `pa_state *paL_newstate(void)` | **电池版**组合根入口（实现属 `pyawa-runtime`）：`pa_create` ＋ `fs`／`clock`／`net` 真实能力 ＋ builtins／`sys`／stdlib；交回的实例上 `print`／`import` 可用。**单一 C 产物**：`pyawa-runtime` 的 cdylib／staticlib 同时导出全部 `pa_*` 与 `paL_*`；provider／vtable 按实例泄漏到进程末（便捷入口的如实边界） |
 
 > **禁止**靠辅助层绕过任何硬约束——辅助层**不得**引入核心层没有的语义（`AB-4`／`AB-6`）。
 
@@ -727,8 +727,9 @@
 **本规格无未实现的 `AB-` 条款**：`AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
 当场拒绝）、#3（`pa_getglobal` 缺失名 `PA_ERR_INVALID`）、#4（模块句柄上栈）已随 **1.13** 落地
 （`crates/pyawa-abi/tests/host_usability.rs` 的 `T-AB-15/16/17`）。**§12.13 #1**（组合根 stdlib
-可用性）不是 AB 条款、仍是实现项：路线 **A** 已由用户拍板（C 宿主链 `pyawa-runtime` 产物），
-待实施（`T-AB-18`）。此前：
+可用性）也已按路线 **A** 落地：`pyawa-runtime` 的 C 产物是单一库（`pa_*`＋`paL_*`），
+`paL_newstate` 装真实能力＋stdlib，`paL_openlibs` 由组合根提供；仓库内最小探针
+`tests/ci/host_usability_probe.py`（无 numpy）验收 `T-AB-18`。此前：
 **`AB-75`…`AB-78` 全部落地**（`AB-75` `pa_set_object_ops` 与 `AB-78` 投影等价差分于步 3/5
 落地（`crates/pyawa-abi/tests/object_ops.rs` 的 T-AB-12／T-AB-14）；`AB-76`（`pa_typeid`）与
 `AB-77`（`pa_newtype` 的 `base_index`）于步 1/4 落地（`crates/pyawa-abi/tests/type_identity.rs`）；

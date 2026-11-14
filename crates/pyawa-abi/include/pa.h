@@ -442,7 +442,8 @@ int pa_setcapability_async(pa_state *state, int domain, int classification);
  * 结构性限制（README 里同样写明）：
  *   - paL_error 的 C 变参格式化在稳定版 Rust 里做不到（要 vsnprintf）⇒ 只收拼好的消息；
  *     format 那一路等 AB-44 的版本策略裁定
- *   - paL_openlibs／paL_dostring／paL_dofile 分别缺标准库（P3-14）与编译器（P3-12）
+ *   - paL_openlibs 由**组合根产物**（pyawa-runtime 的 cdylib/staticlib）提供（§12.13 #1）；
+ *     pyawa-abi 的最小 cdylib 不导出它；paL_dostring／paL_dofile 缺编译器（P3-12）
  *   - paL_where 缺 traceback（OM-28）、paL_requiref 缺模块系统（IM-）
  */
 typedef struct pa_reg {
@@ -472,7 +473,8 @@ int paL_openlibs(pa_state *state);
 int paL_dostring(pa_state *state, const char *s, int mode);
 int paL_dofile(pa_state *state, const char *path, int mode);
 
-/* paL_newstate()：pa_create ＋ 真实机器 provider 的便捷入口（实现属 pyawa-runtime）。
+/* paL_newstate()：组合根电池版入口（实现属 pyawa-runtime）——pa_create ＋ fs/clock/net 真实能力
+ * ＋ builtins/sys/stdlib 装配；pyawa-runtime 的 C 产物同时导出全部 pa_*（单一库）。
  * 交回的指针必须用 pa_destroy 释放；失败给 NULL。 */
 pa_state *paL_newstate(void);
 

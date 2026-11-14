@@ -7,7 +7,7 @@ use core::mem::size_of;
 use pyawa_abi::status::*;
 use pyawa_abi::helpers::{
     paL_checkinteger, paL_checkstring, paL_dofile, paL_dostring, paL_error, paL_execresult,
-    paL_getsubtable, paL_len, paL_openlibs, paL_optinteger, paL_optstring, paL_ref,
+    paL_getsubtable, paL_len, paL_optinteger, paL_optstring, paL_ref,
     paL_requiref, paL_setfuncs, paL_traceback, paL_unref, paL_where,
 };
 use pyawa_abi::tag::*;
@@ -1401,7 +1401,6 @@ fn helpers_report_unimplemented_parts_honestly() {
     // SAFETY: state 存活。
     unsafe {
         // 这几条各自缺一块前置：标准库／编译器／traceback／模块系统
-        assert_eq!(paL_openlibs(state), PA_ERR_NOTIMPLEMENTED);
         assert_eq!(
             paL_dostring(state, b"1+1\0".as_ptr().cast(), 0),
             PA_ERR_NOTIMPLEMENTED

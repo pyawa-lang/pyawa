@@ -6,7 +6,8 @@
 //! 三处**结构性限制**（不是偷懒，写在 `README.md` 与 `pa.h`）：
 //! - `paL_error` 的 C 变参格式化**做不到**：稳定版 Rust 不能定义 C 变参函数（要 `vsnprintf`）。
 //!   本层取"调用方先拼好消息"的单参数形态；`format` 那一路等 `AB-44` 的版本策略裁定后再定。
-//! - `paL_openlibs`／`paL_dostring`／`paL_dofile` 分别要标准库（`P3-14`）与编译器（`P3-12`）
+//! - `paL_openlibs` **由组合根（`pyawa-runtime`）提供**（§12.13 #1；本 crate 不再导出它）；
+//!   `paL_dostring`／`paL_dofile` 分别缺编译器（`P3-12`）与文件 I/O（`IM-15`）
 //! - `paL_where` 要 traceback（`OM-28` 尚未接线）、`paL_requiref` 要模块系统（`IM-`）
 //!
 //! **`CX-11`**：本层每个 `paL_` 导出入口都自己走 [`crate::boundary`]——panic 绝不跨 FFI 边界。
@@ -507,18 +508,6 @@ pub unsafe extern "C" fn paL_setfuncs(
             index += 1;
         }
         PA_OK
-    })
-}
-
-/// `paL_openlibs(st)`：打开标准库——**要标准库**（`P3-14`）⇒ 未提供。
-///
-/// # Safety
-///
-/// 同 [`paL_checkinteger`]。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn paL_openlibs(_state: *mut pa_state) -> i32 {
-    boundary(|| {
-        PA_ERR_NOTIMPLEMENTED
     })
 }
 
