@@ -100,3 +100,9 @@ git checkout dev
   机制先于特性，**有意如此**）
 
 ⇒ **目前没有卡开工的未决项。**
+
+## 发行与集成
+
+- 发行说明／支持矩阵／已知限制：[`docs/RELEASE.md`](docs/RELEASE.md)
+- 宿主集成示例：[`docs/REFERENCE-HOST.md`](docs/REFERENCE-HOST.md)
+- 变更日志：[`CHANGELOG.md`](CHANGELOG.md)
