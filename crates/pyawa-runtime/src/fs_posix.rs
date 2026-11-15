@@ -16,6 +16,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+/// C 符号（`mkdir(2)`／`pipe(2)` 的 POSIX 名；本 crate 是平台集中点，`CX-4` 不扫它）。
+#[allow(unsafe_code)]
+mod sys {
+    use core::ffi::{c_char, c_int};
+
+    unsafe extern "C" {
+        /// `mkdir(2)`：按 `mode`（**经平台 umask** ✓）建目录。
+        pub fn mkdir(path: *const c_char, mode: u32) -> c_int;
+        /// `pipe(2)`：造一个管道，两个新 fd 写进 `fds`（读端、写端）。
+        pub fn pipe(fds: *mut c_int) -> c_int;
+    }
+}
+
 /// `fs` 域的 provider 状态：句柄表（`CP-17`：`close` 即释放）。
 #[derive(Default)]
 pub struct PosixFs {
@@ -62,8 +75,8 @@ impl PosixFs {
             rename: Some(fs_rename),
             readlink: Some(fs_readlink),
             symlink: Some(fs_symlink),
-            chmod: None,
-            utime: None,
+            chmod: Some(fs_chmod),
+            utime: Some(fs_utime),
             read: Some(fs_read),
             write: Some(fs_write),
             seek: Some(fs_seek),
@@ -74,6 +87,13 @@ impl PosixFs {
             // **`CP-30` 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 1→2）：读文件时间戳，
             // 供 `os.stat_result` 的 `st_mtime` 一族（`linecache` 靠它判缓存新鲜度）。
             stat_times: Some(fs_stat_times),
+            // **`P3-40` 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 3→4）：`os.pipe` 的两端句柄。
+            pipe: Some(fs_pipe),
+            // **round 109 的追加槽**（`AB-41`：表尾追加 ⇒ `PA_ABI_MINOR` 4→5）：不跟随符号链接的
+            // `utime`（`os.utime(..., follow_symlinks=False)`／`shutil.copy2` 的 symlink 分支 ✓）。
+            lutime: Some(fs_lutime),
+            // **round 109 追加槽**（`PA_ABI_MINOR` 5→6）：纳秒级、跟随叶子的 `utime` ✓。
+            utime_ns: Some(fs_utime_ns),
         }
     }
 }
@@ -286,6 +306,176 @@ extern "C" fn fs_stat(
     }
 }
 
+/// `utimensat` 的本层封装（round 109）：`nofollow=false` ⇒ 跟随最后一段 ✓。
+#[allow(unsafe_code)]
+fn utimensat_path(path: &std::path::Path, atime_ns: i64, mtime_ns: i64, nofollow: bool) -> i32 {
+    use std::os::unix::ffi::OsStrExt;
+    #[repr(C)]
+    struct Timespec {
+        tv_sec: i64,
+        tv_nsec: i64,
+    }
+    unsafe extern "C" {
+        fn utimensat(
+            dirfd: i32,
+            pathname: *const core::ffi::c_char,
+            times: *const Timespec,
+            flags: i32,
+        ) -> i32;
+    }
+    const AT_FDCWD: i32 = -100;
+    const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return fallback_errno("EINVAL");
+    };
+    let times = [
+        Timespec {
+            tv_sec: atime_ns.div_euclid(1_000_000_000),
+            tv_nsec: atime_ns.rem_euclid(1_000_000_000),
+        },
+        Timespec {
+            tv_sec: mtime_ns.div_euclid(1_000_000_000),
+            tv_nsec: mtime_ns.rem_euclid(1_000_000_000),
+        },
+    ];
+    let flags = if nofollow { AT_SYMLINK_NOFOLLOW } else { 0 };
+    // SAFETY: `c_path` 以 NUL 结尾且在本调用期间存活；`times` 两个元素；flags 合法。
+    unsafe { utimensat(AT_FDCWD, c_path.as_ptr(), times.as_ptr(), flags) }
+}
+
+/// **`utime_ns(name, atime_ns, mtime_ns)`**（round 109 追加槽 ⇒ `PA_ABI_MINOR` 6）：
+/// 跟随最后一段的纳秒级 `utime` ✓（`shutil.copystat` 的 ns 精度 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_utime_ns(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    unsafe extern "C" {
+        fn __errno_location() -> *mut i32;
+    }
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    if utimensat_path(&path, atime_ns, mtime_ns, false) == 0 {
+        return CapStatus::Ok;
+    }
+    // SAFETY: libc 保证 `__errno_location()` 返回本线程有效的 errno 位置。
+    let errno = unsafe { *__errno_location() };
+    // SAFETY: 出参由调用方提供。
+    unsafe { *errno_out = errno };
+    CapStatus::Machine
+}
+
+/// **`lutime(name, atime_ns, mtime_ns)`**（round 109 追加槽 ⇒ `PA_ABI_MINOR` 5）：**不跟随符号链接**
+/// 的 `utime` ✓ —— Linux `utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW)` ✓（纳秒级 ✓）。
+/// 对接参照的 `os.utime(..., follow_symlinks=False)`（`shutil.copy2` 的 symlink 分支 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_lutime(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    unsafe extern "C" {
+        fn __errno_location() -> *mut i32;
+    }
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    if utimensat_path(&path, atime_ns, mtime_ns, true) == 0 {
+        return CapStatus::Ok;
+    }
+    // SAFETY: libc 保证 `__errno_location()` 返回本线程有效的 errno 位置。
+    let errno = unsafe { *__errno_location() };
+    // SAFETY: 出参由调用方提供。
+    unsafe { *errno_out = errno };
+    CapStatus::Machine
+}
+
+/// `utime(name, atime, mtime)`（round 107）：改宿主文件的访问／修改时间 ✓
+/// （`std::fs::File::set_times`；秒级 ✓ —— ABI 只给秒，纳秒面随后补 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_utime(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime: i64,
+    mtime: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    let to_time = |seconds: i64| -> SystemTime {
+        if seconds >= 0 {
+            UNIX_EPOCH + Duration::from_secs(seconds as u64)
+        } else {
+            UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs())
+        }
+    };
+    let times = std::fs::FileTimes::new()
+        .set_accessed(to_time(atime))
+        .set_modified(to_time(mtime));
+    match std::fs::File::open(&path).and_then(|file| file.set_times(times)) {
+        Ok(()) => CapStatus::Ok,
+        Err(error) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno_of(&error) };
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `chmod(name, mode)`（round 97）：改宿主文件权限 ✓（`std::fs::set_permissions`，按 Unix 模式位 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_chmod(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    mode: u32,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::unix::fs::PermissionsExt;
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    match std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)) {
+        Ok(()) => CapStatus::Ok,
+        Err(error) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno_of(&error) };
+            CapStatus::Machine
+        }
+    }
+}
+
 /// `stat_times(name)`（`CP-30` 的**追加槽**，`AB-41` 次版本 2）：路径 ⇒ 时间戳纳秒。
 ///
 /// 三个时间**全部取自 `std::fs::metadata`**（平台集中点在这里，`DESIGN.md` §7）：
@@ -379,20 +569,25 @@ fn info_of(meta: &std::fs::Metadata) -> FileInfo {
         size: meta.len(),
         mode: meta.mode(),
         is_dir: meta.is_dir(),
-        dev: 0,
-        ino: 0,
+        // **真 `dev`／`ino`**（round 109）：照参照给宿主 `stat(2)` 的同名字段 ✓ —— 先前恒 0 ✗
+        // ⇒ `os.path.samefile(f, d)` 对**任何**两个路径都给 True ✗（`shutil.move` 于是走
+        // "直接 rename"分支 ⇒ `IsADirectoryError` ✗，官方 `test_shutil` 的 `TestMove` 11 个
+        // 错误与 `TestWhich` 的连带失败都源于此 ✓）。`CP-23` 的 /proc 语义另说，这里只是如实报值 ✓。
+        dev: meta.dev(),
+        ino: meta.ino(),
     }
 }
 
-/// `mkdir(name, mode)`。
+/// `mkdir(name, mode)`（`P3-40`：**真把 `mode` 交给内核** ✓ —— 先前的 `_mode` 丢掉了 ✗）。
 #[allow(unsafe_code)]
 extern "C" fn fs_mkdir(
     _state: *mut c_void,
     name: *const u8,
     len: usize,
-    _mode: u32,
+    mode: u32,
     errno_out: *mut i32,
 ) -> CapStatus {
+    use std::os::unix::ffi::OsStrExt;
     let path = match path_of(name, len) {
         Ok(path) => path,
         Err(errno) => {
@@ -401,13 +596,23 @@ extern "C" fn fs_mkdir(
             return CapStatus::Machine;
         }
     };
-    match std::fs::create_dir(&path) {
-        Ok(()) => CapStatus::Ok,
-        Err(error) => {
-            // SAFETY: 出参由调用方提供。
-            unsafe { *errno_out = errno_of(&error) };
-            CapStatus::Machine
-        }
+    // 走 `mkdir(2)`（不是 `create_dir`）：`mode` 语义与**平台 umask** 一致 ✓（参照同口径）。
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = fallback_errno("EINVAL") };
+        return CapStatus::Machine;
+    };
+    // SAFETY: `c_path` 是以 NUL 结尾的有效 C 字符串，生命周期覆盖本次调用。
+    let status = unsafe { sys::mkdir(c_path.as_ptr(), mode) };
+    if status == 0 {
+        CapStatus::Ok
+    } else {
+        let errno = std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or_else(|| fallback_errno("EIO"));
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno };
+        CapStatus::Machine
     }
 }
 
@@ -765,6 +970,51 @@ extern "C" fn fs_fsync(
     }
 }
 
+/// `pipe()`（`P3-40` 的追加槽）：造一个真管道，两端作**不透明句柄**交出。
+///
+/// **`fd` 不在 provider 这一层** ✓：句柄号由本 provider 的句柄表分配（与 `open` 同一套），
+/// VM 侧再把它映射成**实例能力表下标**（`CP-31`）—— 调用方（`pyawa-core::Instance::fs_pipe`）
+/// 只认表下标 ✓。
+#[allow(unsafe_code)]
+extern "C" fn fs_pipe(
+    state: *mut c_void,
+    read_out: *mut Handle,
+    write_out: *mut Handle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::unix::io::FromRawFd;
+    let mut fds = [0i32; 2];
+    // SAFETY: `fds` 是两元素数组，`pipe(2)` 只写这两个槽。
+    let status = unsafe { sys::pipe(fds.as_mut_ptr()) };
+    if status != 0 {
+        let errno = std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or_else(|| fallback_errno("EIO"));
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno };
+        return CapStatus::Machine;
+    }
+    // SAFETY: `pipe(2)` 成功即把两个新 fd 的所有权交给调用方；`File` 的 `Drop` 会 `close` 它们。
+    let read_file = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    // SAFETY: 同上。
+    let write_file = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+    // SAFETY: 同 `fs_open`：`state` 由 `vtable()` 给出且比 vtable 活得久。
+    let provider = unsafe { &*(state as *const PosixFs) };
+    let read_id = provider.next.fetch_add(1, Ordering::Relaxed);
+    let write_id = provider.next.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut files = provider.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        files.insert(read_id, read_file);
+        files.insert(write_id, write_file);
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe {
+        *read_out = Handle(read_id);
+        *write_out = Handle(write_id);
+    }
+    CapStatus::Ok
+}
+
 /// `close(handle)`（`CP-17`：释放；**必须幂等**）。
 ///
 /// **`CP-17` 要求 `close` 幂等** ⇒ 对"已经不在句柄表里"的 handle（第二次 close／从未成功的
@@ -888,6 +1138,12 @@ impl RestrictedFs {
         // 名字类槽位：把 VM 解析后的 guest 名字映射到根，再交给内层真实现。
         table.open = Some(restricted_open);
         table.stat = Some(restricted_stat);
+        table.chmod = Some(restricted_chmod);
+        table.utime = Some(restricted_utime);
+        // **round 109 追加槽**：不跟随符号链接的 `utime`（受限根下同属路径写面 ⇒ 同样映射）。
+        table.lutime = Some(restricted_lutime);
+        // **round 109 追加槽**（纳秒级 utime）：受限根下与 `utime` 同属路径写面 ⇒ 同样映射。
+        table.utime_ns = Some(restricted_utime_ns);
         table.mkdir = Some(restricted_mkdir);
         table.rmdir = Some(restricted_rmdir);
         table.unlink = Some(restricted_unlink);
@@ -907,6 +1163,8 @@ impl RestrictedFs {
         table.truncate = Some(restricted_truncate);
         table.fsync = Some(restricted_fsync);
         table.close = Some(restricted_close);
+        // **`P3-40` 的追加槽**：句柄类（不解析名字）⇒ 直接交内层 `state`（同 `fstat` 一族）。
+        table.pipe = Some(restricted_pipe);
         table
     }
 }
@@ -985,6 +1243,82 @@ extern "C" fn restricted_stat(
     let (provider, path) = resolve_name!(state, name, len, false, false, errno_out);
     let bytes = os_bytes(&path);
     fs_stat(provider.inner_state(), bytes.as_ptr(), bytes.len(), out, errno_out)
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_utime(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime: i64,
+    mtime: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_utime(
+        provider.inner_state(),
+        bytes.as_ptr(),
+        bytes.len(),
+        atime,
+        mtime,
+        errno_out,
+    )
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_utime_ns(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_utime_ns(
+        provider.inner_state(),
+        bytes.as_ptr(),
+        bytes.len(),
+        atime_ns,
+        mtime_ns,
+        errno_out,
+    )
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_lutime(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    atime_ns: i64,
+    mtime_ns: i64,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_lutime(
+        provider.inner_state(),
+        bytes.as_ptr(),
+        bytes.len(),
+        atime_ns,
+        mtime_ns,
+        errno_out,
+    )
+}
+
+#[allow(unsafe_code)]
+extern "C" fn restricted_chmod(
+    state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    mode: u32,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let (provider, path) = resolve_name!(state, name, len, false, true, errno_out);
+    let bytes = os_bytes(&path);
+    fs_chmod(provider.inner_state(), bytes.as_ptr(), bytes.len(), mode, errno_out)
 }
 
 #[allow(unsafe_code)]
@@ -1095,6 +1429,19 @@ extern "C" fn restricted_fstat(
     // SAFETY: 同 `resolve_name!`。
     let provider = unsafe { &*(state as *const RestrictedFs) };
     fs_fstat(provider.inner_state(), handle, out, errno_out)
+}
+
+/// `pipe()` 的受限根转发（句柄类：只换 provider 状态，不解析名字 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn restricted_pipe(
+    state: *mut c_void,
+    read_out: *mut Handle,
+    write_out: *mut Handle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同 `resolve_name!`。
+    let provider = unsafe { &*(state as *const RestrictedFs) };
+    fs_pipe(provider.inner_state(), read_out, write_out, errno_out)
 }
 
 #[allow(unsafe_code)]

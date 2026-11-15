@@ -64,6 +64,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyawa-lsp"
+version = "0.0.0"
+dependencies = [
+ "pyawa-core",
+]
+
+[[package]]
 name = "pyawa-runtime"
 version = "0.0.0"
 dependencies = [

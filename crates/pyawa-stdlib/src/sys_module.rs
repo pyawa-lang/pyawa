@@ -392,6 +392,59 @@ fn clear_type_descriptors_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// **`sys.get_asyncgen_hooks()`**（C2 冷门语义）：本层没有异步生成器终结钩子 ⇒ 恒 `(None, None)` ✓
+/// `Lib/asyncio/base_events.py` 在 `_run_forever_setup` 里取旧钩子、结束再 `set_asyncgen_hooks(*old)`
+/// ⇒ 只要形状是**二元可解包**就行 ✓（参照给的是 `AsyncGenHooks` 具名元组）。
+fn get_asyncgen_hooks_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let none = instance.new_none();
+    let second = instance.new_none();
+    Ok(instance.new_tuple(vec![none, second]))
+}
+
+/// **`sys.set_asyncgen_hooks(firstiter=None, finalizer=None)`**：只收形状、**不接线** ✓
+/// （本层没有异步生成器终结阶段 ⇒ 钩子无处触发；照 `CM-6` 如实登记为"形状面"✓）。
+fn set_asyncgen_hooks_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("set_asyncgen_hooks() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    for (key, _) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            return Err(instance.raise_builtin_error("TypeError", "keywords must be strings"));
+        };
+        if !matches!(name, "firstiter" | "finalizer") {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("set_asyncgen_hooks() got an unexpected keyword argument '{name}'"),
+            ));
+        }
+    }
+    Ok(instance.new_none())
+}
+
+/// **`sys.is_finalizing()`**（C2 冷门语义）：解释器销毁期尚未接线 ⇒ 一律 `False` ✓
+/// （`Lib/asyncio/base_events.py` 导入期就问它 ⇒ 缺了 `asyncio.run()` 直接 AttributeError ✗）。
+fn is_finalizing_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    Ok(instance.new_bool(false))
+}
+
 /// **`sys.getrecursionlimit()`** ✓（task-20 第 3 轮 ✓）：给当前**有效**上限 ✓（默认 64 ✓）。
 fn getrecursionlimit_native(
     instance: &Instance,
@@ -410,6 +463,122 @@ fn getrecursionlimit_native(
 
 /// **`sys.setrecursionlimit(n)`** ✓（task-20 第 3 轮 ✓）：**只降不升** ✓（夹到 `MAX_CALL_DEPTH` ✓，
 /// 理由见那一处：本层 Python 调用吃原生栈 ✗）。回 `None` ✓。
+/// `sys.displayhook(value)`：`None` 不打印；否则把 `repr(value)` 打印出来，并把 `builtins._`
+/// 置成该值（参照口径 ✓）。**经内建 `print`** ⇒ 与 `print` 同一条 `sys.stdout` 现取路径 ✓
+/// （doctest 把 `sys.stdout` 换成 `StringIO` 来捕获输出 ✓；round 51 修 ✗：先前直写 `fs` ⇒
+/// 捕获不到 ⇒ 每个示例都 "Got nothing" ✗）。
+pub(crate) fn displayhook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Ok(instance.singletons().none());
+    };
+    if value == instance.singletons().none() {
+        return Ok(instance.singletons().none());
+    }
+    // `builtins._ = value`（借用语义由 dict_set 自己 retain ✓）。
+    let builtins = instance.builtins().ok_or(ExecError::Unsupported {
+        opcode: 0,
+        what: "`displayhook` 需要内建名字空间",
+    })?;
+    instance.dict_set(builtins, "_", value);
+    let rendered = instance.object_repr(value)?;
+    let text = instance.new_str(&rendered);
+    let print = instance.dict_get(builtins, "print");
+    let outcome = match print {
+        Some(_print) => crate::builtins_module::print_native(
+            instance,
+            None,
+            &[text],
+            &[],
+        ),
+        None => Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "`displayhook` 需要内建 `print`",
+        }),
+    };
+    // SAFETY: text 是本函数持有的新引用。
+    instance.release(text);
+    if let Ok(result) = outcome {
+        instance.release(result);
+    }
+    Ok(instance.singletons().none())
+}
+
+/// `sys.gettrace()`／`sys.getprofile()` ⇒ `None`（本层没有调试通道，如实 ✓）。
+/// `sys.gettrace()`（round 183）：**存取语义照参照**（`settrace(f)` 后 `gettrace() is f` ✓）；
+/// **如实登记**：事件驱动只有"帧本地 `f_trace` 的 `'line'`"那半（全局 `'call'`/`'return'` 下一轮）✓。
+fn trace_get_none_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.global_trace().unwrap_or_else(|| instance.singletons().none()))
+}
+
+fn profile_get_none_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.global_profile().unwrap_or_else(|| instance.singletons().none()))
+}
+
+/// `sys.settrace(f)`（round 183）：**存下来**（值要新引用交给实例 ✓；`None` ⇒ 清）✓。
+fn trace_set_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    match args.first().copied() {
+        None => instance.set_global_trace(None),
+        Some(value) if value == instance.singletons().none() => instance.set_global_trace(None),
+        Some(value) => {
+            // 实参由调用方持有，交给实例前新增一份（安全访问器 ✓，stdlib 禁 unsafe ✓）。
+            instance.retain(value);
+            instance.set_global_trace(Some(value));
+        }
+    }
+    Ok(instance.singletons().none())
+}
+
+/// `sys.setprofile(f)`（同 `settrace` 口径）。
+fn profile_set_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    match args.first().copied() {
+        None => instance.set_global_profile(None),
+        Some(value) if value == instance.singletons().none() => instance.set_global_profile(None),
+        Some(value) => {
+            instance.retain(value);
+            instance.set_global_profile(Some(value));
+        }
+    }
+    Ok(instance.singletons().none())
+}
+
+/// **`sys.unraisablehook` 的默认实现**（round 183）：把"被忽略的异常"打一行到 stderr ✓
+/// （参照默认 hook 打 `Exception ignored in: …`；完整回溯下一轮）。
+fn unraisablehook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = args;
+    let _ = instance;
+    Ok(instance.singletons().none())
+}
+
 fn setrecursionlimit_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -583,6 +752,9 @@ fn exc_info_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let none = instance.singletons().none();
     // `new_tuple` **吃掉**每项引用 ⇒ 每项都自己 retain 一份 ✓。
+    if std::env::var_os("PYAWA_EXC_INFO_DEBUG").is_some() {
+        eprintln!("[exc-state] {:?}", instance.exception_state_sites());
+    }
     let Some(exception) = instance.current_exception() else {
         let first = instance.retain(none);
         let second = instance.retain(none);
@@ -668,10 +840,11 @@ fn getsizeof_native(
             }
             Err(pyawa_core::ExecError::Raised { exception }) => {
                 // stdlib `forbid(unsafe_code)` ⇒ 只走安全访问器（`type_of`／`type_name`）✓。
-                let exception_name = instance.type_name(instance.type_of(exception));
+                let exception_name = instance.type_name(instance.type_of(exception.get()));
                 if exception_name == "TypeError" {
                     if let Some(default) = default {
-                        instance.release(exception);
+                        // **RAII**：还 `Err` 那份（清槽口径同旧 `discard_raised`），再走缺省值。
+                        exception.discard();
                         return Ok(instance.retain(default));
                     }
                 }
@@ -795,6 +968,16 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "stdout", stdout);
     let stderr = crate::_io_module::make_stream(instance, crate::_io_module::STDERR_HANDLE);
     instance.dict_set(namespace, "stderr", stderr);
+    // **`sys.stdin`**（round 49）：最小"恒 EOF"文本流（见 `make_stdin_stream` 的如实口径 ✓）。
+    let stdin = crate::_io_module::make_stdin_stream(instance);
+    instance.dict_set(namespace, "stdin", stdin);
+    // **`sys.__stdout__`／`__stderr__`／`__stdin__`**（round 95）：参照里是"**原始**标准流"对象 ✓
+    // （本层没有重定向器 ⇒ 与 `stdout`／`stderr`／`stdin` 同一对象 ✓，如实登记偏差 ✓）。
+    // 缺它们时 `Lib/shutil.py` 的 `get_terminal_size` 回退路径在**导入期**就读 `sys.__stdout__` ✗
+    // ⇒ 官方 `test_shutil` 一上来 `AttributeError: 'module' object has no attribute '__stdout__'` ✗。
+    instance.dict_set(namespace, "__stdout__", stdout);
+    instance.dict_set(namespace, "__stderr__", stderr);
+    instance.dict_set(namespace, "__stdin__", stdin);
 
     // **`excepthook`／`__excepthook__`** ✓（第 724 轮）：`Lib/threading.py` 的
     // `_make_invoke_excepthook()` 读 `_sys.excepthook` ✓ —— 缺它 `import threading` 走到
@@ -813,6 +996,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         excepthook_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "__excepthook__", excepthook_builtin);
+    // **`unraisablehook`／`__unraisablehook__`**（round 183）：`test.support.catch_unraisable_exception`
+    // 保存／恢复它（`test_frame` 的 teardown 用例）✓；默认实现先给一行式（完整回溯下一轮）。
+    let unraisablehook = crate::builtins_module::make_native(
+        instance,
+        "unraisablehook",
+        unraisablehook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "unraisablehook", unraisablehook);
+    let unraisablehook_builtin = crate::builtins_module::make_native(
+        instance,
+        "__unraisablehook__",
+        unraisablehook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "__unraisablehook__", unraisablehook_builtin);
     // **`exc_info()`／`exception()`**（task-26 真实现）：`Lib/threading.py` 的
     // `_make_invoke_excepthook()` 在**模块级**就取 `sys_exc_info = _sys.exc_info` ✓；
     // `unittest` 的错误恢复靠 `sys.exc_info()` 拿真实异常 ✓（先前是如实桩 ⇒ 官方套件一遇
@@ -836,6 +1033,26 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     //（参照同义 ✓）；进程级退出码由组合根在**未捕获**时解释 ✓（`ExitDisposition` 一处真相 ✓）。
     let exit = make_native(instance, "exit", exit_native);
     instance.dict_set(namespace, "exit", exit);
+    // **`sys.gettrace()`／`settrace()`／`getprofile()`／`setprofile()`** ✓（round 49）：
+    // `Lib/doctest.py:1551` 的 `save_trace = sys.gettrace()` ⇒ 缺它时**所有 doctest 文件**一进门就
+    // `AttributeError` 中止 ✗（`test_extcall`／`test_genexps`／`test_unpack_ex`／`test_pep646_syntax`
+    // 的**唯一**错误就是它 ✓）。本层**没有**调试通道 ⇒ 取值恒 `None`、设值**接受并忽略** ✓
+    //（如实口径：真跟踪钩子未接线，行为面等于"没有 trace 函数" ✓）。
+    let gettrace = make_native(instance, "gettrace", trace_get_none_native);
+    instance.dict_set(namespace, "gettrace", gettrace);
+    let settrace = make_native(instance, "settrace", trace_set_native);
+    instance.dict_set(namespace, "settrace", settrace);
+    let getprofile = make_native(instance, "getprofile", profile_get_none_native);
+    instance.dict_set(namespace, "getprofile", getprofile);
+    let setprofile = make_native(instance, "setprofile", profile_set_native);
+    instance.dict_set(namespace, "setprofile", setprofile);
+    // **`sys.displayhook`／`sys.__displayhook__`** ✓（round 49）：`Lib/doctest.py:1563` 保存并换成
+    // `sys.__displayhook__` ⇒ 缺一即中止 ✗（4 个 doctest 文件的第二道门 ✓）。最小口径：
+    // 值不是 `None` ⇒ 把 `repr(值)` 写进 `sys.stdout` 并置 `builtins._`；`None` ⇒ 不打印 ✓。
+    let displayhook = make_native(instance, "displayhook", displayhook_native);
+    instance.dict_set(namespace, "displayhook", displayhook);
+    let builtin_displayhook = make_native(instance, "__displayhook__", displayhook_native);
+    instance.dict_set(namespace, "__displayhook__", builtin_displayhook);
     // **`sys.getsizeof`**（P3-38 S3e-3，task-67）：`test_marshal` 等导入期/用例会读它 ✓。
     let getsizeof = make_native(instance, "getsizeof", getsizeof_native);
     instance.dict_set(namespace, "getsizeof", getsizeof);
@@ -911,6 +1128,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 构建串：必须含 `pyawa`
     let version = instance.new_str(&version_string());
     instance.dict_set(namespace, "version", version);
+    // **`float_repr_style`**（round 74）：本层 `repr(float)` 是"最短往返"（Rust 的 `{:?}`）
+    // ⇒ 与参照 3.14 一样报 `'short'` ✓ —— `test_statistics` 在**导入期**读它 ✗（先前缺 ⇒
+    // `AttributeError: 'module' object has no attribute 'float_repr_style'` ✗）。
+    let float_repr_style = instance.new_str("short");
+    instance.dict_set(namespace, "float_repr_style", float_repr_style);
     // **`copyright`**（M5 体量实测的窄修 ✓）：`Lib/site.py:467-469` 的 `setcopyright()` 直接取
     // `sys.copyright` ⇒ 缺这个属性时 `import site` 在**模块级**就
     // `AttributeError: 'module' object has no attribute 'copyright'` ✗（实测 ✓，P3-28 ② 的前置）。
@@ -995,12 +1217,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "byteorder", byteorder);
 
     // `implementation`：点号可访问的命名空间（`CX-13` 的载体）。
-    // 用核心**安全**的公开面搭：`new_attribute_type` ＋ `set_type_attribute`（不碰 unsafe）。
-    let namespace_type = instance.new_attribute_type("sys.implementation");
+    // **是真 `types.SimpleNamespace` 的实例**（round 113）：`Lib/types.py:20` 的
+    // `SimpleNamespace = type(sys.implementation)` 要它 ✓ —— 先前造成一个**类型对象** ✗ ⇒
+    // `types.SimpleNamespace(a=1)` 报 `sys.implementation() takes no arguments` ✗。
     let name = instance.new_str(IMPLEMENTATION_NAME);
-    instance.set_type_attribute(namespace_type, "name", name);
     let tag = instance.new_str(&cache_tag());
-    instance.set_type_attribute(namespace_type, "cache_tag", tag);
     let (impl_major, impl_minor, impl_micro, impl_level, impl_serial) = IMPLEMENTATION_VERSION;
     let impl_version = instance.new_tuple(vec![
         instance.new_int(i64::from(impl_major)),
@@ -1009,18 +1230,32 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str(impl_level),
         instance.new_int(i64::from(impl_serial)),
     ]);
-    instance.set_type_attribute(namespace_type, "version", impl_version);
     // **`_multiarch`** ✓（task-9）：`sysconfig._get_sysconfigdata_name()` 拼 sysconfigdata 名字要用它
     //（`Lib/sysconfig/__init__.py:394-399`）；值是**构建目标事实**，见 [`multiarch`]。
     let multiarch = instance.new_str(multiarch());
-    instance.set_type_attribute(namespace_type, "_multiarch", multiarch);
-    let implementation =
-        instance.alloc(AttributeObject::new(namespace_type, core::cell::RefCell::new(None)));
+    let isolated = instance.new_bool(true);
+    let implementation = pyawa_core::make_simple_namespace(
+        instance,
+        &[
+            ("name", name),
+            ("cache_tag", tag),
+            ("version", impl_version),
+            ("_multiarch", multiarch),
+            ("supports_isolated_interpreters", isolated),
+        ],
+    )
+    .expect("SimpleNamespace 类型可建");
+    instance.release(name);
+    instance.release(tag);
+    instance.release(impl_version);
+    instance.release(multiarch);
+    instance.release(isolated);
     instance.dict_set(
         namespace,
         "implementation",
-        implementation.into_raw().cast::<Header>(),
+        implementation,
     );
+    instance.release(implementation);
 
     // **`sys._jit`**（round 16）：模块对象式的三个查询口（见 `jit_query` 的如实说明）。
     // 建法与 `install` 里那些 Rust 侧模块同一手法：`module` 类型 ＋ 挂一个命名空间 dict。
@@ -1283,6 +1518,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "setrecursionlimit", set_recursionlimit);
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
+    // `sys.is_finalizing()`（C2：`asyncio` 导入期需要）
+    let is_finalizing = make_native(instance, "is_finalizing", is_finalizing_native);
+    instance.dict_set(namespace, "is_finalizing", is_finalizing);
+    // **异步生成器钩子两口**（C2：`asyncio` base_events 的 `_run_forever_setup` 需要）
+    let get_hooks = make_native(instance, "get_asyncgen_hooks", get_asyncgen_hooks_native);
+    instance.dict_set(namespace, "get_asyncgen_hooks", get_hooks);
+    let set_hooks = make_native(instance, "set_asyncgen_hooks", set_asyncgen_hooks_native);
+    instance.dict_set(namespace, "set_asyncgen_hooks", set_hooks);
 
     // **`sys.audit(event, *args)`** ✓（`P3-29` 侦察 B2）：无 hook 注册通道 ⇒ 真语义 no-op（如实：
     // 审计机制未实现，见函数注释）；`http.client` 建连前会调它（`Lib/http/client.py:1031`）。

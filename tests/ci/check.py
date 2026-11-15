@@ -52,6 +52,26 @@ FORBIDDEN_PLATFORM = (
 )
 FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
 
+#: `CX-29`：ABI 的**符号面**——cdylib 导出 ⊆ `pa.h` 声明 ⊆ `SPEC-c-abi` 提及；总数 ≤ `AB-1` 的预算。
+#: `pyawa-abi` 与 `pyawa-runtime` 两个 crate 的 `#[no_mangle] extern "C"` 都算"导出"：前者是 cdylib，
+#: 后者是 `paL_newstate`（`§15.4` 指定由组合根实现）。
+ABI_HEADERS = (
+    "crates/pyawa-abi/include/pa.h",
+    "crates/pyawa-abi/include/pa_capabilities.h",
+)
+ABI_SPEC = "docs/SPEC-c-abi.md"
+ABI_EXPORT_SOURCE_DIRS = ("crates/pyawa-abi/src", "crates/pyawa-runtime/src")
+ABI_FUNCTION_BUDGET = 120
+#: **过渡清单**（`T-CX-19` 的棘轮）：只允许点名"已授权但暂未进 `pa.h`"的影子导出。
+#: **当前为空**（`PLAN-milestones.md` §12.4 #8 已于 2026-11-14 收口：`pa_set_program_filename`
+#: 补进 `pa.h`／规格）。新增影子导出 ⇒ 红；将来若再出现过渡项，必须显式列在这里，修好后删掉
+#: （不删同样红——棘轮：不得更差）。
+ABI_PENDING_SHADOW_EXPORTS: frozenset[str] = frozenset()
+ABI_HEADER_DECL = re.compile(r"\b(paL?_[a-z0-9_]+)\s*\([^;{]*\);")
+ABI_SPEC_MENTION = re.compile(r"\b(paL?_[a-z0-9_]+)\s*\(")
+ABI_NO_MANGLE = re.compile(r"#\[(?:unsafe\()?no_mangle(?:\))?\]")
+ABI_EXPORT_FN = re.compile(r'pub\s+(?:unsafe\s+)?extern\s+"C(?:-unwind)?"\s+fn\s+(paL?_[a-z0-9_]+)')
+
 #: `CX-22`：值**载荷**的布局类型（`*Object` 一族）。名单**必须**都能在核心里找到声明——
 #: 改名的类型会让本检查自己变红，而不是悄悄放过（见 `check_stdlib_layout_isolation`）。
 LAYOUT_TYPES = (
@@ -89,6 +109,162 @@ RESERVED_MASK_ALLOWED = (
     "crates/pyawa-core/src/flags.rs",
     "crates/pyawa-core/src/header.rs",
 )
+
+#: `CX-30`／`T-CX-20`：core 的四个模块内**禁止裸丢弃 `Result`**。
+#:
+#: 扫描面（约束定义的一部分，见 `CONSTRAINTS.md` §3.1）：这四个**模块**——目录 ＋ 模块根文件
+#: （`executor.rs`／`instance.rs`／`builtin.rs`／`builtin_objects/mod.rs`）。`tests/` 与其余
+#: `src/*.rs` 不在 v1 范围（阶段 1 收口后可扩大）。
+RESULT_DISCARD_MODULES = (
+    ("crates/pyawa-core/src/executor.rs", "crates/pyawa-core/src/executor"),
+    ("crates/pyawa-core/src/instance.rs", "crates/pyawa-core/src/instance"),
+    ("crates/pyawa-core/src/builtin.rs", "crates/pyawa-core/src/builtin"),
+    ("crates/pyawa-core/src/builtin_objects/mod.rs", "crates/pyawa-core/src/builtin_objects"),
+)
+#: 裸丢弃的四类形态（`CX-30`）：catch-all 臂、`if/while let Err(_)`、把 `.is_ok()`／`.is_err()`
+#: 的 bool **当语句丢掉**、`let _ = <Result 调用>`。字符串/注释先由 `strip_rust` 去掉。
+RESULT_DISCARD_CATCH_ALL = re.compile(r"\bErr\s*\(\s*_\s*\)\s*=>")
+RESULT_DISCARD_IF_LET = re.compile(r"\b(?:if|while)\s+let\s+Err\s*\(\s*_\s*\)")
+#: 只认"**整个语句**就是把 bool 丢掉"（`x.is_ok();`）；`if x.is_ok()`／`assert!(…is_ok())`／
+#: 作为别的调用的实参都算**用掉了** bool，不是丢弃。
+RESULT_DISCARD_BOOL_STMT = re.compile(r"^\s*[^=]*?\.(?:is_ok|is_err)\s*\(\s*\)\s*;\s*$")
+RESULT_DISCARD_LET = re.compile(r"\blet\s+_\s*=\s*(.*)$")
+#: `let _ =` 的 RHS 是**结构性非 Result**（Option／usize／bool／`()` 等）⇒ 不是 `CX-30` 目标。
+#: 依据就近写在注释里；这是"静态无类型信息"下必须付出的白名单（约束正文已如实登记边界）。
+RESULT_DISCARD_NONRESULT_CALLS = (
+    "install_closure",  # usize
+    "register_bases",  # Option
+    "pop",  # Option
+    "set_pending_exception",  # Option（旧 pending 引用；非 Result，见约束边界）
+    "set_cause_context_suppress",  # bool
+)
+#: 变量／元组／字面量形态：静态拿不到类型 ⇒ 本规则不判（边界见约束正文；阶段 1 用类型/宏收口）。
+RESULT_DISCARD_NONRESULT_RHS = (
+    "()",
+    "(bound, args)",
+    "(&root, &held)",
+    "opcode",
+    "oparg",
+    "previous",
+    "checked",
+    "type_name",
+    "is_async_generator",
+    "events",
+    "temporary",
+    "memoryview_type",
+    "index",
+    "owner",
+    "bound",
+    "args",
+    "instance",
+    "key",
+    "slice",
+    "class",
+    "lasti",
+    "prev",
+    "_NonNull::<Header>::dangling",
+)
+#: **白名单**（`CX-30`／`T-CX-20` 的**棘轮**：只许缩不许涨）。每条 `(文件, 行锚点, 理由)`：
+#: 锚点按"同文件 ＋ 该行文本包含锚点"匹配，**一条只消费一次**；有未消费条目或被拦下的新违规
+#: 都算红。修好一处 ⇒ **必须**把对应条目删掉（不删同样红，与 `CX-29` 的棘轮同一口径）。
+#: 生成方式：`python3 tests/ci/check.py --list` 的 T-CX-20 失败行 + 本文件里的规则；条目本身
+#: **不是**"允许写"，是"阶段 1 之前的历史欠账 ＋ 非 Result 的合法写法"。
+RESULT_DISCARD_ALLOWED: tuple[tuple[str, str, str], ...] = (
+    (
+        'crates/pyawa-core/src/executor/attribute.rs',
+        'Err(_) => None,',
+        '非 `Raised` 变体（`Raised` 已在上一条臂显式还清）',
+    ),
+    (
+        'crates/pyawa-core/src/executor/step_containers.rs',
+        'Err(_) => "越界".to_owned(),',
+        '`FrameError`（无引用载荷：只表栈越界）',
+    ),
+    (
+        'crates/pyawa-core/src/executor/step_locals.rs',
+        'Err(_) => {',
+        '`FrameError`（无引用载荷：只表槽越界）',
+    ),
+    (
+        'crates/pyawa-core/src/executor/step_locals.rs',
+        'Err(_) => {',
+        '`FrameError`（无引用载荷：只表槽越界）',
+    ),
+    (
+        'crates/pyawa-core/src/executor/step_locals.rs',
+        'Err(_) => {',
+        '`FrameError`（无引用载荷：只表槽越界）',
+    ),
+    (
+        'crates/pyawa-core/src/executor.rs',
+        'Err(_) => {',
+        '`CapabilityCallError`／`Utf8Error`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/executor.rs',
+        'Err(_) => crate::wtf8::to_string_lossy(bytes),',
+        '`CapabilityCallError`／`Utf8Error`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/instance/accessors.rs',
+        'Err(_) => crate::wtf8::to_string_lossy(bytes),',
+        '`Utf8Error`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/instance/quote.rs',
+        'Err(_) => text.push(crate::wtf8::REPLACEMENT_CHARACTER),',
+        '`Utf8Error`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin/compile.rs',
+        'Err(_) => {',
+        '`Utf8Error`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin/float.rs',
+        'Err(_) => {',
+        '`ParseFloatError`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin/float.rs',
+        'Err(_) => {',
+        '`ParseFloatError`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin/int.rs',
+        'Err(_) => {',
+        '`FromUtf8Error`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin/int.rs',
+        'Err(_) => {',
+        '`FromUtf8Error`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin/str.rs',
+        'Err(_) => {',
+        '`ParseIntError`（无引用载荷）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin_objects/callables.rs',
+        'Err(_) => {}',
+        '非 `Raised` 变体（`Raised` 已在上一条臂处理）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin_objects/frame_locals.rs',
+        'Err(_) => {',
+        '`FrameError`（无引用载荷：`set_cell` 只表槽越界）',
+    ),
+    (
+        'crates/pyawa-core/src/builtin_objects/frame_locals.rs',
+        'Err(_) => false,',
+        '`FrameError`（无引用载荷：`set_cell` 只表槽越界）',
+    ),
+)
+
+#: 白名单**高水位**（只许缩）：条目数超过它就是"棘轮倒转"⇒ 红。当前值＝首次登记数。
+RESULT_DISCARD_ALLOWED_MAX = 18
+
 
 TABLE_SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
 BULLET_DEFINITION = r"^\s*(?:[-*+]|\d+[.)])\s+\*\*(?:~~)?\s*`?{identifier}`?\s*(?:~~)?\s*\*\*"
@@ -270,11 +446,18 @@ def strip_rust(source: str) -> str:
             i += 1
             while i < n:
                 if source[i] == "\\":
+                    # **行号必须保持一一对应**：字符串里的 `\` 换行（Rust 的续行写法）与
+                    # 多行字符串的换行都要补一个 `\n` 出去，否则后续行号整体错位
+                    # （`T-CX-20` 的违规行号会指到别的行，白名单锚点也会错）。
+                    if i + 1 < n and source[i + 1] == "\n":
+                        out.append("\n")
                     i += 2
                 elif source[i] == '"':
                     i += 1
                     break
                 else:
+                    if source[i] == "\n":
+                        out.append("\n")
                     i += 1
             out.append('""')
         else:
@@ -800,6 +983,72 @@ def check_fake_gaps() -> list[str]:
     return failures
 
 
+def _strip_c_aggregates(text: str) -> str:
+    """去掉注释与 struct/enum 的 `{...}` 体（A3：只扫**文件作用域**的 `pa_*` 函数原型）。
+
+    能力头里的函数指针字段形如 `pa_cap_status (*now_ns)(...)`，若直接套函数正则会把
+    `pa_cap_status` 误认成函数名；因此先剥聚合体，再做声明扫描。
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", "", text)
+    return re.sub(r"(?:typedef\s+)?(?:struct|enum)\s+\w*\s*\{[^{}]*\}", "", text, flags=re.S)
+
+
+def check_abi_export_surface() -> list[str]:
+    """**`T-CX-19`**：ABI 符号面三面一致（`CX-29`）。
+
+    - **导出 ⊆ 两个 ABI 头声明**（`pa.h`＋`pa_capabilities.h`，后者只含 vtable 结构）：`#[no_mangle] extern "C"` 的函数名必须都能在头文件找到声明
+      （禁止"影子导出"；当前唯一过渡项是 `PLAN-milestones.md` §12.4 #8 的待裁项，显式列出）；
+    - **两个 ABI 头 ⊆ 规格提及**：头文件里每个函数名都必须在 `SPEC-c-abi.md` 里出现
+      （权威清单是规格，头文件只是它的落地）；
+    - **预算**：导出与声明总数都不超过 `AB-1` 的 120。
+
+    只扫源码与文本，不构建 cdylib（`AB-6` 的清单规则是纯符号名比对）。
+    """
+    failures: list[str] = []
+    declared: set[str] = set()
+    for relative in ABI_HEADERS:
+        header_path = ROOT / relative
+        if not header_path.is_file():
+            return [f"{relative} 不存在"]
+        text = _strip_c_aggregates(header_path.read_text(encoding="utf-8"))
+        declared |= set(ABI_HEADER_DECL.findall(text))
+    exported: set[str] = set()
+    for directory in ABI_EXPORT_SOURCE_DIRS:
+        for path in sorted((ROOT / directory).rglob("*.rs")):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                if ABI_NO_MANGLE.search(line) is None:
+                    continue
+                # 属性与函数签名之间可能隔几行（注释／其它属性）。
+                tail = "\n".join(lines[index : index + 6])
+                matched = ABI_EXPORT_FN.search(tail)
+                if matched is not None:
+                    exported.add(matched.group(1))
+    if not exported:
+        return ["一个 `#[no_mangle] extern \"C\"` 导出都没解析到——正则失效？"]
+
+    shadow = exported - declared
+    for name in sorted(shadow - ABI_PENDING_SHADOW_EXPORTS):
+        failures.append(f"两个 ABI 头：导出 {name!r} 不在头文件里（禁止影子导出）")
+    stale = ABI_PENDING_SHADOW_EXPORTS - shadow
+    for name in sorted(stale):
+        failures.append(
+            f"`T-CX-19` 的待裁清单已过期：{name!r} 现在已在 `pa.h` 里"
+            "（`PLAN-milestones.md` §12.4 #8 修好后请删掉过渡清单里的这一项）"
+        )
+
+    mentioned = set(ABI_SPEC_MENTION.findall((ROOT / ABI_SPEC).read_text(encoding="utf-8")))
+    for name in sorted(declared - mentioned):
+        failures.append(f"两个 ABI 头声明了 {name!r}，但 {ABI_SPEC} 没有提及（权威清单缺项）")
+
+    if len(exported) > ABI_FUNCTION_BUDGET:
+        failures.append(f"导出 {len(exported)} 个 > `AB-1` 的预算 {ABI_FUNCTION_BUDGET}")
+    if len(declared) > ABI_FUNCTION_BUDGET:
+        failures.append(f"`pa.h` 声明 {len(declared)} 个 > `AB-1` 的预算 {ABI_FUNCTION_BUDGET}")
+    return failures
+
+
 def check_placeholder_ledger(implemented: set[str], defined: set[str]) -> list[str]:
     landing = parse_landing()
     ledger = parse_ledger()
@@ -852,9 +1101,209 @@ class Check:
     run: Callable[[], list[str]]
 
 
+def check_next_page_size() -> list[str]:
+    """CX-23：`NEXT.md` 是单页交接 —— ≤ 40 行；禁止在本页写逐轮复盘（历史只进台账）。"""
+    path = pathlib.Path(__file__).resolve().parents[2] / "NEXT.md"
+    if not path.is_file():
+        return ["NEXT.md 不存在"]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    problems = []
+    if len(lines) > 40:
+        problems.append(f"NEXT.md 有 {len(lines)} 行（CX-23 上限 40）⇒ 逐轮复盘请移动账 docs/rounds/")
+    longest = max((len(line) for line in lines), default=0)
+    if longest > 4000:
+        problems.append(f"NEXT.md 最长行 {longest} 字符（CX-23）：疑似把逐轮复盘塞进了单行")
+    return problems
+
+
+def check_next_head_line() -> list[str]:
+    """CX-24：`NEXT.md` 的 HEAD 行必须是短哈希（可解析为真实提交），禁止写指针。"""
+    path = pathlib.Path(__file__).resolve().parents[2] / "NEXT.md"
+    if not path.is_file():
+        return ["NEXT.md 不存在"]
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"^\s*-\s*\*\*HEAD\*\*[:：]\s*`?([0-9a-f]{7,40})`?", text, re.M)
+    if not match:
+        return ["NEXT.md 的 HEAD 行不是短哈希（CX-24）：应写 `git rev-parse --short HEAD` 的输出，禁止写指针"]
+    proc = subprocess.run(["git", "cat-file", "-e", f"{match.group(1)}^{{commit}}"],
+                          cwd=path.parent, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return [f"NEXT.md HEAD 行写 {match.group(1)}，但仓库里解析不到（CX-24）"]
+    return []
+
+
+def check_core_zero_deps() -> list[str]:
+    """**`T-CX-17`**：核心五 crate 的 `[dependencies]` 只能指向 workspace 内部（`CX-27`）；
+    第三方依赖只许出现在 `pyawa-lsp`，且它不得被核心反向依赖。"""
+    import tomllib
+
+    core = ("pyawa-core", "pyawa-abi", "pyawa-stdlib", "pyawa-runtime", "pyawa-capabilities")
+    # 每个 crate 允许的第三方（workspace 内部依赖一律允许）
+    extra = {
+        "pyawa-core": set(),
+        "pyawa-abi": set(),
+        "pyawa-capabilities": set(),
+        "pyawa-runtime": set(),
+        "pyawa-stdlib": {"regex", "fancy-regex"},  # 既有例外，新增须先改 CX-27
+    }
+    failures: list[str] = []
+    for name in core:
+        path = ROOT / "crates" / name / "Cargo.toml"
+        if not path.is_file():
+            continue
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        for dep in data.get("dependencies", {}):
+            if dep not in core and dep not in extra.get(name, set()):
+                failures.append(
+                    f"crates/{name}/Cargo.toml: 依赖 {dep} 越出 `CX-27` 的白名单（`T-CX-17`）"
+                )
+    return failures
+
+
+def check_section_numbering() -> list[str]:
+    """**`T-CX-18`**：文档的二级章节编号（`## N. `）在**本文件内唯一且从 1 连续**（`CX-28`）。
+
+    只认 `## N. ` 形式（N 为纯整数＋点＋空格）：`## 3b.`、`## 5.9` 一类子节标题不计入，
+    避免把"子节误用二级标题"与"章节撞号"混为一谈。`docs/rounds/` 为历史台账，不扫描。
+    """
+    pattern = re.compile(r"^## (\d+)\.\s", re.M)
+    targets = sorted((ROOT / "docs").glob("*.md")) + [
+        ROOT / "AGENTS.md", ROOT / "NEXT.md", ROOT / "README.md",
+    ]
+    failures: list[str] = []
+    for path in targets:
+        if not path.is_file():
+            continue
+        nums = [int(x) for x in pattern.findall(path.read_text(encoding="utf-8"))]
+        if not nums:
+            continue
+        seen: set[int] = set()
+        for n in nums:
+            if n in seen:
+                failures.append(f"{relative(path)}: 章节 `## {n}.` 重复")
+            seen.add(n)
+        for n in range(1, max(nums) + 1):
+            if n not in seen:
+                failures.append(f"{relative(path)}: 章节编号缺 `## {n}.`（1..{max(nums)} 应连续）")
+    return failures
+
+
+def result_discard_targets() -> list[pathlib.Path]:
+    """`CX-30` 的扫描面：core 四个模块（目录 ＋ 模块根文件）。"""
+    targets: list[pathlib.Path] = []
+    for root_file, directory in RESULT_DISCARD_MODULES:
+        folder = ROOT / directory
+        if folder.is_dir():
+            targets.extend(sorted(folder.rglob("*.rs")))
+        module_root = ROOT / root_file
+        if module_root.is_file():
+            targets.append(module_root)
+    return targets
+
+
+def let_underscore_is_result_discard(rhs: str) -> bool:
+    """`let _ = <rhs>` 是否算"丢弃 `Result`"（`CX-30`）。
+
+    静态没有类型信息，判据只能是**语法形态**：RHS 是**调用**、且不是已登记的非 Result 调用／
+    变量形态。边界（变量形态无法判、`.ok()` 一族不在本规则）在 `CONSTRAINTS.md` 的 `CX-30`
+    里如实写明——这是**规则定义**的一部分，不是实现细节。
+    """
+    rhs = rhs.strip().rstrip(";").strip()
+    if not rhs:
+        return False
+    if "?" in rhs:
+        return False  # 错误已传播；`let _ =` 拿到的是 `()`
+    if "(" not in rhs:
+        return False  # 变量／元组／字面量：静态拿不到类型 ⇒ 不判（边界）
+    if rhs in RESULT_DISCARD_NONRESULT_RHS:
+        return False
+    for name in RESULT_DISCARD_NONRESULT_CALLS:
+        if re.search(rf"[.>:\s]{re.escape(name)}\s*\(", rhs):
+            return False
+    return True
+
+
+def result_discard_hits() -> list[tuple[str, int, str, str]]:
+    """返回 `(相对路径, 行号, 规则名, 该行原文)`——`CX-30` 的全部候选（未过滤白名单）。"""
+    hits: list[tuple[str, int, str, str]] = []
+    for path in result_discard_targets():
+        relative_path = relative(path)
+        text = path.read_text(encoding="utf-8")
+        original = text.splitlines()
+        stripped = strip_rust(text).splitlines()
+        for index in range(min(len(original), len(stripped))):
+            line = stripped[index]
+            lineno = index + 1
+            snippet = original[index].strip()
+            if RESULT_DISCARD_CATCH_ALL.search(line):
+                hits.append((relative_path, lineno, "catch-all `Err(_) =>`", snippet))
+            if RESULT_DISCARD_IF_LET.search(line):
+                hits.append((relative_path, lineno, "`if/while let Err(_)`", snippet))
+            if RESULT_DISCARD_BOOL_STMT.match(line):
+                hits.append((relative_path, lineno, "`.is_ok()`／`.is_err()` 当语句丢弃", snippet))
+            match = RESULT_DISCARD_LET.search(line)
+            if match and let_underscore_is_result_discard(match.group(1)):
+                hits.append((relative_path, lineno, "`let _ = <调用>`", snippet))
+    return hits
+
+
+def check_result_discards() -> list[str]:
+    """**`T-CX-20`**（`CX-30`）：core 四个模块里**禁止裸丢弃 `Result`**；白名单只许缩。"""
+    failures: list[str] = []
+    if len(RESULT_DISCARD_ALLOWED) > RESULT_DISCARD_ALLOWED_MAX:
+        failures.append(
+            f"白名单 {len(RESULT_DISCARD_ALLOWED)} 条 > 高水位 {RESULT_DISCARD_ALLOWED_MAX}"
+            "（`CX-30` 棘轮：只许缩不许涨）"
+        )
+    hits = result_discard_hits()
+    used = [False] * len(RESULT_DISCARD_ALLOWED)
+    for relative_path, lineno, rule, snippet in hits:
+        normalized = " ".join(snippet.split())
+        matched = False
+        for index, (entry_path, anchor, _reason) in enumerate(RESULT_DISCARD_ALLOWED):
+            if used[index] or entry_path != relative_path:
+                continue
+            if " ".join(anchor.split()) in normalized:
+                used[index] = True
+                matched = True
+                break
+        if matched:
+            continue
+        failures.append(
+            f"{relative_path}:{lineno}: 裸丢弃 `Result`（{rule}）：{snippet} ⇒ "
+            "改走 `discard_error`／`discard_attribute_error`／`discard_raised`；"
+            "确属非 Result 的写法请把理由写进 `RESULT_DISCARD_ALLOWED`（棘轮，只许缩）"
+        )
+    for index, consumed in enumerate(used):
+        if consumed:
+            continue
+        entry_path, anchor, _reason = RESULT_DISCARD_ALLOWED[index]
+        failures.append(
+            f"白名单条目已失效：{entry_path} 的锚点 {anchor!r} 未命中任何违规行"
+            "（该处已修好或代码已变）⇒ 必须从 `RESULT_DISCARD_ALLOWED` 删除（`CX-30` 棘轮）"
+        )
+    return failures
+
+
 def build_checks() -> list[Check]:
     checks = [
         Check("T-CX-1", ("CX-1",), "编号零悬空（全库引用）＋ 重复定义", check_spec_ids),
+        Check("T-CX-14", ("CX-23",), "NEXT 单页 ≤40 行、禁止逐轮复盘", check_next_page_size),
+        Check("T-CX-15", ("CX-24",), "NEXT 的 HEAD 行＝短哈希、可解析", check_next_head_line),
+        Check("T-CX-17", ("CX-27",), "核心五 crate 零第三方依赖（LSP 依赖只许在 pyawa-lsp）", check_core_zero_deps),
+        Check("T-CX-18", ("CX-28",), "文档二级章节编号唯一且从 1 连续", check_section_numbering),
+        Check(
+            "T-CX-19",
+            ("CX-29",),
+            "ABI 符号面：导出 ⊆ pa.h ⊆ 规格（含 ≤120 预算）",
+            check_abi_export_surface,
+        ),
+        Check(
+            "T-CX-20",
+            ("CX-30",),
+            "core 四个模块禁止裸丢弃 Result（白名单棘轮）",
+            check_result_discards,
+        ),
         Check("T-CX-2", ("CX-2",), "文档集状态：SPEC-INDEX §1 ↔ README", check_doc_status),
         Check("T-CX-3", ("CX-3",), "禁全局可变状态（VM 核心 crate 的 src/）", check_global_mutable_state),
         Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 ＋ C 层模块 crate 的 src/）", check_platform_dependencies),

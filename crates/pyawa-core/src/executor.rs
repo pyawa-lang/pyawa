@@ -21,6 +21,7 @@
 
 pub(crate) use core::cell::{Cell, RefCell};
 pub(crate) use core::ptr::NonNull;
+pub(crate) use crate::HotId;
 
 pub(crate) use crate::code::CodeObject;
 pub(crate) use crate::bigint::IntValue;
@@ -68,7 +69,10 @@ enum Step<'a> {
 }
 
 /// 执行失败的形态。
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// **不再 `Clone`**（阶段 2/A）：`Raised` 携带一份**拥有**的异常引用（[`RaiseRef`]），
+/// 裸克隆会复制所有权 ⇒ 只允许 move；`PartialEq` 按异常指针比较。
+#[derive(Debug, PartialEq, Eq)]
 pub enum ExecError {
     /// 解码失败（`BC-32`…`BC-36`）。
     Decode(DecodeError),
@@ -84,8 +88,11 @@ pub enum ExecError {
     UnboundLocal { slot: usize },
     /// 抛出了一个 Python 异常（**异常对象由实例的 `pending_exception` 保活**）。
     ///
-    /// `BC-60` ②：异常状态按实例存；这里只带一个借用的裸引用。
-    Raised { exception: NonNull<Header> },
+    /// `BC-60` ②：异常状态按实例存。`exception` 是**拥有一份引用**的 RAII 守卫
+    /// （[`crate::raise_guard::RaiseRef`]）：`Drop` 自动按"丢弃"归还（还 `Err` 那份，若
+    /// `pending` 仍指向它则一并清槽）⇒ **忘记处理也不会泄漏**；显式消费走
+    /// `into_pending()`／`discard()`。
+    Raised { exception: crate::raise_guard::RaiseRef },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
 }
@@ -143,7 +150,7 @@ fn push_container<T: crate::header::PyObject>(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-pub(crate) const ITERATOR_TYPE_NAMES: [&str; 30] = [
+pub(crate) const ITERATOR_TYPE_NAMES: [&str; 36] = [
     // **`reversed`** ✓（第 727 轮）：通用反向迭代器（序列协议 ✓）。
     "reversed",
     "tuple_iterator",
@@ -162,7 +169,18 @@ pub(crate) const ITERATOR_TYPE_NAMES: [&str; 30] = [
     "range_iterator",
     // **`zip()` 的迭代器** ✓（第 229 轮）：参照的名字也是 `zip` ✓。
     "zip",
+    // **`map()`／`filter()` 的迭代器** ✓（`P3-41` round 41：参照的 `map`／`filter` 对象就是迭代器 ✓）。
+    "map",
+    "filter",
     "dict_keyiterator",
+    // **`iter(callable, sentinel)`**（round 85）：参照名 `callable_iterator` ✓。
+    "callable_iterator",
+    // **序列协议（`__getitem__`）的惰性迭代器**（round 85）：参照名 `iterator` ✓。
+    "iterator",
+    // **`items()`／`values()` 的迭代器**（round 119）：照参照应有真迭代器类型 ✓
+    //（先前视图迭代交的是快照 list_iterator ✗ ⇒ 迭代中改键不报 RuntimeError ✗）。
+    "dict_itemiterator",
+    "dict_valueiterator",
     "set_iterator",
     // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）
     "count",
@@ -183,6 +201,36 @@ pub(crate) const ITERATOR_TYPE_NAMES: [&str; 30] = [
     "combinations_with_replacement",
     "permutations",
     "product",
+];
+
+/// **有专用推进分支的迭代器类型名**（round 249 性能，A2-4；从 `instance::misc` 移来 ⇒ 一处真相）：
+/// 建类型时按"首个登记"名字标能力位 `DEDICATED_ITERATOR_TYPE` ⇒ `advance_iterator` 每轮一次位测 ✓。
+pub(crate) const DEDICATED_ITERATOR_TYPE_NAMES: &[&str] = &[
+    "list_reverseiterator",
+    "reversed",
+    "count",
+    "repeat",
+    "islice",
+    "range_iterator",
+    "longrange_iterator",
+    "product",
+    "permutations",
+    "compress",
+    "combinations",
+    "combinations_with_replacement",
+    "zip",
+    "map",
+    "filter",
+    "zip_longest",
+    "pairwise",
+    "batched",
+    "cycle",
+    "accumulate",
+    "starmap",
+    "takewhile",
+    "dropwhile",
+    "filterfalse",
+    "chain",
 ];
 
 /// 属性查找的结果。
@@ -231,12 +279,28 @@ pub(crate) fn super_lookup(
     // 若也改走自己的 MRO，会命中 `generic_init_subclass_native` 的简化条件（`params.is_empty()` 一律报
     // `Cannot inherit from plain Generic`）⇒ `import typing` 当场红 ✗ —— 那一格（`builtin/typing.rs`）
     // 不在本任务写域，待它按参照的 `Generic in cls.__bases__`／`__orig_bases__` 口径对齐后再放开。
-    let this_type = if name == "__new__" && instance.is_type_object(this) {
+    // **`__self__` 是类对象时用它的 `tp_mro`** ✓（round 65，参照 `super_getattro`：
+    // `PyType_Check(obj) ⇒ ((PyTypeObject *)obj)->tp_mro`）。先前只对 `__new__` 放开 ✗；
+    // 隐式 classmethod（`__init_subclass__` 一族，`cls` 就是**正在创建的类**）也走这条 ⇒
+    // 零参 `super()` 必须看**那个类自己的 MRO**（`class A(Left, Middle, Right)` 的菱形链
+    // 才会从 `Middle` 走到 `Right` ✓；否则只看 `Middle.mro()`＝`[Middle, object]` ⇒ 跳过 `Right` ✗，
+    // `test_subclassinit.test_init_subclass_diamond` 实测 `['middle']` ✗）。
+    let stop = thisclass.cast::<TypeObject>();
+    // **`__self__` 是类对象时用它的 `tp_mro`** ✓（参照 `super_getattro`：`PyType_Check(obj) ⇒
+    // ((PyTypeObject *)obj)->tp_mro`）—— 本层**只对 `__new__` 放开** ✗（round 65 试过全面放开，
+    // ⇒ 隐式 classmethod 的零参 `super()` 改走"类自己的 MRO"后 `import typing` 红：
+    // `Protocol.__init_subclass__` 链与 `generic_init_subclass_native` 的简化判断互相踩 ✗。
+    // 已回退；菱形 `__init_subclass__` 的次序（`test_subclassinit.test_init_subclass_diamond`）
+    // 留作 typing 那格按参照对齐后再修 ✓）。
+    let this_type = if (name == "__new__" || name == "__init_subclass__")
+        && instance.is_type_object(this)
+    {
+        // **`__init_subclass__` 也是隐式 classmethod**（round 68 试）：`cls` 就是**正在创建的类** ⇒
+        // 零参 `super()` 必须看**那个类自己的 MRO** ✓（`test_subclassinit.test_init_subclass_diamond` ✓）。
         this.cast::<TypeObject>()
     } else {
         instance.type_of(this)
     };
-    let stop = thisclass.cast::<TypeObject>();
     // SAFETY: this_type 由注册表持有。
     let mro = unsafe { this_type.as_ref() }.mro();
     // **定义类不在被查的 MRO 里** ✓ ⇒ **整条 MRO 都算数** ✓（第 234 轮实测的形态 ✓）：
@@ -249,8 +313,7 @@ pub(crate) fn super_lookup(
         if after {
             let entry_name = unsafe { entry.as_ref() }.name();
             let resolved_new = instance.type_lookup(entry, name);
-            let object_default_new = instance
-                .type_named("object")
+            let object_default_new = instance.hot_type(HotId::Object)
                 .and_then(|ty| instance.type_lookup(ty, "__new__"));
             // 判据（第 608 轮修 ✓）：**该条目自己有 `new` 槽** ✓ 且（查不到 ✓ 或查到的就是 `object` 层默认 ✓）
             // ⇒ 用**该条目**的槽 ✓；**排除 `object`／`type`** ✗（对它们桥接会波及元类建类 ✓ —— 第 607 轮那条红的来源 ✓）。
@@ -289,12 +352,10 @@ pub(crate) fn super_lookup(
                 // 不该在这里被桥接 ✗ —— 那正是第 607/608 轮把 `meta_path_shapes` 打红的那条路 ✓。
                 if name == "__new__"
                     && (Some(found)
-                        == instance
-                            .type_named("object")
+                        == instance.hot_type(HotId::Object)
                             .and_then(|ty| instance.type_lookup(ty, "__new__"))
                         || Some(found)
-                            == instance
-                                .type_named("type")
+                            == instance.hot_type(HotId::Type)
                                 .and_then(|ty| instance.type_lookup(ty, "__new__")))
                     && instance.is_type_object(this)
                 {
@@ -324,7 +385,7 @@ pub(crate) fn super_lookup(
                 // ⇒ 类字典里存的是**包装对象** ✓，参照的 `super().__getattribute__` 走 `__get__` 解包 ✓
                 //（先前一律按元类 MRO 查、走不到这一格 ⇒ 漏着没暴露；真 `_collections_abc` 的
                 // `_DeprecateByteStringMeta.__new__` 当场报 `'staticmethod' object is not callable` ✗）。
-                if Some(found_type) == instance.type_named("staticmethod") {
+                if Some(found_type) == instance.hot_type(HotId::StaticMethod) {
                     // SAFETY: 类型身份刚确认 ⇒ 载荷是 `StaticMethodObject`。
                     let inner = unsafe {
                         &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>()
@@ -333,7 +394,7 @@ pub(crate) fn super_lookup(
                     // `staticmethod.__get__` 不绑 `self` ⇒ 交**裸函数**（`LOAD_ATTR` 的方法位会补 NULL 槽）。
                     return Ok(Some(Attribute::Value(inner)));
                 }
-                if Some(found_type) == instance.type_named("classmethod") {
+                if Some(found_type) == instance.hot_type(HotId::ClassMethod) {
                     // SAFETY: 类型身份刚确认 ⇒ 载荷是 `ClassMethodObject`。
                     let inner = unsafe {
                         &*found.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>()
@@ -350,16 +411,71 @@ pub(crate) fn super_lookup(
                         this: bound,
                     }));
                 }
-                if found_type == builtin_type(instance, "function")
-                    || found_type == builtin_type(instance, "builtin_function_or_method")
+                // **`__new__` 是 staticmethod 语义**（round 235 真 bug 修 ✗）：参照的
+                // `object.__new__`／`type.__new__` 在类字典里是**静态**的 ⇒ `super().__new__(cls)`
+                // 只传 `cls` 一个实参 ✓。先前走下面那条"内建方法一律绑 self"✗ ⇒ 多绑一份
+                // ⇒ `object.__new__()` 收到 `(this, cls)` 两个 ⇒
+                // `TypeError: object.__new__() takes exactly one argument …，实际给了 1 个`（原文计数也错 ✗；
+                // `test_abc.TestABC.test_all_new_methods_are_called` 的 `super().__new__(cls)` ✓）。
+                if name == "__new__" && found_type == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记") {
+                    return Ok(Some(Attribute::Value(found)));
+                }
+                if found_type == instance.hot_type(HotId::Function).expect("function 已登记")
+                    || found_type == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记")
                 {
                     return Ok(Some(Attribute::Method {
                         function: found,
                         this,
                     }));
                 }
+                // **描述符协议**（`P3-29` 连带修 ✗）：MRO 上取到的属性若其类型有 `__get__`
+                // （`property` 是最常见的一种），参照的 `super.__getattribute__` 要调它 ✓
+                // —— 先前**直接交属性对象本身** ✗ ⇒ `Lib/socket.py` 的
+                // `@property def family(self): return _intenum_converter(super().family, …)`
+                // 拿到 `property` 对象 ⇒ `super().family == AF_INET` 为假／数值运算报 TypeError ✗。
+                // 函数／内建方法／staticmethod／classmethod 已在上面的分支处理掉 ✓ ⇒ 这里只处理其余。
+                if let Some(get) = instance.type_lookup(found_type, "__get__") {
+                    let owner = if instance.is_type_object(this) {
+                        this
+                    } else {
+                        instance.type_of(this).cast::<Header>()
+                    };
+                    // 实参是**借用**（`call_callable` 只借不接管）⇒ 各 retain 一份。
+                    // SAFETY: this／owner 都是存活对象（注册表或实例持有）。
+                    unsafe {
+                        instance.incref_object(this.as_ptr());
+                        instance.incref_object(owner.as_ptr());
+                    }
+                    let result = crate::executor::call::call_callable(
+                        instance,
+                        get,
+                        Some(found),
+                        vec![this, owner],
+                        Vec::new(),
+                        0,
+                    )?;
+                    return Ok(Some(Attribute::Value(result)));
+                }
                 return Ok(Some(Attribute::Value(found)));
             }
+        }
+        // **`super().__prepare__`**（round 84）：`type.__prepare__` 是本层在属性通道里
+        // **特殊名分支**实现的（不在 `type` 的类型字典里 ✓）⇒ `super` 沿 MRO 查字典永远找不到它 ✗
+        // ⇒ 元类方法里的 `super().__prepare__(*args, **kwds)` 报 `AttributeError` ✗
+        //（`test_metaclass` 的 doctest 钉住 ✓）。这里补一格：走到内建 `type` 条目时交回
+        // **默认实现**（参数忽略、给空 dict ✓）。
+        if name == "__prepare__" && unsafe { entry.as_ref() }.name() == "type" {
+            let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
+                .expect("builtin_function_or_method 在引导期已登记");
+            let native = instance
+                .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    method_type,
+                    "__prepare__",
+                    core::cell::Cell::new(crate::executor::attribute::type_prepare_native),
+                ))
+                .into_raw()
+                .cast::<Header>();
+            return Ok(Some(Attribute::Value(native)));
         }
         if entry == stop {
             after = true;
@@ -392,7 +508,15 @@ pub(crate) fn module_getattr_missing(
     // `call_value` 自己给实参新增引用 ✓ ⇒ 我们这份用完即还 ✓。
     let outcome = crate::executor::call::call_value(instance, hook, &[name_object], &[]);
     instance.release(name_object);
-    outcome.ok()
+    match outcome {
+        Ok(value) => Some(value),
+        Err(error) => {
+            // **回退调用失败要还异常**（round 256 真泄漏修 ✗）：调用方拿 `None` 后照常报
+            // `AttributeError`，这份 `Err(Raised)` 不还就每探一次漏一颗 ✓。
+            crate::executor::runtime::discard_error(instance, &error);
+            None
+        }
+    }
 }
 
 /// **经 `fs` 域把一个文件读成文本**（`IM-15`：I/O 一律走能力域 ✓，本层不碰平台 ✓ `CX-4`）。
@@ -407,13 +531,13 @@ pub(crate) fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<S
             Ok(0) => break,
             Ok(count) => bytes.extend_from_slice(&buffer[..count]),
             Err(_) => {
-                let _ = instance.fs_close(handle);
+                crate::executor::runtime::discard_capability_result(instance.fs_close(handle));
                 return None;
             }
         }
     }
-    let _ = instance.fs_close(handle);
-    if crate::diag::flag("PYAWA_TRACE_IMPORT") {
+    crate::executor::runtime::discard_capability_result(instance.fs_close(handle));
+    if crate::diag::flag_site!("PYAWA_TRACE_IMPORT") {
         // **诊断** ✓（第 200 轮）：读出多少字节 ✓（好与磁盘上的大小对照 ✗）。
         let path_text = String::from_utf8_lossy(path);
         eprintln!("[读文件] {path_text} ⇒ {} 字节", bytes.len());
@@ -480,6 +604,20 @@ pub fn unary_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`~bool` 的弃用告警** ✓（round 48；参照 3.14 实测文案 + `DeprecationWarning`，
+    // `test_bool.test_math` 的 `assertWarns` 钉住）：结果仍是"底层 int 的按位取反"（`~False` ⇒ -1 ✓），
+    // 只是先发一条警告。`~int` 不告警 ✓。
+    if symbol == "~"
+        && instance.type_of(operand) == instance.singletons().bool_type()
+    {
+        crate::executor::runtime::warn_deprecation(
+            instance,
+            "Bitwise inversion '~' on bool is deprecated and will be removed in Python 3.16. \
+             This returns the bitwise inversion of the underlying int object and is usually not what \
+             you expect from negating a bool. Use the 'not' operator for boolean negation or \
+             ~int(x) if you really want the bitwise inversion of the underlying int.",
+        );
+    }
     if let Some(value) = instance.int_of(operand) {
         // `-`／`+`／`abs`／`~` 全走任意精度（`TS-45`）
         let wide = value.to_bigint();
@@ -500,7 +638,7 @@ pub fn unary_public(
     // **浮点的一元面**（第 318 轮）：`-1.5`／`+1.5`／`abs(-1.5)` —— 先前落到最后那条
     // `bad operand type for unary -: 'float'` ✗（`Lib/` 里浮点遍地都是 ✓）。
     // SAFETY: operand 由调用方保证存活。
-    if unsafe { operand.as_ref() }.ty() == builtin_type(instance, "float") {
+    if unsafe { operand.as_ref() }.ty() == instance.hot_type(HotId::Float).expect("float 已登记") {
         // SAFETY: 类型身份刚确认 ⇒ `FloatObject` 载荷。
         let value = unsafe { &*operand.as_ptr().cast::<FloatObject>() }.value();
         let result = match symbol {
@@ -541,23 +679,9 @@ pub fn unary_public(
         _ => "",
     };
     if !dunder.is_empty() {
-        if let Ok(Attribute::Method { function, this }) =
-            crate::executor::attribute::attribute_lookup(instance, operand, dunder)
-        {
-            // SAFETY: 两者分别由类型字典／实例持有，存活。
-            unsafe {
-                instance.incref_object(function.as_ptr());
-                instance.incref_object(this.as_ptr());
-            }
-            let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
-                builtin_type(instance, "method"),
-                function,
-                this,
-            ));
-            let bound = bound.into_raw().cast::<Header>();
-            let outcome = crate::executor::call::call_value(instance, bound, &[], &[]);
-            release(instance, bound);
-            return outcome;
+        // **属性通道统一派发**（用户方法／宿主 `getattr_fn` 都走这里）；`None` ⇒ 没有实现。
+        if let Some(result) = crate::executor::protocol::call_protocol_method(instance, operand, dunder, &[])? {
+            return Ok(result);
         }
     }
     let name = instance.type_name(instance.type_of(operand));
@@ -662,7 +786,7 @@ pub(crate) fn set_operation(
 /// **取集合元素** ✓（第 205 轮）：`set` 与 `frozenset` **同一载荷** ✓（第 236 轮 ✓）⇒ 两边都认 ✓。
 pub(crate) fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
     let ty = instance.type_of(object);
-    let is_set = Some(ty) == instance.type_named("set") || Some(ty) == instance.type_named("frozenset");
+    let is_set = Some(ty) == instance.hot_type(HotId::Set) || Some(ty) == instance.hot_type(HotId::FrozenSet);
     if !is_set {
         return None;
     }
@@ -683,20 +807,20 @@ pub(crate) fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Opti
 pub(crate) fn render_label(instance: &Instance, label: NonNull<Header>) -> String {
     // SAFETY: label 由常量表持有，存活。
     let label_type = unsafe { label.as_ref() }.ty();
-    if label_type == builtin_type(instance, "str") {
+    if label_type == instance.hot_type(HotId::Str).expect("str 已登记") {
         // P3-38 S2c：标签文本走安全口径（内部标签是合法 ASCII ⇒ 旧输出不变；代理 ⇒ 有损，不 panic ✓）
         return instance.text_value(label).unwrap_or_default();
     }
     if is_type_object(instance, label_type) {
         return type_name_of(instance, label.cast::<TypeObject>());
     }
-    if label_type == builtin_type(instance, "tuple") {
+    if label_type == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         // SAFETY: 类型身份刚确认。
         let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
         // `TS-46`／`BC-24`：union 标签 ⇒ `Union[成员, 成员]`（成员用同一函数递归渲染）。
         if let Some(head) = parts.item(0) {
             // SAFETY: 元组元素存活。
-            let head_is_union_marker = unsafe { head.as_ref() }.ty() == builtin_type(instance, "str")
+            let head_is_union_marker = unsafe { head.as_ref() }.ty() == instance.hot_type(HotId::Str).expect("str 已登记")
                 // P3-38 S2c：合法视图比较（WTF-8 不等于内部 ASCII 标签 ✓，不 panic ✓）
                 && instance.text_of(head) == Some("Union");
             if head_is_union_marker {
@@ -741,14 +865,14 @@ enum OrOperand {
 
 /// 是 `types.UnionType` 实例 ⇒ 取 `__args__` 的成员表（**借用**，不增减引用）；否则 `None`。
 fn union_args_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-    let union_type = instance.type_named("UnionType")?;
+    let union_type = instance.hot_type(HotId::UnionType)?;
     // SAFETY: object 是存活对象；类型身份下面刚比过。
     if unsafe { object.as_ref() }.ty() != union_type {
         return None;
     }
     let mapping = mounted_instance_dict(instance, object)?;
     let args = instance.dict_get(mapping, "__args__")?;
-    if instance.type_of(args) != builtin_type(instance, "tuple") {
+    if instance.type_of(args) != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         return None;
     }
     // SAFETY: 上面刚确认过是 `tuple`。
@@ -789,8 +913,7 @@ fn push_union_member(
 
 /// 造一个 `types.UnionType` 实例：成员表按给定顺序进 `__args__`（成员是**新引用**，由本函数接手）。
 fn new_union_of(instance: &Instance, members: Vec<NonNull<Header>>) -> NonNull<Header> {
-    let union_type = instance
-        .type_named("UnionType")
+    let union_type = instance.hot_type(HotId::UnionType)
         .unwrap_or_else(|| instance.new_attribute_type("UnionType"));
     let object = instance
         .alloc(crate::builtin_objects::AttributeObject::new(
@@ -801,7 +924,10 @@ fn new_union_of(instance: &Instance, members: Vec<NonNull<Header>>) -> NonNull<H
         .cast::<Header>();
     let args = instance.new_tuple(members);
     // `set_attribute_value` 收**借用** ⇒ 交出去的元组引用随后还掉（字典自己持一份）。
-    let _ = instance.set_attribute_value(object, "__args__", args);
+    crate::executor::runtime::discard_exec_result(
+        instance,
+        instance.set_attribute_value(object, "__args__", args),
+    );
     release(instance, args);
     object
 }
@@ -870,8 +996,7 @@ pub fn exception_uncaught_text(instance: &Instance, exception: NonNull<Header>) 
     // SAFETY: ty 由注册表持有。
     let type_object = unsafe { ty.as_ref() };
     let type_name = type_object.name();
-    let is_exception = instance
-        .type_named("BaseException")
+    let is_exception = instance.hot_type(HotId::BaseException)
         .is_none_or(|base| instance.is_subtype(ty, base));
     if !is_exception
         || type_object.instance_size()
@@ -914,17 +1039,25 @@ pub(crate) fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
 // ---- `BC-56` 的消息：**逐条实测**（禁止手写近似文本，见 tests/calls.rs 的记录）----
 
 /// 取一个 `str` 对象的文本（关键字实参的名字要用它）。
-fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<String, ExecError> {
-    // SAFETY: raw 是存活对象。
-    let ty = unsafe { raw.as_ref() }.ty();
-    if ty != instance.singletons().str_type() {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "关键字实参的名字必须是 str",
+///
+/// **失败 ⇒ 参照的 `TypeError: keywords must be strings`** ✓（round 50）：先前报
+/// `Unsupported`（状态 5，整个文件中止 ✗）—— `f(**{1: 2})` 与
+/// `f(**<keys() 含非 str 的映射>)` 都是这条 ✓（`test_extcall` 的 doctest 钉住）。
+fn str_text(instance: &Instance, raw: NonNull<Header>, _opcode: u8) -> Result<String, ExecError> {
+    if let Some(text) = instance.text_of(raw) {
+        return Ok(text.to_owned());
+    }
+    // **`str` 子类**（round 50）：`text_of` 只认"恰是 `str`" ✗ —— 参照的关键字名**接受子类** ✓
+    // （`class S(str)` 作 `**{S("a"): 1}` 的键 ✓）。载荷同构 ⇒ 直接取 WTF-8 文本 ✓。
+    if instance.is_str_object(raw) {
+        // SAFETY: 刚确认是 `str` 族（载荷同布局）。
+        let bytes = unsafe { &*raw.as_ptr().cast::<crate::StrObject>() }.wtf8_bytes();
+        return Ok(match core::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => crate::wtf8::to_string_lossy(bytes),
         });
     }
-    // SAFETY: 类型身份已确认。P3-38 S2c：安全口径（WTF-8 ⇒ 有损文本，不 panic ✓）
-    Ok(instance.text_value(raw).unwrap_or_default())
+    Err(instance.raise_builtin_error("TypeError", "keywords must be strings"))
 }
 
 /// 取函数对象的位置默认值（**借用**，需要时自行 incref）。
@@ -950,11 +1083,25 @@ pub(crate) fn function_defaults(function: NonNull<Header>) -> (NonNull<Header>, 
 /// **槽级追踪** ✓（第 653 轮，门控 `PYAWA_SLOT_TRACE="函数名:槽号"`）：把某函数某槽的**每一次读／写**
 /// 按**发生顺序**打出来 ✓（句首是动作 ✓）—— 用来夹"先读后写"这类**控制流分岔** ✓
 ///（`Lib/re._parser._parse` 的槽 14 就是靠它定位 ✓）。不设这个环境变量时**零开销** ✓（只多一次查表 ✓）。
+/// **`PYAWA_SLOT_TRACE` 是否启用**（round 250 性能，A2-5）：`execute` 入口查**一次**，
+/// 之后 `LOAD_FAST`／`STORE_FAST` 只判一个 `bool` ✓（先前每条指令都要 `OnceLock::get_or_init` ✗）。
+fn slot_trace_enabled() -> bool {
+    static SLOT_TRACE: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    SLOT_TRACE
+        .get_or_init(|| std::env::var_os("PYAWA_SLOT_TRACE"))
+        .is_some()
+}
+
 fn slot_trace(instance: &Instance, code: &crate::CodeObject, slot: usize, action: &str) {
-    let Some(wanted) = std::env::var_os("PYAWA_SLOT_TRACE") else {
+    // 只有 `slot_trace_enabled()` 为真才会进来 ✓（环境变量进程内只读一次 ✓）。
+    static SLOT_TRACE: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    let Some(wanted) = SLOT_TRACE
+        .get_or_init(|| std::env::var_os("PYAWA_SLOT_TRACE"))
+        .as_ref()
+    else {
         return;
     };
-    let wanted = wanted.to_string_lossy().into_owned();
+    let wanted = wanted.to_string_lossy();
     let mut parts = wanted.splitn(2, ':');
     let (Some(name), Some(number)) = (parts.next(), parts.next()) else {
         return;
@@ -1036,20 +1183,59 @@ pub(crate) fn bind_arguments(
                 release(instance, value);
             }
         };
+        let extra_count = extra.len();
         release_all(extra);
         for slot in locals.iter_mut().filter_map(Option::take) {
             release(instance, slot);
         }
+        // **多给的位置实参 ＋ 已给的仅关键字实参**（round 63）：参照报文尾巴两者都报 ✓。
+        let keyword_only_given = kwargs
+            .iter()
+            .filter(|(name, _)| {
+                match str_text(instance, *name, opcode) {
+                    Ok(text) => (0..kwonly)
+                        .any(|offset| code.varname(argcount + offset) == Some(text.as_str())),
+                    Err(error) => {
+                        crate::executor::runtime::discard_error(instance, &error);
+                        false
+                    }
+                }
+            })
+            .count();
         let message = message_too_many(
-            code.name(),
+            code.qualname(),
             argcount,
             argcount - defaults.len(),
-            given + 1,
+            // **多出来的位置实参有几个就报几个** ✓（round 63 真 bug 修 ✗：先前写死 `given + 1`
+            // ⇒ `f(1, 2, 3)` 报 "but 1 was given" ✗；`test_extcall` 实测 ✓）。
+            given + extra_count,
+            keyword_only_given,
         );
         return Err(raise_builtin(instance, "TypeError", &message));
     }
 
     // ③ 关键字实参
+    // **形参名 ⇒ 槽位的快查表**（round 71，性能）：先前每个关键字实参都线性扫 `varnames` ✗
+    // ⇒ `_replace(**{150k 个字段})` 之流是 O(n²) ✗（`test_collections.test_large_size` 的超时源）。
+    // 只在大参数量时建表 ✓（普通调用仍走线性小表 ✓）。
+    let slot_index: Option<std::collections::HashMap<&str, usize>> =
+        if kwargs.len() > 8 || argcount + kwonly > 64 {
+            let mut map = std::collections::HashMap::with_capacity(argcount + kwonly);
+            for slot in 0..argcount {
+                if let Some(name) = code.varname(slot) {
+                    map.entry(name).or_insert(slot);
+                }
+            }
+            for offset in 0..kwonly {
+                if let Some(name) = code.varname(argcount + offset) {
+                    map.entry(name).or_insert(argcount + offset);
+                }
+            }
+            Some(map)
+        } else {
+            None
+        };
+    // **位置实参被跳过的起手**：位置匹配要跳过仅位置形参之后的……（原逻辑不变 ✓）
     let mut collected: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
     for (name, value) in kwargs {
         let text = match str_text(instance, name, opcode) {
@@ -1064,28 +1250,46 @@ pub(crate) fn bind_arguments(
             }
         };
 
-        let positional_hit = (0..argcount).find(|slot| code.varname(*slot) == Some(text.as_str()));
-        let keyword_hit = (0..kwonly)
-            .find(|offset| code.varname(argcount + offset) == Some(text.as_str()))
-            .map(|offset| argcount + offset);
+        let (positional_hit, keyword_hit) = match slot_index.as_ref() {
+            Some(index) => match index.get(text.as_str()) {
+                Some(slot) if *slot < argcount => (Some(*slot), None),
+                Some(slot) => (None, Some(*slot)),
+                None => (None, None),
+            },
+            None => (
+                (0..argcount).find(|slot| code.varname(*slot) == Some(text.as_str())),
+                (0..kwonly)
+                    .find(|offset| code.varname(argcount + offset) == Some(text.as_str()))
+                    .map(|offset| argcount + offset),
+            ),
+        };
 
         let outcome = if let Some(slot) = positional_hit {
             if slot < code.posonlyargcount() {
-                // 仅位置形参不能用关键字传
-                release(instance, value);
-                release(instance, name);
-                Err(raise_builtin(
-                    instance,
-                    "TypeError",
-                    &message_positional_only(code.name(), std::slice::from_ref(&text)),
-                ))
+                // **仅位置形参不能用关键字传；但函数有 `**kwargs` ⇒ 归到 kwargs**（round 213 真 bug 修 ✗）：
+                // 参照口径 `def f(self, /, **kw): f(self=1)` ⇒ `kw['self']==1` ✓（不是 TypeError ✓）。
+                // 先前一律报错 ✗ ⇒ `Counter(self=42)` 报
+                // `__init__() got some positional-only arguments passed as keyword arguments: 'self'` ✗
+                //（`test_collections.TestCounter.test_init` ✓）。
+                if code.has_varkeywords() {
+                    collected.push((name, value));
+                    Ok(())
+                } else {
+                    release(instance, value);
+                    release(instance, name);
+                    Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        &message_positional_only(code.name(), std::slice::from_ref(&text)),
+                    ))
+                }
             } else if locals[slot].is_some() {
                 release(instance, value);
                 release(instance, name);
                 Err(raise_builtin(
                     instance,
                     "TypeError",
-                    &message_duplicate(code.name(), &text),
+                    &message_duplicate(code.qualname(), &text),
                 ))
             } else {
                 locals[slot] = Some(value);
@@ -1099,7 +1303,7 @@ pub(crate) fn bind_arguments(
                 Err(raise_builtin(
                     instance,
                     "TypeError",
-                    &message_duplicate(code.name(), &text),
+                    &message_duplicate(code.qualname(), &text),
                 ))
             } else {
                 locals[slot] = Some(value);
@@ -1115,7 +1319,7 @@ pub(crate) fn bind_arguments(
             Err(raise_builtin(
                 instance,
                 "TypeError",
-                &message_unexpected_keyword(code.name(), &text),
+                &message_unexpected_keyword(code.qualname(), &text),
             ))
         };
 
@@ -1155,7 +1359,7 @@ pub(crate) fn bind_arguments(
         for slot in locals.iter_mut().filter_map(Option::take) {
             release(instance, slot);
         }
-        let message = message_missing(code.name(), &missing_positional, false);
+        let message = message_missing(code.qualname(), &missing_positional, false);
         return Err(raise_builtin(instance, "TypeError", &message));
     }
 
@@ -1174,9 +1378,7 @@ pub(crate) fn bind_arguments(
             let name_object = instance.alloc(StrObject::new(instance.singletons().str_type(), name.clone()));
             let name_raw = name_object.as_ptr().cast::<Header>();
             let position = dict
-                .entries()
-                .iter()
-                .position(|(existing, _)| values_equal(instance, *existing, name_raw));
+                .find_live_position(|existing| values_equal(instance, existing, name_raw));
             if let Some(position) = position {
                 found = dict.entry(position).map(|(_, value)| value);
             }
@@ -1198,7 +1400,7 @@ pub(crate) fn bind_arguments(
         for slot in locals.iter_mut().filter_map(Option::take) {
             release(instance, slot);
         }
-        let message = message_missing(code.name(), &missing_keyword_only, true);
+        let message = message_missing(code.qualname(), &missing_keyword_only, true);
         return Err(raise_builtin(instance, "TypeError", &message));
     }
 
@@ -1224,7 +1426,7 @@ pub(crate) fn bind_arguments(
             return Err(raise_builtin(instance, "TypeError", &message));
         }
         let dict = instance.alloc(DictObject::new(
-            builtin_type(instance, "dict"),
+            instance.hot_type(HotId::Dict).expect("dict 已登记"),
             RefCell::new(collected),
         ));
         locals[slot] = Some(dict.into_raw().cast::<Header>());
@@ -1256,7 +1458,7 @@ fn dispatch_raise(
     frame: &Frame,
     exceptiontable: &[u8],
     offset_bytes: usize,
-    exception: NonNull<Header>,
+    exception: crate::raise_guard::RaiseRef,
     decoder: &mut Decoder,
 ) -> Result<(), ExecError> {
     let table = parse_exception_table(exceptiontable).map_err(ExecError::Decode)?;
@@ -1264,9 +1466,10 @@ fn dispatch_raise(
         .iter()
         .find(|entry| entry.start <= offset_bytes && offset_bytes < entry.end);
     let Some(entry) = handler else {
+        // 没有处理块 ⇒ 把守卫**原样 move** 给调用方（继续往外抛）。
         return Err(ExecError::Raised { exception });
     };
-    if crate::diag::flag("PYAWA_TRY_DEPTH_DEBUG") {
+    if crate::diag::flag_site!("PYAWA_TRY_DEPTH_DEBUG") {
         eprintln!("[try_depth] 展开 实际栈深={} 记账 depth={}", frame.depth(), entry.depth);
     }
     while frame.depth() > entry.depth {
@@ -1280,7 +1483,12 @@ fn dispatch_raise(
     if entry.lasti {
         push_int(instance, frame, (offset_bytes / 2) as i64)?;
     }
-    push(instance, frame, exception)?;
+    // `push` 是**借用**接口（内部 `own` 新增一份）⇒ 守卫自己的那份要归还。
+    // **RAII**：`discard`（幂等）＝ 旧"`record_consumed` ＋ `release`"；这就是"被处理块接住"
+    // 的标准消费点，随后的 Drop 不再重复。
+    push(instance, frame, exception.get())?;
+    // 只还 `Err` 那份，**保留 `pending` 槽**（旧 `dispatch_raise` 口径：槽是实例可见状态）。
+    exception.release_keeping_pending();
     decoder.set_position(entry.target / 2);
     Ok(())
 }
@@ -1303,6 +1511,18 @@ pub(crate) fn resume_generator(
 ) -> Result<GeneratorOutcome, ExecError> {
     // SAFETY: 调用方保证 generator 是本实例里存活的生成器。
     let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
+    // **重入守卫** ✓（round 56）：生成器体里再驱动自己 ⇒ 参照 `ValueError: <种类> already executing`；
+    // 先前不查 ✗ ⇒ 递归恢复同一帧 ⇒ `帧操作失败：StackUnderflow`（`test_genexps` ✓）。
+    if object.running() {
+        let word = instance.type_name(unsafe { generator.as_ref() }.ty());
+        return Err(crate::executor::runtime::raise_builtin(
+            instance,
+            "ValueError",
+            &format!("{word} already executing"),
+        ));
+    }
+    object.set_running(true);
+    let outcome = (|| -> Result<GeneratorOutcome, ExecError> {
     let frame_header = object.frame();
     let generator_frame = Owned::new(
         // SAFETY: frame_header 由生成器持有，这里新增一份引用交给守卫。
@@ -1349,11 +1569,11 @@ pub(crate) fn resume_generator(
             // 那里 `StopIteration` 是**返回值**机制。
             if let ExecError::Raised { exception } = &error {
                 // SAFETY: exception 是存活对象。
-                let ty = unsafe { exception.as_ref() }.ty();
-                let stop_iteration = exception_type(instance, "StopIteration");
+                let ty = unsafe { exception.get().as_ref() }.ty();
+                let stop_iteration = instance.hot_type(HotId::StopIteration).expect("StopIteration 已登记");
                 // SAFETY: generator 是本实例里存活的对象。
                 let is_coroutine =
-                    unsafe { generator.as_ref() }.ty() == builtin_type(instance, "coroutine");
+                    unsafe { generator.as_ref() }.ty() == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
                 let code_flags = {
                     let frame_header = object.frame();
                     // SAFETY: 帧由生成器持有，存活。
@@ -1365,17 +1585,81 @@ pub(crate) fn resume_generator(
                     }
                 };
                 let iterable_coroutine = code_flags & 0x100 != 0;
+                // **异步生成器**（round 245）：体里逃出来的 `StopIteration`／`StopAsyncIteration`
+                // 都要变成 `RuntimeError`（参照原话 `async generator raised …` ✓；
+                // `Lib/test/test_asyncgen.py` 的 exception_05／06 ✓）。
+                // SAFETY: generator 存活。
+                let is_async_generator =
+                    unsafe { generator.as_ref() }.ty() == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
+                if is_async_generator {
+                    let stop_async_iteration = instance.hot_type(HotId::StopAsyncIteration).expect("StopAsyncIteration 已登记");
+                    let word = if instance.is_subtype(ty, stop_iteration) {
+                        Some("StopIteration")
+                    } else if instance.is_subtype(ty, stop_async_iteration) {
+                        Some("StopAsyncIteration")
+                    } else {
+                        None
+                    };
+                    if let Some(word) = word {
+                        let message = format!("async generator raised {word}");
+                        let wrapper = crate::builtin_objects::exception_instance(
+                            instance,
+                            "RuntimeError",
+                            vec![instance.new_str(&message)],
+                        );
+                        unsafe {
+                            instance.incref_object(exception.get().as_ptr());
+                            instance.incref_object(exception.get().as_ptr());
+                        }
+                        let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
+                            instance,
+                            wrapper,
+                            Some(exception.get()),
+                            Some(exception.get()),
+                            true,
+                        );
+                        // **RAII**：原异常那份由 `error` 守卫在返回时 Drop 归还（cause/context 各持
+                        // 一份 ⇒ 手工 incref 两次后不再显式 release）。
+                        return Err(ExecError::Raised {
+                            exception: crate::raise_guard::RaiseRef::from_owned(instance, wrapper),
+                        });
+                    }
+                }
                 if instance.is_subtype(ty, stop_iteration) && (is_coroutine || iterable_coroutine) {
                     let word = if is_coroutine { "coroutine" } else { "generator" };
                     let message = format!("{word} raised StopIteration");
-                    // SAFETY: 错误里那份引用在此消费。
-                    unsafe { instance.release_object(exception.as_ptr()) };
-                    return Err(raise_builtin(instance, "RuntimeError", &message));
+                    // **PEP 479**：包装出的 `RuntimeError` 要带走 cause／context（round 64 ✓）。
+                    let wrapper = crate::builtin_objects::exception_instance(
+                        instance,
+                        "RuntimeError",
+                        vec![instance.new_str(&message)],
+                    );
+                    // 原异常要给**两份**引用（cause 与 context 各一份 ✓）+ 错误自己那份
+                    // = **3 份** ⇒ 先各加一份（两次 ✓），下面再还错误自己那份 ✓。
+                    unsafe {
+                        instance.incref_object(exception.get().as_ptr());
+                        instance.incref_object(exception.get().as_ptr());
+                    }
+                    let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
+                        instance,
+                        wrapper,
+                        Some(exception.get()),
+                        Some(exception.get()),
+                        true,
+                    );
+                    // **RAII**：原异常那份由 `error` 守卫在返回时 Drop 归还（cause/context 各持
+                    // 一份 ⇒ 手工 incref 两次后不再显式 release）。
+                    return Err(ExecError::Raised {
+                        exception: crate::raise_guard::RaiseRef::from_owned(instance, wrapper),
+                    });
                 }
             }
             Err(error)
         }
     }
+    })();
+    object.set_running(false);
+    outcome
 }
 
 /// 异步生成器耗尽时抛的东西（`async for` 的结束信号）。
@@ -1435,6 +1719,29 @@ pub(crate) fn resume_generator_with_raise(
 /// **当前全局映射的 RAII 守卫**（第 156 轮）：`Drop` 时恢复上一格 ✓ ⇒ `execute` 里**任何**提前返回
 /// （含 `?`）都安全 ✓（生成器挂起返回时也算「本帧不活跃」✓，恢复正是对的 ✓）。
 /// **当前帧的 RAII 守卫** ✓（第 230 轮）：与全局映射那只**同款** ✓ —— 进帧时公布、出帧时还原 ✓。
+/// **异常状态的 RAII 守卫**（round 62）：进入 `execute` 记下当前深度，退出时截断回去 ✓。
+///
+/// `Drop` 覆盖**所有**退出路径（正常返回、异常逃逸、生成器挂起、以及 `?` 提前返回 ✓）。
+struct ExceptionStateGuard<'a> {
+    instance: &'a Instance,
+    depth: usize,
+}
+
+impl<'a> ExceptionStateGuard<'a> {
+    fn install(instance: &'a Instance) -> Self {
+        Self {
+            instance,
+            depth: instance.exception_depth(),
+        }
+    }
+}
+
+impl Drop for ExceptionStateGuard<'_> {
+    fn drop(&mut self) {
+        self.instance.truncate_exception_state(self.depth);
+    }
+}
+
 struct CurrentFrameGuard<'a> {
     instance: &'a Instance,
     previous: Option<NonNull<Header>>,
@@ -1532,6 +1839,290 @@ fn load_deref_value(
     Ok(value)
 }
 
+/// **本地追踪的 `'line'` 事件**（round 181）：行号变化时调帧上 `f_trace` 回调
+/// （`trace(frame, 'line', None)`；参照的本地追踪只对**设了 `f_trace` 的那一帧**生效 ✓）。
+///
+/// 递归保护：回调执行期间不再下发事件（`trace_dispatching`），防追踪函数自己被追。
+fn trace_line_event<'a>(
+    instance: &'a Instance,
+    frame: &Owned<'a, Frame>,
+    code: &CodeObject,
+) -> Result<(), ExecError> {
+    let line = line_at_offset(code, frame.get().instruction_pointer()) as i64;
+    if line == frame.get().trace_last_line() {
+        return Ok(());
+    }
+    if instance.trace_dispatching() {
+        return Ok(());
+    }
+    // `f_trace` 在**挂载实例字典**里（round 179 的口径 ✓）。
+    // SAFETY: frame 由调用方持有，存活。
+    // SAFETY: frame 由调用方持有，存活。
+    let header = unsafe { frame.as_ptr().cast::<Header>().as_ref() };
+    let Some(trace) = header
+        .instance_dict()
+        .and_then(|dict| instance.dict_get(dict, "f_trace"))
+    else {
+        return Ok(());
+    };
+    // **`f_trace_lines=False` 时不发 `'line'` 事件**（round 182）：参照里本地追踪也要过这个开关 ✓。
+    if let Some(lines) = header
+        .instance_dict()
+        .and_then(|dict| instance.dict_get(dict, "f_trace_lines"))
+    {
+        if instance.truthiness_of(lines).map(|enabled| !enabled).unwrap_or(false) {
+            return Ok(());
+        }
+    }
+    // 非可调用值（`test_lineno_with_tracing` 的 `f_trace = True`）⇒ 不发事件 ✓
+    // （`trace_active` 只在可调用时置位，这里再守一次，防"设了之后又被换成不可调用值"）。
+    if crate::executor::attribute::attribute_lookup_swallowing(instance, trace, "__call__").is_none() {
+        return Ok(());
+    }
+    frame.get().set_trace_last_line(line);
+    let frame_value = frame.as_ptr().cast::<Header>();
+    let event = instance.new_str("line");
+    // 参照的本地追踪回调签名是 `trace(frame, event, arg)` ✓（arg 对 `'line'` 事件是 `None` ✓）。
+    let argument = instance.retain(instance.singletons().none());
+    instance.set_trace_dispatching(true);
+    let result = crate::executor::call::call_callable(
+        instance,
+        trace,
+        None,
+        vec![instance.retain(frame_value), event, argument],
+        Vec::new(),
+        0,
+    );
+    instance.set_trace_dispatching(false);
+    match result {
+        Ok(value) => {
+            // SAFETY: 返回值是本函数的新引用。
+            unsafe { instance.release_object(value.as_ptr()) };
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// 指令**分派组**（round 249 性能，A2-4；`BC-50`：仍**按名字**分派 —— 表用名字建）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpGroup {
+    Calls,
+    Misc,
+    Checks,
+    Names,
+    Locals,
+    Operators,
+    Jumps,
+    Containers,
+    Iterators,
+    Match,
+    Format,
+    Exceptions,
+    Imports,
+    Attributes,
+    Generators,
+}
+
+/// 分派组表：名字 → `OpGroup`（唯一真相在 `execute` 的旧 `match name` 语义里，逐条照搬 ✓）。
+const DISPATCH_GROUPS: &[(OpGroup, &[&str])] = &[
+    (
+        OpGroup::Calls,
+        &[
+            "DICT_MERGE",
+            "DICT_UPDATE",
+            "CALL_FUNCTION_EX",
+            "CALL_INTRINSIC_1",
+            "CALL_INTRINSIC_2",
+            "LOAD_BUILD_CLASS",
+            "LOAD_SPECIAL",
+            "PUSH_NULL",
+            "MAKE_FUNCTION",
+            "SET_FUNCTION_ATTRIBUTE",
+            "CALL",
+            "CALL_KW",
+        ],
+    ),
+    (
+        OpGroup::Misc,
+        &[
+            "RESUME",
+            "NOP",
+            "POP_TOP",
+            "NOT_TAKEN",
+            "LOAD_SMALL_INT",
+            "CACHE",
+        ],
+    ),
+    (
+        OpGroup::Checks,
+        &["CHECK_BOUNDARY_IN", "CHECK_BOUNDARY_OUT", "CHECK_ASSIGNMENT"],
+    ),
+    (
+        OpGroup::Names,
+        &[
+            "LOAD_COMMON_CONSTANT",
+            "LOAD_NAME",
+            "LOAD_GLOBAL",
+            "STORE_GLOBAL",
+            "DELETE_GLOBAL",
+            "STORE_NAME",
+            "DELETE_NAME",
+        ],
+    ),
+    (
+        OpGroup::Locals,
+        &[
+            "COPY_FREE_VARS",
+            "MAKE_CELL",
+            "LOAD_LOCALS",
+            "STORE_DEREF",
+            "DELETE_DEREF",
+            "LOAD_DEREF",
+            "LOAD_FROM_DICT_OR_DEREF",
+            "LOAD_FROM_DICT_OR_GLOBALS",
+            "LOAD_CONST",
+            "LOAD_FAST",
+            "LOAD_FAST_CHECK",
+            "LOAD_FAST_BORROW",
+            "STORE_FAST",
+            "DELETE_FAST",
+            "LOAD_FAST_AND_CLEAR",
+            "STORE_FAST_LOAD_FAST",
+            "LOAD_FAST_LOAD_FAST",
+            "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+            "STORE_FAST_STORE_FAST",
+        ],
+    ),
+    (
+        OpGroup::Operators,
+        &[
+            "TO_BOOL",
+            "UNARY_NOT",
+            "UNARY_NEGATIVE",
+            "UNARY_INVERT",
+            "CONTAINS_OP",
+            "IS_OP",
+            "COMPARE_OP",
+            "BINARY_OP",
+        ],
+    ),
+    (
+        OpGroup::Jumps,
+        &[
+            "JUMP_FORWARD",
+            "JUMP_BACKWARD",
+            "JUMP_BACKWARD_NO_INTERRUPT",
+            "POP_JUMP_IF_TRUE",
+            "POP_JUMP_IF_FALSE",
+            "POP_JUMP_IF_NONE",
+            "POP_JUMP_IF_NOT_NONE",
+        ],
+    ),
+    (
+        OpGroup::Containers,
+        &[
+            "BUILD_TUPLE",
+            "BUILD_LIST",
+            "BUILD_SET",
+            "BUILD_SLICE",
+            "BINARY_SLICE",
+            "BUILD_MAP",
+            "BUILD_STRING",
+            "UNPACK_SEQUENCE",
+            "UNPACK_EX",
+            "LIST_APPEND",
+            "SET_ADD",
+            "MAP_ADD",
+            "LIST_EXTEND",
+            "SET_UPDATE",
+            "GET_LEN",
+            "STORE_SUBSCR",
+            "STORE_SLICE",
+            "DELETE_SUBSCR",
+        ],
+    ),
+    (
+        OpGroup::Iterators,
+        &[
+            "GET_ITER",
+            "FOR_ITER",
+            "END_FOR",
+            "POP_ITER",
+            "GET_YIELD_FROM_ITER",
+            "GET_AITER",
+            "GET_ANEXT",
+            "END_ASYNC_FOR",
+            "CLEANUP_THROW",
+            "GET_AWAITABLE",
+            "SEND",
+            "END_SEND",
+        ],
+    ),
+    (
+        OpGroup::Match,
+        &["MATCH_SEQUENCE", "MATCH_MAPPING", "MATCH_KEYS", "MATCH_CLASS"],
+    ),
+    (
+        OpGroup::Format,
+        &[
+            "FORMAT_SIMPLE",
+            "CONVERT_VALUE",
+            "FORMAT_WITH_SPEC",
+            "SWAP",
+            "COPY",
+        ],
+    ),
+    (
+        OpGroup::Exceptions,
+        &[
+            "PUSH_EXC_INFO",
+            "POP_EXCEPT",
+            "CHECK_EXC_MATCH",
+            "RERAISE",
+            "WITH_EXCEPT_START",
+            "RAISE_VARARGS",
+        ],
+    ),
+    (
+        OpGroup::Imports,
+        &["IMPORT_NAME", "IMPORT_FROM"],
+    ),
+    (
+        OpGroup::Attributes,
+        &["LOAD_ATTR", "STORE_ATTR", "DELETE_ATTR"],
+    ),
+    (
+        OpGroup::Generators,
+        &["RETURN_VALUE", "YIELD_VALUE", "RETURN_GENERATOR"],
+    ),
+];
+
+/// **每条指令一次查表**（round 249 性能，A2-4）：编号 → `(分派组, 名字)`。
+///
+/// 表在**首次执行**时由 `DISPATCH_GROUPS` × `opcode::opcode(名字)` 建（名字是唯一真相 ⇒
+/// 仍满足 `BC-50` 的"一律按名字分派、不依赖具体编号"✓）。热路径只剩：一次 `OnceLock` 读＋
+/// 一次数组下标 ⇒ 不再 `opcode::opname()` ＋ 对 ~200 个字符串做 match ✗。
+fn instruction_term(opcode_number: u8) -> Option<(OpGroup, &'static str)> {
+    static TERMS: std::sync::OnceLock<[Option<(OpGroup, &'static str)>; 256]> =
+        std::sync::OnceLock::new();
+    let terms = TERMS.get_or_init(|| {
+        let mut table: [Option<(OpGroup, &'static str)>; 256] = [None; 256];
+        for (group, names) in DISPATCH_GROUPS {
+            for name in *names {
+                if let Some(number) = crate::opcode::opcode(name) {
+                    if let Some(slot) = table.get_mut(number as usize) {
+                        *slot = Some((*group, name));
+                    }
+                }
+            }
+        }
+        table
+    });
+    terms.get(opcode_number as usize).copied().flatten()
+}
+
+
 pub fn execute<'a>(
     instance: &'a Instance,
     frame: &Owned<'a, Frame>,
@@ -1552,6 +2143,11 @@ pub fn execute<'a>(
     // SAFETY: 帧由调用方持有，本函数运行期间存活 ✓。
     let frame_header: NonNull<Header> = frame.as_ptr().cast::<Header>();
     let _frame_guard = CurrentFrameGuard::install(instance, Some(frame_header));
+    // **异常状态是每帧保存／恢复的**（round 62）：本层只有实例级一张栈 ⇒ 帧退出时（含异常
+    // 逃逸／生成器挂起）截回入口深度 ✓。否则某个处理块压入的 `PUSH_EXC_INFO` 会活过帧，
+    // `sys.exc_info()` 在后续代码里看到**上一个函数**的残留异常（`import enum` 的
+    // `KeyError('keep')`、`import unittest` 的 `KeyError(512)` 就是这个 ✓）。
+    let _exception_guard = ExceptionStateGuard::install(instance);
 
     // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑——值栈与 ip 都在恢复点里。
     // 新帧的 ip 是 0，所以"一律按帧的 ip 起步"这一条对两种情况都成立。
@@ -1561,19 +2157,47 @@ pub fn execute<'a>(
     // **`throw`／`close`**：恢复点上有"待抛异常"就先按本帧的异常表派发它
     // （所以生成器体里的 `try/except` 能接住，与参照实现"抛在挂起点"一致）。
     let mut forced_raise = frame.get().take_pending_raise();
+    let slot_trace = slot_trace_enabled();
+    // **每实例内存配额**（`OM-3` 扩，沙箱硬需求）：配额为 0（默认宿主）时只多读一次 `Cell`
+    // （在循环外读一次本地量 ⇒ 每条指令只剩一个分支 ✓）；命中位由分配器置、这里**取走**并抛
+    // 可捕获的 `MemoryError`（不 abort ✗）。处理块／`finally` 照常能跑 ✓。
+    let memory_limit = instance.memory_limit();
     let mut decoder = Decoder::new(code.code());
     decoder.set_position(frame.get().instruction_pointer());
     while let Some(instruction) = decoder.next_instruction()? {
+        // **`throw`／`close` 的待抛异常**（恢复点上有就按本帧异常表派发 ✓；先前被本轮配额
+        // 改动误删，此处恢复 ✓）。
         if let Some(exception) = forced_raise.take() {
+            // `take_pending_raise` 交回的是**一份裸引用**（帧的待抛槽）⇒ 交给 RAII 守卫接管。
             dispatch_raise(
                 instance,
                 frame.get(),
                 code.exceptiontable(),
                 frame.get().instruction_pointer() * 2,
-                exception,
+                crate::raise_guard::RaiseRef::from_owned(instance, exception),
                 &mut decoder,
             )?;
             continue;
+        }
+        if memory_limit != 0 {
+            // **按参照语义派发**（可捕获 ✓）：走异常表（与普通运行时异常同一路径），不能直接
+            // `return Err`（那会越过 Python 层 `except` ✗）。抛错时会抬高水位一档 slack，让处理块
+            // 能继续分配／清理（见 `Instance::memory_budget_error` ✓）。
+            match instance.enforce_memory_quota() {
+                Ok(()) => {}
+                Err(ExecError::Raised { exception }) => {
+                    dispatch_raise(
+                        instance,
+                        frame.get(),
+                        code.exceptiontable(),
+                        instruction.offset * 2,
+                        exception,
+                        &mut decoder,
+                    )?;
+                    continue;
+                }
+                Err(other) => return Err(other),
+            }
         }
         // **`AB-5`①**：宿主请求中断后就地停手（每条指令查一次，按实例存，`CX-3`）。
         if instance.interrupted() {
@@ -1581,39 +2205,56 @@ pub fn execute<'a>(
         }
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
+        // **本地追踪的 `'line'` 事件**（round 181）：只有 `f_trace` 被设成可调用值时
+        // `trace_active` 才为真 ⇒ 未启用时只多读一个 `Cell<bool>` ✓（实测开销在噪声内）。
+        if frame.get().trace_active() {
+            trace_line_event(instance, frame, code)?;
+        }
         let oparg = instruction.oparg as usize;
 
-        // BC-50：一律按名字分派，**禁止**依赖具体编号
-        let Some(name) = opcode::opname(u16::from(opcode_number)) else {
+        // **BC-50：仍按名字分派，禁止依赖具体编号** —— 但每条指令只做一次**静态表查**：
+        // 编号 → (分派组, 名字)（表由名字建 ✓）；不再 `opname()` ＋ 对 ~200 个名字做字符串 match ✗
+        //（round 249 性能，A2-4）。
+        let Some((group, name)) = instruction_term(opcode_number) else {
             return Err(ExecError::NotImplemented { opcode: opcode_number });
         };
 
         // 把"一条指令"的执行包进闭包：这样异常能被这里接住并派发到处理块（BC-60 ①）。
         // 闭包返回 `Option<Value>`：`Some` 表示这条指令结束了整个执行（`RETURN_VALUE`）。
         let outcome = (|| -> Result<Step<'a>, ExecError> {
-        match name {
-            "RESUME" | "NOP" | "POP_TOP" | "NOT_TAKEN" | "LOAD_SMALL_INT" | "CACHE" => return step_misc::step_misc(instance, frame, oparg, name),
-            "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" | "CHECK_ASSIGNMENT" => return step_checks::step_checks(instance, frame, oparg, opcode_number, name),
-            "LOAD_COMMON_CONSTANT" | "LOAD_NAME" | "LOAD_GLOBAL" | "STORE_GLOBAL" | "DELETE_GLOBAL" | "STORE_NAME" | "DELETE_NAME" => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
-            "COPY_FREE_VARS" | "MAKE_CELL" | "LOAD_LOCALS" | "STORE_DEREF" | "LOAD_DEREF" | "LOAD_FROM_DICT_OR_DEREF" | "LOAD_FROM_DICT_OR_GLOBALS" | "LOAD_CONST" | "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" | "STORE_FAST" | "DELETE_FAST" | "LOAD_FAST_AND_CLEAR" | "STORE_FAST_LOAD_FAST" | "LOAD_FAST_LOAD_FAST" | "LOAD_FAST_BORROW_LOAD_FAST_BORROW" | "STORE_FAST_STORE_FAST" => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name),
-            "TO_BOOL" | "UNARY_NOT" | "UNARY_NEGATIVE" | "UNARY_INVERT" | "CONTAINS_OP" | "IS_OP" | "COMPARE_OP" | "BINARY_OP" => return step_operators::step_operators(instance, frame, oparg, opcode_number, name),
-            "JUMP_FORWARD" | "JUMP_BACKWARD" | "JUMP_BACKWARD_NO_INTERRUPT" | "POP_JUMP_IF_TRUE" | "POP_JUMP_IF_FALSE" | "POP_JUMP_IF_NONE" | "POP_JUMP_IF_NOT_NONE" => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
-            "BUILD_TUPLE" | "BUILD_LIST" | "BUILD_SET" | "BUILD_SLICE" | "BINARY_SLICE" | "BUILD_MAP" | "BUILD_STRING" | "UNPACK_SEQUENCE" | "UNPACK_EX" | "LIST_APPEND" | "SET_ADD" | "MAP_ADD" | "LIST_EXTEND" | "SET_UPDATE" | "GET_LEN" | "STORE_SUBSCR" | "STORE_SLICE" | "DELETE_SUBSCR" => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),
-            "GET_ITER" | "FOR_ITER" | "END_FOR" | "POP_ITER" | "GET_YIELD_FROM_ITER" | "GET_AITER" | "GET_ANEXT" | "END_ASYNC_FOR" | "CLEANUP_THROW" | "GET_AWAITABLE" | "SEND" | "END_SEND" => return step_iterators::step_iterators(instance, frame, &mut decoder, &instruction, opcode_number, name),
-            "DICT_MERGE" | "DICT_UPDATE" | "CALL_FUNCTION_EX" | "CALL_INTRINSIC_1" | "CALL_INTRINSIC_2" | "LOAD_BUILD_CLASS" | "LOAD_SPECIAL" | "PUSH_NULL" | "MAKE_FUNCTION" | "SET_FUNCTION_ATTRIBUTE" | "CALL" | "CALL_KW" => return step_calls::step_calls(instance, frame, oparg, opcode_number, name),
-            "MATCH_SEQUENCE" | "MATCH_MAPPING" | "MATCH_KEYS" | "MATCH_CLASS" => return step_match::step_match(instance, frame, oparg, opcode_number, name),
-            "FORMAT_SIMPLE" | "CONVERT_VALUE" | "FORMAT_WITH_SPEC" | "SWAP" | "COPY" => return step_format::step_format(instance, frame, oparg, opcode_number, name),
-            "PUSH_EXC_INFO" | "POP_EXCEPT" | "CHECK_EXC_MATCH" | "RERAISE" | "WITH_EXCEPT_START" | "RAISE_VARARGS" => return step_exceptions::step_exceptions(instance, frame, oparg, opcode_number, name),
-            "IMPORT_NAME" | "IMPORT_FROM" => return step_imports::step_imports(instance, frame, code, oparg, opcode_number, name),
-            "LOAD_ATTR" | "STORE_ATTR" | "DELETE_ATTR" => return step_attributes::step_attributes(instance, frame, code, oparg, opcode_number, name),
-            "RETURN_VALUE" | "YIELD_VALUE" | "RETURN_GENERATOR" => return step_generators::step_generators(instance, frame, code, &instruction, name),
-            _ => return Err(ExecError::NotImplemented { opcode: opcode_number }),
+        match group {
+            OpGroup::Calls => return step_calls::step_calls(instance, frame, oparg, opcode_number, name),
+            OpGroup::Misc => return step_misc::step_misc(instance, frame, oparg, name),
+            OpGroup::Checks => return step_checks::step_checks(instance, frame, oparg, opcode_number, name),
+            OpGroup::Names => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Locals => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name, slot_trace),
+            OpGroup::Operators => return step_operators::step_operators(instance, frame, oparg, opcode_number, name),
+            OpGroup::Jumps => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
+            OpGroup::Containers => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Iterators => return step_iterators::step_iterators(instance, frame, &mut decoder, &instruction, opcode_number, name),
+            OpGroup::Match => return step_match::step_match(instance, frame, oparg, opcode_number, name),
+            OpGroup::Format => return step_format::step_format(instance, frame, oparg, opcode_number, name),
+            OpGroup::Exceptions => return step_exceptions::step_exceptions(instance, frame, oparg, opcode_number, name),
+            OpGroup::Imports => return step_imports::step_imports(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Attributes => return step_attributes::step_attributes(instance, frame, code, oparg, opcode_number, name),
+            OpGroup::Generators => return step_generators::step_generators(instance, frame, code, &instruction, name),
         }
         })();
 
         match outcome {
             Ok(Step::Return(value)) => return Ok(ExecOutcome::Returned(value)),
-            Ok(Step::Yield(value)) => return Ok(ExecOutcome::Yielded(value)),
+            Ok(Step::Yield(value)) => {
+                // **生成器挂起 ⇒ 断开 `f_back`**（round 119 真 leak 修）：参照里挂起期间
+                // `gi_frame.f_back is None` ✓；本层先前保留 f_back 的**强引用** ⇒ 生成器帧把
+                // "创建它的调用者帧"钉住 ⇒ `帧 → 类 → 类型字典 → __del__ 闭包 cell → 生成器 → 帧`
+                // 成环，且类的 rc 永远多 1（实测 `class A(UserList)` 的 A `rc=2`、referrer 正是
+                // `frame(wrapper)`）⇒ `test_userlist.test_free_after_iterating` 收不掉 ✗。
+                if let Some(parent) = frame.get().take_f_back() {
+                    // SAFETY: f_back 那份由本帧持有，这里交还。
+                    unsafe { instance.release_object(parent.as_ptr()) };
+                }
+                return Ok(ExecOutcome::Yielded(value));
+            }
             Ok(Step::Continue) => {}
             Err(ExecError::Raised { exception }) => {
                 // BC-60 ①：按异常表回退值栈到 `depth`、按 `lasti` 压最后一条指令偏移、
@@ -1627,7 +2268,43 @@ pub fn execute<'a>(
                     &mut decoder,
                 )?;
             }
-            Err(other) => return Err(other),
+            Err(other) => {
+                // **帧错误现场**（round 205 诊断）：`PYAWA_FRAME_ERR_DEBUG=1` 时打当前帧
+                // （code 名／指令偏移／栈深）与 `f_back` 链，用来定位"哪条字节码把栈弹空" ✓。
+                {
+                    static FRAME_ERR_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                    if crate::diag::flag_cached("PYAWA_FRAME_ERR_DEBUG", &FRAME_ERR_DEBUG) {
+                        if matches!(other, ExecError::Frame(_)) {
+                            let mut names: Vec<String> = Vec::new();
+                            names.push(format!(
+                                "{}@{} stack={}",
+                                code.name(),
+                                frame.get().instruction_pointer(),
+                                frame.get().depth()
+                            ));
+                            let mut cursor = frame.get().f_back();
+                            while let Some(parent) = cursor {
+                                // SAFETY: f_back 链上的帧由各自持有者保活。
+                                let parent_frame = unsafe { &*parent.as_ptr().cast::<Frame>() };
+                                let name = parent_frame
+                                    .code()
+                                    .map(|code| unsafe {
+                                        &*code.as_ptr().cast::<crate::code::CodeObject>()
+                                    })
+                                    .map(|code| code.name().to_owned())
+                                    .unwrap_or_default();
+                                names.push(format!(
+                                    "{name}@{}",
+                                    parent_frame.instruction_pointer()
+                                ));
+                                cursor = parent_frame.f_back();
+                            }
+                            eprintln!("[frame-err] {other:?} 链={names:?}");
+                        }
+                    }
+                }
+                return Err(other);
+            }
         }
     }
     Err(ExecError::FellOffEnd)

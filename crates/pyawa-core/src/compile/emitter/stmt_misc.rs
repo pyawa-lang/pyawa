@@ -37,8 +37,20 @@ impl Emitter {
                     };
                     // **跳出 `except` 处理块 ⇒ 逐层 `POP_EXCEPT`** ✓（与 `continue` 同一条规矩 ✓）。
                     for _ in frame.handler_depth..self.handler_depth {
+                        // 记下这条 `POP_EXCEPT` 的偏移：处理块异常表区间的右端要用（见
+                        // `Emitter::handler_exit_cleanups` 的注释；取**未记过的、最内层**处理块）。
+                        let exit_position = self.unit.code.len();
+                        for slot in self.handler_exit_cleanups.iter_mut().rev() {
+                            if *slot == usize::MAX {
+                                *slot = exit_position;
+                                break;
+                            }
+                        }
                         self.emit_at(*position, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
                     }
+                    // **先退出循环体内的各层 `with`** ✓（round 45；它们的两格在迭代器**之上**，
+                    // 不先退就 `POP_TOP` 弹错对象 ✗）。循环体外的 `with` 不动 ✓。
+                    emit_enclosing_with_exits(self, frame.with_levels, *position);
                     // **块结构模型**：`break` ＝ `POP_TOP`（`for`：弹迭代器）／`NOP`（`while`）
                     // ＋ **就地复制"循环之后的语句"** ＋ 作用域收尾 ⇒ 退出路径终止，不回循环尾
                     if frame.is_for {
@@ -101,8 +113,19 @@ impl Emitter {
                     // 异常状态（`prev_exc` ＋ 异常对象 ✓）会**留在栈上** ✓ ⇒ 外层 `FOR_ITER` 把异常
                     // 当迭代器 ✗（实测 `re.compile(r'[a-z]', re.I)` ✓）。
                     for _ in frame.handler_depth..self.handler_depth {
+                        // 记下这条 `POP_EXCEPT` 的偏移：处理块异常表区间的右端要用（见
+                        // `Emitter::handler_exit_cleanups` 的注释；取**未记过的、最内层**处理块）。
+                        let exit_position = self.unit.code.len();
+                        for slot in self.handler_exit_cleanups.iter_mut().rev() {
+                            if *slot == usize::MAX {
+                                *slot = exit_position;
+                                break;
+                            }
+                        }
                         self.emit_at(*position, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
                     }
+                    // **退出循环体内的各层 `with`** ✓（round 45；`continue` 也离开它们）。
+                    emit_enclosing_with_exits(self, frame.with_levels, *position);
                     self.emit_directed_jump(
                         *position,
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
@@ -408,6 +431,10 @@ impl Emitter {
                             self.emit_delete_name(value_span, &name);
                         }
                     }
+                    // **记下本次 `return` 的死代码洞**（round 109）：退出调用＋取值＋`RET` 这一段在
+                    // 体内是**不可达于正常流**的 ✓；`with` 的受保护区要在洞两侧切开 ✓（见字段注释）。
+                    let with_hole_start =
+                        if with_levels.is_empty() { None } else { self.with_body_end };
                     // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
                     // （它看的是栈顶且**不弹出**）
                     if let Some(index) = self.boundary_out {
@@ -427,6 +454,10 @@ impl Emitter {
                         opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
                         0,
                     );
+                    if let Some(hole_start) = with_hole_start {
+                        self.with_return_holes
+                            .push((hole_start, self.unit.code.len()));
+                    }
                     Ok(())
                 }
             _ => unreachable!("emit_statement_misc 只接收 stmt_misc 族的 Statement"),
@@ -438,6 +469,42 @@ impl Emitter {
 ///
 /// 用途：`try: return … finally: <必然 return 的 finally>` 里，外层那条 `return` 的取值与
 /// `RETURN_VALUE` 是**死代码** ✓（参照也不发 ✓；task-24）。
+/// 退出**循环体内**的各层 `with`（`break`／`continue` 的出口，round 45）：
+/// 从最内层往外发退出调用（每层按 item 逆序）——层数从 `frame.with_levels` 起（循环体外的
+/// `with` 不归本循环退 ✗，`with cm: for …: break` 里那层必须留着 ✓）。
+fn emit_enclosing_with_exits(this: &mut Emitter, floor: usize, position: Span) {
+    let total = this.with_exit_stack.len();
+    for level in (floor..total).rev() {
+        let spans = this.with_exit_stack[level].clone();
+        for span in spans.iter().rev() {
+            let none_index = this.intern_constant(Constant::None);
+            this.emit_with_exit_call(*span, none_index);
+        }
+    }
+    let _ = position;
+}
+
+/// 处理块体是否**必然以"出口跳转"结束**（`return`／`raise`／`break`／`continue`；
+/// `if` 两支都如此才算）。与 [`block_terminates`] 分开：这里把 `break`／`continue` 也算上——
+/// 它们的出口会**就地重放"循环余部"副本**，异常表区间必须止于出口那条 `POP_EXCEPT` 之前
+/// （见 `Emitter::handler_exit_cleanups` 的注释；2026-11-14 修 `StackUnderflow`）。
+pub(super) fn block_exits_via_jump(statements: &[Statement]) -> bool {
+    match statements.last() {
+        Some(Statement::Return(..))
+        | Some(Statement::Raise { .. })
+        | Some(Statement::Break(_))
+        | Some(Statement::Continue(_)) => true,
+        Some(Statement::If {
+            then_body,
+            else_body,
+            ..
+        }) if !else_body.is_empty() => {
+            block_exits_via_jump(then_body) && block_exits_via_jump(else_body)
+        }
+        _ => false,
+    }
+}
+
 fn block_terminates(statements: &[Statement]) -> bool {
     match statements.last() {
         Some(Statement::Return(..)) | Some(Statement::Raise { .. }) => true,

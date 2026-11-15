@@ -18,7 +18,7 @@
 
 | 内容 | 归属 |
 |---|---|
-| 能力接口 vtable 的**形状**（有哪些函数、可否取消、如何表达"未实现"） | `SPEC-capabilities.md`（`CP-`）——本文件只写"如何注册它"（`SPEC-INDEX.md` §4） |
+| 能力接口 vtable 的**C 布局**（字段类型/顺序/公共头） | **`pa_capabilities.h`（已落地，§12.17 A1；唯一处定义）**；**语义**（有哪些槽、未实现如何表达）归 `SPEC-capabilities.md`（`CP-`）；本文件写"如何注册它"（`SPEC-INDEX.md` §4） |
 | 对象模型内部（头部、类型对象、引用计数） | `SPEC-object-model.md`；**头部禁止出现在本 ABI 里**（`OM-6`） |
 | 宿主对象的**表示**与生命周期 | `OM-34`…`OM-37`；本文件定**注册调用** |
 | 用 C 写扩展模块 | **不做**（`REQUIREMENTS.md`：只做嵌入，不做扩展） |
@@ -92,8 +92,90 @@
 - **AB-16** 返回值为**新引用**（`OM-16`）；借出方**禁止**假定宿主会归还。
 - **AB-17** 宿主**禁止**在"可能触发释放的调用"之后继续使用借用句柄（`OM-19` 的跨边界版本）。
 - **AB-18** 实例销毁后其全部句柄**立即失效**；宿主**禁止**再使用（`CX-13` 的实例隔离）。
+- **AB-70** **宿主对象载荷读回**（`AB-35`／`AB-58` 的配套）：
+  `int pa_tohandle(pa_state *st, int idx, void **payload_out)`（栈契约 `—`）：
+  - 栈上 `idx` 指向**宿主对象**（`pa_newtype` 注册的类型**或其 Python 子类**）⇒ `PA_OK`，
+    `*payload_out` 指向 **VM 分配**的载荷（`AB-58`；注册的 `payload_size == 0` ⇒ `NULL`）；
+  - **只借出、不转移**：指针有效期同 `AB-15`／`AB-17`（下一次可能触发释放的调用之前有效），
+    宿主**禁止** `free`／`realloc`（载荷归 VM，`AB-58`）；
+  - `idx` 越界／`payload_out == NULL`／栈上**不是宿主对象** ⇒ `PA_ERR_INVALID`（`AB-22`）；
+  - **判定"是不是我的句柄"用本函数本身**：`pa_type` 对 `list`／普通实例也报 `PA_THANDLE`
+    （`AB-63`），不能用它猜（那是第二个真相）。
+- **AB-71** `pa_set_program_filename(st, name, len)`：**设置后续执行产物**的 `co_filename` 来源
+  （CLI 在 `pa_exec_bytecode`／`pa_exec_string` 之前调用；未设置 ⇒ 内部占位名 `<pyawa-test>`）。
+  - `name` 指向 `len` 个 **UTF-8** 字节（**不要求** NUL 结尾）；`len < 0`／`name == NULL`／
+    非 UTF-8 ⇒ `PA_ERR_INVALID`；栈契约 `—`；
+  - **按实例**保存（不影响其它实例）；成功后再执行的 `f_code.co_filename`／traceback 用这份值。
+- **AB-72** `pa_call`／`pa_pcall` 的 `nresults` 是**精确结果数**（栈契约 `−nargs+nresults`）：
+  - 被调用方产出 **M** 个结果（v1 的调用 **M = 1**）⇒ `nresults < M` **截断**、`> M` 用 `None`
+    **补齐**、`0` **全部丢弃**（v1 的 `0` 即丢弃那唯一结果）；
+  - `nargs < 0` 或 `nresults < 0` ⇒ `PA_ERR_INVALID`；
+  - **v1 边界（如实）**：本层调用只产出 1 个结果 ⇒ 多值形态的"多截"当前不可观测，规则先钉住。
 
----
+- **AB-73** **宿主类型的属性/方法派发**（"ABI 边界不可感知"的落点）：
+  `pa_newtype` 增加**可选的自带尺寸回调结构** `pa_type_ops`（末参；`NULL` ⇒ 行为与现在
+  **完全一致**）。结构（`pa.h` 为唯一落地；字段顺序固定）：
+  ```c
+  typedef int (*pa_type_getattr)(pa_state *state, void *payload,
+                                 const char *name, size_t len, void *context);
+  typedef int (*pa_type_setattr)(pa_state *state, void *payload,
+                                 const char *name, size_t len, int value_idx, void *context);
+  typedef struct pa_type_ops {
+      size_t size;            /* 本结构体字节数（自带尺寸，AB-43 有界读） */
+      void *context;          /* 注册时给的透传指针 */
+      pa_type_getattr getattr_fn;   /* 可 NULL */
+      pa_type_setattr setattr_fn;   /* 可 NULL */
+  } pa_type_ops;
+  ```
+  - **`getattr_fn`**：处理 ⇒ **恰好压入 1 个值**（净 `+1`）并返回 `PA_OK`；不处理 ⇒
+    返回 `PA_ERR_NOTFOUND`（**不压栈**）；出错 ⇒ 其它 `PA_ERR_*`（`AB-22`：必须与"未找到"可区分）。
+  - **`setattr_fn`**：值取栈上 `value_idx`（`AB-9` 索引；**借用、不消耗**，`AB-15`）；
+    处理 ⇒ `PA_OK`；不处理 ⇒ `PA_ERR_NOTFOUND`；出错 ⇒ 其它 `PA_ERR_*`。
+  - 回调**禁止**保存 `payload`／`context`／`state` 供返回后使用（`AB-17` 的跨边界版本）；
+    `payload` 归 VM（`AB-58`），回调**禁止** `free`／`realloc`。
+  - **派发顺序**：VM 先按普通规则查（类型字典/数据描述符 → 宿主类型挂载的实例字典）；
+    **全未命中**才回调 `getattr_fn`／`setattr_fn`。`PA_ERR_NOTFOUND` ⇒ 继续 VM 默认
+    （读 ⇒ 最终 `AttributeError`；写 ⇒ 宿主类型有挂载实例字典则写它，否则 `AttributeError`）。
+    其它 `PA_ERR_*` ⇒ VM **不得**静默回退，**必须**转成脚本可捕获异常（无映射 ⇒ `RuntimeError`，
+    消息含状态码；`AB-21`／`AB-48`），宿主错误不得吞掉。
+  - **绑定**：`getattr_fn` 若压入的是**宿主函数对象**（`pa_register`／`pa_module_addfunction`
+    注入的那个对象；可用 `paL_ref` 保存、回调里 `paL_getref` 压回），VM 在**调用位置**把它
+    包成**绑定方法**（实例自动作为第一个实参）。因此该宿主函数的 `pa_sig` **含 `self`**
+    （声明完整调用形参）；显式写 `obj.method(obj, x)` 会多传一个实参 ⇒ 按实参个数/边界检查
+    **如实报错**（不做"双形态"猜测）。
+  - **协议复用**：`len()`／`for`／`+` 等**不另开钩子**——它们本就走属性查找
+    （`__len__`／`__iter__`／`__add__`；实现位置：`len` 见 `instance/containers.rs` 的
+    `length_of` 经 `attribute_lookup`，`for` 见 `executor/iter.rs` 的 `iter_value` 属性通道，
+    `+` 见 `executor/arithmetic.rs` 的 `__add__` 槽分派），因此经同一 `getattr_fn` 自然生效。
+  - **ABI 版本**：`pa_set_type_ops` 是**追加式**函数（旧宿主仍可用，`AB-41`）；
+    `PA_ABI_VERSION` 次版本 **1.10 → 1.11**。
+  - **验收**（`T-AB-8`）：① `obj.attr` 取到宿主值；② 宿主"不处理"时 VM 回退并正确抛
+    `AttributeError`；③ `obj.method(x)` 自动绑定（`pa_sig` 含 `self`）；④ `len(obj)`／
+    `for x in obj`／`obj + obj` 经 `__len__`／`__iter__`／`__add__` 生效；⑤ 宿主错误、
+    "未找到"、成功三态可区分（`AB-22`）；⑥ 未注册 `pa_type_ops` 的类型行为不变（零回归）。
+
+- **AB-74** **宿主异常映射**：宿主可抛**带类型**的异常，而不是只有状态码＋消息（`AB-48`）。
+  最小面：`int pa_raise_host_exception(pa_state *state, int type_idx, const char *msg, ptrdiff_t len)`
+  （栈契约 `—`）：
+  - `type_idx` 是**栈索引**（`AB-9`），指向一个**类型对象**（不消耗）；该类型**必须**是
+    `BaseException` 的子类（guest 侧定义的异常类也合法，宿主可经 `pa_getglobal`／`paL_getref`
+    取到它并压栈）。
+  - VM 以**该类型**＋一个 `str` 实参（内容取 `msg`，共 `len` 字节，UTF-8；`len == -1` ⇒ 以
+    NUL 结尾计长；`msg == NULL` ⇒ 空串）实例化异常；构造失败（`__init__` 抛）⇒ 该构造异常
+    作为 guest 异常抛出。
+  - 成功记录后**返回 `PA_ERR_RUNTIME`**（宿主函数应直接 `return` 它）——VM 在边界处把记录的
+    异常作为**脚本侧异常**重新抛出：guest 的 `except <类型>` 能捕获，traceback **不含**跨边界
+    帧（`AB-73` 的配套）。
+  - `type_idx` 越界／不是类型对象／不是 `BaseException` 子类／`msg` 非 UTF-8 ⇒ `PA_ERR_INVALID`
+    （`AB-22`："已实现但拒绝"）。
+  - **未映射的宿主错误仍走 `PA_ERR_RUNTIME` ＋ `pa_errmsg`**（向后兼容，不是"假成功"）。
+  - **实现口径**：VM 用 `call_value` 以该类型＋消息按**普通构造语义**实例化（用户 `__init__`
+    抛错 ⇒ 那个构造异常同样记录并重抛）；宿主函数返回边界时经 `raise_object_public` 作为 guest
+    异常重抛（`pending` 槽与 `Err` 各持一份，RAII 归还）。traceback 由 guest 侧异常处理生成，
+    **不含**宿主函数帧（宿主函数不是 Python 帧）。
+  - **验收**（`T-AB-9`）：① guest `try: host_fn() except MyError as e:` 捕获到真实类；
+    ② `e.args` 为传入消息；③ traceback 无跨边界帧；④ 非法 `type_idx` ⇒ `PA_ERR_INVALID`；
+    ⑤ 未调用本入口的宿主错误路径与今天一致。
 
 ## 7. 错误处理
 
@@ -104,6 +186,82 @@
 - **AB-22** "**未实现**"与"**已实现但拒绝**"**必须**可区分（`DESIGN.md` §2、`CP-6`）：
   前者是关于"该嵌入提供了什么"的事实，后者是真实机器语义的错误。
 - **AB-23** 错误信息的**生命周期必须明确**（属于实例还是属于调用）——在 §15 里逐函数写明。
+
+- **AB-75** **统一的宿主对象协议钩子**（`AB-73` 的推广；**取代** `pa_set_type_ops` 的「只对类型」限定）：
+  `int pa_set_object_ops(pa_state *st, int idx, const pa_object_ops *ops)`：
+  - `idx`（栈索引，`AB-9`，**不消耗**）可指向**类型、实例或模块对象**；`ops == NULL` ⇒ 清除；
+  - `pa_object_ops{ size, context, getattr_fn, setattr_fn }`（自带尺寸，`AB-43`；回调签名同 `AB-73`）；
+  - **存储与生命周期**（每对象一份，实现自选、不跨 ABI）：类型态与实例态**互相独立**（给类型装
+    ops 不回溯影响已存在实例，给实例装 ops 不外溢到其它实例）；模块对象的 ops 挂在**该模块
+    对象**上；对象销毁时随对象释放；`ops` 在注册时**按自带尺寸拷贝**（宿主无需保活），`context`
+    仍禁止回调保存（`AB-17`）；重复设置 ⇒ **替换**（旧 ops 随替换释放），`NULL` ⇒ 清除。
+  - **查找顺序（读）**：对象自身的 ops →（类型态）类型字典/数据描述符 → 实例字典 →
+    类型对象的 ops →（模块对象）模块命名空间 → 未命中回调 → `PA_ERR_NOTFOUND` 回退到 VM 默认；
+    **写**：类型数据描述符 → 对象自身的 ops → 类型对象的 ops → VM 默认（实例字典/模块属性写）。
+    回退/错误语义与 `AB-73` **完全一致**（`PA_ERR_NOTFOUND` 才回退；其它状态不得静默回退）。
+  - `pa_set_type_ops` 保留为**类型版的便捷投影**（语义等价于 `pa_set_object_ops(type)`，
+    须有等价测试，见 `AB-78`）。
+  **理由（语义唯一）**：模块与对象不得有两套「按名字取属性」的机制 —— 否则 `np.<没枚举到的>` 会露边界。
+  - **验收**：`T-AB-12`；与 `pa_set_type_ops` 的投影等价见 `T-AB-14`；**协议唯一入口**（每个协议都必须经属性通道问宿主）的机检见 `T-AB-19`。
+
+- **AB-76** **真实类型身份**：新增 `pa_typeid`（不破坏 `AB-63` 的值类别标签）：
+  `int pa_typeid(pa_state *st, int idx, void **typeid_out)`（栈契约 `—`）：
+  - 对任意值都给出**真实类型身份**（不透明类型句柄，`AB-14`）：宿主对象 → 其注册类型；模块 →
+    模块类型；普通实例 → 其类；内建值 → 对应内建类型；`idx` 越界／`typeid_out == NULL` ⇒
+    `PA_ERR_INVALID`；`typeid_out` 收到的是**借用**（`AB-15`，实例存活期内有效）。
+  - **分工唯一**：**值类别**问 `pa_type`（`AB-63`，不改既有取值域）；**类型身份**问 `pa_typeid`；
+    **宿主载荷**问 `pa_tohandle`（`AB-70`，按类型校验）。`PA_THANDLE` **不再**承担"身份"职责，
+    「用 `pa_type` 猜是不是宿主对象」的写法**作废**（`pa_tohandle` 才是判据）。
+  - **验收**：`T-AB-11`。
+
+- **AB-77** **`pa_newtype` 指定基类**：
+  `int pa_newtype(pa_state *st, const char *name, int base_index, size_t payload_size, pa_host_dealloc, pa_host_traverse, const pa_sig *sig)`：
+  - `base_index == 0` ⇒ 无基类（`object`；`0` 本来就不是合法栈索引，`AB-9`，故用作哨兵）；
+    其余按 `AB-9` 的栈索引（正/负均可）指向**类型对象**；非类型对象／终态类型 ⇒ `PA_ERR_INVALID`；
+  - 基类在**注册时**解析并建立真实 MRO（之后不再变）⇒ `isinstance`／`issubclass`／MRO 查询对宿主
+    类型天然成立；宿主异常类型可真的继承 `ValueError` 等（`AB-74` 的完整形态）；
+  - **布局**：基类只影响 MRO／身份判定；实例载荷仍按宿主类型的 `payload_size` 由 VM 分配
+    （`AB-58`），基类的 Python 级方法**不**被自动适配到宿主载荷上。
+  - 签名变更（ABI 未冻结，`AB-44`）；**不保留**旧签名的第二条路径。**实现窗口**：`PLAN` §12.12
+    步 4；落地时 `PA_ABI_VERSION` 次版本 **11 → 12**（追加式之外的签名改写，未发布窗口内）。
+  - **验收**：`T-AB-13`（真实 MRO 的 `issubclass`／`isinstance`；`except` 的宿主异常形态见 `AB-74`／`T-AB-9`，两者组合的布局约束在 `AB-77` 的"布局"句内如实登记）。
+
+- **AB-78** **便捷投影原则**：凡「便捷函数」，语义必须由**主路径**定义，且**可证等价**：
+  - `pa_module_addfunction`／`setconst`／`addsubmodule` ＝ 向模块对象写属性的**投影**（属性查找唯一，`AB-75`）；
+  - `pa_raise_host_exception` ＝「构造异常实例并记录」的**投影**（构造经 `AB-77` 的真实类型）；
+  - `pa_tointeger` ＝ `pa_tointstring` 的 **i64 投影**（语义仍是十进制串，超界如实失败）；
+  - 每条投影**必须**配等价测试（差分），否则它就是第二个真相。
+  - **依赖如实**：`pa_raise_host_exception` 的"宿主类型异常"形态依赖 `AB-77` 的真实基类；
+    在 `AB-77` 落地前，它只对 **guest 声明的异常类**成立（`AB-74` 现状，`T-AB-9` 已验收）。
+  - **验收**：`T-AB-14`。
+
+- **AB-79** **模块句柄上栈**（`AB-75` 模块态的 C 宿主入口；§12.13 #4）：
+  `int pa_pushmodule(pa_state *st, pa_module module)`（栈契约 **+1**）：
+  - 把 `module` 对应的**模块对象**压栈（VM/模块记录持有对象，宿主得到的是**借用→栈持有**），
+    从而可用 `pa_set_object_ops`／`pa_setfield` 等按普通对象操作它；
+  - `module` **必须**是本实例 `pa_add_host_module`／`pa_module_addsubmodule` 交回的句柄；
+    否则 `PA_ERR_INVALID`（`AB-22`）；同一句柄可多次上栈；
+  - 与 `paL_getref` 的区别：后者压**注册表键**的值，本函数专用于模块句柄（不需要宿主先枚举键）。
+  - **验收**：`T-AB-15`。追加式（未发布窗口，`PA_ABI_MINOR` 1.12→**1.13** 时落地）。
+
+- **AB-80** **一次性写回字节数据**（`AB-63`／`AB-15` 的配套；**不做**长期可写视图）：
+  `int pa_writetobytes(pa_state *st, int idx, size_t offset, const void *p, size_t len)`（栈契约 `—`）：
+  - **接受的唯一对象**：`idx`（栈索引，`AB-9`）指向**恰好 `bytearray` 类型**的对象（**子类也拒绝**——
+    与 core 的 `Instance::write_bytearray_at` 同一口径）；`bytes`（不可变）／`memoryview`／其它
+    非字节类型／宿主对象一律 `PA_ERR_INVALID`（不新增类型标签、不靠 `pa_type` 猜类型）；
+  - **只写数据区**：不触及对象头、长度、引用计数 ⇒ 宿主无法借它破坏 VM 不变量；**禁止**隐式扩容／
+    重分配（不改变对象身份与长度）；
+  - **校验顺序（失败都写 `pa_errmsg`，`AB-48`）**：`state` → `idx` 越界 → 对象类型（必须恰好
+    `bytearray`）→ `p == NULL && len > 0` ⇒ `PA_ERR_INVALID` → 范围（见下）；
+  - **范围**：用**带溢出检查**的 `offset.checked_add(len)`；`None` 或 `offset + len > 当前长度` ⇒
+    `PA_ERR_INVALID`（**不截断、不扩展、不部分写**）；`len == 0` 且 `offset <= 当前长度` ⇒ 无操作
+    `PA_OK`（`p` 可为 `NULL`）；
+  - **不保留任何借用**：调用返回后 `p` 对 VM 无效 —— 本函数根本**不借出** VM 内存，因此无 `AB-15`／
+    `AB-17` 的借用义务，也无 UAF 面（对比：长期可写视图会让 VM 对象必须可钉住/不可搬家）；
+  - **不新增类型标签**（`bytearray`／`memoryview` 的独立标签仍**不引入**，避免 `AB-63` 已有的
+    "用标签猜类型＝第二个真相"问题）。
+  - **落地**：追加式；已随 `PA_ABI_MINOR` **13 → 14** 落地（`PLAN` §12.16；`tests/write_tobytes.rs`）。
+  **验收**：`T-AB-20`。
 
 ---
 
@@ -120,7 +278,9 @@
 - **AB-27** 签名**必须**能表达：参数名、参数类型、默认值、可变参数、仅关键字参数、返回类型、
   是否为方法、是否为静态／类方法。
 - **AB-28** 签名**必须**能生成 **`.pyi` 存根**——**禁止**发明新的 IDL 文件格式（`DESIGN.md` §8.2）。
-- **AB-29** 签名**必须**能被类型检查器在**跨模块**场景读到（`DESIGN.md` §8.2 的 LSP 用途）。
+- **AB-29** 签名**必须**能被类型检查器在**跨模块**场景读到：**进程内**检查器读**注册信息的内存投影**
+  （`AB-69` 的 `HostFunctionSignature`，编译期用）；**进程外**工具（LSP／独立 `check`）**可以**读
+  导出的 `.pyi`（`AB-53`）——`.pyi` 是**可选路径**，不是必经依赖（`AB-31`／`AB-54`）。
 - **AB-30** 签名与栈的对应关系**必须**确定：stub 从栈取参的顺序**必须**与 §5 的索引规则一致。
 - **AB-31** 签名的**权威在运行时注册**（`§13-3` **已决**）：注册时**内联提供** `pa_sig`（`AB-51`），
   **运行期不读 fs**；`.pyi` 是**导出产物**，不是运行期输入。
@@ -130,13 +290,31 @@
 - **AB-52** `pa_param { name, type_expr, flags, default_handle }`：
   - `name`：NUL 结尾的 UTF-8；
   - `type_expr`：**注解表达式字符串**（如 `"list[int]"`、`"int | None"`），由 Pyawa **自己的
-    注解解析器**求值——**禁止**发明新 IDL（`AB-28`）；
+    注解解析器**求值——**禁止**发明新 IDL（`AB-28`）。解析器分两阶段（语法层/求值层）：
+    语法入口 `pyawa_core::compile::parse_type_expression`（`TypeExpr` 语法树）与求值器
+    `pyawa_core::evaluate_type_expression` 已落地；`pa_register`／`pa_module_addfunction` 在注册时
+    **求值**字符串并登记进 `AB-69` 的同一账本（`TyExpr`：边界运行期检查＋编译期调用点检查同样
+    生效；`.pyi` 仍用原字符串）；失败语义/前向引用策略/同一性见 `SPEC-type-system.md` §16 的
+    `TS-51`…`TS-56`（2026-11-14 起分里程碑落地，`PLAN-milestones.md` §12.9）。
   - `flags`：位置／仅关键字／可变位置／可变关键字／有无默认值（`AB-27` 的七项能力由此表达）；
   - `default_handle`：默认值以**不透明句柄**给出（`AB-14`），无默认时为 NULL。
-- **AB-53** `.pyi` **必须**能由注册信息**导出**（遍历而成）；宿主**可以**另外提供手写 stub
-  覆盖它，但**禁止**让运行期依赖 `.pyi` 文件存在（沙箱下可能无 fs）。
-- **AB-54** 类型检查器跨模块读签名（`AB-29`）**必须**经导出的 `.pyi`；运行期 `inspect` 一类
-  读**注册信息**。两者**禁止**不一致——导出是同一份数据的**投影**。
+- **AB-53** `.pyi` **必须**能由注册信息**导出**（遍历而成）：导出是**单向投影**——运行期与
+  进程内检查器**禁止**依赖 `.pyi` 文件存在（沙箱下可能无 fs）；**禁止**把导出物当第二个签名源
+  （宿主手写 stub 只属**进程外消费端**，不参与权威校验，也不得反馈进运行期）。
+- **AB-54** 签名的**唯一权威**是注册信息（`AB-31`）：进程内检查器读它的**内存投影**；运行期
+  `inspect` 一类读**注册信息本身**（`__text_signature__` 由 `pa_sig` 投影）；进程外工具读
+  **导出投影**（`.pyi`）。各投影**禁止**不一致——导出是同一份数据的**投影**，不是第二来源。
+> **`AB-54` 的运行期投影规则**（实现口径，随 2026-11-14 的 `__text_signature__` 落地）：
+> - 运行期 `__text_signature__` 由注册时的 `pa_sig` **投影**（不读 fs、与 `.pyi` 无关）；
+> - 文本签名**不含注解**（`inspect` 的 `_signature_fromstr` 对带注解形参直接报错——注解走
+>   `AB-69` 的 `pa_type_expr` 通道）；
+> - 默认值只有在能还原成 `literal_eval` 常数（`None`／`bool`／`int`）时才进文本签名；
+>   其它（含"`HAS_DEFAULT` 但默认值句柄不可渲染"）⇒ **整条文本签名不提供**（如实 `None`，
+>   `inspect` 报"no signature"），**禁止**编一个假值；
+> - 宿主函数对象带 `__call__`（委托 call 槽）与普通函数的 `__get__`（类属性绑定）⇒ 上游
+>   `inspect` 的 `_signature_is_builtin` 走方法描述符分支，读到上面的 `__text_signature__`。
+> 验收：`crates/pyawa-runtime/tests/abi_text_signature.rs`（端到端：真装 stdlib ＋ 真注册）。
+
 - **AB-55** `pa_create` 的签名**必须**是 `int pa_create(const pa_host *host, pa_state **out)`：
   实例经**出参**交回（`AB-49` 的"经栈"在此不适用）。`pa_create` **不接触栈**（栈契约 `—`）。
 - **AB-56** **ABI 不匹配时仍交出实例**：`pa_create` 返回 `PA_ERR_ABI`，且 `*out` 指向一个
@@ -146,7 +324,7 @@
 - **AB-57** `pa_destroy` **释放实例本身**；`pa_state *` 随即**不可用**（**禁止**解引用或复用），
   实例内全部句柄同时失效（`AB-18`）。**禁止**把它做成"仅置失效标记而不释放"。
 - **AB-58** **宿主载荷由 VM 分配**（`AB-35`／`OM-3`／`AB-18` 三者的落点）：
-  - 载荷尺寸**必须**在**注册时**声明：`pa_newtype(st, name, payload_size, dealloc, traverse, sig)`
+  - 载荷尺寸**必须**在**注册时**声明：`pa_newtype(st, name, base_idx, payload_size, dealloc, traverse, sig)`（`base_idx` 见 `AB-77`）
   - `pa_newhandle(st, type, void **payload_out)`（栈契约 `+1`）：`*payload_out` 指向 VM 分配的
     `payload_size` 字节，宿主**必须**在对象**对脚本可见之前**填完
   - 载荷**归 VM 所有**：随实例（`AB-18`）与类型一并回收，**由 VM 释放**；宿主**禁止** `free`／`realloc`
@@ -194,7 +372,8 @@
     （**复制**）与 `pa_tobytes`（**借用**视图），**不新增**函数（`§15` 已登记，落地即可）。
   - **禁止**把本桥推广成"任意值的通用文本桥"：目前**只有整数**需要它；别的类型**需要时**再按
     同一手法加对应的桥（**不做推测性设计**，与 `CM-10` 的"禁止预先写清单"同理）。
-- **AB-63** **`pa_type` 的标签取值域**（宿主判定"这是什么"的**唯一**机制）：
+- **AB-63** **`pa_type` 的标签取值域**（宿主判定**值类别**的机制；**类型身份**改由 `AB-76` 的
+  `pa_typeid` 给出——见该条，`PA_THANDLE` **不再**用于猜"是不是宿主对象"）：
   - 取值**必须**是**末尾追加**的整数枚举：`PA_TNIL=0`、`PA_TBOOLEAN=1`、`PA_TINTEGER=2`、
     `PA_TNUMBER=3`、`PA_TSTRING=4`、`PA_TTABLE=5`、`PA_TFUNCTION=6`、`PA_THANDLE=7`、
     **`PA_TBYTES=8`**。**禁止**改动已有编号；新增类型**只能**取下一个值（`AB-44` 的追加式）。
@@ -218,7 +397,8 @@
 
 - **AB-35** 宿主类型**必须**注册为**真实类型**（`OM-14`）；**禁止**另立一套对象表示。
 - **AB-36** 注册**必须**提供 `dealloc` 与 `traverse`（`OM-34`／`OM-36`）、**载荷尺寸**（`AB-58`）
-  以及 §9 的签名。
+  以及 §9 的签名。**NULL `dealloc`／`traverse` ⇒ `pa_newtype` 当场返回 `PA_ERR_INVALID` 并写
+  `pa_errmsg`**（`AB-22`／`AB-48`；不得拖到 `pa_newhandle` 才以空消息拒绝——§12.13 #2 决策）。
 - **AB-37** 宿主类型**可被脚本继承**（`§13-1` **已决**）：`pa_newtype` 注册的类型
   **默认可作基类**。因此 vtable **必须**含**子类分派槽位**——`tp_new`／`tp_dealloc`／`tp_traverse`
   得能被 Python 覆写；且注册时**必须**能声明该类型是否需要**实例字典**
@@ -246,18 +426,28 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.3**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **2 → 3**）——`AB-41` 的又一次应用：
-> `clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime` 三槽（形状见 `SPEC-capabilities.md` §9.4）
-> ⇒ 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新槽 ⇒ "未实现"，`CP-3`）。上一次 1→2 是
-> `fs` 域追加 `stat_times`（`SPEC-capabilities.md` §9.1）。`CP-30` 的注册校验口径**不变**：公共头的
-> version／size 规则不动（vtable 的形状归 `CP-`，本文件只管"如何注册"）。
+> **当前版本：1.14**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **14**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
+> 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
+> 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
+> `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
+> `AB-67` 宿主模块四函数、`AB-68` `pa_setpath`、`AB-69` 签名句柄、`AB-70` `pa_tohandle`／
+> `AB-71` `pa_set_program_filename`）。`CP-30` 的注册校验口径**不变**：公共头的 version／size
+> 规则不动（vtable 的 **C 布局**以 `pa_capabilities.h` 为唯一处定义（§12.17 A1 已落地）；**语义**归 `CP-`；本文件只管"如何注册"）。
 
-- **AB-45** 头文件**必须**是**单一** `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
-  **禁止**分层头。
-- **AB-46** `pa.h` **必须**能被 **C 与 C++** 同时包含：**必须**有 `extern "C"` 守卫
-  （`#ifdef __cplusplus`），且版本宏在 C 下也可用——**禁止**让 `PA_ABI_VERSION`／`PA_ABI_SIZE`
-  依赖 C++ 特性。
+- **AB-45** ABI 的**公开入口头**必须是单一 `pa.h`，并提供宏 `PA_ABI_VERSION` 与 `PA_ABI_SIZE`；
+  **允许且仅允许**一个同发行集的伴随头 `pa_capabilities.h` 承载能力域 vtable 的 **C 布局**
+  （`CP-30`；`PLAN §12.17`）；**禁止**其它分层头。`pa.h` **必须** `#include "pa_capabilities.h"`，
+  使宿主只 include `pa.h` 即可用（单入口的意图不变）。
+- **AB-46** **两个头**（`pa.h` 与 `pa_capabilities.h`）**必须**能被 **C 与 C++** 同时包含：
+  **必须**有 `extern "C"` 守卫（`#ifdef __cplusplus`），且版本宏在 C 下也可用——
+  **禁止**让 `PA_ABI_VERSION`／`PA_ABI_SIZE` 依赖 C++ 特性。
 - ~~AB-42~~ **作废**：其内容（"禁止在本规格里先定具体方案"）随 `§13-2` 裁决失效；编号保留，不重用。
+- **AB-81** **冻结随稳定发行版**：ABI 的冻结**随首个稳定（非 alpha／pre-release）发行版**宣布
+  （冻结生效点与支持矩阵由 `docs/RELEASE.md` 的稳定发行说明公告；**`PA_ABI_MINOR` 与发行版号各自独立**，
+  不要把 SemVer 与 ABI 次版本混为一谈）；**alpha 不构成冻结点**（alpha 期仍可能做破坏性变更，
+  但须在 `docs/RELEASE.md` 的 alpha 说明里逐条列出）；发行前 `main` 上的 `PA_ABI_MINOR`
+  **不构成冻结承诺**。冻结之后允许的改动**仅限** `AB-41` 的"追加"行；任何破坏既有签名／语义
+  的改动**必须**升 `PA_ABI_MAJOR`。
 
 ---
 
@@ -269,9 +459,22 @@
 | `T-AB-2` | 宿主函数故意 panic：被捕获、返回状态码、进程不崩（`AB-3`／`AB-26`） |
 | `T-AB-3` | "未实现"与"已实现但拒绝"返回**可区分**的结果（`AB-22`） |
 | `T-AB-4` | 版本不匹配时 `create` 失败且信息可诊断（`AB-40`） |
-| `T-AB-5` | 静态统计导出符号数 ≤ 预算（`AB-1`） |
+| `T-AB-5` | 静态统计导出符号数 ≤ 预算（`AB-1`）；机检 `T-CX-19`（`CX-29`）：导出 ⊆ `pa.h` ⊆ 规格提及 ＋ 总数 ≤ 120 |
 | `T-AB-6` | 未声明异步分类的能力域注册失败，不落默认值（`AB-34`） |
 | `T-AB-7` | 实例销毁后使用其句柄不导致 UB（`AB-18`） |
+| `T-AB-8` | 宿主类型属性/方法派发：`obj.attr` 取值、宿主"不处理"回退并抛 `AttributeError`、`obj.method(x)` 绑定、`len`/`for`/`+` 经 `__len__`/`__iter__`/`__add__` 生效；`PA_ERR_NOTFOUND` 与错误态可区分；未注册 `pa_type_ops` 零回归（`AB-73`） |
+| `T-AB-9` | 宿主异常映射：guest `except <宿主异常类>` 捕获真实实例、`e.args` 为传入消息、traceback 无跨边界帧、非法 `type_idx` ⇒ `PA_ERR_INVALID`；未调用入口的宿主错误路径不变（`AB-74`） |
+| `T-AB-10` | §12.11 验收演练：宿主把 `list`/`dict`/自定义类包装成宿主对象注入 guest；guest 仅用对象语法完成增删改查与迭代（源码不含 host/handle 字样）；`is`/`id` 的口径与跨界性能作为仅有的可感知痕迹如实登记 |
+| `T-AB-11` | `pa_typeid` 的真实类型身份：宿主对象/模块/普通实例/内建值各自返回其真实类型；`pa_type` 的值类别语义不变（`AB-63`）；`pa_typeid` 借用有效期内可经 `pa_type` 等一致判定；越界/`NULL` 出参 ⇒ `PA_ERR_INVALID`（`AB-76`） |
+| `T-AB-12` | `pa_set_object_ops` 三形态（类型/实例/模块）：各自装/清 ops，回退与三态错误语义同 `AB-73`；类型态与实例态互不外溢；模块未枚举名字可取到（`AB-75`） |
+| `T-AB-13` | `pa_newtype` 的 `base_index`：真实 MRO（宿主类型继承 `ValueError` ⇒ `issubclass`／`isinstance` 命中）；`0` ⇒ `object`；非类型/终态基类 ⇒ `PA_ERR_INVALID`；载荷布局仍按宿主 `payload_size`（`AB-77`） |
+| `T-AB-14` | 投影等价差分：`pa_set_type_ops`↔`pa_set_object_ops(type)`；模块注入函数↔向模块对象写属性；`pa_tointeger`↔`pa_tointstring`（i64 内）；`pa_raise_host_exception`↔「构造异常实例并记录」逐条对拍（`AB-78`） |
+| `T-AB-15` | `pa_pushmodule`：模块句柄上栈（+1）后可 `pa_set_object_ops` 挂模块态；C/ctypes 宿主能取到未枚举的 `np.<x>`；非法句柄 ⇒ `PA_ERR_INVALID`（`AB-79`） |
+| `T-AB-16` | `pa_getglobal` 缺失名 ⇒ `PA_ERR_INVALID` **不压栈**（此前压 nil 作废）；存在名照旧 `PA_OK`（§12.13 #3） |
+| `T-AB-17` | `pa_newtype` 的 `NULL dealloc`／`traverse` ⇒ 当场 `PA_ERR_INVALID` 且 `pa_errmsg` 可诊断；合法注册不受影响（`AB-36`／§12.13 #2） |
+| `T-AB-18` | 宿主可用性：组合根产物（`pyawa-runtime` cdylib／静态库）交出的 `paL_newstate`／`paL_openlibs` 实例上 builtins／`import` 可用；`pyawa-abi` 裸实例保持"语言骨架"且失败带 `pa_errmsg`；**仓库内有不含 numpy 的最小探针**可复跑（§12.13 #1） |
+| `T-AB-19` | **协议唯一入口 oracle**：记录式 `getattr_fn` 对 `pyawa_core::PROTOCOL_CASES` **全清单**（含异步协议）跑用例，断言每个协议的 dunder 都被问过（缺席即旁路）；清单↔片段双向一致（禁止只覆盖已实现协议）；另测宿主 dunder 行为生效＋内建/用户类快路等价（`protocol_oracle.rs`／`protocol_host_dispatch.rs`，**无 numpy**，进 CI） |
+| `T-AB-20` | **一次性写回**（`AB-80`）：恰好 `bytearray` 写入成功且 guest 读到新内容、栈不变；`offset+len` 越界／**usize 溢出**⇒ `PA_ERR_INVALID` 且不部分写；`bytes`／`memoryview`／**`bytearray` 子类**／非字节类型／非法 `idx` ⇒ `PA_ERR_INVALID`；`p == NULL` 且 `len > 0` 拒绝；合法 `bytearray` 上 `len == 0`（`offset <= len`）为 `PA_OK` no-op；失败 `pa_errmsg` 非空；valgrind 0 错误 |
 
 ---
 
@@ -296,8 +499,8 @@
 - **AB-49** 每个函数**必须**返回状态码（`AB-19`）；**返回值不经状态码传递**，它经栈传递。
   **唯一例外**：`pa_create` 经**出参**交回实例（`AB-55`）——创建那一刻**还没有栈**
   （`AB-13` 把栈绑在实例上）。
-- **AB-50** 函数总数**必须** ≤ 120（`AB-1`）。本表列出 **72 个**（核心 54 ＋ 辅助 18），余 **48** 个预算；
-  新增**必须**从表尾追加（`AB-44`）。
+- **AB-50** 函数总数**必须** ≤ 120（`AB-1`）。当前 §15.3＋§15.4 共列出 **93** 个（核心 **75** ＋辅助 18），
+  余 **27** 个预算；新增**必须**从表尾追加（`AB-44`）。
 
 ### 15.2 状态码枚举（`AB-20`：既有取值**禁止**改变含义，新增**必须**追加到预留区）
 
@@ -311,9 +514,10 @@
 | 5 | `PA_ERR_NOTIMPLEMENTED` | 该嵌入**未提供**所要求的能力槽位（`CP-5`）——**必须**与"已实现但拒绝"区分（`AB-22`） |
 | 6 | `PA_ERR_INVALID` | 宿主用法错误（栈越界、类型不符、句柄失效、`.pyac` 版本不符等） |
 | 7 | `PA_ERR_ABI` | ABI 版本或尺寸不兼容（`AB-40`） |
-| 8–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
+| 8 | `PA_ERR_NOTFOUND` | 属性/方法派发回调的"**未处理**"（`AB-73`）；VM 在**内部回退**，不直接暴露给 guest |
+| 9–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
 
-### 15.3 核心层 `pa_`（54 个）
+### 15.3 核心层 `pa_`（81 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
 
 | 函数 | 栈契约 | 说明 |
 |---|---|---|
@@ -324,8 +528,12 @@
 | `pa_destroy(pa_state *)` | — | **释放实例本身**（`AB-57`）；此后全部句柄失效（`AB-18`） |
 | `pa_interrupt(pa_state *)` | — | 请求中断；执行类函数随即返回 `PA_ERR_INTERRUPT` |
 | `pa_exec_string(st, src, len, chunkname, mode, const pa_options *opts)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`／`AB-60`）；`opts` **可传 `NULL`**（＝浅层 ＋ 默认优化级），见 `AB-61` |
-| `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件；I/O 经能力层（`IM-15`）。`mode` 见 `AB-60`；`opts` 见 `AB-61` |
+| `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件：源经 **`fs` 域**读入后复用 `pa_exec_string` 的编译/执行路径（`mode`/`opts` 同 `AB-60`/`AB-61`）；宿主注册了 `fs`（或电池版 `paL_newstate`）⇒ 正常执行；无 provider ⇒ `PA_ERR_NOTIMPLEMENTED`（`AB-22`）；机器错误 ⇒ `PA_ERR_RUNTIME`（§12.18 C1） |
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |
+| `pa_set_program_filename(st, name, len)` | — | 设置后续执行的 `co_filename`（`AB-71`；按实例；未设置 ⇒ 内部占位名；非 UTF-8 ⇒ `PA_ERR_INVALID`） |
+| `pa_set_memory_limit(st, limit)` | — | 每实例内存配额（`AB-65`／`OM-41`）；`0` ＝ 取消。超限 ⇒ 脚本内可捕获的 `MemoryError` |
+| `pa_memory_used(st, u64 *out)` | — | 读取当前占用字节（`AB-66`）；`out == NULL` ⇒ `PA_ERR_INVALID` |
+| `pa_setpath(st, const char *const *dirs, size_t n)` | — | 设每实例 `sys.path`（`AB-68`）；`dirs == NULL` 或 `n == 0` ⇒ 清空。路径可读性仍由 `fs` 能力域决定（`CP-21`）|
 
 > **`AB-7` 的档位／优化级子句：已满足** ✓（`AB-61` 的 `pa_options`，`P1-13` 已落地）。
 > `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（`NULL` ⇒ 浅层 ＋ 默认优化级），
@@ -338,7 +546,8 @@
 | `pa_settop(st, n)` | ± | 设置栈深；越界返 `PA_ERR_INVALID`，**禁止** UB（`AB-12`） |
 | `pa_pushvalue(st, idx)` | +1 | 压入栈上某项的副本（持有一个引用，`AB-10`） |
 | `pa_pop(st, n)` | −n | 弹出并释放（`AB-10`／`OM-20`） |
-| `pa_type(st, idx)` | — | 类型标签；取值域与追加规则见 `AB-63`（**判类型用它／`pa_is*`，取值用 `pa_to*`**） |
+| `pa_type(st, idx)` | — | **值类别**标签（`AB-63` 的固定枚举；`PA_THANDLE` 不再用于猜宿主对象）；**类型身份**用 `pa_typeid`（`AB-76`） |
+| `pa_typeid(st, idx, void **typeid_out)` | — | **真实类型身份**（`AB-76`；不透明类型句柄、借用）：宿主对象/模块/普通实例/内建值各自如实；越界／`NULL` ⇒ `PA_ERR_INVALID`（已落地） |
 | `pa_isnil(st, idx)` | — | 类型判定 |
 | `pa_isboolean(st, idx)` | — | 同上 |
 | `pa_isinteger(st, idx)` | — | 同上 |
@@ -356,54 +565,71 @@
 | `pa_pushhandle(st, h)` | +1 | 压入已有对象句柄（不透明，`AB-14`） |
 | `pa_newhandle(st, type, void **payload_out)` | +1 | 新建宿主对象句柄，**交 VM 记账**（`OM-3`）；载荷由 **VM 分配**并经出参交回（`AB-58`）。`type` 是**栈索引**，指向类型对象句柄，**不消耗**（`AB-59`） |
 | `pa_toboolean(st, idx)` | — | 真值转换 |
-| `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID`。**越 `i64` 必须如实失败**（禁止截断）——任意精度走 `pa_tointstring`（`AB-62`） |
+| `pa_tointeger(st, idx)` | — | 整数转换；非整数 ⇒ `PA_ERR_INVALID`。**越 `i64` 必须如实失败**（禁止截断；当前如实报 `PA_ERR_NOTIMPLEMENTED`，大整数 ABI 通道待 `TS-45`，`AB-62`）——任意精度走 `pa_tointstring` |
 | `pa_tointstring(st, idx, len*)` | — | 取**任意整数**的十进制只读**借用**视图（`AB-62`）；**非整数 ⇒ `PA_ERR_INVALID`** |
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
 | `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
 | `pa_tobytes(st, idx, len*)` | — | 取只读字节视图（**借用**） |
+| `pa_writetobytes(st, idx, offset, p, len)` | — | 一次性写回 `bytearray` 数据区（`AB-80`；恰好 `bytearray`；越界/溢出/不可变/非字节拒绝；不借出 VM 内存）（已落地，`tests/write_tobytes.rs`） |
+| `pa_tohandle(st, idx, payload_out)` | — | **宿主对象**载荷读回（`AB-70`；借用、仅宿主对象；NULL／类型不符 ⇒ `PA_ERR_INVALID`） |
 | `pa_newtable(st)` | +1 | 新建表 |
 | `pa_newlist(st, n)` | +1 | 新建长度 n 的列表 |
 | `pa_getfield(st, idx, name)` | ±1 | 属性访问；走 `getattr` 槽位（`TS` §8） |
-| `pa_setfield(st, idx, name)` | ±1 | 属性写入；走 `setattr` 槽位 |
+| `pa_setfield(st, idx, name)` | −1 | 属性写入；走 `setattr` 槽位（值在栈顶、写入即消耗 ⇒ 净 −1） |
 | `pa_gettable(st, idx)` | ±1 | 下标访问；走 `BINARY_OP`＋`NB_SUBSCR` 语义（`BC-39`） |
-| `pa_settable(st, idx)` | ±1 | 下标写入；走 `STORE_SUBSCR` 语义 |
+| `pa_settable(st, idx)` | −2 | 下标写入；走 `STORE_SUBSCR` 语义（键与值都被消耗 ⇒ 净 −2） |
 | `pa_rawget(st, idx)` | ±1 | 下标访问但**不触发**槽位 |
-| `pa_rawset(st, idx)` | ±1 | 下标写入但**不触发**槽位 |
-| `pa_getglobal(st, name)` | +1 | 读模块全局 |
+| `pa_rawset(st, idx)` | −2 | 下标写入但**不触发**槽位（键与值都被消耗 ⇒ 净 −2） |
+| `pa_getglobal(st, name)` | +1 | 读模块全局；**缺失名 ⇒ `PA_ERR_INVALID`（不压栈）**（§12.13 #3 决策；此前"压 nil"作废） |
 | `pa_setglobal(st, name)` | −1 | 写模块全局 |
-| `pa_call(st, nargs, nresults)` | −nargs+nresults | 调用；异常经状态码 ＋ `pa_errmsg` |
-| `pa_pcall(st, nargs, nresults)` | −nargs+nresults | 受保护调用（语义同 `pa_call`，显式区分调用点） |
+| `pa_call(st, nargs, nresults)` | −nargs+nresults | 调用；异常经状态码 ＋ `pa_errmsg`；`nresults` 精确（`0`/`N`，多截少补 `None`，`AB-72`） |
+| `pa_pcall(st, nargs, nresults)` | −nargs+nresults | 受保护调用（语义同 `pa_call`，显式区分调用点；`AB-72`） |
 | `pa_errmsg(st)` | — | 取错误信息（**借用**，`AB-48`） |
 | `pa_error(st, msg)` | — | 宿主主动抛错 |
 | `pa_register(st, name, fn, sig)` | — | 注入宿主函数（`AB-24`／`AB-25`）；`sig` 形态见 §15.5 |
-| `pa_newtype(st, name, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`），故**必须**提供子类分派槽位与实例字典声明 |
+| `pa_add_host_module(st, name, pa_module *out)` | — | 建宿主模块（`AB-67`）；名字须简单标识符、不得是保留名／重名 ⇒ `PA_ERR_INVALID` |
+| `pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` | — | 往宿主模块装函数（`AB-67`）；签名必须同时给（`AB-25`／`AB-51`） |
+| `pa_module_setconst(st, module, name)` | — | 往宿主模块装常量（`AB-67`）；值取自**栈顶**并消费 |
+| `pa_module_addsubmodule(st, parent, name, pa_module *out)` | — | 在宿主模块下建子模块（`AB-67`）；登记 `sys.modules["<parent>.<name>"]` 与父属性 |
+| `pa_pushmodule(st, module)` | +1 | 把模块句柄对应的**模块对象**压栈（`AB-79`；`AB-75` 模块态入口）；非法句柄 ⇒ `PA_ERR_INVALID`（已落地） |
+| `pa_type_expr_*`（9 个构造：`runtime_tag`／`named`／`list_of`／`dict_of`／`optional`／`union`／`callable`／`var`／`apply`） | — | 建 `AB-69` 的类型表达式句柄（每实例、不透明）；失败 ⇒ `NULL` ＋ `pa_errmsg` |
+| `pa_func_set_signature(st, fn, params, n, ret, tparams, nt, flags)` | — | 给已注册宿主函数声明签名（`AB-69`）；注册后、任何执行前；不符 ⇒ `PA_ERR_INVALID`；声明后边界核参数／返回（脚本侧 `TypeError`，归责插件） |
+| `pa_newtype(st, name, base_idx, payload_size, dealloc, traverse, sig)` | +1 | 注册宿主类型（`AB-35`／`AB-36`）；`base_idx` 指定真实基类（`AB-77`；`0` ⇒ `object`，其余按栈索引）；声明**载荷尺寸**（`AB-58`）；**压入类型对象**句柄（`AB-59`）；**默认可被继承**（`AB-37`）；回调见 `AB-73` 的 `pa_set_type_ops`（待 `AB-75` 收敛为投影） |
+| `pa_set_type_ops(st, type_idx, const pa_type_ops *ops)` | — | 给 `pa_newtype` 注册的宿主类型装属性/方法派发回调（`AB-73`；追加式，次版本 11）；`type_idx` 栈索引且不消耗；`NULL` ⇒ 清空/不派发；失败 ⇒ `PA_ERR_INVALID` |
+| `pa_set_object_ops(st, idx, const pa_object_ops *ops)` | — | 统一的宿主对象协议钩子（`AB-75`；类型/实例/模块；每对象一份；`NULL` ⇒ 清除；`pa_set_type_ops` 是其类型版投影）（已落地，`crates/pyawa-abi/tests/object_ops.rs` 的 T-AB-12） |
+| `pa_raise_host_exception(st, type_idx, msg, len)` | — | 宿主抛**带类型**异常（`AB-74`）：`type_idx` 栈索引指向 `BaseException` 子类（不消耗）；成功 ⇒ `PA_ERR_RUNTIME`（guest 可 `except` 到真实类），非法 ⇒ `PA_ERR_INVALID`；未映射错误仍走 `PA_ERR_RUNTIME`＋`pa_errmsg` |
 | `pa_setcapability(st, domain, impl)` | — | 注册能力域实现（`AB-32`／`AB-33`） |
 | `pa_setcapability_async(st, domain, cls)` | — | 异步分类声明；**缺失即注册失败**（`AB-34`） |
 | `pa_retain(st, idx)` | — | 借用 → 持有（`AB-15`） |
 | `pa_release(st, idx)` | — | 持有 → 释放 |
 
-### 15.4 辅助层 `paL_`（18 个，**不含**新语义）
+### 15.4 辅助层 `paL_`（19 个，**不含**新语义）
 
-| 函数 | 说明 |
+**签名以 `pa.h` 为唯一落地**（下表是规格侧对照，逐字同源；`AB-19`：一律返回状态码，`paL_newstate`
+是唯一例外——它没有实例可承载状态码）。辅助层**不得**引入核心层没有的语义（`AB-4`／`AB-6`）。
+
+| 函数签名（与 `pa.h` 一致） | 说明 |
 |---|---|
-| `paL_newstate()` | `pa_create` ＋ 真实机器 provider 的便捷入口（实现属 `pyawa-runtime`） |
-| `paL_openlibs(st)` | 打开标准库 |
-| `paL_dostring(st, s, mode)` | 执行字符串并统一收尾 |
-| `paL_dofile(st, path, mode)` | 执行文件并统一收尾 |
-| `paL_setfuncs(st, const pa_reg *, n)` | 批量注册 |
-| `paL_checkinteger(st, idx)` | 参数校验：不符即抛错 |
-| `paL_optinteger(st, idx, def)` | 同上，缺省可给 |
-| `paL_checkstring(st, idx)` | 同上 |
-| `paL_optstring(st, idx, def)` | 同上 |
-| `paL_len(st, idx)` | 长度 |
-| `paL_getsubtable(st, idx, name)` | 取或建子表 |
-| `paL_ref(st, idx)` | 把栈项存入注册表，返回整数键 |
-| `paL_unref(st, ref)` | 释放注册表键 |
-| `paL_traceback(st, msg)` | 附加 traceback |
-| `paL_where(st, level)` | 当前位置串 |
-| `paL_error(st, fmt, ...)` | 格式化抛错 |
-| `paL_execresult(st, status)` | 状态码 → 统一收尾 |
-| `paL_requiref(st, name, openf, glb)` | 取或加载模块 |
+| `int paL_checkinteger(pa_state *state, int idx, int64_t *out)` | 参数校验：不符即抛错 |
+| `int paL_optinteger(pa_state *state, int idx, int64_t def, int64_t *out)` | 同上，缺省可给 |
+| `int paL_checkstring(pa_state *state, int idx, const char **out, size_t *len)` | 同上 |
+| `int paL_optstring(pa_state *state, int idx, const char *def, const char **out, size_t *len)` | 同上 |
+| `int paL_len(pa_state *state, int idx, size_t *out)` | 长度 |
+| `int paL_getsubtable(pa_state *state, int idx, const char *name)` | 取或建子表 |
+| `int paL_ref(pa_state *state, int idx, int *out_ref)` | 把栈项存入注册表，返回整数键（从 1 起） |
+| `int paL_unref(pa_state *state, int ref)` | 释放注册表键（幂等） |
+| `int paL_getref(pa_state *state, int ref)` | 把注册表键 `ref` 的值**压栈**（+1，新引用；`AB-73` 的"绑定方法"回调用它压回已持有的可调用值；非法键 ⇒ `PA_ERR_INVALID`） |
+| `int paL_traceback(pa_state *state, const char *msg)` | 附加 traceback |
+| `int paL_where(pa_state *state, int level, const char **out, size_t *len)` | 取**当前帧（`level=0`）或沿 `f_back` 第 `level` 层**的 `"code名:行号"` 借用视图（下次调用前有效，`AB-15`）。`level < 0`／`out == NULL` ⇒ `PA_ERR_INVALID`；无帧／无 code／链不足 `level` 层 ⇒ `PA_ERR_NOTIMPLEMENTED`；行号无法定位 ⇒ 行号 `0`（如实，不编造）。traceback **数据面**见 `OM-42`，**链语义**见 `BC-60`／`T-BC-22` |
+| `int paL_error(pa_state *state, const char *msg)` | 抛错（只收拼好的消息） |
+| `int paL_errorf(pa_state *state, const char *format, ...)` | 宿主侧格式化（**C 头 `static inline`**，`vsnprintf` 后转 `paL_error`；不新增导出符号；超长截断） |
+| `int paL_execresult(pa_state *state, int status)` | 状态码 → 统一收尾（`PA_OK` ⇒ 压 `True`，`+1`） |
+| `int paL_requiref(pa_state *state, const char *name, const void *openf, int glb)` | 取或加载模块：`sys.modules` 命中直接压栈；否则 `openf(pa_state*)`（须压入恰好一个模块）或 `import_through_bridge`；登记 `sys.modules`，`glb != 0` 写全局；失败 ⇒ `PA_ERR_RUNTIME` |
+| `int paL_setfuncs(pa_state *state, const pa_reg *regs, int n)` | 批量注册（`n < 0` ⇒ 以 NULL 名字结尾） |
+| `int paL_openlibs(pa_state *state)` | 打开标准库（**提供方＝组合根**：`pyawa-runtime` 的 C 产物；`pyawa-abi` 的最小产物**不导出**本符号）。实现在组合根：装 builtins／`sys`（幂等）；**不**注册能力域（`fs` 等由宿主按 `AB-33`／`AB-34` 决定）；`state == NULL` ⇒ `PA_ERR_INVALID`（§12.13 #1，已落地） |
+| `int paL_dostring(pa_state *state, const char *s, int mode)` | 执行字符串并统一收尾；`mode`：`0`＝python／`1`＝pyawa（其它 ⇒ `PA_ERR_INVALID`）；成功后压 `True`（+1） |
+| `int paL_dofile(pa_state *state, const char *path, int mode)` | 执行文件并统一收尾（`mode` 同上）；文件经 `fs` 域读：无 provider ⇒ `PA_ERR_NOTIMPLEMENTED`，机器错误 ⇒ `PA_ERR_RUNTIME` |
+| `pa_state *paL_newstate(void)` | **电池版**组合根入口（实现属 `pyawa-runtime`）：`pa_create` ＋ `fs`／`clock`／`net` 真实能力 ＋ builtins／`sys`／stdlib；交回的实例上 `print`／`import` 可用。**单一 C 产物**：`pyawa-runtime` 的 cdylib／staticlib 同时导出全部 `pa_*` 与 `paL_*`；provider／vtable 按实例泄漏到进程末（便捷入口的如实边界） |
 
 > **禁止**靠辅助层绕过任何硬约束——辅助层**不得**引入核心层没有的语义（`AB-4`／`AB-6`）。
 
@@ -424,9 +650,144 @@
   - **阻塞的能力调用必须让出实例**：`DESIGN.md` §7.2 的"可异步化"一类（文件／socket／时钟／随机／进程）
     送 worker 线程，**等待期间必须**允许同实例的其它线程推进（否则该实例会被一次阻塞 I/O 拖死）。
 
+- **AB-65** **每实例内存配额**：`pa_set_memory_limit(st, limit)`（`limit == 0` ⇒ 取消）。
+  超限时脚本里抛**可捕获的** `MemoryError`（执行器在指令边界派发；**不是** abort／panic ✗）；
+  抛错后水位抬高一档 `slack = max(64 KiB, limit/16)`（处理块还能分配），继续增长则每 `slack` 字节
+  再抛一次 ⇒ 宿主占用上界 ≈ `limit + slack` 量级。记账口径与已知不精确见 `OM-41`。
+  配额是**宿主侧钩子**（ABI-adjacent）⇒ 与 ABI 发布前的钩子族一起定 ✓。
+- **AB-66** **读取当前占用**：`pa_memory_used(st, u64 *out)`（`out == NULL` ⇒ `PA_ERR_INVALID`）。
+  宿主用它做指标／看门狗；数值与 `OM-41` 的记账口径一致。
+
+- **AB-67** **宿主模块注入**（宿主库不是 Pyawa 写的时的正解 ✓）：宿主用 `pa_add_host_module(st, name)` 得到一个**模块句柄**，再用原子 API 往里装 **宿主函数**（复用 `AB-24` 的虚拟栈注册 ✓）、**常量**、**子模块**（树形命名空间 ✓）。约束：
+  - **按实例**注册 ✓（与 `AB-64` 的并发边界同用）；**guest 不可调用**这些 API ✓（只有宿主调 ✓）；
+  - 装进去的宿主函数参数／返回仍是**裸数据 ＋ 不透明句柄** ✓（`CP-10`）——宿主库内部状态对脚本**不可见** ✓，沙箱边界不破 ✓；
+  - 模块对象就是普通 Python 模块（`__name__`／`sys.modules`／`from X import y` 一致 ✓）；
+  - **保留名不得覆盖** ✗（`sys`／`builtins`／`io` 等内置模块名 ⇒ `PA_ERR_INVALID`）；
+  - 插件侧**零 Pyawa 胶水** ✓：`import myapp` 直接拿到宿主的东西 ✓。
+  **生命周期**：注入发生在**实例 setup 阶段**（`AB-65` 之后、**任何脚本执行之前** ✓）——插件的 `import myapp` 可能出现在第一行，模块必须先进 `sys.modules`；
+  - **两次宿主调用之间**可以继续往模块里加函数 ✓（模块对象是**活的** ✓，已 import 的同一对象对后续调用可见 ✓）；
+  - **宿主函数回调内部**（VM 正在执行）**禁止**改模块结构 ✗（属 `AB-64` 的并发进入 ＋ 状态改动，只为可查性保留 setup 阶段这一个写窗口 ✓）；
+  - **签名与函数同一时刻给** ✗（见 `AB-69`），禁止先注入后补签名。
+  **API 形状（v1，round 271 落地 ✓）**：
+
+  ```
+  typedef struct pa_module_s *pa_module;   /* 每实例不透明句柄；pa_destroy 后失效（AB-18） */
+  int pa_add_host_module(pa_state *st, const char *name, pa_module *out);
+  int pa_module_addfunction(pa_state *st, pa_module module, const char *name,
+                            pa_host_fn fn, const pa_sig *sig);   /* 签名必须同时给（AB-25/51） */
+  int pa_module_setconst(pa_state *st, pa_module module, const char *name); /* 值取自栈顶，消费 */
+  int pa_module_addsubmodule(pa_state *st, pa_module parent, const char *name, pa_module *out);
+  ```
+
+  约束细化：模块名必须是**简单标识符**（点分名走子模块 API ✗）；保留名＝静态名单
+  （`sys`／`builtins`／`_io`／`io`／`importlib`／`_imp`）**＋**本实例 `sys.modules` 里已有的名字，
+  重复名 ⇒ `PA_ERR_INVALID`；坏句柄／空出参／**回调期间** ⇒ `PA_ERR_INVALID`（写 `pa_errmsg`，
+  不 UB ✓）；`pa_module_setconst` 的值可以是裸数据或不透明句柄 ✓。
+  验收：`crates/pyawa-abi/tests/host_module.rs`（8 例：三种 import 形态／保留与非法名／两实例隔离／
+  guest 无 `pa_*`／两次调用之间可加／宿主错误与 panic 不穿 FFI／回调内注册返错误码／不透明句柄往返）。
+  **状态**：**已实现 ✓（round 271）**；`AB-69` 的 `pa_type_expr` 签名通道已随 round 272–273 落地 ✓（检查期投影见 `d4847368`）。
+- **AB-68** **宿主设置每实例 `sys.path`**：`pa_setpath(st, const char *const *dirs, size_t n)`（`dirs == NULL` 或 `n == 0` ⇒ 清空）。语义**完全**沿用 `SPEC-imports-and-modes` 的 `IM-*`（**禁止**另立一套路径逻辑 ✗，禁令照该规格 ✓）；实现上就是把 `sys.path` 换成本实例的这份列表（**拷贝**宿主缓冲区 ✓，宿主返回后可释放 ✓）。约束：**按实例** ✓；路径访问仍受 **`fs` 能力域**夹根 ✓（`CP-21`／`AB-32`）——`sys.path` 只决定**在哪找** ✓，**能不能读**由能力面决定 ✓；脚本自己改 `sys.path` 的语义不变 ✓（`sys.path` 本就可变 ✓）。
+  **实现 ✓（round 270）**：`pa_setpath(st, dirs, n)` 已接线；`pa_create` 的实例带**最小 `sys` 骨架**
+  （`sys.path` 空表 ＋ `sys.modules`；`paL_openlibs` 由组合根产物提供，§12.13 #1）。验收
+  `crates/pyawa-abi/tests/host_path.rs`（5 例：两目录可 import／脚本改 `sys.path` 语义不变／
+  `fs` 夹根后越根模块 `ImportError`／两实例路径隔离／参数边界与清空）。`pa.h` 已声明；次版本 6→7。
+- **AB-69** **宿主函数的类型签名**（`AB-67` 配套；卖点①「类型检查真正生效」的边界延伸 ✓）：
+  宿主注入函数时**一并**声明签名。**类型表达式用不透明句柄**（不是扁平标签 ✗）：
+
+  ```
+  typedef struct pa_type_expr_s *pa_type_expr;              /* 每实例不透明句柄；pa_destroy 后失效（AB-18） */
+  pa_type_expr pa_type_expr_runtime_tag(pa_state *st, int tag);       /* AB-63 的取值域 */
+  pa_type_expr pa_type_expr_named(pa_state *st, const char *name);    /* 具名／宿主注册类型（同一性＝类型对象） */
+  pa_type_expr pa_type_expr_list_of(pa_state *st, pa_type_expr elem);
+  pa_type_expr pa_type_expr_dict_of(pa_state *st, pa_type_expr k, pa_type_expr v);
+  pa_type_expr pa_type_expr_optional(pa_state *st, pa_type_expr t);          /* T? */
+  pa_type_expr pa_type_expr_union(pa_state *st, const pa_type_expr *ts, size_t n);
+  pa_type_expr pa_type_expr_callable(pa_state *st, const pa_type_expr *params, size_t n, pa_type_expr ret);
+  pa_type_expr pa_type_expr_var(pa_state *st, const char *name);      /* 类型参数 T（配 tparams） */
+  pa_type_expr pa_type_expr_apply(pa_state *st, pa_type_expr base, const pa_type_expr *args, size_t n); /* 宿主泛型 Result[T] */
+  int pa_func_set_signature(pa_state *st, pa_host_fn f, const pa_type_expr *params, size_t n,
+                            pa_type_expr ret, const pa_type_expr *tparams, size_t ntparams, unsigned flags);
+  ```
+
+  **命名**：句柄叫 **`pa_type_expr`**（**不是** `pa_ty`）：`pa_type` 已是 `AB-63` 的运行时标签函数
+  （C 的 typedef 与函数同属一个标识符命名空间）⇒ 签名里的**类型表达式**用全名区分；
+  **`pa_type_expr` ≠ `pa_type()` 的返回值**（前者是签名元数据，后者是运行时值标签）。
+
+  **与用户草案的两处必要修正**（`ABI` 未发布 ⇒ 现在定最便宜 ✓）：
+  - `pa_type_expr` 的构造与 `pa_func_set_signature` 都**收 `pa_state *`**：句柄与签名是**按实例**存的
+    （`AB-64`），无 `state` 版无法满足；
+  - `pa_func_set_signature` **返回 `int` 状态码**（`AB-19`），不返回 `void`；`pa_type_expr_*` 构造失败返回
+    `NULL` ＋ `pa_errmsg`（与 `AB-58` 的"载荷指针"同口径）。
+  - `pa_fn` 在头文件里**不存在**（只有 `pa_host_fn`）⇒ 签名按 **`pa_host_fn` 函数指针**绑定；
+    **同一 C 函数可注册多次**（同实现同签名 ✓），声明一次覆盖全部。
+
+  约束：
+  - **与函数同一时刻给** ✓（v1 可执行口径）：必须在该函数**注册之后、任何执行之前**声明——
+    注册时记下执行序号，声明时序号必须未变；晚声明 ⇒ `PA_ERR_INVALID` ✗（禁止先注入后补签名）；
+  - `params` 与注册时的 `pa_sig.nparams` **一一对应**：**类型**只在 `pa_type_expr` 里；**可选／变参的
+    个数语义**仍由 `pa_sig` 的 `PA_PARAM_HAS_DEFAULT`／`PA_PARAM_VARARGS` 表达 ✓；
+    `flags` v1 **保留**（必须 0）；
+  - **不声明 ＝ 未标注** ✓（按 `object` 处理、**不检查** ✓，行为与今天一致 ✓）；
+  - **边界运行期检查** ✓：声明后调用边界核**参数**（个数／类型）与**非 NULL 返回类型**；不符 ⇒
+    **脚本侧可捕获的 `TypeError`**（消息带宿主函数名 ⇒ **归责插件** ✓）。**检查期调用点检查**
+    也**已落地** ✓（round 273：签名投影进 `TS-47` 的调用点检查；见本节末"实现"）。
+  - **宿主类型**：`pa_type_expr_named` 的同一性 ＝ **类型注册得到的那个类型对象** ✓（不按字符串 ✓；
+    解析时机＝声明签名时 ⇒ 宿主类型须先 `pa_newtype` ✓）；签名含宿主类型**不暴露内部** ✓
+    （`CP-10`：只能当不透明句柄传；边界只核类型对象身份 ✓）；
+  - **泛型擦除口径**（沿用 `TS-35`／`TS-30` ✓）：`list[int]`／`dict[K,V]`／`pa_type_expr_apply` 的宿主
+    泛型在**边界只核容器／基底身份**，元素类型**不核** ✓（运行期 `isinstance(x, list[int])` 仍按
+    `TS-35` 与 CPython 一致报 `TypeError` ✓）；**注解检查不擦除**（`TS-47` 插入点）✓；
+    **不做 reified generics** ✗；
+  - **类型变量**（`pa_type_expr_var`）：同一次调用的同名变量**统一**（首个实参定下类型，后续须相容）；
+    `tparams` 里必须声明参数里用到的变量（未声明 ⇒ `TypeError` 归责插件）✓；
+  - `pa_type_expr_callable` v1 只核"可调用"（`PA_TFUNCTION` 标签），形参／返回类型暂不核（如实 ✗）。
+
+  **实现 ✓（round 272 数据模型＋边界；round 273 检查期）**：
+  - **边界运行期**：参数（个数／类型）与返回类型检查、归责插件的 `TypeError`、未声明不检查、
+    宿主不透明类型、可选＋变参 flags、泛型擦除、类型变量统一；
+  - **检查期**：宿主签名投影成静态标签表送进 `TS-47` 的**调用点检查**（扩展模式）——实参静态
+    类型可判且与声明不符 ⇒ **编译期** `PA_ERR_SYNTAX`（消息含宿主函数名＋`AB-69`）；判不出的实参
+    仍交边界运行期兜底（两档分工 ✓）。实现：`compile_with_host_functions`（`pyawa-core`，只影响
+    扩展模式的静态检查、不改发射）＋ ABI 侧签名投影。
+  - 验收：`crates/pyawa-abi/tests/host_signature.rs`（10 例：上述全部 ＋ 编译期／运行期两档分工）。
+
 ## 16. 尚未写出（本规格自己缺的节）
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**无未写小节，也无未决推迟项。** 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
+**本规格无未实现的 `AB-` 条款**：`AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**
+落地（`crates/pyawa-abi/tests/write_tobytes.rs` 的 `T-AB-20`；valgrind 0 错误）。此前已落地：
+`AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
+当场拒绝）、#3（`pa_getglobal` 缺失名 `PA_ERR_INVALID`）、#4（模块句柄上栈）已随 **1.13** 落地
+（`crates/pyawa-abi/tests/host_usability.rs` 的 `T-AB-15/16/17`）。**§12.13 #1**（组合根 stdlib
+可用性）也已按路线 **A** 落地：`pyawa-runtime` 的 C 产物是单一库（`pa_*`＋`paL_*`），
+`paL_newstate` 装真实能力＋stdlib，`paL_openlibs` 由组合根提供；仓库内最小探针
+`tests/ci/host_usability_probe.py`（无 numpy）验收 `T-AB-18`。此前：
+**`AB-75`…`AB-78` 全部落地**（`AB-75` `pa_set_object_ops` 与 `AB-78` 投影等价差分于步 3/5
+落地（`crates/pyawa-abi/tests/object_ops.rs` 的 T-AB-12／T-AB-14）；`AB-76`（`pa_typeid`）与
+`AB-77`（`pa_newtype` 的 `base_index`）于步 1/4 落地（`crates/pyawa-abi/tests/type_identity.rs`）；
+此前 `AB-73`（B1/B2a）与 `AB-74`（B2b）已落地，`§12.11` 验收演练见 `PLAN` §12.11 与
+`crates/pyawa-abi/tests/` 的 `host_visibility` 测试；另有 `AB-67`／`AB-68`／`AB-69`／`AB-70`／
+`AB-71`／`AB-72` 见各轮台账。其余无未写小节，也无未决推迟项。
+
+> **§12.17 A1 已落地（2026-11-14）**：`pa_capabilities.h` 存在（3 域 vtable＋`pa_cap_status`，
+> 由 `tools/gen_pa_capabilities.py` 从 Rust `repr(C)` 生成），`pa.h` 已 include 它 ⇒ `AB-45` 的
+> 伴随头形态是当前**唯一允许**的形态；`T-CX-19` 已扫两个头。 原先列的四处（`§13-1` 宿主类型继承／`§13-4` 异步分类内容／
 `§13-13` 交互模式默认值／`§13-17` 足迹指标）**均已决**，见 `DESIGN.md` §13 的"已决"。
+
+## 17. 设计原则（2026-11-14 起生效）
+
+**语义唯一；表示可多，但必须可证等价；对外表面唯一。**
+
+- **语义层**（值的含义、对象协议、错误类型、类型身份）只许有一个真相；出现两个，行为必然漂。
+- **表示层**（快路、缓存、投影、特化）允许多条，但每一条都必须能被「与语义路径等价」的测试钉住；
+  写不出等价性的「优化」，就是第二个真相穿了优化的外衣。
+- **对外表面**（API、语法、宿主能看到的差别）必须唯一：模块与对象不得有两套属性注入；`pa_type` 与
+  `pa_tohandle` 不得有两种类型判断。
+
+**冲突裁决顺序**（取自 `Zen of Python`，但作为**裁决器**而非教条）：
+
+> **语义唯一 ＞ 对外一致 ＞ 效率 ＞ 内部简洁**
+
+说明：Python 自身违反 `Zen of Python` 的地方（3.11+ 专门化、`%`／`format`／f-string 并存）都是
+**在保住对外唯一与语义唯一的前提下**换效率，而不是反过来；本规格按同一口径裁决。

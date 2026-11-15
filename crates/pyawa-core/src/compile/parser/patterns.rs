@@ -46,7 +46,10 @@ pub(crate) fn try_parse_match(
             guard = Some(expression);
             at = next;
         }
-        let (body, next) = parse_suite(lexed, at, depth, in_function)?;
+        // **行内套件也收**（C1 日常面）：`case [1, 2]: return "x"` 这类合法写法先前走
+        // `parse_suite`（只接缩进块 ✗）⇒ 报"冒号后面要换行" ✗。统一到 `parse_colon_suite`
+        // （与 `if`／`with` 那一族同口径 ✓；返回后 cursor 同样停在换行之后 ✓）。
+        let (body, next) = parse_colon_suite(lexed, at, depth, in_function)?;
         at = next;
         last_end = statements_last_end(&body).unwrap_or(case_span);
         cases.push(MatchCase {

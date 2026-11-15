@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 
 
@@ -140,6 +141,16 @@ pub unsafe fn classmethod_new(
     Ok(instance
         .alloc_payload(ClassMethodObject::new(ty, function))
         .cast::<Header>())
+}
+
+/// **造一个 `classmethod` 包装对象**（**新引用**；round 122 给 `dict.fromkeys` 类级绑定用 ✓）。
+pub fn new_classmethod(instance: &Instance, function: NonNull<Header>) -> NonNull<Header> {
+    let ty = instance.hot_type(HotId::ClassMethod)
+        .expect("classmethod 在引导期已登记");
+    instance.retain(function);
+    instance
+        .alloc_payload(ClassMethodObject::new(ty, function))
+        .cast::<Header>()
 }
 
 /// **`staticmethod.__get__`／`classmethod.__get__` 的实参口径**（`P3-17`）
@@ -284,7 +295,7 @@ pub unsafe fn classmethod_descriptor_get(
     instance.retain(this);
     Ok(instance
         .alloc(MethodObject::new(
-            instance.type_named("method").expect("method 已登记"),
+            instance.hot_type(HotId::Method).expect("method 已登记"),
             inner,
             this,
         ))
@@ -323,12 +334,79 @@ pub unsafe fn builtin_function_getattr(
 ) -> Option<NonNull<Header>> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<BuiltinFunctionObject>() };
+    // **`__module__`**（round 69 起有；task-6 起**如实报告来源模块** ✓）：参照的
+    // `builtin_function_or_method` 报告**来源 C 模块**（实测 3.14.4：`len.__module__ == 'builtins'`、
+    // `_csv.reader.__module__ == '_csv'`、`math.sqrt.__module__ == 'math'`、`sys.exit.__module__ == 'sys'`）。
+    //
+    // 本层对象只存名字与函数指针 ⇒ 来源模块由**模块安装的集中路径**登记进每实例旁表
+    // （[`Instance::register_namespace_native_modules`]）；没登记 ⇒ 沿用既有 `builtins` 口径 ✓
+    // （内建命名空间里创建的函数、core 自造的原生函数都是这一档）。
+    // `builtins` 这个默认值让 `inspect.getmodule`／`doctest.DocTestSuite` 不再在 `_from_module` 里抛
+    // `ValueError: object must be a class or function` ✗（`test_collections`／`test_itertools`／
+    // `test_metaclass` 的 `load_tests` 都卡在这里 ✓；跳过这些内建函数的递归即可 ✓）。
+    if name == "__module__" {
+        // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+        let pointer = unsafe { NonNull::new_unchecked(ptr) };
+        let module = instance
+            .builtin_function_module(pointer)
+            .unwrap_or_else(|| "builtins".to_owned());
+        return Some(instance.new_str(&module));
+    }
+    // **`__text_signature__`**（round 86）：`inspect.signature` 解析内建可调用对象的入口 ✓。
+    if name == "__text_signature__" {
+        return Some(match instance.text_signature(unsafe { NonNull::new_unchecked(ptr) }) {
+            Some(signature) => instance.new_str(&signature),
+            None => instance.new_none(),
+        });
+    }
+    // **`__reduce__` 返回名字串**（round 111）：参照的 `iter.__reduce__()` ⇒ `'iter'` ✓ ——
+    // `pickle` 的 `save_reduce` 见到字符串就按 `save_global(obj, rv)` 存 ✓
+    //（否则落到 `object.__reduce_ex__` ⇒ 找 `builtins.builtin_function_or_method` ✗ ——
+    // 迭代器 `__reduce__` 元的第一个元素正是内建 `iter`／`reversed` ✓，`test_iterator_pickle` 卡在这 ✓）。
+    if name == "__reduce__" {
+        let handler: crate::NativeFn = builtin_function_reduce_native;
+        let builtin_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
+            .expect("引导期已登记");
+        let native = instance.alloc(BuiltinFunctionObject::new(
+            builtin_type,
+            "__reduce__",
+            core::cell::Cell::new(handler),
+        ));
+        let native_raw = native.into_raw().cast::<Header>();
+        // SAFETY: 方法对象要自己那份 self（`OM-16`）；ptr 是本类型的存活对象。
+        unsafe { instance.incref_object(ptr) };
+        let bound = instance.alloc(MethodObject::new(
+            instance.hot_type(HotId::Method).expect("method 已登记"),
+            native_raw,
+            unsafe { NonNull::new_unchecked(ptr) },
+        ));
+        return Some(bound.into_raw().cast::<Header>());
+    }
     let text = match name {
         "__name__" | "__qualname__" => object.name(),
         "__doc__" => "",
         _ => return None,
     };
     Some(instance.new_str(text))
+}
+
+/// `builtin.__reduce__()`：返回**名字串** ✓（`pickle.save_reduce` 按 `save_global` 存 ✓）。
+#[allow(unsafe_code)]
+fn builtin_function_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(function) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__reduce__() 需要内建函数实例",
+        ));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*function.as_ptr().cast::<BuiltinFunctionObject>() };
+    Ok(instance.new_str(object.name()))
 }
 
 /// 原生可调用对象的 `repr`：`<built-in function len>`（实测）。
@@ -366,6 +444,15 @@ pub unsafe fn free_fixed_layout(ptr: *mut Header) {
 /// 本层暂**吞掉**（报告机制要 `sys.unraisablehook`，随后补——清单里记着）。
 pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
     let object = NonNull::new(ptr).expect("调用方保证非空");
+    // **Python 级 `__del__` 至多一次**（round 82，照参照 `tp_finalize`）：`header` 的保留位
+    // （bit 4–7）禁止占用 ⇒ 用旁表 ✓。复活后再死**不再**跑 `__del__`（`ownership_shapes`
+    // 的 `finalized 1` 行与参照逐字节一致 ✓；宿主终结器槽不受影响，`object_model` 的
+    // "复活后再死可再终结"语义仍成立 ✓）。
+    let pointer = ptr as usize;
+    if instance.python_finalized_contains(pointer) {
+        return;
+    }
+    instance.mark_python_finalized(pointer);
     // **特殊查找**（`_PyObject_LookupSpecial` ✓，第 578 轮）：参照取 `__del__` **只扫 `type(self)` 的 MRO** ✓
     //（不碰实例字典 ✗、不走 `__getattribute__`/'__getattr__' ✗）。MRO 里没有 ⇒ 参照**根本不调** ✗ ⇒
     // 这里直接返回 ✓ —— 同时掐掉 `super` 对象那条绕行 ✓：旧写法走完整 `getattr` ✗ ⇒ 对 `super` 会绕进
@@ -384,8 +471,10 @@ pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
         }
         Ok(None) => {}
         Err(crate::ExecError::Raised { exception }) => {
-            // 吞掉并记在实例上（`pending_exception`），供宿主随后查看
-            let _ = instance.set_pending_exception(Some(exception));
+            // 吞掉并记在实例上（`pending_exception`），供宿主随后查看。
+            // **RAII**：把 `Err` 那份所有权**移交 pending 槽**；被顶下来的旧 pending 由返回的
+            // `PendingRef` 在 Drop 时归还（task-18 终结器真泄漏的结构性修法）。
+            let _previous = exception.into_pending();
         }
         Err(_) => {}
     }
@@ -425,7 +514,7 @@ fn wrapper_delegate(
     // `attribute_optional_of` 交的是**新引用**（与 `Attribute::Owned` 同款 ✓）；
     // 取不到（被包对象没有这个名字）⇒ `None` ⇒ 外层照旧报 `AttributeError` ✓
     //（参照此时报的是**被包对象**那句 `'int' object has no attribute …` —— 如实记偏差 ✓）。
-    instance.attribute_optional_of(inner, name).ok().flatten()
+    instance.attribute_optional_discarding(inner, name)
 }
 
 /// **`classmethod`／`staticmethod` 的属性面**（第 346 轮：`__func__` 与 `__wrapped__` ✓；
@@ -442,6 +531,17 @@ pub unsafe fn classmethod_getattr(
     let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
     match name {
         "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        // **`__isabstractmethod__` 委托底层函数**（round 235）：参照 3.10+ 的
+        // `classmethod.__isabstractmethod__` 就是 `__func__.__isabstractmethod__`（没有给 `False` ✓）——
+        // `Lib/abc.py` 的 `abstractclassmethod` 一族靠它判抽象 ✓；先前没有这个属性 ✗
+        //（`test_abc.test_abstractclassmethod_basics` 的 `foo.__isabstractmethod__` ✓）。
+        "__isabstractmethod__" => Some(
+            instance
+                .attribute_optional_of(object.function(), "__isabstractmethod__")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| instance.retain(instance.singletons().boolean(false))),
+        ),
         _ => wrapper_delegate(instance, object.function(), name),
     }
 }
@@ -504,16 +604,45 @@ pub unsafe fn method_getattr(
     let object = unsafe { &*ptr.cast::<MethodObject>() };
     match name {
         "__self__" => Some(instance.retain(object.this())),
-        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        "__func__" => Some(instance.retain(object.function())),
+        // **`__wrapped__` 委托给被绑函数自己的属性**（round 114 真语义）：参照的绑定方法把
+        // 未知属性**转发给底层函数** ✓ —— `dataclasses` 生成的 `__repr__` 带 `__wrapped__`
+        //（`__create_fn__.<locals>.__repr__`）⇒ `dc.__repr__.__wrapped__` 必须给那个原函数 ✓；
+        // 先前直接给 **函数本身** ✗ ⇒ `pprint._format` 的 dataclass 包装判据
+        //（`"__create_fn__" in object.__repr__.__wrapped__.__qualname__`）为假 ⇒
+        // **dataclass 不换行** ✗（`test_pprint.test_larger_dataclass`／`test_recursive_dataclass` ✓）。
+        "__wrapped__" => match instance.attribute_optional_of(object.function(), "__wrapped__") {
+            Ok(Some(value)) => Some(value),
+            _ => None,
+        },
         // **函数面代理**（第 276 轮 ✓）：参照里绑定方法把 `__qualname__`／`__name__` 等转发给被绑函数 ✓
         //（实测 `d.__setitem__.__qualname__ == 'D.__setitem__'` ✓）。先前没有这几格 ✗ ⇒ AttributeError ✗。
         // 取法：先查**函数类型字典**里的现成条目 ✓；没有再看它是不是 Python 函数 ✓（是则用 `code()`
         // 合成 `__name__`／`__qualname__` ✓ —— 与 `method_repr`（第 269 轮 ✓）同一口径 ✓）。
         "__qualname__" | "__name__" | "__doc__" => {
             let function = object.function();
+            // **生成器方法的 `__doc__`**（round 96）：参照的 `g.__next__.__doc__` 是
+            // `'Implement next(self).'` ✓（官方 `test_genexps` 的 doctest 钉着 ✗ —— 先前落到
+            // 内建函数的空 `__doc__` ⇒ 给 `None`/`''` 都不对 ✗）。本层生成器方法都是同一个内建
+            // 函数对象（名字 `generator` ✓、绑定实例是 generator ✓）⇒ 按这条判据给参照文案 ✓。
+            if name == "__doc__" {
+                let function_type = unsafe { function.as_ref() }.ty();
+                if Some(function_type) == instance.hot_type(HotId::BuiltinFunctionOrMethod) {
+                    // SAFETY: 类型身份刚确认。
+                    let builtin = unsafe { &*function.as_ptr().cast::<BuiltinFunctionObject>() };
+                    if builtin.name() == "__next__" {
+                        let this_type = unsafe { object.this().as_ref() }.ty();
+                        if instance.hot_type(HotId::Generator)
+                            .is_some_and(|generator| instance.is_subtype(this_type, generator))
+                        {
+                            return Some(instance.new_str("Implement next(self)."));
+                        }
+                    }
+                }
+            }
             // SAFETY: function 由方法对象持有。
             let function_type = unsafe { function.as_ref() }.ty();
-            if Some(function_type) == instance.type_named("function") {
+            if Some(function_type) == instance.hot_type(HotId::Function) {
                 // **`P3-17` 之后函数类型字典里也有了这几格（数据描述符对象 ✓）** ⇒ 不能像先前那样
                 // `type_lookup` 直接交出去（会把**描述符对象**当值交出去 ✗）⇒ 走 `function_getattr`
                 // 的**值**面（覆盖字段优先 ✓ —— 与 `f.__name__` 同一处真相 ✓）。
@@ -532,13 +661,20 @@ pub unsafe fn method_getattr(
             let function = object.function();
             // SAFETY: function 由方法对象持有。
             let function_type = unsafe { function.as_ref() }.ty();
-            if Some(function_type) == instance.type_named("function") {
+            if Some(function_type) == instance.hot_type(HotId::Function) {
                 // SAFETY: 刚确认是 Python 函数。
                 let from_getattr = unsafe {
                     crate::builtin::function::function_getattr(function.as_ptr(), name, instance)
                 };
                 if from_getattr.is_some() {
                     return from_getattr;
+                }
+            }
+            // **原生函数的 `__module__`**（task-6／缺口2）：绑定形态（`m = some_native`）也按
+            // 来源模块旁表如实报告；未登记 ⇒ 继续走类型字典（既有口径）。
+            if name == "__module__" {
+                if let Some(module) = instance.builtin_function_module(function) {
+                    return Some(instance.new_str(&module));
                 }
             }
             instance.type_lookup(function_type, name).map(|found| instance.retain(found))
@@ -557,6 +693,14 @@ pub unsafe fn staticmethod_getattr(
     let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
     match name {
         "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        // **`__isabstractmethod__` 委托底层函数**（round 235；与 `classmethod` 同口径 ✓）。
+        "__isabstractmethod__" => Some(
+            instance
+                .attribute_optional_of(object.function(), "__isabstractmethod__")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| instance.retain(instance.singletons().boolean(false))),
+        ),
         _ => wrapper_delegate(instance, object.function(), name),
     }
 }
@@ -577,15 +721,51 @@ impl ClassMethodObject {
     }
 }
 
+/// **弱引用目标格**（round 59）：`Cell<Option<NonNull<Header>>>` 的薄包装。
+///
+/// 为什么包：`gc_field_coverage` 的静态检查要求"持引用的字段"被 traverse／clear 覆盖；
+/// 弱引用**不持引用**（不是 GC 边）⇒ 需要让那条检查**看不见**这个字段 ✓（同时名字也自解释 ✓）。
+pub struct WeakTarget(Cell<Option<NonNull<Header>>>);
+
+impl WeakTarget {
+    /// 从目标建立（**不持有引用** ✓）。
+    pub fn new(target: NonNull<Header>) -> Self {
+        Self(Cell::new(Some(target)))
+    }
+
+    /// 读目标（`None` ⇒ 已死）。
+    pub fn get(&self) -> Option<NonNull<Header>> {
+        self.0.get()
+    }
+
+    /// 置死（**不碰目标内存** ✓）。
+    pub fn clear(&self) {
+        self.0.set(None);
+    }
+}
+
 py_object! {
-    /// **`_weakref.ref`**（第 173 轮）：给 `Lib/_weakrefset.py` 用的**最小面子** ✓。
+    /// **`_weakref.ref`**（round 59 起是**真弱引用** ✓）：
+    /// 目标**不持有引用**（`Cell<Option<…>>`，目标释放时置 `None` ✓）；
+    /// 回调**持有强引用**（`None` ⇒ 没有回调 ✓）。
     ///
-    /// **如实登记的偏差** ✗：本层**没有真正的弱引用**（GC 不支持 ✓）⇒ 这里存的是**强引用** ✓
-    /// ⇒ 目标永远不会被回收 ✓（`WeakSet` 因而**不会自动清理** ✓）。对"能把 `abc.py`／`os.py` 跑起来"
-    /// 这一步够用 ✓；真正的弱语义留待专门一轮 ✓。
+    /// 先前是**强引用** ✗ ⇒ 目标永不回收 ⇒ `WeakKeyDictionary`／`WeakValueDictionary`／`WeakSet`
+    /// 里的条目永不清理 ⇒ 循环里**无界增长**（`test_weakref` 的 `check_len_race` 200 s＋、
+    /// `test_weakref` 整体超时 ✓）。真正的弱语义见 `Instance::weakrefs` 与
+    /// `invalidate_weakrefs`（round 59）。
     pub struct WeakRefObject {
-        /// 目标对象（**本对象持有一份引用**）。
-        target: NonNull<Header>,
+        /// 目标（**弱**：不持有引用；目标一释放就置 `None` ✓）。
+        ///
+        /// 用 [`WeakTarget`] 包一层：**静态检查**（`OM-40`／`OM-20` ②）只该盯"持引用的字段"，
+        /// 弱引用不是 GC 边 ⇒ 不能要求 traverse／clear 覆盖它 ✓（包一层也让这条口径**可读** ✓）。
+        weak_target: WeakTarget,
+        /// 回调（**强引用**；目标释放时以本弱引用为实参调用一次 ✓）。
+        callback: RefCell<Option<NonNull<Header>>>,
+        /// **哈希缓存**（round 59，给内建 `hash()`／删键用）：目标活着时算过一次就记下 ✓。
+        hash: Cell<Option<i64>>,
+        /// **字典键哈希缓存**（round 59，给 `key_hash` 用；与 `hash` 是**两套口径**、不能混 ✓）：
+        /// 缓存的是 `key_hash` 的原始 u64 ⇒ 死引用当字典键时查找／删除的桶位仍一致 ✓。
+        key_hash: Cell<Option<u64>>,
     }
 }
 
@@ -598,24 +778,124 @@ impl WeakRefObject {
             .with_call(weakref_call)
     }
 
-    /// 目标（**借用**）。
-    pub fn target(&self) -> NonNull<Header> {
-        self.target
+    /// 目标（**弱**：`None` ⇒ 目标已释放 ✓）。
+    pub fn target(&self) -> Option<NonNull<Header>> {
+        self.weak_target.get()
+    }
+
+    /// 回调（**借用**）。
+    pub fn callback(&self) -> Option<NonNull<Header>> {
+        *self.callback.borrow()
+    }
+
+    /// 取出回调（**所有权转移**：字段清空 ✓ —— 回调只触发一次 ✓）。
+    pub fn take_callback(&self) -> Option<NonNull<Header>> {
+        self.callback.borrow_mut().take()
+    }
+
+    /// 目标已释放：置 `None`（**不碰目标内存** ✓）。
+    pub fn mark_dead(&self) {
+        self.weak_target.clear();
     }
 }
 
 // **手写** ✓（第 158／160／161 轮的教训 ✓：机械改名会留下错误强转 ✗，而 GC 静态检查**只查结构** ✓）。
+/// **`weakref.ref` 的目标**（借用视图；不是弱引用 ⇒ `None`）。
+///
+/// 给 stdlib 的 `hash`／`values_equal` 用（`P3-41` round 40：弱引用按**目标**比／哈希 ✓）——
+/// stdlib 禁 `unsafe` ⇒ 载荷的读取留在 core 这一处 ✓。
+pub fn weakref_target(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    weakref_state(instance, object).flatten()
+}
+
+/// **弱引用的哈希缓存状态**（round 59）：`None` ⇒ 不是弱引用；`Some(None)` ⇒ 还没算过；
+/// `Some(Some(hash))` ⇒ 算过（目标死后仍可用 ✓）。
+pub fn weakref_hash_state(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<Option<i64>> {
+    let base = instance.hot_type(HotId::WeakRef)?;
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认（弱引用载荷是 `WeakRefObject`）。
+    Some(unsafe { &*object.as_ptr().cast::<WeakRefObject>() }.hash.get())
+}
+
+/// 记下弱引用的哈希（round 59）。
+pub fn weakref_store_hash(instance: &Instance, object: NonNull<Header>, value: i64) {
+    let Some(base) = instance.hot_type(HotId::WeakRef) else {
+        return;
+    };
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return;
+    }
+    // SAFETY: 类型身份刚确认。
+    unsafe { &*object.as_ptr().cast::<WeakRefObject>() }
+        .hash
+        .set(Some(value));
+}
+
+/// 字典键哈希缓存状态（`None` ⇒ 不是弱引用；`Some(None)` ⇒ 没算过 ✓）。
+pub fn weakref_key_hash_state(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<Option<u64>> {
+    let base = instance.hot_type(HotId::WeakRef)?;
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认。
+    Some(unsafe { &*object.as_ptr().cast::<WeakRefObject>() }.key_hash.get())
+}
+
+/// 记下字典键哈希缓存 ✓。
+pub fn weakref_store_key_hash(instance: &Instance, object: NonNull<Header>, value: u64) {
+    let Some(base) = instance.hot_type(HotId::WeakRef) else {
+        return;
+    };
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return;
+    }
+    // SAFETY: 类型身份刚确认。
+    unsafe { &*object.as_ptr().cast::<WeakRefObject>() }
+        .key_hash
+        .set(Some(value));
+}
+
+/// **弱引用状态**（round 59）：`None` ⇒ 不是弱引用；`Some(None)` ⇒ 是弱引用但**目标已释放**；
+/// `Some(Some(target))` ⇒ 活着 ✓。给 `values_equal`／`hash` 用来区分"死引用"。
+pub fn weakref_state(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<Option<NonNull<Header>>> {
+    let base = instance.hot_type(HotId::WeakRef)?;
+    if !instance.is_subtype(instance.type_of(object), base) {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认（弱引用载荷是 `WeakRefObject`）。
+    Some(unsafe { &*object.as_ptr().cast::<WeakRefObject>() }.target())
+}
+
 pub(crate) unsafe fn weakref_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<WeakRefObject>() };
-    visit(object.target().as_ptr());
+    // **目标不算引用**（真弱引用 ✓）——只遍历回调 ✓。
+    if let Some(callback) = object.callback() {
+        visit(callback.as_ptr());
+    }
 }
 
 pub(crate) unsafe fn weakref_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<WeakRefObject>() };
-    // SAFETY: 这一份引用由本对象持有。
-    unsafe { instance.release_object(object.target().as_ptr()) };
+    if let Some(callback) = object.take_callback() {
+        // SAFETY: 这一份引用由本对象持有。
+        unsafe { instance.release_object(callback.as_ptr()) };
+    }
 }
 
 /// **调用 `ref(x)`** ✓：给回目标本身 ✓（强引用 ⇒ 一定还在 ✓；真正弱语义随后补 ✗）。
@@ -628,7 +908,10 @@ pub(crate) unsafe fn weakref_call(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<WeakRefObject>() };
-    Ok(instance.retain(object.target()))
+    match object.target() {
+        Some(target) => Ok(instance.retain(target)),
+        None => Ok(instance.new_none()),
+    }
 }
 
 /// 造一个 `ref`（`_weakref` 模组的 `ref` ✓）：接 1 或 2 个实参 ✓（回调**忽略** ✗，已登记 ✓）。
@@ -686,17 +969,41 @@ pub unsafe fn weakref_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(target) = args.first() else {
+    let Some(target) = args.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "ref expected at least 1 argument, got 0",
         ));
     };
-    instance.retain(*target);
-    // SAFETY: `class` 由注册表持有；`target` 的那份引用由新对象接手（上面刚 retain ✓）。
-    Ok(instance
-        .alloc_payload(WeakRefObject::new(class, *target))
-        .cast::<Header>())
+    // **能不能建弱引用**（round 59）：照参照报 `cannot create weak reference to 'X' object` ✓。
+    if !instance.is_weakrefable(target) {
+        let name = instance.type_name(instance.type_of(target)).to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cannot create weak reference to '{name}' object"),
+        ));
+    }
+    // 回调（可选；`None` 等价于没有 ✓）：**持有强引用** ✓。
+    let callback = args
+        .get(1)
+        .copied()
+        .filter(|value| *value != instance.singletons().none());
+    if let Some(callback) = callback {
+        instance.retain(callback);
+    }
+    // SAFETY: `class` 由注册表持有；目标不持引用（真弱引用 ✓）。
+    let object = instance
+        .alloc_payload(WeakRefObject::new(
+            class,
+            WeakTarget::new(target),
+            RefCell::new(callback),
+            Cell::new(None),
+            Cell::new(None),
+        ))
+        .cast::<Header>();
+    // 登记到目标名下（**不持有**弱引用本体 ✓）。
+    instance.register_weakref(target, object);
+    Ok(object)
 }
 
 /// **`weakref.__new__(cls, ob, callback=None)`**（task-7）：`ref.__new__` 在参照里是 weakref 类型
@@ -934,7 +1241,7 @@ impl AttributeObject {
     pub fn set_attributes(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
         // **探针**（第 189 轮，`PYAWA_SETATTR_DEBUG=1`）：谁把"非普通 dict"（如类命名空间 `EnumDict`）
         // 放进某个对象的**内联属性字典** ✓ —— 盯**类型**（不盯地址 ✓，第 118 轮盯地址失败过 ✓）。
-        if crate::diag::flag("PYAWA_SETATTR_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_SETATTR_DEBUG") {
             if let Some(mapping) = mapping {
                 // SAFETY: mapping 由调用方保证存活。
                 // SAFETY: mapping 由调用方保证存活；它的 ty 由注册表持有。
@@ -944,7 +1251,7 @@ impl AttributeObject {
                 }
             }
         }
-        if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_SETDICT_DEBUG") {
             if let Some(mapping) = mapping {
                 eprintln!("[setdict] 内联属性字典 ← {:p}", mapping.as_ptr());
             }
@@ -990,7 +1297,7 @@ pub(crate) fn new_bridge_function(instance: &Instance) -> Option<NonNull<Header>
             return NonNull::new(pointer as *mut Header);
         }
     }
-    let function_type = instance.type_named("builtin_function_or_method")?;
+    let function_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)?;
     let object = instance
         .alloc(BuiltinFunctionObject::new(
             function_type,
@@ -1018,6 +1325,38 @@ pub(crate) unsafe fn attribute_traverse(ptr: *mut Header, visit: &mut dyn FnMut(
 pub(crate) unsafe fn attribute_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<AttributeObject>() };
+    static TB_CLEAR_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if crate::diag::flag_cached("PYAWA_TB_CLEAR_DEBUG", &TB_CLEAR_DEBUG) {
+        // SAFETY: ptr 存活（调用方契约）。
+        let ty = unsafe { &*ptr }.ty();
+        if unsafe { ty.as_ref() }.name() == "traceback" {
+            let payload = object.attributes();
+            // SAFETY: 两个字典都由 ptr 持有，存活。
+            let payload_keys: Vec<String> = payload
+                .map(|dict| {
+                    unsafe { &*dict.as_ptr().cast::<crate::builtin_objects::DictObject>() }
+                        .entries()
+                        .into_iter()
+                        .map(|(key, _)| instance.text_of(key).unwrap_or("?").to_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let frame_pointer = payload.and_then(|dict| {
+                // SAFETY: 字典由 ptr 持有，存活。
+                let dictionary = unsafe { &*dict.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+                let key = instance.new_str("tb_frame");
+                let found = dictionary
+                    .find_live_position(|existing| instance.text_of(existing) == Some("tb_frame"));
+                let _ = key;
+                found.map(|position| {
+                    dictionary.entry(position).map(|(_, value)| value.as_ptr() as usize)
+                }).flatten()
+            });
+            eprintln!(
+                "[tb-clear] ptr={ptr:p} payload_keys={payload_keys:?} frame={frame_pointer:?}",
+            );
+        }
+    }
     if let Some(mapping) = object.set_attributes(None) {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(mapping.as_ptr()) };

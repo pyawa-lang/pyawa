@@ -40,7 +40,7 @@ fn call_expecting_error(instance: &Instance, name: &str, args: &[NonNull<Header>
         Ok(value) => panic!("{name} 应当报错，实际得到 {value:?}"),
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 是存活对象。
-            unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default()
         }

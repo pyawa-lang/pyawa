@@ -97,11 +97,13 @@ fn a_class_body_docstring_and_a_base_class_work() {
         .type_lookup(derived_type, "__doc__")
         .expect("类字典里有 __doc__");
     assert_eq!(vm.instance.text_value(doc).as_deref(), Some("ddoc"));
-    // 划重点：两条都该有 `__qualname__`
+    // 划重点：类的 `__qualname__` 要正确 —— **task-13 #d** 起按参照口径存**私有键**
+    // （`type_new` 把它收进类型槽、类字典里没有公开 `__qualname__` 键）⇒ 走属性通道验值。
     let qualname = vm
         .instance
-        .type_lookup(derived_type, "__qualname__")
-        .expect("类字典里有 __qualname__");
+        .attribute_optional_of(derived, "__qualname__")
+        .expect("读 __qualname__ 不该出错")
+        .expect("类应当有 __qualname__");
     assert_eq!(vm.instance.text_value(qualname).as_deref(), Some("Derived"));
 }
 
@@ -507,7 +509,7 @@ fn set_name_errors_propagate() {
     match outcome {
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // 传播的应当是**用户那个** ValueError（类名对得上就行）
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             assert_eq!(unsafe { ty.as_ref() }.name(), "NameError");
         }
         Ok(_) => panic!("应当把 `__set_name__` 的异常抛出来，却正常跑完了"),
@@ -545,7 +547,7 @@ fn raise_propagates_the_user_exception() {
     let frame = vm.instance.alloc(frame);
     match pyawa_core::execute(&vm.instance, &frame) {
         Err(pyawa_core::ExecError::Raised { exception }) => {
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             assert_eq!(unsafe { ty.as_ref() }.name(), "ValueError");
         }
         Ok(_) => panic!("`raise` 应当把异常抛出来"),

@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -14,7 +15,7 @@ use super::*;
 /// **取后三个实参**当 `(name, bases, namespace)` ✓ ⇒ 两种调用形状**都合** ✓。
 pub fn type_new_native(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
+    bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
@@ -55,7 +56,7 @@ pub fn type_new_native(
     let Some(name) = instance.text_of(name_value) else {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的名字要是 str"));
     };
-    if Some(instance.type_of(bases_value)) != instance.type_named("tuple") {
+    if Some(instance.type_of(bases_value)) != instance.hot_type(HotId::Tuple) {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的基类要是 tuple"));
     }
     // SAFETY: 类型身份刚确认。
@@ -64,17 +65,93 @@ pub fn type_new_native(
     // **命名空间只要是 `dict` 的**子类**就收** ✓（第 507 轮真 bug 修 ✗）：先前按**类型身份**比较 ✗
     // ⇒ `Lib/enum.py` 把 `_EnumDict`（`dict` 子类 ✓）**本身**交给 `super().__new__` ✓ ⇒ 我们当场报
     // `type.__new__ 的命名空间要是 dict` ✗，参照给 `D-ok` ✓。参照的口径是"映射"而非"恰好是 dict" ✓。
-    let namespace_is_dict = instance
-        .type_named("dict")
+    let namespace_is_dict = instance.hot_type(HotId::Dict)
         .is_some_and(|dict| instance.is_subtype(instance.type_of(namespace), dict));
     if !namespace_is_dict {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的命名空间要是 dict"));
     }
     // `mcls` 那一位：是个**类型对象**就用它当元类 ✓（`super().__new__(mcls, …)` 正是这样 ✓）。
+    // **绑定形态**（`super().__new__(mcls, cls, bases, ns)`）时 `mcls` 在 `bound` 里 ✗（不在 args[0]）
+    // ⇒ 必须并进来（round 208：否则会把"已经是被请求元类"的类又转交回 `EnumType.__new__` ⇒ 无限递归／
+    // `classdict._member_names` 在普通 dict 上炸 ✗）。
     let requested = args
         .first()
         .filter(|value| instance.is_type_object(**value))
-        .map(|value| value.cast::<crate::TypeObject>());
+        .map(|value| value.cast::<crate::TypeObject>())
+        .or_else(|| {
+            bound.filter(|value| instance.is_type_object(*value)).map(|value| value.cast::<crate::TypeObject>())
+        });
+    // **元类胜出者若不是 `type`，要交给它的 `__new__`**（round 208 真 bug 修 ✗）：
+    // `type('C', (Sequence,), {...})` 在参照里会走 `ABCMeta.__new__`（算 `__abstractmethods__` ✓）；
+    // 本层先前直接落到 `build_class_from_parts_with_keywords` ✗ ⇒ 元类 `__new__` 根本不跑 ⇒
+    // `C.__abstractmethods__` 只会**继承**基类那份（`test_collections` 的 `validate_abstract_methods`
+    // 当场"抽象类不能实例化" ✗）。这里先算**最派生元类**，非 `type` 就转交 ✓。
+    let type_type = instance.hot_type(HotId::Type);
+    let mut winner = requested;
+    for base in bases.iter().copied() {
+        // SAFETY: base 是存活对象；这里是"基类自己的类型"（元类）。
+        let metaclass = unsafe { base.as_ref() }.ty();
+        match winner {
+            Some(current) if instance.is_subtype(metaclass, current) => winner = Some(metaclass),
+            Some(_) => {}
+            None => winner = Some(metaclass),
+        }
+    }
+    let custom_winner = match (winner, type_type) {
+        (Some(candidate), Some(base_type)) => {
+            // **已经就是"被请求的元类"时不再转交**（`super().__new__(mcls, …)` 的路径 ✓）：
+            // 否则 `ABCMeta.__new__` 里的 `super().__new__(mcls, …)` 会再转交回自己 ⇒ 无限递归 ✗。
+            // **只转交 `ABCMeta` 一族**（round 208）：`EnumType` 的 `__new__` 期待"带 `_member_names`
+            // 的命名空间 dict"（它走 `etype(...)` 功能式 API 那条路 ✓），三参 `type(...)` 直接把普通 dict
+            // 交给它会炸；而本 bug 的靶子只有 `ABCMeta.__new__`（算 `__abstractmethods__`）✓。
+            Some(candidate) != requested
+                && Some(candidate) != Some(base_type)
+                && instance.is_subtype(candidate, base_type)
+                && instance.hot_type(HotId::ABCMeta)
+                    .is_some_and(|abc_meta| instance.is_subtype(candidate, abc_meta))
+        }
+        _ => false,
+    };
+    // **只在"恰好三参、无关键字"时转交**（round 208）：带关键字的调用（如 `enum.py:1792` 的
+    // `type(cls_name, (etype,), body, boundary=…, _simple=True)`）要原样把关键字交给元类；本层
+    // 这条转交路径没有关键字通道 ⇒ 那些调用维持原状（不转交 ✓）——先只让 `type('C', (Sequence,), stubs)`
+    // 这类三参形态走对 ✓。
+    if custom_winner && kwargs.is_empty() && args.len() == 3 {
+        if crate::diag::flag_site!("PYAWA_TYPE_NEW_DEBUG") {
+            let base_names: Vec<String> = bases
+                .iter()
+                .map(|base| {
+                    // SAFETY: base 是存活对象。
+                    unsafe { base.as_ref() }.ty();
+                    instance.type_name(unsafe { base.as_ref() }.ty())
+                })
+                .collect();
+            eprintln!(
+                "[type-new] delegate name={name} args={} bound={} requested={} winner={} bases_types={base_names:?} ns_type={}",
+                args.len(),
+                bound.is_some(),
+                requested.map(|value| unsafe { value.as_ref() }.name()).unwrap_or("<none>"),
+                winner.map(|value| unsafe { value.as_ref() }.name()).unwrap_or("<none>"),
+                instance.type_name(instance.type_of(namespace))
+            );
+        }
+        let metaclass = winner.expect("刚判过非空");
+        // **有 Python 级 `__new__` 才转交**（否则仍是 `type.__new__` ⇒ 自己建 ✓）。
+        let target = instance
+            .type_lookup(metaclass, "__new__")
+            .filter(|found| Some(*found) != instance.type_lookup(type_type.expect("type 已登记"), "__new__"));
+        if target.is_some() {
+            let found = crate::executor::call::call_object_method(
+                instance,
+                metaclass.cast::<Header>(),
+                "__new__",
+                &[name_value, bases_value, namespace],
+            )?;
+            if let Some(created) = found {
+                return Ok(created);
+            }
+        }
+    }
     // **类关键字转交 `__init_subclass__`** ✓（task-24 尾件 ✓；`metaclass` 由被调方滤掉 ✓）。
     crate::classes::build_class_from_parts_with_keywords(
         instance,
@@ -149,24 +226,24 @@ fn class_dict_value_has_code(
     value: NonNull<Header>,
     code: NonNull<Header>,
 ) -> bool {
-    let Some(function_type) = instance.type_named("function") else {
+    let Some(function_type) = instance.hot_type(HotId::Function) else {
         return false;
     };
     let value_type = instance.type_of(value);
     if value_type == function_type {
         return function_has_code(instance, value, function_type, code);
     }
-    if Some(value_type) == instance.type_named("staticmethod") {
+    if Some(value_type) == instance.hot_type(HotId::StaticMethod) {
         // SAFETY: 类型身份刚确认 ⇒ 载荷是 `StaticMethodObject`。
         let inner = unsafe { &*value.as_ptr().cast::<StaticMethodObject>() }.function();
         return function_has_code(instance, inner, function_type, code);
     }
-    if Some(value_type) == instance.type_named("classmethod") {
+    if Some(value_type) == instance.hot_type(HotId::ClassMethod) {
         // SAFETY: 类型身份刚确认 ⇒ 载荷是 `ClassMethodObject`。
         let inner = unsafe { &*value.as_ptr().cast::<ClassMethodObject>() }.function();
         return function_has_code(instance, inner, function_type, code);
     }
-    if Some(value_type) == instance.type_named("property") {
+    if Some(value_type) == instance.hot_type(HotId::Property) {
         // SAFETY: 类型身份刚确认 ⇒ 载荷是 `PropertyObject`（`fset`／`fdel` 可能是 `None` 单例，下面按类型滤）。
         let property = unsafe { &*value.as_ptr().cast::<PropertyObject>() };
         return [property.fget(), property.fset(), property.fdel()]
@@ -243,7 +320,7 @@ pub fn super_new(
     let this = frame.local(0).ok().flatten().ok_or_else(|| {
         instance.raise_builtin_error("RuntimeError", "super(): 当前帧没有第一个实参")
     })?;
-    let super_type = instance.type_named("super").ok_or(crate::ExecError::Unsupported {
+    let super_type = instance.hot_type(HotId::Super).ok_or(crate::ExecError::Unsupported {
         opcode: 0,
         what: "super 类型未登记",
     })?;
@@ -405,11 +482,107 @@ pub fn dir_new(
         }
     } else {
         let object = args[0];
+        // **`__class__` 恒在**（round 222）：参照 `dir(x)` 对**任何**对象都含 `__class__` ✓
+        //（`dir(list)`／`dir(1)` 都是 ✓）——本层先前缺 ⇒ `dir(UserList)` 比 `dir(list)` 少一个名字 ✗
+        //（`test_collections.TestUserObjects.test_list_protocol` 的"UserList should have all the
+        // methods of list" ✓）。
+        names.insert("__class__".to_owned());
         if instance.is_type_object(object) {
             collect_type_mro_names(instance, object.cast(), &mut names);
+            // **内建 `list` 的参照名字面**（round 152）：`list` 的方法大多在 `getattr` 槽里、
+            // 不在类型字典 ⇒ `dir(list)` 会少名字 ✗ ⇒ 补一张参照表面表 ✓（tut3 逐项钉住 ✓）。
+            if instance.hot_type(HotId::List).is_some_and(|list_type| list_type.cast::<Header>() == object) {
+                for name in crate::builtin::list::LIST_TYPE_DIR_NAMES {
+                    names.insert((*name).to_owned());
+                }
+            }
+            // **`mro`**（round 87）：参照里它在 **`type` 的类型字典**上（`type.mro`）⇒ `dir(type)`
+            // 看得到、而 `dir(<普通类>)` **看不到** ✓（实测 `'mro' in dir(int)` 为 False ✓）。
+            // 本层 `type.mro` 是 `getattr` 动态给的、字典里没有 ⇒ 这里**只给 `dir(type)` 补名** ✓
+            // （`rlcompleter` 的 `CompleteMe.mro()` 是经 `get_class_members(type)` 拿到的 ✓）。
+            if instance.hot_type(HotId::Type)
+                .is_some_and(|type_type| type_type.cast::<Header>() == object)
+            {
+                // 参照 `dir(type)` 里由 `getattr` 动态给的那几个名字（本层没进 `type` 的类型字典 ✓）。
+                for name in [
+                    "mro",
+                    "__name__",
+                    "__qualname__",
+                    "__subclasses__",
+                    "__prepare__",
+                    "__bases__",
+                    "__base__",
+                ] {
+                    names.insert(name.to_owned());
+                }
+            }
+        } else if instance.type_name(instance.type_of(object)) == "module" {
+            // **模块的 `dir` 只列模块字典**（round 103）：参照 `dir(sys)` 不含 `object` 那一族 dunder
+            // （`__eq__`／`__delattr__`… 全无 ✗）—— 先前把模块类型的 MRO 名也收进来 ✗ ⇒ 官方
+            // `test_pkg` 的 `dir()` 断言多出 14 个名字 ✗（"Lists differ … First differing element
+            // '__delattr__' vs '__doc__'" ✓）。
+            if let Some(mapping) = crate::mounted_instance_dict(instance, object) {
+                collect_mapping_keys(instance, mapping, &mut names);
+            }
         } else {
             let ty = instance.type_of(object);
             collect_type_mro_names(instance, ty.cast(), &mut names);
+            // **`object` 一族 dunder 名字**（round 87）：参照的 `dir(<实例>)` 是"类型 MRO 上的**名字**"
+            // —— 本层这些行为在 `getattr` 槽里**特判**、没进 `object` 的类型字典 ⇒ `dir` 会少
+            // `__class__`／`__eq__`／`__delattr__`… 一族 ✗（`test_rlcompleter` 的
+            // `None.*`/`dir(None)` 期望与 `test_frame` 的 `f_locals` 一族都受影响 ✓）。
+            // 这是参照 `object.__dict__` 的**名字面**；能否真取到值由属性通道决定（与参照同口径 ✓）。
+            const OBJECT_DUNDERS: [&str; 24] = [
+                "__class__", "__delattr__", "__dir__", "__doc__", "__eq__", "__format__",
+                "__ge__", "__getattribute__", "__getstate__", "__gt__", "__hash__",
+                "__init__", "__init_subclass__", "__le__", "__lt__", "__ne__", "__new__",
+                "__reduce__", "__reduce_ex__", "__repr__", "__setattr__", "__sizeof__",
+                "__str__", "__subclasshook__",
+            ];
+            for name in OBJECT_DUNDERS {
+                names.insert(name.to_owned());
+            }
+            // **`__slots__` 声明的名字**（round 87）：参照里它们是**类型上的描述符** ⇒ `dir(实例)`
+            // 看得到（`test_rlcompleter.test_uncreated_attr` 要求"未创建的 slot 也要能补全" ✓）。
+            // 本层的 `__slots__` 语义尚未实现（实例仍用普通属性字典）⇒ 这里至少把**名字**补进 `dir` ✓。
+            for base in unsafe { &*ty.as_ptr() }.mro() {
+                // SAFETY: base 由注册表持有。
+                let Some(mapping) = (unsafe { &*base.as_ptr() }).dict() else { continue };
+                let Some(slots) = instance.dict_get(mapping, "__slots__") else { continue };
+                match instance.iterable_items(slots) {
+                    Ok(Some(items)) => {
+                        for item in items {
+                            if let Some(text) = instance.text_of(item) {
+                                names.insert(text.to_owned());
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(text) = instance.text_of(slots) {
+                            names.insert(text.to_owned());
+                        }
+                    }
+                }
+            }
+            // **动态 getset 属性面**（round 60）：生成器的 `gi_*` 在参照里是类型上的 getset
+            // 描述符（`dir(g)` 看得到 ✓），本层由 `getattr` 槽动态给值 ⇒ `dir` 这里补上名字 ✓。
+            // **`set`／`frozenset` 的参照方法名面**（round 166）：方法都在 `getattr` 槽里 ⇒
+            // 不补的话 `dir(set())` 只有 `union` 一个 ✗（参照有全套 ✓）。
+            if instance.type_name(ty) == "set" {
+                for name in crate::builtin::set::SET_TYPE_DIR_NAMES {
+                    names.insert((*name).to_owned());
+                }
+            }
+            if instance.type_name(ty) == "frozenset" {
+                for name in crate::builtin::set::FROZENSET_TYPE_DIR_NAMES {
+                    names.insert((*name).to_owned());
+                }
+            }
+            if instance.type_name(ty) == "generator" {
+                for name in ["gi_code", "gi_frame", "gi_running", "gi_suspended", "gi_yieldfrom"] {
+                    names.insert(name.to_owned());
+                }
+            }
             if let Some(mapping) = crate::mounted_instance_dict(instance, object) {
                 collect_mapping_keys(instance, mapping, &mut names);
             }
@@ -473,15 +646,10 @@ pub fn zip_new(
     Ok(iterator)
 }
 
-/// **`map(function, iterable, ...)`** ✓（第 338 轮）：**急求值** —— 返回一个 **`list`** ✓。
+/// **`map(function, iterable, ...)`** ✓（`P3-41` round 41 改正为**惰性迭代器** ✓）。
 ///
-/// **如实登记的偏差** ✗：参照返回**惰性**的 `map` 对象 ✓（`type(...)` 是 `map` ✓、可以套无限可迭代
-/// 对象 ✓）；本层返回**列表** ✓。为什么这样落：真正的惰性 `map` 需要**新迭代器类型**，而那个改动
-/// （把 `map`／`filter` 认成迭代器 ✓）会在**套件上下文里抖出一条潜伏 UAF** ✗（第 335／337 轮已把
-/// 触发点夹到"这两个类型被 `is_iterator_type` 认成迭代器"这一处 ✓，但根因还欠 ✓）⇒ **先按急求值**
-/// 让上限榜上那 **74** 个模块过这一关 ✓，惰性面随后补 ✓。
-/// **不静默** ✗：偏差写在这里、写进台账、写进语料注释 ✓（值与迭代行为都与参照一致 ✓，
-/// 只有"类型名"与"惰性"两点不同 ✓）。
+/// 参照口径：`type(map(...)) is map`、可以套无限可迭代对象、每次 `next` 才取一行并调用函数 ✓
+/// （`test_tempfile` 的 `map(str, itertools.count())` 正靠它 —— 先前"急求值"会消费无限序列 ⇒ 真 hang ✗）。
 pub fn map_new(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -495,40 +663,23 @@ pub fn map_new(
         ));
     }
     let function = args[0];
-    // 每个可迭代实参先 `iter()` ✓（走执行器**同一处** ✓）
+    // 每个可迭代实参先 `iter()` ✓（走执行器**同一处** ✓）——**不推进** ✓。
     let mut iterators: Vec<NonNull<Header>> = Vec::with_capacity(args.len() - 1);
     for argument in &args[1..] {
         iterators.push(instance.iter_object(*argument)?);
     }
-    let mut items: Vec<NonNull<Header>> = Vec::new();
-    loop {
-        let mut row: Vec<NonNull<Header>> = Vec::with_capacity(iterators.len());
-        let mut exhausted = false;
-        for inner in &iterators {
-            match instance.advance_iterator(*inner)? {
-                Some(item) => row.push(item),
-                None => {
-                    exhausted = true;
-                    break;
-                }
-            }
-        }
-        if exhausted {
-            for item in row {
-                // SAFETY: 刚取出来的新引用 ⇒ 交还实例 ✓
-                unsafe { instance.release_object(item.as_ptr()) };
-            }
-            break;
-        }
-        // **实参表的所有权交给 `call_callable`** ✓（它的契约就是接手 ✓）
-        let value = crate::executor::call::call_callable(instance, function, None, row, Vec::new(), 0)?;
-        items.push(value);
-    }
-    Ok(instance.new_list(items))
+    let list = instance.new_list(iterators);
+    let iterator = instance.new_map_iterator(function, list);
+    // 构造器自己留了一份 ⇒ 还掉我们这份 ✓。
+    // SAFETY: list 由本函数持有。
+    unsafe { instance.release_object(list.as_ptr()) };
+    Ok(iterator)
 }
 
-/// **`filter(predicate, iterable)`** ✓（第 338 轮）：**急求值** —— 返回一个 **`list`** ✓
-/// （偏差同 [`map_new`] ✓：参照是惰性的 `filter` 对象 ✗）。
+/// **`filter(function, iterable)`** ✓（`P3-41` round 41 改正为**惰性迭代器** ✓）。
+///
+/// `function` 为 `None` ⇒ 按**真值**筛 ✓；否则「谓词为真就让出」✓（推进细节在
+/// `executor::iter_advance::advance_filter` ✓）。
 pub fn filter_new(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -542,44 +693,11 @@ pub fn filter_new(
         ));
     }
     let predicate = args[0];
-    let none = instance.singletons().none();
-    let mut items: Vec<NonNull<Header>> = Vec::new();
-    // **与 `map` 走同一处**（`iter_object` ＋ `advance_iterator` ✓）：先前用 `collect_iterable` ✗
-    // ⇒ `filter(lambda x: x > 1, range(5))` 会报出一条**张冠李戴**的消息
-    // （`bytes(<可迭代>)：只接线了 list／tuple` ✗ —— 明明与 `bytes` 无关 ✓），实测抓到 ✓。
     let inner = instance.iter_object(args[1])?;
-    let values: Vec<NonNull<Header>> = {
-        let mut collected = Vec::new();
-        while let Some(value) = instance.advance_iterator(inner)? {
-            collected.push(value);
-        }
-        // 迭代器本身那份引用用完就还 ✓
-        // SAFETY: inner 由本函数持有 ⇒ 交还实例 ✓。
-        unsafe { instance.release_object(inner.as_ptr()) };
-        collected
-    };
-    for value in values {
-        let keep = if predicate == none {
-            instance.truth_of(value)
-        } else {
-            let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(1);
-            // SAFETY: value 由本函数持有 ⇒ 新增一份交给调用 ✓。
-            unsafe { instance.incref_object(value.as_ptr()) };
-            call_args.push(value);
-            let verdict = crate::executor::call::call_callable(instance, predicate, None, call_args, Vec::new(), 0)?;
-            let truth = instance.truth_of(verdict);
-            // SAFETY: verdict 由本次调用返回 ⇒ 交还实例 ✓。
-            unsafe { instance.release_object(verdict.as_ptr()) };
-            truth
-        };
-        if keep {
-            items.push(value);
-        } else {
-            // SAFETY: value 由本函数持有 ⇒ 交还实例 ✓。
-            unsafe { instance.release_object(value.as_ptr()) };
-        }
-    }
-    Ok(instance.new_list(items))
+    let iterator = instance.new_filter_iterator(predicate, inner);
+    // SAFETY: inner 的这份引用由本函数持有。
+    unsafe { instance.release_object(inner.as_ptr()) };
+    Ok(iterator)
 }
 
 /// **`enumerate(iterable, start=0)`** ✓（第 347 轮）：**急求值** —— 返回 `(下标, 元素)` 的 **`list`** ✓。
@@ -658,7 +776,7 @@ pub fn reversed_new(
             .map(|(key, _)| instance.retain(*key))
             .collect();
         let list = instance.new_list(items);
-        let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
+        let ty = instance.hot_type(HotId::Reversed).ok_or(crate::ExecError::Unsupported {
             opcode: 0,
             what: "reversed 类型未登记",
         })?;
@@ -682,7 +800,7 @@ pub fn reversed_new(
             &format!("'{name}' object is not reversible"),
         ));
     };
-    let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
+    let ty = instance.hot_type(HotId::Reversed).ok_or(crate::ExecError::Unsupported {
         opcode: 0,
         what: "reversed 类型未登记",
     })?;

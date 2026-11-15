@@ -9,7 +9,7 @@ pub(super) fn step_misc<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, op
                 "RESUME" | "NOP" => {}
                 // `BC-23`：边界检查的两条**专有**指令（`TS-10`…`TS-13`）
                 "POP_TOP" => {
-                    if crate::diag::flag("PYAWA_POP_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_POP_DEBUG") {
                         eprintln!("[pop_top] 弹前深={} site={}", frame.get().depth(), instance.current_site());
                     }
                     release(instance, frame.get().pop()?)

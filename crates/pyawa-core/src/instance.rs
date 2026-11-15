@@ -8,7 +8,7 @@ use util::{ruler_on, str_matches};
 use crate::diag::{dangling_mode, flag, leak_mode, quarantine_mode};
 use core::ptr;
 use core::ptr::NonNull;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::flags;
 
@@ -21,6 +21,10 @@ mod path;
 
 mod refcount;
 
+// **热路径类型指针缓存**（round 246 性能，A2-1）：注册表按名字查表 → 分派处指针比较 ✓。
+mod hot_types;
+pub(crate) use hot_types::HotId;
+
 mod util;
 mod misc;
 mod bootstrap;
@@ -28,8 +32,14 @@ mod interrupt;
 mod convert;
 // **编码表与归一函数**（第 726 轮）：`_codecs`／`bytes.decode`／`str.encode` 的**一处真相** ✓。
 pub(crate) use convert::CP437;
+/// 形参所有权实验开关（round 95；见 `refcount::frame_own_params`）。
+pub(crate) use refcount::frame_own_params;
+/// refcount 毒值诊断（round 107；见 `refcount::poison_refcount`）。
+pub(crate) use refcount::poison_refcount;
 mod gc;
 mod context;
+// `P3-41`：`repr` 递归守卫的三支结果（`OM-11`）。
+pub(crate) use context::ReprEntry;
 mod accessors;
 mod constructors;
 mod query;
@@ -39,6 +49,7 @@ mod alloc;
 mod containers;
 mod state;
 mod capability_table;
+mod weakrefs;
 mod wait;
 
 use crate::bigint::IntValue;
@@ -101,15 +112,125 @@ pub enum CapabilityCallError {
 /// **如实登记**：参照默认 1000 且可用 `sys.setrecursionlimit` 调 ✗ —— 本层上限更低、且该接口还没接 ✗。
 pub const MAX_CALL_DEPTH: usize = 64;
 
+mod host_ops;
+pub use host_ops::{HostObjectGetAttr, HostObjectOps, HostObjectSetAttr};
+
 pub struct Instance {
     /// **当前帧对象**（第 230 轮；`sys._getframe()` ✓）。
     current_frame: core::cell::Cell<Option<NonNull<Header>>>,
     /// **`NotImplemented` 单例**（第 215 轮）。
     not_implemented_singleton: core::cell::Cell<Option<NonNull<Header>>>,
+    /// **`AB-75`**：宿主对象协议钩子（键＝对象地址；类型/实例/模块同一张表，每对象一份）。
+    object_ops: RefCell<crate::fast_hash::FastMap<usize, crate::instance::HostObjectOps>>,
+    /// **Python 级终结器旁表**（round 82，照 `OM-20` 的参照语义 ＝ at-most-once）：
+    /// 地址 → 已跑过 `__del__` ✓。`header` 的 bit 4–7 是**禁止占用**的保留位（`OM-7`）⇒ 不能加标志
+    /// ⇒ 用旁表 ✓；对象释放时同步摘除（地址复用不会串味 ✓）。
+    /// 只对**用户类的 `__del__`**（`python_level_finalize`）生效；宿主终结器槽保持 `OM-20` 的
+    /// "复活后再死可再终结"语义（`object_model` 的用例钉住 ✓）。
+    python_finalized: RefCell<crate::fast_hash::FastSet<usize>>,
+    /// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 的落点。core 不能依赖
+    /// stdlib（分层）⇒ 由 `_ast` 模块在引导期登记一个函数指针 ✓（未登记时 compile 照旧报未接线 ✓）。
+    ast_parser: Cell<Option<crate::AstParserFn>>,
+    /// **已回收类型的地址登记**（round 130）：孤儿回收把类型从 `types`/`user_types` 摘掉后，**类型本体**
+    /// 仍被 `Box::leak` 保留（裸 `ty` 指针仍有效 ✓）；登记在这里让 `assert_live` 认得它 ⇒ 仍在别处的
+    /// 计数引用将来释放它时不会被当野指针 ✓（round 129 曾因此悬垂）。
+    retired_types: RefCell<crate::fast_hash::FastSet<usize>>,
+    /// **类型名 → 类型对象索引**（round 142 真性能修 ✗）：`type_named` 先前是**对 `types` 线性扫**
+    /// （每次 `builtin_type(instance, …)` 都扫一遍 ⇒ 套件里类型一多就**每次 Python 调用**吃几微秒 ✓）；
+    /// 现在 O(1) 哈希查找 ✓（`or_insert` 保持"先登记者优先"，与线性扫的旧口径一致 ✓）。
+    types_by_name: RefCell<std::collections::HashMap<String, NonNull<TypeObject>>>,
+    /// **未命中的类型名（负缓存）**（round 248 性能，A2-3）：`(代数, 名字集合)` —— 未命中的名字
+    /// 在同一代数内**不再线性扫全表** ✓；`types_generation` 变化（登记新类型）时整体失效 ✓。
+    types_missing: RefCell<(usize, std::collections::HashSet<String>)>,
+    /// **类型注册代数**（round 145）：每登记一个类型 +1 ⇒ 依据"全部内建名"算出来的缓存（如
+    /// [`Instance::is_dedicated_iterator_type`] 的集合）在代数变化时**重建** ✓（惰性建的迭代器
+    /// 类型在首次推进之后才出现时，缓存不能过期 ✗）。
+    types_generation: Cell<usize>,
+    /// **热路径类型指针槽**（round 246 性能，A2-1；round 249 改直接 Sip 槽）：把"按名字查类型"
+    /// 从每条指令的热路径拿掉 —— 分派处只读一次 `Cell` ✓（不再 `RefCell` 借用 ✓）。
+    /// 按 `types_generation` 失效（`hot_types_generation` 记录建槽时的代数 ✓）。
+    hot_type_slots: [Cell<Option<NonNull<TypeObject>>>; hot_types::HotId::COUNT],
+    /// 热类型槽建立时的 `types_generation`（不等就重建 ✓）。
+    hot_types_generation: Cell<usize>,
+    /// **类型 id 计数器**（round 249 性能，A2-4）：`alloc_type_raw` 每次 +1 ⇒ `is_subtype` 用 id 位图 ✓。
+    next_type_id: Cell<u32>,
+    /// **被迭代源类型 → 布局种类缓存**（round 146 性能，`iter.rs::source_kind` 用）：避免每个元素都做
+    /// 7 次 `type_is_subtype_of`（`type_named` ＋ MRO 线性扫 ✗）。类型布局与实例无关 ⇒ 只存 `u8` 小码 ✓。
+    iterable_source_kinds: RefCell<crate::fast_hash::FastMap<usize, u8>>,
+    /// **`__slots__` 声明的槽名**（round 147）：键是类型地址、值是槽名表。当前实现：实例仍用普通
+    /// 属性字典**存值**（槽就是字典键 ✓），但**写非槽名**要按参照报
+    /// `'X' object has no attribute 'y' and no __dict__ for setting new attributes` ✓
+    /// （`test_descrtut` 的 tut2 钉这一条 ✓）。完整"无实例字典"语义（`__dict__` 不存在）随后收。
+    type_slots: RefCell<crate::fast_hash::FastMap<usize, crate::fast_hash::FastSet<String>>>,
+    /// **用户类型地址集合**（round 119）：`adopt` 里 O(1) 判断"这个对象是不是用户类实例"✓。
+    user_type_set: RefCell<crate::fast_hash::FastSet<usize>>,
+    /// **用户类实例登记表**（round 119）：类型地址 → 活实例地址集合 ✓ —— 孤儿回收**必须能枚举活实例**
+    /// 才能"先跑终结器、再清类型字典"（round 118 的教训：只扫 `gc_headers` 会漏非跟踪布局的实例 ✗）。
+    user_instances: RefCell<crate::fast_hash::FastMap<usize, crate::fast_hash::FastSet<usize>>>,
+    /// **动态（用户）类类型的"孤儿回收"名单**（round 99）：`class`/`type()` 造出的类型 —— 参照里类型是
+    /// GC 对象；本层**不释放类型 Box**（`alloc_type_raw` 的 `Box::leak` 与 `AttributeObject::slots().dealloc`
+    /// 不同构 ⇒ 真释放会 invalid free ✗），改为**保守孤儿回收**：`rc == 1`（只剩注册表）× 没有活对象以它
+    /// 为 `ty` × 没有其它类型以它为 bases/mro/元类 ⇒ 摘注册表＋清字典（环随之由引用计数释放 ✓；类型本体留着，
+    /// 任何裸 `ty` 指针仍有效 ✓）。可收 `test_dict`/`test_list` 的 `test_free_after_iterating` ✓。
+    user_types: RefCell<Vec<NonNull<Header>>>,
+    /// **`__getattribute__` 派发守卫**（round 87）：用户覆写走钩子期间置位，防止默认实现递归 ✓。
+    getattribute_dispatching: Cell<bool>,
+    /// **本地追踪回调执行中**（round 181）：防追踪函数自己被追踪（递归）。
+    trace_dispatching: Cell<bool>,
+    /// **B 引用账本**（task-16，`PYAWA_GC_LOG=4`）：`ExecError::Raised` 的生成／移交 pending／
+    /// 显式丢弃记账 ＋ 未消费（泄漏）点名；默认关闭时所有入口只多一次 bool 读，正常路径零分支。
+    pub(crate) raised_ledger: RefCell<crate::error_ledger::RaisedLedger>,
+    /// **`traceback` 对象计数**（round 191 诊断）：创建数／释放数（GC_LOG 时打印）。
+    traceback_created: Cell<usize>,
+    /// 已释放的 `traceback` 对象数。
+    traceback_freed: Cell<usize>,
+    /// **全局追踪函数**（round 183；`sys.settrace` 存的值，**本实例持一份引用**）：
+    /// 事件驱动仍只做"帧本地 `f_trace`"这半（全局 `'call'`/`'return'` 事件下一轮）✓，
+    /// 但 `settrace`/`gettrace` 的**存取语义**先照参照（`sys.gettrace() is f` ✓）。
+    global_trace: RefCell<Option<NonNull<Header>>>,
+    /// **全局性能钩子**（`sys.setprofile`，同口径）。
+    global_profile: RefCell<Option<NonNull<Header>>>,
+    /// **类型对象的 `__text_signature__` 旁表**（round 87）：`staticmethod`/`classmethod`/`property`
+    /// 一类内建类在参照里有非空签名（`(function, /)` 等）——`inspect.signature(<类>)` 的类分支
+    /// 会先读"MRO 里第一个非空 `base.__text_signature__`" ✓。
+    type_text_signatures: RefCell<std::collections::HashMap<usize, &'static str>>,
+    /// **对象级 `__text_signature__` 旁表**（round 86；`AB-54`）：内建函数与**宿主函数**共用
+    /// （宿主函数的文本签名由 ABI 在注册时从 `pa_sig` 投影写入 ⇒ 值用 `String`，运行期数据）。
+    /// `inspect.signature` 解析内建可调用对象（`object.__init__`／`__new__`／`__init_subclass__`
+    /// 以及宿主函数）的文本签名入口 ✓。
+    text_signatures: RefCell<std::collections::HashMap<usize, String>>,
+    /// **原生可调用对象的来源模块旁表**（task-6／缺口2）：参照的 `builtin_function_or_method`
+    /// 报告**来源 C 模块**（`_csv.reader.__module__ == "_csv"`、`math.sqrt.__module__ == "math"`），
+    /// 而本层对象只存名字与函数指针（`BuiltinFunctionObject`）⇒ 由**模块安装的集中路径**
+    /// （`pyawa-stdlib` 的 `install`／ABI 的宿主函数注册）按对象地址登记一份来源模块名。
+    /// 未登记（内建命名空间里创建的原生函数、core 自造的原生函数）⇒ `builtins`（既有口径）。
+    /// 与 `text_signatures` 同一模式：值用 `String`（运行期数据）、按地址登记，条目随实例销毁。
+    builtin_function_modules: RefCell<std::collections::HashMap<usize, String>>,
+    /// **`mappingproxy` 的活视图来源**（round 125）：键/值/项视图的 `.mapping` 要是**源字典的活视图** ✓
+    /// ⇒ 按代理地址记源 dict 指针；等价比较等入口先同步快照 ✓（`test_dict.test_views_mapping` ✓）。
+    mappingproxy_live: RefCell<crate::fast_hash::FastMap<usize, NonNull<Header>>>,
+    /// **`mappingproxy` 的来源类型**（round 114）：`MappingProxyType(OrderedDict(...))` 的
+    /// `.copy()`／`repr` 要还原**底层映射类型** ✓ ⇒ 按代理对象地址记一份来源类型 ✓
+    /// （类型对象活到实例销毁 ⇒ 不会悬垂 ✓；条目随代理存活而累积，量小如实登记）。
+    mappingproxy_sources: RefCell<crate::fast_hash::FastMap<usize, NonNull<TypeObject>>>,
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
+    /// **OM-3 扩（每实例内存配额，round 266）**：`0` ＝ 不限；否则**活着**的分配字节数
+    /// （`bytes_allocated`）超过它即置 [`Self::memory_hit`]；执行器在**指令边界**取走并抛
+    /// 可捕获的 `MemoryError` ⇒ 沙箱宿主能把"一个脚本把宿主 RSS 撑大"变成干净异常 ✓。
+    /// 配额是**宿主侧 ABI 钩子**（ABI-adjacent，发布前定 ✓）：由 `pa_set_memory_limit` 设 ✓。
+    memory_limit: Cell<usize>,
+    /// 配额命中标志（分配器置位；执行器／大块分配循环取走并抛 `MemoryError`）。
+    memory_hit: Cell<bool>,
+    /// **当前允许的水位**（初始等于 `memory_limit`；每次抛 `MemoryError` 后抬高 `slack` 字节 ✓）。
+    ///
+    /// 为什么需要 ✗：`MemoryError` 抛到 Python 处理块后，**已用字节还高于上限** ⇒ 处理块里
+    /// 任何一个分配都会再次命中 ⇒ 异常从处理块里逃出去（实测 `except MemoryError: print(...)`
+    /// 接不住 ✗）。抬高 `slack`（`max(64 KiB, limit/16)`）⇒ 处理块有清理空间，同时继续增长时
+    /// 每 `slack` 字节再抛一次 ⇒ 宿主占用的上界是 `limit + slack` 量级 ✓（不断言"恰好上限"）。
+    memory_ceiling: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
-    live: RefCell<HashSet<usize>>,
+    live: RefCell<crate::fast_hash::FastSet<usize>>,
     /// **盯住的地址**（第 113 轮，`PYAWA_NS_DEBUG` 下由建类那处设 ✓）：0 ＝ 关 ✓。
     /// 对它**每一次 incref／decref 都报现场与计数** ✓ —— 不看地址归因 ✗、只看**计数与现场** ✓，
     /// 用来解释"`rc=2` 进去、内部归零" ✓（上限榜那一族的内存缺陷 ✓，见第 107～112 轮台账 ✓）。
@@ -119,6 +240,21 @@ pub struct Instance {
     freed_sites: RefCell<std::collections::HashMap<usize, (String, String)>>,
     /// 是否开启（`PYAWA_ZOMBIE_TRACE=1` ✓；关着零开销 ✓）。
     zombie_trace: Cell<bool>,
+    /// **弱引用登记**（round 59）：目标地址 ⇒ 指向它的弱引用对象（**不持有引用** ✓）。
+    /// 目标释放时逐个置死并调用回调 ✓（`invalidate_weakrefs`）；弱引用对象自己释放时摘除 ✓。
+    weakrefs: RefCell<crate::fast_hash::FastMap<usize, Vec<NonNull<Header>>>>,
+    /// **`isinstance` 的 ABC 快存**（round 73）：`(类, 实例类型, _abc_invalidation_counter)` ⇒ 结果 ✓。
+    ///
+    /// 为什么 ✗：`collections.abc` 的 `__instancecheck__` 是纯 Python（两个 `WeakSet` 查缓存 ＋
+    /// `__subclasshook__`），本层每次调用要 ~45 µs（`ref()` 9 µs＋两次集合查），而 `Lib/` 里
+    /// `isinstance(x, Sequence)` 一族遍地都是（`UserString` 的每个方法都带一个）；实测
+    /// `test_userstring` 因此从 round 44 的 42 s 涨到 ~90 s（survey 120 s 阈值上临界漂移 ✗）。
+    /// **失效**：ABC 的注册表变更会令 `ABCMeta._abc_invalidation_counter` ＋1，键里带上它就天然失效 ✓；
+    /// 只对**元类恰是 `ABCMeta`** 的类启用 ✓（用户自定义元类的 `__instancecheck__` 可能有副作用 ⇒ 不缓存 ✗）。
+    isinstance_cache: RefCell<crate::fast_hash::FastMap<(usize, usize, u64), bool>>,
+    /// **GC 回收路径延后执行的弱引用回调**（round 59）：`free_garbage` 阶段只登记，
+    /// 等整个回收循环结束后统一调（那时 `gc_running` 已复位 ✓）。
+    pending_weakref_callbacks: RefCell<Vec<(NonNull<Header>, NonNull<Header>)>>,
     /// **毒化隔离区** ✓（第 272 轮诊断；只在 `PYAWA_QUARANTINE=1` 时填 ✓）：
     /// `(头部地址, 载荷字节数, 类型名, 释放现场)` ✓ —— 第 297 轮补的第四格是**释放点**
     /// （`<帧 qualname>@<指令指针>`）：事后"多放一份"报出来时，两头都要有。
@@ -151,6 +287,11 @@ pub struct Instance {
     modules: RefCell<Option<NonNull<Header>>>,
     /// **BC-60** ②：**本实例**的当前异常状态（正在处理的异常）——**禁止**进程级全局。
     exception_state: RefCell<Vec<NonNull<Header>>>,
+    /// **异常分配位点**（round 165 诊断，`PYAWA_EXC_SITE=1` 才记）：对象地址 ⇒ 抛出位点。
+    /// 用来追"GC 根里的异常是谁抛的"（`[gc-reverse]` 已排除候选持有者 ⇒ 只能看来源 ✓）。
+    exception_sites: RefCell<std::collections::HashMap<usize, String>>,
+    /// 诊断（round 62，`PYAWA_EXC_INFO_DEBUG=1`）：与 `exception_state` 同形的**压入现场**表 ✓。
+    exception_state_sites: RefCell<Vec<String>>,
     /// `__build_class__`（引导期建好；见 [`Instance::build_class`]）。
     build_class: Cell<Option<NonNull<Header>>>,
     /// 最近一次抛出的异常（**本实例持有一份引用**）：`ExecError::Raised` 借它保活。
@@ -191,10 +332,71 @@ pub struct Instance {
     gc_threshold: Cell<(usize, usize, usize)>,
     /// 自上次回收以来的分配计数。
     gc_alloc_count: Cell<usize>,
+    /// **`gc.get_debug()`／`gc.set_debug()` 的落点**（round 92）：按实例存（`CX-3` 禁止进程级全局 ✓）。
+    ///
+    /// 本层没有调试通道（`PYAWA_GC_LOG` 一类是宿主侧诊断）⇒ 这里只**忠实保存/回报**用户设的位，
+    /// 不声称有 `DEBUG_SAVEALL` 等语义 ✓（参照里设了不生效也只是"没有可观测行为" ✓）。
+    gc_debug: Cell<u64>,
+    /// **下一次自动回收的分配计数水位**（`P3-41` 慢因修复）：
+    /// 单代标记-清除的每次代价是 **O(存活对象数)** ⇒ 固定阈值（2000）会让"存活对象多"的
+    /// 工作负载退化成 **O(n²)**（`test_frame` 的 15 万层嵌套 ≈ 26.9 s，实测见 round 39 台账）。
+    /// ⇒ 每次回收后把水位调到"再分配 `max(阈值, 当前存活数)` 次"：每次回收的 O(存活) 摊到
+    /// 至少同样多次分配上 ⇒ 摊还 O(1)。`sys.get_threshold()` 仍只报**配置**值（口径不变 ✓）。
+    gc_next_collect: Cell<usize>,
+    /// 自动／手动回收的**实际执行次数**（诊断面；`gc.get_stats` 的口径底座）。
+    gc_collections: Cell<usize>,
     /// 回收进行中：这些对象只减计数、由本次回收统一释放（见 [`Instance::collect`]）。
-    gc_frozen: RefCell<HashSet<usize>>,
+    gc_frozen: RefCell<crate::fast_hash::FastSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
     gc_running: Cell<bool>,
+    /// **显式** `gc.collect()` 正在跑（round 110）：孤儿用户类回收只在显式回收或每 N 次自动回收时做 ✓
+    /// （否则重负载套件每次自动回收都做 `user_types × gc_headers` 扫描 ⇒ 4–5× 变慢 ✗）。
+    gc_explicit: Cell<bool>,
+    /// **本次显式回收是否"只收年轻代"**（round 148）：`gc.collect(0)`／`collect(1)` 是"年轻代"语义，
+    /// 参照里也不会做全量类型级清理 ⇒ 本层对应地**跳过孤儿类型回收**（它要遍历全部候选＋用户类型，
+    /// 是显式回收的最大单项成本 ✗）。`gc.collect()`（默认 2）仍做全量回收 ✓（`free_after` 家族靠它 ✓）。
+    gc_skip_reclaim: Cell<bool>,
+    /// **年轻代边界**（round 157）：上一次回收结束时回收链的**头**。链是"新对象压头"⇒
+    /// 从当前头走到这个指针为止就是"上次回收以来新分配的对象"＝年轻代 ✓。
+    /// `gc.collect(0)`／`collect(1)` 只收这一段（参照的分代语义的**近似**：老对象只当根，不扫 ✓），
+    /// 全量 `gc.collect()` 收全部并把边界推到当前头 ✓。
+    gc_young_mark: Cell<*mut Header>,
+    /// **自动回收的轮次计数**（round 157）：自动回收默认收**年轻代**（便宜 ✓，参照的分代语义近似），
+    /// 每 16 轮做一次**全量**（保证老环最终也能收 ✓）。
+    gc_auto_ticks: Cell<u32>,
+    /// **下一次自动回收强制全量**（round 157）：线程能力缺位抛 `SkipTest` 后，套件帧里刚建的
+    /// 大对象图（70k 弱字典条目）会成为**环状垃圾** ⇒ 尽快做一次全量回收把它收掉，别拖累后面的用例 ✓。
+    gc_force_full: Cell<bool>,
+    /// **类型级 dunder 的"每类型一份"包装器**（round 103）：参照里每个内建类型在**自己的类型字典**
+    /// 里有自己的 slot wrapper（`list.__repr__ is not dict.__repr__` ✓）—— 本层这些 dunder 由
+    /// `object` 的同一个 native 兜底 ✗ ⇒ 在**类型对象**上取到的都是**同一个对象** ✗ ⇒
+    /// `pprint` 的 `_dispatch[type(obj).__repr__]`（以类型属性作 dict 键）全部落到最后写入的那一项 ✗
+    /// （实测：任意 list 被当成 deque 交给 `_pprint_deque` ⇒ `'list' object has no attribute
+    /// 'maxlen'` ✗，官方 `test_pkg`／`test_rlcompleter` 的收尾都卡在这 ✓）。
+    /// 缓存键 `(类型对象地址, 名字)` ✓；值由本实例持有（随实例释放 ✓）。
+    type_dunders: RefCell<crate::fast_hash::FastMap<(usize, &'static str), NonNull<Header>>>,
+    /// **小元组复用池**（round 96）：参照的 `tuple` freelist ✓ —— 生成器表达式每轮产的
+    /// `(i, i)` 如果**立刻被丢弃**，下一轮会拿到**同一地址** ⇒ 官方 `test_genexps` 的
+    /// 「Verify re-use of tuples」doctest 要求 `max(id)-min(id)==0` ✓（先前每次新分配 ⇒ 非 0 ✗）。
+    ///
+    /// **只放已 clear 过、内存还在的 `tuple` 对象**（≤20 个，参照的 freelist 上限同量级 ✓）；
+    /// 复用时要**重新登记**（活表／GC 链／字节计数／`GC_TRACKED` ✓，见 `Instance::reuse_tuple`）。
+    /// `PYAWA_QUARANTINE`／`PYAWA_NO_GC` 的实测模式**不进池** ✓（保持诊断语义 ✓）。
+    tuple_pool: RefCell<Vec<NonNull<Header>>>,
+    /// **`int` 复用池**（round 251 性能，A2-6；CPython PyLong freelist 同款）：`n += 1` 这类
+    /// 每轮都造/丢一个 `IntObject` 的循环不再每次 `malloc`／`free`（perf：`cfree` ~3–4% ✗）。
+    /// 只放**已 clear 过、内存还在**的 `IntObject`（载荷已重置成小值 ⇒ 不钉住大整数堆 ✓）。
+    int_pool: RefCell<Vec<NonNull<Header>>>,
+    /// **释放路径诊断位快照**（round 251 性能，A2-6）：见 `diag::release_diag_bits`。
+    diag_bits: Cell<u32>,
+    /// **正在 `release_one` 里的深度**（round 256 内存安全修）：终结器／弱引用回调在
+    /// `release_one` 中途可能重入调用 `gc.collect()` ✗ —— 此时目标对象计数已是 0、但仍挂在
+    /// GC 链上 ⇒ 回收器会把它再清一遍 ⇒ 双重释放 ✗（实测 `test_weakref.ReferencesTestCase
+    /// .test_callback_gcs` 段错误）。深度 > 0 时 `collect` **推迟**（`gc_deferred`），等整条
+    /// 释放链排空后由 `release_zero` 补跑 ✓。
+    releasing: Cell<u32>,
+    /// 释放链里被推迟的回收请求（见 `releasing`）。
+    gc_deferred: Cell<bool>,
     /// **`OM-11` 的 `repr` 递归守卫**（`CX-3`：按实例存）：正在生成 `repr` 的对象地址。
     repr_guard: RefCell<Vec<usize>>,
     /// **`CP-22`：实例 cwd**（`SPEC-capabilities.md`；`os.chdir` 的落点）。
@@ -220,3 +422,19 @@ mod drop;
 mod quote;
 
 pub(crate) use quote::{quote_bytes, quote_wtf8};
+
+impl Instance {
+    /// **`isinstance` 的 ABC 快存：读**（round 73）——键含 ABC 失效计数 ✓。
+    pub fn isinstance_cache_get(&self, key: (usize, usize, u64)) -> Option<bool> {
+        self.isinstance_cache.borrow().get(&key).copied()
+    }
+
+    /// **`isinstance` 的 ABC 快存：写**（round 73）；超过 8192 条就整体清掉 ✓（防无界增长）。
+    pub fn isinstance_cache_put(&self, key: (usize, usize, u64), value: bool) {
+        let mut cache = self.isinstance_cache.borrow_mut();
+        if cache.len() > 8192 {
+            cache.clear();
+        }
+        cache.insert(key, value);
+    }
+}

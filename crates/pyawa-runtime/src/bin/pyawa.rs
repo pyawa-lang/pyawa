@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! pyawa <文件.py|文件.pyawa> [参数…]
+//! pyawa check [--format=json] <文件…>     # 只编译不执行（LSP 线①；PLAN §10.1）
 //! ```
 //!
 //! # 如实范围（**这是本版的边界，不是待办清单的省略**）
@@ -24,6 +25,7 @@ use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAI
 use pyawa_abi::{
     pa_setcapability, pa_setcapability_async,
     pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host,
+    pa_set_memory_limit, pa_set_program_filename,
     pa_state, status, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
@@ -71,7 +73,7 @@ fn set_attribute(
     instance.release(value);
 }
 
-use pyawa_core::compile::{CheckTier, Mode};
+use pyawa_core::compile::{check_source, CheckTier, Diagnostic, Mode};
 use pyawa_runtime::pyac;
 
 /// **崩溃点回溯器**（`PYAWA_SEGV_TRACE=1`，第 577 轮）：把段错误／总线错误／abort **变成可读栈** ✓。
@@ -106,21 +108,99 @@ fn install_segv_trace() {
 #[cfg(not(unix))]
 fn install_segv_trace() {}
 
+/// 从 `PYAWA_MEMORY_LIMIT` 读每实例内存配额（字节；支持 `K`／`M`／`G` 后缀，大小写不敏感）。
+///
+/// 宿主接缝的**示例实现**：正式宿主应经 ABI `pa_set_memory_limit` 自己决定（`AB-65`）✓；
+/// 这里只为 CLI 演示／冒烟提供一个环境变量入口（不影响库内语义 ✓）。
+fn memory_limit_from_env() -> Option<u64> {
+    let text = std::env::var("PYAWA_MEMORY_LIMIT").ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (number, multiplier) = match text.as_bytes().last().copied() {
+        Some(b'k') | Some(b'K') => (&text[..text.len() - 1], 1024u64),
+        Some(b'm') | Some(b'M') => (&text[..text.len() - 1], 1024 * 1024),
+        Some(b'g') | Some(b'G') => (&text[..text.len() - 1], 1024 * 1024 * 1024),
+        _ => (text, 1),
+    };
+    number.trim().parse::<u64>().ok().map(|value| value.saturating_mul(multiplier))
+}
+
 fn main() {
     install_segv_trace();
+    // **大栈执行线程**（round 112）：本层 Python 调用是 Rust 递归 ✓ —— 主线程默认 8 MiB 栈；
+    // 给执行线程开 **512 MiB** 栈以留余量 ✓（默认递归上限仍是保守的 `MAX_CALL_DEPTH=64` ✓，
+    // 深容器 `repr` 仍按参照报 `RecursionError` ✓ —— 见 `repr_loop_crash_shapes` 的守卫 ✓）。
+    // **默认递归上限提到 160**（round 114）：纯 Python 库（`pprint`）的正常嵌套要几十层 ✓；
+    // 512 MiB 栈足够 160 层 Rust 递归 ✓；深容器 `repr`（200 层）仍会先触发参考口径的
+    // `RecursionError` ✓（`repr_loop_crash_shapes` 守卫 ✓）。`cargo test` 不经过这里 ⇒ 默认 64 ✓。
+    // SAFETY: 单线程启动阶段设环境变量。
+    unsafe {
+        // **外部可覆盖**（round 138 起）：默认 160；调用方可设 `PYAWA_RECURSION_LIMIT` 提高
+        //（512 MiB 执行线程栈足够更高层数；`test_richcmp` 一类的深递归用例需要 ✓）。
+        if std::env::var_os("PYAWA_RECURSION_LIMIT").is_none() {
+            std::env::set_var("PYAWA_RECURSION_LIMIT", "160");
+        }
+        // **主机名**（round 117）：`_socket.gethostname()` 的取值来源（stdlib 不碰文件系统 ✓）；
+        // 只读 `/proc/sys/kernel/hostname`（Linux；失败就给 `localhost` ✓）。
+        if std::env::var_os("PYAWA_HOSTNAME").is_none() {
+            let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| "localhost".to_owned());
+            std::env::set_var("PYAWA_HOSTNAME", hostname);
+        }
+    }
+    let builder = std::thread::Builder::new().stack_size(512 * 1024 * 1024);
+    if let Ok(handle) = builder.spawn(real_main) {
+        let _ = handle.join();
+        return;
+    }
+    real_main();
+}
+
+fn real_main() {
+    install_segv_trace();
     let mut arguments = std::env::args_os().skip(1);
-    let Some(path) = arguments.next() else {
+    let Some(first) = arguments.next() else {
         usage("缺文件参数");
         std::process::exit(EXIT_HOST);
     };
-    let path = std::path::PathBuf::from(path);
-    let script_arguments: Vec<std::ffi::OsString> = arguments.collect();
-    let mode = match path.extension().and_then(|extension| extension.to_str()) {
-        Some("pyawa") => "pyawa",
-        Some("py") => "python",
-        _ => {
-            usage("只接 `.py`／`.pyawa`");
+    // **`pyawa check`**（LSP 线①；PLAN §10.1）：只编译不执行、批量诊断。
+    if first == std::ffi::OsStr::new("check") {
+        std::process::exit(run_check(arguments));
+    }
+    // **`-c 代码`**（round 111）：`test.support.script_helper.assert_python_ok('-c', code)` 一族
+    // （`test_list.test_deopt_from_append_list` ✓）与 `-c` 冒烟都需要 ✓。`-c` 的代码**不落盘**
+    // （不写 `.pyac` 产物 ✓），路径名照参照给 `-c`（`sys.argv[0]` 由上层按 `-c` 约定处理 ✓）。
+    let from_code = first == std::ffi::OsStr::new("-c");
+    let (path, inline_source) = if from_code {
+        let Some(code) = arguments.next() else {
+            usage("-c 缺代码参数");
             std::process::exit(EXIT_HOST);
+        };
+        let code_bytes = {
+            use std::os::unix::ffi::OsStrExt;
+            code.as_bytes().to_vec()
+        };
+        let text = String::from_utf8_lossy(&code_bytes).into_owned();
+        (std::path::PathBuf::from("<string>"), Some(text))
+    } else {
+        (std::path::PathBuf::from(first), None)
+    };
+    let script_arguments: Vec<std::ffi::OsString> = arguments.collect();
+    let mode = if from_code {
+        "python"
+    } else {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("pyawa") => "pyawa",
+            Some("py") => "python",
+            _ => {
+                usage("只接 `.py`／`.pyawa`");
+                std::process::exit(EXIT_HOST);
+            }
         }
     };
 
@@ -135,12 +215,15 @@ fn main() {
     // （`SPEC-capabilities.md` §4 表第二项；`CP-38`；分类"可异步化" ✓）。
     let net_provider = PosixNet::new();
     let net_vtable = net_provider.vtable();
-    let source = match read_through_fs(&vtable, &path) {
-        Ok(source) => source,
-        Err(message) => {
-            eprintln!("pyawa: {message}");
-            std::process::exit(EXIT_HOST);
-        }
+    let source = match inline_source {
+        Some(source) => source,
+        None => match read_through_fs(&vtable, &path) {
+            Ok(source) => source,
+            Err(message) => {
+                eprintln!("pyawa: {message}");
+                std::process::exit(EXIT_HOST);
+            }
+        },
     };
 
     // **`pa_host.capabilities` 只传空**：那个指针**不带长度** ✗ ⇒ 宿主若放一个短数组，
@@ -157,6 +240,18 @@ fn main() {
     if created != status::PA_OK {
         eprintln!("pyawa: 建实例失败（状态 {created}）");
         std::process::exit(EXIT_HOST);
+    }
+
+    // **每实例内存配额**（OM-3 扩；宿主接缝示例）：`PYAWA_MEMORY_LIMIT` 以字节为单位，可带
+    // K/M/G 后缀（如 `64M`）。沙箱宿主用它把"一个脚本把宿主 RSS 撑大"变成脚本内可捕获的
+    // MemoryError ✓（正式宿主应直接调 ABI `pa_set_memory_limit`，`AB-65`）。
+    if let Some(limit) = memory_limit_from_env() {
+        // SAFETY: `state` 刚建成功、尚未销毁。
+        let quota_status = unsafe { pa_set_memory_limit(state, limit) };
+        if quota_status != status::PA_OK {
+            eprintln!("pyawa: 设置内存配额失败（状态 {quota_status}）");
+            std::process::exit(EXIT_HOST);
+        }
     }
 
     // 能力注册（`AB-32`／`AB-33`／`AB-34`：按域注册、必须带异步分类 ✓）
@@ -347,7 +442,27 @@ fn main() {
         pyac::Staleness::Fresh => std::fs::read(&artifact).ok(),
         _ => None,
     };
-    let product = fresh.or_else(&compile_and_write);
+    // `-c`：**不写也不读产物** ✓（`<string>` 没有落盘位置 ✓）。
+    let product = if from_code {
+        None
+    } else {
+        fresh.or_else(&compile_and_write)
+    };
+    // **`co_filename` 的来源**（round 176）：参照里 CLI 脚本的 `f_code.co_filename` 就是**脚本路径** ✓
+    // （`test_frame.ReprTest.test_repr` 逐字断言 ✓）；本层先前全写死 `<pyawa-test>` ✗。
+    // SAFETY: `program_name` 在本栈上活着；`state` 由 `pa_create` 交回 ✓。
+    unsafe {
+        pa_set_program_filename(
+            state,
+            program_name.as_ptr().cast::<c_char>(),
+            program_name.len() as isize,
+        );
+    }
+    // **`linecache` 注册运行脚本源码**（round 189）：试过（把源码按占位名 `<pyawa-test>` 注册进
+    // `linecache.cache`）——`traceback.extract_tb(...).line` 立刻有文本 ✓，但 `inspect` 也会因此
+    // **找得到源码** ⇒ 走 `ast.parse`（本层只接线签名面）⇒ **大片 unimplemented abort** ✗
+    // （与 round 178 的嵌套真文件名同一个雷 ✓）。**本轮撤回**：先补 AST 解析再开这一步 ✓
+    // （已登记进 NEXT；`test_exception_locations` 两档要 `f.line`，所以也压在 AST 上 ✓）。
     let run_bytecode = |bytes: &Vec<u8>| unsafe {
         // SAFETY: 产物字节在本栈上活着；`state` 由 `pa_create` 交回 ✓。
         pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)
@@ -493,8 +608,165 @@ fn absolute_script_path(path: &std::path::Path) -> std::path::PathBuf {
     normalized
 }
 
+/// **`pyawa check [--format=json] <文件…>`**（PLAN §10.1；LSP 线①）：**只编译不执行**。
+///
+/// 范围：批量文件；批量诊断（不遇首错即止）；`.py` 只出语法类（`TS-26`／`MS-19`）、
+/// `.pyawa` 出语法＋类型；`--format=json` 供 LSP ② 当数据源；退出码 **0＝无诊断／1＝有诊断／
+/// 2＝用法或内部错误**。禁区：不对 `.py` 做类型诊断、不执行任何代码、不做 autofix、不实现 LSP 协议。
+fn run_check(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> i32 {
+    let mut json = false;
+    let mut files: Vec<std::ffi::OsString> = Vec::new();
+    let mut end_of_flags = false;
+    while let Some(argument) = arguments.next() {
+        if !end_of_flags {
+            if argument == std::ffi::OsStr::new("--") {
+                end_of_flags = true;
+                continue;
+            }
+            let text = argument.to_string_lossy();
+            if let Some(value) = text.strip_prefix("--format=") {
+                match value {
+                    "json" => json = true,
+                    "text" => json = false,
+                    _ => {
+                        usage(&format!("check 的 --format 只接受 json／text（收到 {value}）"));
+                        return EXIT_HOST;
+                    }
+                }
+                continue;
+            }
+            if text == "--format" {
+                let Some(value) = arguments.next() else {
+                    usage("check 的 --format 缺值");
+                    return EXIT_HOST;
+                };
+                match value.to_string_lossy().as_ref() {
+                    "json" => json = true,
+                    "text" => json = false,
+                    other => {
+                        usage(&format!("check 的 --format 只接受 json／text（收到 {other}）"));
+                        return EXIT_HOST;
+                    }
+                }
+                continue;
+            }
+            if text.starts_with('-') {
+                usage(&format!("check 不认识的选项：{text}"));
+                return EXIT_HOST;
+            }
+        }
+        files.push(argument);
+    }
+    if files.is_empty() {
+        usage("check 至少要给一个文件");
+        return EXIT_HOST;
+    }
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    for file in files {
+        let path = std::path::PathBuf::from(&file);
+        let display = path.to_string_lossy().into_owned();
+        let mode = match path.extension().and_then(|extension| extension.to_str()) {
+            Some("pyawa") => Mode::Extension,
+            Some("py") => Mode::PurePython,
+            _ => {
+                usage(&format!("check 只接 .py／.pyawa（收到 {display}）"));
+                return EXIT_HOST;
+            }
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("pyawa check: 读不到 {display}：{error}");
+                return EXIT_HOST;
+            }
+        };
+        let source = match String::from_utf8(bytes) {
+            Ok(source) => source,
+            Err(_) => {
+                diagnostics.push(Diagnostic {
+                    file: display,
+                    line: 0,
+                    col: 0,
+                    code: "syntax".to_owned(),
+                    severity: "error".to_owned(),
+                    message: "源文件不是合法 UTF-8".to_owned(),
+                });
+                continue;
+            }
+        };
+        diagnostics.extend(check_source(&source, &display, mode));
+    }
+    if json {
+        println!("{}", diagnostics_to_json(&diagnostics));
+    } else {
+        for diagnostic in &diagnostics {
+            println!(
+                "{}:{}:{}: {}: {} [{}]",
+                diagnostic.file,
+                diagnostic.line,
+                diagnostic.col,
+                diagnostic.severity,
+                diagnostic.message,
+                diagnostic.code
+            );
+        }
+    }
+    if diagnostics.is_empty() {
+        0
+    } else {
+        EXIT_SCRIPT
+    }
+}
+
+/// 把诊断列表手写序列化成 JSON 数组（**不引序列化库**：`CX-27` 只许 workspace 内部依赖）。
+///
+/// 字段固定为 `file`／`line`／`col`／`code`／`severity`／`message`（PLAN §10.1 ③）。
+fn diagnostics_to_json(diagnostics: &[Diagnostic]) -> String {
+    let mut out = String::from("[");
+    for (index, diagnostic) in diagnostics.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"file\":");
+        json_string(&mut out, &diagnostic.file);
+        out.push_str(",\"line\":");
+        out.push_str(&diagnostic.line.to_string());
+        out.push_str(",\"col\":");
+        out.push_str(&diagnostic.col.to_string());
+        out.push_str(",\"code\":");
+        json_string(&mut out, &diagnostic.code);
+        out.push_str(",\"severity\":");
+        json_string(&mut out, &diagnostic.severity);
+        out.push_str(",\"message\":");
+        json_string(&mut out, &diagnostic.message);
+        out.push('}');
+    }
+    out.push(']');
+    out
+}
+
+/// JSON 字符串转义（`"`／`\`／控制字符；非 ASCII 原样输出，LSP 侧是 UTF-8 ✓）。
+fn json_string(out: &mut String, text: &str) {
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other if (other as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", other as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+}
+
 fn usage(reason: &str) {
     eprintln!("pyawa: {reason}");
     eprintln!("用法：pyawa <文件.py|文件.pyawa> [参数…]");
+    eprintln!("      pyawa check [--format=json] <文件…>   # 只编译不执行；0=无诊断 1=有诊断 2=用法/内部错误");
     eprintln!("范围：跑单文件／给退出码／报未捕获异常；**本版还不能 `print`**（`CM-26`：`print` 须走 `sys.stdout → _io → fs`）。");
 }

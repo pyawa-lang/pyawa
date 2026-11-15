@@ -6,24 +6,45 @@
 
 
 
-pub(crate) fn message_too_many(name: &str, accepted: usize, required: usize, given: usize) -> String {
+pub(crate) fn message_too_many(
+    name: &str,
+    accepted: usize,
+    required: usize,
+    given: usize,
+    keyword_only_given: usize,
+) -> String {
     // 动词也随**实参个数**变：`… but 1 was given`（实测；夹具 `fixture-argbind-3.14.json`
     // 的 `none_positional` 用例抓出来的）。名词则随**形参个数**变（`1 positional argument`）。
+    //
+    // **带关键字实参那一档**（round 63，`test_extcall` 实测）：多出来的位置实参之外还给了
+    // `n` 个仅关键字实参时，参照的尾巴换成
+    // `but 1 positional argument (and 1 keyword-only argument) were given` ✓
+    // （名词随**各自个数**变，动词固定 `were` ✓；尾巴里的 `positional` 一词也会重新出现 ✓）。
     let verb = if given == 1 { "was" } else { "were" };
     let noun = if accepted == 1 {
         "argument"
     } else {
         "arguments"
     };
-    if required < accepted {
-        format!(
-            "{name}() takes from {required} to {accepted} positional {noun} but {given} {verb} given"
-        )
+    let expected = if required < accepted {
+        format!("takes from {required} to {accepted} positional {noun}")
     } else if accepted == 1 {
-        format!("{name}() takes 1 positional argument but {given} {verb} given")
+        "takes 1 positional argument".to_owned()
     } else {
-        format!("{name}() takes {accepted} positional {noun} but {given} {verb} given")
+        format!("takes {accepted} positional {noun}")
+    };
+    if keyword_only_given > 0 {
+        let positional_noun = if given == 1 { "argument" } else { "arguments" };
+        let keyword_noun = if keyword_only_given == 1 {
+            "argument"
+        } else {
+            "arguments"
+        };
+        return format!(
+            "{name}() {expected} but {given} positional {positional_noun} (and {keyword_only_given} keyword-only {keyword_noun}) were given"
+        );
     }
+    format!("{name}() {expected} but {given} {verb} given")
 }
 
 pub(crate) fn message_missing(name: &str, missing: &[String], keyword_only: bool) -> String {

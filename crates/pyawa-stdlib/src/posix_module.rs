@@ -11,7 +11,8 @@ use core::ptr::NonNull;
 use pyawa_capabilities::fs::open_flag;
 use pyawa_core::{AttributeObject, Header, Instance};
 
-use crate::io_module::{fs_error, fs_error_with_display};
+use std::io::IsTerminal;
+use crate::io_module::{fs_error_with_display};
 
 
 /// **机器错误 ⇒ `OSError` 子类**（`CM-19`／`CM-20`：按 **errno 名**查表 ✓）。
@@ -97,6 +98,37 @@ fn exit_native(
 /// `'//a/../..'` ⇒ `'//'` ✓、`'x/../../y'` ⇒ `'../y'` ✓。
 ///
 /// **如实说** ✗：只接 `str` ✓。
+/// **`normpath` 的字节版**（round 95）：与上面 `str` 版同一口径（`splitroot` ＋ 逐段折叠 ✓）。
+fn normpath_bytes(path: &[u8]) -> Vec<u8> {
+    if path.is_empty() {
+        return b".".to_vec();
+    }
+    let (initial_slashes, rest): (&[u8], &[u8]) = if !path.starts_with(b"/") {
+        (b"", path)
+    } else if path.get(1) != Some(&b'/') || path.get(2) == Some(&b'/') {
+        (b"/", &path[1..])
+    } else {
+        (b"//", &path[2..])
+    };
+    let mut folded: Vec<&[u8]> = Vec::new();
+    for component in rest.split(|byte| *byte == b'/') {
+        if component.is_empty() || component == b"." {
+            continue;
+        }
+        let keep = component != b".."
+            || (initial_slashes.is_empty() && folded.is_empty())
+            || folded.last().copied() == Some(b"..");
+        if keep {
+            folded.push(component);
+        } else if !folded.is_empty() {
+            folded.pop();
+        }
+    }
+    let mut out = initial_slashes.to_vec();
+    out.extend(folded.join(&b'/'));
+    out
+}
+
 fn path_normpath_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -106,42 +138,28 @@ fn path_normpath_native(
     let Some(value) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "_path_normpath() 要 1 个实参"));
     };
-    let Some(path) = instance.text_of(value) else {
+    // **`bytes` 形态也收**（round 95）：`Lib/posixpath.py` 的 `abspath` 对 bytes 路径直接调
+    // `_path_normpath(p)` ✓ —— 先前只认 str ⇒ 官方 `test_tempfile` 的
+    // `TestMkdtemp.test_basic_with_bytes_names` 报 `TypeError: _path_normpath() 的参数要是 str` ✗。
+    if let Some(raw) = instance.bytes_value(value) {
+        let raw = raw.to_vec();
+        let folded = normpath_bytes(&raw);
+        return Ok(instance.new_bytes(&folded));
+    }
+    // **`str`（含孤立代理的 WTF-8 形态）**（round 107 真 bug 修 ✗）：`text_of` 对含孤立代理的串给
+    // `None` ✗ ⇒ `os.path.abspath("…\udcff…")`／`realpath` 直接 `TypeError` ✗（官方
+    // `test_unicode_file` 的 `TESTFN_UNENCODABLE` 就含 `\udcff` ✓）。改成按 **WTF-8 字节**折叠再
+    // 还原 ✓（与 `concat` 同一手法 ✓）。
+    let Some(raw) = instance.wtf8_of(value) else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "_path_normpath() 的参数要是 str（**bytes 随后补** ✗）",
+            "_path_normpath() 的参数要是 str 或 bytes",
         ));
     };
-    if path.is_empty() {
-        return Ok(instance.new_str("."));
-    }
-    // `splitroot` 那三步 ✓（与 `_path_splitroot_ex` **同一口径** ✓ —— 规格同源 ✓）。
-    let (initial_slashes, rest) = if !path.starts_with('/') {
-        ("", path)
-    } else if path.as_bytes().get(1) != Some(&b'/') || path.as_bytes().get(2) == Some(&b'/') {
-        ("/", &path[1..])
-    } else {
-        ("//", &path[2..])
-    };
-    let mut folded: Vec<&str> = Vec::new();
-    for component in rest.split('/') {
-        if component.is_empty() || component == "." {
-            continue;
-        }
-        let keep = component != ".."
-            || (initial_slashes.is_empty() && folded.is_empty())
-            || folded.last() == Some(&"..");
-        if keep {
-            folded.push(component);
-        } else if !folded.is_empty() {
-            folded.pop();
-        }
-    }
-    let mut text = format!("{initial_slashes}{}", folded.join("/"));
-    if text.is_empty() {
-        text = ".".to_owned();
-    }
-    Ok(instance.new_str(&text))
+    let folded = normpath_bytes(raw);
+    return Ok(instance
+        .new_str_wtf8(&folded)
+        .expect("折叠后的 WTF-8 字节仍合法"));
 }
 
 /// **`posix._path_splitroot_ex(p)`** ✓（第 195 轮）：`Lib/posixpath.py:139` 要它 ✓
@@ -228,6 +246,18 @@ pub(crate) fn path_argument(
     if let Some(raw) = instance.bytes_value(value) {
         let display = format!("b'{}'", String::from_utf8_lossy(raw));
         return Ok(PathArgument { bytes: raw.to_vec(), display, want_bytes: true });
+    }
+    // **`os.PathLike` 协议**（round 93，PEP 519）：`__fspath__()` 返回 `str`／`bytes` ⇒ 按它的结果走 ✓。
+    // 参照里所有路径参数都吃 PathLike（`open`／`stat`／`scandir` 一族 ✓）；先前只认 str／bytes
+    // ⇒ `TypeError: open: path should be string, bytes or os.PathLike, not FakePath` ✗
+    // （官方 `test_mimetypes` 的 `FakePath` 夹具当场踩到 ✓；`pathlib` 一族同样靠它 ✓）。
+    if let Ok(Some(fspath)) = instance.attribute_optional_of(value, "__fspath__") {
+        let outcome = pyawa_core::executor::call::call_value(instance, fspath, &[], &[]);
+        instance.release(fspath);
+        let result = outcome?;
+        let converted = path_argument(instance, result, function);
+        instance.release(result);
+        return converted;
     }
     let name = instance.type_name(instance.type_of(value));
     Err(instance.raise_builtin_error(
@@ -443,10 +473,57 @@ fn write_native(
     };
     let handle = instance.int_value(handle_value).unwrap_or(-1) as u64;
     // **安全访问器** ✓（本 crate **禁 `unsafe`** ✓ ⇒ 设计规矩 ✓）。
-    let Some(data) = instance.bytes_value(data_value) else {
+    // **`memoryview` 也收**（round 91）：`Lib/_pyio.py` 的 `BufferedWriter` 在 `flush` 里
+    // 把缓冲当 **`memoryview`** 传给 raw 的 `write` ⇒ 先前只认 `bytes` ⇒
+    // `test_bufio` 的 `PyBufferSizeTest` 两条 `TypeError: write() 的数据要是 bytes` ✗。
+    // 取法：走 `memoryview` 自己的 `tobytes` 方法（与用户语义同一处真相 ✓），取回 bytes 后即还。
+    let owned: Option<Vec<u8>> = if let Some(data) = instance.bytes_value(data_value) {
+        Some(data.to_vec())
+    } else if instance.type_name(instance.type_of(data_value)) == "bytearray" {
+        // `_pyio` 的缓冲在 flush 时可能是 `bytearray`／`memoryview` ✓（参照的 `os.write` 收任意缓冲协议 ✓）。
+        let bytes_type = instance.type_named("bytes").expect("bytes 已登记");
+        match pyawa_core::executor::call::call_value(
+            instance,
+            bytes_type.cast(),
+            &[data_value],
+            &[],
+        ) {
+            Ok(converted) => {
+                let value = instance.bytes_value(converted).map(|slice| slice.to_vec());
+                instance.release(converted);
+                value
+            }
+            Err(_) => None,
+        }
+    } else if instance.type_name(instance.type_of(data_value)) == "memoryview" {
+        // 走 memoryview 自己的 `tobytes`（用户语义一处真相 ✓；先取属性再 `call_value`，
+        // 与 `attribute_optional_of` 的**新引用**契约一致 ✓）。
+        match instance
+            .attribute_optional_of(data_value, "tobytes")
+            .ok()
+            .flatten()
+        {
+            Some(method) => {
+                let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+                instance.release(method);
+                match outcome {
+                    Ok(result) => {
+                        let value = instance.bytes_value(result).map(|slice| slice.to_vec());
+                        instance.release(result);
+                        value
+                    }
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let Some(data) = owned else {
         return Err(instance.raise_builtin_error("TypeError", "write() 的数据要是 bytes"));
     };
-    match instance.fs_write(handle, data) {
+    match instance.fs_write(handle, &data) {
         Ok(written) => Ok(instance.new_int(written as i64)),
         Err(_) => Err(instance.raise_builtin_error("OSError", "write：写不了")),
     }
@@ -479,24 +556,12 @@ fn stat_result_type(instance: &Instance) -> NonNull<pyawa_core::TypeObject> {
 ///
 /// **如实说** ✗：`st_uid` 一族仍未接；`st_dev`／`st_ino` 仍来自 `FileInfo` 的既有值（provider 目前给
 /// 0，属 `CP-23` 的保留面，不在本格）。
-fn stat_native(
+/// 组装一个 `os.stat_result`（`stat`／`fstat` 共用 ✓，round 91 抽出）。
+pub(crate) fn build_stat_result(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    info: pyawa_capabilities::fs::FileInfo,
+    times: Option<pyawa_capabilities::fs::FileTimes>,
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    let Some(value) = args.first().copied() else {
-        return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
-    };
-    let path = path_argument(instance, value, "stat")?;
-    let info = match instance.fs_stat(&path.bytes) {
-        Ok(info) => info,
-        Err(error) => {
-            return Err(fs_error_with_display(instance, error, &path.display));
-        }
-    };
-    // **时间戳是追加槽**：取不到（旧宿主／槽未实现）就不补名 —— 不能把"读不到"编成 0 ✗。
-    let times = instance.fs_stat_times(&path.bytes).ok();
     // **先分配结果对象，再往它自己的实例属性上写**（task-19 的共享类型 bug 修 ✗）。
     let result_type = stat_result_type(instance);
     let result = instance
@@ -510,11 +575,36 @@ fn stat_native(
         ("st_size", info.size as i64),
         ("st_dev", info.dev as i64),
         ("st_ino", info.ino as i64),
+        // **补齐参照 `stat_result` 的必有名**（round 95）：`shutil.gettarinfo` 读
+        // `st_uid`／`st_gid`／`st_nlink`／`st_mtime` ✗ —— 缺名 ⇒ 官方 `test_shutil` 的归档用例
+        // 当场 `AttributeError: 'os.stat_result' object has no attribute 'st_uid'` ✗。
+        // 值如实：`nlink` 本层能力面取不到 ⇒ 1（普通文件/目录的常见真值 ✓）；`uid`/`gid` 取不到 ⇒ 0
+        // （**如实偏差** ✗：`CP-23` 的属主面未接线 ✓）。
+        ("st_nlink", 1),
+        ("st_uid", 0),
+        ("st_gid", 0),
     ] {
         let object = instance.new_int(number);
         let outcome = instance.set_attribute_value(result, field, object);
         instance.release(object);
         let _ = outcome;
+    }
+    if times.is_none() {
+        // 取不到时间戳时也把**必有名**补成 0 ✓（参照 `stat_result` 六项时间戳恒在 ✓；不补会让
+        // `getattr(st, 'st_mtime', 0)` 之外的直接读法 `AttributeError` ✗）。
+        for field in [
+            "st_atime",
+            "st_mtime",
+            "st_ctime",
+            "st_atime_ns",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        ] {
+            let object = instance.new_int(0);
+            let outcome = instance.set_attribute_value(result, field, object);
+            instance.release(object);
+            let _ = outcome;
+        }
     }
     if let Some(times) = times {
         // `st_*time`：**浮点秒**（参照实测就是 `ns / 1e9` 同一个浮点值）。
@@ -541,6 +631,159 @@ fn stat_native(
         }
     }
     Ok(result)
+}
+
+/// **`os.lstat(path)`**（round 94，真实现 ✓）：不跟随最后一段的符号链接 ✓。
+///
+/// 本层 `fs` 能力**没有** `lstat` 槽 ⇒ 用 `readlink` 探"这段是不是链接"：
+/// - `readlink` 成功 ⇒ 返回**链接本身**的 `stat_result`（`st_mode = S_IFLNK|0o777`、
+///   `st_size = 目标长度` ✓；时间戳取不到就给 0 ✓）——**断链也能 stat** ✓（这正是
+///   `os.path.lexists` 要的：官方 `test_glob.test_glob_broken_symlinks` 用断链做夹具 ✗）；
+/// - `readlink` 不是链接（`EINVAL` 等）⇒ 退回 `stat`（跟随叶子）✓。
+///
+/// 先前 `os.lstat` 直接**别名到 `stat_native`** ✗ ⇒ 断链报 `ENOENT` ⇒ `lexists` False ⇒
+/// glob 漏掉断链 ✗。
+fn lstat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
+    };
+    // **`os.stat(fd)` 形态**（round 97，参照支持 ✓）：整数 ⇒ 直接 `fstat` ✓。先前一律当路径 ⇒
+    // `TypeError: stat: path should be string, bytes or os.PathLike, not int` ✗（`test_tempfile` ✓）。
+    if let Some(fd) = instance.int_value(value) {
+        let info = match instance.fs_fstat(fd.max(0) as u64) {
+            Ok(info) => info,
+            Err(error) => return Err(fs_error_with_display(instance, error, "")),
+        };
+        return build_stat_result(instance, info, None);
+    }
+    let path = path_argument(instance, value, "stat")?;
+    lstat_result(instance, &path)
+}
+
+/// **`lstat` 的结果**（round 109 抽出，供 `stat(follow_symlinks=False)` 共用 ✓）：先 `readlink`
+/// （叶子不跟随 ⇒ 断链也能给 `S_IFLNK` ✓），否则普通 `fs_stat` ✓。
+fn lstat_result(
+    instance: &Instance,
+    path: &PathArgument,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    // **不要先 `resolve_path`**（round 94 真 bug 修 ✗）：那个解析会**跟随最后一段** ⇒ 断链在
+    // readlink 之前就报 `ENOENT` ✗（`os.path.lexists` 对断链要 True ✓）。两个能力各自解析：
+    // `fs_readlink` 走 `resolve_path_parent`（不动叶子 ✓）、`fs_stat` 才跟随叶子 ✓。
+    if let Ok(target) = instance.fs_readlink(&path.bytes) {
+        let info = pyawa_capabilities::fs::FileInfo {
+            size: target.len() as u64,
+            // `S_IFLNK | 0o777`（Linux 的链接权限位）✓
+            mode: 0o120777,
+            is_dir: false,
+            // **真 dev/ino 交给 `fs_stat`**（round 109）：链接自身的能力层拿不到 ⇒ 跟随一次取
+            // （只用于 `samefile` 判据，`mode` 仍是链接 ✓）。
+            dev: instance.fs_stat(&path.bytes).map(|info| info.dev).unwrap_or(0),
+            ino: instance.fs_stat(&path.bytes).map(|info| info.ino).unwrap_or(0),
+        };
+        return build_stat_result(instance, info, None);
+    }
+    let info = match instance.fs_stat(&path.bytes) {
+        Ok(info) => info,
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    };
+    let times = instance.fs_stat_times(&path.bytes).ok();
+    build_stat_result(instance, info, times)
+}
+
+/// **`os.fstat(fd)`**（round 91）：`os.stat_result` 的 fd 版本 ✓（`test_bufio` 的
+/// `PyBufferSizeTest.__init__` 用 `os.fstat(f.fileno())` 钉住）。走 `fs` 能力的 `fstat` 槽
+/// （`CP-31` 的 `fd → provider 句柄` 解析在 `Instance::fs_fstat` 里 ✓）。
+fn fstat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fstat() takes no keyword arguments",
+        ));
+    }
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fstat() takes exactly one argument (0 given)",
+        ));
+    };
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("fstat() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let Some(fd) = instance.int_value(value) else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("an integer is required (got type {name})"),
+        ));
+    };
+    if fd < 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "file descriptor cannot be a negative integer",
+        ));
+    }
+    let info = match instance.fs_fstat(fd as u64) {
+        Ok(info) => info,
+        Err(error) => return Err(fs_error_with_display(instance, error, "")),
+    };
+    build_stat_result(instance, info, None)
+}
+
+fn stat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
+    };
+    let path = path_argument(instance, value, "stat")?;
+    // **`follow_symlinks=False` 真生效**（round 109）：`shutil.copystat(symlink, …, follow_symlinks=False)`
+    // 要的是**链接自身**的 `st_mode`／`st_mtime` ✓ —— 先前整条 kwargs 被忽略 ✗ ⇒ 拿目标的信息 ⇒
+    // 后续断言对不上 ✗（官方 `test_shutil` 的 `test_copy2_symlinks`／`test_copystat_symlinks` ✓）。
+    let mut follow = true;
+    for (key, kwarg) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            continue;
+        };
+        match name {
+            "follow_symlinks" => follow = instance.truth_of(*kwarg),
+            // `dir_fd` 本层不支持（参照对非相对路径也容忍 ✓）⇒ 只忽略，不编造语义 ✓。
+            "dir_fd" => {}
+            _ => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("stat() got an unexpected keyword argument '{name}'"),
+                ));
+            }
+        }
+    }
+    if !follow {
+        return lstat_result(instance, &path);
+    }
+    let info = match instance.fs_stat(&path.bytes) {
+        Ok(info) => info,
+        Err(error) => {
+            return Err(fs_error_with_display(instance, error, &path.display));
+        }
+    };
+    // **时间戳是追加槽**：取不到（旧宿主／槽未实现）就不补名 —— 不能把"读不到"编成 0 ✗。
+    let times = instance.fs_stat_times(&path.bytes).ok();
+    build_stat_result(instance, info, times)
 }
 
 /// **`os.terminal_size` 的每实例唯一类型对象**（task-8）：与 [`stat_result_type`] 同一口径
@@ -723,6 +966,681 @@ fn get_terminal_size_native(
     ))
 }
 
+/// **`posix.isatty(fd)`**（round 92）：标准流 0／1／2 走宿主 `IsTerminal` ✓；能力表里的
+/// fd（文件／管道／socket）一律 `False` ✓（参照里它们也几乎不会是 tty ✓）。
+///
+/// 动因：`Lib/_colorize.py` 的 `can_colorize()` 与 `test.support` 用 `os.isatty` ✓ —— 官方
+/// `test__colorize` 直接 `mock.patch("os.isatty")` ✓，先前的 `os` 模块没有这个属性 ⇒
+/// `AttributeError: <module …> does not have the attribute 'isatty'` ✗。
+fn isatty_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(fd) = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_value(value))
+    else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "isatty() takes exactly one argument",
+        ));
+    };
+    let answer = match fd {
+        0 => std::io::stdin().is_terminal(),
+        1 => std::io::stdout().is_terminal(),
+        2 => std::io::stderr().is_terminal(),
+        _ => false,
+    };
+    Ok(instance.new_bool(answer))
+}
+
+// ============================================================================
+// `os.scandir`（round 93）：`shutil.rmtree`／`glob`／`tempfile` 一族都要它。
+//
+// 本层没有 `os.DirEntry`／`os.ScandirIterator` 的 C 载荷 ⇒ 用 **`AttributeObject` ＋
+// 每实例类型字典里挂原生方法** 实现（与 `os.stat_result` 的每实例类型同一手法 ✓）：
+// 数据字段放**实例字典**（`name`／`path` 等直接可读 ✓），方法挂**类型字典**
+// （特殊方法 `__iter__`／`__next__`／`__enter__`／`__exit__` 必须按类型找 ✓）。
+// 如实记 ✗：`is_dir()`／`is_file()` 不收 `follow_symlinks` 语义（本层 `fs` 的 `stat` 跟随叶子 ✓），
+// 只接受该关键字以免 `TypeError` ✓。
+// ============================================================================
+
+/// 给 `AttributeObject` 写一个**借用语义**的属性（值的新引用用完即还 ✓）。
+fn set_data_attribute(instance: &Instance, object: NonNull<Header>, name: &str, value: NonNull<Header>) {
+    let _ = instance.set_attribute_value(object, name, value);
+    instance.release(value);
+}
+
+/// 读一个属性（**新引用**；没有就 `None` ✓）。
+fn get_data_attribute(instance: &Instance, object: NonNull<Header>, name: &str) -> Option<NonNull<Header>> {
+    instance.attribute_optional_of(object, name).ok().flatten()
+}
+
+/// 取"绑定 self"：绑定调用给 `bound` ✓，**非绑定**调用（`type(e).__fspath__(e)` ——
+/// `Lib/os.py` 的 `fspath` 正是这么调的 ✓）把**第一个位置实参**当 self ✓。
+fn native_self(bound: Option<NonNull<Header>>, args: &[NonNull<Header>]) -> Option<NonNull<Header>> {
+    bound.or_else(|| args.first().copied())
+}
+
+/// 每实例的 `os.DirEntry`／`os.ScandirIterator` 类型（缺失就建，并把方法挂进**类型字典** ✓）。
+fn scandir_type(instance: &Instance, type_name: &'static str) -> NonNull<pyawa_core::TypeObject> {
+    if let Some(existing) = instance.type_named(type_name) {
+        return existing;
+    }
+    let ty = instance.new_attribute_type(type_name);
+    let methods: &[(&str, pyawa_core::NativeFn)] = if type_name == "os.DirEntry" {
+        &[
+            ("is_dir", dir_entry_is_dir as pyawa_core::NativeFn),
+            ("is_file", dir_entry_is_file as pyawa_core::NativeFn),
+            ("stat", dir_entry_stat as pyawa_core::NativeFn),
+            ("inode", dir_entry_inode as pyawa_core::NativeFn),
+            ("__fspath__", dir_entry_fspath as pyawa_core::NativeFn),
+            // **`DirEntry.is_junction()`**（round 93）：POSIX 没有 Windows junction ⇒ 恒 `False` ✓
+            // （`Lib/shutil.py` 的 `rmtree` 直接调它 ✗ ⇒ 先前 `AttributeError` 让 `shutil.rmtree` 断 ✓）。
+            ("is_junction", dir_entry_is_junction as pyawa_core::NativeFn),
+            // **`DirEntry.is_symlink()`**（round 93）：`os.walk` 靠它决定"不跟进链接目录" ✓
+            // （`shutil.rmtree` 经 `os.walk` 走到它 ✗ ⇒ 先前 `AttributeError` 让 rmtree 一个子项都不删 ✗）。
+            ("is_symlink", dir_entry_is_symlink as pyawa_core::NativeFn),
+        ]
+    } else {
+        &[
+            ("__iter__", scandir_iter_native as pyawa_core::NativeFn),
+            ("__next__", scandir_next_native as pyawa_core::NativeFn),
+            ("__enter__", scandir_iter_native as pyawa_core::NativeFn),
+            ("__exit__", scandir_exit_native as pyawa_core::NativeFn),
+            ("close", scandir_close_native as pyawa_core::NativeFn),
+        ]
+    };
+    for (name, handler) in methods {
+        let function = crate::builtins_module::make_native(instance, name, *handler);
+        instance.set_type_attribute(ty, name, function);
+    }
+    ty
+}
+
+/// 造一个 `os.DirEntry`（字段：`name`／`path`／`_is_dir`／`_is_file`／`_stat`／`_inode` ✓）。
+fn make_dir_entry(
+    instance: &Instance,
+    name: NonNull<Header>,
+    path: NonNull<Header>,
+    is_dir: bool,
+    is_file: bool,
+    is_symlink: bool,
+    stat: NonNull<Header>,
+    inode: i64,
+) -> NonNull<Header> {
+    let ty = scandir_type(instance, "os.DirEntry");
+    let object = instance
+        .alloc(AttributeObject::new(ty, core::cell::RefCell::new(None)))
+        .into_raw()
+        .cast::<Header>();
+    set_data_attribute(instance, object, "name", name);
+    set_data_attribute(instance, object, "path", path);
+    let dir_value = instance.new_bool(is_dir);
+    set_data_attribute(instance, object, "_is_dir", dir_value);
+    let file_value = instance.new_bool(is_file);
+    set_data_attribute(instance, object, "_is_file", file_value);
+    let link_value = instance.new_bool(is_symlink);
+    set_data_attribute(instance, object, "_is_symlink", link_value);
+    set_data_attribute(instance, object, "_stat", stat);
+    let inode_value = instance.new_int(inode);
+    set_data_attribute(instance, object, "_inode", inode_value);
+    // **不要再还**（round 93 真 bug 修 ✗）：`set_data_attribute` 自己已经把传入的新引用还了 ✓
+    // —— 先前这里又 `release(name)`／`release(path)`／`release(stat)` ⇒ **双放** ⇒
+    // `entry.name` 读到被复用的内存（实测拿到 `<built-in function __next__>` 一类垃圾 ✗）。
+    object
+}
+
+/// 解析 `DirEntry.is_dir(follow_symlinks=…)` 的"跟不跟链接"（两个实参位置形式都收 ✓）。
+fn entry_follow_symlinks(args: &[NonNull<Header>], kwargs: &[(NonNull<Header>, NonNull<Header>)], instance: &Instance) -> bool {
+    for (key, value) in kwargs {
+        if instance.text_of(*key) == Some("follow_symlinks") {
+            return instance.truth_of(*value);
+        }
+    }
+    match args.first() {
+        Some(value) => instance.truth_of(*value),
+        None => true,
+    }
+}
+
+/// `DirEntry.is_dir(follow_symlinks=True)`（参数只为兼容：本层 `fs_stat` 跟随叶子 ✓）。
+fn dir_entry_is_dir(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "is_dir() 缺少 self"));
+    };
+    // **`follow_symlinks=False`**（round 93）：符号链接本身**不是**目录 ✓ —— `os.walk` 的
+    // `os._walk_symlinks_as_files` 模式直接 `entry.is_dir(follow_symlinks=False)` ✓；先前一律
+    // 按 `fs_stat`（跟随叶子）给 True ⇒ `shutil.rmtree` 把链接当目录递归 ⇒ `NotADirectoryError` ✗。
+    let follow = entry_follow_symlinks(_args, _kwargs, instance);
+    let Some(value) = get_data_attribute(instance, this, "_is_dir") else {
+        return Err(instance.raise_builtin_error("AttributeError", "_is_dir"));
+    };
+    let mut answer = instance.truth_of(value);
+    instance.release(value);
+    if answer && !follow {
+        if let Some(link) = get_data_attribute(instance, this, "_is_symlink") {
+            answer = !instance.truth_of(link);
+            instance.release(link);
+        }
+    }
+    Ok(instance.new_bool(answer))
+}
+
+/// `DirEntry.is_file(follow_symlinks=True)`。
+fn dir_entry_is_file(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "is_file() 缺少 self"));
+    };
+    let follow = entry_follow_symlinks(_args, _kwargs, instance);
+    let Some(value) = get_data_attribute(instance, this, "_is_file") else {
+        return Err(instance.raise_builtin_error("AttributeError", "_is_file"));
+    };
+    let mut answer = instance.truth_of(value);
+    instance.release(value);
+    if answer && !follow {
+        if let Some(link) = get_data_attribute(instance, this, "_is_symlink") {
+            answer = !instance.truth_of(link);
+            instance.release(link);
+        }
+    }
+    Ok(instance.new_bool(answer))
+}
+
+/// `DirEntry.stat(follow_symlinks=True)`：返回创建时抓到的 `os.stat_result` ✓。
+fn dir_entry_stat(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "stat() 缺少 self"));
+    };
+    get_data_attribute(instance, this, "_stat")
+        .ok_or_else(|| instance.raise_builtin_error("AttributeError", "_stat"))
+}
+
+/// `DirEntry.is_symlink()`（round 93）：创建条目时由 `fs` 的 `readlink` 槽探出 ✓。
+fn dir_entry_is_symlink(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "is_symlink() 缺少 self"));
+    };
+    let Some(value) = get_data_attribute(instance, this, "_is_symlink") else {
+        return Err(instance.raise_builtin_error("AttributeError", "_is_symlink"));
+    };
+    let answer = instance.truth_of(value);
+    instance.release(value);
+    Ok(instance.new_bool(answer))
+}
+
+/// `DirEntry.is_junction()`：POSIX 无 junction 语义 ⇒ 恒 `False` ✓。
+fn dir_entry_is_junction(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    Ok(instance.new_bool(false))
+}
+
+/// `DirEntry.inode()`。
+fn dir_entry_inode(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "inode() 缺少 self"));
+    };
+    get_data_attribute(instance, this, "_inode")
+        .ok_or_else(|| instance.raise_builtin_error("AttributeError", "_inode"))
+}
+
+/// `DirEntry.__fspath__()`：返回 `path` ✓（`os.fspath(entry)` 与 `open(entry)` 靠它 ✓）。
+fn dir_entry_fspath(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "__fspath__() 缺少 self"));
+    };
+    get_data_attribute(instance, this, "path")
+        .ok_or_else(|| instance.raise_builtin_error("AttributeError", "path"))
+}
+
+/// `ScandirIterator.__iter__()`（也作 `__enter__`）：返回自身 ✓。
+fn scandir_iter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "__iter__() 缺少 self"));
+    };
+    Ok(instance.retain(this))
+}
+
+/// `ScandirIterator.__next__()`：按 `_index` 取 `_entries` 的下一个 ✓；取完报 `StopIteration` ✓。
+fn scandir_next_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "__next__() 缺少 self"));
+    };
+    let Some(entries) = get_data_attribute(instance, this, "_entries") else {
+        return Err(instance.raise_builtin_error("StopIteration", ""));
+    };
+    let index = get_data_attribute(instance, this, "_index")
+        .and_then(|value| instance.int_of(value))
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let items = instance.list_items(entries).unwrap_or_default();
+    if index >= items.len() {
+        instance.release(entries);
+        return Err(instance.raise_builtin_error("StopIteration", ""));
+    }
+    let item = items[index];
+    instance.retain(item);
+    instance.release(entries);
+    let next_index = instance.new_int((index + 1) as i64);
+    set_data_attribute(instance, this, "_index", next_index);
+    Ok(item)
+}
+
+/// `ScandirIterator.__exit__()`：与参照一致地"关闭"（本层没有系统句柄 ⇒ 只清 `_entries` ✓）。
+fn scandir_exit_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(this) = native_self(bound, _args) else {
+        return Err(instance.raise_builtin_error("TypeError", "__exit__() 缺少 self"));
+    };
+    let empty = instance.new_list(Vec::new());
+    set_data_attribute(instance, this, "_entries", empty);
+    Ok(instance.new_none())
+}
+
+/// `ScandirIterator.close()`。
+fn scandir_close_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    scandir_exit_native(instance, bound, _args, _kwargs)
+}
+
+/// **`posix.scandir(path='.')`**（round 93）：返回 `os.ScandirIterator` ✓（条目字段与 `DirEntry` 方法
+/// 见上；`name`／`path` 的 `str`／`bytes` 形态跟输入走 ✓）。
+fn scandir_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    for (key, _value) in kwargs {
+        if let Some(name) = instance.text_of(*key) {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("scandir() got an unexpected keyword argument '{name}'"),
+            ));
+        }
+    }
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("scandir() takes at most 1 argument ({} given)", args.len()),
+        ));
+    }
+    let path = match args.first().copied() {
+        Some(value) if instance.type_of(value) != instance.singletons().none_type() => {
+            path_argument(instance, value, "scandir")?
+        }
+        _ => PathArgument { bytes: b".".to_vec(), display: "'.'".to_owned(), want_bytes: false },
+    };
+    let names = match instance.fs_listdir(&path.bytes) {
+        Ok(names) => names,
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    };
+    let mut entries: Vec<NonNull<Header>> = Vec::with_capacity(names.len());
+    for raw_name in names {
+        let mut joined = path.bytes.clone();
+        if !joined.ends_with(b"/") {
+            joined.push(b'/');
+        }
+        joined.extend_from_slice(&raw_name);
+        let info = instance.fs_stat(&joined).ok();
+        let (is_dir, is_file) = match info {
+            Some(info) => (info.is_dir, !info.is_dir),
+            None => (false, false),
+        };
+        let inode = info.map(|info| info.ino as i64).unwrap_or(0);
+        // `readlink` 成功 ⇒ 是符号链接 ✓（`fs_stat` 跟随叶子，探不出"链接本身" ✓）。
+        let is_symlink = instance.fs_readlink(&joined).is_ok();
+        let times = instance.fs_stat_times(&joined).ok();
+        let stat = match info {
+            Some(info) => build_stat_result(instance, info, times)?,
+            None => build_stat_result(
+                instance,
+                pyawa_capabilities::fs::FileInfo {
+                    size: 0,
+                    mode: 0,
+                    is_dir: false,
+                    dev: 0,
+                    ino: 0,
+                },
+                None,
+            )?,
+        };
+        let name = if path.want_bytes {
+            instance.new_bytes(&raw_name)
+        } else {
+            decode_path_text(instance, &raw_name)?
+        };
+        let path_text = if path.want_bytes {
+            instance.new_bytes(&joined)
+        } else {
+            decode_path_text(instance, &joined)?
+        };
+        entries.push(make_dir_entry(
+            instance, name, path_text, is_dir, is_file, is_symlink, stat, inode,
+        ));
+    }
+    let iterator_type = scandir_type(instance, "os.ScandirIterator");
+    let iterator = instance
+        .alloc(AttributeObject::new(iterator_type, core::cell::RefCell::new(None)))
+        .into_raw()
+        .cast::<Header>();
+    let entries_list = instance.new_list(entries);
+    set_data_attribute(instance, iterator, "_entries", entries_list);
+    let zero = instance.new_int(0);
+    set_data_attribute(instance, iterator, "_index", zero);
+    Ok(iterator)
+}
+
+/// **`posix.utime(path, times=None, *, ns=None, ...)`**（round 107）：走 `fs` 的 `utime` 槽 ✓。
+///
+/// 口径：`times` 收二元组（int／float 秒 ✓）或 `None`（＝当前时间 ✓）；`ns` 关键字收二元组
+/// （纳秒 → 秒，截断 ✓ —— ABI 只有秒级槽，如实记 ✗）。官方 `test_unicode_file` 的
+/// `os.utime(path, (0,0))`／`os.utime(path, None)` ✓。
+fn utime_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(path_value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime() missing required argument 'path'",
+        ));
+    };
+    let path = path_argument(instance, path_value, "utime")?;
+    // **`follow_symlinks=False`**（round 109）：走能力层的 `lutime` 追加槽（不跟随最后一段 ✓）——
+    // `shutil.copy2(src_link, dst, follow_symlinks=False)` 要给链接自身回填 ns 时间 ✓；
+    // 跟随语义对**断链**会 `ENOENT` ✗（`test_copytree_dangling_symlinks` ✓）。
+    let follow_symlinks = kwargs
+        .iter()
+        .find_map(|(key, value)| (instance.text_of(*key) == Some("follow_symlinks")).then_some(*value))
+        .map(|value| instance.truth_of(value))
+        .unwrap_or(true);
+    // `ns=` 优先（参照里 ns／times 互斥 ✓，同时给 ⇒ ValueError）
+    let ns_keyword = kwargs
+        .iter()
+        .find_map(|(key, value)| (instance.text_of(*key) == Some("ns")).then_some(*value));
+    let times_keyword = kwargs
+        .iter()
+        .find_map(|(key, value)| (instance.text_of(*key) == Some("times")).then_some(*value));
+    let times_arg = args.get(1).copied().or(times_keyword);
+    if ns_keyword.is_some() && times_arg.is_some() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "utime: you may specify either 'times' or 'ns' but not both",
+        ));
+    }
+    if !follow_symlinks {
+        let (atime_ns, mtime_ns) = if let Some(ns) = ns_keyword {
+            pair_nanoseconds(instance, ns, true)?
+        } else if let Some(times) = times_arg {
+            if instance.type_of(times) == instance.singletons().none_type() {
+                (0i64, 0i64)
+            } else {
+                pair_nanoseconds(instance, times, false)?
+            }
+        } else {
+            (0i64, 0i64)
+        };
+        return match instance.fs_lutime(&path.bytes, atime_ns, mtime_ns) {
+            Ok(()) => Ok(instance.retain(instance.singletons().none())),
+            Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+        };
+    }
+    // **纳秒级 `utime`**（round 109）：旧的秒级槽会丢小数 ⇒ `shutil.copystat` 的 `st_mtime` 比较当场红 ✗
+    //（官方 `test_filecmp` 的浅比较辅助 ✓）；新追加槽 `utime_ns` 直接送 ns ✓。
+    let (atime_ns, mtime_ns) = if let Some(ns) = ns_keyword {
+        pair_nanoseconds(instance, ns, true)?
+    } else if let Some(times) = times_arg {
+        if instance.type_of(times) == instance.singletons().none_type() {
+            (0i64, 0i64)
+        } else {
+            pair_nanoseconds(instance, times, false)?
+        }
+    } else {
+        (0i64, 0i64)
+    };
+    match instance.fs_utime_ns(&path.bytes, atime_ns, mtime_ns) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+    }
+}
+
+/// 从二元组取 `(atime, mtime)` 秒值（`ns=true` ⇒ 纳秒 → 秒，截断 ✓）。
+
+/// **纳秒形态**（round 109，`lutime` 追加槽用 ✓）：`ns=True` 的元组本身就是 ns ✓；
+/// `times` 元组（int/float 秒）乘以 1e9 ✓。
+fn pair_nanoseconds(
+    instance: &Instance,
+    value: NonNull<Header>,
+    ns: bool,
+) -> Result<(i64, i64), pyawa_core::ExecError> {
+    let Some(items) = instance.tuple_items(value) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime: 'times' must be either a tuple of two ints or None",
+        ));
+    };
+    if items.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime: 'times' must be either a tuple of two ints or None",
+        ));
+    }
+    let convert = |item: NonNull<Header>| -> Result<i64, pyawa_core::ExecError> {
+        if let Some(number) = instance.int_of(item).and_then(|number| number.to_i64()) {
+            return Ok(if ns { number } else { number.saturating_mul(1_000_000_000) });
+        }
+        if !ns {
+            if let Some(number) = instance.float_value(item) {
+                return Ok((number * 1_000_000_000.0) as i64);
+            }
+        }
+        Err(instance.raise_builtin_error(
+            "TypeError",
+            "utime: 'times' must be either a tuple of two ints or None",
+        ))
+    };
+    Ok((convert(items[0])?, convert(items[1])?))
+}
+/// **`posix.chmod(path, mode)`**（round 97）：走 `fs` 的 `chmod` 槽 ✓。
+///
+/// 动因：官方 `test_tempfile` 的收尾用例 `os.chmod(...)` ✗（`'module' object has no attribute 'chmod'`）；
+/// `shutil.copystat`／`test_shutil` 一族同样要 ✓。
+fn chmod_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (Some(path_value), Some(mode_value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "chmod() takes exactly 2 arguments",
+        ));
+    };
+    let path = path_argument(instance, path_value, "chmod")?;
+    let Some(mode) = instance.int_of(mode_value).and_then(|value| value.to_i64()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "an integer is required",
+        ));
+    };
+    match instance.fs_chmod(&path.bytes, mode as u32) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+    }
+}
+
+/// **`posix.putenv(key, value)`**（round 92）：真改进程环境（`os.environ` 的写路径 ✓）。
+///
+/// 动因：`Lib/os.py` 的 `_Environ.__setitem__` 直接调**模块级** `putenv` / `unsetenv`
+/// （它们来自 `from posix import *` ✓）—— 先前 posix 没有这两个名字 ⇒
+/// `NameError: name 'putenv' is not defined` ✗（官方 `test__colorize` / `test_mimetypes` 的
+/// 环境变量夹具当场踩到 ✓；`test.support` 大量用 `os.environ` 做夹具 ✓）。
+/// `std::env` 不在 `T-CX-4` 的禁面里（同 `getcwd` 的 `std::env::current_dir` 先例 ✓）。
+fn putenv_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (Some(key), Some(value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "putenv() takes exactly 2 arguments",
+        ));
+    };
+    let (Some(key), Some(value)) = (env_text(instance, key), env_text(instance, value)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "str expected, not bytes-like",
+        ));
+    };
+    if key.contains('=') || key.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "illegal environment variable name",
+        ));
+    }
+    pyawa_core::host_env::set_var(&key, &value);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`posix.unsetenv(key)`**（round 92）：从进程环境删一个名字（不存在 ⇒ 静默成功 ✓）。
+fn unsetenv_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "unsetenv() takes exactly 1 argument",
+        ));
+    };
+    let Some(key) = env_text(instance, key) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "str expected, not bytes-like",
+        ));
+    };
+    pyawa_core::host_env::remove_var(&key);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// 取环境变量名／值的文本（`str` 或 `bytes`；取不到给 `None`）。
+fn env_text(instance: &Instance, value: NonNull<Header>) -> Option<String> {
+    if let Some(text) = instance.text_of(value) {
+        return Some(text.to_owned());
+    }
+    instance
+        .bytes_value(value)
+        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+}
+
+/// **`posix.chdir(path)`**（round 91）：改**实例** cwd（`CP-22`）✓ —— 之后相对路径解析
+/// （`fs_open`／`fs_stat` 一族都走 `Instance::resolve_path` ✓）以新 cwd 为起点 ✓。
+///
+/// 实现：路径经 `path_argument`（str／bytes／PathLike）⇒ `resolve_path`（guest 绝对、夹根 ✓）⇒
+/// `fs_stat` 确认是目录（否则 `NotADirectoryError`）⇒ `set_path_cwd` ✓。
+/// **不碰宿主进程 cwd** ✓（`CX-3`：实例状态，禁止进程级副作用 ✓）。
+fn chdir_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("posix.chdir() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.chdir() takes no keyword arguments",
+        ));
+    }
+    let path = path_argument(instance, args[0], "chdir")?;
+    let resolved = match instance.resolve_path(&path.bytes) {
+        Ok(resolved) => resolved,
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    };
+    match instance.fs_stat(&resolved) {
+        Ok(info) => {
+            if !info.is_dir {
+                return Err(instance.raise_builtin_error(
+                    "NotADirectoryError",
+                    &format!("[Errno 20] Not a directory: {}", path.display),
+                ));
+            }
+        }
+        Err(error) => return Err(fs_error_with_display(instance, error, &path.display)),
+    }
+    instance.set_path_cwd(&resolved);
+    Ok(instance.new_none())
+}
+
 /// **`posix.getcwd()`** ✓（task-10）：`sysconfig` 一族的**第一道 import 闸** ✓ —— 它不是直接调
 /// `os.getcwd()`，而是 `Lib/posixpath.py` 的 `realpath` 对**绝对路径**也会调 `os.getcwd()`
 /// （`posixpath.py:381`／`426`；`sysconfig/__init__.py:219` 的 `_safe_realpath(sys.executable)` 经它 ✓）。
@@ -750,34 +1668,10 @@ fn getcwd_native(
             "posix.getcwd() takes no keyword arguments",
         ));
     }
-    match current_dir_bytes() {
-        // **PEP 383**：`getcwd()` = `fsdecode(getcwdb())` —— 原始字节按
-        // utf-8＋surrogateescape 解成 WTF-8 str（含代理的目录名 ⇒ `'\udcff'` 一类）✓。
-        Ok(bytes) => decode_path_text(instance, &bytes),
-        Err(error) => Err(fs_error(
-            instance,
-            pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
-            "",
-        )),
-    }
-}
-
-/// **当前工作目录的原始字节**（P3-38 S3b-3）：`getcwdb` 的真值、`getcwd` 的输入。
-///
-/// `std::env::current_dir()` 给的 `PathBuf` 在 Unix 上可经 `OsStrExt` **原样取字节**
-/// （安全视图；`T-CX-4` 的禁面是 `std::fs`／`std::net`／`libc`／`cfg(target_os)`，不含
-/// `std::os::unix::ffi`——既有 `std::env` 先例同口径）。非 Unix 目标回退 lossy（如实偏差）。
-fn current_dir_bytes() -> Result<Vec<u8>, std::io::Error> {
-    let path = std::env::current_dir()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        Ok(path.as_os_str().as_bytes().to_vec())
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(path.to_string_lossy().as_bytes().to_vec())
-    }
+    // **读实例 cwd**（round 91，`CP-22`）：`os.chdir` 之后 `os.getcwd()` 必须跟着变 ✓ ——
+    // 先前读的是**宿主进程** cwd ✗（`chdir` 接线后两者会分叉 ✗）。初值是首次解析时从宿主 cwd 取 ✓。
+    let bytes = instance.path_cwd();
+    decode_path_text(instance, &bytes)
 }
 
 /// **`posix.getcwdb()`** ✓（task-10；P3-38 S3b-3 修字节口径）：返回 **`bytes`**（原始字节 ✓）。
@@ -799,14 +1693,8 @@ fn getcwdb_native(
             "posix.getcwdb() takes no keyword arguments",
         ));
     }
-    match current_dir_bytes() {
-        Ok(bytes) => Ok(instance.new_bytes(&bytes)),
-        Err(error) => Err(fs_error(
-            instance,
-            pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
-            "",
-        )),
-    }
+    let bytes = instance.path_cwd();
+    Ok(instance.new_bytes(&bytes))
 }
 
 /// **`posix.readlink(path, *, dir_fd=None)`** ✓（task-10）：真值走 **`fs` 能力域**的 `readlink` 槽 ✓
@@ -971,27 +1859,38 @@ fn symlink_native(
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    if !kwargs.is_empty() {
-        let name = kwargs
-            .first()
-            .and_then(|(key, _)| instance.text_of(*key))
-            .unwrap_or("?")
-            .to_owned();
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            &format!("symlink() got an unexpected keyword argument '{name}'"),
-        ));
+    // **`target_is_directory` 是 Windows 语义参数**（POSIX 忽略 ✓）：参照在 POSIX 上也**接受**它 ✓
+    // ⇒ 先前一律当"意外关键字" ✗ ⇒ 官方 `test_tempfile` 的 `os_helper.symlink(...)` 夹具 32 处
+    // `TypeError: symlink() got an unexpected keyword argument 'target_is_directory'` ✗。
+    let mut name_value = args.get(1).copied();
+    for (key, value) in kwargs {
+        match instance.text_of(*key) {
+            Some("target_is_directory") | Some("dir_fd") | Some("follow_symlinks") => {}
+            _ => {
+                let name = instance.text_of(*key).unwrap_or("?").to_owned();
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("symlink() got an unexpected keyword argument '{name}'"),
+                ));
+            }
+        }
+        if instance.text_of(*key) == Some("dst") && name_value.is_none() {
+            name_value = Some(*value);
+        }
     }
-    let (Some(target_value), Some(name_value)) = (args.first().copied(), args.get(1).copied()) else {
+    let (Some(target_value), Some(name_value)) = (args.first().copied(), name_value.or_else(|| args.get(1).copied())) else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "symlink() missing required argument 'src'/'dst'",
         ));
     };
-    if args.len() > 2 {
+    // **参照的 POSIX 签名是 `symlink(src, dst, target_is_directory=False)`** ✓ —— 第三个参数在
+    // POSIX 上**忽略**但**必须接受**（`pathlib.Path.symlink_to` 就按位置传三个 ✓；round 268
+    // 实测此前报 `symlink() takes exactly 2 arguments (3 given)` ✗）。
+    if args.len() > 3 {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("symlink() takes exactly 2 arguments ({} given)", args.len()),
+            &format!("symlink() takes at most 3 arguments ({} given)", args.len()),
         ));
     }
     // 目标按"路径形状"编码（str 走 surrogateescape、bytes 原样），但**不**做 VM 路径解析。
@@ -1141,6 +2040,92 @@ fn remove_path(
             &format!("{kind}：fs 能力域未注册（CM-8）"),
         )),
         Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+    }
+}
+
+/// **`posix.mkdir(path, mode=0o777)`** ✓（`P3-40`）：经 `fs` 域建目录（叶子不跟随符号链接 ✓）。
+///
+/// 参照口径（本机 3.14.4 实测）：缺 `path` ⇒ `TypeError: mkdir() missing required argument 'path' (pos 1)`；
+/// `mode` 缺省 `0o777`（**平台 umask 由内核施加** ✓）；`mode` 非整数 ⇒
+/// `TypeError: 'str' object cannot be interpreted as an integer`。
+fn mkdir_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "mkdir() missing required argument 'path' (pos 1)",
+        ));
+    };
+    let path = path_argument(instance, value, "mkdir")?;
+    let mode = match args.get(1) {
+        None => 0o777u32,
+        Some(mode_value) => match instance.int_value(*mode_value) {
+            Some(raw) => raw as u32,
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "'str' object cannot be interpreted as an integer",
+                ))
+            }
+        },
+    };
+    match instance.fs_mkdir(&path.bytes, mode) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(pyawa_core::CapabilityCallError::NotImplemented) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "mkdir：provider 没有这条 fs 槽（CM-8）",
+        )),
+        Err(pyawa_core::CapabilityCallError::NotRegistered) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "mkdir：fs 能力域未注册（CM-8）",
+        )),
+        Err(error) => Err(fs_error_with_display(instance, error, &path.display)),
+    }
+}
+
+/// **`posix.pipe()`** ✓（`P3-40`）：返回 `(读端 fd, 写端 fd)`，**两个都是实例能力表下标**
+///（`CP-31`：动态段从 3 起、与 fs 的其余 fd 同一张表 ⇒ 可以直接交给 `os.read`／`os.write`／
+/// `os.close`／`select` 一族 ✓）。
+///
+/// 参照口径（本机 3.14.4 实测）：带实参 ⇒ `TypeError: posix.pipe() takes no arguments (1 given)`；
+/// 带关键字 ⇒ `TypeError: posix.pipe() takes no keyword arguments`。
+fn pipe_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.pipe() takes no keyword arguments",
+        ));
+    }
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("posix.pipe() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    match instance.fs_pipe() {
+        Ok((read_fd, write_fd)) => {
+            let read = instance.new_int(read_fd as i64);
+            let write = instance.new_int(write_fd as i64);
+            Ok(instance.new_tuple(vec![read, write]))
+        }
+        Err(pyawa_core::CapabilityCallError::NotImplemented) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "pipe：provider 没有这条 fs 槽（CM-8；旧宿主 ≤ ABI 1.3）",
+        )),
+        Err(pyawa_core::CapabilityCallError::NotRegistered) => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "pipe：fs 能力域未注册（CM-8）",
+        )),
+        Err(error) => Err(capability_error(instance, error)),
     }
 }
 
@@ -1395,7 +2380,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let stat_fn = crate::builtins_module::make_native(instance, "stat", stat_native as pyawa_core::NativeFn);
     instance.dict_set(namespace, "stat", stat_fn);
     // `lstat`／`fstat` 与它**同源** ✓（provider 的同一个槽 ✓）：先各自给一份 ✓。
-    let lstat_fn = crate::builtins_module::make_native(instance, "lstat", stat_native as pyawa_core::NativeFn);
+    let lstat_fn = crate::builtins_module::make_native(instance, "lstat", lstat_native as pyawa_core::NativeFn);
     instance.dict_set(namespace, "lstat", lstat_fn);
     // **`stat_result`** ✓（第 722 轮）：`Lib/shutil.py:659` 要 `os.stat_result` ✓
     //（`os.py:55` 的 `from posix import *` 靠 `__all__` 带过去 ✓）。
@@ -1431,11 +2416,29 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // （实测：`hasattr(os, "remove")` False、`unlink` True ✓）。
         ("remove", unlink_native as pyawa_core::NativeFn),
         ("rmdir", rmdir_native as pyawa_core::NativeFn),
+        // **P3-40**：目录创建（带 mode）＋管道（两个真 fd，CP-31 的表下标）。
+        ("mkdir", mkdir_native as pyawa_core::NativeFn),
+        ("pipe", pipe_native as pyawa_core::NativeFn),
         ("urandom", urandom_native as pyawa_core::NativeFn),
         ("getpid", getpid_native as pyawa_core::NativeFn),
         // **task-10**：`sysconfig` 族的 import 闸（`getcwd` 经 `posixpath.realpath` 隐式要 ✓）＋
         // `test.support` 链的模块级 `SAVEDCWD = os.getcwd()` ✓；`readlink` 同理（`realpath` ✓）。
         ("getcwd", getcwd_native as pyawa_core::NativeFn),
+        // **`os.chdir`**（round 91）：实例 cwd（`CP-22`）；`test.support` 的 `os_helper` 一族要靠它 ✓。
+        ("chdir", chdir_native as pyawa_core::NativeFn),
+        // **`os.fstat`**（round 91）：fd 版 stat_result（`test_bufio` 钉住 ✓）。
+        ("fstat", fstat_native as pyawa_core::NativeFn),
+        // **`os.environ` 的写路径**（round 92）：`Lib/os.py` 的 `_Environ` 直接调它们 ✓。
+        ("putenv", putenv_native as pyawa_core::NativeFn),
+        // **`os.isatty`**（round 92）：`_colorize`／`test.support` 要 ✓。
+        ("isatty", isatty_native as pyawa_core::NativeFn),
+        // **`os.scandir`**（round 93）：`shutil.rmtree`／`glob`／`tempfile` 一族 ✓。
+        ("scandir", scandir_native as pyawa_core::NativeFn),
+        // **`os.chmod`**（round 97）：走 `fs` 的 `chmod` 槽 ✓。
+        ("chmod", chmod_native as pyawa_core::NativeFn),
+        // **`os.utime`**（round 107）：走 `fs` 的 `utime` 槽 ✓。
+        ("utime", utime_native as pyawa_core::NativeFn),
+        ("unsetenv", unsetenv_native as pyawa_core::NativeFn),
         ("getcwdb", getcwdb_native as pyawa_core::NativeFn),
         ("readlink", readlink_native as pyawa_core::NativeFn),
         // **P3-38 S3b-2**：路径面（真文件、含非 UTF-8 文件名）✓
@@ -1499,10 +2502,22 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("unlink"),
         instance.new_str("remove"),
         instance.new_str("rmdir"),
+        instance.new_str("mkdir"),
+        instance.new_str("pipe"),
         instance.new_str("urandom"),
         instance.new_str("getpid"),
         instance.new_str("getcwd"),
         instance.new_str("getcwdb"),
+        instance.new_str("chdir"),
+        instance.new_str("fstat"),
+        instance.new_str("putenv"),
+        instance.new_str("isatty"),
+        instance.new_str("scandir"),
+        instance.new_str("chmod"),
+        instance.new_str("utime"),
+        instance.new_str("DirEntry"),
+        instance.new_str("ScandirIterator"),
+        instance.new_str("unsetenv"),
         instance.new_str("readlink"),
         instance.new_str("listdir"),
         instance.new_str("rename"),
@@ -1537,11 +2552,28 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("WSTOPSIG"),
         instance.new_str("WNOHANG"),
     ]);
+    // **`os.DirEntry`／`os.ScandirIterator` 类型对象**（round 95）：`Lib/filecmp.py` 用
+    // `isinstance(entry, os.DirEntry)`（`os.DirEntry` 必须是**模块属性** ✓）；参照的 `os.__all__`
+    // 也含这两个名字 ✓。类型在首次 `scandir` 时建（这里先建好并导出 ✓）。
+    let dir_entry_type = scandir_type(instance, "os.DirEntry");
+    instance.dict_set(namespace, "DirEntry", dir_entry_type.cast::<Header>());
+    let scandir_iterator_type = scandir_type(instance, "os.ScandirIterator");
+    instance.dict_set(namespace, "ScandirIterator", scandir_iterator_type.cast::<Header>());
     instance.dict_set(namespace, "__all__", exports);
     // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定
     // `supports_follow_symlinks` 一族 ✓）。**如实说** ✗：本层还没实现那些可选能力 ✓ ⇒ 给**空表** ✓
     //（语义上就是"一个都不支持" ✓，比编造一串名字**诚实** ✓）。
-    let have_functions = instance.new_list(Vec::new());
+    // **`_have_functions` 真名**（round 109）：`Lib/os.py` 用 `HAVE_LSTAT`／`HAVE_LUTIMES` 等名字
+    // 算出 `os.supports_follow_symlinks` ✓ —— 先前给空表 ✗ ⇒ `shutil.copystat` 的
+    // `if fn in os.supports_follow_symlinks` 全不成立 ⇒ 回退到 `_nop`（返回 None）✗ ⇒
+    // `AttributeError: 'NoneType' object has no attribute 'st_mode'` ✗。只列**真支持**的：
+    // `stat`（follow_symlinks=False 已接线 ✓）与 `utime`（接受该 kw ✓，语义见台账）。
+    let have_functions = instance.new_list(
+        ["HAVE_LSTAT", "HAVE_FSTATAT", "HAVE_LUTIMES", "HAVE_UTIMENSAT"]
+            .iter()
+            .map(|name| instance.new_str(name))
+            .collect(),
+    );
     instance.dict_set(namespace, "_have_functions", have_functions);
     // **`_create_environ`** ✓（第 195 轮）：`os.py` 一导入就调它 ✓。
     // **`posix.environ`** ✓（第 268 轮）：`Lib/os.py` 里 `data = environ` 读的是 `from posix import *`

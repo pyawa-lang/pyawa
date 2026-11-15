@@ -123,6 +123,16 @@ pub(crate) fn format_value_with_spec(
             }
         }
     }
+    // **宿主对象**：统一协议入口（宿主 `getattr_fn` 优先；`attribute_lookup` 会先命中
+    // `object.__format__` 默认而走不到宿主回退）。
+    if instance.has_host_object_ops(value) {
+        let spec = instance.new_str(spec_text);
+        let outcome = instance.call_protocol_method(value, "__format__", &[spec]);
+        instance.release(spec);
+        if let Ok(Some(result)) = outcome {
+            return Ok(result);
+        }
+    }
     // SAFETY: value 由调用方保证存活。
     let value_type = unsafe { value.as_ref() }.ty();
     // SAFETY: 类型名由注册表持有。
@@ -137,7 +147,9 @@ pub(crate) fn format_value_with_spec(
             let args = vec![instance.new_str(spec_text)];
             crate::executor::call_callable(instance, method, Some(value), args, Vec::new(), opcode)
         }
-        Err(_) => {
+        Err(error) => {
+            // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
             let message = format!("unsupported format string passed to {class_name}.__format__");
             Err(raise_builtin(instance, "TypeError", &message))
         }

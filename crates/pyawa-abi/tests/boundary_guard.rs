@@ -1,5 +1,6 @@
 //! **`CX-11`（panic 不跨 FFI 边界）的机械化守卫**：枚举 `crates/pyawa-abi/src/` 里**每一个**
-//! `#[unsafe(no_mangle)]` 导出，断言它要么在**自己的函数体**里走 `boundary(`／`boundary_ptr(`，
+//! `#[unsafe(no_mangle)]` 导出，断言它要么在**自己的函数体**里走 `boundary(`／`boundary_ptr(`／
+//! `boundary_ty(`（`*mut c_void` 版，`AB-69` 的 `pa_type_expr` 构造用；同一 `catch_unwind` 口径），
 //! 要么在**显式白名单**里且带理由。
 //!
 //! 理由的**一处真相**在 `src/lib.rs` 的源码注释里（版本三件套上的 ``CX-11-EXEMPT`` 行）；
@@ -15,7 +16,13 @@ use std::path::PathBuf;
 /// 源码注释里的白名单标记（`src/lib.rs` 的版本三件套上各出现一次）。
 const EXEMPT_MARKER: &str = "CX-11-EXEMPT";
 /// 允许不包边界的入口（**显式**第二道闸：改这里必须同时给出源码理由）。
-const EXEMPT_EXPECTED: &[&str] = &["pa_abi_size", "pa_abi_version", "pa_version"];
+const EXEMPT_EXPECTED: &[&str] = &[
+    "pa_abi_size",
+    "pa_abi_version",
+    // round 176：只拷一段宿主给的字节进 `String`（不分配实例对象、不执行脚本）；非法输入回 `PA_ERR_INVALID`。
+    "pa_set_program_filename",
+    "pa_version",
+];
 
 /// 一个 `#[unsafe(no_mangle)]` 导出及其解析出的源码片段。
 #[derive(Debug)]
@@ -250,8 +257,9 @@ fn every_export_is_bounded_or_explicitly_exempt() {
             export.file,
             export.name
         );
-        let bounded =
-            export.body.contains("boundary(") || export.body.contains("boundary_ptr(");
+        let bounded = export.body.contains("boundary(")
+            || export.body.contains("boundary_ptr(")
+            || export.body.contains("boundary_ty(");
         if !bounded {
             unbounded.push(export);
         }

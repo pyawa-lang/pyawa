@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -54,6 +55,23 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                     let wants_leaf = full != top
                         && instance.type_name(instance.type_of(fromlist)) == "tuple"
                         && instance.tuple_items(fromlist).is_some_and(|items| !items.is_empty());
+                    // **`sys.modules[name] = None` 的"阻断导入"**（round 98）：参照把 None 当
+                    // **显式失败**（`ImportError: import of X halted; None in sys.modules`）✓ ——
+                    // 官方 `test.support.import_helper.import_fresh_module(..., blocked=['_elementtree'])`
+                    // 与 `Lib/xml/etree/ElementTree.py` 的 `try: from _elementtree import * except ImportError`
+                    // 就靠这一条 ✓。先前把 None 当模块交出去 ✗ ⇒ `import *` 报"没有属性字典"的状态 5 ✗
+                    //（官方 `test_xml_etree`／`test_xml_etree_c` 的 setUpModule ✓）。
+                    for candidate in [full.as_str(), top.as_str()] {
+                        if let Some(found) = instance.dict_get(modules, candidate) {
+                            if instance.type_of(found) == instance.singletons().none_type() {
+                                return Err(raise_builtin(
+                                    instance,
+                                    "ImportError",
+                                    &format!("import of {candidate} halted; None in sys.modules"),
+                                ));
+                            }
+                        }
+                    }
                     let module = match instance.dict_get(modules, &full) {
                         Some(found) => {
                             // 缓存命中：`fromlist` 空 ⇒ 交**顶层**（`sys.modules['os.path'] = …` 那种
@@ -131,8 +149,7 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                 instance.incref_object(this.as_ptr());
                             }
                             let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
-                                instance
-                                    .type_named("method")
+                                instance.hot_type(HotId::Method)
                                     .expect("`method` 类型已登记"),
                                 function,
                                 this,
@@ -145,11 +162,11 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                             // `cannot import name 'x' from 'm'` ✓ —— 上游 `Lib/io.py:93` 的
                             // `try: from _io import _WindowsConsoleIO / except ImportError: pass` 正是靠它 ✓；
                             // 先前直接抛 `AttributeError` ✗ ⇒ 那个 `try` **接不住** ✗ ⇒ 整个 `io` 导入失败 ✓。
-                            let attribute_error = builtin_type(instance, "AttributeError");
+                            let attribute_error = instance.hot_type(HotId::AttributeError).expect("AttributeError 已登记");
                             let is_missing = match &error {
                                 ExecError::Raised { exception } => {
                                     // SAFETY: 抛出的异常由实例持有，存活。
-                                    unsafe { exception.as_ref() }.ty() == attribute_error
+                                    unsafe { exception.get().as_ref() }.ty() == attribute_error
                                 }
                                 _ => false,
                             };
@@ -176,10 +193,49 @@ pub(super) fn step_imports<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>,
                                         }
                                     }
                                 }
-                                // 两条回退都没有 ⇒ 照旧报 `ImportError` ✓。
+                                // **包上缺属性 ⇒ 按 `from pkg import 子模块` 装载**（round 101）：
+                                // 参照的 `_handle_fromlist` 在属性缺失时会 `import pkg.子模块` ✓ ——
+                                // 先前只查已有属性／模块表 ✗ ⇒ `from test import test_pdb`（官方
+                                // `test_pdb.load_tests` 第一句 ✓）报 `cannot import name 'test_pdb'
+                                // from 'test'` ✗。判据：模块有 `__path__`（包 ✓）。
+                                let is_package = instance
+                                    .attribute_optional_discarding(module, "__path__")
+                                    .is_some();
+                                if is_package {
+                                    if let Some(modules) = instance.modules() {
+                                        if let Some(module_name) =
+                                            module_text(instance, module, "__name__")
+                                        {
+                                            let full = format!("{module_name}.{name}");
+                                            match crate::executor::import::load_module(
+                                                instance,
+                                                modules,
+                                                &full,
+                                                opcode_number,
+                                            ) {
+                                                Ok(loaded) => {
+                                                    // `loaded` 是模块表持着的**借用** ⇒ `push` 会留一份 ✓。
+                                                    frame.get().push(module)?;
+                                                    push(instance, frame.get(), loaded)?;
+                                                    return Ok(Step::Continue);
+                                                }
+                                                Err(error) => {
+                                                    // **失败异常要还**（round 256 真泄漏修 ✗）：
+                                                    // 这里只是"试试子模块"的探测路 ⇒ 丢弃它，落到
+                                                    // 下面的 ImportError ✓（先前 `if let Ok` 直接丢 ✗）。
+                                                    crate::executor::runtime::discard_error(instance, &error);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // 三条回退都没有 ⇒ 照旧报 `ImportError` ✓。
                                 // 模块名：从模块命名空间里借读 `__name__` ✓（借用 ⇒ 不还引用 ✓）
                                 let module_name = crate::executor::module_text(instance, module, "__name__")
                                     .unwrap_or_else(|| "?".to_owned());
+                                if crate::diag::flag_site!("PYAWA_IMPORT_DEBUG") {
+                                    eprintln!("[import_debug] IMPORT_FROM name={name} module={module_name} site={}", instance.current_site());
+                                }
                                 let converted = raise_builtin(
                                     instance,
                                     "ImportError",

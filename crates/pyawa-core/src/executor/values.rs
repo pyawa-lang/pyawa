@@ -1,10 +1,11 @@
 //! **`values` 族** —— 从 `builtin_objects.rs` **原样搬来** ✓（纯移动 ✓、零逻辑改动 ✓）。
 //!
 //! * 派发表 `values_method_native` **不搬** ✓（族之间的粘合层 ✓）；
-//! * 仍在原处的被引用项：`ITERATOR_TYPE_NAMES`、`builtin_type`、`exception_type`、`integer_payload`、`numeric_payload` ✓；
+//! * 仍在原处的被引用项：`integer_payload`、`numeric_payload` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{ITERATOR_TYPE_NAMES, builtin_type, exception_type, integer_payload, numeric_payload};
+use crate::executor::{integer_payload, numeric_payload};
+use crate::HotId;
 use crate::builtin_objects::BytesObject;
 use crate::builtin_objects::DictObject;
 use crate::header::Header;
@@ -13,6 +14,7 @@ use crate::builtin_objects::ListObject;
 use core::ptr::NonNull;
 use crate::builtin_objects::SetObject;
 use crate::builtin_objects::TupleObject;
+use crate::builtin_objects::WeakRefObject;
 use crate::type_object::TypeObject;
 
 
@@ -65,6 +67,14 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         // *临时*：整数与浮点比时按 f64 走（超大整数与浮点混用时会有精度话题，随协议槽位收口）
         return a == b;
     }
+    // **`bytes`／`bytearray`（含子类）按字节内容相等** ✓（round 100）：参照 `bytearray(b"ab") ==
+    // b"ab"` 为真 ✓、`bytearray(b"a") == bytearray(b"a")` 真 ✓ —— 先前只认精确 `bytes` ✗。
+    if let (Some(left_bytes), Some(right_bytes)) = (
+        instance.bytes_like_value(left),
+        instance.bytes_like_value(right),
+    ) {
+        return left_bytes == right_bytes;
+    }
     let str_type = instance.singletons().str_type();
     // SAFETY: 两个都是存活对象。
     let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
@@ -82,7 +92,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
     let subtype_of_bytes = |ty: NonNull<crate::TypeObject>| {
         instance
-            .type_named("bytes")
+            .hot_type(HotId::Bytes)
             .is_some_and(|base| instance.is_subtype(ty, base))
     };
     if subtype_of_bytes(left_type) && subtype_of_bytes(right_type) {
@@ -103,13 +113,33 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     // **子类也按值比** ✓（task-14 真 bug 修 ✗）：先前按**恰好**是 list／tuple／dict 判 ✗
     // ⇒ `namedtuple` 实例 `Point(1,2) == (1,2)` 实测 **False** ✗（参照 True ✓）。
     // 参照口径 ✓：tuple（含子类）与 tuple（含子类）逐项比 ✓；list 与 tuple **不同族**不等 ✓。
-    let subtype_of = |ty: NonNull<crate::TypeObject>, name: &str| {
+    let subtype_of = |ty: NonNull<crate::TypeObject>, id: HotId| {
         instance
-            .type_named(name)
+            .hot_type(id)
             .is_some_and(|base| instance.is_subtype(ty, base))
     };
-    let is_list = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "list");
-    let is_tuple = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "tuple");
+    let is_list = |ty: NonNull<crate::TypeObject>| subtype_of(ty, HotId::List);
+    let is_tuple = |ty: NonNull<crate::TypeObject>| subtype_of(ty, HotId::Tuple);
+    // **`deque` 按值比**（round 86）：参照的 `deque.__eq__` 逐项比 ✓；同一对象已在函数开头
+    // 用身份短路 ✓（`test_contains.test_nonreflexive` 的 `nan`／`NEVER_EQ` 依赖它 ✓）。
+    if subtype_of(left_type, HotId::Deque) && subtype_of(right_type, HotId::Deque) {
+        // SAFETY: 类型身份已确认，两侧载荷同为 `DequeObject` ✓。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<crate::builtin_objects::DequeObject>(),
+                &*right.as_ptr().cast::<crate::builtin_objects::DequeObject>(),
+            )
+        };
+        if a.len() != b.len() {
+            return false;
+        }
+        let left_items = a.items();
+        let right_items = b.items();
+        return left_items
+            .iter()
+            .zip(right_items.iter())
+            .all(|(left, right)| values_equal(instance, *left, *right));
+    }
     if is_list(left_type) && is_list(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe { (&*left.as_ptr().cast::<ListObject>(), &*right.as_ptr().cast::<ListObject>()) };
@@ -133,8 +163,48 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         });
     }
 
+    // **`GenericAlias` 按值比**（round 222）：参照里 `list[int] == list[int]` 为真 ✓
+    //（比 `__origin__` 与 `__args__`）；本层别名没有原生 `richcompare` ⇒ 落到"身份" ✗
+    //（`test_collections.TestNamedTuple.test_non_generic_subscript` 的
+    // `(int, list[int]) == (int, list[int])` ✓）。
+    let is_generic_alias = |ty: NonNull<crate::TypeObject>| instance.type_name(ty) == "GenericAlias";
+    if is_generic_alias(left_type) && is_generic_alias(right_type) {
+        let attribute = |object: NonNull<Header>, name: &str| {
+            instance
+                .attribute_optional_of(object, name)
+                .ok()
+                .flatten()
+        };
+        let (Some(our_origin), Some(our_args), Some(their_origin), Some(their_args)) = (
+            attribute(left, "__origin__"),
+            attribute(left, "__args__"),
+            attribute(right, "__origin__"),
+            attribute(right, "__args__"),
+        ) else {
+            return false;
+        };
+        let origins_equal = values_equal(instance, our_origin, their_origin);
+        let items = instance.tuple_items(our_args);
+        let their_items = instance.tuple_items(their_args);
+        let equal = origins_equal
+            && match (items, their_items) {
+                (Some(items), Some(their_items)) => {
+                    items.len() == their_items.len()
+                        && items
+                            .iter()
+                            .zip(their_items.iter())
+                            .all(|(left, right)| values_equal(instance, *left, *right))
+                }
+                _ => false,
+            };
+        for value in [our_origin, our_args, their_origin, their_args] {
+            instance.release(value);
+        }
+        return equal;
+    }
+
     // **`dict` 按值比**（实测）：长度相等 ＋ 每个键在右边**按键值相等**找到、且对应值递归相等。
-    if subtype_of(left_type, "dict") && subtype_of(right_type, "dict") {
+    if subtype_of(left_type, HotId::Dict) && subtype_of(right_type, HotId::Dict) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe {
             (
@@ -145,28 +215,52 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         if a.len() != b.len() {
             return false;
         }
-        let right_entries = b.entries();
+        // **按哈希索引查**（`P3-41` round 42）：先前对每个键**线性扫右表** ⇒ `d == d2`
+        // 是 O(n²)（`test_dict.test_copy_fuzz` 的 10 万项两个 O(n²) 之一 ✓）。
+        let right_mapping = right;
         for (key, value) in a.entries() {
-            let mut matched = false;
-            for (other_key, other_value) in &right_entries {
-                if values_equal(instance, key, *other_key) {
-                    if !values_equal(instance, value, *other_value) {
-                        return false;
-                    }
-                    matched = true;
-                    break;
-                }
-            }
-            if !matched {
+            let Some(position) = instance.dict_lookup_key(right_mapping, key) else {
+                return false;
+            };
+            let Some((_, other_value)) = b.entry(position) else {
+                return false;
+            };
+            if !values_equal(instance, value, other_value) {
                 return false;
             }
         }
         return true;
     }
+    // **`weakref.ref` 按"指称对象"比** ✓（`P3-41` round 40 修 ✗）：参照的 `ref.__eq__` 比的是
+    // **目标**（`weakref.ref(a) == weakref.ref(b)` ⇔ `a == b`；同一目标的两个不同 `ref` 对象也相等 ✓）。
+    // 先前落到最后那条 `false`（按身份）⇒ `Lib/_weakrefset.py` 的 `WeakSet` **不去重** ✓：
+    // `weakref.WeakSet.add` 每次真的塞一条 ⇒ `_abc_cache` 一次 `isinstance` 长一条 ⇒ 成员查询
+    // 线性扫、越查越慢 ⇒ **O(n²)**（实测 `test_userstring` 的 6.5 万次循环 >900 s ✗）。
+    let weakref_type = instance.hot_type(HotId::WeakRef);
+    let is_weakref = |ty: NonNull<crate::TypeObject>| {
+        weakref_type.is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    if is_weakref(left_type) && is_weakref(right_type) {
+        // SAFETY: 类型身份已确认（弱引用载荷是 `WeakRefObject`）。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<WeakRefObject>(),
+                &*right.as_ptr().cast::<WeakRefObject>(),
+            )
+        };
+        // **真弱引用**（round 59）：两边都活着 ⇒ 比**目标**；任一边已死 ⇒ 只有"同一个弱引用对象"
+        // 才相等（身份；上面 `left == right` 已先判过 ⇒ 这里一律不等 ✓，与参照一致 ✓）。
+        return match (a.target(), b.target()) {
+            (Some(left_target), Some(right_target)) => {
+                values_equal(instance, left_target, right_target)
+            }
+            _ => false,
+        };
+    }
     // **`set`／`frozenset`**：同族（含跨 `set`／`frozenset`——Python 允许，`{1} == frozenset({1})`
     // 为真）时"长度相等 ＋ 左的每一项在右里找得到"（双向包含由长度 ＋ 单向包含推出）。
-    let set_type = instance.type_named("set");
-    let frozen_type = instance.type_named("frozenset");
+    let set_type = instance.hot_type(HotId::Set);
+    let frozen_type = instance.hot_type(HotId::FrozenSet);
     let left_is_set = Some(left_type) == set_type || Some(left_type) == frozen_type;
     let right_is_set = Some(right_type) == set_type || Some(right_type) == frozen_type;
     if left_is_set && right_is_set {
@@ -192,11 +286,273 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     false
 }
 
+/// **`str` 文本的哈希**（FNV-1a 64；与 [`key_hash`] 用同一个 ⇒ 调用方可直接按 `&str` 查字典 ✓）。
+pub(crate) fn hash_text(text: &str) -> u64 {
+    // **CPython 口径**（round 70）：与 `hash()`／用户 `__hash__` 必须**同值** ✓ —— 先前这里是
+    // FNV ✗ ⇒ `{'halibut', HalibutProxy()}`（`HalibutProxy.__hash__` 返回 `hash('halibut')` ✓）
+    // 两边桶不同 ⇒ 去重失败 ✗（`test_numeric_tower.test_hash_normalization` ✓）。
+    if text.is_empty() {
+        return 0;
+    }
+    // **ASCII 快路（round 248 性能，A2-3）**：先前**每个字符串哈希都先分配一个 `Vec<u8>`** ✗
+    // （perf 里 `Vec<u8> from_iter` ≈6%；属性名／dunder 名每次查字典都付一遍）⇒ ASCII 的
+    // `chars() as u8` 与 `as_bytes()` **逐字节相同** ✓ ⇒ 直接哈希，零分配（哈希值与旧口径一致 ✓）。
+    if text.is_ascii() {
+        return hash_bytes(text.as_bytes());
+    }
+    let mut largest = 0u32;
+    for character in text.chars() {
+        largest = largest.max(character as u32);
+    }
+    let bytes: Vec<u8> = if largest <= 0xFF {
+        text.chars().map(|character| character as u8).collect()
+    } else if largest <= 0xFFFF {
+        text.encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect()
+    } else {
+        text.chars()
+            .flat_map(|character| (character as u32).to_le_bytes())
+            .collect()
+    };
+    hash_bytes(&bytes)
+}
+
+/// 字节序列的哈希（SipHash-1-3 零密钥，与 `hash()` **同值** ✓；空串 ⇒ 0）。
+pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let mut value = siphash13_zero(bytes) as i64;
+    if value == -1 {
+        value = -2;
+    }
+    value as u64
+}
+
+/// `SipHash-1-3`（**零密钥**；CPython 的 `_Py_HashBytes` 同算法）。
+fn siphash13_zero(data: &[u8]) -> u64 {
+    fn round(state: &mut [u64; 4]) {
+        state[0] = state[0].wrapping_add(state[1]);
+        state[1] = state[1].rotate_left(13);
+        state[1] ^= state[0];
+        state[0] = state[0].rotate_left(32);
+        state[2] = state[2].wrapping_add(state[3]);
+        state[3] = state[3].rotate_left(16);
+        state[3] ^= state[2];
+        state[0] = state[0].wrapping_add(state[3]);
+        state[3] = state[3].rotate_left(21);
+        state[3] ^= state[0];
+        state[2] = state[2].wrapping_add(state[1]);
+        state[1] = state[1].rotate_left(17);
+        state[1] ^= state[2];
+        state[2] = state[2].rotate_left(32);
+    }
+    let mut state = [
+        0x736f_6d65_7073_6575u64,
+        0x646f_7261_6e64_6f6d,
+        0x6c79_6765_6e65_7261,
+        0x7465_6462_7974_6573,
+    ];
+    let mut chunks = data.chunks_exact(8);
+    for chunk in &mut chunks {
+        let block = u64::from_le_bytes(chunk.try_into().expect("8 字节块"));
+        state[3] ^= block;
+        round(&mut state);
+        state[0] ^= block;
+    }
+    let remainder = chunks.remainder();
+    let mut tail = ((data.len() as u64) & 0xFF) << 56;
+    for (index, byte) in remainder.iter().enumerate() {
+        tail |= u64::from(*byte) << (8 * index);
+    }
+    state[3] ^= tail;
+    round(&mut state);
+    state[0] ^= tail;
+    state[2] ^= 0xFF;
+    for _ in 0..3 {
+        round(&mut state);
+    }
+    state[0] ^ state[1] ^ state[2] ^ state[3]
+}
+
+/// 整数键的哈希（`bytes` 哈希同族；`dict_set_int` 一类直接用它 ✓）。
+pub(crate) fn hash_i64(value: i64) -> u64 {
+    // **与参照的整数哈希同值**（round 120 真 bug 修 ✗）：先前 `mix64(n)` ✗ ⇒ 用户
+    // `__hash__` 返回 `hash('x')` 一类**原始哈希值**的键与内建数值键**桶不同** ⇒
+    // 明明 `__eq__` 会抛异常却根本没被问到 ✗（`test_dict.test_eq`／`test_bad_key` 的
+    // `d[x2]`／`x2 in d` ✓）。参照口径：小整数哈希就是它自己（`-1` 特例给 `-2`）✓；
+    // 大整数按 `2^61-1` 取模（带符号）✓。
+    const MODULUS: i128 = (1i128 << 61) - 1;
+    if value == -1 {
+        return (-2i64) as u64;
+    }
+    let magnitude = (value as i128).abs() % MODULUS;
+    let signed = if value < 0 { -magnitude } else { magnitude };
+    (signed as i64) as u64
+}
+
+fn mix64(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+/// **字典键的哈希**（`P3-41` round 42）：与 [`values_equal`] **同源口径** ——
+/// `values_equal(a, b) ⇒ key_hash(a) == key_hash(b)`（反过来不要求：桶内冲突由 `values_equal` 消解 ✓）。
+///
+/// 覆盖：`None`／数值（`bool`／`int`／`float` 同值同哈希，含 `True == 1` ✓）／`str`（含子类）／
+/// `bytes`（含子类）／`tuple`（递归）／`weakref`（按**目标**哈希，与 round 40 的相等口径一致 ✓）；
+/// `list`／`dict`／`set`／`bytearray` **不可哈希** ⇒ `None`（调用方退回线性扫；设置键时已由
+/// `reject_unhashable_key` 拒掉 ✓）；其余按**身份**哈希（与 `values_equal` 的"其余按身份"一致 ✓）。
+pub(crate) fn key_hash_checked(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<Option<u64>, crate::ExecError> {
+    let ty = instance.type_of(object);
+    if ty == instance.singletons().none_type() {
+        return Ok(Some(mix64(0x4e4f_4e45)));
+    }
+    if let Some(number) = numeric_payload(instance, object) {
+        // `NaN != NaN`（连自己也不等 ✓）⇒ 哈希按**身份**，保证"同一个 NaN 键"还能按身份查到 ✓。
+        if number.is_nan() {
+            return Ok(Some(mix64(0x4e41_4e00 ^ object.as_ptr() as usize as u64)));
+        }
+        // `-0.0 == 0.0` ⇒ 同哈希 ✓。
+        if number == 0.0 {
+            return Ok(Some(0));
+        }
+        if number.fract() == 0.0 && number.abs() < 9.223_372_036_854_776e18 {
+            return Ok(Some(hash_i64(number as i64)));
+        }
+        return Ok(Some(mix64(number.to_bits())));
+    }
+    if let Some(text) = instance.text_of(object) {
+        return Ok(Some(hash_text(text)));
+    }
+    if let Some(bytes) = instance.bytes_value(object) {
+        return Ok(Some(hash_bytes(bytes)));
+    }
+    if let Some(items) = instance.tuple_items(object) {
+        let mut hash = mix64(0x7475_706c_6500_0000);
+        for item in items {
+            let Some(lane) = key_hash_checked(instance, item)? else {
+                return Ok(None);
+            };
+            hash = mix64(hash ^ lane);
+        }
+        return Ok(Some(hash));
+    }
+    // **弱引用**（round 59）：有缓存 ⇒ 用缓存（目标死后仍能删键 ✓）；活着 ⇒ 按目标算并缓存；
+    // 已死且没缓存 ⇒ 按身份（它没进过任何字典 ⇒ 一致 ✓）。
+    if let Some(state) = crate::builtin_objects::weakref_key_hash_state(instance, object) {
+        if let Some(cached) = state {
+            // 缓存的是**原始 u64**（不再二次 mix ✓ —— 否则"索引建立时按缓存算、查找时按目标算"
+            // 两套口径不一致 ⇒ 临时弱引用键永远查不到 ✗）。
+            return Ok(Some(cached));
+        }
+        match crate::builtin_objects::weakref_state(instance, object).flatten() {
+            Some(target) => {
+                let Some(hash) = key_hash_checked(instance, target)? else {
+                    return Ok(None);
+                };
+                crate::builtin_objects::weakref_store_key_hash(instance, object, hash);
+                return Ok(Some(hash));
+            }
+            None => return Ok(Some(mix64(object.as_ptr() as usize as u64))),
+        }
+    }
+    // 不可哈希的容器（参照 `dict` 也拒它们当键）⇒ `None`（线性兜底；正常路径到不了 ✓）。
+    if [HotId::List, HotId::Dict, HotId::Set, HotId::ByteArray]
+        .into_iter()
+        .any(|id| {
+            instance
+                .hot_type(id)
+                .is_some_and(|base| instance.is_subtype(ty, base))
+        })
+    {
+        return Ok(None);
+    }
+    // **用户 `__hash__`**（round 70）：参照的容器哈希就是 `hash(对象)` ✓ —— 先前"其余按身份" ✗
+    // ⇒ `{'halibut', HalibutProxy()}`（`HalibutProxy.__hash__` 返回 `hash('halibut')` ✓）里两项
+    // 桶不同 ⇒ 去重失败 ✗（`test_numeric_tower.test_hash_normalization` 实测 2 != 1 ✓）。
+    // 口径：类型字典里**自己**有 `__hash__`（不是 `object` 的那份）⇒ 调它，取整数结果；
+    // 返回 `None` 表示不可哈希 ⇒ `None` ✓。结果用**原始位模式**（不 mix）—— 与本函数对
+    // `str`／`int` 的口径必须**一致**：`hash('halibut')` 走本文件的 `hash_text` ⇒ 同一条路径 ✓。
+    let object_hash = instance
+        .hot_type(HotId::Object)
+        .and_then(|object_type| instance.type_lookup(object_type, "__hash__"));
+    let own_hash = instance.type_lookup(ty, "__hash__");
+    if let Some(hasher) = own_hash.filter(|found| Some(*found) != object_hash) {
+        if instance.hot_type_is(HotId::Type, ty) {
+            // 类型对象的 `__hash__` 是**元类**的 —— 交给身份兜底（与既有行为一致 ✓）。
+        } else {
+            // SAFETY: hasher 由类型字典持有。
+            unsafe { instance.incref_object(hasher.as_ptr()) };
+            let outcome = crate::executor::call::call_callable(
+                instance,
+                hasher,
+                Some(object),
+                Vec::new(),
+                Vec::new(),
+                0,
+            );
+            // SAFETY: 上面新增的那份引用由本函数归还。
+            unsafe { instance.release_object(hasher.as_ptr()) };
+            let returned = outcome?;
+            let hash = instance
+                .int_of(returned)
+                .and_then(|value| value.to_i64());
+            // SAFETY: 返回值是新引用，这里消费。
+            unsafe { instance.release_object(returned.as_ptr()) };
+            if let Some(hash) = hash {
+                return Ok(Some(hash as u64));
+            }
+            return Ok(None);
+        }
+    }
+    // **宿主 `__hash__`**（`PLAN` §12.12 oracle）：`attribute_lookup` 会在类型 MRO 命中
+    // `object.__hash__` 后停止、永远走不到宿主回退 ⇒ 这里先直接问宿主钩子（`AB-75` 读序）。
+    if instance.has_host_object_ops(object) {
+        if let Some(found) = instance.host_object_getattr(object, "__hash__")? {
+            // 宿主 getattr 返回已绑定方法 ⇒ 不再补 self。
+            let outcome = crate::executor::call::call_callable(
+                instance,
+                found,
+                None,
+                Vec::new(),
+                Vec::new(),
+                0,
+            );
+            // SAFETY: `found` 是属性通道交出的新引用。
+            unsafe { instance.release_object(found.as_ptr()) };
+            let returned = outcome?;
+            let hash = instance.int_of(returned).and_then(|value| value.to_i64());
+            // SAFETY: 返回值是新引用，这里消费。
+            unsafe { instance.release_object(returned.as_ptr()) };
+            let Some(hash) = hash else {
+                return Ok(None);
+            };
+            return Ok(Some(hash as u64));
+        }
+    }
+    // 其余按**身份**（与 `values_equal` 的"其余按身份"一致 ✓）。
+    Ok(Some(mix64(object.as_ptr() as usize as u64)))
+}
+
+/// 旧的 Option 口径包装（22 个既有调用点不变）；需要原样上抛 __hash__ 异常的入口用 checked。
+pub(crate) fn key_hash(instance: &Instance, object: NonNull<Header>) -> Option<u64> {
+    key_hash_checked(instance, object).ok().flatten()
+}
+
 /// 一个对象是不是本层接线的迭代器。
+///
+/// **round 246 性能**：先前对 36 个内建名逐个 `type_named`（每个 `FOR_ITER` 一遍 ✗）；
+/// 现在只比缓存里的类型指针 ✓（见 [`crate::instance::HotTypes`]）。
 pub(crate) fn is_iterator_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    ITERATOR_TYPE_NAMES
-        .iter()
-        .any(|name| instance.type_named(name) == Some(ty))
+    instance.hot_is_iterator_type(ty)
 }
 
 /// **相等性**（本层的临时口径，随 `richcompare` 槽位收口）：给宿主面用。
@@ -210,10 +566,14 @@ pub fn values_equal_public(
 
 /// 这个类型是不是异常类（MRO 里有 `BaseException`）。
 pub(crate) fn is_exception_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    instance.is_subtype(ty, exception_type(instance, "BaseException"))
+    instance
+        .hot_type(HotId::BaseException)
+        .is_some_and(|base| instance.is_subtype(ty, base))
 }
 
 /// 这个类型是不是"类型对象"（`type` 及其子类，`TS-41` 的层次说了算）。
 pub(crate) fn is_type_object(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    instance.is_subtype(ty, builtin_type(instance, "type"))
+    instance
+        .hot_type(HotId::Type)
+        .is_some_and(|base| instance.is_subtype(ty, base))
 }

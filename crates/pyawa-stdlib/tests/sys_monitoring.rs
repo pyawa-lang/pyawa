@@ -114,11 +114,11 @@ fn monitoring_tool_api_is_honestly_unimplemented() {
         let message = match error {
             ExecError::Raised { exception } => {
                 // SAFETY: exception 是存活对象。
-                let ty = unsafe { exception.as_ref() }.ty();
+                let ty = unsafe { exception.get().as_ref() }.ty();
                 // SAFETY: ty 由注册表持有。
                 let type_name = unsafe { ty.as_ref() }.name().to_owned();
                 let value = instance
-                    .object_str(exception)
+                    .object_str(exception.get())
                     .expect("异常对象要能转文本");
                 assert_eq!(type_name, "NotImplementedError", "{name}");
                 value

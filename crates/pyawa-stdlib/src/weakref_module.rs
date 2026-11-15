@@ -48,33 +48,54 @@ fn proxy_native(
     Ok(instance.retain(*target))
 }
 
-/// `getweakrefcount(obj)`：本层没有真正的弱引用 ⇒ 恒 **0** ✓（如实 ✓）。
+/// `getweakrefcount(obj)`：指向 `obj` 的弱引用数 ✓（round 59：真弱引用登记表 ✓）。
 fn getweakrefcount_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    Ok(instance.new_int(0))
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "getweakrefcount expected 1 argument, got 0",
+        ));
+    };
+    Ok(instance.new_int(instance.weakref_count(object) as i64))
 }
 
-/// `getweakrefs(obj)`：同上 ⇒ 恒**空列表** ✓。
+/// `getweakrefs(obj)`：指向 `obj` 的弱引用列表 ✓（round 59）。
 fn getweakrefs_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    Ok(instance.new_list(Vec::new()))
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "getweakrefs expected 1 argument, got 0",
+        ));
+    };
+    let refs: Vec<NonNull<Header>> = instance
+        .weakrefs_of(object)
+        .into_iter()
+        .map(|weakref| instance.retain(weakref))
+        .collect();
+    Ok(instance.new_list(refs))
 }
 
-/// `_remove_dead_weakref(dict, key)`：本层没有死引用 ⇒ **什么都不做** ✓（返回 `None` ✓）。
+/// `_remove_dead_weakref(dict, key)`：死引用的回调里用它**原子删键** ✓（round 59）。
+/// 键是那个弱引用（哈希用创建时缓存的 ✓ ⇒ 目标死后也能删 ✓）。
 fn remove_dead_weakref_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    if let (Some(mapping), Some(key)) = (args.first().copied(), args.get(1).copied()) {
+        instance.dict_remove_key(mapping, key);
+    }
     Ok(instance.retain(instance.singletons().none()))
 }
 

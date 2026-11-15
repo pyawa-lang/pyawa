@@ -41,7 +41,7 @@ fn run(vm: &Vm, source: &str, name: &str) -> Result<i64, String> {
         }
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // SAFETY: 异常对象存活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             Err(unsafe { ty.as_ref() }.name().to_owned())
         }
         Err(other) => Err(format!("{other:?}")),
@@ -90,7 +90,7 @@ fn run_truth(vm: &Vm, source: &str) -> Result<bool, String> {
         }
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // SAFETY: 异常对象存活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             Err(unsafe { ty.as_ref() }.name().to_owned())
         }
         Err(other) => Err(format!("{other:?}")),
@@ -172,7 +172,7 @@ fn run_len(vm: &Vm, source: &str) -> Result<usize, String> {
         }
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // SAFETY: 异常对象存活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             Err(unsafe { ty.as_ref() }.name().to_owned())
         }
         Err(other) => Err(format!("{other:?}")),
@@ -271,7 +271,7 @@ fn run_dict_entries(
                 })
                 .collect())
         }
-        Err(pyawa_core::ExecError::Raised { exception }) => Err(exception_parts(vm, exception)),
+        Err(pyawa_core::ExecError::Raised { exception }) => Err(exception_parts(vm, exception.get())),
         Err(other) => Err((format!("{other:?}"), String::new())),
     }
 }
@@ -303,7 +303,7 @@ fn run_exception(vm: &Vm, source: &str) -> (String, String) {
     let frame = vm.instance.alloc(frame);
     match pyawa_core::execute(&vm.instance, &frame) {
         Ok(_) => panic!("{source:?} 应当抛异常"),
-        Err(pyawa_core::ExecError::Raised { exception }) => exception_parts(vm, exception),
+        Err(pyawa_core::ExecError::Raised { exception }) => exception_parts(vm, exception.get()),
         Err(other) => panic!("{source:?} 应当是 Python 异常，实际：{other:?}"),
     }
 }

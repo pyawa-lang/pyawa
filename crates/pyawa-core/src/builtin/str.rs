@@ -4,11 +4,12 @@
 //! * 依赖的 `bound_text`／`text_argument`／`text_prefixes` 仍留在 `builtin_objects.rs`（已放宽到 `pub(crate)` ✓）；
 //! * `NativeFn` 的定义也在 `builtin_objects.rs:49` ✓（`pub type` ✓）⇒ 这里 import ✓。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::builtin_objects::{bound_text, text_argument, text_prefixes, MethodObject};
 use crate::executor::{
-    attribute_lookup_with_getattr, builtin_type, format_value_with_spec, subscript_read, Attribute,
+    attribute_lookup_with_getattr, format_value_with_spec, subscript_read, Attribute,
 };
 use crate::header::Header;
 use crate::instance::Instance;
@@ -21,32 +22,284 @@ use crate::instance::Instance;
 ///
 /// 口径（照参照逐例实测 ✓）：下标按**字符**数 ✓；负数先 `+len` 再夹到 `>=0` ✓；
 /// `end` 缺省是 `len` ✓；`start > end` ⇒ 找不到 ✓；空子串那条另算（见调用处 ✓）。
+/// **绑定 `str` 的借用视图**（`Cow`）：合法 UTF-8 ⇒ **借用**（不拷贝 ✓）；WTF-8 表示
+/// （含孤立代理，`text_of` 给 `None`）⇒ 退化成有损 `String`。
+///
+/// 为什么要它：`bound_text` 每口都 `to_owned()` 克隆整个接收者 ✗ —— `test_userstring` 的
+/// `test_find_periodic_pattern` 对 2–4 KB 串做上千次 `startswith(p, i)` ⇒ 光拷贝就几十 MB
+/// （round 40 实测 33 s → 借用后回落）。热路径（`find`／`count`／`startswith` 一族）改用它 ✓。
+fn bound_text_cow<'a>(
+    instance: &'a Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<std::borrow::Cow<'a, str>, crate::ExecError> {
+    let Some(bound) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
+    };
+    if let Some(text) = instance.text_of(bound) {
+        return Ok(std::borrow::Cow::Borrowed(text));
+    }
+    Ok(std::borrow::Cow::Owned(instance.text_value(bound).unwrap_or_default()))
+}
+
+/// **`str`（含孤立代理）的 WTF-8 字节**（round 107）：`text_of` 对 WTF-8 表示给 `None` ✗
+/// ⇒ 字符串方法（`split`／`rfind` 一族）按**字节**处理再还原 ✓（与 `concat` 同一手法 ✓）。
+fn bound_wtf8_bytes(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<Vec<u8>, crate::ExecError> {
+    let Some(bound) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
+    };
+    instance
+        .wtf8_of(bound)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs a str argument"))
+}
+
+/// 把 **WTF-8 字节偏移**换成**码点数**（`str.find` 一族的下标语义 ✓；越界按全文长度 ✓）。
+fn wtf8_char_index(bytes: &[u8], byte_offset: usize) -> i64 {
+    let mut count = 0i64;
+    let mut index = 0usize;
+    while index < byte_offset.min(bytes.len()) {
+        // 跳过 UTF-8／WTF-8 的一个码元序列（首字节高 1 的个数决定长度；非法字节按 1 字节走 ✓）。
+        let lead = bytes[index];
+        let length = if lead < 0x80 {
+            1
+        } else if lead & 0xE0 == 0xC0 {
+            2
+        } else if lead & 0xF0 == 0xE0 {
+            3
+        } else if lead & 0xF8 == 0xF0 {
+            4
+        } else {
+            1
+        };
+        index += length.min(bytes.len() - index);
+        count += 1;
+    }
+    count
+}
+
+/// 在字节串里找子串（`reverse=true` ⇒ 从尾部找 ✓；空 needle 按参照规则处理 ✓）。
+fn find_subsequence(haystack: &[u8], needle: &[u8], reverse: bool) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(if reverse { haystack.len() } else { 0 });
+    }
+    if needle.len() > haystack.len() {
+        return None;
+    }
+    if reverse {
+        (0..=haystack.len() - needle.len())
+            .rev()
+            .find(|&start| &haystack[start..start + needle.len()] == needle)
+    } else {
+        (0..=haystack.len() - needle.len())
+            .find(|&start| &haystack[start..start + needle.len()] == needle)
+    }
+}
+
+/// `start`／`end` 区间（`str.find` 一族的参照口径 ✓）：负数加长度、越界夹到 `0..=len` ✓；
+/// `start > end` 交给调用方给 `-1`／`ValueError` ✓。缺省 `start=0`、`end=len` ✓。
+/// 参数非整数／超 3 个实参 ⇒ `TypeError` ✓（`None` 当缺省 ✓ —— 参照 `find(sub, None)` 合法 ✓）。
+fn text_range_bounds(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    length: usize,
+    method: &str,
+) -> Result<(usize, usize), crate::ExecError> {
+    let length = length as i64;
+    let mut values: [Option<i64>; 2] = [None, None];
+    for (index, value) in args.iter().skip(1).take(2).enumerate() {
+        if instance.type_of(*value) == instance.singletons().none_type() {
+            continue;
+        }
+        // **超出 `i64` 的整数按饱和处理**（round 107）：参照 `"ab".rfind("xxx", sys.maxsize + 1, 0)`
+        // 给 **-1** ✓（start > len ⇒ 空区间）—— `to_i64()` 对大整数给 `None` ✗ ⇒ 先前误报
+        // `TypeError` ✗（官方 `test_userstring.test_rfind` ✓）。
+        if let Some(number) = instance.int_of(*value) {
+            let saturated = number.to_i64().unwrap_or_else(|| {
+                if number.to_bigint().signum() < 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            });
+            values[index] = Some(saturated);
+            continue;
+        }
+        let name = instance.type_name(instance.type_of(*value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{method}() 的 start／end 要整数，不是 '{name}'"),
+        ));
+    }
+    let normalize = |value: Option<i64>, default: i64| -> i64 {
+        match value {
+            Some(number) => {
+                let shifted = if number < 0 { number + length } else { number };
+                shifted.clamp(0, length)
+            }
+            None => default,
+        }
+    };
+    let start = normalize(values[0], 0);
+    let end = normalize(values[1], length);
+    // **`start > len` 的显式形态**：参照 `"abc".rfind("", 4)` ⇒ -1 ✓（`end` 夹到 len 后 start>end ✓）。
+    let raw_start = values[0].unwrap_or(0);
+    let start = if raw_start > length { length + 1 } else { start };
+    Ok((start as usize, end as usize))
+}
+
+/// 用 WTF-8 字节切分（`maxsplit < 0` ⇒ 不限 ✓）；返回**字节段**列表 ✓。
+fn split_wtf8(text: &[u8], separator: &[u8], maxsplit: i64) -> Vec<Vec<u8>> {
+    let mut parts: Vec<Vec<u8>> = Vec::new();
+    let mut rest = text;
+    let mut splits = 0i64;
+    if maxsplit < 0 {
+        while let Some(position) = find_subsequence(rest, separator, false) {
+            parts.push(rest[..position].to_vec());
+            rest = &rest[position + separator.len()..];
+        }
+        parts.push(rest.to_vec());
+        return parts;
+    }
+    while splits < maxsplit {
+        let Some(position) = find_subsequence(rest, separator, false) else {
+            break;
+        };
+        parts.push(rest[..position].to_vec());
+        rest = &rest[position + separator.len()..];
+        splits += 1;
+    }
+    parts.push(rest.to_vec());
+    parts
+}
+
+/// 空白切分（`maxsplit` 语义照参照 ✓）：按**码点**判 `char::is_whitespace` ✓（孤立代理按非空白 ✓）。
+fn split_whitespace_wtf8(text: &[u8], maxsplit: i64) -> Vec<Vec<u8>> {
+    // 参照口径（3.14.4 实测 ✓）：`maxsplit == 0` ⇒ **去掉前导空白**后的整段（尾随空白保留 ✓）；
+    // 达到 `maxsplit` 后 ⇒ 跳过空白、剩余整段原样收尾 ✓（" a  b c  ".split(None,1) ⇒ ['a','b c  '] ✓）。
+    let points: Vec<u32> = crate::wtf8::code_points(text)
+        .map(|point| point.expect("刚确认是 WTF-8"))
+        .collect();
+    let is_space = |point: u32| char::from_u32(point).is_some_and(char::is_whitespace);
+    let mut parts: Vec<Vec<u8>> = Vec::new();
+    let mut index = 0usize;
+    let emit = |from: usize, to: usize, parts: &mut Vec<Vec<u8>>| {
+        let mut bytes: Vec<u8> = Vec::new();
+        for &point in &points[from..to] {
+            crate::wtf8::encode_code_point(point, &mut bytes).expect("码点可编码");
+        }
+        parts.push(bytes);
+    };
+    while index < points.len() && is_space(points[index]) {
+        index += 1;
+    }
+    if maxsplit == 0 {
+        if index < points.len() {
+            emit(index, points.len(), &mut parts);
+        }
+        return parts;
+    }
+    while index < points.len() {
+        let start = index;
+        while index < points.len() && !is_space(points[index]) {
+            index += 1;
+        }
+        emit(start, index, &mut parts);
+        while index < points.len() && is_space(points[index]) {
+            index += 1;
+        }
+        if maxsplit > 0 && parts.len() as i64 >= maxsplit {
+            if index < points.len() {
+                emit(index, points.len(), &mut parts);
+            }
+            break;
+        }
+    }
+    parts
+}
+
+/// **字符数**（`str` 是 UTF-8：非 ASCII 时必须数 `chars()`；**ASCII 快路径**直接 `len()` ✓）。
+///
+/// 为什么要它：`test_userstring` 的 `test_find_periodic_pattern` 会对 2–4 KB 的 ASCII 串做
+/// 上千次 `startswith(p, i)`；先前每口都 `text.chars().count()`（O(n)）＋ 逐字符找字节偏移
+/// ⇒ 整体 O(n²)，54 s 的测试一下跑到 10 分钟量级 ✗（round 40 实测）。
+fn text_char_len(text: &str) -> i64 {
+    if text.is_ascii() {
+        text.len() as i64
+    } else {
+        text.chars().count() as i64
+    }
+}
+
+/// **方法实参个数上限检查**（`P3-42` round 44）：参照对多给实参报
+/// `<name>() takes at most N arguments (M given)` ✓ —— 报文**必须以方法名开头**（有一条官方测试
+/// 正是用 `^find\b` 这类正则钉报文前缀 ✓）。
+fn check_max_arguments(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    max: usize,
+    method: &str,
+) -> Result<(), crate::ExecError> {
+    if args.len() > max {
+        // 参照口径：`find expected at most 3 arguments, got 4` ✓（无括号、无 "takes"）。
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{method} expected at most {max} arguments, got {}", args.len()),
+        ));
+    }
+    Ok(())
+}
+
+/// **切片下标实参**（`start`／`end`）：整数（含**超出 `i64` 的大整数**，按方向饱和 —— 切片语义随后
+/// 会再夹到 `len` ✓）或 `__index__` 对象 ✓；否则参照同形的 `TypeError`。
+fn bound_index(
+    instance: &Instance,
+    object: NonNull<Header>,
+    method: &str,
+) -> Result<i64, crate::ExecError> {
+    if let Some(number) = instance.int_of(object) {
+        return Ok(number.to_i64().unwrap_or_else(|| {
+            // 超出 `i64` 的整数：按方向饱和（切片语义随后夹到 `len`）。
+            if number.to_bigint().signum() < 0 {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }));
+    }
+    match instance.index_value(object) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{method}: 下标要是整数"),
+        )),
+        Err(error) => Err(error),
+    }
+}
+
 fn search_bounds(
     instance: &Instance,
     text: &str,
     args: &[NonNull<Header>],
     method: &str,
 ) -> Result<(i64, i64, i64), crate::ExecError> {
-    let length = text.chars().count() as i64;
+    let length = text_char_len(text);
     let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
         match args.get(index) {
             None => Ok(default),
-            Some(value) => instance
-                .index_value(*value)
-                .ok()
-                .flatten()
-                .ok_or_else(|| {
-                    instance.raise_builtin_error(
-                        "TypeError",
-                        &format!("{method}: 下标要是整数"),
-                    )
-                }),
+            // **`None` ＝ 缺省**（本机 3.14.4 实测：`"abc".find("b", None)` ⇒ 1 ✓；
+            // `None` 在切片口径里就是"用默认边界" ✓ —— 先前落到"下标要是整数" ✗）。
+            Some(value) if *value == instance.singletons().none() => Ok(default),
+            Some(value) => bound_index(instance, *value, method),
         }
     };
     let start = read(1, 0)?;
     let end = read(2, length)?;
-    let start = if start < 0 { (start + length).max(0) } else { start };
-    let end = if end < 0 { (end + length).max(0) } else { end };
+    let start = if start < 0 { start.saturating_add(length).max(0) } else { start };
+    let end = if end < 0 { end.saturating_add(length).max(0) } else { end };
+    // **正的 `end` 也夹到 `len`** ✓（`P3-42` round 44）：空子串的 `rfind` 走
+    // `end <= length` 那条判据，而 `UserString.rfind(sub, 0)` 传的是 `end=sys.maxsize`
+    // ⇒ 不夹就误判成 -1 ✗（参照 `'abc'.rfind('', 0)` ⇒ 3 ✓）。
+    let end = end.clamp(0, length);
     Ok((start, end, length))
 }
 
@@ -55,10 +308,51 @@ fn char_byte_offset(text: &str, char_index: i64) -> usize {
     if char_index <= 0 {
         return 0;
     }
+    // **ASCII 快路径**：字节偏移＝字符下标 ✓（见 [`text_char_len`] 的动因）。
+    if text.is_ascii() {
+        return (char_index as usize).min(text.len());
+    }
     match text.char_indices().nth(char_index as usize) {
         Some((byte, _)) => byte,
         None => text.len(),
     }
+}
+
+/// **`startswith`／`endswith` 的窗口**（`P3-41` round 40 修 ✗）：`start`／`end` 必须生效。
+///
+/// 参照口径（本机 3.14.4 逐例实测）：下标按**字符**数 ✓；负数先 `+len`、再夹到 `>=0` ✓；
+/// **`start > len` ⇒ 窗口无效**（连空串也一样 —— `"abc".startswith("", 5)` ⇒ `False` ✓；
+/// 这点与 `find` 的空子串口径不同）；`end` 缺省 `len`、超界夹到 `len` ✓；`start > end` ⇒ 无效 ✓；
+/// `None` ＝ 缺省 ✓（3.14 的切片口径）。
+fn prefix_suffix_window<'a>(
+    instance: &Instance,
+    text: &'a str,
+    args: &[NonNull<Header>],
+    method: &str,
+) -> Result<Option<&'a str>, crate::ExecError> {
+    let length = text_char_len(text);
+    let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
+        match args.get(index) {
+            None => Ok(default),
+            Some(value) if *value == instance.singletons().none() => Ok(default),
+            Some(value) => bound_index(instance, *value, method),
+        }
+    };
+    let start = read(1, 0)?;
+    let end = read(2, length)?;
+    let start = if start < 0 { start + length } else { start };
+    if start > length {
+        return Ok(None);
+    }
+    let start = start.max(0);
+    let end = if end < 0 { end + length } else { end };
+    let end = end.clamp(0, length);
+    if start > end {
+        return Ok(None);
+    }
+    let byte_start = char_byte_offset(text, start);
+    let byte_end = char_byte_offset(text, end);
+    Ok(Some(&text[byte_start..byte_end]))
 }
 
 /// **四口共用的搜索** ✓：`reverse` 走 `rfind` 语义 ✓；回**字符**下标 ✓（找不到 `None` ✓）。
@@ -96,7 +390,14 @@ fn text_search(
     }
     let window = &text[byte_start..byte_end];
     let found = if reverse { window.rfind(needle) } else { window.find(needle) };
-    Ok(found.map(|byte| start + window[..byte].chars().count() as i64))
+    // **ASCII 快路径**：窗口是 ASCII 时字节下标＝字符下标 ✓。
+    Ok(found.map(|byte| {
+        if window.is_ascii() {
+            start + byte as i64
+        } else {
+            start + window[..byte].chars().count() as i64
+        }
+    }))
 }
 
 pub(crate) fn str_find_native(
@@ -105,7 +406,8 @@ pub(crate) fn str_find_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+        check_max_arguments(instance, args, 3, "find")?;
+    let text = bound_text_cow(instance, bound)?;
     let needle = text_argument(instance, args, 0, "find")?;
     // 参照按**字符**给下标 ✓；`start`／`end` 照参照归一化 ✓（task-22 第 2 轮修 ✗）。
     let found = text_search(instance, &text, &needle, args, "find", false)?.unwrap_or(-1);
@@ -178,7 +480,10 @@ pub(crate) fn str_translate_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+    // **WTF-8 码点层**（round 107）：含孤立代理的串 `text_of` 给 `None` ✗ ⇒ 先前
+    // `bound_text` 退化成空串／丢代理 ✗；`re.escape` 的 `str.translate` 正走这里 ✓
+    //（官方 `test_unicode_file` 的 `TESTFN_UNENCODABLE` ✓）。
+    let source = bound_wtf8_bytes(instance, bound)?;
     let Some(table) = args.first() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
@@ -186,30 +491,39 @@ pub(crate) fn str_translate_native(
         ));
     };
     let none_type = instance.singletons().none_type();
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
+    let mut out: Vec<u8> = Vec::with_capacity(source.len());
+    for point in crate::wtf8::code_points(&source) {
+        let ch = point.expect("刚确认是 WTF-8");
         // **键是"码位"这个 `int` 对象** ✓（`maketrans` 也是这么建的 ✓ —— 一处真相 ✓）。
         let key = instance.new_int(ch as i64);
         // **用统一的取值口** ✓（`subscript_read` ✓ —— 表就是普通映射 ✓）；**查不到 ⇒ 原字符留下** ✓
         // ⇒ 把 `Err`（`KeyError` 一类）也当"没有这一项" ✓（`translate` 的语义正是"缺省保留" ✓）。
-        let found = crate::executor::subscript::subscript_read(instance, *table, key).ok();
+        // **`Err` 也要还**（task-18 `.ok()` 族）：`translate` 的语义是"查不到就原样保留"。
+        // 先前 `.ok()` 把 `Err(Raised)` 的异常引用丢掉（用户映射的 `__getitem__` 抛错时漏一颗）。
+        let found = match crate::executor::subscript::subscript_read(instance, *table, key) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                crate::executor::runtime::discard_error(instance, &error);
+                None
+            }
+        };
         // SAFETY: key 由本函数持有（新引用 ✓）⇒ 用完交还 ✓。
         unsafe { instance.release_object(key.as_ptr()) };
         let Some(value) = found else {
-            out.push(ch);
+            crate::wtf8::encode_code_point(ch, &mut out).expect("码点可编码");
             continue;
         };
         if instance.type_of(value) == none_type {
             continue; // `None` ⇒ 删除 ✓
         }
         if let Some(number) = instance.int_of(value).and_then(|value| value.to_i64()) {
-            if let Some(replacement) = u32::try_from(number).ok().and_then(char::from_u32) {
-                out.push(replacement);
+            if let Ok(replacement) = u32::try_from(number) {
+                crate::wtf8::encode_code_point(replacement, &mut out).expect("码点可编码");
                 continue;
             }
         }
-        if let Some(replacement) = instance.text_of(value) {
-            out.push_str(replacement);
+        if let Some(replacement) = instance.wtf8_of(value) {
+            out.extend_from_slice(replacement);
             continue;
         }
         let name = instance.type_name(instance.type_of(value));
@@ -218,7 +532,9 @@ pub(crate) fn str_translate_native(
             &format!("character mapping must return integer, None or str, not {name}"),
         ));
     }
-    Ok(instance.new_str(&out))
+    Ok(instance
+        .new_str_wtf8(&out)
+        .expect("translate 的输出仍是合法 WTF-8"))
 }
 
 /// `str.rfind(sub)` ✓（照 `find` 镜像 ✓；找不到 ⇒ `-1` ✓）。
@@ -228,9 +544,28 @@ pub(crate) fn str_rfind_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let needle = text_argument(instance, args, 0, "rfind")?;
-    let found = text_search(instance, &text, &needle, args, "rfind", true)?.unwrap_or(-1);
+        check_max_arguments(instance, args, 3, "rfind")?;
+    // **WTF-8 字节层搜索＋`start`／`end` 区间**（round 107）：含孤立代理的串 `text_of` 给 `None` ✗；
+    // 且区间语义要照参照（`"abc".rfind("", 4)` ⇒ **-1** ✓ —— 先前一律给 3 ✗，官方夹具
+    // `equality_and_str_semantics` 当场红 ✓）。
+    let text = bound_wtf8_bytes(instance, bound)?;
+    let Some(needle_value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "rfind() takes at least 1 argument (0 given)",
+        ));
+    };
+    let Some(needle) = instance.wtf8_of(needle_value) else {
+        return Err(instance.raise_builtin_error("TypeError", "must be str, not other"));
+    };
+    let (start, end) = text_range_bounds(instance, args, text.len(), "rfind")?;
+    if start > end {
+        return Ok(instance.new_int(-1));
+    }
+    let window = &text[start..end];
+    let found = find_subsequence(window, needle, true)
+        .map(|position| wtf8_char_index(&text, start + position))
+        .unwrap_or(-1);
     Ok(instance.new_int(found))
 }
 
@@ -241,7 +576,8 @@ pub(crate) fn str_index_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+        check_max_arguments(instance, args, 3, "index")?;
+    let text = bound_text_cow(instance, bound)?;
     let needle = text_argument(instance, args, 0, "index")?;
     match text_search(instance, &text, &needle, args, "index", false)? {
         Some(found) => Ok(instance.new_int(found)),
@@ -256,10 +592,24 @@ pub(crate) fn str_rindex_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let needle = text_argument(instance, args, 0, "rindex")?;
-    match text_search(instance, &text, &needle, args, "rindex", true)? {
-        Some(found) => Ok(instance.new_int(found)),
+        check_max_arguments(instance, args, 3, "rindex")?;
+    // **WTF-8 字节层搜索＋`start`／`end` 区间**（round 107；与 `rfind` 同一口径 ✓）。
+    let text = bound_wtf8_bytes(instance, bound)?;
+    let Some(needle_value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "rindex() takes at least 1 argument (0 given)",
+        ));
+    };
+    let Some(needle) = instance.wtf8_of(needle_value) else {
+        return Err(instance.raise_builtin_error("TypeError", "must be str, not other"));
+    };
+    let (start, end) = text_range_bounds(instance, args, text.len(), "rindex")?;
+    if start > end {
+        return Err(instance.raise_builtin_error("ValueError", "substring not found"));
+    }
+    match find_subsequence(&text[start..end], needle, true) {
+        Some(position) => Ok(instance.new_int(wtf8_char_index(&text, start + position))),
         None => Err(instance.raise_builtin_error("ValueError", "substring not found")),
     }
 }
@@ -273,6 +623,10 @@ pub(crate) fn str_rpartition_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
     let separator = text_argument(instance, args, 0, "rpartition")?;
+    // 空分隔符 ⇒ `ValueError: empty separator` ✓（与 `partition` 同口径）。
+    if separator.is_empty() {
+        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+    }
     let (head, mid, tail) = match text.rfind(&separator) {
         Some(byte) => (
             text[..byte].to_owned(),
@@ -295,12 +649,18 @@ pub(crate) fn str_count_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+        check_max_arguments(instance, args, 3, "count")?;
+    let text = bound_text_cow(instance, bound)?;
     let needle = text_argument(instance, args, 0, "count")?;
+    // **`start`／`end` 生效**（`P3-41` round 40 修 ✗）：与 `startswith` 同一条窗口口径
+    // （`start > len` ⇒ 0 ✓，`"abc".count("", 5)` ⇒ 0 ✓、`"abc".count("", 3)` ⇒ 1 ✓）。
+    let Some(window) = prefix_suffix_window(instance, &text, args, "count")? else {
+        return Ok(instance.new_int(0));
+    };
     let count = if needle.is_empty() {
-        text.chars().count() as i64 + 1
+        text_char_len(window) + 1
     } else {
-        text.matches(needle.as_str()).count() as i64
+        window.matches(needle.as_str()).count() as i64
     };
     Ok(instance.new_int(count))
 }
@@ -490,18 +850,26 @@ pub(crate) fn str_expandtabs_native(
     let mut out = String::with_capacity(text.len());
     let mut column = 0usize;
     for ch in text.chars() {
-        if ch == '\t' {
-            if tabsize == 0 {
-                continue;
+        match ch {
+            '\t' => {
+                if tabsize == 0 {
+                    continue;
+                }
+                let pad = tabsize - (column % tabsize);
+                for _ in 0..pad {
+                    out.push(' ');
+                }
+                column += pad;
             }
-            let pad = tabsize - (column % tabsize);
-            for _ in 0..pad {
-                out.push(' ');
+            // **`\n`／`\r` 都归零列** ✓（参照口径；先前按普通字符 +1 ✗ ⇒ 换行后的 tab 位置全错 ✗）。
+            '\n' | '\r' => {
+                out.push(ch);
+                column = 0;
             }
-            column += pad;
-        } else {
-            out.push(ch);
-            column += 1;
+            _ => {
+                out.push(ch);
+                column += 1;
+            }
         }
     }
     Ok(instance.new_str(&out))
@@ -549,7 +917,15 @@ pub(crate) fn str_zfill_native(
     if width <= current {
         return Ok(instance.new_str(&text));
     }
-    let padded = format!("{}{}", "0".repeat((width - current) as usize), text);
+    // **符号在零之前** ✓（`'+123'.zfill(5)` ⇒ `'+0123'`；先前给 `'0+123'` ✗）。
+    let zeros: String = core::iter::repeat('0').take((width - current) as usize).collect();
+    let padded = match text.chars().next() {
+        Some(sign @ ('+' | '-')) => {
+            let rest: String = text.chars().skip(1).collect();
+            format!("{sign}{zeros}{rest}")
+        }
+        _ => format!("{zeros}{text}"),
+    };
     Ok(instance.new_str(&padded))
 }
 
@@ -648,7 +1024,9 @@ pub(crate) fn str_strip_side_native(
     // **带参形态**（第 527 轮接线 ✗）：`chars` 是**字符集合**（不是子串 ✓）——
     // 先前一律报 `NotImplementedError` ✗ ⇒ `Lib/site.py` 等在这一面上卡住 ✓。
     // 参照的报错口径：`strip arg must be None or str` ✓。
-    let trimmed = if let Some(first) = args.first() {
+    let trimmed = if let Some(first) = args.first().filter(|value| **value != instance.singletons().none()) {
+        // **`None` ＝ 缺省**（本机 3.14.4：`'  a  '.strip(None)` ⇒ `'a'` ✓；先前落到
+        // "strip arg must be None or str" ✗ —— `UserString.strip(None)` 直接踩它 ✓）。
         let Some(chars) = instance.text_of(*first) else {
             return Err(instance.raise_builtin_error(
                 "TypeError",
@@ -704,7 +1082,7 @@ pub(crate) fn str_title_native(
         // 参照把"字母"当词字符 ✓（空白与标点都断开 ✓）
         if character.is_alphabetic() {
             if at_word_start {
-                out.extend(character.to_uppercase());
+                push_titlecase(&mut out, character);
             } else {
                 out.extend(character.to_lowercase());
             }
@@ -718,6 +1096,24 @@ pub(crate) fn str_title_native(
 }
 
 /// `capitalize()`（第 154 轮）：首字符大写 ✓、**其余全部小写** ✓（参照口径 ✓：`"aB"` ⇒ `'Ab'` ✓）。
+/// **一个字符的 title 映射**（参照 `str.capitalize()`／`str.title()` 的词首口径）：
+/// 先查生成表 `unicode_case::TITLE_CASE_OVERRIDES` ✓（title ≠ upper 的 135 个码点），否则回退
+/// Rust 的 `to_uppercase`（与参照的 upper 映射一致 ✓）。
+fn push_titlecase(out: &mut String, character: char) {
+    let code_point = character as u32;
+    if let Ok(index) = crate::unicode_case::TITLE_CASE_OVERRIDES
+        .binary_search_by_key(&code_point, |(point, _)| *point)
+    {
+        for point in crate::unicode_case::TITLE_CASE_OVERRIDES[index].1 {
+            if let Some(expanded) = char::from_u32(*point) {
+                out.push(expanded);
+            }
+        }
+        return;
+    }
+    out.extend(character.to_uppercase());
+}
+
 pub(crate) fn str_capitalize_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -729,7 +1125,8 @@ pub(crate) fn str_capitalize_native(
     let capitalized = match characters.next() {
         Some(first) => {
             let mut out = String::new();
-            out.extend(first.to_uppercase());
+            // **title 映射**（不是 upper ✓）：`'ῼ'.capitalize()` ⇒ `'ῼ'` ✓（参照实测）。
+            push_titlecase(&mut out, first);
             out.extend(characters.flat_map(|character| character.to_lowercase()));
             out
         }
@@ -738,7 +1135,7 @@ pub(crate) fn str_capitalize_native(
     Ok(instance.new_str(&capitalized))
 }
 
-/// `rjust`／`ljust`／`center`（第 154 轮）：按宽度补空格 ✓（**不接填充字符** ✗，如实登记 ✓）。
+/// `rjust`／`ljust`／`center`：按宽度补**填充字符** ✓（第二实参；缺省空格 ✓）。
 pub(crate) fn str_pad_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -750,21 +1147,39 @@ pub(crate) fn str_pad_native(
         .first()
         .and_then(|value| instance.int_value(*value))
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "width 要整数"))?;
+    // **填充字符**（`P3-42` round 44）：参照口径是"恰好一个字符的 str"；否则
+    // `TypeError: The fill character must be exactly one character long` ✓。先前整条实参
+    // 被**忽略** ✗ ⇒ `'abc'.center(10, '*')` 给空格 ✗。
+    let fill: char = match args.get(1) {
+        None => ' ',
+        Some(value) => match instance.text_of(*value) {
+            Some(fill) if fill.chars().count() == 1 => fill.chars().next().expect("刚数过 1 个"),
+            _ => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "The fill character must be exactly one character long",
+                ))
+            }
+        },
+    };
     let current = text.chars().count() as i64;
     if width <= current {
         return Ok(instance.new_str(&text));
     }
     let pad = (width - current) as usize;
+    let fill_text: String = core::iter::repeat(fill).take(pad).collect();
     let padded = match mode {
-        0 => format!("{}{}", " ".repeat(pad), text), // rjust
-        1 => format!("{}{}", text, " ".repeat(pad)), // ljust
+        0 => format!("{}{}", fill_text, text), // rjust
+        1 => format!("{}{}", text, fill_text), // ljust
         _ => {
             // center 的**准确规则**照参照 ✓：`left = pad//2 + (pad & width & 1)`（CPython 的
             //   `str.center` 就是这么写的 ✓）—— 实测三个样例都对 ✓：`"a".center(2)` ⇒ `'a '` ✓、
             //   `"ab".center(5)` ⇒ `'  ab '` ✓、`"a".center(5)` ⇒ `'  a  '` ✓。
             //   （我先前先写成"多的一格在左"✗、又改成 ceil ✗，两次都不对 ⇒ 现在照公式 ✓。）
             let left = (pad / 2 + (pad & (width as usize) & 1)) as usize;
-            format!("{}{}{}", " ".repeat(left), text, " ".repeat(pad - left))
+            let left_text: String = core::iter::repeat(fill).take(left).collect();
+            let right_text: String = core::iter::repeat(fill).take(pad - left).collect();
+            format!("{left_text}{text}{right_text}")
         }
     };
     Ok(instance.new_str(&padded))
@@ -833,20 +1248,30 @@ pub(crate) fn str_rsplit_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
-    let separator = text_argument(instance, args, 0, "rsplit")?;
-    if separator.is_empty() {
-        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
-    }
-    // **Rust 的 `rsplit` 是逆序产出** ✗ ⇒ 要 `.rev()` 才与参照同序 ✓
-    //   （参照里 `"a,b,c".rsplit(",")` 与 `split` **同序** ✓ ⇒ 空格子放最后 ✓；夹具/语料当场抓到 ✓）。
-    // **Rust 的 `rsplit` 逆序产出** ✗，且 `&str` 的 `rsplit` **不支持 `.rev()`** ✗（`StrSearcher`
-    //   不是双端 ✓）⇒ **先收进 Vec、再 `reverse()`** ✓，这样才与参照同序 ✓。
-    let mut collected: Vec<String> = text
-        .rsplit(separator.as_str())
-        .map(|part| part.to_owned())
-        .collect();
-    collected.reverse();
-    let parts: Vec<NonNull<Header>> = collected
+    let (separator, maxsplit) = split_arguments(instance, args, "rsplit")?;
+    let parts: Vec<String> = match separator {
+        Some(separator) => {
+            if separator.is_empty() {
+                return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+            }
+            if maxsplit < 0 {
+                let mut collected: Vec<String> =
+                    text.rsplit(separator.as_str()).map(str::to_owned).collect();
+                collected.reverse();
+                collected
+            } else {
+                // `rsplitn` 从右往左产出（**逆序**）⇒ 收完再反转成参照顺序 ✓。
+                let mut collected: Vec<String> = text
+                    .rsplitn(maxsplit as usize + 1, separator.as_str())
+                    .map(str::to_owned)
+                    .collect();
+                collected.reverse();
+                collected
+            }
+        }
+        None => rsplit_on_whitespace(&text, maxsplit),
+    };
+    let parts: Vec<NonNull<Header>> = parts
         .iter()
         .map(|part| instance.new_str(part))
         .collect();
@@ -965,7 +1390,8 @@ pub(crate) fn str_strip_native(
     let text = bound_text(instance, bound)?;
     // **带参形态**（第 527 轮接线 ✗）：`chars` 是**字符集合** ✓ —— 先前把实参**丢掉** ✗
     // ⇒ `"xxabcxx".strip("x")` 给的是 `"xxabcxx"` ✗（参照 `abc` ✓）。两侧都按集合剪 ✓。
-    let trimmed = if let Some(first) = args.first() {
+    let trimmed = if let Some(first) = args.first().filter(|value| **value != instance.singletons().none()) {
+        // **`None` ＝ 缺省** ✓（同上）。
         let Some(chars) = instance.text_of(*first) else {
             return Err(instance.raise_builtin_error(
                 "TypeError",
@@ -989,11 +1415,15 @@ pub(crate) fn str_startswith_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+        check_max_arguments(instance, args, 3, "startswith")?;
+    let text = bound_text_cow(instance, bound)?;
     // **也认元组** ✓（第 195 轮：`Lib/importlib/_bootstrap_external.py:61` 就是
     // `sys.platform.startswith(('win32', 'cygwin', 'darwin'))` ✓ —— 先前只认单个 `str` ✗）。
     let prefixes = text_prefixes(instance, args, "startswith")?;
-    let found = prefixes.iter().any(|prefix| text.starts_with(prefix));
+    let found = match prefix_suffix_window(instance, &text, args, "startswith")? {
+        Some(window) => prefixes.iter().any(|prefix| window.starts_with(prefix)),
+        None => false,
+    };
     Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
@@ -1003,10 +1433,14 @@ pub(crate) fn str_endswith_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
+        check_max_arguments(instance, args, 3, "endswith")?;
+    let text = bound_text_cow(instance, bound)?;
     // **也认元组** ✓（同 `startswith` ✓）。
     let suffixes = text_prefixes(instance, args, "endswith")?;
-    let found = suffixes.iter().any(|suffix| text.ends_with(suffix));
+    let found = match prefix_suffix_window(instance, &text, args, "endswith")? {
+        Some(window) => suffixes.iter().any(|suffix| window.ends_with(suffix)),
+        None => false,
+    };
     Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
@@ -1020,28 +1454,123 @@ pub(crate) fn str_join_native(
     let Some(iterable) = args.first() else {
         return Err(instance.raise_builtin_error("TypeError", "join() takes exactly one argument"));
     };
-    let items = match instance.iterable_items(*iterable) {
-        Some(items) => items,
-        None => {
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                "can only join an iterable",
-            ))
+    // **走迭代器协议**（`P3-42` round 44）：先前用 `iterable_items`（只认内建容器 ✓ 且是**借用快照** ✗）
+    // ⇒ ① 生成器里的异常被"不是可迭代"顶掉（官方用例要求 `+` 原样透出 ✓）；
+    // ② 元素不是 str 时报文没有下标与类型（参照 `sequence item 0: expected str instance, int found` ✓）。
+    let iterator = match instance.iter_object(*iterable) {
+        Ok(iterator) => iterator,
+        Err(error) => {
+            crate::executor::runtime::discard_error(instance, &error);
+            return Err(instance.raise_builtin_error("TypeError", "can only join an iterable"));
         }
     };
-    let mut parts: Vec<String> = Vec::with_capacity(items.len());
-    for item in items {
-        match instance.text_of(item) {
-            Some(text) => parts.push(text.to_owned()),
+    let mut result = String::new();
+    let mut index = 0usize;
+    let mut first = true;
+    loop {
+        let next = instance.advance_iterator(iterator);
+        let item = match next {
+            Ok(Some(item)) => item,
+            Ok(None) => break,
+            Err(error) => {
+                // SAFETY: iterator 的这份引用由本函数持有。
+                unsafe { instance.release_object(iterator.as_ptr()) };
+                return Err(error);
+            }
+        };
+        let Some(text) = instance.text_of(item) else {
+            let kind = instance.type_name(instance.type_of(item));
+            // SAFETY: item 是新引用。
+            unsafe { instance.release_object(item.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(iterator.as_ptr()) };
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("sequence item {index}: expected str instance, {kind} found"),
+            ));
+        };
+        if !first {
+            result.push_str(&separator);
+        }
+        result.push_str(text);
+        first = false;
+        index += 1;
+        // SAFETY: item 是新引用。
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+    // SAFETY: iterator 的这份引用由本函数持有。
+    unsafe { instance.release_object(iterator.as_ptr()) };
+    Ok(instance.new_str(&result))
+}
+
+/// `split`／`rsplit` 的实参解码：`(separator: Option<String>, maxsplit: i64)`。
+///
+/// 口径照本机 3.14.4 实测：`separator` 为 `None` ＝ 按空白切 ✓；`maxsplit` 缺省 `-1`＝不限 ✓；
+/// 非 str 分隔符 ⇒ `must be str or None, not <类型>` ✓；`maxsplit` 非整数 ⇒
+/// `'<类型>' object cannot be interpreted as an integer` ✓。
+fn split_arguments(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    _method: &str,
+) -> Result<(Option<String>, i64), crate::ExecError> {
+    let separator = match args.first() {
+        None => None,
+        Some(value) if *value == instance.singletons().none() => None,
+        Some(value) => match instance.text_of(*value) {
+            Some(text) => Some(text.to_owned()),
             None => {
+                let kind = instance.type_name(instance.type_of(*value));
                 return Err(instance.raise_builtin_error(
                     "TypeError",
-                    "sequence item: expected str instance",
-                ))
+                    &format!("must be str or None, not {kind}"),
+                ));
             }
-        }
+        },
+    };
+    let maxsplit = match args.get(1) {
+        None => -1,
+        Some(value) => instance
+            .index_value(*value)
+            .ok()
+            .flatten()
+            .ok_or_else(|| {
+                let kind = instance.type_name(instance.type_of(*value));
+                instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{kind}' object cannot be interpreted as an integer"),
+                )
+            })?,
+    };
+    Ok((separator, maxsplit))
+}
+
+/// **空白切分 ＋ `maxsplit`**（`str.split(None, n)` 的参照口径：剩余段**原样保留**，
+/// 只去掉段首空白 ✓；`"  ".split(None, 0)` ⇒ `[]` ✓）。
+/// **从右往左的空白切分 ＋ `maxsplit`**（`str.rsplit(None, n)` 的镜像口径 ✓）。
+fn rsplit_on_whitespace(text: &str, maxsplit: i64) -> Vec<String> {
+    if maxsplit < 0 {
+        return text.split_whitespace().map(str::to_owned).collect();
     }
-    Ok(instance.new_str(&parts.join(&separator)))
+    let mut reversed: Vec<String> = Vec::new();
+    let mut rest = text.trim_end();
+    let mut remaining = maxsplit as usize;
+    while remaining > 0 {
+        if rest.is_empty() {
+            break;
+        }
+        let start = rest
+            .rfind(char::is_whitespace)
+            .map(|index| index + rest[index..].chars().next().map(char::len_utf8).unwrap_or(0))
+            .unwrap_or(0);
+        reversed.push(rest[start..].to_owned());
+        remaining -= 1;
+        rest = rest[..start].trim_end();
+    }
+    if !rest.is_empty() {
+        reversed.push(rest.to_owned());
+    }
+    reversed.reverse();
+    reversed
 }
 
 pub(crate) fn str_split_native(
@@ -1050,28 +1579,51 @@ pub(crate) fn str_split_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    // 无参 ⇒ 与参照同义的"按空白切、丢弃空段" ✓；有参 ⇒ 按该分隔符切 ✓
-    let parts: Vec<NonNull<Header>> = match args.first() {
-        Some(separator) => {
-            let separator = match instance.text_of(*separator) {
-                Some(text) => text.to_owned(),
+    check_max_arguments(instance, args, 2, "split")?;
+    let text = bound_wtf8_bytes(instance, bound)?;
+    let separator_value = args.first().copied();
+    let separator_is_none = separator_value.is_none()
+        || separator_value.is_some_and(|value| value == instance.singletons().none());
+    let maxsplit = match args.get(1).copied() {
+        None => -1,
+        Some(value) => {
+            // 参照：`maxsplit=None` 也 **TypeError**（不是"用缺省" ✓）；非整数同文案 ✓。
+            match instance.index_value(value)? {
+                Some(number) => number,
                 None => {
+                    let name = instance.type_name(instance.type_of(value));
                     return Err(instance.raise_builtin_error(
                         "TypeError",
-                        "must be str or None, not the given type",
-                    ))
+                        &format!("'{name}' object cannot be interpreted as an integer"),
+                    ));
                 }
-            };
-            text.split(separator.as_str())
-                .map(|part| instance.new_str(part))
-                .collect()
+            }
         }
-        None => text
-            .split_whitespace()
-            .map(|part| instance.new_str(part))
-            .collect(),
     };
+    let parts: Vec<Vec<u8>> = if separator_is_none {
+        split_whitespace_wtf8(&text, maxsplit)
+    } else {
+        let separator_value = separator_value.expect("刚判过不是 None");
+        let Some(separator) = instance.wtf8_of(separator_value).map(<[u8]>::to_vec) else {
+            let name = instance.type_name(instance.type_of(separator_value));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("must be str or None, not {name}"),
+            ));
+        };
+        if separator.is_empty() {
+            return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+        }
+        split_wtf8(&text, &separator, maxsplit)
+    };
+    let parts: Vec<NonNull<Header>> = parts
+        .iter()
+        .map(|part| {
+            instance
+                .new_str_wtf8(part)
+                .expect("切分后的 WTF-8 字节仍合法")
+        })
+        .collect();
     Ok(instance.new_list(parts))
 }
 
@@ -1079,12 +1631,64 @@ pub(crate) fn str_replace_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
     let from = text_argument(instance, args, 0, "replace")?;
     let to = text_argument(instance, args, 1, "replace")?;
-    Ok(instance.new_str(&text.replace(&from, &to)))
+    // **`count` 真生效** ✓（`P3-42` round 44）：先前整条忽略 ✗ ⇒ `'abab'.replace('a','x',1)`
+    // 给 `'xbxb'` ✗（参照 `'xbab'` ✓）。负数/缺省 ⇒ 不限 ✓。
+    // `count` 也收**关键字**（`'aa'.replace('a', 'b', count=0)` ✓；官方 `test_count_keyword` ✓）。
+    let count_argument = match args.get(2) {
+        Some(value) => Some(*value),
+        None => kwargs
+            .iter()
+            .find(|(key, _)| instance.text_of(*key) == Some("count"))
+            .map(|(_, value)| *value),
+    };
+    let count = match count_argument {
+        None => -1,
+        Some(value) => bound_index(instance, value, "replace")?,
+    };
+    // `count == 0` ⇒ 原样返回（**不要**走"空 `from` 的空隙替换"那条 ✗）。
+    if count == 0 {
+        return Ok(instance.new_str(&text));
+    }
+    let replaced = if count < 0 {
+        text.replace(&from, &to)
+    } else if from.is_empty() {
+        // 空 `from`：按参照在**每个空隙**替换，最多 `count` 次 ✓。
+        let mut out = String::with_capacity(text.len());
+        let mut done = 0i64;
+        out.push_str(&to);
+        done += 1;
+        for character in text.chars() {
+            out.push(character);
+            if done < count {
+                out.push_str(&to);
+                done += 1;
+            }
+        }
+        out
+    } else {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text.as_str();
+        let mut done = 0i64;
+        while done < count {
+            match rest.find(&from) {
+                Some(at) => {
+                    out.push_str(&rest[..at]);
+                    out.push_str(&to);
+                    rest = &rest[at + from.len()..];
+                    done += 1;
+                }
+                None => break,
+            }
+        }
+        out.push_str(rest);
+        out
+    };
+    Ok(instance.new_str(&replaced))
 }
 
 /// `str.encode(encoding='utf-8', errors='strict')` —— **薄包装**：解析参数后交给
@@ -1096,23 +1700,13 @@ pub(crate) fn str_replace_native(
 /// （与 `bytes.decode` 那份重复 ⇒ 两处都得改才通）。
 /// 取绑定 `str` 的 **WTF-8 字节**（P3-38 S3a）：`str.encode` 的输入可含孤立代理 ⇒
 /// `bound_text`（`.value()`）对 WTF-8 表示会 panic ✗，这里走字节视图 ✓。
-fn bound_wtf8(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<Vec<u8>, crate::ExecError> {
-    let Some(bound) = bound else {
-        return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
-    };
-    // SAFETY: 绑定的是 `str`（或子类，布局沿用 str ✓）。
-    Ok(unsafe { &*bound.as_ptr().cast::<crate::StrObject>() }
-        .wtf8_bytes()
-        .to_vec())
-}
-
 pub(crate) fn str_encode_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_wtf8(instance, bound)?;
+    let text = bound_wtf8_bytes(instance, bound)?;
     let mut encoding = args.first().and_then(|value| instance.text_of(*value));
     let mut errors = args.get(1).and_then(|value| instance.text_of(*value));
     for (key, value) in kwargs {
@@ -1138,6 +1732,28 @@ pub(crate) fn str_encode_native(
 /// `:` 规格段（走 [`format_value_with_spec`] ⇒ 与 `FORMAT_WITH_SPEC` **同一处** ✓）、
 /// 规格段里的**嵌套一层** `{…}` ✓、`{{`／`}}` 转义 ✓。
 /// 未接的形态**如实报错** ✗（不静默给假值 ✓）。
+/// **`str.__mod__`**（`P3-42` round 44）：`'abc'.__mod__(x)` ≡ `'abc' % x` ✓。
+///
+/// 为什么必须显式登记：`string_tests.test_formatting` 里大量 `self.checkraises(TypeError, 'abc',
+/// '__mod__', …)` 是**按名字取方法再调** ✓ —— 先前 `str` 类型上没有 `__mod__` ⇒ 取属性先报
+/// `AttributeError` ✗ ⇒ 那些"该报 TypeError"的断言全红 ✓（`%` 运算本身走 `arithmetic_public`，
+/// 从不经过属性查表 ⇒ 之前一直没暴露 ✗）。
+pub(crate) fn str_mod_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let template = bound_text(instance, bound)?;
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("expected 1 argument, got {}", args.len()),
+        ));
+    }
+    crate::executor::percent_format(instance, &template, args[0], 0)
+}
+
 pub(crate) fn str_format_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1507,7 +2123,7 @@ fn format_getattr(
                 instance.incref_object(this.as_ptr());
             }
             let bound = instance.alloc(MethodObject::new(
-                builtin_type(instance, "method"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 function,
                 this,
             ));

@@ -41,13 +41,26 @@ fn attribute(instance: &Instance, namespace: NonNull<Header>, name: &str) -> Non
         .unwrap_or_else(|| panic!("§5.2.3：`sys.{name}` 必须存在"))
 }
 
-/// 读 `sys.implementation` 的字段：它们挂在**类型字典**上（`OM-10` 的沿 MRO 查），
-/// 所以这里走核心的 `type_lookup`，而不是把实例当字典读（那会读到垃圾）。
+/// 读 `sys.implementation` 的字段。
+///
+/// **round 113 起**：`sys.implementation` 是 **`types.SimpleNamespace` 的实例** ✓
+/// （`Lib/types.py:20` 的 `SimpleNamespace = type(sys.implementation)` ✓）⇒ 字段在**实例字典**里 ✓，
+/// 不在类型字典 ✗ —— 先前它是"一个类型对象"，字段才是类型属性 ✗（`types.SimpleNamespace(a=1)`
+/// 因此报 `sys.implementation() takes no arguments` ✗）。
 fn implementation_field(
     instance: &Instance,
     implementation: NonNull<Header>,
     name: &str,
 ) -> NonNull<Header> {
+    // `sys.implementation`：真实例 ⇒ 字典里 ✓；`sys.int_info`／`sys.float_info` 这类仍挂在
+    // **类型字典**上 ✓ ⇒ 两种形态都认（先实例字典、再类型字典 ✓）。
+    if let Some(mapping) = pyawa_core::mounted_instance_dict(instance, implementation) {
+        if let Some(value) = instance.dict_get(mapping, name) {
+            // SAFETY: 值由实例字典持有；交回前添一份新引用。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            return value;
+        }
+    }
     let ty = instance.type_of(implementation);
     instance
         .type_lookup(ty, name)
@@ -218,7 +231,7 @@ fn message_of(instance: &Instance, error: pyawa_core::ExecError) -> String {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default()
         }
@@ -238,10 +251,10 @@ fn error_text(instance: &Instance, error: pyawa_core::ExecError) -> String {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             let name = unsafe { ty.as_ref() }.name().to_owned();
             // SAFETY: 同上。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default();
             format!("{name}: {message}")

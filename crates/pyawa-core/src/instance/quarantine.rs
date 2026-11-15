@@ -74,6 +74,23 @@ impl Instance {
         format!("{name}@{pointer}")
     }
 
+    /// **当前执行现场 ＋ 行号**（round 62 诊断）：给异常栈的"压入点"用 ✓。
+    pub(crate) fn current_site_with_line(&self) -> String {
+        let Some(frame_header) = self.current_frame() else {
+            return "<无当前帧>".to_owned();
+        };
+        // SAFETY: 当前帧由执行器的守卫挂着，存活。
+        let frame = unsafe { &*frame_header.as_ptr().cast::<crate::frame::Frame>() };
+        let pointer = frame.instruction_pointer();
+        let Some(code_header) = frame.code() else {
+            return format!("<无代码对象>@{pointer}");
+        };
+        // SAFETY: code 由帧持有，存活。
+        let code = unsafe { &*code_header.as_ptr().cast::<crate::code::CodeObject>() };
+        let line = crate::frame::line_at(code, pointer).unwrap_or(0);
+        format!("{}@{} (line {line})", code.qualname(), pointer)
+    }
+
     /// 复核隔离区 ✓：毒化字节被改 ⇒ **释放后仍被写** ✓（use-after-free ✗）。
     pub(crate) fn quarantine_check(&self) {
         if !quarantine_mode() {
@@ -104,17 +121,22 @@ impl Instance {
         // **释放探针**（第 112 轮，`PYAWA_FREE_DEBUG=1`）：每次真正摘除一个对象都报
         // **地址 ＋ 类型 ＋ Python 现场 ＋ Rust 回溯** ✓ —— 用来分辨"同一条指令放了两次" ✗
         // 还是"重绑放一次、调用收尾又放一次" ✗（上限榜那一族的内存缺陷 ✓，见第 107～111 轮台账 ✓）。
-        if flag("PYAWA_FREE_DEBUG") {
+        let code_probe = crate::diag::flag_site!("PYAWA_FREE_DEBUG_CODE");
+        if crate::diag::flag_site!("PYAWA_FREE_DEBUG") || code_probe {
             // SAFETY: header 由调用方保证存活（正要摘除）。
             let name = unsafe { header.as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             let name = unsafe { name.as_ref() }.name().to_owned();
-            eprintln!(
-                "[free 探针] {:#x} 类型={name} 现场={}\n{}",
-                header.as_ptr() as usize,
-                self.current_site(),
-                std::backtrace::Backtrace::force_capture()
-            );
+            // `PYAWA_FREE_DEBUG_CODE=1`：**只记 code 对象**的释放（round 53 排查 `test_extcall`
+            // 的 code 双重释放；全量探针太慢 ✓）。
+            if !code_probe || name == "code" {
+                eprintln!(
+                    "[free 探针] {:#x} 类型={name} 现场={}\n{}",
+                    header.as_ptr() as usize,
+                    self.current_site(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
         }
         if self.zombie_trace.get() {
             // SAFETY: header 由调用方保证存活（正要摘除）。
@@ -134,9 +156,17 @@ impl Instance {
         // `tcache_thread_shutdown(): unaligned tcache chunk detected` ✓）／**内部指针** ✗。
         // 注意：地址会被复用 ✓ ⇒ 所以判据是"**摘除时**在不在表里" ✓（不在 ⇒ 一定放多了 ✓），不会假阳性 ✓。
         if !self.live.borrow_mut().remove(&(header.as_ptr() as usize)) {
+            // **诊断增强（round 256）**：把"最早那次释放的类型＋现场"一起打出来 ✓
+            //（`PYAWA_ZOMBIE_TRACE=1` 时 `freed_sites` 才记账；`PYAWA_REF_TRACE` 也记）。
+            let first = self
+                .freed_sites
+                .borrow()
+                .get(&(header.as_ptr() as usize))
+                .cloned();
             eprintln!(
-                "[野释放] {:#x} 不在活表里 ✗ —— 重复释放／内部指针／从未分配（见 PLAN 第 183 轮 ✓）",
-                header.as_ptr() as usize
+                "[野释放] {:#x} 不在活表里 ✗ —— 重复释放／内部指针／从未分配（见 PLAN 第 183 轮 ✓）\n  最早释放={first:?}\n  当前现场={}",
+                header.as_ptr() as usize,
+                self.current_site()
             );
             std::process::abort();
         }

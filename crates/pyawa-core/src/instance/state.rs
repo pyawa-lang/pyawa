@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -57,7 +58,7 @@ impl Instance {
             None => {
                 let mapping = self
                     .adopt(DictObject::new(
-                        self.type_named("dict").expect("dict 已在引导期登记"),
+                        self.hot_type(HotId::Dict).expect("dict 已在引导期登记"),
                         RefCell::new(Vec::new()),
                     ))
                     .cast::<Header>();
@@ -70,10 +71,7 @@ impl Instance {
         let key = self
             .adopt(StrObject::new(self.singletons().str_type(), name.to_owned()))
             .cast::<Header>();
-        let position = dict
-            .entries()
-            .into_iter()
-            .position(|(existing, _)| str_matches(self, existing, name));
+        let position = dict.find_live_position(|existing| str_matches(self, existing, name));
         match position {
             Some(slot) => {
                 // 键已在表里：新键那份引用交回去
@@ -116,7 +114,11 @@ impl Instance {
         object: NonNull<Header>,
         name: &str,
     ) -> Result<Option<NonNull<Header>>, ExecError> {
-        if let Ok(found) = crate::executor::attribute_lookup(self, object, name) {
+        if let Some(found) = crate::executor::attribute::attribute_lookup_swallowing(
+            self,
+            object,
+            name,
+        ) {
             return Ok(Some(match found {
                 crate::executor::Attribute::Owned(value)
                 | crate::executor::Attribute::Value(value) => value,
@@ -124,7 +126,7 @@ impl Instance {
                     // 绑定成方法对象 ✓（与属性通道同一口径 ✓）。
                     unsafe { self.incref_object(object.as_ptr()) };
                     self.alloc(crate::builtin_objects::MethodObject::new(
-                        self.type_named("method").expect("method 已登记"),
+                        self.hot_type(HotId::Method).expect("method 已登记"),
                         function,
                         this,
                     ))
@@ -136,8 +138,12 @@ impl Instance {
         if name == "__getattr__" {
             return Ok(None);
         }
-        if let Ok(crate::executor::Attribute::Method { function, this }) =
-            crate::executor::attribute_lookup(self, object, "__getattr__")
+        if let Some(crate::executor::Attribute::Method { function, this }) =
+            crate::executor::attribute::attribute_lookup_swallowing(
+                self,
+                object,
+                "__getattr__",
+            )
         {
             let name_object = self.new_str(name);
             let found = crate::executor::call::call_callable(
@@ -164,6 +170,8 @@ impl Instance {
         name: &str,
         value: NonNull<Header>,
     ) -> Result<(), ExecError> {
+        // **`f_trace` 写帧**要维护本地追踪开关（round 181；与 `attribute_write` 同一处真相 ✓）。
+        crate::executor::attribute::maintain_frame_trace(self, object, name, value);
         // **只有"类型自己定义了 `__setattr__`"才走协议** ✓（第 715 轮 ✗ 修）：`object` 自己也有一份
         // `__setattr__` ✓ ⇒ 若不加这道判据，**每一次**普通赋值都会绕进协议 ✗ ⇒ 把
         // `instance_attribute_set` 里那套**数据描述符 `__set__`／类型对象命名空间／引用还账**全绕过去 ✗
@@ -173,12 +181,16 @@ impl Instance {
             let object_type = unsafe { object.as_ref() }.ty();
             let own = self.type_lookup(object_type, "__setattr__");
             let default = self.type_lookup(
-                self.type_named("object").expect("object 在引导期已登记"),
+                self.hot_type(HotId::Object).expect("object 在引导期已登记"),
                 "__setattr__",
             );
             if own.is_some() && own != default {
-                if let Ok(crate::executor::Attribute::Method { function, this: _ }) =
-                    crate::executor::attribute_lookup(self, object, "__setattr__")
+                if let Some(crate::executor::Attribute::Method { function, this: _ }) =
+                    crate::executor::attribute::attribute_lookup_swallowing(
+                        self,
+                        object,
+                        "__setattr__",
+                    )
                 {
                     // **引用纪律照 `instance_attribute_set` 的 `__set__` 那条** ✓（`protocol.rs:166` ✓）：
                     // 对象与值各 retain 一份交出去 ✓（绑定用的 `this` 就是我们 retain 的那一份 ✓，

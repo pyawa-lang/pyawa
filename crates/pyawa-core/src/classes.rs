@@ -13,6 +13,7 @@
 //! **尚未接线**：`metaclass=`（非 `type` 的元类）、`__prepare__`、`__set_name__`
 //! （要描述符）、`__mro_entries__`（`AB-37` 的宿主类型继承那一侧）。
 
+use crate::HotId;
 use core::cell::Cell;
 use core::ptr::NonNull;
 
@@ -58,6 +59,10 @@ pub unsafe fn build_class_native(
 
     // **要接的自定义元类** ✓（第 218 轮）：`class X(metaclass=M)` ✓。
     let mut requested_metaclass: Option<NonNull<TypeObject>> = None;
+    // **函数当元类**（round 82，参照实测：`class C(metaclass=meta)` 里 `meta` 是普通可调用对象时，
+    // 参照**不建类型**，而是 `meta(name, bases, namespace, **kwds)`，把**返回值**当类 ✓
+    // —— `test_metaclass` 的 doctest 钉住 `type(C) is dict` ✓）。
+    let mut callable_metaclass: Option<NonNull<Header>> = None;
     // **转交给元类的类关键字** ✓（第 292 轮）：除 `metaclass=` 之外**原样**留着 ✓（键对象照用 ✓，
     // `call_value` 会自己 retain ✓）。`Lib/enum.py:1400` 的 `boundary=STRICT` 就是它 ✓。
     let mut forwarded_keywords: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
@@ -73,8 +78,7 @@ pub unsafe fn build_class_native(
                 //   认两种写法 ✓（`type` 的类型对象 ✓／内建里那个 `type` 名 ✓ —— 本层 `type()` 是 native ✓）；
                 //   其余元类仍**如实报未接线** ✗（不静默当默认元类 ✓）。
                 let wanted = _value.cast::<Header>();
-                let default_type = instance
-                    .type_named("type")
+                let default_type = instance.hot_type(HotId::Type)
                     .map(|ty| ty.cast::<Header>())
                     .is_some_and(|ty| ty == wanted);
                 let builtin_type = instance
@@ -90,6 +94,11 @@ pub unsafe fn build_class_native(
                 // 本层**暂时**只做"元类型对"这一步 ✓ —— `M.__new__`／`__init__`／`__prepare__`
                 // 尚未被调用 ✗（`ABC` 一族的注册表要等那一步 ✓）。
                 if !instance.is_type_object(wanted) {
+                    // **可调用对象可以当元类** ✓（参照口径，见上）——不可调用才报原来的 TypeError ✓。
+                    if instance.is_callable(wanted) {
+                        callable_metaclass = Some(wanted);
+                        continue;
+                    }
                     return Err(raise_builtin(instance, "TypeError", "metaclass must be a type"));
                 }
                 requested_metaclass = Some(wanted.cast::<TypeObject>());
@@ -125,8 +134,7 @@ pub unsafe fn build_class_native(
     // 动因：`Lib/enum.py` 的 `EnumType.__prepare__` 返回 `EnumDict`（`dict` 的子类 ✓），
     // `EnumType.__new__` 头一句 `classdict._member_names` 全指望它 ✓ —— 先前只造普通 `dict` ✗
     // ⇒ 报 `AttributeError: 'dict' object has no attribute '_member_names'` ✗（那一族 **42** 个模块 ✓）。
-    let default_prepare = instance
-        .type_named("type")
+    let default_prepare = instance.hot_type(HotId::Type)
         .and_then(|ty| instance.type_lookup(ty, "__prepare__"));
     // **取"真正可调"的那个 `__prepare__`** ✓：`type_lookup` 给的是**未绑定**的描述符 ✗ ——
     // `@classmethod` 直接调会报 `'classmethod' object is not callable` ✗（实测 ✓）⇒
@@ -143,6 +151,43 @@ pub unsafe fn build_class_native(
                 "__prepare__",
             )? {
                 custom_prepare = Some((metaclass, method));
+            }
+        }
+    }
+    // **函数当元类的 `__prepare__`**：函数对象上挂了就调它（参照口径 ✓）。
+    if callable_metaclass.is_some() {
+        if let Some(meta) = callable_metaclass {
+            if let Some(method) = crate::executor::attribute::attribute_optional(instance, meta, "__prepare__")? {
+                let name_value = instance.new_str(&name);
+                let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+                for base in &bases {
+                    // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
+                    unsafe { instance.incref_object(base.as_ptr()) };
+                    base_values.push(*base);
+                }
+                let bases_value = instance.new_tuple(base_values);
+                let args: Vec<NonNull<Header>> = vec![name_value, bases_value];
+                let outcome = crate::executor::call::call_value(
+                    instance,
+                    method,
+                    &args,
+                    &forwarded_keywords,
+                );
+                for argument in args {
+                    instance.release(argument);
+                }
+                instance.release(method);
+                let namespace = outcome?;
+                crate::executor::run_class_body(instance, body, namespace)?;
+                pop_classdictcell(instance, namespace);
+                return finish_callable_metaclass(
+                    instance,
+                    meta,
+                    &name,
+                    &bases,
+                    namespace,
+                    &forwarded_keywords,
+                );
             }
         }
     }
@@ -177,14 +222,13 @@ pub unsafe fn build_class_native(
             // 病灶在第 93 轮被收窄到"**这个 `prepared` 映射**"（`Lib/enum.py` 的 `EnumDict` ✓，
             // `dict` 的子类 ✓）⇒ 这里看清三件：**类型名** ✓、**布局对不对**（`instance_size` 与
             // `DictObject` 的 Rust 布局对照 ✓）、以及当 `DictObject` 读时的 `len`／`cap`／`ptr` ✓。
-            if crate::diag::flag("PYAWA_PREPARE_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_PREPARE_DEBUG") {
                 let ty = instance.type_of(prepared);
                 let name = instance.type_name(ty);
                 // SAFETY: ty 由注册表持有。
                 let instance_size = unsafe { ty.as_ref() }.instance_size();
                 let dict_size = core::mem::size_of::<DictObject>();
-                let is_dict = instance
-                    .type_named("dict")
+                let is_dict = instance.hot_type(HotId::Dict)
                     .map(|dict| instance.is_subtype(ty, dict))
                     .unwrap_or(false);
                 // SAFETY: prepared 由调用方保证存活。
@@ -203,8 +247,7 @@ pub unsafe fn build_class_native(
         }
         None => instance
             .alloc(DictObject::new(
-                instance
-                    .type_named("dict")
+                instance.hot_type(HotId::Dict)
                     .expect("dict 在引导期已登记"),
                 core::cell::RefCell::new(Vec::new()),
             ))
@@ -214,10 +257,30 @@ pub unsafe fn build_class_native(
 
     // 跑类体：它的局部变量就是这个命名空间（`LOAD_NAME`／`STORE_NAME`）
     crate::executor::run_class_body(instance, body, namespace)?;
+    // **去掉 `__classdictcell__`**（round 120，照参照 `type_new` 口径）：类体收尾会把
+    // `__classdict__` 这个 cell 也挂进命名空间（本层 `compile.rs` 实测产物 ✓），而**cell 里存的就是
+    // 命名空间本身** ⇒ `dict ↔ cell` **自环** ✓；参照在 `type.__new__` 里把它 pop 掉 ⇒ 命名空间
+    // 不再持有 cell。本层用户类型不 dealloc ⇒ 这个自环让**类字典的 rc 永远多 1** ⇒ 动态可达性把
+    // 类字典当**根** ⇒ 穿过类字典的环（`__del__` 闭包 → 生成器 → 实例）永远收不掉 ✗
+    //（`test_userlist.test_free_after_iterating` ✓；round 120 实测 `root=dict rc=2`、
+    //  `root_referrers=[cell(value=dict)]` 正是它 ✓）。
+    pop_classdictcell(instance, namespace);
 
     // **PEP 560：基类先解析** ✓（task-24 尾件 ✓）：自定义元类与建类核心都收**解析后**的基类 ✓
     // （参照实测 `class SupportsAbs[T](Protocol)` 的 `_ProtocolMeta.__new__` 只收到 `(Protocol,)` ✓，
     // 没有 `Generic[T]` 别名 ✓）；`__orig_bases__` 仍记**原始**表 ✓。
+    // **函数当元类**：不建类型，调 `meta(name, bases, namespace, **kwds)` 把返回值当类 ✓
+    // （`__prepare__` 已在上面的分支里处理过并提前返回 ✓）。
+    if let Some(meta) = callable_metaclass {
+        return finish_callable_metaclass(
+            instance,
+            meta,
+            &name,
+            &bases,
+            namespace,
+            &forwarded_keywords,
+        );
+    }
     let (resolved_bases, used_mro_entries) = resolve_bases(instance, &bases)?;
     if used_mro_entries {
         let original: Vec<NonNull<Header>> = bases
@@ -235,11 +298,9 @@ pub unsafe fn build_class_native(
     if let Some(metaclass) = requested_metaclass {
         // **自带 `__new__`／`__init__` 才调** ✓：默认那两个（我们挂在 `type` 命名空间里的 ✓）
         // 要跳过 ✗，否则**自己调自己** ⇒ 死循环 ✓。
-        let default_new = instance
-            .type_named("type")
+        let default_new = instance.hot_type(HotId::Type)
             .and_then(|ty| instance.type_lookup(ty, "__new__"));
-        let default_init = instance
-            .type_named("type")
+        let default_init = instance.hot_type(HotId::Type)
             .and_then(|ty| instance.type_lookup(ty, "__init__"));
         // **元类自己的 `__new__` 也被包成了 `staticmethod`** ✓（第 411 轮，task-22 ✓）⇒ 剥开再调 ✓
         // （否则 `call_value` 拿到包装体报 `'staticmethod' object is not callable` ✗）。
@@ -278,7 +339,7 @@ pub unsafe fn build_class_native(
             // **引用计数探针**（第 111 轮，`PYAWA_NS_DEBUG=1`）：命名空间在"交给元类前后"各有多少份 ✓
             // —— 毒化档说它在 `EnumType.__new__@540`（`classdict = dict(classdict.items())` 那句重绑）
             // 被放到 0 ✓ ⇒ 重绑之前除帧那份已无人持有 ⇒ **调用方那份早就没了** ✗ ⇒ 就在这段里逐点读 ✓。
-            if crate::diag::flag("PYAWA_NS_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_NS_DEBUG") {
                 eprintln!(
                     "[ns 探针] 交元类之前 namespace={namespace:p} rc={}",
                     instance.refcount_of(namespace)
@@ -286,24 +347,21 @@ pub unsafe fn build_class_native(
                 instance.watch_address(namespace);
             }
             let namespace_for_init = instance.retain(namespace);
-            let result = match custom_new {
-                Some(new_method) => {
-                    let built = crate::executor::call::call_value(
-                        instance,
-                        new_method,
-                        &[
-                            metaclass.cast::<Header>(),
-                            name_value,
-                            bases_value,
-                            namespace,
-                        ],
-                        &forwarded_keywords,
-                    )?;
-                    // **这条路不吃命名空间** ⇒ 调用方那一份留着**不动** ✓（与第 234 轮的既有口径一致 ✓：
-                    // `M.__new__` 是否"接管"了它由那个元类自己决定 ✓ ⇒ 这里**不还** ✗，免得把
-                    // 类字典里那一份打掉 ✓（实测：这里 `release` 会当场把类字典打空 ⇒ 段错误 ✗）。
-                    built
-                }
+            // `custom_new` 有 ⇒ 元类自己处理命名空间（**不吃**本函数这份 ✗）⇒ 本函数负责归还；
+            // `custom_new` 没有 ⇒ 落 `build_class_from_parts_with_keywords`（它**吃掉**命名空间 ✓）。
+            let namespace_consumed = custom_new.is_none();
+            let new_outcome = match custom_new {
+                Some(new_method) => crate::executor::call::call_value(
+                    instance,
+                    new_method,
+                    &[
+                        metaclass.cast::<Header>(),
+                        name_value,
+                        bases_value,
+                        namespace,
+                    ],
+                    &forwarded_keywords,
+                ),
                 None => build_class_from_parts_with_keywords(
                     instance,
                     name.clone(),
@@ -311,9 +369,22 @@ pub unsafe fn build_class_native(
                     namespace,
                     requested_metaclass,
                     &forwarded_keywords,
-                )?,
+                ),
             };
-            if crate::diag::flag("PYAWA_NS_DEBUG") {
+            let result = match new_outcome {
+                Ok(built) => built,
+                Err(error) => {
+                    instance.release(namespace_for_init);
+                    // **错误路径也要还本函数那份命名空间**（round 123 泄漏修）：先前 `?` 直接冒泡
+                    // ⇒ 自定义元类路径的类体命名空间**永远漏 1 份**（`test_userlist.free_after` 的
+                    // "root 类字典 rc=1 无持有者" 就是它 ✓）。**已被吃掉的路径不还** ✓。
+                    if !namespace_consumed {
+                        unsafe { instance.release_object(namespace.as_ptr()) };
+                    }
+                    return Err(error);
+                }
+            };
+            if crate::diag::flag_site!("PYAWA_NS_DEBUG") {
                 eprintln!(
                     "[ns 探针] 元类返回之后 namespace={namespace:p} rc={}",
                     instance.refcount_of(namespace)
@@ -337,6 +408,9 @@ pub unsafe fn build_class_native(
                 instance.release(outcome);
             }
             instance.release(namespace_for_init);
+            if !namespace_consumed {
+                unsafe { instance.release_object(namespace.as_ptr()) };
+            }
             return Ok(result);
         }
     }
@@ -359,8 +433,7 @@ pub unsafe fn build_class_native(
 #[allow(dead_code)] // 引导期用等价的一份；这里留给测试与将来的 `builtins`
 pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
     let object = instance.alloc(BuiltinFunctionObject::new(
-        instance
-            .type_named("builtin_function_or_method")
+        instance.hot_type(HotId::BuiltinFunctionOrMethod)
             .expect("引导期已登记"),
         "__build_class__",
         Cell::new(build_class_native as NativeFn),
@@ -370,6 +443,106 @@ pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
 
 /// 帧：把命名空间交给类体（供 [`crate::executor::run_class_body`] 用）。
 ///
+/// **类 `__qualname__` 在类型字典里的私有存放键**（task-13 #d，**一处真相**的键名）。
+///
+/// 参照 3.14 的 `type_new` 把类命名空间里的 `__qualname__` 收进**类型槽**（类字典里**没有**
+/// 这个公开键）⇒ 本层没有对应字段（`type_object.rs` 在本任务写域外）⇒ 存进类型字典的
+/// **私有键**（读侧 [`crate::Instance::type_qualname_value`] 一处）。键名以 `__…__` 收尾
+/// ⇒ `enum`／`dataclasses` 一类按"dunder 名"过滤的遍历不会把它当成员/字段（与既有私有键手法一致）。
+pub(crate) const TYPE_QUALNAME_KEY: &str = "__pyawa_qualname__";
+
+/// **类 `__name__` 的 rename 覆盖值存放键**（task-13 #d）：参照里 `C.__name__ = …` 是
+/// `type.__dict__['__name__']` 的 getset `__set__`，**不进类字典**；本层没有类型槽（写域外）
+/// ⇒ 覆盖值存这个私有键（读侧 [`crate::Instance::type_name_value`]）。**类体里**的
+/// `__name__ = …` 仍是普通类属性、留在类字典里（参照也这样：类字典有 `__name__`，
+/// 但 `C.__name__` 读的是类型槽、类字典那份被遮住）。
+pub(crate) const TYPE_NAME_KEY: &str = "__pyawa_name__";
+
+/// **CPython 私有名改写规则**（`BC-66`；与 `compile/mangle.rs` 同一把尺子，**实测校准**）。
+///
+/// `__spam`（至少两个前导下划线、**不以两个下划线结尾**）⇒ `_<类名去前导下划线>__spam`；
+/// 类名全是下划线（`__`／`___`）⇒ 该类体**不改写**。规则细节见 `compile/mangle.rs` 的模块文档
+/// （那里是**标识符**的一次性 AST 改写；本函数用于 `__slots__` 的**字符串槽名** —— 它是数据、
+/// 编译器不改，参照在 `type_new` 里按同一规则改写）。
+fn mangle_slot_name(class_name: &str, name: &str) -> String {
+    let stripped = class_name.trim_start_matches('_');
+    if stripped.is_empty() || !name.starts_with("__") || name.ends_with("__") {
+        return name.to_owned();
+    }
+    format!("_{stripped}__{}", &name[2..])
+}
+
+/// 槽名必须是**标识符**（参照原话：`TypeError: __slots__ must be identifiers`）。
+///
+/// 判据与 `str.isidentifier` 的既有近似口径一致（首字符字母/下划线、其余字母/数字/下划线；
+/// Unicode 表落定后一并收口）—— 两处一致即可，`str.isidentifier` 在 `builtin/str.rs`。
+fn is_identifier_text(text: &str) -> bool {
+    let mut chars = text.chars();
+    match chars.next() {
+        None => false,
+        Some(first) => {
+            (first == '_' || first.is_alphabetic())
+                && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
+        }
+    }
+}
+
+/// 取 `__slots__` 的**源码名字表**（参照 3.14.4 实测语义）：
+///
+/// - `str` ⇒ **一个**名字（`__slots__ = "ab"` 是一个槽；`"a b"` 不是标识符 ⇒
+///   `__slots__ must be identifiers`）；
+/// - 其余按**可迭代对象**取元素（list／tuple／dict／生成器…；不可迭代 ⇒ 迭代器给出参照原话
+///   `'int' object is not iterable`）；
+/// - 每个元素必须是 `str`（否则 `__slots__ items must be strings, not '<type>'`）。
+fn slot_source_names(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<Vec<String>, ExecError> {
+    if let Some(text) = instance.text_of(value) {
+        if !is_identifier_text(text) {
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "__slots__ must be identifiers",
+            ));
+        }
+        return Ok(vec![text.to_owned()]);
+    }
+    let iterator = instance.iter_object(value)?;
+    let mut names: Vec<String> = Vec::new();
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(item)) => {
+                let Some(text) = instance.text_of(item) else {
+                    let actual = instance.type_name(instance.type_of(item));
+                    instance.release(iterator);
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        &format!("__slots__ items must be strings, not '{actual}'"),
+                    ));
+                };
+                if !is_identifier_text(text) {
+                    instance.release(iterator);
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        "__slots__ must be identifiers",
+                    ));
+                }
+                names.push(text.to_owned());
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(names)
+}
+
 /// **`BC-4`**：把一个类体条目里的**函数**换成"`co_qualname` 已补成 `C.m`"的新函数。
 ///
 /// 不是函数、或名字读不出来时给 `None`（调用方原样搬）。新函数与旧函数共享默认值／
@@ -377,25 +550,35 @@ pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
 fn requalified_method(
     instance: &Instance,
     class_name: &str,
-    key: NonNull<Header>,
+    class_qualname: &str,
+    _key: NonNull<Header>,
     value: NonNull<Header>,
 ) -> Option<NonNull<Header>> {
-    let function_type = instance.type_named("function")?;
+    let function_type = instance.hot_type(HotId::Function)?;
     // SAFETY: 调用方保证 key／value 存活。
     if unsafe { value.as_ref() }.ty() != function_type {
         return None;
     }
-    // P3-38 S2c：方法名走安全口径（合法 UTF-8 原样；代理 ⇒ 有损，仅用于 qualname 合成，不 panic ✓）
-    // SAFETY: 键是 str（类命名空间的键）。
-    let method_name = instance.text_value(key).unwrap_or_default();
     // SAFETY: 上面刚确认是函数对象。
     let function = unsafe { &*value.as_ptr().cast::<crate::FunctionObject>() };
     let code_header = function.code();
     // SAFETY: 函数持有 code 的一份引用，存活。
     let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
-    // 已经是限定名（`C.m`）就不必再换
-    let expected = format!("{class_name}.{method_name}");
+    // **已经是完整限定名**（task-13 #c）：完整值取自**类命名空间**的 `__qualname__`
+    //（编译器按定义处作用域写死：`N2.D`／`outer.<locals>.K`；本层方法的 `co_qualname` 只发射了
+    // `<简单类名>.<源名>` ⇒ 这里按完整类名补全，参照里这件事由编译器做 ✓）。
+    // 分段用 **`code.name()`（源码名）** ✓：私有方法绑定名被改写成 `_C__m` 时，参照的
+    // `__qualname__` 用的是源码名 `C.__m`（实测）。
+    let expected = format!("{class_qualname}.{}", code.name());
     if code.qualname() == expected {
+        return None;
+    }
+    // 只在两种形态上补前缀：① 本层编译器发射的**简单类名 + 源名**（`D.m`）；
+    // ② 裸名字（`m` —— 手写/合成字节码，或 `MAKE_FUNCTION` 后直接进类字典的形态；`BC-4` 的
+    // 既有测试就钉这条）。其它形态（外部赋进类字典的函数、闭包里定义后被引用的函数）保持原样
+    // —— 参照不改它们（`class C: f = external` ⇒ `f.__qualname__` 仍是外部那个值 ✓）。
+    let compiler_form = format!("{class_name}.{}", code.name());
+    if code.qualname() != compiler_form && code.qualname() != code.name() {
         return None;
     }
     let new_code = instance.code_with_qualname(code, expected);
@@ -509,8 +692,7 @@ pub(crate) fn class_body_frame(
     globals: Option<NonNull<Header>>,
     closure: &[NonNull<Header>],
 ) -> NonNull<Frame> {
-    let frame_type = instance
-        .type_named("frame")
+    let frame_type = instance.hot_type(HotId::Frame)
         .expect("Frame 在引导期已登记");
     // `Owned::new` 收的是**新引用**（`OM-16`：守卫的 `Drop` 会释放它）⇒ 这里必须自己新增一份。
     // 少了这一步，守卫析构时会释放**函数自己那份** code 引用（症状：随机时刻
@@ -598,6 +780,36 @@ pub fn resolve_bases(
     Ok((resolved_bases, used_mro_entries))
 }
 
+/// **函数当元类**的收尾（round 82）：`meta(name, bases, namespace, **kwds)`，返回值即"类" ✓
+/// （参照不建类型；`test_metaclass` 的 doctest 钉住 `type(C) is dict` ✓）。
+fn finish_callable_metaclass(
+    instance: &Instance,
+    meta: NonNull<Header>,
+    name: &str,
+    bases: &[NonNull<Header>],
+    namespace: NonNull<Header>,
+    keywords: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let name_value = instance.new_str(name);
+    let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+    for base in bases {
+        // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
+        unsafe { instance.incref_object(base.as_ptr()) };
+        base_values.push(*base);
+    }
+    let bases_value = instance.new_tuple(base_values);
+    let result = crate::executor::call::call_value(
+        instance,
+        meta,
+        &[name_value, bases_value, namespace],
+        keywords,
+    );
+    instance.release(name_value);
+    instance.release(bases_value);
+    instance.release(namespace);
+    result
+}
+
 /// **不带类关键字**的那条旧口径（stdlib 装配用它 ✓ —— 那些都是内建类型的类体 ✓，没有类关键字 ✓）。
 pub fn build_class_from_parts(
     instance: &Instance,
@@ -618,6 +830,16 @@ pub fn build_class_from_parts(
 
 /// **带类关键字**的建类核心（`__build_class__`／`type.__new__` 两条真路用它 ✓）：
 /// `class_keywords`（去掉 `metaclass` 之后 ✓）转交 `__init_subclass__(**kwds)` ✓。
+/// **把 `__classdictcell__` 从类命名空间里摘掉**（round 120，照参照 `type_new`）：本层类体收尾会把
+/// `__classdict__` cell 挂进命名空间，而 cell 的载荷就是命名空间本身 ⇒ `dict ↔ cell` 自环 ✓。
+/// 参照在 `type.__new__` 里 pop（`C.__dict__` 里看不到它 ✓）；这里同口径，**顺带释放字典交出的那份** ✓。
+fn pop_classdictcell(instance: &Instance, namespace: NonNull<Header>) {
+    let key = instance.new_str("__classdictcell__");
+    instance.dict_remove_key(namespace, key);
+    // SAFETY: key 是上面刚造的新引用，`dict_remove_key` 借用查找、不接手。
+    unsafe { instance.release_object(key.as_ptr()) };
+}
+
 pub fn build_class_from_parts_with_keywords(
     instance: &Instance,
     name: String,
@@ -628,6 +850,23 @@ pub fn build_class_from_parts_with_keywords(
     // （task-24 尾件 ✓：`class X(_Final, _root=True)` 的 `_root` ✓ —— `Lib/typing.py:498` ✓）。
     class_keywords: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`__abc_tpflags__` 的合法性**（round 226）：参照的 ABCMeta 在类创建时校验这个类属性 ——
+    // 同时声明"序列"（`1<<5`）和"映射"（`1<<6`）⇒ `TypeError: a class cannot be both a mapping
+    // and a sequence` ✓。本层 ABCMeta 是 `_py_abc`（纯 Python）⇒ 没有这道校验 ✗ ⇒ 这里补 ✓
+    //（`test_collections.TestCollectionABCs.test_illegal_patma_flags` 的
+    // `class Both(Collection): __abc_tpflags__ = Sequence.__flags__ | Mapping.__flags__` ✓）。
+    if let Some(tpflags) = instance.dict_get(namespace, "__abc_tpflags__") {
+        if let Some(value) = instance.int_of(tpflags) {
+            if let Some(value) = value.to_i64() {
+                if value & (1 << 5) != 0 && value & (1 << 6) != 0 {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "a class cannot be both a mapping and a sequence",
+                    ));
+                }
+            }
+        }
+    }
     // ---- 基类与布局（`OM-14`／`AB-37`／`AB-58`）----
     //
     // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。
@@ -687,7 +926,7 @@ pub fn build_class_from_parts_with_keywords(
         base_types.push(base.cast::<TypeObject>());
     }
     if base_types.is_empty() {
-        base_types.push(instance.type_named("object").expect("object 已登记"));
+        base_types.push(instance.hot_type(HotId::Object).expect("object 已登记"));
     }
     // 冗余基类去掉（`class X(Sub, Base)` 合法；`Base` 已被 `Sub` 覆盖）
     let mut pruned: Vec<NonNull<TypeObject>> = Vec::new();
@@ -760,6 +999,10 @@ pub fn build_class_from_parts_with_keywords(
             // ⇒ 强调会读到别人的字段（实测 `null pointer dereference` abort ✗）。
             // 动因：`Lib/importlib/_bootstrap.py` 的 `_WeakValueDictionary` 嵌套 `KeyedRef` ✓。
             "weakref",
+            // **`types.SimpleNamespace`**（round 113）：`class AdvancedNamespace(types.SimpleNamespace)`
+            // 必须沿用 `AttributeObject` 布局与 `namespace_new`／`repr` 槽 ✓（否则子类落通用布局 ✗ ⇒
+            // `AdvancedNamespace(...)` 收不到关键字、repr 变成 `<AdvancedNamespace object …>` ✗）。
+            "SimpleNamespace",
         ]
             .iter()
             .find_map(|name| {
@@ -780,7 +1023,16 @@ pub fn build_class_from_parts_with_keywords(
         Some(base) => {
             // SAFETY: base 由注册表持有。
             let base_info = unsafe { base.as_ref() };
-            let slots = base_info.slots().inherit_host_layout_with_new();
+            // **内置布局基类的子类也要 `__del__`**（round 111 真 bug 修 ✗）：参照里
+            // `class A(list): def __del__(self): ...` 的实例在释放时**会**调终结器 ✓；
+            // 先前子类槽只继承布局／`new`／属性面／repr／str ✗、没继承终结器 ✗
+            // ⇒ `list_tests.test_free_after_iterating`（`support.check_free_after_iterating`）里
+            // `done` 永远 False ✗。`python_level_finalize` 自己在 MRO 里找不到 `__del__` 时直接返回 ✓
+            // ⇒ 对所有内置布局子类一律装上不改变无 `__del__` 类的行为 ✓。
+            let slots = base_info
+                .slots()
+                .inherit_host_layout_with_new()
+                .with_finalize(crate::python_level_finalize);
             let created = instance.new_type(static_name, base_info.instance_size(), slots);
             // 宿主钩子（`dealloc`／`traverse`）随布局一起继承
             if let (Some(dealloc), Some(traverse)) =
@@ -806,7 +1058,67 @@ pub fn build_class_from_parts_with_keywords(
         }
     };
 
-    if instance.register_bases(ty, pruned).is_none() {
+    // **`__bases__` 要保留"显式给出的冗余基类"**（round 76 真 bug 修 ✗）：先前把"被更派生基类
+    // 覆盖的基类"（典型：`class C(B, object)` 里的 `object`）**从类型基类里剔掉** ✗ ——
+    // 布局／元类型那一半确实该用剔除后的表 ✓，但**类型自己的 `__bases__`／MRO 序列**照参照要保留
+    // 显式基类 ✓（参照：`class C(B, object)` ⇒ `C.__bases__ == (B, object)` ✓；
+    // `test_metaclass` 的 doctest 钉住 ✓）。C3 合并本来就会去重 ⇒ MRO 不受影响 ✓。
+    // **元类覆写了 `mro`**（round 85，参照口径）：`type.__new__` 用 `metaclass.mro(cls)` 的结果当 MRO ✓
+    //（`test_metaclass` 的 `class Meta(type): def mro(cls): return (cls, Base, object)` ⇒
+    // `WeirdClass.value` 走 Base ✓）。默认 `type.mro` 是本层特殊名实现（不在字典里）⇒ 这里只认
+    // **元类自己字典里**的覆写 ✓；没有就走 C3（`register_bases`）✓。
+    let chosen_metaclass = requested_metaclass.unwrap_or(effective_metaclass);
+    let custom_mro = if chosen_metaclass != instance.metatype() {
+        instance
+            .type_lookup_owner(chosen_metaclass, "mro")
+            .filter(|(owner, _)| *owner == chosen_metaclass)
+            .map(|(_, found)| found)
+    } else {
+        None
+    };
+    let mut registered = false;
+    if let Some(found) = custom_mro {
+        let ty_header = ty.cast::<Header>();
+        // SAFETY: found 由元类字典持有；ty 是本函数刚造出的类对象；`bound_self` 是借用 ✓。
+        unsafe { instance.incref_object(found.as_ptr()) };
+        let outcome = crate::executor::call::call_callable(
+            instance,
+            found,
+            Some(ty_header),
+            Vec::new(),
+            Vec::new(),
+            0,
+        );
+        instance.release(found);
+        let result = outcome?;
+        let items = instance
+            .tuple_items(result)
+            .ok_or_else(|| raise_builtin(instance, "TypeError", "mro() 要回一个 tuple"))?;
+        let mut custom_order: Vec<NonNull<TypeObject>> = Vec::with_capacity(items.len());
+        for item in &items {
+            let Some(entry) = instance.as_type(*item) else {
+                instance.release(result);
+                return Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    "mro() 的条目必须是类型",
+                ));
+            };
+            custom_order.push(entry);
+        }
+        instance.release(result);
+        if custom_order.first().copied() != Some(ty.cast::<TypeObject>()) {
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "mro() 的第一项必须是类自己",
+            ));
+        }
+        // SAFETY: ty 由注册表持有（`new_type` 已登记）。
+        unsafe { ty.as_ref() }.set_bases(base_types.clone(), custom_order);
+        registered = true;
+    }
+    if !registered && instance.register_bases(ty, base_types).is_none() {
         return Err(raise_builtin(
             instance,
             "TypeError",
@@ -840,6 +1152,49 @@ pub fn build_class_from_parts_with_keywords(
         unsafe { ty.as_ref() }.mark_external_instance_dict();
     }
 
+    // **`__slots__` 处理**（task-13 #b；round 147/150 的既有面保留）：
+    // ① 取**源码名字表**并按参照校验（str＝一个名字；其余按可迭代取；名字必须是标识符；
+    //    元素必须是 str —— 报错文案照 3.14.4 实测）；
+    // ② 按 `BC-66` 规则改写**私有槽名**（`__x` ⇒ `_C__x`；类名剥前导下划线；全下划线类名不改）；
+    // ③ 与类变量冲突照参照报 `ValueError`（类命名空间的键已被编译器按同一规则改写）；
+    // ④ 槽名表放进 `Instance::type_slots` ⇒ `instance_attribute_set` 对非槽名报参照的
+    //    `AttributeError` ✓（`test_descrtut` 的 tut2 ✓）；值本身仍存在实例字典里
+    //    （槽即字典键 ✓，完整"无实例字典"语义随后收 ✓）；
+    // ⑤ 每个槽在**类型字典**里放一个 `member_descriptor`（见下方搬完命名空间后的那段）。
+    let mut slot_names: Option<Vec<String>> = None;
+    if let Some(slots_value) = instance.dict_get(namespace, "__slots__") {
+        let source_names = slot_source_names(instance, slots_value)?;
+        // **私有名改写**（round 150 真 bug 修 ✗，task-13 #b 补齐）：槽名与实例属性写入都走
+        // 编译器改写后的键 ✓ ⇒ 槽表/描述符名必须用同一套改写后的名字，否则
+        // `__slots__ = ('__num',)` 的类写 `self.__num` 会撞"非槽名"✗（`test_binop.Rat` ✓）。
+        let class_name = unsafe { ty.as_ref() }.name();
+        let mangled: Vec<String> = source_names
+            .iter()
+            .map(|slot| mangle_slot_name(class_name, slot))
+            .collect();
+        // **与类变量冲突**：参照原话 `ValueError: '<名>' in __slots__ conflicts with class variable`
+        // （实测：冲突判据用的是**改写后的槽名**，如 `_Dyn__x`）。
+        if let Some(entries) = instance.dict_entries(namespace) {
+            for slot in &mangled {
+                let conflicts = entries
+                    .iter()
+                    .any(|(key, _)| instance.text_of(*key) == Some(slot.as_str()));
+                if conflicts {
+                    return Err(raise_builtin(
+                        instance,
+                        "ValueError",
+                        &format!("'{slot}' in __slots__ conflicts with class variable"),
+                    ));
+                }
+            }
+        }
+        // **空 `__slots__` 也要登记**（round 218 真 bug 修 ✗）：`__slots__ = ()` 表示
+        // "**没有**实例字典"⇒ 非槽名属性写入必须报 `AttributeError` ✓；先前空表不登记
+        // ⇒ 放行 ✗（`namedtuple` 的 `p.x = 5` ✓）。
+        instance.register_type_slots(ty, mangled.clone());
+        slot_names = Some(mangled);
+    }
+
     // 把类体的命名空间搬进**类型字典**（`OM-11` 的属性通道就是查它）
     // SAFETY: namespace 是刚造的 dict。
     let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
@@ -858,7 +1213,7 @@ pub fn build_class_from_parts_with_keywords(
         None => {
             let mapping = instance
                 .alloc(DictObject::new(
-                    instance.type_named("dict").expect("dict 已登记"),
+                    instance.hot_type(HotId::Dict).expect("dict 已登记"),
                     core::cell::RefCell::new(Vec::new()),
                 ))
                 .into_raw()
@@ -879,19 +1234,49 @@ pub fn build_class_from_parts_with_keywords(
     // `ValueError: not enough values to unpack (expected 4, got 0)` ✗）。
     // 每一遍都按**命名空间插入序** ✓（参照的 `__set_name__` 次序也是定义序 ✓）。
     let mut items: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(entries.len());
-    for (key, value) in entries {
-        // **`BC-4`**：类体里的**函数**要把 `co_qualname` 补成 `C.m`——参照实现由**编译器**写死，
-        // 编译器**已经有类体**（且会写死 `C.m`）⇒ 这里只在**不匹配**时才补（换一份 code 再包新函数；见
-        // `Instance::code_with_qualname` 的说明）。
-        let replacement = requalified_method(instance, &name, key, value);
-        // SAFETY: 键值由命名空间持有，各新增一份（insert_raw 是转移语义）；
-        // 替换出来的新函数**自带一份**，故那时不再 incref。
-        unsafe {
-            instance.incref_object(key.as_ptr());
-            match &replacement {
-                Some(_) => {}
-                None => instance.incref_object(value.as_ptr()),
+    // **诊断（round 96，`PYAWA_CLASS_KEY_TRACE=1`）**：搬运命名空间时键/值是否还活着 ✓。
+    if crate::diag::flag_site!("PYAWA_CLASS_KEY_TRACE") {
+        for (key, value) in &entries {
+            let key_live = instance.is_live_address(*key);
+            let value_live = instance.is_live_address(*value);
+            let key_freed = instance.was_freed(*key);
+            let value_freed = instance.was_freed(*value);
+            if key_freed || value_freed {
+                eprintln!(
+                    "[class-key] name={name} namespace={namespace:p} entries={} key={:p}(live={key_live},freed={key_freed}) value={:p}(live={value_live},freed={value_freed})",
+                    entries.len(),
+                    key.as_ptr(),
+                    value.as_ptr()
+                );
             }
+        }
+    }
+    // **类自己的限定名**（task-13 #c，**一处真相**：`Instance::type_qualname_value`）：
+    // 编译器把定义处的完整 qualname 写进了类命名空间（`N2.D`／`outer.<locals>.K`）。
+    let class_qualname = instance.type_qualname_value(ty.cast::<Header>());
+    for (key, value) in entries {
+        // **`BC-4`＋task-13 #c**：类体里的**函数**要把 `co_qualname` 补成**完整**限定名
+        // （`N2.D.m`／`outer.<locals>.K.km`）。参照实现由**编译器**写死；本层编译器只发射
+        // `<简单类名>.<源名>`（`D.m`）⇒ 这里按类的完整 qualname 补前缀（见
+        // `Instance::code_with_qualname` 的说明）。
+        let replacement = requalified_method(instance, &name, &class_qualname, key, value);
+        // **`__qualname__` 的存放位置**（task-13 #d）：参照 3.14 的 `type_new` 把它收进类型槽、
+        // 类字典里**不出现**这个公开键 ⇒ 本层存进私有键（`TYPE_QUALNAME_KEY`）——
+        // 这样 `C.__dict__` 与参照一致，`inspect.getattr_static(C, "__qualname__")` 才会落到
+        // `type.__dict__` 的 getset 描述符上（值由 `Instance::type_qualname_value` 读）。
+        let storage_key = if instance.text_value(key).as_deref() == Some("__qualname__") {
+            instance.new_str(TYPE_QUALNAME_KEY)
+        } else {
+            // SAFETY: 键由命名空间持有，各新增一份（insert_raw 是转移语义）。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            key
+        };
+        // SAFETY: 值由命名空间持有，各新增一份（insert_raw 是转移语义）；
+        // 替换出来的新函数**自带一份**，故那时不再 incref。
+        match &replacement {
+            Some(_) => {}
+            // SAFETY: 同上。
+            None => unsafe { instance.incref_object(value.as_ptr()) },
         }
         let value = replacement.unwrap_or(value);
         // **`type.__new__` 自动把类体里的 `__new__` 包成 `staticmethod`** ✓（第 411 轮，task-22 ✓）：
@@ -902,8 +1287,7 @@ pub fn build_class_from_parts_with_keywords(
         let value = if instance.text_value(key).is_some_and(|text| text == "__new__")
             && instance.type_name(instance.type_of(value)) == "function"
         {
-            let static_type = instance
-                .type_named("staticmethod")
+            let static_type = instance.hot_type(HotId::StaticMethod)
                 .expect("staticmethod 在引导期已登记");
             instance.retain(value);
             instance
@@ -916,9 +1300,40 @@ pub fn build_class_from_parts_with_keywords(
             value
         };
         // SAFETY: type_dict 由类型对象持有，存活。
-        unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
-        items.push((key, value));
+        unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(storage_key, value);
+        items.push((storage_key, value));
     }
+    // **`__slots__` 的 `member_descriptor` 进类型字典**（task-13 #b）：参照 3.14.4 里每个槽名在类
+    // 字典里有一个 `member_descriptor`（`C.__dict__['_C__x']`；`__name__`／`__qualname__`＝
+    // `<类 qualname>.<槽名>`／`__objclass__` ✓）。槽值仍存在**实例字典**的槽键里
+    // （完整"无实例字典"语义未接，如实登记）；`__get__` 分派见 `getset_descriptor_get` 的 "member"。
+    if let Some(slot_names) = slot_names {
+        let member_type = instance
+            .hot_type(HotId::MemberDescriptor)
+            .expect("member_descriptor 在引导期已登记");
+        let class_qualname = instance.type_qualname_value(ty.cast::<Header>());
+        for slot in slot_names {
+            // **重复槽名只建一个描述符**（参照 `__slots__ = ('q','q')` 的类字典只有一个 `q`）。
+            if instance.dict_get(type_dict, &slot).is_some() {
+                continue;
+            }
+            let qualname = instance.new_str(&format!("{class_qualname}.{slot}"));
+            let descriptor = instance.descriptor_instance(
+                member_type,
+                "member",
+                &slot,
+                Some(ty),
+                &[("__qualname__", qualname)],
+            );
+            // SAFETY: `qualname` 是上面刚造的新引用、字典已另存一份。
+            unsafe { instance.release_object(qualname.as_ptr()) };
+            let key = instance.new_str(&slot);
+            // SAFETY: type_dict 由类型对象持有、存活；`insert_raw` 是**转移**语义
+            // （键与描述符各交出一份引用）。
+            unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, descriptor);
+        }
+    }
+
     // **第二遍：`__set_name__`**（实测 3.14）：对**本类自己命名空间**的每一项（按**插入序**），
     // 若它有 `__set_name__` 就调一次 `(类对象, 属性名)`——继承项不在此循环里，故不会重调；
     // 没有该方法的项跳过；**抛错原样传播**（本函数本来就返回 `Result`）。
@@ -937,7 +1352,22 @@ pub fn build_class_from_parts_with_keywords(
                     instance.release(setter);
                     match outcome {
                         Ok(result) => instance.release(result),
-                        Err(error) => return Err(error),
+                        Err(error) => {
+                            // **PEP 678 自动 note**（round 65，参照 `type_new_set_attrs` 口径）：
+                            // `Error calling __set_name__ on 'Descriptor' instance 'attr' in 'C'` ✓
+                            //（`test_subclassinit.test_set_name_error` 读 `__notes__` ✓）。
+                            if let crate::executor::ExecError::Raised { exception } = &error {
+                                let describing = instance.type_name(instance.type_of(value)).to_owned();
+                                let attribute = instance.text_value(key).unwrap_or_default();
+                                let note = format!(
+                                    "Error calling __set_name__ on '{describing}' instance '{attribute}' in '{name}'"
+                                );
+                                crate::builtin_objects::add_exception_note(
+                                    instance, exception.get(), &note,
+                                );
+                            }
+                            return Err(error);
+                        }
                     }
                 }
                 Ok(None) => {}
@@ -969,6 +1399,8 @@ pub fn build_class_from_parts_with_keywords(
         &subclass_keywords,
     )?;
 
+    // **登记为"动态（用户）类类型"**（round 99）：参与孤儿类型回收 ✓（见 `Instance::user_types`）。
+    instance.register_user_type(ty.cast::<Header>());
     // SAFETY: ty 由注册表持有；这里新增一份引用交给调用方。
     unsafe { instance.incref_object(ty.cast::<Header>().as_ptr()) };
     Ok(ty.cast::<Header>())

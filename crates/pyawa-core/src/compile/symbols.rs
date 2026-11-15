@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// 把**已改写**的属性名还原成源码原名（见 [`collect_static_attributes`]）。
+fn restore_private_attribute(class_name: &str, name: &str) -> String {
+    match super::mangle::class_prefix(class_name) {
+        Some(prefix) => match name.strip_prefix(&prefix) {
+            Some(rest) => format!("__{rest}"),
+            None => name.to_owned(),
+        },
+        None => name.to_owned(),
+    }
+}
+
 /// **`__static_attributes__` 的静态收集**（实测 3.14 的规则）：
 ///
 /// - 只收**赋值**形态 `self.名字 = …`；只读 `self.名字` 不算
@@ -10,16 +21,25 @@ use super::*;
 /// - **嵌套函数里也算**（方法里的 `def inner(): self.z = 1` ⇒ 收到的 `z`）
 ///
 /// - `if`／`while`／`for` 的体（含各自的 `else` 体）也走进去（实测：`if x: self.a = 1` ⇒ `('a',)`）
-pub(super) fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
+pub(super) fn collect_static_attributes(
+    statements: &[Statement],
+    class_name: &str,
+    out: &mut Vec<String>,
+) {
     for statement in statements {
         match statement {
             Statement::AssignAttr { object, name, .. } => {
                 if matches!(object, Expression::Name(base, _) if base == "self") {
-                    out.push(name.clone());
+                    // **私有名改写还原**（task-5，实测）：`__static_attributes__` 记的是**源码原名**
+                    // （`class C: def m(self): self.__p = 1` ⇒ `C.__static_attributes__ == ('__p',)`），
+                    // 而 AST 里的属性名已被改写（`_C__p`）⇒ 按本类前缀还原回 `__` 前缀的源码名。
+                    // 唯一歧义：源码里**显式写** `self._C__p`（本来就带类前缀）也会被还原成 `__p` ——
+                    // 与参照只差这一格，见 `mangle` 模块头注释。
+                    out.push(restore_private_attribute(class_name, name));
                 }
             }
             // 方法与嵌套函数
-            Statement::Def { body, .. } => collect_static_attributes(body, out),
+            Statement::Def { body, .. } => collect_static_attributes(body, class_name, out),
             // 复合语句的体（实测：`if`／`while`／`for` 体里写 `self.X` 同样会收）
             Statement::For {
                 body, else_body, ..
@@ -27,14 +47,14 @@ pub(super) fn collect_static_attributes(statements: &[Statement], out: &mut Vec<
             | Statement::While {
                 body, else_body, ..
             } => {
-                collect_static_attributes(body, out);
-                collect_static_attributes(else_body, out);
+                collect_static_attributes(body, class_name, out);
+                collect_static_attributes(else_body, class_name, out);
             }
             Statement::If {
                 then_body, else_body, ..
             } => {
-                collect_static_attributes(then_body, out);
-                collect_static_attributes(else_body, out);
+                collect_static_attributes(then_body, class_name, out);
+                collect_static_attributes(else_body, class_name, out);
             }
             Statement::Try {
                 body,
@@ -44,14 +64,14 @@ pub(super) fn collect_static_attributes(statements: &[Statement], out: &mut Vec<
                 ..
             } => {
                 // 与**发射顺序**一致：套体 → `else` → `finally` → 各处理块
-                collect_static_attributes(body, out);
-                collect_static_attributes(else_body, out);
-                collect_static_attributes(finally_body, out);
+                collect_static_attributes(body, class_name, out);
+                collect_static_attributes(else_body, class_name, out);
+                collect_static_attributes(finally_body, class_name, out);
                 for handler in handlers {
-                    collect_static_attributes(&handler.body, out);
+                    collect_static_attributes(&handler.body, class_name, out);
                 }
             }
-            Statement::With { body, .. } => collect_static_attributes(body, out),
+            Statement::With { body, .. } => collect_static_attributes(body, class_name, out),
             // `import` 不改属性；`from … import *` 也别去猜绑定了什么
             Statement::Import { .. } | Statement::ImportFrom { .. } => {}
             _ => {}
@@ -264,7 +284,8 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 pre_intern_expression(emitter, key);
             }
             Statement::Def {
-                name,
+                name: _,
+                binding,
                 parameters,
                 kwonly,
                 decorators,
@@ -284,18 +305,23 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 // **函数里嵌套的 `def`**：名字是**局部**（进 `varnames`，不进 `co_names`）⇒ 不 intern。
                 // 实测 `def outer(): def inner(): …` 的内层单元 `co_names` 是**空**的。
                 if emitter.kind != ScopeKind::Function {
-                    emitter.intern_name(name);
+                    // **私有名改写后的绑定名**（task-5）：`class C: def __m` 的 co_names 里是 `_C__m`。
+                    emitter.intern_name(binding);
                 }
             }
             Statement::Class {
-                name, bases, body: _, ..
+                name: _,
+                binding,
+                bases,
+                body: _,
+                ..
             } => {
                 for base in bases {
                     pre_intern_expression(emitter, base);
                 }
                 // **按作用域** ✓（第 202 轮真 bug 修复 ✗：先前一律 `intern_name` ⇒
                 // 函数里定义类会多出一个 `co_names` 项 ⇒ 与参照对不上 ✓；函数里该进 `varnames` ✓）。
-                pre_intern_target(emitter, name);
+                pre_intern_target(emitter, binding);
             }
             Statement::AssignChained { targets, value, .. } => {
                 // 实测 `a = b = x` 的 `co_names` 是 `('x','a','b')` ✓ ⇒ **值先、目标后** ✓
@@ -324,6 +350,7 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
             | Statement::Assert { .. } => {}
         }
     }
+
 }
 
 /// **收集局部名**（函数作用域）：赋名的目标按源码顺序进 `varnames`。
@@ -421,6 +448,9 @@ pub(super) fn analyze_cells(
         } = def
         {
             let probe_qualname = format!("{qualname}.{name}");
+            // **类体里的方法 `nonlocal`**（round 117）：先收需求（类作用域不是目标，外层函数
+            // 要据此建 cell ✓；探针编译是否成功不影响这一条 ✓）。
+            collect_nested_scope_nonlocals(body, &mut demanded);
             if let Ok(probe) = compile_class_scope(
                 name,
                 &probe_qualname,
@@ -488,6 +518,7 @@ pub(super) fn analyze_cells(
             body,
             ScopeKind::Function,
             false,
+            false,
             &[],
             Span::new(*first_line, *first_line, 0, 0),
         );
@@ -504,7 +535,17 @@ pub(super) fn analyze_cells(
                     demanded.push(wanted.clone());
                 }
             }
-            for referenced in &probe.names {
+            // **两层闭包**（round 117）：内层的**内层**（`b` 里的 `c`）把 `a` 的局部当全局读时，
+            // 那句 `LOAD_GLOBAL` 在 `c` 的 code 常量里 —— 只看 `b` 自己的 `co_names` 看不到 ✗ ⇒
+            // `a` 不把 `x` 变 cell ✗ ⇒ `b` 重编时 `deref_slot(x)` 落空 ⇒ 编译期 panic
+            //（"自由变量必在本层 cell／free 表里"，`test_builtin.test_exec_closure` ✓）。
+            let mut probe_names: Vec<String> = probe.names.clone();
+            for name in nested_unit_names(&probe) {
+                if !probe_names.iter().any(|item| item == &name) {
+                    probe_names.push(name);
+                }
+            }
+            for referenced in &probe_names {
                 if emitter.unit.varnames.iter().any(|local| local == referenced) {
                     // 本层有这个名字 ⇒ 本层把它变 cell 就够了，需求到此为止 ✓
                     if !cells.iter().any(|cell| cell == referenced) {
@@ -557,6 +598,9 @@ pub(super) fn analyze_cells(
             .map(|(_, local)| local.clone())
             .collect();
         emitter.unit.varnames = kept;
+        // **缓存失效 ＋ 重建**（round 70／71）：`varnames` 整体换掉 ⇒ 旧下标全作废 ✓ ⇒
+        // 立刻按新表重建（否则每个名字第一次查都线性扫 ⇒ 千参函数 O(n²) ✗）。
+        emitter.rebuild_local_slot_cache();
         emitter.unit.nlocals = emitter.unit.varnames.len();
         emitter.unit.cellvars = cells;
     }
@@ -564,49 +608,61 @@ pub(super) fn analyze_cells(
 
 /// 走一个**表达式**，收集其中的 `Name`（`lambda` 只收它**体外**所需的名字：体内引用减去自己的形参）。
 /// 给 lambda 的闭包分析用（第 297 轮）。
+/// 走一个**表达式**，收集其中的 `Name`（`lambda` 只收它**体外**所需的名字：体内引用减去自己的形参）。
+/// 给 lambda 的闭包分析用（第 297 轮）。**去重保持首次出现序** ✓（round 70：内部改成先去重
+/// 开销也是线性的 —— `HashSet` 一次建 ✓）。
 pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec<String>) {
-    let push = |name: &String, out: &mut Vec<String>| {
-        if !out.iter().any(|item| item == name) {
-            out.push(name.clone());
+    let mut raw = Vec::new();
+    collect_names_in_expression_raw(expression, &mut raw);
+    let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
+    for name in raw {
+        if seen.insert(name.clone()) {
+            out.push(name);
         }
-    };
+    }
+}
+
+fn collect_names_in_expression_raw(expression: &Expression, out: &mut Vec<String>) {
+    // **不去重**（round 70 性能）：调用方统一去重 ✓ —— 150k 形参的 lambda 体里
+    // 逐名 `out.iter().any` 是 O(n²) ✗（`collections.namedtuple` 的 150k 字段生成类）。
+    let push = |name: &String, out: &mut Vec<String>| out.push(name.clone());
     match expression {
         Expression::Name(name, _) => push(name, out),
         Expression::Walrus { target, value, .. } => {
             // 值先、目标后（实测 `if (o := f()) is None:` 的 `co_names` 是 `('f','o','x')` ✓）
-            collect_names_in_expression(value, out);
+            collect_names_in_expression_raw(value, out);
             push(target, out);
         }
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
         | Expression::TupleLiteral(items, _) => {
             for item in items {
-                collect_names_in_expression(item, out);
+                collect_names_in_expression_raw(item, out);
             }
         }
         Expression::Map(items, _) => {
             for item in items {
                 match item {
                     MapItem::Pair(key, value) => {
-                        collect_names_in_expression(key, out);
-                        collect_names_in_expression(value, out);
+                        collect_names_in_expression_raw(key, out);
+                        collect_names_in_expression_raw(value, out);
                     }
-                    MapItem::Unpack(value) => collect_names_in_expression(value, out),
+                    MapItem::Unpack(value) => collect_names_in_expression_raw(value, out),
                 }
             }
         }
         Expression::Attribute(target, _, _)
         | Expression::Not(target, _)
-        | Expression::Unary(_, target, _) => collect_names_in_expression(target, out),
+        | Expression::Unary(_, target, _) => collect_names_in_expression_raw(target, out),
         Expression::Binary(_, left, right, _)
         | Expression::Compare(left, _, right, _)
         | Expression::Subscript(left, right, _) => {
-            collect_names_in_expression(left, out);
-            collect_names_in_expression(right, out);
+            collect_names_in_expression_raw(left, out);
+            collect_names_in_expression_raw(right, out);
         }
         Expression::BoolOp { values, .. } | Expression::ChainedCompare { operands: values, .. } => {
             for value in values {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
         }
         Expression::Conditional {
@@ -615,18 +671,18 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             else_value,
             ..
         } => {
-            collect_names_in_expression(condition, out);
-            collect_names_in_expression(then_value, out);
-            collect_names_in_expression(else_value, out);
+            collect_names_in_expression_raw(condition, out);
+            collect_names_in_expression_raw(then_value, out);
+            collect_names_in_expression_raw(else_value, out);
         }
         Expression::FString { parts, .. } => {
             for part in parts {
                 if let FStringPart::Formatted { expression, spec, .. } = part {
-                    collect_names_in_expression(expression, out);
+                    collect_names_in_expression_raw(expression, out);
                     if let Some(spec) = spec {
                         for item in spec {
                             if let FStringPart::Formatted { expression, .. } = item {
-                                collect_names_in_expression(expression, out);
+                                collect_names_in_expression_raw(expression, out);
                             }
                         }
                     }
@@ -662,15 +718,15 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             dict_arguments,
             ..
         } => {
-            collect_names_in_expression(function, out);
+            collect_names_in_expression_raw(function, out);
             for argument in arguments.iter().chain(star_arguments) {
-                collect_names_in_expression(argument, out);
+                collect_names_in_expression_raw(argument, out);
             }
             for (_, value) in keywords {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
             for value in dict_arguments {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
         }
         Expression::Comprehension {
@@ -679,15 +735,15 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             generators,
             ..
         } => {
-            collect_names_in_expression(element, out);
+            collect_names_in_expression_raw(element, out);
             if let Some(value) = value {
-                collect_names_in_expression(value, out);
+                collect_names_in_expression_raw(value, out);
             }
             // 生成器的**目标名**是推导式自己的局部，不算需求 ⇒ 只走可迭代对象与过滤条件 ✓
             for generator in generators {
-                collect_names_in_expression(&generator.iterable, out);
+                collect_names_in_expression_raw(&generator.iterable, out);
                 for condition in &generator.conditions {
-                    collect_names_in_expression(condition, out);
+                    collect_names_in_expression_raw(condition, out);
                 }
             }
         }
@@ -698,19 +754,24 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             ..
         } => {
             for part in [lower, upper, step].into_iter().flatten() {
-                collect_names_in_expression(part, out);
+                collect_names_in_expression_raw(part, out);
             }
         }
         // **`BC-63`**：两个操作数都在本层求值 ⇒ 照常收
         Expression::NullCoalesce(left, right, _) => {
-            collect_names_in_expression(left, out);
-            collect_names_in_expression(right, out);
+            collect_names_in_expression_raw(left, out);
+            collect_names_in_expression_raw(right, out);
         }
         Expression::SafeChain { receiver, rest, .. } => {
-            collect_names_in_expression(receiver, out);
-            collect_names_in_expression(rest, out);
+            collect_names_in_expression_raw(receiver, out);
+            collect_names_in_expression_raw(rest, out);
         }
         Expression::ChainSubject(_) => {}
+        // **`await <表达式>`**（round 220）：里面的名字照常收 ✓ —— 特别是"推导式作为
+        // `await` 调用的实参"（`await staggered.staggered_race((... for ...), ...)` ✓）：
+        // 漏收 ⇒ 外层 `self` 不会被标成 cell ⇒ emitter 的推导式闭包分析报
+        // "cell／自由变量槽缺失" ✗（`import asyncio` 实测 ✓）。
+        Expression::Await(value, _) => collect_names_in_expression_raw(value, out),
         _ => {}
     }
 }
@@ -968,6 +1029,48 @@ pub(super) fn collect_nonlocals(statements: &[Statement], out: &mut Vec<String>)
                 collect_nonlocals(finally_body, out);
             }
             Statement::With { body, .. } => collect_nonlocals(body, out),
+            _ => {}
+        }
+    }
+}
+
+/// **收集"隔着类体的 `nonlocal`"**：类作用域不是 `nonlocal` 的目标 ✓，但它是**通道** ✓ ——
+/// 类体里的方法声明 `nonlocal x` 要跳过类体指回外层函数 ✓
+/// （`def make(): count = 0; class C: def m(self): nonlocal count; count += 1` ✓）。
+/// 给闭包分析用：外层函数据此把 `count` 当 cell ✓（`test_dict.test_str_nonstr` ✓）。
+pub(super) fn collect_nested_scope_nonlocals(statements: &[Statement], out: &mut Vec<String>) {
+    for statement in statements {
+        match statement {
+            Statement::Def { body, .. } => collect_nonlocals(body, out),
+            Statement::Class { body, .. } => collect_nested_scope_nonlocals(body, out),
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_nested_scope_nonlocals(then_body, out);
+                collect_nested_scope_nonlocals(else_body, out);
+            }
+            Statement::While { body, else_body, .. }
+            | Statement::For { body, else_body, .. } => {
+                collect_nested_scope_nonlocals(body, out);
+                collect_nested_scope_nonlocals(else_body, out);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                collect_nested_scope_nonlocals(body, out);
+                for handler in handlers {
+                    collect_nested_scope_nonlocals(&handler.body, out);
+                }
+                collect_nested_scope_nonlocals(else_body, out);
+                collect_nested_scope_nonlocals(finally_body, out);
+            }
+            Statement::With { body, .. } => collect_nested_scope_nonlocals(body, out),
             _ => {}
         }
     }
@@ -1508,8 +1611,9 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
         match statement {
             // **别名语句**（task-24 收口 ③）：**别名的名字是本作用域的局部** ✓
             // （函数里 ⇒ `STORE_FAST` ✓；值表达式在 thunk 里求值 ⇒ 不在这里收 ✓）。
-            Statement::TypeAlias { name, .. } => {
-                declare_local(emitter, name);
+            Statement::TypeAlias { binding, .. } => {
+                // **私有名改写后的绑定名**（task-5）：类体里 `type __X = …` 的局部名是 `_C__X`。
+                declare_local(emitter, binding);
             }
             Statement::Delete { targets, .. } => {
                 // `del x` 在函数里让 `x` 成为**局部**（参照：`co_varnames=('x',)` ＋ `DELETE_FAST` ✓）
@@ -1560,11 +1664,11 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             // **类的名字也是本作用域的局部** ✓（第 202 轮真 bug ✗：先前漏了这一支 ⇒
             // "函数里定义类"会把类名按模块级 `STORE_NAME` 发 ✗ ⇒ 撞"需要命名空间帧" ✓）。
             // **不递归进类体** ✗：那是**另一个作用域** ✓（它的 `STORE_NAME` 落在类字典上 ✓）。
-            Statement::Class { name, .. } => {
-                declare_local(emitter, name);
+            Statement::Class { binding, .. } => {
+                declare_local(emitter, binding);
             }
-            Statement::Def { name, .. } => {
-                declare_local(emitter, name);
+            Statement::Def { binding, .. } => {
+                declare_local(emitter, binding);
             }
             // `import a` 在函数里存的是**局部**（实测 `def f(): import a` ⇒ `STORE_FAST a`）
             // —— 但**`global a` 声明的名字不是局部**（`global heapq; import heapq` ⇒
@@ -1708,6 +1812,8 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             }
         }
         Expression::YieldFrom(value, _) => pre_intern_expression(emitter, value),
+        // **`await <表达式>`**（round 220）：值那一半照样要**预登记**名字 ✓。
+        Expression::Await(value, _) => pre_intern_expression(emitter, value),
         Expression::Int(_, _)
         | Expression::BigInt(_, _)
         | Expression::Float(_, _)
@@ -1733,13 +1839,9 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             if emitter.comprehension_locals.iter().any(|item| item == name) {
                 return;
             }
-            if emitter.kind == ScopeKind::Function
-                && emitter.unit.varnames.iter().any(|item| item == name)
-            {
+            if emitter.kind == ScopeKind::Function && emitter.plain_local_slot(name).is_some() {
                 return;
             }
-            // **cell／自由变量同样不进 `co_names`**（实测 `nonlocal x` 的内层 `co_names=()` ✓
-            // —— `x` 只该在 `co_freevars` 里；这条以前只挡了 `varnames`，自由变量会漏过去 ✗）
             if emitter.deref_slot(name).is_some() {
                 return;
             }
@@ -1971,23 +2073,63 @@ pub(super) fn block_terminates(statements: &[Statement]) -> bool {
     }
 }
 
-/// **这个作用域里有没有 `yield`**（第 124 轮）：有就是**生成器** ✓（`flags |= 0x20` ✓、
-/// 前言要补 `RETURN_GENERATOR; POP_TOP` ✓、收尾要补 `CALL_INTRINSIC_1 3; RERAISE 1` ✓）。
+/// **语句里本作用域求值的表达式**：给"生成器／yield from 语法档"用 ✓。
 ///
-/// **不下探**内层 `def`／`class` 与 `lambda` ✓（它们的 `yield` 属于它们自己 ✓）。
-pub(super) fn statements_have_yield(statements: &[Statement]) -> bool {
-    statements.iter().any(|statement| match statement {
+/// `plain` 为真表示"任何让出都算"（生成器判定）；为假只找 `yield from`
+/// （`async def` 里不许 `yield from` 的编译期语法档）。
+///
+/// **作用域边界**（逐条实测本机 3.14.4 定的，见 PLAN §12.1 的修因）：
+/// - 复合语句只递归它的**体**（体属于本作用域）；
+/// - `def`／`class` 只下潜**装饰器、形参默认值、基类、类关键字**（这些在外层求值：
+///   实测 `def f(): def g(x=(yield)): pass` 与 `def f(): class C((yield)): pass` 的 `f`
+///   都是生成器）；**不下潜** `def`／`class` 的体（那是它们自己的作用域）；
+/// - `lambda` 只在表达式走查里处理（见 `expression_has_yield`）。
+fn statement_has_yield(statement: &Statement, plain: bool) -> bool {
+    match statement {
         // **`yield from` 也算让出**（第 315 轮）：漏了它 ⇒ `def g(): yield from [1,2]` 被编成
         // **普通函数** ✗ ⇒ 运行期报"非生成器函数不该让出（码元被改坏了？）" ✗。
-        Statement::Yield(_, _) | Statement::YieldFrom(_, _) => true,
+        // `yield` 语句带着的操作数也在**本作用域**求值 ⇒ 查 `yield from` 时照样下潜
+        // （否则 `async def f(): yield (yield from x)` 漏报参照的 SyntaxError）。
+        Statement::Yield(value, _) => {
+            plain
+                || value
+                    .as_ref()
+                    .is_some_and(|value| expression_has_yield(value, plain))
+        }
+        Statement::YieldFrom(_, _) => true,
         Statement::If {
+            condition,
             then_body,
             else_body,
             ..
-        } => statements_have_yield(then_body) || statements_have_yield(else_body),
-        Statement::While { body, else_body, .. }
-        | Statement::For { body, else_body, .. } => {
-            statements_have_yield(body) || statements_have_yield(else_body)
+        } => {
+            expression_has_yield(condition, plain)
+                || statements_have_yield_kind(then_body, plain)
+                || statements_have_yield_kind(else_body, plain)
+        }
+        Statement::While {
+            condition,
+            body,
+            else_body,
+            ..
+        } => {
+            expression_has_yield(condition, plain)
+                || statements_have_yield_kind(body, plain)
+                || statements_have_yield_kind(else_body, plain)
+        }
+        Statement::For {
+            iterable,
+            body,
+            else_body,
+            tuple_targets,
+            ..
+        } => {
+            expression_has_yield(iterable, plain)
+                || tuple_targets
+                    .iter()
+                    .any(|target| for_target_has_yield(target, plain))
+                || statements_have_yield_kind(body, plain)
+                || statements_have_yield_kind(else_body, plain)
         }
         Statement::Try {
             body,
@@ -1996,18 +2138,207 @@ pub(super) fn statements_have_yield(statements: &[Statement]) -> bool {
             finally_body,
             ..
         } => {
-            statements_have_yield(body)
-                || handlers.iter().any(|handler| statements_have_yield(&handler.body))
-                || statements_have_yield(else_body)
-                || statements_have_yield(finally_body)
+            statements_have_yield_kind(body, plain)
+                || handlers.iter().any(|handler| {
+                    // **`except (yield):` 的类型表达式在外层作用域求值** ✓（独立审查发现：先前只扫
+                    // `handler.body` ⇒ `def f(): try: … except (yield): …` 里的 `f` 漏标成生成器 ✗）。
+                    handler
+                        .type_
+                        .as_ref()
+                        .is_some_and(|type_| expression_has_yield(type_, plain))
+                        || statements_have_yield_kind(&handler.body, plain)
+                })
+                || statements_have_yield_kind(else_body, plain)
+                || statements_have_yield_kind(finally_body, plain)
         }
-        Statement::With { body, .. } => statements_have_yield(body),
+        Statement::With { items, body, .. } => {
+            items.iter().any(|(expression, target)| {
+                expression_has_yield(expression, plain)
+                    || target
+                        .as_ref()
+                        .is_some_and(|target| for_target_has_yield(target, plain))
+            }) || statements_have_yield_kind(body, plain)
+        }
+        Statement::Match {
+            subject, cases, ..
+        } => {
+            expression_has_yield(subject, plain)
+                || cases.iter().any(|case| {
+                    case.guard
+                        .as_ref()
+                        .is_some_and(|guard| expression_has_yield(guard, plain))
+                        || statements_have_yield_kind(&case.body, plain)
+                })
+        }
+        // ---- 赋值族：目标那一半也可能在本层求值（属性对象／下标容器与键） ----
+        Statement::Assign { value, .. } => expression_has_yield(value, plain),
+        Statement::AssignChained { targets, value, .. } => {
+            expression_has_yield(value, plain)
+                || targets
+                    .iter()
+                    .any(|target| expression_has_yield(target, plain))
+        }
+        Statement::AssignTuple {
+            targets,
+            value,
+            chain,
+            ..
+        } => {
+            expression_has_yield(value, plain)
+                || targets
+                    .iter()
+                    .any(|(target, _)| expression_has_yield(target, plain))
+                || chain
+                    .iter()
+                    .any(|target| expression_has_yield(target, plain))
+        }
+        Statement::AssignSubscript {
+            container,
+            key,
+            value,
+            ..
+        } => {
+            expression_has_yield(container, plain)
+                || expression_has_yield(key, plain)
+                || expression_has_yield(value, plain)
+        }
+        Statement::AssignAttr { object, value, .. } => {
+            expression_has_yield(object, plain) || expression_has_yield(value, plain)
+        }
+        Statement::AugAssign { target, value, .. } => {
+            expression_has_yield(value, plain) || aug_target_has_yield(target, plain)
+        }
+        Statement::NullCoalesceAssign { value, .. } => expression_has_yield(value, plain),
+        Statement::Delete { targets, .. } => targets
+            .iter()
+            .any(|target| expression_has_yield(target, plain)),
+        Statement::Assert { test, message, .. } => {
+            expression_has_yield(test, plain)
+                || message
+                    .as_ref()
+                    .is_some_and(|message| expression_has_yield(message, plain))
+        }
+        Statement::Raise { value, cause, .. } => {
+            value
+                .as_ref()
+                .is_some_and(|value| expression_has_yield(value, plain))
+                || cause
+                    .as_ref()
+                    .is_some_and(|cause| expression_has_yield(cause, plain))
+        }
         // **语句里的表达式** ✓（第 219 轮）：lambda 的体会被合成成 `return <体>` ✓ ⇒ 必须看到这一层 ✓
         //（否则含 `yield` 的 lambda **不会**被标成生成器 ✗ ⇒ `type((lambda: (yield))())` 就不是 `generator` ✗）。
-        // **如实说** ✗：目前只覆盖 `return` 与裸表达式两块 ✓；赋值那一族的表达式随后补 ✓。
         Statement::Return(value, _) | Statement::Expression(value, _) => {
-            crate::compile::expressions_have_yield(value)
+            expression_has_yield(value, plain)
         }
+        // **嵌套定义只下潜"在外层求值"的那几列**（装饰器／默认值／基类／类关键字）✓。
+        Statement::Def {
+            decorators,
+            parameters,
+            kwonly,
+            ..
+        } => {
+            decorators
+                .iter()
+                .any(|decorator| expression_has_yield(decorator, plain))
+                || parameters
+                    .iter()
+                    .chain(kwonly.iter())
+                    .any(|parameter| {
+                        parameter
+                            .default
+                            .as_ref()
+                            .is_some_and(|value| expression_has_yield(value, plain))
+                    })
+        }
+        Statement::Class {
+            decorators,
+            bases,
+            keywords,
+            ..
+        } => {
+            decorators
+                .iter()
+                .any(|decorator| expression_has_yield(decorator, plain))
+                || bases
+                    .iter()
+                    .any(|base| expression_has_yield(base, plain))
+                || keywords
+                    .iter()
+                    .any(|(_, value)| expression_has_yield(value, plain))
+        }
+        // 其余语句不带本作用域求值的表达式（`pass`／`break`／`continue`／`global`／`nonlocal`／
+        // `import` 一族／类体之外的注解与类型别名——后两者里出现 `yield` 参照报 SyntaxError）。
+        _ => false,
+    }
+}
+
+/// **这个作用域里有没有 `yield`**（第 124 轮）：有就是**生成器** ✓（`flags |= 0x20` ✓、
+/// 前言要补 `RETURN_GENERATOR; POP_TOP` ✓、收尾要补 `CALL_INTRINSIC_1 3; RERAISE 1` ✓）。
+///
+/// **不下探**内层的体（`def`／`class`／`lambda`／推导式作用域）✓；但**要看**同层语句里的
+/// 表达式（PLAN §12.1：`v = yield` 就是漏在这里 ⇒ 生成器标志没置 ⇒ 运行期"非生成器函数不该让出"）。
+pub(crate) fn statements_have_yield(statements: &[Statement]) -> bool {
+    statements_have_yield_kind(statements, true)
+}
+
+/// **作用域里有 `yield from` 吗**（round 244）：`async def` 里出现 ⇒ `SyntaxError: 'yield from' inside async function` ✓
+/// （参照在**编译期**就拒 ✗ —— 本层先前接受 ⇒ `test_asyncgen` 的 5 个语法档全红 ✗）。只看本层，不进嵌套定义 ✓。
+pub(crate) fn statements_have_yield_from(statements: &[Statement]) -> bool {
+    statements_have_yield_kind(statements, false)
+}
+
+fn statements_have_yield_kind(statements: &[Statement], plain: bool) -> bool {
+    statements
+        .iter()
+        .any(|statement| statement_has_yield(statement, plain))
+}
+
+/// 赋值目标（`for`／`with … as` 的递归目标）里本层求值的表达式。
+fn for_target_has_yield(target: &ForTarget, plain: bool) -> bool {
+    match target {
+        ForTarget::Name(..) => false,
+        ForTarget::Group(items, _) => items
+            .iter()
+            .any(|item| for_target_has_yield(item, plain)),
+        ForTarget::Starred(inner, _) => for_target_has_yield(inner, plain),
+        ForTarget::Attribute(object, _, _) => expression_has_yield(object, plain),
+        ForTarget::Subscript(container, key, _) => {
+            expression_has_yield(container, plain) || expression_has_yield(key, plain)
+        }
+    }
+}
+
+/// 增强赋值目标里本层求值的表达式。
+fn aug_target_has_yield(target: &AugTarget, plain: bool) -> bool {
+    match target {
+        AugTarget::Name(..) => false,
+        AugTarget::Attribute { object, .. } => expression_has_yield(object, plain),
+        AugTarget::Subscript { container, key, .. } => {
+            expression_has_yield(container, plain) || expression_has_yield(key, plain)
+        }
+    }
+}
+
+/// **作用域里有"带值的 return"吗**（round 244）：异步生成器里出现 ⇒
+/// `SyntaxError: 'return' with value in async generator` ✓。只看本层 ✓。
+pub(crate) fn statements_have_return_value(statements: &[Statement]) -> bool {
+    statements.iter().any(|statement| match statement {
+        // 裸 `return` 被解析成 `Return(Constant::None)` ⇒ 只有**非常量 None**才算"带值" ✓
+        Statement::Return(value, _) => !matches!(value, crate::compile::Expression::Constant(crate::compile::Constant::None, _)),
+        Statement::If { then_body, else_body, .. } => {
+            statements_have_return_value(then_body) || statements_have_return_value(else_body)
+        }
+        Statement::While { body, else_body, .. } | Statement::For { body, else_body, .. } => {
+            statements_have_return_value(body) || statements_have_return_value(else_body)
+        }
+        Statement::Try { body, handlers, else_body, finally_body, .. } => {
+            statements_have_return_value(body)
+                || handlers.iter().any(|handler| statements_have_return_value(&handler.body))
+                || statements_have_return_value(else_body)
+                || statements_have_return_value(finally_body)
+        }
+        Statement::With { body, .. } => statements_have_return_value(body),
         _ => false,
     })
 }
@@ -2171,5 +2502,699 @@ fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
         }
         Pattern::Star(inner, _) => collect_pattern_locals(emitter, inner),
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
+    }
+}
+
+// ===== `nonlocal` 绑定的编译期校验（task-12） =====
+//
+// 参照 3.14.4 的口径（`Python/symtable.c` 实测；`analyze_name`／`analyze_block`）：
+//
+// - **模块层的 `nonlocal`** ⇒ `SyntaxError: nonlocal declaration not allowed at module level`
+//   （模块块的 `bound` 是 `NULL`；类体块即使定义在模块层也有 `bound`（空集）⇒ 报的是"找不到绑定"）；
+// - **`nonlocal` 名字在外层函数作用域里没有任何 local 绑定**（类作用域**不算**绑定来源）⇒
+//   `SyntaxError: no binding for nonlocal 'x' found`；
+// - `nonlocal` 与同作用域的 `global` 同名（且不是参数冲突）⇒
+//   `SyntaxError: name 'x' is nonlocal and global`（按符号首次出现序取第一个冲突名）；
+// - 形参被 `global`／`nonlocal` 声明 ⇒ `SyntaxError: name 'x' is parameter and global`／
+//   `... and nonlocal`（pass-1 在声明处当场报）；
+// - **PEP 695 类型参数**不能做 `nonlocal` 目标 ⇒ `nonlocal binding not allowed for type parameter 'T'`；
+// - 报错里的名字是**私有名改写后**的名字（`task-5` 的改写在本校验之前执行 ✓）。
+//
+// **如实范围外**（本层仍未实现，README 报告里登记）：
+// - pass-1 的"先用后声明"一族：`is used prior to nonlocal declaration`、
+//   `is assigned to before nonlocal declaration`、`annotated name 'x' can't be nonlocal/global`；
+// - 重复声明等 CPython 直接放行的组合（本层也不报，与参照一致）。
+//
+// 做法：两趟（与参照同构）——
+// ① **pass-1**：按源码序把每个块的声明记下来，并在声明处查形参冲突；
+// ② **pass-2**：自模块向下，按声明插入序做冲突／模块层／绑定校验；`nonlocal` 的绑定来源是
+//    **外层函数作用域的 local 集合的并**（类作用域不加、模块 local 不着），
+//    形参／注解声明／赋值／`del`／`for`／`with`／`except`／`match` 捕获／`import`／
+//    `def`／`class`／`type` 别名／表达式里的 `:=` 都算 local；**推导式的迭代目标是推导式自己的
+//    作用域**（不算外层 local）；**lambda 体里的 `:=` 算 lambda 自己的**（不往外收）。
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ValidateBlockKind {
+    Module,
+    Class,
+    Function,
+}
+
+/// 一个块（模块／类体／函数体）里 `nonlocal` 校验需要的事实。
+struct ValidateBlock {
+    kind: ValidateBlockKind,
+    /// `global`／`nonlocal` 声明：`(名字, 是 global, 是 nonlocal)`，按**源码里首次出现**的顺序。
+    declarations: Vec<(String, bool, bool)>,
+    /// 本块**绑定的名字**（参照的 `local` 集合；只对 function 块有意义）。
+    locals: Vec<String>,
+    /// 本块可见的 PEP 695 类型参数名（含外层泛型作用域继承来的）。
+    type_params: Vec<String>,
+    /// 子块（`def`／`class` 的体），按源码顺序。
+    children: Vec<ValidateBlock>,
+}
+
+/// **入口**：校验一段模块源码里所有 `nonlocal` 声明（`compile()`／`exec()`／导入共用）。
+pub(super) fn validate_nonlocal_bindings(statements: &[Statement]) -> Result<(), CompileError> {
+    let module = build_validate_block(statements, ValidateBlockKind::Module, &[], &[])?;
+    validate_block(&module, &[])
+}
+
+/// 造一块的校验信息（内含 pass-1：形参冲突在声明处当场报）。
+fn build_validate_block(
+    statements: &[Statement],
+    kind: ValidateBlockKind,
+    parameters: &[String],
+    visible_type_params: &[String],
+) -> Result<ValidateBlock, CompileError> {
+    let mut declarations: Vec<(String, bool, bool)> = Vec::new();
+    // **pass-1**：按源码序收声明；形参被 `global`／`nonlocal` 声明 ⇒ 当场报（参照同）。
+    walk_block_statements(statements, &mut |statement| {
+        let (names, is_global) = match statement {
+            Statement::Global(names, _) => (names, true),
+            Statement::NonLocal(names, _) => (names, false),
+            _ => return Ok(()),
+        };
+        for name in names {
+            if parameters.iter().any(|parameter| parameter == name) {
+                let message = if is_global {
+                    format!("name '{name}' is parameter and global")
+                } else {
+                    format!("name '{name}' is parameter and nonlocal")
+                };
+                return Err(CompileError::Syntax(message));
+            }
+            if let Some(entry) = declarations.iter_mut().find(|entry| &entry.0 == name) {
+                if is_global {
+                    entry.1 = true;
+                } else {
+                    entry.2 = true;
+                }
+            } else {
+                declarations.push((name.clone(), is_global, !is_global));
+            }
+        }
+        Ok(())
+    })?;
+    // 本块绑定的名字（只对函数块要；类体 local 不进 bound、模块 local 不传给子块）。
+    let mut locals: Vec<String> = Vec::new();
+    if kind == ValidateBlockKind::Function {
+        locals.extend(parameters.iter().cloned());
+        walk_block_statements(statements, &mut |statement| {
+            collect_statement_bound_names(statement, &mut locals);
+            Ok(())
+        })?;
+        // `global`／`nonlocal` 声明的名字**不**是本块 local（参照 `analyze_name` 的分支 ✓）。
+        locals.retain(|name| {
+            !declarations
+                .iter()
+                .any(|(declared, is_global, is_nonlocal)| {
+                    declared == name && (*is_global || *is_nonlocal)
+                })
+        });
+    }
+    // 子块（`def`／`class` 的体），按源码顺序递归造。
+    let mut children: Vec<ValidateBlock> = Vec::new();
+    walk_block_statements(statements, &mut |statement| {
+        match statement {
+            Statement::Def {
+                parameters,
+                kwonly,
+                varargs,
+                varkw,
+                type_params,
+                body,
+                ..
+            } => {
+                let mut child_params: Vec<String> = parameters
+                    .iter()
+                    .chain(kwonly.iter())
+                    .map(|parameter| parameter.name.clone())
+                    .collect();
+                if let Some(varargs) = varargs {
+                    child_params.push(varargs.clone());
+                }
+                if let Some(varkw) = varkw {
+                    child_params.push(varkw.clone());
+                }
+                let mut child_types = visible_type_params.to_vec();
+                child_types.extend(type_params.iter().map(|item| item.name.clone()));
+                children.push(build_validate_block(
+                    body,
+                    ValidateBlockKind::Function,
+                    &child_params,
+                    &child_types,
+                )?);
+            }
+            Statement::Class {
+                type_params, body, ..
+            } => {
+                let mut child_types = visible_type_params.to_vec();
+                child_types.extend(type_params.iter().map(|item| item.name.clone()));
+                children.push(build_validate_block(
+                    body,
+                    ValidateBlockKind::Class,
+                    &[],
+                    &child_types,
+                )?);
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(ValidateBlock {
+        kind,
+        declarations,
+        locals,
+        type_params: visible_type_params.to_vec(),
+        children,
+    })
+}
+
+/// **pass-2**：自模块向下校验（声明插入序 ⇒ 冲突 → 模块层 → 类型参数 → 绑定），再递归子块。
+///
+/// `bound` 是**外层函数作用域 local 集合**的栈（类体不压栈；模块 local 不进来）。
+fn validate_block(block: &ValidateBlock, bound: &[Vec<String>]) -> Result<(), CompileError> {
+    for (name, is_global, is_nonlocal) in &block.declarations {
+        if *is_global && *is_nonlocal {
+            return Err(CompileError::Syntax(format!(
+                "name '{name}' is nonlocal and global"
+            )));
+        }
+        if !*is_nonlocal {
+            continue;
+        }
+        if block.kind == ValidateBlockKind::Module {
+            return Err(CompileError::Syntax(
+                "nonlocal declaration not allowed at module level".to_owned(),
+            ));
+        }
+        // 类型参数不能当 `nonlocal` 目标（参照实测：`class C[T]: def m(): nonlocal T` ✓）。
+        if block.type_params.iter().any(|item| item == name) {
+            return Err(CompileError::Syntax(format!(
+                "nonlocal binding not allowed for type parameter '{name}'"
+            )));
+        }
+        if !bound
+            .iter()
+            .any(|locals| locals.iter().any(|local| local == name))
+        {
+            return Err(CompileError::Syntax(format!(
+                "no binding for nonlocal '{name}' found"
+            )));
+        }
+    }
+    for child in &block.children {
+        // 传给子块的 `bound`：**外层函数 local 的并**（本块是函数就再加本块 local；本块是类体就
+        // 加参照 ClassBlock 特判的三个名字——实测：方法里 `nonlocal __class__` 参照可编译，而
+        // **类体自己**里 `nonlocal __class__` 参照报"no binding"⇒ 特判只给子块、不给本块 ✓）。
+        let mut next: Vec<Vec<String>> = bound.to_vec();
+        match block.kind {
+            ValidateBlockKind::Module => {}
+            ValidateBlockKind::Function => next.push(block.locals.clone()),
+            ValidateBlockKind::Class => next.push(
+                ["__class__", "__classdict__", "__conditional_annotations__"]
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect(),
+            ),
+        }
+        validate_block(child, &next)?;
+    }
+    Ok(())
+}
+
+/// 走**一个块自己的语句**（含复合语句体；**不进** `def`／`class` 的体）—— 先序、源码顺序。
+fn walk_block_statements(
+    statements: &[Statement],
+    visit: &mut impl FnMut(&Statement) -> Result<(), CompileError>,
+) -> Result<(), CompileError> {
+    for statement in statements {
+        visit(statement)?;
+        match statement {
+            Statement::Def { .. } | Statement::Class { .. } => {}
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                walk_block_statements(then_body, visit)?;
+                walk_block_statements(else_body, visit)?;
+            }
+            Statement::While { body, else_body, .. }
+            | Statement::For { body, else_body, .. } => {
+                walk_block_statements(body, visit)?;
+                walk_block_statements(else_body, visit)?;
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                walk_block_statements(body, visit)?;
+                for handler in handlers {
+                    walk_block_statements(&handler.body, visit)?;
+                }
+                walk_block_statements(else_body, visit)?;
+                walk_block_statements(finally_body, visit)?;
+            }
+            Statement::With { body, .. } => walk_block_statements(body, visit)?,
+            Statement::Match { cases, .. } => {
+                for case in cases {
+                    walk_block_statements(&case.body, visit)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn push_bound_name(out: &mut Vec<String>, name: &str) {
+    if !out.iter().any(|item| item == name) {
+        out.push(name.to_owned());
+    }
+}
+
+/// 一条语句在**本块**里绑定了哪些名字（赋值／`del`／`for`／`with`／`except`／`match` 捕获／
+/// `import`／嵌套 `def`／`class`／`type` 别名／注解声明／表达式里的 `:=`）。
+fn collect_statement_bound_names(statement: &Statement, out: &mut Vec<String>) {
+    match statement {
+        Statement::Assign { target, value, .. } => {
+            collect_expr_target_names(value, out);
+            push_bound_name(out, target);
+        }
+        Statement::AssignChained { targets, value, .. } => {
+            for target in targets {
+                collect_expr_target_names(target, out);
+            }
+            collect_walrus_targets(value, out);
+        }
+        Statement::AssignTuple {
+            targets,
+            value,
+            chain,
+            ..
+        } => {
+            for (target, _) in targets {
+                collect_expr_target_names(target, out);
+            }
+            for target in chain {
+                collect_expr_target_names(target, out);
+            }
+            collect_walrus_targets(value, out);
+        }
+        Statement::Delete { targets, .. } => {
+            for target in targets {
+                collect_expr_target_names(target, out);
+            }
+        }
+        Statement::Annotation { name, .. } => {
+            // 参照：`AnnAssign` 的简单名字加 `DEF_ANNOT|DEF_LOCAL` ⇒ 算 local（但不占 `varnames`）。
+            push_bound_name(out, name);
+        }
+        Statement::TypeAlias { binding, .. } => push_bound_name(out, binding),
+        Statement::For {
+            target,
+            tuple_targets,
+            iterable,
+            ..
+        } => {
+            push_bound_name(out, target);
+            for item in tuple_targets {
+                collect_for_target_names(item, out);
+            }
+            collect_walrus_targets(iterable, out);
+        }
+        Statement::While { condition, .. } | Statement::If { condition, .. } => {
+            collect_walrus_targets(condition, out);
+        }
+        Statement::With { items, .. } => {
+            for (context, target) in items {
+                collect_walrus_targets(context, out);
+                if let Some(target) = target {
+                    collect_for_target_names(target, out);
+                }
+            }
+        }
+        Statement::Try { handlers, .. } => {
+            for handler in handlers {
+                if let Some(type_) = &handler.type_ {
+                    collect_walrus_targets(type_, out);
+                }
+                if let Some(name) = &handler.name {
+                    push_bound_name(out, name);
+                }
+            }
+        }
+        Statement::Match { subject, cases, .. } => {
+            collect_walrus_targets(subject, out);
+            for case in cases {
+                collect_pattern_names(&case.pattern, out);
+                if let Some(guard) = &case.guard {
+                    collect_walrus_targets(guard, out);
+                }
+            }
+        }
+        Statement::Return(value, _) | Statement::Expression(value, _) => {
+            collect_walrus_targets(value, out);
+        }
+        Statement::Assert { test, message, .. } => {
+            collect_walrus_targets(test, out);
+            if let Some(message) = message {
+                collect_walrus_targets(message, out);
+            }
+        }
+        Statement::Raise { value, cause, .. } => {
+            if let Some(value) = value {
+                collect_walrus_targets(value, out);
+            }
+            if let Some(cause) = cause {
+                collect_walrus_targets(cause, out);
+            }
+        }
+        Statement::Yield(Some(value), _) => collect_walrus_targets(value, out),
+        Statement::YieldFrom(value, _) => collect_walrus_targets(value, out),
+        Statement::Yield(None, _) => {}
+        Statement::AugAssign { target, value, .. } => {
+            match target {
+                AugTarget::Name(name, _) => push_bound_name(out, name),
+                AugTarget::Attribute { object, .. } => collect_walrus_targets(object, out),
+                AugTarget::Subscript {
+                    container, key, ..
+                } => {
+                    collect_walrus_targets(container, out);
+                    collect_walrus_targets(key, out);
+                }
+            }
+            collect_walrus_targets(value, out);
+        }
+        Statement::AssignSubscript {
+            container,
+            key,
+            value,
+            ..
+        } => {
+            collect_walrus_targets(container, out);
+            collect_walrus_targets(key, out);
+            collect_walrus_targets(value, out);
+        }
+        Statement::AssignAttr { object, value, .. } => {
+            collect_walrus_targets(object, out);
+            collect_walrus_targets(value, out);
+        }
+        Statement::NullCoalesceAssign { name, value, .. } => {
+            push_bound_name(out, name);
+            collect_walrus_targets(value, out);
+        }
+        Statement::Import { items, .. } => {
+            for (module, alias) in items {
+                let dest = alias.clone().unwrap_or_else(|| {
+                    module.split('.').next().unwrap_or(module).to_owned()
+                });
+                push_bound_name(out, &dest);
+            }
+        }
+        Statement::ImportFrom { names, .. } => {
+            for (name, alias) in names {
+                push_bound_name(out, alias.as_deref().unwrap_or(name));
+            }
+        }
+        Statement::Def {
+            binding,
+            decorators,
+            parameters,
+            kwonly,
+            ..
+        } => {
+            push_bound_name(out, binding);
+            // 装饰器／默认值在**本块**求值 ⇒ 里面的 `:=` 是本块 local（参照同）。
+            for decorator in decorators {
+                collect_walrus_targets(decorator, out);
+            }
+            for parameter in parameters.iter().chain(kwonly.iter()) {
+                if let Some(default) = &parameter.default {
+                    collect_walrus_targets(default, out);
+                }
+            }
+        }
+        Statement::Class {
+            binding,
+            decorators,
+            keywords,
+            bases,
+            ..
+        } => {
+            push_bound_name(out, binding);
+            for decorator in decorators {
+                collect_walrus_targets(decorator, out);
+            }
+            for base in bases {
+                collect_walrus_targets(base, out);
+            }
+            for (_, value) in keywords {
+                collect_walrus_targets(value, out);
+            }
+        }
+        Statement::Pass(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::Global(_, _)
+        | Statement::NonLocal(_, _) => {}
+    }
+}
+
+/// 赋值目标里的**名字**（`a, (b, *c)`；属性／下标目标不绑名字）。
+fn collect_expr_target_names(target: &Expression, out: &mut Vec<String>) {
+    match target {
+        Expression::Name(name, _) => push_bound_name(out, name),
+        Expression::TupleLiteral(items, _) | Expression::List(items, _) => {
+            for item in items {
+                collect_expr_target_names(item, out);
+            }
+        }
+        Expression::Starred(inner, _) => collect_expr_target_names(inner, out),
+        _ => {}
+    }
+}
+
+fn collect_for_target_names(target: &ForTarget, out: &mut Vec<String>) {
+    match target {
+        ForTarget::Name(name, _) => push_bound_name(out, name),
+        ForTarget::Group(items, _) => {
+            for item in items {
+                collect_for_target_names(item, out);
+            }
+        }
+        ForTarget::Starred(inner, _) => collect_for_target_names(inner, out),
+        ForTarget::Attribute(..) | ForTarget::Subscript(..) => {}
+    }
+}
+
+fn collect_pattern_names(pattern: &Pattern, out: &mut Vec<String>) {
+    match pattern {
+        Pattern::Capture(name, _) => push_bound_name(out, name),
+        Pattern::As(inner, name, _) => {
+            collect_pattern_names(inner, out);
+            push_bound_name(out, name);
+        }
+        Pattern::Or(items, _) | Pattern::Sequence { items, .. } => {
+            for item in items {
+                collect_pattern_names(item, out);
+            }
+        }
+        Pattern::Class {
+            positional, keywords, ..
+        } => {
+            for item in positional {
+                collect_pattern_names(item, out);
+            }
+            for (_, item) in keywords {
+                collect_pattern_names(item, out);
+            }
+        }
+        Pattern::Mapping { items, .. } => {
+            for (key, value) in items {
+                collect_pattern_names(key, out);
+                collect_pattern_names(value, out);
+            }
+        }
+        Pattern::Star(inner, _) => collect_pattern_names(inner, out),
+        Pattern::Literal(..) | Pattern::Value(..) | Pattern::Wildcard(..) => {}
+    }
+}
+
+/// 表达式里的 `:=` 目标（**绑定到最近的函数作用域**，参照 PEP 572／symtable 的叠栈检索）：
+/// - **推导式**：迭代目标属于推导式自己的作用域（不收），但元素／可迭代对象／条件里的 `:=`
+///   绑到外层函数 ⇒ 继续走；
+/// - **lambda**：体在自己的作用域 ⇒ **不进**；它的形参默认值在本块求值 ⇒ 走。
+fn collect_walrus_targets(expression: &Expression, out: &mut Vec<String>) {
+    match expression {
+        Expression::Walrus { target, value, .. } => {
+            push_bound_name(out, target);
+            collect_walrus_targets(value, out);
+        }
+        Expression::Lambda {
+            parameters,
+            kwonly,
+            body,
+            ..
+        } => {
+            for parameter in parameters.iter().chain(kwonly.iter()) {
+                if let Some(default) = &parameter.default {
+                    collect_walrus_targets(default, out);
+                }
+            }
+            let _ = body;
+        }
+        Expression::Comprehension {
+            element,
+            value,
+            generators,
+            ..
+        } => {
+            collect_walrus_targets(element, out);
+            if let Some(value) = value {
+                collect_walrus_targets(value, out);
+            }
+            for generator in generators {
+                collect_walrus_targets(&generator.iterable, out);
+                for condition in &generator.conditions {
+                    collect_walrus_targets(condition, out);
+                }
+            }
+        }
+        Expression::Yield(Some(value), _)
+        | Expression::YieldFrom(value, _)
+        | Expression::Await(value, _)
+        | Expression::Starred(value, _)
+        | Expression::Not(value, _)
+        | Expression::Unary(_, value, _) => collect_walrus_targets(value, out),
+        Expression::Yield(None, _)
+        | Expression::Int(..)
+        | Expression::BigInt(..)
+        | Expression::Float(..)
+        | Expression::Imaginary(..)
+        | Expression::Str(..)
+        | Expression::StrWtf8(..)
+        | Expression::Bytes(..)
+        | Expression::Name(..)
+        | Expression::Constant(..)
+        | Expression::ChainSubject(..) => {}
+        Expression::List(items, _)
+        | Expression::SetLiteral(items, _)
+        | Expression::TupleLiteral(items, _) => {
+            for item in items {
+                collect_walrus_targets(item, out);
+            }
+        }
+        Expression::Map(items, _) => {
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        collect_walrus_targets(key, out);
+                        collect_walrus_targets(value, out);
+                    }
+                    MapItem::Unpack(value) => collect_walrus_targets(value, out),
+                }
+            }
+        }
+        Expression::Attribute(object, _, _) => collect_walrus_targets(object, out),
+        Expression::Binary(_, left, right, _) => {
+            collect_walrus_targets(left, out);
+            collect_walrus_targets(right, out);
+        }
+        Expression::FString { parts, .. } => collect_walrus_targets_in_fstring(parts, out),
+        Expression::BoolOp { values, .. } => {
+            for value in values {
+                collect_walrus_targets(value, out);
+            }
+        }
+        Expression::Subscript(container, key, _) => {
+            collect_walrus_targets(container, out);
+            collect_walrus_targets(key, out);
+        }
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => {
+            for bound in [lower, upper, step].into_iter().flatten() {
+                collect_walrus_targets(bound, out);
+            }
+        }
+        Expression::Compare(left, _, right, _) => {
+            collect_walrus_targets(left, out);
+            collect_walrus_targets(right, out);
+        }
+        Expression::ChainedCompare { operands, .. } => {
+            for operand in operands {
+                collect_walrus_targets(operand, out);
+            }
+        }
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            collect_walrus_targets(condition, out);
+            collect_walrus_targets(then_value, out);
+            collect_walrus_targets(else_value, out);
+        }
+        Expression::Call {
+            function,
+            arguments,
+            positional_order,
+            star_arguments,
+            keywords,
+            dict_arguments,
+            ..
+        } => {
+            collect_walrus_targets(function, out);
+            for argument in arguments {
+                collect_walrus_targets(argument, out);
+            }
+            for argument in positional_order {
+                match argument {
+                    PositionalArgument::Plain(value) | PositionalArgument::Star(value) => {
+                        collect_walrus_targets(value, out)
+                    }
+                }
+            }
+            for argument in star_arguments {
+                collect_walrus_targets(argument, out);
+            }
+            for (_, value) in keywords {
+                collect_walrus_targets(value, out);
+            }
+            for argument in dict_arguments {
+                collect_walrus_targets(argument, out);
+            }
+        }
+        Expression::NullCoalesce(left, right, _) => {
+            collect_walrus_targets(left, out);
+            collect_walrus_targets(right, out);
+        }
+        Expression::SafeChain { receiver, rest, .. } => {
+            collect_walrus_targets(receiver, out);
+            collect_walrus_targets(rest, out);
+        }
+    }
+}
+
+fn collect_walrus_targets_in_fstring(parts: &[FStringPart], out: &mut Vec<String>) {
+    for part in parts {
+        if let FStringPart::Formatted {
+            expression, spec, ..
+        } = part
+        {
+            collect_walrus_targets(expression, out);
+            if let Some(spec) = spec {
+                collect_walrus_targets_in_fstring(spec, out);
+            }
+        }
     }
 }

@@ -87,11 +87,12 @@ fn the_vtable_declares_the_shared_abi_version_and_its_own_size() {
     // 本片落地四槽
     assert!(table.socketpair.is_some() && table.send.is_some() && table.recv.is_some());
     assert!(table.close.is_some());
-    // 本片**未**落地的槽位：留 None（CP-3），不是假装成功
-    assert!(table.connect.is_none(), "connect 不在首片");
-    assert!(table.bind.is_none(), "bind 不在首片");
-    assert!(table.listen.is_none(), "本片没有 listen 槽");
-    assert!(table.poll.is_some(), "`poll` 槽（T-CP-3 底座）本轮已实现");
+    // **`P3-29` round 37**：AF_INET 的 TCP 面向已真接线（`connect`／`bind`／`listen`／`accept`／
+    // `getsockname`／`getpeername`／`shutdown`／`setsockopt`）；只留 `getsockopt` 未接（`CP-3`）。
+    assert!(table.connect.is_some() && table.bind.is_some(), "TCP 面向已接线");
+    assert!(table.listen.is_some() && table.accept.is_some(), "TCP 面向已接线");
+    assert!(table.getsockopt.is_none(), "`getsockopt` 仍如实未接（CP-3）");
+    assert!(table.poll.is_some(), "`poll` 槽（T-CP-3 底座）已实现");
 }
 
 /// `CP-38`：`socketpair` 之后 **send／recv 真往返**（AF_UNIX ＋ SOCK_STREAM）。
@@ -183,8 +184,11 @@ fn unsupported_family_is_a_machine_error_and_writes_no_handles() {
 /// `CP-5`：未实现的槽位用 `None` 表示（不是某个 errno）；本片没有 `poll`／`connect`。
 #[test]
 fn unimplemented_slots_are_absent_not_fake_success() {
+    // **`P3-29` round 37 之后**：只剩 `getsockopt` 一个空槽（其余 8 个已真接线）——
+    // 空槽仍然如实留 `None`（`CP-3`：不是假装成功）。
     let provider = PosixNet::new();
     let table = provider.vtable();
+    assert!(table.getsockopt.is_none(), "getsockopt 仍不在本片（CP-3）");
     for (name, present) in [
         ("connect", table.connect.is_some()),
         ("bind", table.bind.is_some()),
@@ -193,10 +197,9 @@ fn unimplemented_slots_are_absent_not_fake_success() {
         ("shutdown", table.shutdown.is_some()),
         ("getsockname", table.getsockname.is_some()),
         ("getpeername", table.getpeername.is_some()),
-        ("getsockopt", table.getsockopt.is_some()),
         ("setsockopt", table.setsockopt.is_some()),
     ] {
-        assert!(!present, "{name} 不在本片（CP-3：留 None 即未实现）");
+        assert!(present, "{name} 已在 round 37 真接线");
     }
 }
 

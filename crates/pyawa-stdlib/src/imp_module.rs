@@ -197,13 +197,18 @@ fn override_frozen_modules_for_tests_native(
             ),
         ));
     }
-    if instance.index_value(args[0])?.is_none() {
+    let Some(value) = instance.index_value(args[0])? else {
         let name = instance.type_name(instance.type_of(args[0]));
         return Err(instance.raise_builtin_error(
             "TypeError",
             &format!("'{name}' object cannot be interpreted as an integer"),
         ));
-    }
+    };
+    // **真接线**（round 101）：开关值交给核心导入层（`-1` 禁／`1` 优先／`0` 不覆盖 ✓）——
+    // 官方 `test_frozen` 的三条断言靠它把 `__hello__`／`__phello__`／`__phello__.spam` 的
+    // `__spec__.loader` 标成 `importlib.machinery.FrozenImporter` ✓（先前这里只做参数契约、
+    // 开关对导入毫无效果 ✗ ⇒ 测试拿到 `None is not FrozenImporter` ✗）。
+    pyawa_core::executor::import::set_frozen_modules_override(value as i32);
     Ok(instance.retain(instance.singletons().none()))
 }
 

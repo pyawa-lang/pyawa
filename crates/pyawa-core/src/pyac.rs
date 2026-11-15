@@ -188,6 +188,7 @@ pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
         out.extend_from_slice(&(number as u32).to_le_bytes());
     }
     out.extend_from_slice(&unit.flags.to_le_bytes());
+    out.extend_from_slice(&(unit.firstlineno as u32).to_le_bytes());
     // `BC-45` 的 `co_cellvars`／`co_freevars`（与 `names`／`varnames` 同一种文本表编码）
     for table in [&unit.names, &unit.varnames, &unit.cellvars, &unit.freevars] {
         out.extend_from_slice(&(table.len() as u32).to_le_bytes());
@@ -425,6 +426,7 @@ impl UnitReader<'_> {
         let kwonlyargcount = self.usize()?;
         let nlocals = self.usize()?;
         let flags = self.u32()?;
+        let firstlineno = self.u32()? as usize;
         let names = self.text_table()?;
         let varnames = self.text_table()?;
         let cellvars = self.text_table()?;
@@ -458,6 +460,7 @@ impl UnitReader<'_> {
             kwonlyargcount,
             nlocals,
             flags,
+            firstlineno,
             names,
             varnames,
             cellvars,

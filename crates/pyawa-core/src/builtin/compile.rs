@@ -15,6 +15,7 @@
 //! 与 `exec()`／`eval()` 的接口：`exec_code_public`／`eval_code_public`（stdlib 的 `exec`／`eval`
 //! 内置在第一个实参是 code 对象时调它们 ✓）。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::CodeObject;
@@ -29,8 +30,7 @@ const EVAL_RESULT_NAME: &str = "__pyawa_compile_eval_result__";
 
 /// 这个值是不是本层的 **code 对象**（stdlib 的 `exec`／`eval` 用它分流 ✓；不碰载荷布局 ✓）。
 pub fn is_code_object(instance: &Instance, value: NonNull<Header>) -> bool {
-    instance
-        .type_named("CodeObject")
+    instance.hot_type(HotId::CodeObject)
         .is_some_and(|code_type| instance.type_of(value) == code_type)
 }
 
@@ -105,7 +105,7 @@ fn syntax_error(
         instance.retain(end_lineno_value),
         instance.retain(end_offset_value),
     ]);
-    let Some(syntax_type) = instance.type_named("SyntaxError") else {
+    let Some(syntax_type) = instance.hot_type(HotId::SyntaxError) else {
         return instance.raise_builtin_error("SyntaxError", message);
     };
     let exception = crate::executor::format::new_exception_with_args(
@@ -123,10 +123,15 @@ fn syntax_error(
         ("end_lineno", end_lineno_value),
         ("end_offset", end_offset_value),
     ] {
-        let _ = instance.set_attribute_value(exception, name, value);
+        crate::executor::runtime::discard_exec_result(
+            instance,
+            instance.set_attribute_value(exception, name, value),
+        );
         instance.release(value);
     }
-    ExecError::Raised { exception }
+    // **`compile()` 的 SyntaxError 也要挂回溯** ✓（round 49；见 `attach_traceback` 的注释）。
+    crate::executor::runtime::attach_traceback(instance, exception);
+    ExecError::Raised { exception: crate::raise_guard::RaiseRef::from_owned(instance, exception) }
 }
 
 /// 从"测试路径"的 code 模板复制出一个**带给定 filename** 的 code 对象 ✓。
@@ -139,8 +144,7 @@ fn code_with_filename(
     filename: &str,
 ) -> NonNull<Header> {
     let source = template.get();
-    let code_type = instance
-        .type_named("CodeObject")
+    let code_type = instance.hot_type(HotId::CodeObject)
         .expect("CodeObject 在引导期已登记");
     let mut names: Vec<String> = Vec::new();
     let mut index = 0usize;
@@ -202,7 +206,7 @@ fn execute_code(
             what: "exec／eval：第一个实参不是本层的 code 对象",
         });
     }
-    let frame_type = instance.type_named("frame").ok_or(ExecError::Unsupported {
+    let frame_type = instance.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
         opcode: 0,
         what: "exec／eval：`frame` 类型未登记",
     })?;
@@ -296,8 +300,14 @@ pub fn eval_source_public(
     execute_code(instance, code, globals, locals)?;
     // SAFETY: code 是 code_with_filename 给的新引用；用完归还。
     unsafe { instance.release_object(code.as_ptr()) };
-    let namespace = globals.or(Some(locals)).expect("locals 一定在");
-    match instance.dict_get(namespace, EVAL_RESULT_NAME) {
+    // 结果落在**本次执行的命名空间**里：模块级代码的 `STORE_NAME` 写的是**locals** ✗ ——
+    // 先前先查 `globals` ✗ ⇒ 在函数里 `eval("False")` 取不回结果（拿到 `None` ✗，
+    // `test_bool.test_repr` 的 `eval(repr(False))` 同型 ✓）。与 `eval_code_public` **同一口径**：
+    // **先 locals、再 globals** ✓。
+    let found = instance
+        .dict_get(locals, EVAL_RESULT_NAME)
+        .or_else(|| globals.and_then(|globals| instance.dict_get(globals, EVAL_RESULT_NAME)));
+    match found {
         Some(value) => Ok(instance.retain(value)),
         None => Ok(instance.retain(instance.singletons().none())),
     }
@@ -336,6 +346,12 @@ pub fn compile_native(
         let Some(name) = instance.text_of(*key) else {
             continue;
         };
+        // **`_feature_version`**（round 85）：`inspect.signature` 解析文本签名时走
+        // `ast.parse(..., _feature_version=...)` ⇒ `compile()` 要收下这个**私有**关键字 ✓
+        // （参照的 `compile` 同款；本层不做版本特性开关，值忽略 ✓）。
+        if name == "_feature_version" {
+            continue;
+        }
         let Some(position) = NAMES.iter().position(|candidate| *candidate == name) else {
             return Err(instance.raise_builtin_error(
                 "TypeError",
@@ -415,24 +431,63 @@ pub fn compile_native(
     // flags：只接 0（`PyCF_ONLY_AST` 等如实未实现）。
     let flags = match values[3] {
         None => 0i64,
-        Some(value) => instance.int_of(value).and_then(|integer| integer.to_i64()).ok_or_else(|| {
-            instance.raise_builtin_error("TypeError", "compile() arg 4（flags）要整数")
-        })?,
+        // **`__index__` 也要认**（round 69，参照走 `PyNumber_Index` ✓）：`test_call` 的
+        // `test_fastcall_clearing_dict` 传 `IntWithDict`（`__index__` 返回 0）✓。
+        Some(value) => instance
+            .index_value(value)?
+            .ok_or_else(|| {
+                instance.raise_builtin_error("TypeError", "compile() arg 4（flags）要整数")
+            })?,
     };
-    // `flags`：只认 `PyCF_ONLY_AST`（0x400）／`PyCF_ALLOW_TOP_LEVEL_AWAIT`（0x2000）这两个**已知**位；
-    // 其它位 ⇒ 参照的 `ValueError: compile(): unrecognised flags` ✓（实测）；已知位本身尚未接线 ⇒
-    // 诚实 `NotImplementedError`（AST 面 / 顶层 await）。
+    // **`flags` 的已知位**（`P3-42`）：
+    // * 参照内部位：`PyCF_DONT_IMPLY_DEDENT`(0x200)／`PyCF_ALLOW_INCOMPLETE_INPUT`(0x4000)
+    //   —— `Lib/codeop.py` 正是靠它们（先前一律 `ValueError: compile(): unrecognised flags` ✗
+    //   ⇒ `test_codeop.test_filename` ERROR ✗）。本层解析器是整段解析、不区分交互式补全 ⇒
+    //   **收下但按普通编译处理**（如实记 ✗：不实现"不完整输入"的交互语义）；
+    // * `PyCF_ONLY_AST`(0x400)／`PyCF_ALLOW_TOP_LEVEL_AWAIT`(0x2000) —— 已知但**尚未接线**
+    //   ⇒ 诚实 `NotImplementedError`；
+    // * `__future__` 的 `CO_FUTURE_*` 位（`Lib/__future__.py` 的 `compiler_flag`，0x10 与
+    //   0x20000…0x1000000）：Py3 下它们多数是默认语义 ⇒ 收下（此前 `test_flufl` 的
+    //   `compile(..., __future__.CO_FUTURE_BARRY_AS_BDFL)` 报 unrecognised ✗）；
+    //   **`CO_FUTURE_BARRY_AS_BDFL`(0x400000) 除外** —— 它改语法（`<>`），本层解析器不支持 ⇒
+    //   诚实 `NotImplementedError`（不静默忽略 ✗）；
+    // * 其它位 ⇒ 参照的 `ValueError: compile(): unrecognised flags` ✓（实测）。
+    const PYCF_DONT_IMPLY_DEDENT: i64 = 0x200;
     const PYCF_ONLY_AST: i64 = 0x400;
+    const PYCF_ALLOW_INCOMPLETE_INPUT: i64 = 0x4000;
     const PYCF_ALLOW_TOP_LEVEL_AWAIT: i64 = 0x2000;
-    let unknown = flags & !(PYCF_ONLY_AST | PYCF_ALLOW_TOP_LEVEL_AWAIT);
+    const CO_NESTED: i64 = 0x10;
+    const CO_FUTURE_FLAGS: i64 = 0x20000
+        | 0x40000
+        | 0x80000
+        | 0x100000
+        | 0x200000
+        | 0x800000
+        | 0x1000000;
+    const CO_FUTURE_BARRY_AS_BDFL: i64 = 0x400000;
+    let accepted = PYCF_DONT_IMPLY_DEDENT
+        | PYCF_ONLY_AST
+        | PYCF_ALLOW_INCOMPLETE_INPUT
+        | PYCF_ALLOW_TOP_LEVEL_AWAIT
+        | CO_NESTED
+        | CO_FUTURE_FLAGS
+        | CO_FUTURE_BARRY_AS_BDFL;
+    let unknown = flags & !accepted;
     if unknown != 0 {
         return Err(instance.raise_builtin_error("ValueError", "compile(): unrecognised flags"));
     }
     if flags & PYCF_ONLY_AST != 0 {
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "compile()：`PyCF_ONLY_AST`（返回 AST 对象）尚未接线",
-        });
+        // **`PyCF_ONLY_AST`**（round 86）：交给 `_ast` 模块登记的解析回调（core 不依赖 stdlib ✓）。
+        // 目前只实现"**签名解析所需的最小面**"（`def foo(<参数表>): pass` 的 Module/FunctionDef/
+        // arguments/arg 节点）——`inspect.signature` 的文本签名路径正好只用这些 ✓；
+        // 完整 AST（任意源码）仍留后续轮（回调对不认识的形状**如实报错**，不造假值 ✓）。
+        let Some(parser) = instance.ast_parser() else {
+            return Err(ExecError::Unsupported {
+                opcode: 0,
+                what: "compile()：`PyCF_ONLY_AST`（AST 解析回调未登记）",
+            });
+        };
+        return parser(instance, &source, &filename);
     }
     if flags & PYCF_ALLOW_TOP_LEVEL_AWAIT != 0 {
         return Err(ExecError::Unsupported {
@@ -440,10 +495,17 @@ pub fn compile_native(
             what: "compile()：`PyCF_ALLOW_TOP_LEVEL_AWAIT` 尚未接线",
         });
     }
+    if flags & CO_FUTURE_BARRY_AS_BDFL != 0 {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "compile()：`CO_FUTURE_BARRY_AS_BDFL`（`<>` 语法）尚未接线",
+        });
+    }
     // optimize：接受 `-1`（默认）／0..2；本层**没有优化器** ⇒ 暂不参与发射 ✓（不影响产物语义）。
     let optimize = match values[5] {
         None => -1i64,
-        Some(value) => instance.int_of(value).and_then(|integer| integer.to_i64()).ok_or_else(|| {
+        // 参照走 `PyNumber_Index` ✓（`IntWithDict.__index__` 返回 0 那类 ✓，round 69）。
+        Some(value) => instance.index_value(value)?.ok_or_else(|| {
             instance.raise_builtin_error("TypeError", "compile() arg 6（optimize）要整数")
         })?,
     };
@@ -454,13 +516,26 @@ pub fn compile_native(
     } else {
         source
     };
-    let unit = crate::compile::compile(
-        &wrapped,
-        &filename,
-        crate::compile::Mode::PurePython,
-        crate::compile::CheckTier::Shallow,
-        optimization,
-    )
+    // **`single` 模式**：顶层表达式语句要经 `sys.displayhook` 显示（参照的交互模式 ✓）——
+    // 走 `compile_interactive`（round 51）；先前按 exec 处理 ✗ ⇒ doctest 的每个表达式都
+    // "Got nothing" ✗（`test_unpack_ex`／`test_pep646_syntax` 的 1F 就是这条）。
+    let unit = if mode == "single" {
+        crate::compile::compile_interactive(
+            &wrapped,
+            &filename,
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            optimization,
+        )
+    } else {
+        crate::compile::compile(
+            &wrapped,
+            &filename,
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            optimization,
+        )
+    }
     .map_err(|error| syntax_error(instance, &filename, &wrapped, &compile_error_text(&error)))?;
     let template = crate::compile::instantiate(instance, &unit);
     Ok(code_with_filename(instance, &template, &filename))

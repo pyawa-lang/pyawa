@@ -57,9 +57,35 @@ struct Scope {
     is_module: bool,
 }
 
+/// **批量诊断**的一条（`TS-41`；`pyawa check` 的数据源）：行／列从 1 起，消息与既有错误同源。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TypeDiagnostic {
+    /// 行号（1 基）。
+    pub line: u32,
+    /// 列号（1 基）。
+    pub col: u32,
+    /// 消息（与 `CompileError::TypeAssignment` 的文本一致）。
+    pub message: String,
+}
+
+/// 模块级函数的**静态签名**（`TS-47` 的调用点检查用）：形参类型 ＋ 返回类型（未标注＝`Any`）✓。
+#[derive(Clone, Debug)]
+struct FunctionSignature {
+    parameters: Vec<StaticType>,
+    returns: StaticType,
+}
+
 /// 检查器（除了文件名，还带 `TS-49` 要用的**类属性标注表**）。
 struct Checker<'a> {
     filename: &'a str,
+    /// **`TS-41` 批量诊断**：`check_diagnostics` 时开收集（不遇首错即止）；`check` 时关。
+    collecting: bool,
+    /// 已收集的类型诊断（只在 `collecting` 时写）。
+    errors: Vec<TypeDiagnostic>,
+    /// **`AB-69`**：宿主函数声明（名字 → 静态标签）；调用点检查用。
+    host_functions: HashMap<String, super::HostFunctionSignature>,
+    /// **模块级函数签名**（`def` 的形参／返回注解；`TS-47` 的调用点检查用）。
+    functions: HashMap<String, FunctionSignature>,
     /// **`TS-49` 的已知类型来源**：模块级 `class C:` 体里 `属性: 类型` 的注解。
     /// `A?` 上的 `a?.b`（`b: B`）⇒ `B?` 要靠它；查不到（内建类型／未标注属性）⇒ 平台类型（`TS-48`）。
     /// 类体本身仍**不做赋值检查**（与 M4 的口径一致），这里只读标注。
@@ -67,12 +93,25 @@ struct Checker<'a> {
 }
 
 /// 检查一段源码（模块体）。只在扩展模式调用。
-pub(super) fn check(statements: &[Statement], filename: &str) -> Result<(), CompileError> {
+pub(super) fn check(
+    statements: &[Statement],
+    filename: &str,
+    host_functions: &[HostFunctionSignature],
+) -> Result<(), CompileError> {
     let mut class_attributes = HashMap::new();
     collect_class_attributes(statements, &mut class_attributes);
+    let mut functions = HashMap::new();
+    collect_functions(statements, &mut functions);
     let mut checker = Checker {
         filename,
+        collecting: false,
+        errors: Vec::new(),
+        functions,
         class_attributes,
+        host_functions: host_functions
+            .iter()
+            .map(|signature| (signature.name.clone(), signature.clone()))
+            .collect(),
     };
     let mut scope = Scope {
         declared: HashMap::new(),
@@ -85,6 +124,83 @@ pub(super) fn check(statements: &[Statement], filename: &str) -> Result<(), Comp
     Ok(())
 }
 
+/// **批量诊断入口**（`TS-41`）：与 [`check`] 同一条路，但**收集全部**能静态判定的类型诊断
+/// （不遇首错即止）；供 `pyawa check` 与 LSP 诊断使用 ✓。
+pub(super) fn check_diagnostics(
+    statements: &[Statement],
+    filename: &str,
+    host_functions: &[HostFunctionSignature],
+) -> Vec<TypeDiagnostic> {
+    let mut class_attributes = HashMap::new();
+    collect_class_attributes(statements, &mut class_attributes);
+    let mut functions = HashMap::new();
+    collect_functions(statements, &mut functions);
+    let mut checker = Checker {
+        filename,
+        collecting: true,
+        errors: Vec::new(),
+        functions,
+        class_attributes,
+        host_functions: host_functions
+            .iter()
+            .map(|signature| (signature.name.clone(), signature.clone()))
+            .collect(),
+    };
+    let mut scope = Scope {
+        declared: HashMap::new(),
+        assigned: HashSet::new(),
+        globals: HashSet::new(),
+        module_snapshot: HashMap::new(),
+        is_module: true,
+    };
+    // 批量模式不会因单条语句失败而中断（`check_block` 逐条兜住 ✓）。
+    let _ = checker.check_block(statements, &mut scope, &HashMap::new());
+    checker.errors
+}
+
+/// 收**模块级函数签名**（`def`；**跳过装饰器** —— 签名可能被装饰器改掉，静态不猜 ✓；
+/// 只收**带类型注解**的形参／返回；未标注＝`Any`）。
+fn collect_functions(statements: &[Statement], out: &mut HashMap<String, FunctionSignature>) {
+    for statement in statements {
+        if let Statement::Def {
+            name,
+            decorators,
+            parameters,
+            returns,
+            ..
+        } = statement
+        {
+            if !decorators.is_empty() {
+                continue;
+            }
+            let parameters = parameters
+                .iter()
+                .map(|parameter| parameter_static_type(parameter))
+                .collect();
+            let returns = returns
+                .as_ref()
+                .map(static_from_annotation)
+                .unwrap_or(StaticType::Any);
+            out.insert(
+                name.clone(),
+                FunctionSignature {
+                    parameters,
+                    returns,
+                },
+            );
+        }
+    }
+}
+
+/// 形参的静态类型（未标注／表达式来源注解 ⇒ `Any`）。
+fn parameter_static_type(parameter: &Parameter) -> StaticType {
+    parameter
+        .annotation
+        .as_ref()
+        .map(static_from_annotation)
+        .unwrap_or(StaticType::Any)
+}
+
 /// 收**类属性标注表**（`TS-49`；`class C:` 体里的 `属性: 类型` 与嵌套类）。
 fn collect_class_attributes(
     statements: &[Statement],
@@ -92,7 +208,9 @@ fn collect_class_attributes(
 ) {
     for statement in statements {
         match statement {
-            Statement::Class { name, body, .. } => {
+            Statement::Class {
+                binding, body, ..
+            } => {
                 let mut attributes = HashMap::new();
                 for item in body {
                     if let Statement::Annotation {
@@ -105,7 +223,8 @@ fn collect_class_attributes(
                     }
                 }
                 if !attributes.is_empty() {
-                    out.insert(name.clone(), attributes);
+                    // **私有名改写后的绑定名**（task-5）：`name` 是 code 名／qualname，绑定用 `binding`。
+                    out.insert(binding.clone(), attributes);
                 }
                 // 嵌套类照收（`class Outer: class Inner:` —— 名字按**内层类名**登记）
                 collect_class_attributes(body, out);
@@ -147,9 +266,40 @@ impl Checker<'_> {
     ) -> Result<HashMap<String, StaticType>, CompileError> {
         let mut narrow = narrow_in.clone();
         for statement in statements {
-            narrow = self.check_statement(statement, scope, &narrow)?;
+            match self.check_statement(statement, scope, &narrow) {
+                Ok(advanced) => narrow = advanced,
+                Err(error) => {
+                    if self.collecting {
+                        // 兜底：不预期走到（错位点都在 `report` 里），但不能让批量模式中断。
+                        let CompileError::TypeAssignment(message) = &error else {
+                            return Err(error);
+                        };
+                        self.errors.push(TypeDiagnostic {
+                            line: 0,
+                            col: 0,
+                            message: message.clone(),
+                        });
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
         }
         Ok(narrow)
+    }
+
+    /// 记录或返回一条类型诊断（`TS-47`／`TS-41` 的一处出口）：批量模式收集，执行模式立即返回。
+    fn report(&mut self, message: String, span: Span) -> Result<(), CompileError> {
+        if self.collecting {
+            self.errors.push(TypeDiagnostic {
+                line: span.line_start,
+                col: span.col_start.saturating_add(1),
+                message,
+            });
+            Ok(())
+        } else {
+            Err(CompileError::TypeAssignment(message))
+        }
     }
 
     /// 检查一条语句，返回**执行完之后**的收窄表。
@@ -176,6 +326,7 @@ impl Checker<'_> {
                 ..
             } => {
                 self.check_assignment(target, *target_span, value, scope, &mut narrow)?;
+                self.check_host_calls(value, scope, &narrow)?;
             }
             Statement::AssignChained { targets, value, .. } => {
                 // 只查**名字**目标（属性／下标目标不在 `TS-47` 这一格；`TS-50` 也不窄化它们）。
@@ -184,6 +335,7 @@ impl Checker<'_> {
                         self.check_assignment(name, *name_span, value, scope, &mut narrow)?;
                     }
                 }
+                self.check_host_calls(value, scope, &narrow)?;
             }
             // **`BC-63` 的 `a ??= b`**（`TS-49`）：**不改变 `a` 的标注类型** —— 但赋值本身仍按
             // `TS-47` 查（`b` 与标注相容才算数；`a` 是未标注 ⇒ 平台类型，放行）。
@@ -194,6 +346,7 @@ impl Checker<'_> {
                 ..
             } => {
                 self.check_assignment(name, *name_span, value, scope, &mut narrow)?;
+                self.check_host_calls(value, scope, &narrow)?;
             }
             Statement::If {
                 condition,
@@ -301,6 +454,7 @@ impl Checker<'_> {
         scope: &mut Scope,
         narrow: &HashMap<String, StaticType>,
     ) -> Result<HashMap<String, StaticType>, CompileError> {
+        self.check_host_calls(condition, scope, narrow)?;
         let info = self.is_none_condition(condition, scope, narrow);
         let mut then_narrow = narrow.clone();
         let mut else_narrow = narrow.clone();
@@ -446,17 +600,173 @@ impl Checker<'_> {
         if let Some(expected) = expected {
             let actual = self.infer(value, scope, narrow);
             if !compatible(&expected, &actual) {
-                return Err(CompileError::TypeAssignment(format!(
+                let message = format!(
                     "assignment type check failed: `{name}` expects {}, got {} \
                      (TS-47; {}: line {})",
                     render_static(&expected),
                     render_static(&actual),
                     self.filename,
                     target_span.line_start
-                )));
+                );
+                return self.report(message, target_span);
             }
         }
         narrow.remove(name);
+        Ok(())
+    }
+
+    /// **`AB-69`** 的**调用点检查**（`TS-47` 的第二插入点）：调用**声明过签名**的宿主函数时，
+    /// 若实参的静态类型可判且与声明标签不相容 ⇒ **编译期**报错（归责插件：消息带宿主函数名）。
+    /// 未声明签名的宿主函数／判不出的实参 ⇒ 放行（交给边界运行期，`AB-69` ②）。
+    fn check_host_calls(
+        &mut self,
+        expression: &Expression,
+        scope: &Scope,
+        narrow: &HashMap<String, StaticType>,
+    ) -> Result<(), CompileError> {
+        match expression {
+            Expression::Call {
+                function,
+                arguments,
+                star_arguments,
+                keywords,
+                dict_arguments,
+                span,
+                ..
+            } => {
+                // 只对"**未被局部遮蔽**的模块全局名"做静态判定（避免把局部同名函数误判成宿主函数）。
+                if let Expression::Name(name, _) = function.as_ref() {
+                    let shadowed = scope.assigned.contains(name)
+                        || scope.declared.contains_key(name)
+                        || scope.globals.contains(name);
+                    if !shadowed {
+                        // **本地模块级函数**：参数类型按声明核（判不出的实参放行 ✓）。
+                        let local = self.functions.get(name).cloned();
+                        if let Some(signature) = &local {
+                            if star_arguments.is_empty()
+                                && keywords.is_empty()
+                                && dict_arguments.is_empty()
+                            {
+                                for (index, argument) in arguments.iter().enumerate() {
+                                    let Some(expected) = signature.parameters.get(index) else {
+                                        break;
+                                    };
+                                    let actual = self.infer(argument, scope, narrow);
+                                    if !compatible(expected, &actual) {
+                                        let message = format!(
+                                            "call type check failed: `{name}` argument {index} \
+                                             expects {}, got {} (TS-47; {}: line {})",
+                                            render_static(expected),
+                                            render_static(&actual),
+                                            self.filename,
+                                            span.line_start
+                                        );
+                                        self.report(message, *span)?;
+                                    }
+                                }
+                            }
+                        }
+                        let signature = self.host_functions.get(name).cloned();
+                        if let Some(signature) = signature {
+                            for (index, argument) in arguments.iter().enumerate() {
+                                let Some(Some(expected_label)) =
+                                    signature.parameters.get(index)
+                                else {
+                                    continue;
+                                };
+                                let actual = self.infer(argument, scope, narrow);
+                                let expected =
+                                    StaticType::Label(type_label(expected_label));
+                                if !compatible(&expected, &actual) {
+                                    let message = format!(
+                                        "host function type check failed: `{name}` argument \
+                                         {index} expects {expected_label}, got {} \
+                                         (AB-69; {}: line {})",
+                                        render_static(&actual),
+                                        self.filename,
+                                        span.line_start
+                                    );
+                                    self.report(message, *span)?;
+                                }
+                            }
+                        }
+                    }
+                }
+                // 递归：实参／星号／关键字／`**`／被调用者里都可能还有调用点。
+                for argument in arguments.iter().chain(star_arguments) {
+                    self.check_host_calls(argument, scope, narrow)?;
+                }
+                for (_, value) in keywords {
+                    self.check_host_calls(value, scope, narrow)?;
+                }
+                for value in dict_arguments {
+                    self.check_host_calls(value, scope, narrow)?;
+                }
+                self.check_host_calls(function, scope, narrow)?;
+            }
+            Expression::Binary(_, left, right, _)
+            | Expression::Compare(left, _, right, _) => {
+                self.check_host_calls(left, scope, narrow)?;
+                self.check_host_calls(right, scope, narrow)?;
+            }
+            Expression::Unary(_, operand, _) | Expression::Not(operand, _) => {
+                self.check_host_calls(operand, scope, narrow)?;
+            }
+            Expression::Await(inner, _) | Expression::YieldFrom(inner, _) => {
+                self.check_host_calls(inner, scope, narrow)?;
+            }
+            Expression::Yield(Some(inner), _) => {
+                self.check_host_calls(inner, scope, narrow)?;
+            }
+            Expression::Attribute(receiver, _, _) | Expression::Starred(receiver, _) => {
+                self.check_host_calls(receiver, scope, narrow)?;
+            }
+            Expression::Subscript(container, index, _) => {
+                self.check_host_calls(container, scope, narrow)?;
+                self.check_host_calls(index, scope, narrow)?;
+            }
+            Expression::List(items, _)
+            | Expression::SetLiteral(items, _)
+            | Expression::TupleLiteral(items, _) => {
+                for item in items {
+                    self.check_host_calls(item, scope, narrow)?;
+                }
+            }
+            Expression::Map(items, _) => {
+                for item in items {
+                    match item {
+                        MapItem::Pair(key, value) => {
+                            self.check_host_calls(key, scope, narrow)?;
+                            self.check_host_calls(value, scope, narrow)?;
+                        }
+                        MapItem::Unpack(value) => {
+                            self.check_host_calls(value, scope, narrow)?;
+                        }
+                    }
+                }
+            }
+            Expression::BoolOp { values, .. } => {
+                for value in values {
+                    self.check_host_calls(value, scope, narrow)?;
+                }
+            }
+            Expression::Conditional {
+                condition,
+                then_value,
+                else_value,
+                ..
+            } => {
+                self.check_host_calls(condition, scope, narrow)?;
+                self.check_host_calls(then_value, scope, narrow)?;
+                self.check_host_calls(else_value, scope, narrow)?;
+            }
+            Expression::ChainedCompare { operands, .. } => {
+                for operand in operands {
+                    self.check_host_calls(operand, scope, narrow)?;
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -486,7 +796,36 @@ impl Checker<'_> {
             // 空安全链的基底占位只在 `SafeChain::rest` 里出现（那里由 `infer_safe_chain` 直接带
             // 类型走，不经过 `infer`）⇒ 走到这里说明判不出，返回平台类型。
             Expression::ChainSubject(_) => StaticType::Any,
-            // 调用／属性／下标／容器字面量／运算… ⇒ 判不出，交运行期（`TS-47` ②）。
+            // **调用**：被调是**未被遮蔽的模块级函数**且返回注解可判 ⇒ 返回类型（`TS-47`）；
+            // 宿主函数声明过返回类型同理；其余（方法／装饰器／动态可调用）⇒ `Any`，交运行期。
+            Expression::Call {
+                function,
+                star_arguments,
+                keywords,
+                dict_arguments,
+                ..
+            } => {
+                let Expression::Name(name, _) = function.as_ref() else {
+                    return StaticType::Any;
+                };
+                if scope.assigned.contains(name)
+                    || scope.declared.contains_key(name)
+                    || scope.globals.contains(name)
+                {
+                    return StaticType::Any;
+                }
+                let _ = (star_arguments, keywords, dict_arguments);
+                if let Some(signature) = self.functions.get(name) {
+                    return signature.returns.clone();
+                }
+                if let Some(signature) = self.host_functions.get(name) {
+                    if let Some(label) = &signature.returns {
+                        return StaticType::Label(type_label(label));
+                    }
+                }
+                StaticType::Any
+            }
+            // 属性／下标／容器字面量／运算… ⇒ 判不出，交运行期（`TS-47` ②）。
             _ => StaticType::Any,
         }
     }
@@ -1019,8 +1358,9 @@ fn collect_assigned(statements: &[Statement], out: &mut HashSet<String>) {
                     collect_assigned(&case.body, out);
                 }
             }
-            Statement::Def { name, .. } | Statement::Class { name, .. } => {
-                out.insert(name.clone());
+            Statement::Def { binding, .. } | Statement::Class { binding, .. } => {
+                // **私有名改写后的绑定名**（task-5）：本层的赋值集合要跟改写后的 `Name` 节点一致。
+                out.insert(binding.clone());
             }
             Statement::Import { items, .. } => {
                 for (module, alias) in items {

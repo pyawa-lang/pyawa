@@ -89,6 +89,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         if let Some(ty) = instance.type_named(name) {
             if let Some(type_namespace) = instance.type_namespace(ty.cast()) {
                 instance.dict_set(type_namespace, "__module__", typing_name);
+                // 命名空间里挂了 `__module__` ⇒ 二元运算的用户-dunder 预筛位置上（round 248 性能，A2-3 ✓）。
+                instance.mark_dunder_capable(ty);
             }
         }
     }

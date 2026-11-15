@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -13,6 +14,12 @@ pub unsafe fn bool_repr(ptr: *mut Header, _instance: &Instance) -> Result<String
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<BoolObject>() };
     Ok(if object.value { "True" } else { "False" }.to_owned())
+}
+
+/// `ellipsis` 的 `repr`／`str`：`Ellipsis` ✓（round 51；`repr(...)` 先前落到默认的
+/// `<ellipsis object at 0x…>` ✗ —— `test_pep646_syntax` 的 doctest 逐字比较它 ✓）。
+pub unsafe fn ellipsis_repr(_ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
+    Ok("Ellipsis".to_owned())
 }
 
 /// `NoneType` 的 `repr`：`None`。
@@ -45,9 +52,12 @@ pub unsafe fn str_str(ptr: *mut Header, _instance: &Instance) -> Result<String, 
 pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<TupleObject>() };
-    if !instance.enter_repr(ptr as usize) {
-        return Ok("(...)".to_owned());
-    }
+    // `P3-41`：自引用 ⇒ `(...)`；嵌套太深 ⇒ `RecursionError`；守卫 RAII 摘除。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("(...)".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
     let mut text = String::from("(");
     for index in 0..object.len() {
         if index > 0 {
@@ -62,7 +72,6 @@ pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String
         text.push(',');
     }
     text.push(')');
-    instance.leave_repr(ptr as usize);
     Ok(text)
 }
 
@@ -90,8 +99,7 @@ pub unsafe fn tuple_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -102,7 +110,7 @@ pub unsafe fn tuple_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -128,7 +136,7 @@ pub(crate) fn tuple_receiver(
             }
         },
     };
-    let tuple_type = instance.type_named("tuple").expect("tuple 已登记");
+    let tuple_type = instance.hot_type(HotId::Tuple).expect("tuple 已登记");
     // SAFETY: this 由调用方保证存活。
     let this_type = unsafe { this.as_ref() }.ty();
     if !instance.is_subtype(this_type, tuple_type) {
@@ -244,9 +252,12 @@ pub unsafe fn tuple_index_native(
 pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<DictObject>() };
-    if !instance.enter_repr(ptr as usize) {
-        return Ok("{...}".to_owned());
-    }
+    // `P3-41`：自引用 ⇒ `{...}`；嵌套太深 ⇒ `RecursionError`；守卫 RAII 摘除。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("{...}".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
     let mut text = String::from("{");
     for (index, (key, value)) in object.entries().into_iter().enumerate() {
         if index > 0 {
@@ -257,7 +268,6 @@ pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String,
         text.push_str(&crate::executor::protocol::element_repr(instance, value)?);
     }
     text.push('}');
-    instance.leave_repr(ptr as usize);
     Ok(text)
 }
 
@@ -316,7 +326,7 @@ pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Result<Strin
     // ⇒ `memory allocation of 8386098843153034355 bytes failed` ✗）。这里先判类型 ✓。
     // SAFETY: function 由方法对象持有。
     let function_type = unsafe { function.as_ref() }.ty();
-    let qualname = if Some(function_type) == instance.type_named("function") {
+    let qualname = if Some(function_type) == instance.hot_type(HotId::Function) {
         // SAFETY: 刚确认是 Python 函数。
         let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
         // SAFETY: 函数持有 code object 的一份引用。
@@ -365,11 +375,59 @@ pub unsafe fn exception_str(ptr: *mut Header, instance: &Instance) -> Result<Str
     // `KeyError` 是**唯一**在单实参上改口径的：`str(KeyError('k'))` == `"'k'"`（实参的 repr）。
     // 实测：0 个实参仍是 `''`、≥2 个仍是实参元组的 repr（与基类同）⇒ 只改单实参那一格。
     // 子类继承（参照实现也继承）。
-    let key_error_style = match instance.type_named("KeyError") {
+    let key_error_style = match instance.hot_type(HotId::KeyError) {
         // SAFETY: 类型对象由注册表持有。
         Some(key_error) => instance.is_subtype(header.ty(), key_error),
         None => false,
     };
+    // **`OSError` 一族的 `str`**（round 108）：参照格式
+    // `[Errno {errno}] {strerror}[: {filename!r}[: {filename2!r}]]` ✓ —— 先前多实参按元组 repr 打 ✗
+    // ⇒ `str(FileNotFoundError(...))` 与参照不符（`test_unicode_file_functions` 的 `%a` 格式化 ✓）。
+    // **异常组的 `str`**（C2 冷门语义，PEP 654 形状）：参照口径
+    // `str(ExceptionGroup('m', [ValueError('v')]))` ⇒ `'m (1 sub-exception)'`（复数 `sub-exceptions` ✓）。
+    // 先前落到"多实参 ⇒ 元组 repr"⇒ `"('m', [ValueError('v')])"` ✗。
+    let is_exception_group = instance
+        .type_named("BaseExceptionGroup")
+        .is_some_and(|group| instance.is_subtype(header.ty(), group));
+    if is_exception_group {
+        let message = match args.first().copied() {
+            Some(value) => instance.object_str(value)?,
+            None => String::new(),
+        };
+        let count = args
+            .get(1)
+            .copied()
+            .and_then(|exceptions| {
+                instance
+                    .list_items(exceptions)
+                    .or_else(|| instance.tuple_items(exceptions))
+            })
+            .map(|items| items.len())
+            .unwrap_or(0);
+        let plural = if count == 1 { "" } else { "s" };
+        return Ok(format!("{message} ({count} sub-exception{plural})"));
+    }
+    let is_os_error = match instance.hot_type(HotId::OSError) {
+        // SAFETY: 类型对象由注册表持有。
+        Some(os_error) => instance.is_subtype(header.ty(), os_error),
+        None => false,
+    };
+    if is_os_error && args.len() >= 2 {
+        let errno = instance.int_of(args[0]).map(|value| value.to_i64().unwrap_or(0)).unwrap_or(0);
+        let strerror = instance.object_str(args[1])?;
+        let mut rendered = format!("[Errno {errno}] {strerror}");
+        if let Some(filename) = args.get(2) {
+            if instance.type_of(*filename) != instance.singletons().none_type() {
+                rendered.push_str(&format!(": {}", instance.object_repr(*filename)?));
+            }
+        }
+        if let Some(filename2) = args.get(3) {
+            if instance.type_of(*filename2) != instance.singletons().none_type() {
+                rendered.push_str(&format!(": {}", instance.object_repr(*filename2)?));
+            }
+        }
+        return Ok(rendered);
+    }
     match args.len() {
         0 => Ok(String::new()),
         1 if key_error_style => instance.object_repr(args[0]),

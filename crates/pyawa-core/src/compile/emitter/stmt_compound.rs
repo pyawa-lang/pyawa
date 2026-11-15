@@ -38,9 +38,20 @@ impl Emitter {
                     //    而且守卫不过时**主语还留在栈上** ✓ ⇒ 下一条 `case` 照常判 ✓）；
                     // ② 再判**守卫**（本层没有 `TO_BOOL` ✓ ⇒ 直接 `POP_JUMP_IF_FALSE` 取真值 ✓，语义相同 ✓）；
                     // ③ 最后把主语 `POP_TOP` 掉 ✓（命中后栈上不留东西 ✓）。
-                    if let Pattern::Capture(name, name_span) = &case.pattern {
-                        self.emit_named(*name_span, "COPY", 1);
-                        self.emit_store_name(*name_span, name);
+                    match &case.pattern {
+                        // 顶层捕获：`COPY 1; STORE 名字`（守卫看得见、主语留在栈上 ✓）
+                        Pattern::Capture(name, name_span) => {
+                            self.emit_named(*name_span, "COPY", 1);
+                            self.emit_store_name(*name_span, name);
+                        }
+                        // **顶层 `as` 模式**（C1 日常面修 ✗）：`emit_pattern_test` 只测内层、不绑定
+                        // （内层成功会跳 `matched` ⇒ 在模式测试里绑会**被跳过** ✗）⇒ 在这里统一绑：
+                        // 与 `Capture` 同口径 `COPY 1; STORE 名字` ✓（`case int() as n if n > 10` 于是能看见 n）。
+                        Pattern::As(_, name, name_span) => {
+                            self.emit_named(*name_span, "COPY", 1);
+                            self.emit_store_name(*name_span, name);
+                        }
+                        _ => {}
                     }
                     if let Some(guard) = &case.guard {
                         self.emit_expression(guard)?;
@@ -111,6 +122,12 @@ impl Emitter {
                     //  JUMP_BACKWARD_NO_INTERRUPT <回>; <出> END_SEND` ✓ —— 与 `async for` 同一套近似 ✓
                     // （`async def` 在本层是生成器 ✓ ⇒ `SEND` 一步就把值拿到 ✓）。
                     if *is_async {
+                        // **等待循环的形状**（round 231 与 `await` 同批修正 ✗）：参照 3.14 是
+                        // `GET_AWAITABLE 1; LOAD_CONST None; L_send: SEND L_done; YIELD_VALUE 1;
+                        // RESUME 3; JUMP_BACKWARD_NO_INTERRUPT L_send; L_done: END_SEND` ✓ ——
+                        // **标签在 `SEND` 上**、**中间没有 `POP_TOP`** ✓。先前两处都不对 ✗ ⇒
+                        // `async with` 的 `__aenter__`／`__aexit__` 会多让出／栈错位 ✗
+                        //（`test_contextlib_async` 的 `AsyncContextManagerTestCase` 一族 ✓）。
                         let await_loop = self.new_label();
                         let await_done = self.new_label();
                         self.emit_at(
@@ -120,13 +137,13 @@ impl Emitter {
                         );
                         let none_index = self.intern_constant(Constant::None);
                         self.emit_indexed(context_span, "LOAD_CONST", none_index);
+                        self.mark_label(await_loop);
                         self.emit_directed_jump(
                             context_span,
                             opcode::opcode("SEND").expect("SEND 在表里"),
                             await_done,
                             false,
                         );
-                        self.mark_label(await_loop);
                         self.emit_at(
                             context_span,
                             opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"),
@@ -136,11 +153,6 @@ impl Emitter {
                             context_span,
                             opcode::opcode("RESUME").expect("RESUME 在表里"),
                             3,
-                        );
-                        self.emit_at(
-                            context_span,
-                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                            0,
                         );
                         self.emit_directed_jump(
                             context_span,
@@ -189,17 +201,21 @@ impl Emitter {
                 // 数 `POP_EXCEPT` 用，`with` 的格不能算进去（见字段注释）。
                 let saved_with_depth = self.with_depth;
                 self.with_depth += 2 * items.len();
+                // **体内 `return` 的死代码洞**（round 109）：本层收自己的洞 ✓，层外已有的洞继承 ✓。
+                let saved_return_holes = core::mem::replace(&mut self.with_return_holes, Vec::new());
                 self.emit_block(body, false)?;
+                let body_return_holes = core::mem::replace(
+                    &mut self.with_return_holes,
+                    saved_return_holes,
+                );
                 self.with_depth = saved_with_depth;
                 self.in_epilogue_body = saved_epilogue_body;
                 self.with_exit_stack = saved_with_exits;
                 self.with_return_span = saved_with_return;
                 // **受保护区止于"正常流末尾"** ✓（第 166 轮）：体内有 `return` 时，参照的右端是**退出调用之前**
                 // 那一点 ✓（用 `return` 路径记下的 `with_body_end` ✓）；没有 `return` 就仍是当前长度 ✓。
-                let region_end = self
-                    .with_body_end
-                    .take()
-                    .unwrap_or_else(|| self.unit.code.len());
+                let body_end = self.unit.code.len();
+                let _ = self.with_body_end.take();
                 let none_index = self.intern_constant(Constant::None);
                 // **`NOP`**（实测，第 256 轮逐案收窄）：只当体里存在**跳向块尾的分支**时才发
                 // ——典型是"最后一条是**无 `else` 的 `if`**"（`if flag: return tag` 的假分支就跳到
@@ -255,13 +271,16 @@ impl Emitter {
                 let plan = WithCleanupPlan {
                     context_spans: context_spans.clone(),
                     region_starts: region_starts.clone(),
-                    region_end,
+                    return_holes: body_return_holes.clone(),
+                    body_end,
                     exit_labels: exit_labels.clone(),
                     rest: rest.to_vec(),
                     span: *span,
                     continuation,
                     normal_terminated: terminated,
                 };
+                // **洞继承**：本层的洞也要让外层切开（外层的保护区同样跨过它们 ✓）。
+                self.with_return_holes.extend(body_return_holes);
                 terminated &= self.emit_with_cleanups(&plan)?;
                 self.epilogue_span = context_spans[0];
                 self.epilogue_needed = !terminated;
@@ -307,7 +326,9 @@ impl Emitter {
                 if !finally_body.is_empty() {
                     self.finally_stack.push(finally_body.clone());
                 }
+                self.try_depth += 1;
                 self.emit_block(body, false)?;
+                self.try_depth -= 1;
                 if !finally_body.is_empty() {
                     self.finally_stack.pop();
                 }
@@ -461,12 +482,51 @@ impl Emitter {
                     // **压一层处理器** ✓（第 203 轮）：里面的 `return` 要按参照收尾 ✓。
                     self.handler_stack.push(handler.name.clone());
                     self.handler_depth += 1;
+                    // 处理块出口清理的落点（`break`／`continue` 发射时记进来；见 Emitter 字段注释）。
+                    self.handler_exit_cleanups.push(usize::MAX);
                     self.emit_block(&handler.body, false)?;
+                    let exit_cleanup_mark = self.handler_exit_cleanups.pop().unwrap_or(usize::MAX);
                     self.handler_depth -= 1;
                     self.handler_stack.pop();
                     if !finally_body.is_empty() {
                         self.finally_stack.pop();
                     }
+                    // **处理块体的结束位置**（round 207 真 bug 修 ✗）：处理块段的异常表区间要在这里收尾 ✓ ——
+                    // 先前的 `segment_end` 取 `handler_cleanup_start`（＝体后那条 `POP_EXCEPT` **之前**），
+                    // 但当体以 `break` 结束时，`break` 会**把余部副本就地发出来**（`POP_EXCEPT` +
+                    // 循环后代码，例如 `raise ValueError`）⇒ 那些指令落进了 [处理块起点, handler_cleanup_start)
+                    // 区间里 ✗ ⇒ 余部副本里再抛的异常被派发到清理三连（栈只有 `[lasti, exc]` 2 格）
+                    // ⇒ `COPY 3` 栈下溢 ✗（`test_collections` 的 `Sequence.index` 就是这条 ✓）。
+                    // 参照的区间是 `PUSH_EXC_INFO` 到**体后那条 `POP_EXCEPT` 之前** ✓ ⇒ 这里记体结束位置 ✓。
+                    let handler_body_end = self.unit.code.len();
+                    // **体以 `break`／`continue`／`return` 结束时**：这些出口会**就地**发一份"余部副本"
+                    // （`POP_EXCEPT` ＋ 循环后代码）✓ —— 参照把那份副本放在处理块段**之外**（段止于
+                    // 出口那条 `POP_EXCEPT` ✓）⇒ 这里把段尾回退到**最后一条 `POP_EXCEPT`** 的位置 ✓
+                    //（否则副本里再抛的异常会落到清理三连、栈少一格 ⇒ `COPY 3` 下溢 ✗）。
+                    let handler_body_end = if super::stmt_misc::block_exits_via_jump(&handler.body) {
+                        if exit_cleanup_mark != usize::MAX {
+                            // **首选**：出口清理那条 `POP_EXCEPT` 的精确偏移（`break`／`continue` 发射时
+                            // 记下）——它天然排除掉"就地重放的循环余部副本"（副本里可能有嵌套
+                            // `try` 的 `POP_EXCEPT`，旧的回扫法会把副本圈进区间 ⇒ 副本里再抛的
+                            // 异常被派发到清理块、少一格栈 ⇒ `StackUnderflow`）。
+                            exit_cleanup_mark
+                        } else {
+                            // 兜底：`return`／`raise` 一类出口没记落点（旧口径原样保留）。
+                            let mut cut = handler_body_end;
+                            let mut word = handler_body_end / 2;
+                            while word > segment_start / 2 {
+                                word -= 1;
+                                let op = u16::from(self.unit.code[word * 2]);
+                                if crate::opcode::opname(op) == Some("POP_EXCEPT") {
+                                    cut = word * 2;
+                                    break;
+                                }
+                            }
+                            cut
+                        }
+                    } else {
+                        handler_body_end
+                    };
                     // **粘性位点**（实测）：体末那条之后的 `POP_EXCEPT`／`as 名字` 清理／收尾都取
                     // **上一条指令**的跨度（`except … as e` 的例子是 `(4,4,4,5)`＝名字 `y` 那段），
                     // 不是处理块语句那段的跨度
@@ -490,7 +550,7 @@ impl Emitter {
                     let segment_end = if handler.name.is_some() {
                         self.unit.code.len()
                     } else {
-                        handler_cleanup_start
+                        handler_body_end
                     };
                     self.record_handler_segment(
                         segment_start,
@@ -568,7 +628,7 @@ impl Emitter {
                             self.emit_indexed_none("STORE_GLOBAL", index);
                             self.emit_indexed_none("DELETE_GLOBAL", index);
                         } else if self.kind == ScopeKind::Function
-                            && self.unit.varnames.iter().any(|item| item == &name)
+                            && self.plain_local_slot(&name).is_some()
                         {
                             let slot = self.slot_of(&name);
                             self.emit_indexed_none("STORE_FAST", slot);
@@ -679,29 +739,48 @@ impl Emitter {
                     // ② `async def` 在本层本就是**生成器近似**。⇒ 这一格先求"**能编译、能 import**"
                     // （上限诊断里 `asyncio`／`contextlib` 两族共 **53** 个模块压在它上面）。
                     self.emit_expression(iterable)?;
-                    self.emit_at(
-                        iterable.span(),
-                        opcode::opcode("GET_AITER").expect("GET_AITER 在表里"),
-                        0,
-                    );
+                    // **`.0` 已是 async iterator**（异步生成器表达式体内 ✓）：外层已做 `GET_AITER` ⇒
+                    // 这里不再做（与普通 `for` 的 `.0` 特例同口径 ✓）。
+                    let zero_already_aiter =
+                        matches!(iterable, Expression::Name(name, _) if name == ".0");
+                    if !zero_already_aiter {
+                        self.emit_at(
+                            iterable.span(),
+                            opcode::opcode("GET_AITER").expect("GET_AITER 在表里"),
+                            0,
+                        );
+                    }
                     self.mark_label(loop_label);
                     self.emit_at(
                         iterable.span(),
                         opcode::opcode("GET_ANEXT").expect("GET_ANEXT 在表里"),
                         0,
                     );
+                    let send_label = self.new_label();
                     // **`LOAD_CONST` 要走带 `EXTENDED_ARG` 的那条** ✓（`as u8` 会截断 ✗；
                     // 这里当场入池 ✓ —— 与原来"先 `intern_constant` 再发"同一顺序 ✓）。
                     let none_index = self.intern_constant(Constant::None);
                     self.emit_indexed(iterable.span(), "LOAD_CONST", none_index);
                     // **有内联缓存的跳转要走 `emit_directed_jump`**（第 306 轮实测：
                     // `SEND` 带 1 格缓存 ✓ ⇒ 用 `emit_jump` 落点会偏 4 字节 ✗）。
+                    // **标签落在 `SEND`**（round 231 与 `await` 同批修正 ✓）：参照 3.14 是
+                    // `GET_ANEXT; LOAD_CONST None; L_send: SEND L_done; YIELD_VALUE 1; RESUME 3;
+                    // JUMP_BACKWARD_NO_INTERRUPT L_send; L_done: END_SEND; NOT_TAKEN` ✓ ——
+                    // **`POP_TOP` 不存在**（恢复后的值由 `SEND` 重送 ✓；先前多弹一格 + 跳回
+                    // `GET_ANEXT` ✗ ⇒ 第二次 `send` 栈错位 ✓）。
+                    // **`SEND` 的目标是"本次 await 完成"**（round 241 真 bug 修 ✗）：先前直接指向
+                    // `exhausted`（循环出口）✗ ⇒ 第一格值就跳出循环、循环体一次都不跑
+                    //（`async for i in agen(3): out.append(i)` 得 `[]` ✓）。
+                    let await_done = self.new_label();
+                    let region_start = self.unit.code.len();
+                    self.mark_label(send_label);
                     self.emit_directed_jump(
                         iterable.span(),
                         opcode::opcode("SEND").expect("SEND 在表里"),
-                        exhausted,
+                        await_done,
                         false,
                     );
+                    let region_end = self.unit.code.len();
                     self.emit_at(
                         iterable.span(),
                         opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"),
@@ -712,24 +791,14 @@ impl Emitter {
                         opcode::opcode("RESUME").expect("RESUME 在表里"),
                         3,
                     );
-                    // **丢掉"送进来的值"**（第 306 轮，本层近似）：`RESUME` 之后栈顶是恢复时送进来的
-                    // 那个值 ✓，而下一轮的 `GET_ANEXT` 要的是**迭代器**在栈顶 ✗ ⇒ 不收走就报
-                    // `'async for' requires an object with __anext__ method, got NoneType` ✗。
-                    // 参照那一格由 `YIELD_VALUE` 的 oparg 语义处理 ✓（本层先如实按近似做 ✓）。
-                    self.emit_at(
-                        iterable.span(),
-                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                        0,
-                    );
-                    // **回跳要带方向** ✓（`emit_jump` 一律按前向算 ⇒ 实参成了 65529 ✗）。
                     self.emit_directed_jump(
                         iterable.span(),
                         opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
                             .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
-                        loop_label,
+                        send_label,
                         true,
                     );
-                    self.mark_label(exhausted);
+                    self.mark_label(await_done);
                     self.emit_at(
                         iterable.span(),
                         opcode::opcode("END_SEND").expect("END_SEND 在表里"),
@@ -740,6 +809,11 @@ impl Emitter {
                         opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
                         0,
                     );
+                    // **耗尽路径的异常表区间先存着**（round 241）：目标是收尾处那条
+                    // `END_ASYNC_FOR`（那时才知道偏移 ✓）；`END_ASYNC_FOR` 在参照里是
+                    // **回溯跳**（`BACKWARD_JUMPS` 含它）⇒ 用 arg 0（= 落到下一条 ✓）。
+                    self.pending_async_for
+                        .push((region_start, region_end, self.handler_depth + 1));
                 } else {
                 if matches!(iterable, Expression::Name(name, _) if name == ".0") {
                     let slot = self.slot_of(".0");
@@ -792,8 +866,8 @@ impl Emitter {
                         tuple_targets.as_slice()
                     {
                         if self.kind == ScopeKind::Function
-                            && self.unit.varnames.iter().any(|item| item == first)
-                            && self.unit.varnames.iter().any(|item| item == second)
+                            && self.plain_local_slot(first).is_some()
+                            && self.plain_local_slot(second).is_some()
                             // **cell／free 目标同元组解包那条** ✗（槽里是 cell 对象 ✓ ⇒ 不能 `STORE_FAST`）。
                             && self.deref_slot(first).is_none()
                             && self.deref_slot(second).is_none()
@@ -909,20 +983,14 @@ impl Emitter {
                     is_for: true,
                     rest: rest.to_vec(),
                     block_depth: self.block_depth,
+                    with_levels: self.with_exit_stack.len(),
                 });
                 self.in_loop_body = true;
                 self.emit_block(body, false)?;
                 self.loops.pop();
                 // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）；
-                // 末尾那条"体不落到末尾的 `if`"由 `If` 臂代发 ⇒ 这里让位
-                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
-                    Statement::If {
-                        then_body,
-                        else_body,
-                        ..
-                    } => else_body.is_empty() && block_terminates(then_body),
-                    _ => false,
-                });
+                // 末尾那条"体不落到末尾的 `if`"由 `If` 臂代发 ⇒ 这里让位（判据见 helper 文档）。
+                let tail_owned_by_if = tail_if_owns_back_edge(body);
                 if !loop_body_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（参照的粘性 loc：回跳是合成指令，继承前一条的位点；
                     // 实测 `for i in s:\n    x = i\n` 的回跳与 `STORE_NAME x` 同为 `(2,2,4,5)`）
@@ -935,17 +1003,33 @@ impl Emitter {
                     );
                 }
                 self.mark_label(exhausted);
-                // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）
-                self.emit_at(
-                    iterable.span(),
-                    opcode::opcode("END_FOR").expect("END_FOR 在表里"),
-                    0,
-                );
-                self.emit_at(
-                    iterable.span(),
-                    opcode::opcode("POP_ITER").expect("POP_ITER 在表里"),
-                    0,
-                );
+                if *is_async {
+                    // **异步耗尽路径**（round 241）：`END_ASYNC_FOR` 收掉 async iterator 与异常 ✓
+                    // （arg 0 ⇒ 落到下一条 ✓；正常路径只靠体的回跳，走不到这里 ✓），
+                    // 再把它登记成 `SEND` 区间（`GET_ANEXT..SEND`）的异常处理目标 ✓
+                    //（depth 里 aiter 那格要留 ⇒ `record_exception` 传 1 ✓）。
+                    let handler = self.unit.code.len();
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("END_ASYNC_FOR").expect("END_ASYNC_FOR 在表里"),
+                        0,
+                    );
+                    if let Some((region_start, region_end, depth)) = self.pending_async_for.pop() {
+                        self.record_exception(region_start, region_end, handler, depth, false);
+                    }
+                } else {
+                    // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("END_FOR").expect("END_FOR 在表里"),
+                        0,
+                    );
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("POP_ITER").expect("POP_ITER 在表里"),
+                        0,
+                    );
+                }
                 // 实测：`for … else` 的 else 体紧接 `POP_ITER`（正常耗尽才走到这里）
                 if !else_body.is_empty() {
                     self.emit_block(else_body, false)?;
@@ -989,6 +1073,7 @@ impl Emitter {
                         is_for: false,
                         rest: rest.to_vec(),
                         block_depth: self.block_depth,
+                    with_levels: self.with_exit_stack.len(),
                     });
                     self.in_loop_body = true;
                     self.emit_block(body, false)?;
@@ -1010,18 +1095,13 @@ impl Emitter {
                     is_for: false,
                     rest: rest.to_vec(),
                     block_depth: self.block_depth,
+                    with_levels: self.with_exit_stack.len(),
                 });
                 self.in_loop_body = true;
                 self.emit_block(body, false)?;
                 self.loops.pop();
-                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
-                    Statement::If {
-                        then_body,
-                        else_body,
-                        ..
-                    } => else_body.is_empty() && block_terminates(then_body),
-                    _ => false,
-                });
+                // **同口径**（与 `for` 一致 ✓，判据见 helper 文档）。
+                let tail_owned_by_if = tail_if_owns_back_edge(body);
                 if !loop_body_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（同 `for`；实测与 `STORE_NAME x` 同为 `(2,2,4,5)`）
                     let back_span = self.last_span;
@@ -1071,7 +1151,7 @@ impl Emitter {
                 let inverted = self.loop_last_if
                     && else_body.is_empty()
                     && self.loops.last().is_some();
-                if crate::diag::flag("PYAWA_INVERTED_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_INVERTED_DEBUG") {
                     eprintln!(
                         "[inverted] loop_last_if={} else_empty={} loops_len={}",
                         self.loop_last_if, else_body.is_empty(), self.loops.len()
@@ -1221,4 +1301,29 @@ impl Emitter {
             _ => unreachable!("emit_statement_if 只接收 Statement::If"),
         }
     }
+}
+
+/// 循环体末尾那条 `if` 会不会**自己发回边**（即 `If` 臂的"反转形态"）——决定循环臂是否让位。
+///
+/// **`P3-41` 真 bug 修 ✗**：先前判据只看语法（"末尾是无 `else` 的 `if` 且体终止"）⇒ 让位 ✗；
+/// 但**前面的 `try`／`with` 会把余部分别重放**（`emit_rest_and_tail`），重放块里 `loop_last_if`
+/// 不成立 ⇒ 末尾 `if` 走**非反转**形态、**不回发**回边 ✗ ⇒ 整段没有回边 ⇒ 第二圈
+/// `FOR_ITER` 弹空栈（`帧操作失败：StackUnderflow` ✗）。⇒ 只有"末尾 `if` 会被**直接**发出"
+/// 时才让位 ✓（体内末尾之外的语句里出现 `Try`／`With` 就意味着它会走重放路径 ✓）。
+///
+/// 实测原形：`Lib/unittest/case.py::assertSequenceEqual`（任何**列表**断言失败都会中止
+/// 整个官方测试文件 ✗）；最小复现 `target/recon/p341/r/r2.py` ✓。
+fn tail_if_owns_back_edge(body: &[Statement]) -> bool {
+    !body
+        .iter()
+        .take(body.len().saturating_sub(1))
+        .any(|statement| matches!(statement, Statement::Try { .. } | Statement::With { .. }))
+        && body.last().is_some_and(|statement| match statement {
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => else_body.is_empty() && block_terminates(then_body),
+            _ => false,
+        })
 }

@@ -61,6 +61,18 @@
   即：销毁实例不得依赖回收器先跑完。
 - **OM-3** 内存记账**必须**在 VM 侧按实例进行（每实例字节计数器）。
   **禁止**把预算职责下放给能力接口——能力接口只提供"权威"，判定与记账在 VM（DESIGN §7 原则 1）。
+- **OM-41** **每实例内存配额**（沙箱硬需求；2026-11-13 起）：宿主可给实例设**活分配字节**上限
+  （`0` ＝ 不限）；超限时执行器**必须**在**指令边界**抛**可捕获的** `MemoryError`
+  （禁止 abort／panic ✗）。语义细则：
+  - 记账口径＝对象结构体字节（`OM-3` 的 `bytes_allocated`）＋**已接线载荷**（`str`／`bytes`
+    的实际字节；容器指针数组等暂按 0，如实记 ✗，后续按需补）；释放时**同口径**减回（`saturating`）；
+  - 抛错时**水位抬高一档** `slack = max(64 KiB, limit/16)` ⇒ 处理块／`finally` 还有分配余量；
+    继续增长则每 `slack` 字节再抛一次 ⇒ 宿主占用上界 ≈ `limit + slack` 量级（不断言"恰好上限"）；
+  - **大块来源**（`str`／`bytes`／序列重复、`list(<大迭代器>)`）**必须先在分配前**问预算；
+  - 宿主钩子：ABI `pa_set_memory_limit`（`AB-65`）／`pa_memory_used`（`AB-66`）；CLI 的
+    `PYAWA_MEMORY_LIMIT` 只是**示例宿主**接缝；
+  - **已知不精确** ✗：容器增长（`list.append` 等）的指针数组、`dict` 表、大整数肢未计载荷；
+    单条指令内的超量由"指令边界抛"约束（大块重复已前置拦截 ✓）。
 - **OM-4** 分配器**必须**可参数化为实例私有（建议：实例私有 arena，后端可用系统分配器）。
   **禁止**使用进程级可变分配状态。
 
@@ -240,6 +252,23 @@
   理由：NaN-boxing 是性能优化，而性能不是目标；先换取正确性与可调试性。
 - **OM-39** 任何值表示的选择**必须**满足：小整数与单例的内联不改变语义（`is` 语义按 OM-23 的单例表）。
 
+### 12.1 traceback 对象（Python 可见；不跨 C ABI）
+
+- **OM-42** 每个异常实例**必须**暴露 Python 属性 `__traceback__`：
+  - 首次传播前为 `None`；传播后为一个 **`traceback` 类型对象**（`SPEC-bytecode` 的 `traceback`
+    类型名）；链的**追加、去重（同一帧不重复入链）、`__context__`／`__cause__` 与 `with`
+    `__exit__(type, exc, tb)` 的可观察语义**由 **`BC-60`／`T-BC-22`** 定义，本文件**不重述**这些
+    语义，只定义**数据面**。
+  - `tb_frame`：帧对象（`Frame`，见 `SPEC-bytecode`）；traceback 对象**必须持有**该帧的引用 ⇒
+    异常存活期间帧与 `f_locals` 可读（帧保活）；链释放后帧按 `OM-16`／`OM-17` 正常释放。
+  - `tb_lineno`：`int`，该帧当前指令对应的源码行；无法定位时**必须**为 `0`（如实，不编造）。
+  - `tb_lasti`：`int`，实现自己的字节偏移坐标；**不承诺**与 CPython 的数值一致。
+  - `tb_next`：`None` 或下一节 traceback；不得成环（链方向由 `BC-60` 的追加规则决定）。
+  - **跨宿主边界**（`AB-74` 的宿主异常）：guest 侧得到同一形状的 traceback；**宿主 C 帧不得
+    进入链**。
+  - **已登记偏差（`DIV-6`）**：控制流异常 `unittest.SkipTest` 不挂 `__traceback__`（避免整条
+    帧链在套件存活期无法释放）；其它异常**必须**挂。
+
 ---
 
 ## 13. 验收（可测性质）
@@ -255,6 +284,8 @@
 | T-OM-7 | CI 静态检查：禁止 `static mut`／`thread_local`（`CX-3`；`OM-1`、`OM-4`） |
 | T-OM-8 | CI 静态检查：VM 核心 crate 无平台依赖（`CX-4`） |
 | T-OM-9 | 容器载荷按 `OM-40` 释放：构造容器 → 释放 → 子对象计数正确归零；且除 `clear` 外无释放路径（`OM-40`） |
+| T-OM-10 | 每实例内存配额（`OM-41`）：超限被**可捕获**的 `MemoryError`接住、未捕获时是脚本异常（非 signal）、大块重复**分配前**拒绝；宿主占用 ≤ `limit+slack` 量级（`crates/pyawa-core/tests/memory_quota.rs`／`pyawa-runtime/tests/memory_quota.rs`／`pyawa-abi/tests/memory_quota.rs`） |
+| T-OM-11 | traceback 数据面（`OM-42`／`BC-60`）：`__traceback__` 初始 `None`、抛出后 `tb_frame`/`tb_lineno`/`tb_lasti`/`tb_next` 的类型与链；帧保活与释放；`with __exit__` 第三参；`SkipTest` 偏差（`DIV-6`）——`crates/pyawa-runtime/tests/exception_traceback_frames.rs`、`crates/pyawa-core/tests/exceptions.rs`；`paL_where(level)` 见 `SPEC-c-abi` §15.4（`crates/pyawa-abi/tests/helpers_wiring.rs`） |
 
 ---
 

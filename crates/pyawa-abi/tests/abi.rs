@@ -7,7 +7,7 @@ use core::mem::size_of;
 use pyawa_abi::status::*;
 use pyawa_abi::helpers::{
     paL_checkinteger, paL_checkstring, paL_dofile, paL_dostring, paL_error, paL_execresult,
-    paL_getsubtable, paL_len, paL_openlibs, paL_optinteger, paL_optstring, paL_ref,
+    paL_getsubtable, paL_len, paL_optinteger, paL_optstring, paL_ref,
     paL_requiref, paL_setfuncs, paL_traceback, paL_unref, paL_where,
 };
 use pyawa_abi::tag::*;
@@ -24,9 +24,12 @@ fn status_codes_match_the_spec_table() {
     assert_eq!(PA_ERR_NOTIMPLEMENTED, 5);
     assert_eq!(PA_ERR_INVALID, 6);
     assert_eq!(PA_ERR_ABI, 7);
-    assert_eq!(PA_ERR_RESERVED_FIRST, 8);
+    // `AB-73`：属性派发回调的"未处理"（追加到预留区起点，`AB-20`）。
+    assert_eq!(PA_ERR_NOTFOUND, 8);
+    assert_eq!(PA_ERR_RESERVED_FIRST, 9);
     assert_eq!(PA_ERR_RESERVED_LAST, 31);
     assert!(PA_ERR_RESERVED_FIRST > PA_ERR_ABI, "AB-20：新增必须落在预留区");
+    assert!(PA_ERR_RESERVED_FIRST <= PA_ERR_RESERVED_LAST);
 }
 
 #[test]
@@ -1062,11 +1065,11 @@ fn a_host_type_is_registered_as_a_real_type() {
             pa_newtype(
                 state,
                 name.as_ptr().cast(),
+                0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                &signature,
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1079,11 +1082,11 @@ fn a_host_type_is_registered_as_a_real_type() {
             pa_newtype(
                 state,
                 b"Widget2\0".as_ptr().cast(),
+                0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                core::ptr::null(),
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                core::ptr::null(),)
         },
         PA_ERR_INVALID
     );
@@ -1111,11 +1114,11 @@ fn host_type_accepts_the_final_flag() {
             pa_newtype(
                 state,
                 b"Gadget\0".as_ptr().cast(),
+                0,
                 size_of::<u64>(),
-                host_dealloc,
-                host_traverse,
-                &signature,
-            )
+                    Some(host_dealloc),
+                    Some(host_traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1397,12 +1400,11 @@ fn helpers_report_unimplemented_parts_honestly() {
     let mut length = 0usize;
     // SAFETY: state 存活。
     unsafe {
-        // 这几条各自缺一块前置：标准库／编译器／traceback／模块系统
-        assert_eq!(paL_openlibs(state), PA_ERR_NOTIMPLEMENTED);
-        assert_eq!(
-            paL_dostring(state, b"1+1\0".as_ptr().cast(), 0),
-            PA_ERR_NOTIMPLEMENTED
-        );
+        // C 组接线后：dostring 真执行（PA_OK 并压 True）；无 fs ⇒ dofile 未提供；
+        // where 在非执行期如实未提供；requiref 在裸实例（无模块表）如实未提供。
+        assert_eq!(paL_dostring(state, b"1+1\0".as_ptr().cast(), 0), PA_OK);
+        assert_eq!(pa_isboolean(state, -1), 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
         assert_eq!(
             paL_dofile(state, b"/tmp/x.py\0".as_ptr().cast(), 0),
             PA_ERR_NOTIMPLEMENTED
@@ -1411,10 +1413,12 @@ fn helpers_report_unimplemented_parts_honestly() {
             paL_where(state, 0, &mut view, &mut length),
             PA_ERR_NOTIMPLEMENTED
         );
+        // 裸实例有模块表，但找不到 `m` 且无 `openf` ⇒ 加载失败（`PA_ERR_RUNTIME`＋消息）。
         assert_eq!(
             paL_requiref(state, b"m\0".as_ptr().cast(), core::ptr::null(), 0),
-            PA_ERR_NOTIMPLEMENTED
+            PA_ERR_RUNTIME
         );
+        assert!(!message_of(state).unwrap_or_default().is_empty());
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
@@ -1534,11 +1538,11 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
             pa_newtype(
                 state,
                 b"Gadget\0".as_ptr().cast(),
+                0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                &type_signature,
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                &type_signature,)
         },
         PA_OK
     );
@@ -1554,6 +1558,18 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
         "类型的导出：{text}"
     );
     assert!(text.contains("__dict__: dict[str, object]"), "实例字典声明：{text}");
+    // **逐项投影 ＋ 纯函数**（`AB-53`／`AB-54`）：导出必须由**注册账本**遍历而成，
+    // 不是"只覆盖第一条样例"；同一账本两次导出逐字节相同（可重复构建）。
+    let again = export::pyi(state);
+    assert_eq!(text, again, "`AB-53`：导出是可重复的纯投影");
+    let declarations = text
+        .lines()
+        .filter(|line| line.starts_with("def ") || line.starts_with("class "))
+        .count();
+    assert_eq!(
+        declarations, 2,
+        "两条注册（1 函数 ＋ 1 类型）都必须逐项出现在导出里：{text}"
+    );
     // `AB-54`：导出是**同一份数据**的投影 ⇒ 名字与运行期注册的一模一样
     // SAFETY: state 存活。
     unsafe {
@@ -1596,11 +1612,11 @@ fn newhandle_hands_out_a_vm_allocated_payload() {
             pa_newtype(
                 state,
                 type_name.as_ptr().cast(),
+                0,
                 size_of::<u64>(),
-                dealloc,
-                traverse,
-                &signature,
-            )
+                    Some(dealloc),
+                    Some(traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1660,11 +1676,11 @@ fn one_registration_builds_many_instances() {
             pa_newtype(
                 state,
                 name.as_ptr().cast(),
+                0,
                 size_of::<u64>(),
-                quiet_dealloc,
-                quiet_traverse,
-                &signature,
-            )
+                    Some(quiet_dealloc),
+                    Some(quiet_traverse),
+                &signature,)
         },
         PA_OK
     );
@@ -1707,7 +1723,17 @@ fn a_zero_size_payload_gives_null() {
     let name = b"Empty\0";
     // SAFETY: 按契约传参。
     assert_eq!(
-        unsafe { pa_newtype(state, name.as_ptr().cast(), 0, dealloc, traverse, &signature) },
+        unsafe {
+            pa_newtype(
+                state,
+                name.as_ptr().cast(),
+                0,
+                0,
+                Some(dealloc),
+                Some(traverse),
+                &signature,
+            )
+        },
         PA_OK
     );
     // SAFETY: state 存活。
@@ -2025,21 +2051,21 @@ fn exec_bytecode_runs_a_product_and_rejects_stale_or_malformed_input() {
     unsafe { pa_destroy(state) };
 }
 
-/// **裸 ABI 实例的导入面**（第 211 轮实测 ✓）：`pa_create` 交回的实例**没有装 stdlib** ⇒
-/// 连 `import sys` 都是 `PA_ERR_NOTIMPLEMENTED`（5）✗ —— 于是**不能**用"裸实例"来当
-/// `IM-15`（模块 I/O 经能力层）的判据 ✗（那条判据要有**运行时装配**的实例：装了 stdlib、
+/// **裸 ABI 实例的导入面**（`AB-68` 起改口径 ✓）：`pa_create` 交回的实例**没有装 stdlib**，
+/// 但有 `AB-68` 的**最小 `sys` 骨架**（`sys`＋`sys.path`＋`sys.modules`）⇒ `import sys` 可以 ✓；
+/// **标准库模块仍然没有** ⇒ `import os` 是脚本异常（`PA_ERR_RUNTIME`）✗ —— 于是**不能**用裸实例
+/// 当 `IM-15`（模块 I/O 经能力层）的判据 ✗（那条判据要有**运行时装配**的实例：装了 stdlib、
 /// 再比"注册／不注册 `fs` 域"两种情形 ✓）。
 ///
-/// 本格钉住的是**这条边界本身** ✓：谁要是以后让裸实例能导入，就会在这里看到变化 ✓，
+/// 本格钉住的是**这条边界本身** ✓：谁要是以后让裸实例能导入标准库，就会在这里看到变化 ✓，
 /// 从而必须回头确认 `IM-15` 的判据面 ✓。
 #[test]
-fn a_bare_instance_cannot_import_even_builtin_modules() {
+fn a_bare_instance_imports_sys_but_not_stdlib_modules() {
     let host = compatible_host();
     let mut state: *mut pa_state = core::ptr::null_mut();
     assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
     let mode = b"python\0";
-    let source = b"import sys\n";
-    let status = unsafe {
+    let run = |source: &[u8]| unsafe {
         pa_exec_string(
             state,
             source.as_ptr().cast(),
@@ -2049,9 +2075,242 @@ fn a_bare_instance_cannot_import_even_builtin_modules() {
             core::ptr::null(),
         )
     };
+    // `AB-68` 的最小 `sys`：`import sys` 必须成立（否则 `pa_setpath` 无处可写 ✓）。
+    assert_eq!(run(b"import sys\n"), PA_OK, "`AB-68` 起裸实例应有最小 `sys` 骨架");
     assert_eq!(
-        status, PA_ERR_NOTIMPLEMENTED,
-        "裸实例（没装 stdlib）的导入面变了 ⇒ `IM-15` 的判据面要重核"
+        run(b"import os\n"),
+        PA_ERR_RUNTIME,
+        "裸实例（没装 stdlib）不该能导入标准库模块 == `IM-15` 的判据面要重核"
     );
     unsafe { pa_destroy(state) };
+}
+
+// ---- AB-70：宿主对象载荷读回 ----
+
+/// 宿主函数：读回 `-1` 处宿主对象载荷里的 `u64` 并压回栈顶（`AB-70` 的端到端用）。
+unsafe extern "C-unwind" fn host_read_handle(state: *mut pa_state) -> i32 {
+    // SAFETY: 调度器保证 `state` 与实参有效。
+    unsafe {
+        let mut payload: *mut c_void = core::ptr::null_mut();
+        if pa_tohandle(state, -1, &mut payload) != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        let value = *payload.cast::<u64>();
+        let _ = pa_pop(state, 1);
+        pa_pushinteger(state, value as i64)
+    }
+}
+
+/// 宿主函数：零参数、返回 7（`AB-72` 的 `nresults` 用例）。
+unsafe extern "C-unwind" fn host_seven(state: *mut pa_state) -> i32 {
+    // SAFETY: 回调契约。
+    unsafe { pa_pushinteger(state, 7) }
+}
+
+/// 单位置参数的签名（名字与 `pa_param` 都要活到注册调用结束）。
+fn signature_with_one_positional(name: &'static [u8]) -> (pa_sig, [pa_param; 1]) {
+    let params = [pa_param {
+        size: size_of::<pa_param>(),
+        name: name.as_ptr().cast(),
+        type_expr: core::ptr::null(),
+        flags: pyawa_abi::host::param_flags::PA_PARAM_POSITIONAL,
+        default_handle: core::ptr::null_mut(),
+    }];
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: params.len(),
+        params: params.as_ptr(),
+    };
+    (signature, params)
+}
+
+#[test]
+fn tohandle_reads_back_the_vm_payload_after_container_roundtrip() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    const VALUE: u64 = 0x1122_3344_5566_7788;
+
+    let type_signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let dealloc: PaHostDealloc = quiet_dealloc;
+    let traverse: PaHostTraverse = quiet_traverse;
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                b"Gadget\0".as_ptr().cast(),
+                0,
+                size_of::<u64>(),
+                    Some(dealloc),
+                    Some(traverse),
+                &type_signature,)
+        },
+        PA_OK
+    );
+    let mut payload: *mut c_void = core::ptr::null_mut();
+    // SAFETY: state 存活；类型在 `-1`。
+    unsafe {
+        assert_eq!(pa_newhandle(state, -1, &mut payload), PA_OK);
+        assert!(!payload.is_null(), "AB-58：载荷由 VM 分配");
+        *payload.cast::<u64>() = VALUE;
+
+        // 宿主对象放进脚本全局；类型槽弹掉，栈回到空。
+        assert_eq!(pa_setglobal(state, b"gadget\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+    }
+    let payload_address = payload as usize;
+
+    // 注册"读回载荷"的宿主函数（一个位置参数）：脚本把句柄穿过 list／dict 再传进来。
+    let (mut signature, _params) = signature_with_one_positional(b"handle\0");
+    signature.params = _params.as_ptr();
+    // SAFETY: name／fn／sig 都有效。
+    assert_eq!(
+        unsafe { pa_register(state, b"host_read_handle\0".as_ptr().cast(), host_read_handle, &signature) },
+        PA_OK
+    );
+
+    let source = b"box = [gadget]\ncell = {'k': gadget}\nseen = host_read_handle(cell['k'])\n";
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            core::ptr::null(),
+            b"python\0".as_ptr().cast(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(status, PA_OK, "执行应当成功；诊断：{:?}", message_of(state));
+
+    // SAFETY: state 存活；下面每一步都成对 pop，结束时栈回到 0。
+    unsafe {
+        // ① 脚本把 dict 里的句柄传给宿主函数 ⇒ 宿主读回同一块载荷
+        assert_eq!(pa_getglobal(state, b"seen\0".as_ptr().cast()), PA_OK);
+        let mut seen = 0i64;
+        assert_eq!(pa_tointeger(state, -1, &mut seen), PA_OK);
+        assert_eq!(seen as u64, VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // ② list 往返后仍能读回（直接走 API，核对指针身份）
+        let value = |state: *mut pa_state| -> u64 {
+            let mut out: *mut c_void = core::ptr::null_mut();
+            assert_eq!(pa_tohandle(state, -1, &mut out), PA_OK);
+            assert_eq!(out as usize, payload_address, "读回的必须是同一块 VM 载荷");
+            *out.cast::<u64>()
+        };
+        assert_eq!(pa_getglobal(state, b"box\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushinteger(state, 0), PA_OK);
+        assert_eq!(pa_gettable(state, -2), PA_OK);
+        assert_eq!(value(state), VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK); // 元素
+        assert_eq!(pa_pop(state, 1), PA_OK); // box
+
+        // ③ dict 往返后仍能读回
+        assert_eq!(pa_getglobal(state, b"cell\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushstring(state, b"k\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_gettable(state, -2), PA_OK);
+        assert_eq!(value(state), VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK); // 值
+        assert_eq!(pa_pop(state, 1), PA_OK); // dict
+
+        // ④ 宿主对象本身在栈上也能读回
+        assert_eq!(pa_getglobal(state, b"gadget\0".as_ptr().cast()), PA_OK);
+        assert_eq!(value(state), VALUE);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // ⑤ 非宿主对象 ⇒ PA_ERR_INVALID（**不要**用 pa_type == PA_THANDLE 猜：
+        //    list／int 也都在报 PA_THANDLE／不是句柄）
+        assert_eq!(pa_newlist(state, 0), PA_OK);
+        assert_eq!(pa_type(state, -1), PA_THANDLE, "list 的 pa_type 也是 PA_THANDLE（AB-63）");
+        let mut out: *mut c_void = core::ptr::null_mut();
+        assert_eq!(pa_tohandle(state, -1, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        assert_eq!(pa_tohandle(state, -1, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // ⑥ payload_out 为 NULL／索引越界 ⇒ 都是宿主用法错误
+        assert_eq!(pa_getglobal(state, b"gadget\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_tohandle(state, -1, core::ptr::null_mut()), PA_ERR_INVALID);
+        assert_eq!(pa_tohandle(state, 99, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// ---- AB-72：`pa_call`／`pa_pcall` 的精确结果数 ----
+
+#[test]
+fn call_nresults_is_exact() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    // SAFETY: name／fn／sig 都有效。
+    assert_eq!(
+        unsafe { pa_register(state, b"host_seven\0".as_ptr().cast(), host_seven, &signature) },
+        PA_OK
+    );
+    // SAFETY: state 存活；每步成对收栈。
+    unsafe {
+        // `nresults == 0`：结果被丢弃，可调用与实参也都不留 ⇒ 栈回到空。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, 0), PA_OK, "AB-72：0 个结果是合法请求");
+        assert_eq!(pa_gettop(state), 0);
+
+        // `nresults == 2`：固定产出 1 个结果 ⇒ 第 1 项是结果，其余补 `None`。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, 2), PA_OK);
+        assert_eq!(pa_gettop(state), 2);
+        assert_eq!(pa_type(state, -1), PA_TNIL, "结果数不足 ⇒ 用 None 补齐（AB-72）");
+        let mut value = 0i64;
+        assert_eq!(pa_tointeger(state, -2, &mut value), PA_OK);
+        assert_eq!(value, 7, "第 1 项才是被调用方的结果");
+        assert_eq!(pa_pop(state, 2), PA_OK);
+
+        // `nresults == 1`：既有行为不回退。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 1);
+        assert_eq!(pa_tointeger(state, -1, &mut value), PA_OK);
+        assert_eq!(value, 7);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // `pa_pcall` 同口径（受保护调用）。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pcall(state, 0, 2), PA_OK);
+        assert_eq!(pa_gettop(state), 2);
+        assert_eq!(pa_type(state, -1), PA_TNIL);
+        assert_eq!(pa_tointeger(state, -2, &mut value), PA_OK);
+        assert_eq!(value, 7);
+        assert_eq!(pa_pop(state, 2), PA_OK);
+
+        // 负数 ⇒ 宿主用法错误（AB-72）。
+        assert_eq!(pa_getglobal(state, b"host_seven\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_call(state, 0, -1), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }

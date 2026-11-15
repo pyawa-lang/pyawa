@@ -14,4 +14,9 @@ pyawa-abi = { path = "../pyawa-abi" }
 pyawa-capabilities = { path = "../pyawa-capabilities" }
 pyawa-core = { path = "../pyawa-core" }
 
+[lib]
+# **§12.13 #1（路线 A）**：组合根产物——C 宿主链**这一个**库就拿到 `paL_*` ＋ 完整 `pa_*`
+# （`staticlib` 必含依赖 rlib 的 `#[no_mangle]` 符号；`cdylib` 另行实测再定）。
+crate-type = ["rlib", "cdylib", "staticlib"]
+
 [dev-dependencies]

@@ -4,6 +4,7 @@
 //! `co_positions()`／`_varname_from_oparg()`… 见 `SPEC-bytecode.md` §2.4）随编译管线一起补——
 //! 那需要值表示与容器，现在写会替 `SPEC-object-model.md` §12 做主。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::header::Header;
@@ -295,8 +296,7 @@ pub unsafe fn code_getattr(
                 co_lines_native
             };
             let native = instance.alloc(crate::BuiltinFunctionObject::new(
-                instance
-                    .type_named("builtin_function_or_method")
+                instance.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("引导期已登记"),
                 "code",
                 core::cell::Cell::new(handler),
@@ -305,7 +305,7 @@ pub unsafe fn code_getattr(
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象，这里新增一份给方法对象。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(crate::MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 // SAFETY: 同上，ptr 非空。
                 unsafe { NonNull::new_unchecked(ptr) },
@@ -361,8 +361,7 @@ pub unsafe fn code_getattr(
         // **`replace()`**（第 409 轮，task-17 ✓）：**仅关键字**，缺省＝原值，返回**新** code object ✓。
         "replace" => {
             let native = instance.alloc(crate::BuiltinFunctionObject::new(
-                instance
-                    .type_named("builtin_function_or_method")
+                instance.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("引导期已登记"),
                 "code",
                 core::cell::Cell::new(code_replace_native),
@@ -371,7 +370,7 @@ pub unsafe fn code_getattr(
             // SAFETY: ptr 由槽位契约保证是本类型的存活对象，这里新增一份给方法对象。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(crate::MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 // SAFETY: 同上，ptr 非空。
                 unsafe { NonNull::new_unchecked(ptr) },
@@ -431,7 +430,7 @@ unsafe fn code_replace_native(
         .iter()
         .map(|slot| slot.map(|value| instance.retain(value)))
         .collect();
-    let positions = code.positions().to_vec();
+    let mut positions = code.positions().to_vec();
     for (key, value) in kwargs {
         let Some(field) = instance.text_of(*key) else {
             return Err(instance.raise_builtin_error(
@@ -461,6 +460,17 @@ unsafe fn code_replace_native(
             "co_flags" => flags = replace_positive(instance, field, *value)? as u32,
             "co_code" => bytecode = replace_bytes(instance, field, *value)?,
             "co_exceptiontable" => exceptiontable = replace_bytes(instance, field, *value)?,
+            // **`co_linetable`**（round 240）：本层不存行表（存的是逐指令 `positions` ✓）；
+            // 参照的 `code.replace(co_linetable=b'')` 语义是"清掉位置信息" ⇒ 这里照做：
+            // **空字节串** ⇒ 每条指令的位置全 `None` ✓（`dis`／`co_positions()` 都给 `None` ✓）；
+            // 非空则**接受但忽略**（本层没有行表编码器 ✗，如实登记 ✓，别报 unexpected keyword ✗）。
+            "co_linetable" => {
+                let table = replace_bytes(instance, field, *value)?;
+                if table.is_empty() {
+                    let instruction_count = positions.len();
+                    positions = vec![(None, None, None, None); instruction_count];
+                }
+            }
             "co_varnames" => varnames = replace_names(instance, field, *value)?,
             "co_names" => names = replace_names(instance, field, *value)?,
             "co_cellvars" => cellvars = replace_names(instance, field, *value)?,
@@ -507,8 +517,7 @@ unsafe fn code_replace_native(
             "code: co_nlocals != len(co_varnames)",
         ));
     }
-    let code_type = instance
-        .type_named("CodeObject")
+    let code_type = instance.hot_type(HotId::CodeObject)
         .expect("CodeObject 在引导期已登记");
     // `co_name` 内部是 `&'static str`（历史形态 ✗）⇒ 替换时泄露一份（与 `instantiate` 同款 ✓）
     let static_name: &'static str = Box::leak(name.into_boxed_str());
@@ -724,8 +733,8 @@ unsafe fn co_lines_native(
 fn iterator_over(instance: &Instance, container: NonNull<Header>) -> NonNull<Header> {
     // 迭代器类型照探测表取（`TS-42` 的 M2）；容器是 `list` ⇒ 用 `list_iterator`
     let iterator_type = instance
-        .type_named("list_iterator")
-        .or_else(|| instance.type_named("tuple_iterator"))
+        .hot_type(HotId::ListIterator)
+        .or_else(|| instance.hot_type(HotId::TupleIterator))
         .unwrap_or_else(|| instance.type_of(container));
     instance
         .alloc(crate::IteratorObject::new(

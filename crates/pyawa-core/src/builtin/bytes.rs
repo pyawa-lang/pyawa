@@ -42,7 +42,7 @@ pub(crate) fn bytes_argument(
         return Err(instance.raise_builtin_error(
             "TypeError",
             &{
-                if crate::diag::flag("PYAWA_BYTESLIKE_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_BYTESLIKE_DEBUG") {
                     eprintln!(
                         "[byteslike] 类型={name} 实参={:?} 站点={}\n{}",
                         instance.object_repr(*argument).unwrap_or_else(|_| "?".to_owned()),
@@ -142,6 +142,59 @@ pub(crate) fn bytes_decode_native(
     }
     instance.decode_with_encoding_and_errors(&value, &encoding, &errors)
 }
+/// **`bytes.fromhex(string)`／`bytearray.fromhex(string)`**（round 189）：十六进制文本 → 字节 ✓
+/// （参照口径：跳过 **ASCII 空白**、两字符一组；奇长／非十六进制 ⇒
+/// `ValueError: non-hexadecimal number found in fromhex() arg at position N` ✓；
+/// 非 `str` ⇒ `TypeError: fromhex() argument must be str, not …` ✓）。
+pub fn bytes_fromhex_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fromhex() takes exactly one argument (0 given)",
+        ));
+    };
+    let Some(text) = instance.text_of(value) else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("fromhex() argument must be str, not {name}"),
+        ));
+    };
+    let mut bytes = Vec::with_capacity(text.len() / 2);
+    let mut high: Option<u8> = None;
+    let mut position = 0usize;
+    for character in text.chars() {
+        let character_position = position;
+        position += character.len_utf8();
+        if character.is_ascii_whitespace() {
+            continue;
+        }
+        let Some(digit) = character.to_digit(16) else {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!("non-hexadecimal number found in fromhex() arg at position {character_position}"),
+            ));
+        };
+        let digit = digit as u8;
+        match high.take() {
+            Some(first) => bytes.push(first * 16 + digit),
+            None => high = Some(digit),
+        }
+    }
+    if high.is_some() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("non-hexadecimal number found in fromhex() arg at position {position}"),
+        ));
+    }
+    Ok(instance.new_bytes(&bytes))
+}
+
 /// `bytes.maketrans(from, to)` ⇒ **256 字节**的查表 ✓（见上）。
 pub fn bytes_maketrans_native(
     instance: &Instance,
@@ -220,6 +273,8 @@ fn bytes_bounds(
     let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
         match args.get(index) {
             None => Ok(default),
+            // **`None` ＝ 缺省**（本机 3.14.4：`b"abc".find(b"b", None)` ⇒ 1 ✓）。
+            Some(value) if *value == instance.singletons().none() => Ok(default),
             Some(value) => instance
                 .int_value(*value)
                 .ok_or_else(|| instance.raise_builtin_error("TypeError", &format!("{method}: 下标要是整数")))
@@ -478,6 +533,65 @@ pub(crate) fn bytes_join_native(
     Ok(instance.new_bytes(&out))
 }
 /// `bytes.rfind(sub)`：**最后一个**位置，找不到 `-1`。
+/// `bytes.partition(sep)`／`bytes.rpartition(sep)`（round 109）：返回 `(head, sep, tail)` 三元组 ✓
+/// —— `Lib/tarfile.py` 的 `nts()` 就用 `bytes.partition`（先前 `AttributeError: 'bytes' object has
+/// no attribute 'partition'` ✗ 压住整个 tar 读面 ✓）。空分隔符 ⇒ `ValueError: empty separator` ✓。
+pub(crate) fn bytes_partition_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_partition_like(instance, bound, args, false)
+}
+
+/// `bytes.rpartition(sep)` ✓（与上面同一处实现 ✓）。
+pub(crate) fn bytes_rpartition_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_partition_like(instance, bound, args, true)
+}
+
+fn bytes_partition_like(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    reverse: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let separator = bytes_argument(instance, args, 0)?;
+    if separator.is_empty() {
+        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+    }
+    let found = if reverse {
+        value
+            .windows(separator.len())
+            .rposition(|window| window == separator.as_slice())
+    } else {
+        value
+            .windows(separator.len())
+            .position(|window| window == separator.as_slice())
+    };
+    let (head, sep, tail) = match found {
+        Some(at) => (
+            value[..at].to_vec(),
+            separator.clone(),
+            value[at + separator.len()..].to_vec(),
+        ),
+        None if reverse => (Vec::new(), Vec::new(), value.clone()),
+        None => (value.clone(), Vec::new(), Vec::new()),
+    };
+    let parts = vec![
+        instance.new_bytes(&head),
+        instance.new_bytes(&sep),
+        instance.new_bytes(&tail),
+    ];
+    Ok(instance.new_tuple(parts))
+}
+
 pub(crate) fn bytes_rfind_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

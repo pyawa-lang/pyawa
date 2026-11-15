@@ -84,4 +84,14 @@ impl ThreadHandleObject {
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)
     }
+
+    /// 单线程仿真：同步体跑完 ⇒ 标记已完成（round 151）。
+    pub fn mark_done(&self) {
+        self.started.set(true);
+    }
+
+    /// 是否已完成（round 151）。
+    pub fn is_done(&self) -> bool {
+        self.started.get()
+    }
 }

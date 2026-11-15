@@ -2,9 +2,10 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
-pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
+pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str, slot_trace_on: bool) -> Result<Step<'a>, ExecError> {
     match name {
                 "COPY_FREE_VARS" => {
                     // **3.11+ 是 no-op**：自由变量在建帧阶段由函数的闭包装入（`Frame::install_closure`）。
@@ -22,8 +23,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     // 现在把局部那份**取走**（`set_local(slot, None)` 返回旧值 ✓）⇒ 所有权只剩一份 ✓。
                     // 类体的 `nlocals` 是 0 ⇒ 这一步给 `None` ✓（与先前一致 ✓）。
                     let initial = frame.get().set_local(slot, None).unwrap_or(None);
-                    let cell_type = instance
-                        .type_named("cell")
+                    let cell_type = instance.hot_type(HotId::Cell)
                         .expect("引导期已登记 cell 类型");
                     let cell = instance
                         .alloc(crate::cell::CellObject::new(cell_type, RefCell::new(initial)))
@@ -81,6 +81,27 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     // **没被记账的指针** ✗ ⇒ 值被提前释放 ⇒ cell 还指着它 ⇒ **释放后重用** ⇒ 堆损坏 ✓）。
                     // 线索来自"**每次释放前扫全图看还有谁指着它**"那把尺子 ✓（引用者全是 `cell` ✓）。
                     if let Some(old) = object.replace(Some(value)) {
+                        release(instance, old);
+                    }
+                }
+                "DELETE_DEREF" => {
+                    // **`del <自由变量／cell 名>`**（round 236）：净 0 —— 把 cell 槽第 `oparg` 格
+                    // 那个 cell 的**内容清空**（cell 还在、只是没有值 ✓）；参照删完再读给
+                    // `NameError`／`UnboundLocalError`，本层由 `load_deref_value` 那条路报 ✓。
+                    let slot = oparg as usize;
+                    let cell = match frame.get().cell(slot) {
+                        Ok(cell) => cell,
+                        Err(error) => return Err(ExecError::Frame(error)),
+                    };
+                    let Some(cell) = cell else {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "`DELETE_DEREF` 的 cell 槽是空的（`MAKE_CELL` 没跑过）",
+                        });
+                    };
+                    // SAFETY: cell 由帧的 cell 槽持有，存活。
+                    let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+                    if let Some(old) = object.replace(None) {
                         release(instance, old);
                     }
                 }
@@ -151,13 +172,28 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                             opcode: opcode_number,
                             what: "常量表下标越界",
                         })?;
+                    // **诊断：常量已死**（round 264，`PYAWA_CONST_DEAD_CHECK=1`）：常量表持有裸引用
+                    // （`OM-40`）⇒ 若常量计数已归零，`push` 的 incref 会撞上已释放对象（后续某处
+                    // release 再炸）。这里在**第一次 stale LOAD_CONST** 点名声明的 qualname＋下标 ⇒
+                    // 定位"谁把 code object 的常量引用提前放掉"（`test_difflib` 实测死于
+                    // `_line_iterator` 的 `'X'` 常量 ✗）。默认关（每次 `LOAD_CONST` 只多一次缓存位读 ✓）。
+                    if crate::diag::flag_site!("PYAWA_CONST_DEAD_CHECK")
+                        && unsafe { &*raw.as_ptr() }.refcount() == 0
+                    {
+                        eprintln!(
+                            "[const-dead] qualname={} const_index={oparg} ptr={:p} 现场={}",
+                            code.qualname(),
+                            raw.as_ptr(),
+                            instance.current_site()
+                        );
+                    }
                     push(instance, frame.get(), raw)?;
                 }
                 // BC-51：LOAD_FAST 假定槽位已绑定（编译器保证）；这里宁可报错也不读垃圾
                 // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
                 // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
                 "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
-                    slot_trace(instance, &code, oparg as usize, "读");                                match frame.get().local(oparg) {
+                    if slot_trace_on { slot_trace(instance, &code, oparg as usize, "读"); }                                match frame.get().local(oparg) {
                         Ok(Some(raw)) => push(instance, frame.get(), raw)?,
                         Ok(None) => return Err(unbound_local_error(instance, frame.get(), oparg)),
                         // **cell 在参照实现里也是"快速局部槽"**：类体的 `__classdict__` 只有 cell 槽
@@ -182,7 +218,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     }
                 }
                 "STORE_FAST" => {
-                    slot_trace(instance, &code, oparg as usize, "写");
+                    if slot_trace_on { slot_trace(instance, &code, oparg as usize, "写"); }
                     let value = frame.get().pop()?;
                     // **NULL 哨兵＝"未绑定"**（第 234 轮）：推导式的 `LOAD_FAST_AND_CLEAR` 在外层同名局部
                     // **本来就没有**时会压那个哨兵，收尾的 `STORE_FAST` 要把它还原成"清空槽"而不是存一个
@@ -197,7 +233,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     }
                     // **`STORE_FAST` 的槽号诊断** ✓（第 305 轮，门控 `PYAWA_STORE_FAST_DEBUG=1`）：
                     // 与融合加载读到的槽号对照 ✓ ⇒ 定"写入槽 ≠ 读取槽"✓（第 304 轮的铁证 ✓）。
-                    if crate::diag::flag("PYAWA_STORE_FAST_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_STORE_FAST_DEBUG") {
                         if let Some(v) = restored {
                             // SAFETY: v 由本帧刚写入的槽持有，存活。
                             let tn = unsafe { (&*v.as_ptr()).ty().as_ref() }.name().to_owned();
@@ -229,14 +265,23 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     let value = frame.get().pop()?;
                     let store_slot = oparg >> 4;
                     let load_slot = oparg & 0x0F;
-                    slot_trace(instance, &code, store_slot, "写(融合113高)");
-                    slot_trace(instance, &code, load_slot, "读(融合113低)");
-                    if frame.get().set_local(store_slot, Some(value)).is_err() {
-                        release(instance, value);
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "STORE_FAST_LOAD_FAST 的槽位越界",
-                        });
+                    if slot_trace_on { slot_trace(instance, &code, store_slot, "写(融合113高)"); }
+                    if slot_trace_on { slot_trace(instance, &code, load_slot, "读(融合113低)"); }
+                    // **被覆盖槽的旧值要归还**（round 103 真 bug 修 ✗）：`set_local` 返回旧值，先前
+                    // 直接丢掉 ⇒ 每次融合存取漏一份旧值引用（常见于 `a = b = …`／`while` 的融合形态）。
+                    match frame.get().set_local(store_slot, Some(value)) {
+                        Ok(Some(old)) => {
+                            // SAFETY: 旧值那份由本帧交出。
+                            unsafe { instance.release_object(old.as_ptr()) };
+                        }
+                        Ok(None) => {}
+                        Err(_) => {
+                            release(instance, value);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "STORE_FAST_LOAD_FAST 的槽位越界",
+                            });
+                        }
                     }
                     let loaded = frame.get().local(load_slot)?.ok_or(ExecError::UnboundLocal {
                         slot: load_slot,
@@ -248,7 +293,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     // "(第一个, 第二个)"；`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` 里 a＝0、b＝1）
                     let first = oparg >> 4;
                     let second = oparg & 0x0F;
-                    if crate::diag::flag("PYAWA_EMIT87_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_EMIT87_DEBUG") {
                         eprintln!(
                             "[run87] name={} 码元={} arg={} 高={} 低={}",
                             code.name(),
@@ -268,7 +313,7 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     push(instance, frame.get(), right)?;
                     // **融合加载的槽号诊断** ✓（第 304 轮，门控 `PYAWA_FUSED_LOAD_DEBUG=1`）：第 302 轮
                     // 已证"错值是这一句自己压的" ✗ ⇒ 这里看它**到底从哪两个槽取的** ✓。
-                    if crate::diag::flag("PYAWA_FUSED_LOAD_DEBUG") {
+                    if crate::diag::flag_site!("PYAWA_FUSED_LOAD_DEBUG") {
                         // SAFETY: 两个值分别由对应帧槽持有，存活。
                         let lt = unsafe { (&*left.as_ptr()).ty().as_ref() }.name().to_owned();
                         let rt = unsafe { (&*right.as_ptr()).ty().as_ref() }.name().to_owned();
@@ -284,15 +329,35 @@ pub(super) fn step_locals<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, 
                     let second = frame.get().pop()?;
                     let low = oparg & 0x0F;
                     let high = oparg >> 4;
-                    if frame.get().set_local(high, Some(first)).is_err()
-                        || frame.get().set_local(low, Some(second)).is_err()
-                    {
-                        release(instance, first);
-                        release(instance, second);
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "STORE_FAST_STORE_FAST 的槽位越界",
-                        });
+                    let high_old = match frame.get().set_local(high, Some(first)) {
+                        Ok(old) => old,
+                        Err(_) => {
+                            release(instance, first);
+                            release(instance, second);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "STORE_FAST_STORE_FAST 的槽位越界",
+                            });
+                        }
+                    };
+                    let low_old = match frame.get().set_local(low, Some(second)) {
+                        Ok(old) => old,
+                        Err(_) => {
+                            if let Ok(Some(stored)) = frame.get().set_local(high, None) {
+                                unsafe { instance.release_object(stored.as_ptr()) };
+                            }
+                            release(instance, second);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "STORE_FAST_STORE_FAST 的槽位越界",
+                            });
+                        }
+                    };
+                    if let Some(old) = high_old {
+                        unsafe { instance.release_object(old.as_ptr()) };
+                    }
+                    if let Some(old) = low_old {
+                        unsafe { instance.release_object(old.as_ptr()) };
                     }
                 }
         _ => unreachable!("step_locals 只接收本族的 opcode"),

@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -10,7 +11,15 @@ impl Instance {
     /// 认：`list`／`tuple`／`str`（逐字符）／`dict`（逐**键**）／`set`。
     /// 不认识就给 `None`——**不猜**：调用方据此报参照实现那条
     /// `TypeError: 'int' object is not iterable`（实测）。
-    pub fn iterable_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+    ///
+    /// **返回 `Result`**（round 58）：迭代过程中抛的异常必须**原样传给调用方** ✓ ——
+    /// 先前 `Err(_) => break` 把 `(broken() for …)` 这类生成器里抛的错**吞成"提前结束"** ✗
+    /// ⇒ `list(g)`／`sum(g)`／`f(*g)` 静默少元素甚至反手报"缺位置实参"✗（`test_extcall` 的
+    /// `TypeError: myerror` 用例 ✓）。`Ok(None)` 仍表示"根本不是可迭代"。
+    pub fn iterable_items(
+        &self,
+        object: NonNull<Header>,
+    ) -> Result<Option<Vec<NonNull<Header>>>, ExecError> {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         let owned = |value: NonNull<Header>| {
@@ -18,36 +27,38 @@ impl Instance {
             unsafe { self.incref_object(value.as_ptr()) };
             value
         };
-        if self.type_named("list") == Some(ty) {
+        if self.hot_type(HotId::List) == Some(ty) {
             // SAFETY: 类型身份已确认。
             let list = unsafe { &*object.as_ptr().cast::<ListObject>() };
-            return Some(list.items().into_iter().map(owned).collect());
+            return Ok(Some(list.items().into_iter().map(owned).collect()));
         }
-        if self.type_named("tuple") == Some(ty) {
+        if self.hot_type(HotId::Tuple) == Some(ty) {
             // SAFETY: 同上。
             let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
-            return Some(tuple.items().iter().copied().map(owned).collect());
+            return Ok(Some(tuple.items().iter().copied().map(owned).collect()));
         }
         if ty == self.singletons().str_type() {
             // P3-38 S2c：按**码点**取元素（含孤立代理也各给一个单字符对象 ✓；不再经 `value()` ⇒ 不 panic ✓）
-            let points = self.str_code_point_vec(object)?;
-            return Some(
+            let Some(points) = self.str_code_point_vec(object) else {
+                return Ok(None);
+            };
+            return Ok(Some(
                 points
                     .into_iter()
                     .map(|point| self.new_str_code_point(point))
                     .collect(),
-            );
+            ));
         }
-        if ty == self.type_named("dict")? {
+        if Some(ty) == self.hot_type(HotId::Dict) {
             // SAFETY: 同上。
             let dict = unsafe { &*object.as_ptr().cast::<DictObject>() };
-            return Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect());
+            return Ok(Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect()));
         }
         // **`frozenset` 与 `set` 同载荷** ✓（第 236 轮）⇒ 迭代这条也一并认 ✓。
-        if ty == self.type_named("set")? || Some(ty) == self.type_named("frozenset") {
+        if Some(ty) == self.hot_type(HotId::Set) || Some(ty) == self.hot_type(HotId::FrozenSet) {
             // SAFETY: 同上。
             let set = unsafe { &*object.as_ptr().cast::<SetObject>() };
-            return Some(set.items().into_iter().map(owned).collect());
+            return Ok(Some(set.items().into_iter().map(owned).collect()));
         }
         // **迭代器对象**（第 137 轮）：`list(itertools.repeat(5, 3))`／`list(x for x in y)` 这类
         // 都要能消费 ✓ ⇒ 复用执行器那份 `advance`（内建迭代器 ＋ `__next__` 协议 ✓ **一处真相** ✓）；
@@ -56,20 +67,76 @@ impl Instance {
         // 包括由类型 **`getattr` 槽**动态给 `__iter__` 的 `range` ✓；先前直接拿
         // `runtime::advance(self, object)` ✗（只认内建迭代器 ✓）⇒ `sum(range(4))` 报
         // `TypeError: 'range' object is not iterable` ✗（本轮 `range_builtin` 对拍实测 ✓）。
-        if let Ok(iterator) = crate::executor::iter_value(self, object) {
-            let mut items = Vec::new();
-            loop {
-                match crate::executor::runtime::advance(self, iterator) {
-                    Ok(Some(item)) => items.push(item),
-                    Ok(None) => break,
-                    Err(_) => break,
+        // **区分「不是可迭代」与「迭代协议自己抛错」** ✓（round 58）：
+        // `iter_value` 对**两种**情况都回 `Err(Raised TypeError)` —— 直接拿它当"不可迭代"会把用户
+        // `__iter__` 里抛的错吞成 "argument after * must be an iterable" ✗（`test_extcall` 的
+        // `g(*BrokenIterable1())` ⇒ 应原样传 `myerror` ✓）。这里先看**协议是否存在**：
+        // 有 `__iter__`（含类型 `getattr` 槽给的）或旧式 `__getitem__` ⇒ 异常原样上抛 ✓；
+        // 都没有 ⇒ `Ok(None)`（调用方报参照那条 "not iterable" ✓）。
+        let iterator = match crate::executor::iter_value(self, object) {
+            Ok(iterator) => iterator,
+            Err(error) => {
+                // **探测失败的异常要还**（round 171 真泄漏修 ✗）：`.is_ok()` 先前把 Err 直接丢 ⇒
+                // 每探一次漏一颗 `AttributeError`（`*args` 展开／`iter()` 回退路径 ✓）。
+                let has_iter = match crate::executor::attribute::attribute_lookup_special(
+                    self,
+                    object,
+                    "__iter__",
+                ) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        crate::executor::attribute::discard_attribute_error(self, &error);
+                        false
+                    }
+                };
+                let has_getitem = match crate::executor::attribute_lookup(self, object, "__getitem__") {
+                    Ok(_) => true,
+                    Err(error) => {
+                        crate::executor::attribute::discard_attribute_error(self, &error);
+                        false
+                    }
+                };
+                if has_iter || has_getitem {
+                    return Err(error);
+                }
+                // **`iter_value` 的 `Err(Raised)` 这份引用必须还**（task-14 #f）：本函数把它当
+                // "不是可迭代"的信号吞掉 ⇒ 上面两颗探针（`__iter__`／`__getitem__` 的
+                // AttributeError）已各自 `discard_attribute_error` ✓，但**原始那颗**（`iter_value`
+                // 报的 `TypeError`，`raise()` 给 `Err` 与 `pending` 各一份）不还就每探一次漏一颗
+                // —— 实测 `f(*Plain())` ×2 万 ⇒ `tb_created−tb_freed` 净增 2 万（`PYAWA_GC_LOG`）。
+                // 病根（round 195 的 `mappingproxy_live` 陈旧登记）已修 ⇒ 这里可以安全
+                // `discard_error`（释放 `Err` 那份 ＋ 若 `pending` 仍是它则清槽，与
+                // `discard_attribute_error` 同一处真相）。
+                crate::executor::runtime::discard_error(self, &error);
+                return Ok(None);
+            }
+        };
+        let mut items = Vec::new();
+        loop {
+            // **每 4096 个元素查一次配额**（`OM-3` 扩）：`list(range(10**9))` 这类大块来源
+            // 在**收集循环里**就停手（否则等指令边界时宿主已被吃满 ✗）。
+            if items.len() & 0xFFF == 0 {
+                self.enforce_memory_quota()?;
+            }
+            match crate::executor::runtime::advance(self, iterator) {
+                Ok(Some(item)) => items.push(item),
+                Ok(None) => break,
+                Err(error) => {
+                    // 出错 ⇒ 迭代器与**已收的项**都归还，异常原样上抛 ✓（round 58）。
+                    // SAFETY: 这些引用都归本函数。
+                    unsafe {
+                        self.release_object(iterator.as_ptr());
+                        for item in &items {
+                            self.release_object(item.as_ptr());
+                        }
+                    }
+                    return Err(error);
                 }
             }
-            // SAFETY: iterator 是本函数刚拿到的**新引用** ✓。
-            unsafe { self.release_object(iterator.as_ptr()) };
-            return Some(items);
         }
-        None
+        // SAFETY: iterator 是本函数刚拿到的**新引用** ✓。
+        unsafe { self.release_object(iterator.as_ptr()) };
+        Ok(Some(items))
     }
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
@@ -114,7 +181,12 @@ impl Instance {
         let method = match crate::executor::attribute::attribute_optional(self, object, "__index__") {
             Ok(Some(method)) => method,
             // 没有这个方法、或取属性出错 ⇒ 如实"不是整数" ✓（由调用方报 TypeError ✓）
-            Ok(None) | Err(_) => return Ok(None),
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+                crate::executor::runtime::discard_error(self, &error);
+                return Ok(None);
+            }
         };
         let result = crate::executor::call::call_value(self, method, &[], &[]);
         // SAFETY: method 是新引用。
@@ -126,14 +198,17 @@ impl Instance {
                 unsafe { self.release_object(value.as_ptr()) };
                 Ok(number)
             }
-            Err(_) => Ok(None),
+            Err(error) => {
+                // **调用失败也要还异常引用**（round 198 真泄漏修 ✗）。
+                crate::executor::runtime::discard_error(self, &error);
+                Ok(None)
+            }
         }
     }
 
     /// 读浮点载荷（`float` 才算；别的给 `None`）。
     pub fn float_value(&self, object: NonNull<Header>) -> Option<f64> {
-        if self.type_of(object) == self
-            .type_named("float")
+        if self.type_of(object) == self.hot_type(HotId::Float)
             .expect("float 已登记")
         {
             // SAFETY: 类型身份已确认。
@@ -146,7 +221,7 @@ impl Instance {
     ///
     /// 与 [`Self::float_value`]／[`Self::int_of`] 同一口径（恰类型；Python 子类的载荷面另说 ✓）。
     pub fn complex_value(&self, object: NonNull<Header>) -> Option<(f64, f64)> {
-        if self.type_of(object) == self.type_named("complex").expect("complex 已登记") {
+        if self.type_of(object) == self.hot_type(HotId::Complex).expect("complex 已登记") {
             // SAFETY: 类型身份已确认 ⇒ 载荷是 `ComplexObject`（`TS-43` 布局自选 ✓）。
             let value = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::ComplexObject>() };
             return Some((value.real(), value.imag()));
@@ -232,7 +307,7 @@ impl Instance {
                 }
             }
             if let Some(value) = self.float_value(object) {
-                if ty == self.type_named("float")? {
+                if ty == self.hot_type(HotId::Float)? {
                     return Some(value);
                 }
             }
@@ -271,11 +346,22 @@ impl Instance {
         // `functools.cmp_to_key` 把方法名包成 `KeyWrapper` 再 `sorted`，先前就撞在这条上 ✗）。
         // `compare_public` 报错（两边都没有可比方法）⇒ 仍回 `None`：调用方照旧报
         // `'<' not supported between instances of …` ✓（文案不变）。
-        if crate::executor::compare_public(self, left, right, "<", 0).unwrap_or(false) {
-            return Some(core::cmp::Ordering::Less);
-        }
-        if crate::executor::compare_public(self, left, right, ">", 0).unwrap_or(false) {
-            return Some(core::cmp::Ordering::Greater);
+        // **`<` 失败才认"比不了"**（round 114）：参照排序只问 `a < b` ✓ —— 两次都 `False`
+        // **不是错误**（就是"不小于"，按相等处理 ✓）⇒ 先前再判 `==` ✗ ⇒ 没有 `__eq__` 的用户类
+        //（`pprint` 的 `_safe_key` 就是！）被判"比不了" ✗（`test_pprint` 的 `compact_width`／
+        // `set_of_sets_reprs` 报 `'<' not supported between instances of '_safe_key'` ✗）。
+        match crate::executor::compare_public(self, left, right, "<", 0) {
+            Ok(true) => return Some(core::cmp::Ordering::Less),
+            Ok(false) => match crate::executor::compare_public(self, left, right, ">", 0) {
+                Ok(true) => return Some(core::cmp::Ordering::Greater),
+                Ok(false) => return Some(core::cmp::Ordering::Equal),
+                Err(error) => {
+                    crate::executor::runtime::discard_error(self, &error);
+                }
+            },
+            Err(error) => {
+                crate::executor::runtime::discard_error(self, &error);
+            }
         }
         None
     }
@@ -289,6 +375,26 @@ impl Instance {
         name: &str,
     ) -> Result<Option<NonNull<Header>>, ExecError> {
         crate::executor::attribute::attribute_optional(self, object, name)
+    }
+
+    /// **可选属性探针（探测失败即当"没有"）**：探针抛出的异常**当场丢弃并归还引用** ✓。
+    ///
+    /// 动因（round 256 真泄漏修 ✗；round 77／170 同族）：先前大量站点写
+    /// `attribute_optional_of(...).ok().flatten()` ✗ —— `Err(Raised)` 那份异常引用被丢掉
+    /// ⇒ 每探一次漏一颗（其回溯链再钉住整帧；`test_weakref` 的 live 增长/超时由此累积）。
+    /// **一处真相**：需要"可选"语义都走这里，不再手写 `.ok()` ✓。
+    pub fn attribute_optional_discarding(
+        &self,
+        object: NonNull<Header>,
+        name: &str,
+    ) -> Option<NonNull<Header>> {
+        match self.attribute_optional_of(object, name) {
+            Ok(found) => found,
+            Err(error) => {
+                crate::executor::runtime::discard_error(self, &error);
+                None
+            }
+        }
     }
 }
 
@@ -410,6 +516,8 @@ fn encode_utf8_builtin(
                 }
                 "ignore" => {}
                 "replace" => out.push(b'?'),
+                // **`backslashreplace`** ✓（round 49）：代理码点写成 `\uD800` 形式（参照 ✓）。
+                "backslashreplace" => out.extend(character_literal(code).bytes()),
                 "strict" => return Err(surrogate_encode_error(instance, &points, position, None)),
                 "surrogateescape" => {
                     return Err(surrogate_encode_error(
@@ -450,6 +558,9 @@ fn encode_ascii_builtin(
         match errors {
             "ignore" => {}
             "replace" => out.push(b'?'),
+            // **`backslashreplace`** ✓（round 49）：不可编码字符 ⇒ `\xNN`／`\uNNNN`／`\UNNNNNNNN`
+            // 文本形式（小写十六进制，照参照 ✓）。`Lib/doctest.py` 的 `ascii()` 一族走它 ✓。
+            "backslashreplace" => out.extend(character_literal(code).bytes()),
             // `surrogateescape` 对**不可逃逸**的字符（含 U+D800..DC7F／DD00..DFFF 与普通
             // 不可编码字符）照参照回本编解码器的 strict 文案 ✓（只有 UTF-8 才说 surrogates not allowed）。
             "strict" | "surrogatepass" | "surrogateescape" => {
@@ -486,6 +597,8 @@ fn encode_latin1_builtin(
         match errors {
             "ignore" => {}
             "replace" => out.push(b'?'),
+            // **`backslashreplace`** ✓（round 49，同 ascii 口径）。
+            "backslashreplace" => out.extend(character_literal(code).bytes()),
             "strict" | "surrogatepass" | "surrogateescape" => {
                 return Err(instance.raise_builtin_error(
                     "UnicodeEncodeError",
@@ -521,6 +634,8 @@ fn encode_cp437_builtin(
         match errors {
             "ignore" => {}
             "replace" => out.push(b'?'),
+            // **`backslashreplace`** ✓（round 49，同 ascii 口径）。
+            "backslashreplace" => out.extend(character_literal(code).bytes()),
             "strict" | "surrogatepass" | "surrogateescape" => {
                 return Err(instance.raise_builtin_error(
                     "UnicodeEncodeError",

@@ -4,7 +4,8 @@
 //! * 仍在原处的被引用项：（无） ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::builtin_objects::{FunctionObject};
+use crate::HotId;
+use crate::builtin_objects::{FunctionObject, TupleObject};
 use crate::executor::ExecError;
 use core::ptr::NonNull;
 use crate::header::Header;
@@ -43,41 +44,52 @@ pub fn function_code_native(
 /// `_check_for_existing_members_` 报 `TypeError: <enum 'IntFlag'> cannot extend <flag 'Flag'>` ✗）。
 ///
 /// 语义照参照：`f.__get__(None, owner)` ⇒ **f 本身** ✓；`f.__get__(obj, owner)` ⇒ 绑定方法 ✓。
+/// **也接未绑定形态** `FunctionType.__get__(f, obj, owner)` ✓（`type(f).__get__` 取到的是
+/// **未绑定**的原生方法；`Lib/inspect.py` 的 `_descriptor_get` 正是
+/// `get = getattr(type(descriptor), '__get__'); get(descriptor, obj, type(obj))` ✓ ——
+/// `getattr_static` 修好后 `inspect.signature(用户类)` 第一次走到这条 ✓ ⇒ 必须支持 ✓）。
 pub fn function_descriptor_get(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(function) = bound else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "descriptor '__get__' of 'function' object needs an argument",
-        ));
+    // **绑定形态**（`f.__get__(…)`：`bound` 是 f）与**未绑定形态**（`FunctionType.__get__(f, …)`：
+    // 第一个实参是 f）都要认 ✓。
+    let (function, rest) = match bound {
+        Some(function) => (function, args),
+        None => match args.split_first() {
+            Some((first, remaining)) => (*first, remaining),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "descriptor '__get__' of 'function' object needs an argument",
+                ))
+            }
+        },
     };
-    // SAFETY: 槽位契约保证 bound 是存活函数对象（函数类型字典里的这个方法只经函数实例调用 ✓）。
+    // SAFETY: 槽位契约保证 function 是存活对象。
     if instance.type_name(instance.type_of(function)) != "function" {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "descriptor '__get__' for 'function' objects doesn't apply to a different type",
         ));
     }
-    let Some(this) = args.first().copied() else {
+    let Some(this) = rest.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "function.__get__() takes 2 arguments (1 given)",
         ));
     };
     // `f.__get__(None, owner)` ⇒ 未绑定（就是 f 本身 ✓）
-    if Some(instance.type_of(this)) == instance.type_named("NoneType") {
+    if Some(instance.type_of(this)) == instance.hot_type(HotId::NoneType) {
         // 调用方要一份新引用
         // SAFETY: function 由调用方借用，存活。
         unsafe { instance.incref_object(function.as_ptr()) };
         return Ok(function);
     }
     // 其余 ⇒ 绑成方法 ✓（与属性通道给的那种对象同形 ✓）
-    let method_type = instance
-        .type_named("method")
+    let method_type = instance.hot_type(HotId::Method)
         .expect("method 在引导期已登记");
     // SAFETY: function（借用）与 this（实参）都存活；方法对象要各持一份。
     unsafe {
@@ -88,6 +100,67 @@ pub fn function_descriptor_get(
         .alloc(crate::MethodObject::new(method_type, function, this))
         .into_raw()
         .cast::<Header>())
+}
+
+/// `f.__call__(*args, **kwargs)`（round 97）：Python 函数的 `__call__` 方法-wrapper ✓。
+///
+/// 动因：参照里每个函数都有 `__call__` ✓；`Lib/unittest/mock.py` 的 `_callable(obj)` 判据是
+/// `getattr(obj, '__call__', None) is not None` ✗ ⇒ 我们的函数没有这个属性 ⇒ 被当成**不可调用**
+/// ⇒ `side_effect` 走 `next(effect)` ⇒ `TypeError/未实现`（官方 `test_tempfile` 的
+/// `test_unexpected_error` 直接状态 5 中止 ✗；`test_mock` 一族同理 ✓）。
+/// 实现：绑定一个原生转发器，内部按**转移语义**把实参交给 `call_callable` ✓。
+pub fn function_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__call__() 缺少 self"));
+    };
+    let mut owned_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        // SAFETY: 调用方保证实参存活；`call_callable` 是转移语义 ⇒ 这里各留一份。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        owned_args.push(*argument);
+    }
+    let mut owned_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
+    for (key, value) in kwargs {
+        // SAFETY: 同上。
+        unsafe {
+            instance.incref_object(key.as_ptr());
+            instance.incref_object(value.as_ptr());
+        }
+        owned_kwargs.push((*key, *value));
+    }
+    crate::executor::call::call_callable(instance, this, None, owned_args, owned_kwargs, 0)
+}
+
+/// 把一个原生转发器**绑**到 `target` 上交出去（`method` 对象；各持一份引用 ✓）。
+fn bind_native_to(
+    instance: &Instance,
+    name: &'static str,
+    handler: crate::NativeFn,
+    target: NonNull<Header>,
+) -> NonNull<Header> {
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
+        .expect("builtin_function_or_method 在引导期已登记");
+    let native = instance.alloc(crate::BuiltinFunctionObject::new(
+        method_type,
+        name,
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self。
+    unsafe { instance.incref_object(target.as_ptr()) };
+    instance
+        .alloc(crate::MethodObject::new(
+            instance.hot_type(HotId::Method).expect("method 已登记"),
+            native_raw,
+            target,
+        ))
+        .into_raw()
+        .cast::<Header>()
 }
 
 /// **`function.__globals__` 的访问器形态** ✓（同 `__code__` ✓）。`__globals__` 可能为空 ⇒ 给 `None` ✓。
@@ -178,6 +251,16 @@ pub unsafe fn function_getattr(
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<FunctionObject>() };
     match name {
+        // **`__call__`**（round 97）：见 `function_call_native` 的注释 ✓。
+        "__call__" => {
+            let owner = unsafe { NonNull::new_unchecked(ptr) };
+            return Some(bind_native_to(
+                instance,
+                "__call__",
+                function_call_native as crate::NativeFn,
+                owner,
+            ));
+        }
         "__name__" => {
             if let Some(override_value) = object.name_override() {
                 // SAFETY: 覆盖值由函数持有，调用方要自己那份。
@@ -326,6 +409,21 @@ pub unsafe fn function_getattr(
             let ty = instance.type_of(unsafe { NonNull::new_unchecked(ptr) });
             Some(instance.retain(ty.cast()))
         }
+        // **`function.__builtins__`**（round 216）：参照里它是**只读属性**，值取
+        // `__globals__["__builtins__"]`（没有 ⇒ 空 dict 一类）；`namedtuple` 的 `__new__`
+        // 模板就是 `__builtins__ == {}`（`test_collections.TestNamedTuple.test_new_builtins_issue_43102` ✓）。
+        "__builtins__" => match object.globals() {
+            Some(mapping) => {
+                if let Some(found) = instance.dict_get(mapping, "__builtins__") {
+                    // SAFETY: found 由映射持有，交调用方一份。
+                    unsafe { instance.incref_object(found.as_ptr()) };
+                    Some(found)
+                } else {
+                    Some(instance.new_dict())
+                }
+            }
+            None => Some(instance.new_dict()),
+        },
         "__globals__" => match object.globals() {
             Some(mapping) => {
                 // SAFETY: mapping 由函数持有，存活。
@@ -481,6 +579,10 @@ pub(crate) enum FunctionAttributeKind {
     Qualname,
     Doc,
     Module,
+    /// `f.__defaults__`（位置默认值元组／`None`；round 111 接线可写）
+    Defaults,
+    /// `f.__kwdefaults__`（仅关键字默认值 dict／`None`；round 111 接线可写）
+    Kwdefaults,
 }
 
 impl FunctionAttributeKind {
@@ -495,6 +597,8 @@ impl FunctionAttributeKind {
             "qualname" => Some(Self::Qualname),
             "doc" => Some(Self::Doc),
             "module" => Some(Self::Module),
+            "defaults" => Some(Self::Defaults),
+            "kwdefaults" => Some(Self::Kwdefaults),
             _ => None,
         }
     }
@@ -506,6 +610,8 @@ impl FunctionAttributeKind {
             Self::Qualname => "__qualname__",
             Self::Doc => "__doc__",
             Self::Module => "__module__",
+            Self::Defaults => "__defaults__",
+            Self::Kwdefaults => "__kwdefaults__",
         }
     }
 }
@@ -540,6 +646,10 @@ fn replace_override(
         FunctionAttributeKind::Qualname => object.set_qualname_override(value),
         FunctionAttributeKind::Doc => object.set_doc_override(value),
         FunctionAttributeKind::Module => object.set_module_override(value),
+        // **`__defaults__`／`__kwdefaults__` 不走"覆盖值"面**：它们直接改函数字段 ✓（见 `set` 分支）。
+        FunctionAttributeKind::Defaults | FunctionAttributeKind::Kwdefaults => {
+            value.map(|_| value.unwrap())
+        }
     }
 }
 
@@ -644,6 +754,71 @@ pub(crate) unsafe fn function_attribute_descriptor_set(
         }
         // 参照实测：`__doc__`／`__module__` 的 `__set__` 不收类型限制 ✓。
         FunctionAttributeKind::Doc | FunctionAttributeKind::Module => {}
+        // **`__defaults__`**：`None` 或 tuple ✓（参照：`TypeError: __defaults__ must be set to a
+        // tuple or None` ✓）。tuple ⇒ 每项各留一份交给函数字段 ✓。
+        FunctionAttributeKind::Defaults => {
+            let is_none = value == instance.singletons().none();
+            let is_tuple = instance.hot_type(HotId::Tuple)
+                .is_some_and(|tuple_ty| instance.type_of(value) == tuple_ty);
+            if !is_none && !is_tuple {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "__defaults__ must be set to a tuple or None",
+                ));
+            }
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old: Vec<NonNull<Header>> = object.defaults().to_vec();
+            let fresh: Vec<NonNull<Header>> = if is_none {
+                Vec::new()
+            } else {
+                // SAFETY: is_tuple 已确认。
+                let tuple = unsafe { &*value.as_ptr().cast::<TupleObject>() };
+                let mut items = Vec::with_capacity(tuple.len());
+                for index in 0..tuple.len() {
+                    let item = tuple.item(index).expect("下标在范围内");
+                    // SAFETY: 元素由元组持有。
+                    unsafe { instance.incref_object(item.as_ptr()) };
+                    items.push(item);
+                }
+                items
+            };
+            // SAFETY: 仍是同一函数对象（函数字段可写）。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_defaults(fresh);
+            for old_item in old {
+                // SAFETY: 旧默认值那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(old_item.as_ptr()) };
+            }
+            return Ok(instance.retain(instance.singletons().none()));
+        }
+        // **`__kwdefaults__`**：`None` 或 dict ✓（参照：`TypeError: __kwdefaults__ must be set to a
+        // dict or None` ✓）。只换字段持有那份 ✓。
+        FunctionAttributeKind::Kwdefaults => {
+            let is_none = value == instance.singletons().none();
+            let is_dict = instance.hot_type(HotId::Dict)
+                .is_some_and(|dict_ty| instance.is_subtype(instance.type_of(value), dict_ty));
+            if !is_none && !is_dict {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "__kwdefaults__ must be set to a dict or None",
+                ));
+            }
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old = object.kwdefaults();
+            let fresh = if is_none { None } else { Some(value) };
+            if let Some(mapping) = fresh {
+                // 字段接手一份新引用。
+                instance.retain(mapping);
+            }
+            // SAFETY: 仍是同一函数对象（函数字段可写）。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_kwdefaults(fresh);
+            if let Some(old) = old {
+                // SAFETY: 旧 dict 那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+            return Ok(instance.retain(instance.singletons().none()));
+        }
     }
     // SAFETY: 上面已确认 target 是函数对象。
     let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
@@ -696,6 +871,31 @@ pub(crate) unsafe fn function_attribute_descriptor_delete(
                 "TypeError",
                 &format!("{} must be set to a string object", kind.attribute_name()),
             ))
+        }
+        // `del f.__defaults__`／`del f.__kwdefaults__` ⇒ 清空字段（读回 `None` ✓）。
+        FunctionAttributeKind::Defaults => {
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old: Vec<NonNull<Header>> = object.defaults().to_vec();
+            // SAFETY: 同一函数对象；字段可写。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_defaults(Vec::new());
+            for item in old {
+                // SAFETY: 旧默认值那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(item.as_ptr()) };
+            }
+            Ok(instance.retain(instance.singletons().none()))
+        }
+        FunctionAttributeKind::Kwdefaults => {
+            // SAFETY: 上面已确认 target 是函数对象。
+            let object = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+            let old = object.kwdefaults();
+            // SAFETY: 同一函数对象；字段可写。
+            unsafe { &mut *target.as_ptr().cast::<FunctionObject>() }.set_kwdefaults(None);
+            if let Some(old) = old {
+                // SAFETY: 旧 dict 那份由函数字段持有 ⇒ 归还。
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+            Ok(instance.retain(instance.singletons().none()))
         }
         FunctionAttributeKind::Doc | FunctionAttributeKind::Module => {
             // SAFETY: 上面已确认 target 是函数对象。

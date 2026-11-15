@@ -1,10 +1,11 @@
 //! **`arithmetic` 族** —— 从 `builtin_objects.rs` **原样搬来** ✓（纯移动 ✓、零逻辑改动 ✓）。
 //!
 //! * 派发表 `arithmetic_method_native` **不搬** ✓（族之间的粘合层 ✓）；
-//! * 仍在原处的被引用项：`builtin_type`、`inplace_arithmetic`、`numeric_payload`、`percent_format`、`raise`、`sequence_repeat`、`set_operation`、`unsupported_operand` ✓；
+//! * 仍在原处的被引用项：`inplace_arithmetic`、`numeric_payload`、`percent_format`、`raise`、`sequence_repeat`、`set_operation`、`unsupported_operand` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{builtin_type, numeric_payload, percent_format, sequence_repeat, set_operation, unsupported_operand};
+use crate::executor::{numeric_payload, percent_format, sequence_repeat, set_operation, unsupported_operand};
+use crate::HotId;
 use crate::executor::ExecError;
 use crate::header::Header;
 use crate::instance::Instance;
@@ -28,12 +29,53 @@ pub fn arithmetic_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`str % value` 优先于反射 `__rmod__`** ✓（`P3-42` round 44 修 ✗）：参照里 `'%s' % obj`
+    // 由 **str 自己的 `__mod__`** 处理（它接受任意右操作数）⇒ **不会**再问 `obj.__rmod__` ✓。
+    // 先前先跑 `binary_override` ⇒ `UserString.__rmod__` → `str(template) % self` → 再次反射 ⇒
+    // **无限递归**（`test_userstring.test_rmod` 的 `fmt2 % str3` ✓）。只有**恰是 `str`** 走
+    // 这条快路（`str` 子类覆写 `__mod__` 时仍按用户覆写 ✓）。
+    if symbol == "%" && instance.type_of(left) == instance.singletons().str_type() {
+        if let Some(template) = instance.text_value(left) {
+            return percent_format(instance, &template, right, opcode);
+        }
+    }
     // **用户类覆写优先** ✓（第 411 轮，task-22 ✓）：`int` 子类（真 `enum.py` 的 `IntFlag`）在类体里
     // 定义 `__or__`／`__and__`／`__xor__` 一族 ⇒ 参照先查 `type(left).__or__` ✓、命中就以 Python
     // 语义调用 ✓；先前这里按**载荷**（int）直接走原生运算 ✗ ⇒ `Flags.X | Flags.Y` 得到**普通 int**
     // （缺 `.value`／`._name_`）✗ ⇒ `IntFlag` 组合值全错 ✓。
-    if let Some(result) = binary_override(instance, left, right, symbol, opcode)? {
+    // **`AB-73`**：宿主类型经**属性回退槽**提供二元运算（`__add__`／`__radd__` 一类）。
+    // 普通用户类由下面的 `binary_override` 走类型字典；宿主类型的 dunder 只经 `getattr` 槽给出，
+    // 所以这里显式问一次属性通道（只在**该类型确有宿主回退槽**时，避免改变其它对象的路径）。
+    if let Some(result) = host_binary_dunder(instance, left, right, symbol, opcode)? {
         return Ok(result);
+    }
+
+    let (overridden, had_override) = binary_override(instance, left, right, symbol, opcode)?;
+    if let Some(result) = overridden {
+        return Ok(result);
+    }
+    if had_override {
+        // **左侧用户覆写返回 `NotImplemented` ⇒ 先问右侧的"原生反射"**（round 222 真 bug 修 ✗）：
+        // 参照的 `binary_op1` 在左槽 NotImpl 后仍会调**右操作数的槽**（反序）✓ ——
+        // `Counter.update` 的 `Evil + 1`（`Evil(int)` 的 `__add__` 返回 NotImplemented）⇒ 参照落
+        // `int.__radd__` 得 `1` ✓；先前直接报"unsupported operand" ✗
+        //（`test_collections.TestCounter.test_update_reentrant_add_clears_counter` ✓）。
+        // 只在右侧**不是用户类**时试（两侧都用户类且都 NotImpl ⇒ 照旧报错 ✓，round 67 口径 ✓）。
+        let right_type = instance.type_of(right);
+        if !instance.is_user_type_object(right_type) {
+            if let Ok(result) = arithmetic_public(instance, right, left, symbol, opcode) {
+                return Ok(result);
+            }
+        }
+        // **双方都返回 `NotImplemented`** ⇒ 参照报 `unsupported operand type(s) for <op>: 'A' and 'B'` ✓
+        //（round 67：`DummyIntegral.__truediv__` 返回 `NotImplemented`、本层先前悄悄退回原生 int 除法 ✗
+        // ⇒ `test_numeric_tower.test_fractions` 的 `assertRaises(TypeError)` 红 ✓）。
+        let left_name = instance.type_name(instance.type_of(left)).to_owned();
+        let right_name = instance.type_name(instance.type_of(right)).to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("unsupported operand type(s) for {symbol}: '{left_name}' and '{right_name}'"),
+        ));
     }
 
     // **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测第一个撞上的是
@@ -49,9 +91,9 @@ pub fn arithmetic_public(
     // 认的是**子类型** ✓（`frozenset` 也算 ✓）；结果一律**新的 `set`** ✓（照参照 ✓）。
     if matches!(symbol, "&" | "|" | "-" | "^") {
         let is_set = |ty: NonNull<TypeObject>| {
-            ["set", "frozenset"].iter().any(|name| {
+            [HotId::Set, HotId::FrozenSet].into_iter().any(|id| {
                 instance
-                    .type_named(name)
+                    .hot_type(id)
                     .is_some_and(|base| instance.is_subtype(ty, base))
             })
         };
@@ -66,7 +108,7 @@ pub fn arithmetic_public(
     // 导入链（`P3-32` 框架门槛）的最后一格之一 ✓。
     // 非 dict 的对侧**不在这里接** ✓（照旧落到文件末尾"一处真相"的 `unsupported_operand` ✓）；
     // `dict |= dict` 走 `protocol::inplace_dict_merge` ✓（那条行为不动 ✓）。
-    let dict_type = instance.type_named("dict");
+    let dict_type = instance.hot_type(HotId::Dict);
     let is_dict = |value: NonNull<Header>| {
         dict_type.is_some_and(|base| instance.is_subtype(instance.type_of(value), base))
     };
@@ -128,7 +170,7 @@ pub fn arithmetic_public(
     // **浮点四则**（第 318 轮，参照口径）：**任一侧是 float ⇒ 结果就是 float** ✓
     //（`1 + 2.0 == 3.0` ✓）。先前这条整段缺失 ⇒ `1.5 + 0.5` 报
     // `unsupported operand type(s) for +: 'float' and 'float'` ✗（`Lib/` 里浮点遍地都是 ✓）。
-    let float_type = builtin_type(instance, "float");
+    let float_type = instance.hot_type(HotId::Float).expect("float 已登记");
     // SAFETY: 两个指针都由调用方保证存活。
     let float_involved = unsafe { left.as_ref() }.ty() == float_type
         || unsafe { right.as_ref() }.ty() == float_type;
@@ -180,6 +222,21 @@ pub fn arithmetic_public(
             _ => return Err(unsupported_operand(instance, left, right, symbol)),
         };
         return Ok(instance.new_float(result));
+    }
+    // **`bool & bool`／`|`／`^` ⇒ `bool`** ✓（round 47）：参照只有"两边都恰是 `bool`"时结果仍是
+    // `bool`（`True & True` ⇒ `True`；`True & 1` ⇒ **int** `1`）✓（`test_bool.test_boolean` 钉住）。
+    if matches!(symbol, "&" | "|" | "^")
+        && instance.type_of(left) == instance.singletons().bool_type()
+        && instance.type_of(right) == instance.singletons().bool_type()
+    {
+        let left_value = instance.bool_value(left).expect("类型刚确认是 bool");
+        let right_value = instance.bool_value(right).expect("类型刚确认是 bool");
+        let result = match symbol {
+            "&" => left_value && right_value,
+            "|" => left_value || right_value,
+            _ => left_value != right_value,
+        };
+        return Ok(instance.retain(instance.singletons().boolean(result)));
     }
     if let (Some(a), Some(b)) = (instance.int_of(left), instance.int_of(right)) {
         // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
@@ -277,7 +334,7 @@ pub fn int_add_descriptor(
             "descriptor '__add__' of 'int' object needs an argument",
         ));
     };
-    let int_type = instance.type_named("int").expect("int 已登记");
+    let int_type = instance.hot_type(HotId::Int).expect("int 已登记");
     if !instance.is_subtype(instance.type_of(owner), int_type) {
         return Err(instance.raise_builtin_error(
             "TypeError",
@@ -308,6 +365,45 @@ pub fn int_add_descriptor(
 }
 
 /// 运算符号 ⇒ （左操作数 dunder，右操作数反射 dunder）。
+/// **`AB-73`**：宿主类型的二元运算 dunder（经属性回退槽）。
+///
+/// 只对"该类型的 `Slots` 带 `host_getattr`"的一侧发问；找不到／返回 `NotImplemented` ⇒ `None`
+/// 交回原生路径（不改变非宿主类型的行为）。
+fn host_binary_dunder(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let Some((dunder, reflected)) = binary_dunder(symbol) else {
+        return Ok(None);
+    };
+    for (receiver, other, name) in [(left, right, dunder), (right, left, reflected)] {
+        // **`AB-73`／`AB-75`**：只有装了宿主协议钩子的对象才可能经属性通道给出 dunder。
+        if !instance.has_host_object_ops(receiver) {
+            continue;
+        }
+        let Some(found) = crate::executor::attribute::attribute_lookup_swallowing(
+            instance, receiver, name,
+        ) else {
+            continue;
+        };
+        let (callable, bound) = match found {
+            crate::executor::Attribute::Method { function, this } => (function, Some(this)),
+            crate::executor::Attribute::Value(value) | crate::executor::Attribute::Owned(value) => (value, None),
+        };
+        let args = vec![instance.retain(other)];
+        let result = crate::executor::call::call_callable(instance, callable, bound, args, Vec::new(), opcode)?;
+        if result == instance.not_implemented() {
+            instance.release(result);
+            continue;
+        }
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
 fn binary_dunder(symbol: &str) -> Option<(&'static str, &'static str)> {
     Some(match symbol {
         "+" => ("__add__", "__radd__"),
@@ -334,18 +430,48 @@ fn binary_override(
     right: NonNull<Header>,
     symbol: &str,
     opcode: u8,
-) -> Result<Option<NonNull<Header>>, ExecError> {
+) -> Result<(Option<NonNull<Header>>, bool), ExecError> {
     let Some((dunder, reflected)) = binary_dunder(symbol) else {
-        return Ok(None);
+        return Ok((None, false));
     };
-    for (name, swapped) in [(dunder, false), (reflected, true)] {
+    let mut had_override = false;
+    // **子类优先**（round 217 真 bug 修 ✗）：右侧类型是左侧的严格子类 ⇒ **先问右侧的反射 dunder**
+    //（参照 `do_binary_op`／`binary_op1` 的次序 ✓）—— `ChainMap() | SubclassRor()` 里
+    // `SubclassRor.__ror__` 必须先命中 ⇒ 结果类型是 `SubclassRor` ✓；先前固定先问左侧 `__or__`
+    // ⇒ 结果成了 `ChainMap` ✗（`test_collections.TestChainMap.test_union_operators` ✓）。
+    let left_type = instance.type_of(left);
+    let right_type = instance.type_of(right);
+    // **只在右侧"自己定义了反射 dunder"时先问右侧**（round 217）：参照里
+    // `ChainMap() | Subclass()`（子类**没**覆写 `__ror__`）要得到 `ChainMap` ✓；
+    // `ChainMap() | SubclassRor()`（子类**自己**写了 `__ror__`）要得到 `SubclassRor` ✓。
+    // 判据：`type_lookup_owner(right_type, reflected)` 的 owner **就是 right_type** ✓。
+    // **round 248 性能（A2-3）**：只有"命名空间里挂 `__module__`"的类型（用户类／带模块标记的
+    // 原生类型／它们的子类）才可能命中用户 dunder ✓ ⇒ 用**类型标志位**（建类型时定死）预筛，
+    // 省掉每条 `BINARY_OP` 的 MRO 走查＋字典查表＋字符串哈希（perf 合计 ≈10% ✗）。
+    // 默认路径（`int + int`）一次位测就直接走原生算术 ✓。
+    let right_owns_reflection = instance.dunder_capable(right_type)
+        && instance
+            .type_lookup_owner(right_type, reflected)
+            .is_some_and(|(owner, _)| owner == right_type);
+    let right_first = right_type != left_type
+        && instance.is_subtype(right_type, left_type)
+        && right_owns_reflection;
+    let order: [(&str, bool); 2] = if right_first {
+        [(reflected, true), (dunder, false)]
+    } else {
+        [(dunder, false), (reflected, true)]
+    };
+    for (name, swapped) in order {
         let (receiver, other) = if swapped { (right, left) } else { (left, right) };
-        let Some(result) = call_user_dunder(instance, receiver, other, name, opcode)? else {
-            continue;
-        };
-        return Ok(Some(result));
+        match call_user_dunder(instance, receiver, other, name, opcode)? {
+            // **没有该方法** ⇒ 继续找反射那一侧 ✓。
+            None => continue,
+            // **方法在、但返回 `NotImplemented`** ⇒ 记下"有覆写"✓（决定后面报不报 TypeError）。
+            Some(None) => had_override = true,
+            Some(Some(result)) => return Ok((Some(result), true)),
+        }
     }
-    Ok(None)
+    Ok((None, had_override))
 }
 
 /// 若 `receiver` 的类型（沿 MRO）里有一个**用户类**定义的 `name` ⇒ 调用它并把结果交回 ✓；
@@ -356,8 +482,13 @@ fn call_user_dunder(
     other: NonNull<Header>,
     name: &str,
     opcode: u8,
-) -> Result<Option<NonNull<Header>>, ExecError> {
+) -> Result<Option<Option<NonNull<Header>>>, ExecError> {
     let receiver_type = instance.type_of(receiver);
+    // **round 248 性能（A2-3）**：能力位为假 ⇒ 该类型（及其 MRO）的命名空间里没有 `__module__`
+    // ⇒ 下面那条 `__module__` 判据必然失败 ✓ ⇒ 一次位测跳过整条查表 ✓（语义不变 ✓）。
+    if !instance.dunder_capable(receiver_type) {
+        return Ok(None);
+    }
     let Some((owner, _)) = instance.type_lookup_owner(receiver_type, name) else {
         return Ok(None);
     };
@@ -381,9 +512,9 @@ fn call_user_dunder(
     )?;
     if result == instance.not_implemented() {
         unsafe { instance.release_object(result.as_ptr()) };
-        return Ok(None);
+        return Ok(Some(None));
     }
-    Ok(Some(result))
+    Ok(Some(Some(result)))
 }
 
 // ===================== **复数塔**（task-30／P3-34） =====================

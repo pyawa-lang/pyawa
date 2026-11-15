@@ -4,7 +4,8 @@
 //! * 仍在原处的被引用项：`attribute_lookup`、`bind_arguments`、`builtin_type`、`execute`、`function_closure`、`function_defaults`、`is_type_object`、`own_code`、`push`、`raise_builtin`、`release`、`value_into_raw` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::executor::{attribute_lookup, bind_arguments, builtin_type, execute, function_closure, function_defaults, own_code, raise_builtin, release, value_into_raw};
+use crate::HotId;
+use crate::executor::{attribute::attribute_lookup_swallowing, attribute_lookup, bind_arguments, builtin_type, execute, function_closure, function_defaults, own_code, raise_builtin, release, value_into_raw};
 use crate::executor::Attribute;
 use crate::builtin_objects::BuiltinFunctionObject;
 use core::cell::Cell;
@@ -63,7 +64,7 @@ pub(crate) fn call_init_subclass(
     };
     // `__init_subclass__` 是**隐式类方法** ✓：显式 `classmethod(...)` 形态要拆出内层函数 ✓
     //（`Generic.__init_subclass__ = classmethod(_generic_init_subclass)` ✓ `Lib/typing.py:2131` ✓）。
-    let callable = if Some(unsafe { entry.as_ref() }.ty()) == instance.type_named("classmethod") {
+    let callable = if Some(unsafe { entry.as_ref() }.ty()) == instance.hot_type(HotId::ClassMethod) {
         // SAFETY: 类型身份刚确认。
         unsafe { &*entry.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>() }.function()
     } else {
@@ -93,7 +94,11 @@ pub(crate) fn call_dunder_method(
 ) -> Result<(), ExecError> {
     let found = match attribute_lookup(instance, object, name) {
         Ok(found) => found,
-        Err(_) => return Ok(()),
+        Err(error) => {
+            // **探针丢异常要引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
+            return Ok(());
+        }
     };
     let (callable, this) = match found {
         Attribute::Method { function, this } => (function, this),
@@ -119,6 +124,27 @@ pub fn call_value(
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // **内建可调用的快路**（round 174）：`call_value` 内部调用点极多（属性探针／迭代协议／
+    // `call_object_method`…）⇒ 先前每次都把**借用实参**逐份 incref 进 `Vec` 再交给
+    // `call_callable`（后者再逐份释放）✗ ⇒ 两次分配 ＋ 每实参两次原子无关计数。内建函数
+    // （`builtin_function_or_method`）的 `NativeFn` 契约本来就是"实参借用视图"，可直接调用 ✓。
+    if kwargs.is_empty() {
+        // SAFETY: callable 由调用方保证存活。
+        let callable_type = unsafe { callable.as_ref() }.ty();
+        if callable_type == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记") {
+            // SAFETY: 类型身份刚确认。
+            let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
+            let function = native.function();
+            // **调用边类型化**（B3 试点，round 252）：实参是 `Borrowed` 借用视图、返回值是
+            // `NewRef` 新引用；canary（`PYAWA_REFCOUNT_CANARY=1`）在边界上核对
+            // "入参计数不下降／返回值活着"（`OM-16`／`OM-19`／`AB-15`／`AB-16`）。
+            // SAFETY: `NativeFn` 契约＝借用视图 ＋ 新引用返回值（本轮试点只覆盖这一条快路 ✓）。
+            let result = unsafe {
+                crate::call_edge::call_builtin_borrowed(instance, native.name(), function, args, kwargs)
+            }?;
+            return Ok(result.into_raw());
+        }
+    }
     let mut owned_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
     for argument in args {
         // SAFETY: 调用方保证实参存活。
@@ -147,7 +173,11 @@ pub(crate) fn call_object_method(
 ) -> Result<Option<NonNull<Header>>, ExecError> {
     let found = match attribute_lookup(instance, object, name) {
         Ok(found) => found,
-        Err(_) => return Ok(None),
+        Err(error) => {
+            // **探针丢异常要引用**（round 198 真泄漏修 ✗）。
+            crate::executor::runtime::discard_error(instance, &error);
+            return Ok(None);
+        }
     };
     let (callable, this) = match found {
         Attribute::Method { function, this } => (function, this),
@@ -168,6 +198,57 @@ pub(crate) fn call_object_method(
 ///
 /// **`bound_self` 的所有权契约**：它是**借用**——调用方持有那份引用，本函数不释放它。
 /// 需要长期持有（进实参表、进生成的实例）的路径各自 `incref`。
+/// **抽象类实例化拦截**（round 64）：`__abstractmethods__` 非空 ⇒ 参照的
+/// `Can't instantiate abstract class … without an implementation for abstract method(s) '…'` ✓。
+///
+/// 参照在 `object.__new__` 里查类型标志；本层没有那个标志 ⇒ 直接在**类属性**
+/// `__abstractmethods__` 上查（`ABCMeta` 在每个类创建时都算好、含继承来的抽象方法 ✓）。
+/// 名字按**字典序**排（参照实测 `'a', 'b'` 有序 ✓）。
+fn reject_abstract_instantiation(
+    instance: &Instance,
+    class: NonNull<crate::TypeObject>,
+    class_name: &str,
+) -> Result<(), ExecError> {
+    let Some(value) = instance.attribute_optional_discarding(
+        class.cast::<Header>(),
+        "__abstractmethods__",
+    ) else {
+        return Ok(());
+    };
+    let items = match instance.iterable_items(value) {
+        Ok(items) => items,
+        Err(error) => {
+            // SAFETY: value 是本函数持有的新引用。
+            unsafe { instance.release_object(value.as_ptr()) };
+            return Err(error);
+        }
+    };
+    let mut names: Vec<String> = items
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|item| instance.text_of(*item).map(str::to_owned))
+        .collect();
+    // SAFETY: value 那份引用用完归还。
+    unsafe { instance.release_object(value.as_ptr()) };
+    if names.is_empty() {
+        return Ok(());
+    }
+    names.sort();
+    let quoted: Vec<String> = names.iter().map(|name| format!("'{name}'")).collect();
+    let list = if quoted.len() == 1 {
+        quoted[0].clone()
+    } else {
+        let head = quoted[..quoted.len() - 1].join(", ");
+        let last = quoted.last().cloned().unwrap_or_default();
+        format!("{head}, {last}")
+    };
+    let noun = if names.len() == 1 { "method" } else { "methods" };
+    let message = format!(
+        "Can't instantiate abstract class {class_name} without an implementation for abstract {noun} {list}"
+    );
+    Err(raise_builtin(instance, "TypeError", &message))
+}
+
 pub(crate) fn call_callable(
     instance: &Instance,
     callable: NonNull<Header>,
@@ -206,16 +287,16 @@ pub(crate) fn call_callable(
         return result;
     }
 
-    let callable_type_ok = ty == builtin_type(instance, "function")
+    let callable_type_ok = ty == instance.hot_type(HotId::Function).expect("function 已登记")
         || instance.is_type_object(callable)
-        || ty == builtin_type(instance, "method")
-        || ty == builtin_type(instance, "builtin_function_or_method");
+        || ty == instance.hot_type(HotId::Method).expect("method 已登记")
+        || ty == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记");
     // **`__call__`**（第 593 轮真缺口 ✓）：参照的调用协议里，**实例**只要有 `__call__` 就可调用 ✓
     // （先前 core 里**一处都没有** ✗ ⇒ 任何带 `__call__` 的用户类都报
     // `TypeError: 'X' object is not callable` ✗；`_sre.template` 要返回的**模板可调用对象**也压在这上面 ✓）。
     // 走**同一条属性通道** ✓（`attribute_lookup` ✓，与 `TS-44` 的其它方法一致 ✓）；`this` 就是 self ✓。
     if !callable_type_ok {
-        if let Ok(found) = attribute_lookup(instance, callable, "__call__") {
+        if let Some(found) = attribute_lookup_swallowing(instance, callable, "__call__") {
             let (function, this) = match found {
                 Attribute::Method { function, this } => (function, this),
                 Attribute::Value(method) | Attribute::Owned(method) => (method, callable),
@@ -228,6 +309,11 @@ pub(crate) fn call_callable(
             // 时 `args＝()` ✗）。
             let mut call_args = args;
             if let Some(forwarded) = bound_self {
+                // **借用要变成实参表那份**（`P3-41` round 43 修 ✗）：`call_args` 是**转移**语义 ⇒
+                // 直接塞借用指针会让被调方释放掉调用方那份 ⇒ 双重释放（实测 `import unittest` 崩：
+                // `malloc(): unaligned tcache chunk detected`）。先 incref，调用方之后再还自己那份 ✓。
+                // SAFETY: forwarded 由调用方保证存活。
+                unsafe { instance.incref_object(forwarded.as_ptr()) };
                 call_args.insert(0, forwarded);
             }
             return call_callable(instance, function, Some(this), call_args, kwargs, opcode);
@@ -309,6 +395,57 @@ pub(crate) fn call_callable(
             }
             return Err(raise_builtin(instance, "TypeError", &message));
         };
+        // **`bool(x=10)` ⇒ TypeError** ✓（round 47；参照 `bool() takes no keyword arguments`）。
+        // 本层 `NewFn` 契约里没有关键字一路 ⇒ 关键字会被静默丢掉 ✗（`test_bool.test_keyword_args`
+        // 钉住）。先只收 `bool`（参照里 `float`／`list` 同款、`int`／`str` 是另一句 TypeError，
+        // 那些留给后续轮按类型收口 —— 别在这里一刀切 ✗）。
+        // **`list(...)` 一族的关键字**（round 110）：参照 `list() takes no keyword arguments` ✓
+        //（`test_list.test_keyword_args`／`test_keywords_in_subclass` 钉住：普通子类同罪；
+        // 子类若**自己**定义了 `__init__`／`__new__`，关键字归用户代码 ⇒ 不在这一档拒绝 ✓）。
+        let list_like = instance.hot_type(HotId::List)
+            .is_some_and(|list_type| instance.is_subtype(class, list_type));
+        let user_constructor = instance
+            .type_lookup_owner(class, "__init__")
+            .map(|(owner, _)| {
+                Some(owner) != instance.hot_type(HotId::Object)
+                    && Some(owner) != instance.hot_type(HotId::List)
+            })
+            .unwrap_or(false)
+            || instance
+                .type_lookup_owner(class, "__new__")
+                .map(|(owner, _)| {
+                    Some(owner) != instance.hot_type(HotId::Object)
+                        && Some(owner) != instance.hot_type(HotId::List)
+                })
+                .unwrap_or(false);
+        if list_like && !kwargs.is_empty() && !user_constructor {
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "list() takes no keyword arguments",
+            ));
+        }
+        if class_name == "bool" && !kwargs.is_empty() {
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "bool() takes no keyword arguments",
+            ));
+        }
         // **覆写优先、槽兜底**（第 605 轮真 bug 修 ✗）：参照的 `type.__call__` 只做
         // `cls.__new__(cls, *args)` ✓ —— 槽只是"C 层默认实现" ✓ ⇒ 有 Python 级 `__new__` 覆写时
         // **不能先调槽** ✗（否则 `class N(int)` 覆写 `__new__(cls, value, name)` 时槽先吃全部实参 ✓
@@ -396,10 +533,46 @@ pub(crate) fn call_callable(
                 }
                 constructor_kwargs.push((key, value));
             }
-            let created =
-                call_callable(instance, constructor, None, call_args, constructor_kwargs, opcode)?;
+            // **构造器抛错 ⇒ 本次调用自己那份实参要还**（task-14 #f 同族真泄漏）：
+            // `call_args`／`constructor_kwargs` 是给构造器的**新增**引用（转移给 `call_callable`
+            // 由它按约归还 ✓），而**外层** `args`／`kwargs` 仍归本函数 ⇒ 先前 `?` 直接上抛，
+            // 这两份没还 ⇒ 每失败一次漏一份（实测 `tuple(Plain())` ×2 千漏 2 千个 `Plain`：
+            // `tuple_new_native` 不在 `is_default_new` 的名单里 ⇒ 走这条覆写支 ✓）。
+            let created = match call_callable(
+                instance,
+                constructor,
+                None,
+                call_args,
+                constructor_kwargs,
+                opcode,
+            ) {
+                Ok(created) => created,
+                Err(error) => {
+                    for argument in args.iter().copied() {
+                        release(instance, argument);
+                    }
+                    for (key, value) in kwargs.iter().copied() {
+                        release(instance, key);
+                        release(instance, value);
+                    }
+                    return Err(error);
+                }
+            };
             // SAFETY: created 是新引用，存活。
             let is_instance = instance.is_subtype(unsafe { created.as_ref() }.ty(), class);
+            if is_instance {
+                if let Err(error) = reject_abstract_instantiation(instance, class, &class_name) {
+                    release(instance, created);
+                    for argument in args.iter().copied() {
+                        release(instance, argument);
+                    }
+                    for (key, value) in kwargs.iter().copied() {
+                        release(instance, key);
+                        release(instance, value);
+                    }
+                    return Err(error);
+                }
+            }
             let initializer = if is_instance {
                 instance.type_lookup(class, "__init__")
             } else {
@@ -416,8 +589,35 @@ pub(crate) fn call_callable(
                     init_args.push(created);
                     // 原实参与关键字实参转交给 `__init__`
                     init_args.extend(args.iter().copied());
-                    let result = call_callable(instance, initializer, None, init_args, kwargs, opcode)?;
+                    // **`__init__` 抛错 ⇒ 本函数持有的 `created` 要还**（`init_args`／`kwargs`
+                    // 已转移给 `call_callable`，由它按约归还 ✓；`created` 是构造函数交出的新引用，
+                    // 先前 `?` 上抛时漏还 ⇒ 每失败一次漏一个实例）。
+                    let result = match call_callable(
+                        instance,
+                        initializer,
+                        None,
+                        init_args,
+                        kwargs,
+                        opcode,
+                    ) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            release(instance, created);
+                            return Err(error);
+                        }
+                    };
                     release(instance, result);
+                    // 形参所有权（round 98 起默认）：帧已归还实参 ⇒ 不再补这一份（`PYAWA_FRAME_OWN=0` 才补）。
+                    if !crate::instance::frame_own_params() {
+                        let own_finalizer = instance
+                            .type_lookup_owner(class, "__del__")
+                            .is_some_and(|(owner, _)| owner == class);
+                        if instance.type_name(instance.type_of(initializer)) == "function"
+                            && !own_finalizer
+                        {
+                            release(instance, created);
+                        }
+                    }
                 }
                 None => {
                     // 没有 `__init__`：把调用方那份实参归还
@@ -436,12 +636,24 @@ pub(crate) fn call_callable(
             created_from_slot.expect("槽路径已给出实例")
         };
 
+        // **抽象类拦截**（round 64）：参照在 `object.__new__` 里就报 ✓。
+        if let Err(error) = reject_abstract_instantiation(instance, class, &class_name) {
+            release(instance, created);
+            for argument in args.iter().copied() {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs.iter().copied() {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(error);
+        }
+
         // `__init__`（`OM-14`：子类覆写要生效）。找到就"实例在先、实参在后"地调它。
         // **默认的 `object.__init__` 不算"有 `__init__`"**（第 310 轮）：它是本轮才挂上去的
         // （为了"在类型对象上取 dunder" ✓）⇒ 若不排除，`class C: pass` 的 `C(1)` 就会走"调
         // `__init__`"这条路 ⇒ **不再**报 `C() takes no arguments` ✗（`type_call` 那道测试当场变红 ✓）。
-        let default_init = instance
-            .type_named("object")
+        let default_init = instance.hot_type(HotId::Object)
             .and_then(|object| instance.type_lookup(object, "__init__"));
         let initializer = instance
             .type_lookup(class, "__init__")
@@ -455,16 +667,35 @@ pub(crate) fn call_callable(
             unsafe { instance.incref_object(created.as_ptr()) };
             call_args.push(created);
             call_args.extend(args.iter().copied());
-            let result = call_callable(
+            // **`__init__` 抛错 ⇒ 本函数持有的 `created` 要还**（同覆写支的口径：`call_args`／
+            // `kwargs` 已转移给 `call_callable`，它按约归还；`created` 是槽位交出的新引用）。
+            let result = match call_callable(
                 instance,
                 initializer,
                 None,
                 call_args,
                 kwargs,
                 opcode,
-            )?;
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    release(instance, created);
+                    return Err(error);
+                }
+            };
             // `__init__` 必须返回 None（`T`／参照实现如此）；返回值丢掉那份引用
             release(instance, result);
+            // 形参所有权（round 98 起默认）：帧已归还实参 ⇒ 不再补这一份（`PYAWA_FRAME_OWN=0` 才补）。
+            if !crate::instance::frame_own_params() {
+                let own_finalizer = instance
+                    .type_lookup_owner(class, "__del__")
+                    .is_some_and(|(owner, _)| owner == class);
+                let is_function_initializer =
+                    instance.type_name(instance.type_of(initializer)) == "function";
+                if is_function_initializer && !own_finalizer {
+                    release(instance, created);
+                }
+            }
             // initializer 的那份引用由 `call_callable` 接手（它内部会按需释放）
         } else {
             // 没有 `__init__`，且走的是**通用分配**（`attribute_new`）时，带实参创建就是错的
@@ -480,8 +711,7 @@ pub(crate) fn call_callable(
             // 类型（如 `module` ✓ —— 它的 `new` 槽是 `attribute_new` ✓）**允许**多余实参 ✓。
             // 先前一律按"通用分配"报错 ✗ ⇒ `types.ModuleType("x")` 报
             // `TypeError: module() takes no arguments` ✗（`Lib/` 里造模块对象的写法就断在这 ✓）。
-            let overrides_new = instance
-                .type_named("module")
+            let overrides_new = instance.hot_type(HotId::Module)
                 .map(|module_type| module_type.cast::<crate::TypeObject>() == class)
                 .unwrap_or(false);
             // **参照语义**（第 247 轮补 ✓）：`module("名字")` 走的是"覆盖了 `__new__`"这条路 ✓
@@ -490,17 +720,19 @@ pub(crate) fn call_callable(
             if overrides_new && !args.is_empty() {
                 if let Some(name) = instance.text_of(args[0]).map(|text| text.to_owned()) {
                     let value = instance.new_str(&name);
-                    let _ = crate::executor::protocol::instance_attribute_set(
+                    crate::executor::runtime::discard_exec_result(
                         instance,
-                        created,
-                        "__name__",
-                        value,
-                        0,
+                        crate::executor::protocol::instance_attribute_set(
+                            instance,
+                            created,
+                            "__name__",
+                            value,
+                            0,
+                        ),
                     );
                 }
             }
-            let exception_subclass = instance
-                .type_named("BaseException")
+            let exception_subclass = instance.hot_type(HotId::BaseException)
                 .is_some_and(|base| instance.is_subtype(class, base));
             if generic_allocation
                 && !overrides_new
@@ -547,7 +779,7 @@ pub(crate) fn call_callable(
     // 方法对象自带 `this` ✓，再塞一份会把 receiver 重复传进去 ✗（实测 `range` 迭代当场
     // `TypeError: range indices must be integers or slices, not range` ✗）。
     // SAFETY: callable 是存活对象。
-    let method_type = builtin_type(instance, "method");
+    let method_type = instance.hot_type(HotId::Method).expect("method 已登记");
     let caller_bound_self = bound_self;
     let mut callable = callable;
     let mut args = args;
@@ -577,16 +809,26 @@ pub(crate) fn call_callable(
     // **原生可调用对象**（`AB-24`：宿主函数与内建函数的落点）：实参以**借用视图**递进去，
     // 返回值是**新引用**。绑定方法形态在这里剥掉绑定并当第一个位置实参。
     // SAFETY: callable 是存活对象。
-    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "builtin_function_or_method") {
+    if unsafe { callable.as_ref() }.ty() == instance.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记") {
         // SAFETY: 类型身份已确认。
         let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
         let function = native.function();
-        let bound = match bound_self {
-            Some(self_object) => Some(self_object),
-            None => None,
+        // **未绑定方法描述符**（round 151）：从**类型对象**上取内建方法（`list.__len__`）时，
+        // 名字带 `descriptor:` 前缀 ⇒ 把**第一个位置实参**当 `self` ✓（参照的 method_descriptor ✓）。
+        // 用名字前缀而不是加结构字段：`BuiltinFunctionObject::new` 由 `py_object!` 按字段生成，
+        // 加字段要改 20+ 个调用点且动布局尺寸 ✓ —— 前缀是零成本约定（名字只在 repr 用 ✓）。
+        let descriptor = native.name().starts_with("descriptor:");
+        let (bound, forwarded) = if descriptor && bound_self.is_none() && !args.is_empty() {
+            (Some(args[0]), &args[1..])
+        } else {
+            let bound = match bound_self {
+                Some(self_object) => Some(self_object),
+                None => None,
+            };
+            (bound, &args[..])
         };
         // SAFETY: 签名契约见 `NativeFn`（借用视图 ＋ 新引用返回值）。
-        let result = unsafe { function(instance, bound, &args, &kwargs) };
+        let result = unsafe { function(instance, bound, forwarded, &kwargs) };
         // 借用视图：实参的引用仍归本函数，调用完要按约归还
         for argument in args {
             release(instance, argument);
@@ -603,7 +845,7 @@ pub(crate) fn call_callable(
     // **`__globals__`**：函数帧的全局映射取自函数自己（`BC-57`）；`MAKE_FUNCTION` 时捕获。
     let function_globals = {
         // SAFETY: callable 是存活对象。
-        let is_function = unsafe { callable.as_ref() }.ty() == builtin_type(instance, "function");
+        let is_function = unsafe { callable.as_ref() }.ty() == instance.hot_type(HotId::Function).expect("function 已登记");
         if is_function {
             // SAFETY: 类型身份已确认。
             unsafe { &*callable.as_ptr().cast::<FunctionObject>() }.globals()
@@ -625,8 +867,7 @@ pub(crate) fn call_callable(
     let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;
 
     // **帧类型是"内部"类型** ✓（不进探测表 ✓）⇒ 这里必须用 `type_named` ✗（用 `builtin_type` 会 panic ✓）。
-    let frame_type = instance
-        .type_named("frame")
+    let frame_type = instance.hot_type(HotId::Frame)
         .expect("引导期已登记 frame 类型（内部类型 ✓）");
     let frame = instance.alloc(Frame::for_code(frame_type, &own_code(instance, code_header)));
     if let Some(mapping) = function_globals {
@@ -658,13 +899,15 @@ pub(crate) fn call_callable(
     // `CALL` **不**跑函数体，而是把挂起的帧包成对应的对象交出去
     // （实测骨架：函数体第一条是 `RETURN_GENERATOR`，恢复时才从 `POP_TOP` 继续）。
     // 两者的载荷同形（一个挂起的帧 ＋ 标志），只是类型不同：`repr` 的词、以及协程**不是迭代器**。
-    let wrapped_type = if code.flags() & 0x20 != 0 {
-        Some("generator")
+    // **判定顺序**（round 219）：异步生成器（0x200）／协程（0x80）先于普通生成器（0x20）——
+    // async 体的合成 `yield` 也会带 `0x20` 吗？规范上不带（参照 flags 0x203／0x83 ✓）；
+    // 本层编译器已按 `is_async` 清掉 `0x20`，这里保持"先特例后普通"更稳 ✓。
+    let wrapped_type = if code.flags() & 0x200 != 0 {
+        Some("async_generator")
     } else if code.flags() & 0x80 != 0 {
         Some("coroutine")
-    } else if code.flags() & 0x200 != 0 {
-        // `CO_ASYNC_GENERATOR`（实测 0x200，`async def` ＋ `yield`）
-        Some("async_generator")
+    } else if code.flags() & 0x20 != 0 {
+        Some("generator")
     } else {
         None
     };
@@ -679,7 +922,16 @@ pub(crate) fn call_callable(
             frame.as_ptr().cast::<Header>(),
             Cell::new(false),
             Cell::new(false),
+            Cell::new(false),
         ));
+        let generator_header = generator.as_ptr().cast::<Header>();
+        // **`f_generator` 反向引用**（round 83）：帧持有生成器一份（`frame_traverse`／
+        // `frame_clear` 成对 ✓）；生成器持有帧那份已在上面 `incref` ✓ ⇒ 双向引用都走 GC ✓。
+        unsafe { instance.incref_object(generator_header.as_ptr()) };
+        if let Some(previous) = frame.get().set_generator(generator_header) {
+            // SAFETY: previous 这份由帧交出。
+            unsafe { instance.release_object(previous.as_ptr()) };
+        }
         return Ok(generator.into_raw().cast::<Header>());
     }
 
@@ -693,15 +945,61 @@ pub(crate) fn call_callable(
             "maximum recursion depth exceeded",
         ));
     }
+    static FRAME_DROP_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let frame_debug = crate::diag::flag_cached("PYAWA_FRAME_DROP_DEBUG", &FRAME_DROP_DEBUG);
+    if frame_debug {
+        // SAFETY: frame 刚分配，存活；code 名用于过滤。
+        let name = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() }
+            .name()
+            .to_owned();
+        eprintln!(
+            "[frame-drop] begin code={name} ptr={:p} rc={}",
+            frame.as_ptr(),
+            frame.get().header.refcount()
+        );
+    }
     let outcome = execute(instance, &frame);
     instance.leave_call();
-    match outcome? {
-        ExecOutcome::Returned(value) => Ok(value_into_raw(instance, value)),
-        ExecOutcome::Yielded(_) => Err(ExecError::Unsupported {
+    if frame_debug {
+        // SAFETY: frame 仍由本函数持有。
+        let name = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() }
+            .name()
+            .to_owned();
+        eprintln!(
+            "[frame-drop] end code={name} ptr={:p} rc={}",
+            frame.as_ptr(),
+            frame.get().header.refcount()
+        );
+    }
+    let frame_rc_before_return = frame.get().header.refcount();
+    let result = match outcome {
+        Ok(ExecOutcome::Returned(value)) => Ok(value_into_raw(instance, value)),
+        Ok(ExecOutcome::Yielded(_)) => Err(ExecError::Unsupported {
             opcode,
             what: "非生成器函数不该让出（码元被改坏了？）",
         }),
+        Err(ExecError::Raised { exception }) => {
+            // **逐帧展开回溯链**（round 84）：参照里异常穿过**每一个 Python 帧**都会往
+            // `__traceback__` 链上补一条（`tb_frame` = 该帧、`tb_next` = 内层那条）✓；
+            // 先前只有 `raise()` 在抛出帧挂一条 ✗ ⇒ `tb_next` 只剩 1 帧 ✗（`test_frame` 的
+            // `make_frames` 沿 tb_next 走不到 outer/inner ⇒ 多格红 ✓）。
+            // 时机：`execute` 返回时 `CurrentFrameGuard` 已把 `current_frame` 还原成**调用者**
+            // ⇒ 这条 tb 的 `tb_frame` 正是调用者、行号停在 CALL 位置 ✓。
+            crate::executor::runtime::attach_traceback(instance, exception.get());
+            Err(ExecError::Raised { exception })
+        }
+        Err(other) => Err(other),
+    };
+    if frame_debug {
+        // SAFETY: frame 仍由本函数持有（即将 drop）。
+        eprintln!(
+            "[frame-drop] before-drop ptr={:p} rc={frame_rc_before_return}",
+            frame.as_ptr()
+        );
     }
+    // **显式落域**（round 196 诊断）：正常作用域结束也该落域；显式 `drop` 便于确认。
+    drop(frame);
+    result
 }
 
 /// **沿 MRO 继承来的 `call` 槽**（task-7）——**一处口径**：`call_callable` 的实例调用回退与

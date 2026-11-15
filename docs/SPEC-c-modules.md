@@ -619,7 +619,7 @@ schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模�
 | `time` | §5.2.8 | 能力域（`clock` 域） |
 | `_thread` | §5.2.9 | VM 侧（用户裁定 A） |
 | `_socket` | §5.2.10 | 能力域最小面（I/O 未接线） |
-| `_signal` | §5.2.11 | 能力域最小面（注册未接线） |
+| `_signal` | §5.2.11 | 能力域最小面（记账式：只记录、不投递） |
 | `_posixsubprocess` | §5.2.12 | 能力域最小面（`fork_exec` 未接线） |
 | `select` | §5.2.13 | 能力域最小面（`select` 未接线；导出面收窄） |
 | `array` | §5.2.14 | 纯计算最小面（空数组薄载荷） |
@@ -641,6 +641,7 @@ schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模�
 | `atexit` | §5.2.30 | VM 侧（退出钩子未接） |
 | `_warnings` | §5.2.31 | VM 侧最小面（名字占位） |
 | `_operator` | §5.2.32 | 纯计算（与 `operator` 同一实现） |
+| `_csv` | §5.2.33 | 纯计算（`Lib/csv.py` 逐字同步；见该节未接面） |
 | `binascii` | §5.9 | 纯计算（正文在 §5.9） |
 | `_io` 的装配半（`_io_module.rs`） | §5.2.16 | `sys.stdout`／`stderr` 文本流的最小面 |
 
@@ -653,7 +654,7 @@ schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模�
 > 原先的「`errno` → 异常映射表」缺口已由 §5.1 的 `CM-19`…`CM-21` 关闭；
 > 「Unicode 数据表来源」已由 `CM-13`／`CM-22`…`CM-24` 关闭。
 
-### 5.2.7 `operator`（**第一刀**：比较与真值）
+#### 5.2.7 `operator`（**第一刀**：比较与真值）
 
 **目标**：把参照实现的比较／真值一族先落地（不需要能力域，纯计算）。
 
@@ -765,7 +766,7 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 - **验收**：对拍语料 `tests/conformance/corpus/thread_locks.py`（两侧逐字比，23 条断言）；
   `_imp` 侧的 `is_builtin('_thread')` ⇒ `-1`（该模块在表里、也列在 `sys.builtin_module_names` ✓）。
 
-## 5.9 `binascii`（第 319 轮 ✓）
+### 5.9 `binascii`（第 319 轮 ✓）
 
 **`CM-4` 逐模块合约**（"从 Python 看到的 API 与语义" ✓；实测对照 `python3` ✓）：
 
@@ -785,7 +786,7 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 
 **护栏**：`crates/pyawa-runtime/tests/binascii_module.rs` ✓（三个用例，期望值取自参照 ✓）。
 
-## 5.10 逐模块合约（M3 收尾补；§5.2 续号）
+### 5.10 逐模块合约（M3 收尾补；§5.2 续号）
 
 > 本节是 §5.2 的**续写**（`CM-4`／`CM-14` 的分批补法）：M3 收尾审计出「**自实现、但 §5.2 尚无合约段**」
 > 的模块，逐个补段。审计口径＝`crates/pyawa-stdlib/src/lib.rs` 的 `RUST_MODULES` 模块表 ＋ 特殊装配的
@@ -823,29 +824,51 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 - **验收**：`crates/pyawa-runtime/tests/socket_surface_shapes.rs`（两个用例：面与参照**逐行一致**、
   如实报错面无假成功）。
 
-#### 5.2.11 `_signal`（**能力域最小面** —— task-13）
+#### 5.2.11 `_signal`（**记账式最小面** —— task-13／§12.2，2026-11-14 方案 A）
 
-- **归属**：**能力域模块**（信号注册／查询属外部世界权威；本轮只落导入面＋常量面）。
-- **能 import**：内建模块；`import _signal` 恒成功。上游 `Lib/signal.py` 导入期要：`import _signal`、
-  `from _signal import *`、`@_wraps(_signal.signal)`／`@_wraps(_signal.getsignal)` 在装饰期各读一次
-  `__doc__`。
-- **已落地面**（照参照实测）：
+- **归属**：**能力域模块**（信号注册／查询属外部世界权威）。**方案 A（用户已拍板）**：**不做真实信号投递**，
+  只维护**每实例记账表**（POSIX 信号是进程级状态，与 `CP-13`／`OM-1` 的实例隔离冲突；asyncio 常规路径
+  `run`／`await`／`async for` 不依赖真实投递）。代价：注册的 handler **永不触发** ⇒ `DIV-10`。
+- **能 import**：内建模块；`import _signal` 恒成功。上游 `Lib/signal.py` 导入期要 `import _signal`、
+  `from _signal import *`、`@_wraps(_signal.signal/getsignal)` 各读一次 `__doc__`；
+  `Lib/asyncio/runners.py` 判 `signal.getsignal(signal.SIGINT) is signal.default_int_handler`。
+- **已落地面**（照本机参照 3.14.4 实测，逐字一致）：
   - **45 个整型常量**（`SIG*` 一族含别名 `SIGIOT`／`SIGCLD`／`SIGPOLL`、`SIG_DFL=0`／`SIG_IGN=1`／
-    `NSIG=65`、`ITIMER_*`）；模块 `__doc__` 非空（照参照原文）；
-  - `signal(signalnum, handler, /)`／`getsignal(signalnum, /)` 的**参数校验语义全真**：关键字拒绝、
-    `signal` 元数文案 `signal expected 2 arguments, got N`、号码非整数／越界文案
-    （`ValueError: signal number out of range`）、handler 只收 `SIG_DFL`(0)／`SIG_IGN`(1)／可调用且
-    **`bool` 不算**（照参照 `signal(2, True)` 也报 handler 文案）——逐字与参照一致。
-- **如实未接线面（`CM-6`；禁止假数据）**：
-  - `signal()`／`getsignal()` 校验通过后**调用即 `NotImplementedError`**（"未接线"）：**不注册、不编返回值**。
-    `getsignal` **不返回 `None`**——参照对有效号码从不返回 `None`（未注册 ⇒ `SIG_DFL` 0；`SIGINT` ⇒
-    `default_int_handler`），返回 `None` 是编事实；
-  - **导出面刻意收窄**：`__all__`＝45 常量＋`signal`／`getsignal`（共 47）⇒ 上游 `signal.py` 的
-    `pthread_sigmask`／`sigpending`／`sigwait`／`valid_signals` 四个可选包装**不定义**、`Sigmasks`
-    不建（参照在无这些名字的平台同形）；其余 17 个函数与 2 个类型（`ItimerError`／`struct_siginfo`）
-    **不导出**（缺名＝语义少接线）；
-  - 原生函数 `__doc__` 为空串（core 现行口径）⇒ `signal.signal.__doc__` 读回 `None`（参照给 C 文档串）。
-- **验收**：`crates/pyawa-runtime/tests/signal_surface_shapes.rs`（面逐行一致 ＋ 如实报错面）。
+    `NSIG=65`、`ITIMER_*`）＋ 模块 `__doc__`（照参照原文）；
+  - `__all__` ＝ 45 常量 ＋ `signal`／`getsignal`／`default_int_handler`／`set_wakeup_fd`（**49**）；
+  - `signal(signalnum, handler, /)`：参数校验全真（关键字／元数／非整数／大整数 `OverflowError`／
+    越界 `ValueError: signal number out of range`／handler 只收 `SIG_DFL`(0)／`SIG_IGN`(1)／可调用且
+    `bool` 不算）；校验通过后**记账并返回前值**；
+  - `getsignal(signalnum, /)`：读记账表。**初值**：`SIGINT` ⇒ `default_int_handler`（与
+    `_signal.default_int_handler` **同一对象**）、32／33 保留号 ⇒ `None`、其余 ⇒ `SIG_DFL`(0)；
+  - `default_int_handler(signum, frame, /)`：存在、可调用，**调用必抛 `KeyboardInterrupt`**
+    （元数文案 `default_int_handler expected 2 arguments, got N`）；
+  - `set_wakeup_fd(fd, /, *, warn_on_full_buffer=True)`：记账式——当前 wakeup fd 初值 `-1`，
+    只接受 `-1`（≡ 解除），返回前值；
+  - **不可捕获号**（9 `SIGKILL`／19 `SIGSTOP`／32／33）：照参照实测折成
+    `OSError: [Errno 22] Invalid argument`。
+- **每实例状态（`CX-3`）**：记账表存在模块命名空间的隐藏键（`__pyawa_signal_handlers__`：号码→handler
+  的 dict；`__pyawa_signal_wakeup_fd__`：int），**随实例走**，无全局可变状态、不调用宿主信号设施。
+- **可观察偏差（如实记）**：
+  - `vars(_signal)` 比参照多两个隐藏键（不在 `__all__` ⇒ `from _signal import *` 不导出）；
+  - **handler 永不触发**（`DIV-10`）；初值表**不反映宿主继承的处置**（参照进程 `SIGPIPE`(13)／
+    `SIGXFSZ`(25) 初值 `SIG_IGN`，本层 `SIG_DFL`；`DIV-10` 归一）；
+  - 原生函数 `__doc__` 空串（core 口径）⇒ `signal.signal.__doc__` 读回空串（参照给 C 文档串）；
+  - **异常对象的 `args` 保真度**属 core 既有口径（`str()` 一致）：不可捕获号的 `OSError` 参照
+    `args=(22,'Invalid argument')`／`errno=22`，本层 `args=('[Errno 22] Invalid argument',)`／
+    `errno=None`；`default_int_handler` 抛的 `KeyboardInterrupt` 参照 `args=()`、本层 `args=('',)`。
+    修它要动 core 的异常构造通道 ⇒ 另记（不影响 `asyncio` 路径与 `str` 面）。
+- **如实未实现面（`CM-6`；禁止假成功）**：
+  - `set_wakeup_fd(fd != -1)`：需要校验宿主 fd（有效＋非阻塞）⇒ **如实报 `NotImplementedError`**
+    （本层只能"解除"）；
+  - **导出面刻意收窄**（沿用 task-13 口径）：`pthread_sigmask`／`sigpending`／`sigwait`／
+    `valid_signals` 不导出 ⇒ `Lib/signal.py` 四个包装不定义、`Sigmasks` 不建；其余 17 个函数与 2 个
+    类型不导出；`Lib/asyncio/unix_events.py` 的 `add_signal_handler` 依赖的 `siginterrupt`／
+    `valid_signals` **缺名** ⇒ 该路径如实不可用（`asyncio.run` 常规路径不需要）；
+  - **真实信号投递**属 `proc` 域（`SPEC-capabilities.md` §9.3），等该域开工时另行设计（`PLAN` §12.2 留待）。
+- **验收**：`crates/pyawa-runtime/tests/signal_surface_shapes.rs`（参照逐行一致 ＋ 记账/收窄/如实面）、
+  `crates/pyawa-runtime/tests/asyncio_smoke.rs`（`asyncio.run`／`await sleep(0)`／`async for`／
+  异步推导式，子进程）＋ `tests/conformance/divergences.md` 的 `DIV-10`。
 
 #### 5.2.12 `_posixsubprocess`（**能力域最小面** —— task-15）
 
@@ -971,6 +994,16 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
       **一次**写出、返回 `None`；`flush()` 在本层**无缓冲**下是**真 no-op**（`write` 已落 `fs`，
       无事可刷；返回 `None`）。用途（`P3-32`）：官方 `unittest` 的 `TextTestRunner`／`TextTestResult`
       **直接写这两个流**（报告通道）
+    - `newline=` 的**读**口径（缺口3，2026-11-14）：`open()` 第 6 位置实参/关键字与
+      `TextIOWrapper.__init__` 第 4 位置实参/关键字共五档（`None`／`''`／`'\n'`／`'\r'`／`'\r\n'`）；
+      `read`／`readline`／`readlines`／`__next__` 按档断行/翻译（`None` ⇒ 三档断行并译成 `\n`；
+      `''` ⇒ 三档断行**不翻译**；其余只按给出的那个断）。**写**侧 `newline=` 翻译：`None` 在 Linux
+      上 os.linesep=`\n` ⇒ 恒等、`''`／`'\n'` 不翻译、`'\r'`／`'\r\n'` 把 `\n` 换掉；
+      `.newlines` 只读属性（掩码 CR/LF/CRLF，首次真读扫整块；显式三档恒 `None`）；
+      `StringIO(initial_value, newline=…)` 构造收档、初始值按写口径翻译、读写五档（2026-11-14 落地）。
+      e2e：`crates/pyawa-runtime/tests/io_newline_shapes.rs`（读）＋`io_newline_write_shapes.rs`（写/
+      `.newlines`/`StringIO`）。**边界**：`.newlines` 为整块追踪（参照 8192 字节块）；文本 `tell`
+      仍是字符下标（参照字节 cookie）。
     - `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）
     - `FileIO`（经 `fs` 域）：`open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现
   - **占位类型**（可当基类、可 `isinstance`；**实例化按 CM-6 报错**）：`_IOBase`／`_RawIOBase`／
@@ -1181,3 +1214,56 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
   `i*` 原地族）——见该节，不在此重述（一处真相）。
 - **验收**：对拍语料 `lib_operator.py`（＋`Lib/hmac.py` 的导入链，判据①）。
 
+#### 5.2.33 `_csv`（**纯计算** —— task-3）
+
+> **编号说明**：工单写的是 §5.2.30，但 §5.2.30／31／32 已被 `atexit`／`_warnings`／`_operator`
+> 占用（`CM-14` 的"只追加"历史）⇒ 这里取**下一个空号** §5.2.33。`Lib/csv.py` 是**逐字同步**的上游
+> 文件，按 `CM-4` 不需要合约；本段只写我们自己实现的 `_csv`。
+
+- **归属**：**纯计算**（不碰平台、不碰能力域）；读的是调用方给的**任何可迭代对象**（每项当"一行"文本），
+  写的是调用方给的**任何带 `write` 属性**的对象 —— 与 `CX-4` 一致。
+- **能 import**：内建模块；`Lib/csv.py` 在导入期 `from _csv import Error, writer, reader, …` 并执行
+  `register_dialect("excel")`／`("excel-tab")`／`("unix")` ⇒ 注册表必须**真记账**（不是空桩）。
+- **已落地面**（导出面照参照 `dir(_csv)`）：`Error`（`Exception` 的**真子类**；`str`／`args`／
+  `__module__ == "_csv"` 照参照，可被 `class Foo(csv.Error)` 继承）／`Dialect`／`Reader`／`Writer`／
+  `reader`／`writer`／`register_dialect`／`unregister_dialect`／`get_dialect`／`list_dialects`／
+  `field_size_limit`／`QUOTE_MINIMAL=0`／`QUOTE_ALL=1`／`QUOTE_NONNUMERIC=2`／`QUOTE_NONE=3`／
+  `QUOTE_STRINGS=4`／`QUOTE_NOTNULL=5`／`_dialects`（dict，插入序即 `list_dialects()` 的次序）。
+  - **读侧**照参照 `Modules/_csv.c` 的 `parse_process_char` 状态机：`delimiter`／`quotechar`／
+    `doublequote`／`escapechar`／`skipinitialspace`／`quoting`／`strict`、引号内换行、`\r\n` 处理、
+    行结束哨兵（EOL）／EOF 的"意外结束"语义、空行 ⇒ `[]`、单列语义；`line_num` 是**物理行**计数
+    （耗尽后不再涨）；`__iter__` 返回自身、`__next__` 返回 `list[str]`（`QUOTE_NOTNULL`／
+    `QUOTE_STRINGS` 的空**未引**字段给 `None`，非空**未引**字段按 `QUOTE_NONNUMERIC`／
+    `QUOTE_STRINGS` 转 `float`）；`StringIO`／普通文件／`list[str]` 行源都能读。
+  - **写侧**照 `join_append_data`：六档 `quoting`、`doublequote`／`escapechar`／`lineterminator`、
+    `delimiter=' '` ＋ `skipinitialspace` 的空字段规则、单空字段记录规则；非 `str` 元素走 `str()`；
+    `writerow` 返回**文件对象 `write()` 的返回值**（不是字符数）、`writerows` 返回 `None`。
+  - **`Dialect`**：8 项属性（`delimiter`／`doublequote`／`escapechar`／`lineterminator`／`quotechar`／
+    `quoting`／`skipinitialspace`／`strict`）的转换与校验**按参照次序**、文案逐字一致（`Lib/csv.py`
+    的 `_validate` 把 `TypeError` 原样包成 `csv.Error`，上游测试逐字比对）；属性只读。
+  - `field_size_limit(limit=None)`：默认 **131072**、返回前值、必须在**恰好 `int`** 上设值；
+    `register_dialect` 的 `fmtparams` 覆盖源方言属性；`get_dialect` 返回**同一实例**（`is` 成立）。
+- **如实未接面 / 已知偏差（`CM-6`；都在 `_csv` 的 C 语义之外）**：
+  - **原生函数的 `__module__` 是 core 统一口径 `"builtins"`**（参照给 `"_csv"`）⇒ 上游
+    `test.support.check__all__` 认不出 `reader`／`writer`／`field_size_limit` 等 7 个名字 ⇒
+    `test_csv.test__all__` **失败 1 条**。修它要动 `pyawa-core`（本任务写域外，且影响所有内建模块）。
+    原生函数也没有 clinic 的 `__text_signature__`（本层给 `None`）。
+  - **三个类型的 `__name__`** 走本层"每实例注册类型"口径 ⇒ `_csv.reader`／`_csv.writer`／
+    `_csv.Dialect`（参照分别是 `reader`／`writer`／`Dialect`）；`isinstance`／`except`／
+    `cannot create '_csv.reader' instances` 面照参照一致。
+  - **实例状态在实例字典的私有键**（`__pyawa_csv_*`；参照是 C 载荷、无 `__dict__`）；模块命名空间
+    多一个私有状态键 `__pyawa_csv_field_limit`（字段上限；`_dialects` 照参照暴露）。
+  - **`QUOTE_*` 的"数值"判定**（写侧 `QUOTE_NONNUMERIC`）按内建数值类型（`int`／`bool`／大整数／
+    `float`／`complex`）近似参照的 `PyNumber_Check` ⇒ 自定义数值类可能判得不同。
+  - 读侧**含孤立代理的 `str` 行** ⇒ `Unsupported`（`P3-38` S3b 的表示缺口；**不静默**转义）。
+  - 上游 `test_csv.test_roundtrip_quoteed_newlines`／`test_roundtrip_escaped_unquoted_newlines` 的
+    `lineterminator='\r'` 两格已**转 PASS**（缺口3＝`_io` 的 `TextIOWrapper(newline='')` 已如实
+    按 `\r` 断行，§5.2.16）；`_csv` 仍照参照语义**如实报错**（不偷偷容忍）。
+  - 上游 `TestArrayWrites` 4 格错误：`array.array` 的**元素存储**未接线（§5.2.14），与本模块无关。
+- **验收**：`crates/pyawa-runtime/tests/csv_surface_shapes.rs` —— FACE 双侧（本机 `python3` 3.14.4）
+  逐行对拍（模块面／方言注册表／`Dialect` 校验文案／读侧各族／写侧各族／`DictReader`／
+  `DictWriter`／`Sniffer`），HONEST 面钉住上述 pyawa 独有偏差；`Lib/csv.py` 由
+  `python3 tools/sync_lib.py --check` 保证与上游**逐字节一致**（`CX-8`）。上游
+  `Lib/test/test_csv.py`：接入前 `import csv` 即 `ModuleNotFoundError`（**0 通过**）⇒ 接入后
+  **127 用例：117 通过／0 失败／4 错误／6 跳过**（4 个错误都是 `array.array` 元素存储未接线，
+  §5.2.14；跳过是 `cpython_only`）。

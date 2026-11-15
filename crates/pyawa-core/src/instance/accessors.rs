@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -46,22 +47,38 @@ impl Instance {
         ty: NonNull<TypeObject>,
         name: &str,
     ) -> Option<(NonNull<TypeObject>, NonNull<Header>)> {
-        // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
-        for entry in unsafe { ty.as_ref() }.mro() {
-            // SAFETY: 同上。
-            let mapping = unsafe { entry.as_ref() }.dict();
-            let Some(mapping) = mapping else { continue };
-            // SAFETY: mapping 由类型对象持有。
-            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-            let found = dict
-                .entries()
-                .into_iter()
-                .find(|(key, _)| str_matches(self, *key, name));
-            if let Some((_, value)) = found {
-                return Some((entry, value));
+        // **先查类型自己的命名空间**（C1 日常面修 ✗）：占位类型（`_io._IOBase` 一族，走
+        // `new_bare_type`）**没有登记基类** ⇒ `mro()` 是**空表** ✗ ⇒ 先前的纯 MRO 循环连它
+        // **自己**的字典都查不到（`super().close` 在 `class A(io.IOBase)` 里实测
+        // `AttributeError: 'super' object has no attribute 'close'` ✗；普通类型无影响 —— 它们
+        // 的 `mro()[0]` 就是自己 ✓，下面循环里跳过重复项 ✓）。
+        // SAFETY: ty 由注册表持有。
+        if let Some(mapping) = unsafe { ty.as_ref() }.dict() {
+            if let Some(value) = self.dict_get(mapping, name) {
+                return Some((ty, value));
             }
         }
-        None
+        // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
+        // **不 clone MRO**（round 249 性能，A2-4）：先前 `mro()` 返回克隆 `Vec` ⇒ 每次查找一次分配 ✗。
+        unsafe { ty.as_ref() }.with_mro(|mro| {
+            for entry in mro {
+                // 自己刚查过 ⇒ 跳过（普通类型的 `mro()[0]` 就是自己 ✓）。
+                if *entry == ty {
+                    continue;
+                }
+                // SAFETY: 同上。
+                let mapping = unsafe { (*entry.as_ptr()).dict() };
+                let Some(mapping) = mapping else { continue };
+            // **走哈希索引**（round 72 真性能 bug 修 ✗）：先前把类型字典**摊成 `entries()` 线性找** ✗
+            // ⇒ 类属性越多每次查越慢（150k 字段的 `namedtuple` 每个 `getattr` 都扫全表 ⇒
+            // `test_collections.test_large_size` 的 getattr 循环要 >200 s ✗）。`dict_get` 是
+            // **按字符串键的哈希索引** ✓（非字符串键本来就匹配不上旧口径的 `str_matches` ⇒ 语义不变 ✓）。
+                if let Some(value) = self.dict_get(mapping, name) {
+                    return Some((*entry, value));
+                }
+            }
+            None
+        })
     }
 
 
@@ -85,10 +102,16 @@ impl Instance {
             0,
         )
         .map_err(|error| {
-            self.raise_builtin_error("SyntaxError", &format!("eval: {error:?}"))
+            // **`SyntaxError.msg` 对齐参照**（2026-11-14）：编译期诊断的 `Syntax(message)` 直接
+            // 交回消息（参照 `exec("...")` 的 `.msg` 就是语法错误原文，不带 `Syntax(...)` 包装）。
+            let message = match &error {
+                crate::compile::CompileError::Syntax(message) => message.clone(),
+                _ => format!("{error:?}"),
+            };
+            self.raise_builtin_error("SyntaxError", &message)
         })?;
         let code = crate::compile::instantiate(self, &unit);
-        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+        let frame_type = self.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "eval：`frame` 类型未登记",
         })?;
@@ -123,10 +146,16 @@ impl Instance {
             0,
         )
         .map_err(|error| {
-            self.raise_builtin_error("SyntaxError", &format!("exec: {error:?}"))
+            // **`SyntaxError.msg` 对齐参照**（2026-11-14）：编译期诊断的 `Syntax(message)` 直接
+            // 交回消息（参照 `exec("...")` 的 `.msg` 就是语法错误原文，不带 `Syntax(...)` 包装）。
+            let message = match &error {
+                crate::compile::CompileError::Syntax(message) => message.clone(),
+                _ => format!("{error:?}"),
+            };
+            self.raise_builtin_error("SyntaxError", &message)
         })?;
         let code = crate::compile::instantiate(self, &unit);
-        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+        let frame_type = self.hot_type(HotId::Frame).ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "exec：`frame` 类型未登记",
         })?;
@@ -211,7 +240,10 @@ impl Instance {
     /// stdlib 侧 `#![forbid(unsafe_code)]`（`CX-4` 的静态扫描范围 ✓）⇒ 这类"进对象"的出口
     /// 留在核心 ✓。
     pub fn text_of(&self, object: NonNull<Header>) -> Option<&str> {
-        if self.type_of(object) != self.singletons().str_type() {
+        // **`str` 的子类沿用 str 布局** ✓（round 118）：参照里 `getattr(obj, StrSub('x'))`／
+        // `d[StrSub('k')]` 都按字符串处理 ✓ —— 先前只认**精确** `str` ✗ ⇒
+        // `TypeError: attribute name must be string` ✗（`test_dict.test_instance_dict_getattr_str_subclass` ✓）。
+        if !self.is_str_object(object) {
             return None;
         }
         // SAFETY: 类型身份刚确认是 `str` ✓。
@@ -352,7 +384,7 @@ impl Instance {
     /// `object` 是不是 **`str` 或其子类**（`str` 的值语义对子类同样成立 ✓）。
     fn is_str_like(&self, object: NonNull<Header>) -> bool {
         let ty = self.type_of(object);
-        self.type_named("str")
+        self.hot_type(HotId::Str)
             .is_some_and(|base| ty == base || self.is_subtype(ty, base))
     }
 
@@ -524,6 +556,85 @@ impl Instance {
         type_object.mark_external_instance_dict();
         Some(created)
     }
+
+    /// 取类型的命名空间字典，**没有就交 `None`**（**不惰性创建**）。
+    ///
+    /// 给"只读遍历"的场合用（task-6：模块安装时登记原生函数的来源模块）——那里遍历到的类型
+    /// 大多数不需要命名空间，若走 [`Self::type_namespace`] 会为每个内建类型白建一个空 dict。
+    pub fn type_namespace_if_present(&self, ty: NonNull<Header>) -> Option<NonNull<Header>> {
+        // SAFETY: 调用方保证 ty 是存活的类型对象。
+        unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() }.dict()
+    }
+
+    /// **类型对象的 `__name__` 取值**（task-13 #d 的**一处真相**）。
+    ///
+    /// 口径（实测 3.14.4）：用户类可写 `C.__name__ = …`（`type.__dict__['__name__']` 是
+    /// getset 数据描述符）⇒ 本层既有写入口把值写进**类型命名空间**（同名键）⇒ 读时先看它；
+    /// 没有显式值就用注册名（内建类型／`type()` 动态造的类）。`type.__dict__['__name__']`
+    /// 的描述符 `__get__` 与属性通道共用这个函数（**一处真相**）。
+    pub(crate) fn type_name_value(&self, object: NonNull<Header>) -> String {
+        // 先看 **rename 覆盖键**（`C.__name__ = …` 的写入口存这里；参照是 getset setter 进类型槽）；
+        // **不看类字典里的 `__name__`** —— 类体里 `__name__ = …` 是普通类属性，参照的
+        // `type.__getattribute__` 会用类型槽遮住它（实测 `class C: __name__='x'` ⇒ `C.__name__=='C'`）。
+        if let Some(namespace) = self.type_namespace_if_present(object) {
+            if let Some(value) = self.dict_get(namespace, crate::classes::TYPE_NAME_KEY) {
+                if let Some(text) = self.text_of(value) {
+                    return text.to_owned();
+                }
+            }
+        }
+        // SAFETY: 调用方保证 object 是存活的类型对象（`is_type_object` 判过）。
+        unsafe { object.cast::<crate::TypeObject>().as_ref() }
+            .name()
+            .to_owned()
+    }
+
+    /// **类型对象的 `__qualname__` 取值**（task-13 #c/#d 的**一处真相**）。
+    ///
+    /// 编译器按**定义处作用域**把 `__qualname__` 写进类命名空间（`N2.D`／
+    /// `outer.<locals>.K`；实测本层类体里那份值是**对的**，只有属性读法丢了它）⇒ 读命名空间；
+    /// 没有就退回注册名（内建类型、`type("X", (), {})` 动态造的类；参照给同名）。
+    pub(crate) fn type_qualname_value(&self, object: NonNull<Header>) -> String {
+        if let Some(namespace) = self.type_namespace_if_present(object) {
+            // 类创建后的**正式存储**：私有键（参照 3.14 把 `__qualname__` 收进类型槽、类字典
+            // 里没有公开键；键名常量在 `crate::classes::TYPE_QUALNAME_KEY`，一处真相）。
+            if let Some(value) = self.dict_get(namespace, crate::classes::TYPE_QUALNAME_KEY) {
+                if let Some(text) = self.text_of(value) {
+                    return text.to_owned();
+                }
+            }
+            // 类**创建过程中**（迁移之前）值还在命名空间的 `__qualname__` 键上。
+            if let Some(value) = self.dict_get(namespace, "__qualname__") {
+                if let Some(text) = self.text_of(value) {
+                    return text.to_owned();
+                }
+            }
+        }
+        // SAFETY: 调用方保证 object 是存活的类型对象（`is_type_object` 判过）。
+        unsafe { object.cast::<crate::TypeObject>().as_ref() }
+            .name()
+            .to_owned()
+    }
+
+    /// **类型对象的 `__module__` 取值**（task-13 #d 的**一处真相**）：返回类型字典里那个值的
+    /// **新引用**；没有（内建类型）⇒ `None`，调用方按参照回 `"builtins"`。
+    ///
+    /// 用户类的类体写的是 `str`（`__module__` 由 `LOAD_NAME` 写进命名空间）；也允许别的对象
+    /// （实测 `NT.__module__ = collections` ⇒ 读回**模块对象** ✓）。**描述符值要挡掉** ——
+    /// `function` 类型字典里的 `__module__` 是给**函数实例**用的可写描述符 ⇒ 类级读法仍回
+    /// `"builtins"`（与既有 `attribute_lookup_specials` 的口径**一处** ✓）。
+    pub(crate) fn type_module_value(&self, object: NonNull<Header>) -> Option<NonNull<Header>> {
+        let own = self.type_lookup(object.cast::<crate::TypeObject>(), "__module__")?;
+        let is_descriptor = self
+            .type_lookup(self.type_of(own), "__get__")
+            .is_some();
+        if self.text_of(own).is_some() || !is_descriptor {
+            // SAFETY: own 由类型字典持有，存活；借用要变成调用方那份。
+            unsafe { self.incref_object(own.as_ptr()) };
+            return Some(own);
+        }
+        None
+    }
 }
 
 impl Instance {
@@ -536,8 +647,7 @@ impl Instance {
     ///
     /// 回**新引用** ✓（`Owned`／原生返回值的契约 ✓）。
     pub fn annotations_of(&self, target: NonNull<Header>) -> Option<NonNull<Header>> {
-        let is_module = self
-            .type_named("module")
+        let is_module = self.hot_type(HotId::Module)
             .is_some_and(|module| self.is_subtype(self.type_of(target), module));
         let namespace = if self.is_type_object(target) {
             self.type_namespace(target)
@@ -567,7 +677,10 @@ impl Instance {
             self.release(one);
             match outcome {
                 Ok(value) => value,
-                Err(_) => return None,
+                Err(error) => {
+                    crate::executor::runtime::discard_error(self, &error);
+                    return None;
+                }
             }
         } else {
             self.new_dict()

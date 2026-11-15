@@ -594,11 +594,11 @@ fn raised(instance: &Instance, outcome: Result<NonNull<Header>, ExecError>) -> (
     match outcome {
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 由实例保活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: 同上。
             let type_name = unsafe { ty.as_ref() }.name().to_owned();
             // SAFETY: 同上。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default();
             (type_name, message)

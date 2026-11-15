@@ -62,7 +62,7 @@ impl Emitter {
                             generator.iterable.clone()
                         };
                         inner = vec![Statement::For {
-                            is_async: false,
+                            is_async: generator.is_async,
                             span: *span,
                             target,
                             target_span,
@@ -82,7 +82,7 @@ impl Emitter {
                         ScopeKind::Class => format!("{}.<genexpr>", self.qualname),
                         ScopeKind::Function => format!("{}.<locals>.<genexpr>", self.qualname),
                     };
-                    let parameters = vec![Parameter {
+                    let mut parameters = vec![Parameter {
                         name: iterator,
                         posonly: false,
                         annotation: None,
@@ -102,6 +102,7 @@ impl Emitter {
                         &body,
                         ScopeKind::Function,
                         self.kind == ScopeKind::Class,
+                        generators.iter().any(|generator| generator.is_async),
                         &[],
                         Span::new(span.line_start, span.line_start, 0, 0),
                     )?;
@@ -114,14 +115,40 @@ impl Emitter {
                         .into_iter()
                         .chain(unit.demanded.clone())
                     {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                        let from_here = self.plain_local_slot(&referenced).is_some()
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
                             || self.unit.freevars.iter().any(|free| free == &referenced);
                         if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
                             closure_freevars.push(referenced);
                         }
                     }
-                    if !closure_freevars.is_empty() {
+                    // **推导式内嵌生成器引用推导变量**（round 162）：推导变量是**本层普通局部**
+                    // （内联推导式的目标，未提升成 cell ✓）⇒ 用**隐藏形参**把它传进生成器：
+                    // 生成器单元多收几个与推导变量同名的形参（体内按 `LOAD_FAST` 读 ✓），
+                    // 调用点在 `.0` 之后按同序压值 ✓。这样 module／函数两种作用域都能跑，
+                    // 也不用碰"内联推导式的 cell 读写路径"（尚未接线 ✓）。
+                    let mut parameter_captures: Vec<String> = Vec::new();
+                    let mut true_freevars: Vec<String> = Vec::new();
+                    for free in closure_freevars.drain(..) {
+                        if self.comprehension_locals.iter().any(|local| local == &free) {
+                            parameter_captures.push(free);
+                        } else {
+                            true_freevars.push(free);
+                        }
+                    }
+                    let closure_freevars = true_freevars;
+                    if !parameter_captures.is_empty() {
+                        for capture in &parameter_captures {
+                            parameters.push(Parameter {
+                                name: capture.clone(),
+                                posonly: false,
+                                annotation: None,
+                                annotation_span: None,
+                                default: None,
+                            });
+                        }
+                    }
+                    if !parameter_captures.is_empty() || !closure_freevars.is_empty() {
                         unit = compile_scope(
                             "<genexpr>",
                             &nested_qualname,
@@ -135,20 +162,34 @@ impl Emitter {
                             &body,
                             ScopeKind::Function,
                             self.kind == ScopeKind::Class,
+                            generators.iter().any(|generator| generator.is_async),
                             &closure_freevars,
                             Span::new(span.line_start, span.line_start, 0, 0),
                         )?;
                     }
-                    // **闭包元组**在 `LOAD_CONST` **之前** ✓、`SET_FUNCTION_ATTRIBUTE 8` 在 `MAKE_FUNCTION`
-                    // **之后** ✓（参照实测 ✓）。
                     if !closure_freevars.is_empty() {
                         for free in &closure_freevars {
-                            let slot = self
-                                .deref_slot(free)
-                                .unwrap_or_else(|| panic!("生成器表达式的自由变量必在本层 cell／free 表里：{free:?}（varnames={:?} cellvars={:?} freevars={:?}）", self.unit.varnames, self.unit.cellvars, self.unit.freevars));
+                            let Some(slot) = self.deref_slot(free) else {
+                                return Err(CompileError::Unsupported(
+                                    format!(
+                                        "生成器表达式引用「{free}」：cell／自由变量槽缺失（见台账 round 161/162；qualname={} 行={} freevars={:?} cellvars={:?} varnames={:?}）",
+                                        self.qualname,
+                                        span.line_start,
+                                        self.unit.freevars,
+                                        self.unit.cellvars,
+                                        self.unit.varnames
+                                    ),
+                                ));
+                            };
                             self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                         }
                         self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
+                    }
+                    // **异步生成器表达式 `co_flags`**（round 243）：任何一层 `async for` ⇒ `0x200`、不带 `0x20` ✓。
+                    let mut unit = unit;
+                    if generators.iter().any(|generator| generator.is_async) {
+                        unit.flags &= !0x20;
+                        unit.flags |= 0x200;
                     }
                     let index = self.intern_constant(Constant::Code(Box::new(unit)));
                     self.emit_indexed(*span, "LOAD_CONST", index);
@@ -157,8 +198,21 @@ impl Emitter {
                         self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
                     }
                     self.emit_expression(&outer_iterable)?;
-                    self.emit_named(outer_iterable.span(), "GET_ITER", 0);
-                    self.emit_named(*span, "CALL", 0);
+                    // **异步生成器表达式**（round 243）：外层先把可迭代对象换成 `__aiter__` ✓。
+                    if generators.iter().any(|generator| generator.is_async) {
+                        self.emit_named(outer_iterable.span(), "GET_AITER", 0);
+                    } else {
+                        self.emit_named(outer_iterable.span(), "GET_ITER", 0);
+                    }
+                    // **隐藏形参的值**（round 162）：按 `parameters` 里同序压栈 ✓
+                    for capture in &parameter_captures {
+                        let slot = self.slot_of(capture);
+                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
+                    }
+                    // **CALL 的 argc 只数实参**：栈布局是 `[函数, self 槽, 实参…]` ✓ ——
+                    // 这里 `self` 槽放的就是 `.0` 迭代器（生成器当作它的第一个实参 ✓），
+                    // 所以 argc ＝ 隐藏形参个数 ✓（先前 +1 会多弹一个 NULL 槽 ⇒ `'NULL' object is not callable` ✗）。
+                    self.emit_named(*span, "CALL", parameter_captures.len() as u8);
                     self.last_span = *span;
                     self.epilogue_span = *span;
                     Ok(())
@@ -208,7 +262,8 @@ impl Emitter {
                     self.emit_expression(&generators[0].iterable)?;
                     self.emit_at(
                         first_scaffold,
-                        opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
+                        opcode::opcode(if generators[0].is_async { "GET_AITER" } else { "GET_ITER" })
+                            .expect("取迭代器指令在表里"),
                         0,
                     );
                     let mut slots: Vec<usize> = Vec::with_capacity(target_names.len());
@@ -230,6 +285,7 @@ impl Emitter {
                     );
                     self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
                     // 逐层：`FOR_ITER → 本层出口` ＋ 存目标（内层继续递归）
+                    let mut async_regions: Vec<(usize, usize)> = Vec::new();
                     let mut exhausted: Vec<usize> = Vec::with_capacity(generators.len());
                     let mut loops: Vec<usize> = Vec::with_capacity(generators.len());
                     let mut slot_index = 0usize;
@@ -238,18 +294,58 @@ impl Emitter {
                         let scaffold = generator.iterable.span();
                         if index > 0 {
                             self.emit_expression(&generator.iterable)?;
-                            self.emit_at(scaffold, opcode::opcode("GET_ITER").expect("GET_ITER 在表里"), 0);
+                            self.emit_at(
+                                scaffold,
+                                opcode::opcode(if generator.is_async { "GET_AITER" } else { "GET_ITER" })
+                                    .expect("取迭代器指令在表里"),
+                                0,
+                            );
                         }
                         let loop_start = self.new_label();
                         let out = self.new_label();
                         loops.push(loop_start);
                         exhausted.push(out);
                         self.mark_label(loop_start);
-                        self.emit_jump(
-                            scaffold,
-                            opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
-                            out,
-                        );
+                        if generator.is_async {
+                            // **异步层**（round 243）：与 `async for` 同形状 ✓；`SEND` 目标是
+                            // `await_done`（"本次 await 完成" ✓），耗尽路径由收尾 `END_ASYNC_FOR` 接 ✓。
+                            self.emit_at(scaffold, opcode::opcode("GET_ANEXT").expect("GET_ANEXT 在表里"), 0);
+                            let none_index = self.intern_constant(Constant::None);
+                            self.emit_indexed(scaffold, "LOAD_CONST", none_index);
+                            let region_start = self.unit.code.len();
+                            let send_label = self.new_label();
+                            let await_done = self.new_label();
+                            self.mark_label(send_label);
+                            self.emit_directed_jump(
+                                scaffold,
+                                opcode::opcode("SEND").expect("SEND 在表里"),
+                                await_done,
+                                false,
+                            );
+                            let region_end = self.unit.code.len();
+                            self.emit_at(scaffold, opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"), 1);
+                            self.emit_at(scaffold, opcode::opcode("RESUME").expect("RESUME 在表里"), 3);
+                            self.emit_directed_jump(
+                                scaffold,
+                                opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                                    .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                                send_label,
+                                true,
+                            );
+                            self.mark_label(await_done);
+                            self.emit_at(scaffold, opcode::opcode("END_SEND").expect("END_SEND 在表里"), 0);
+                            self.emit_at(scaffold, opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"), 0);
+                            // 异常表 `depth`：容器(1) ＋ 已保存目标数 ＋ 外层迭代器数 ＋ **本层 aiter(1)** ✓。
+                            let depth = 2 + target_names.len() + index;
+                            self.pending_async_for.push((region_start, region_end, depth));
+                            async_regions.push((region_start, region_end));
+                        } else {
+                            self.emit_jump(
+                                scaffold,
+                                opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
+                                out,
+                            );
+                        }
                         // 存目标：名字可直接与"紧接着的那次读取"打成 `STORE_FAST_LOAD_FAST`（实测）；
                         // 组先 `UNPACK_SEQUENCE` 再递归（第 405 轮：`for [off] in …` 也走这条 ✓）
                         match &generator.target {
@@ -357,8 +453,18 @@ impl Emitter {
                     for index in (0..generators.len()).rev() {
                         let scaffold = generators[index].iterable.span();
                         self.mark_label(exhausted[index]);
-                        self.emit_at(scaffold, opcode::opcode("END_FOR").expect("END_FOR 在表里"), 0);
-                        self.emit_at(scaffold, opcode::opcode("POP_ITER").expect("POP_ITER 在表里"), 0);
+                        if generators[index].is_async {
+                            // **异步层收尾**（round 243）：`END_ASYNC_FOR`（arg 0）收拾耗尽路径 ✓；
+                            // 正常完成早在 `await_done` 处 `END_SEND; NOT_TAKEN` 过了 ✓。
+                            let handler = self.unit.code.len();
+                            self.emit_at(scaffold, opcode::opcode("END_ASYNC_FOR").expect("END_ASYNC_FOR 在表里"), 0);
+                            if let Some((region_start, region_end, depth)) = self.pending_async_for.pop() {
+                                self.record_exception(region_start, region_end, handler, depth, false);
+                            }
+                        } else {
+                            self.emit_at(scaffold, opcode::opcode("END_FOR").expect("END_FOR 在表里"), 0);
+                            self.emit_at(scaffold, opcode::opcode("POP_ITER").expect("POP_ITER 在表里"), 0);
+                        }
                         if index > 0 {
                             self.emit_directed_jump(
                                 element_span,
@@ -377,6 +483,7 @@ impl Emitter {
                     }
                     let label = self.new_label();
                     self.pending_cleanups.push(PendingCleanup {
+                        async_regions: async_regions.clone(),
                         slots: slots.clone(),
                         depth,
                         scaffold: *span,

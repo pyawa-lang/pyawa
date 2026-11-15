@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`bound_set`、`container_contains_native`、`tuple_clear`、`tuple_traverse` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, DictObject, ListObject, MethodObject, NativeFn, SetObject, TupleObject};
 use crate::executor::ExecError;
@@ -14,6 +15,119 @@ use crate::builtin_objects::{bound_set, container_contains_native};
 
 /// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
+/// **`dir(set)` 的参照名字面**（round 166）：方法大多在 `getattr` 槽里、不在类型字典 ⇒
+/// `dir(set)` 会少名字 ✗ ⇒ 补一张参照表面表（与 `LIST_TYPE_DIR_NAMES` 同一手法 ✓）。
+/// 能不能真取到值仍由属性通道决定 ✓。
+pub const SET_TYPE_DIR_NAMES: &[&str] = &[
+    "__and__",
+    "__class__",
+    "__class_getitem__",
+    "__contains__",
+    "__delattr__",
+    "__dir__",
+    "__doc__",
+    "__eq__",
+    "__format__",
+    "__ge__",
+    "__getattribute__",
+    "__getstate__",
+    "__gt__",
+    "__hash__",
+    "__iand__",
+    "__init__",
+    "__init_subclass__",
+    "__ior__",
+    "__isub__",
+    "__iter__",
+    "__ixor__",
+    "__le__",
+    "__len__",
+    "__lt__",
+    "__ne__",
+    "__new__",
+    "__or__",
+    "__rand__",
+    "__reduce__",
+    "__reduce_ex__",
+    "__repr__",
+    "__ror__",
+    "__rsub__",
+    "__rxor__",
+    "__setattr__",
+    "__sizeof__",
+    "__str__",
+    "__sub__",
+    "__subclasshook__",
+    "__xor__",
+    "add",
+    "clear",
+    "copy",
+    "difference",
+    "difference_update",
+    "discard",
+    "intersection",
+    "intersection_update",
+    "isdisjoint",
+    "issubset",
+    "issuperset",
+    "pop",
+    "remove",
+    "symmetric_difference",
+    "symmetric_difference_update",
+    "union",
+    "update",
+];
+
+/// **`dir(frozenset)` 的参照名字面**（round 166）：方法大多在 `getattr` 槽里、不在类型字典 ⇒
+/// `dir(frozenset)` 会少名字 ✗ ⇒ 补一张参照表面表（与 `LIST_TYPE_DIR_NAMES` 同一手法 ✓）。
+/// 能不能真取到值仍由属性通道决定 ✓。
+pub const FROZENSET_TYPE_DIR_NAMES: &[&str] = &[
+    "__and__",
+    "__class__",
+    "__class_getitem__",
+    "__contains__",
+    "__delattr__",
+    "__dir__",
+    "__doc__",
+    "__eq__",
+    "__format__",
+    "__ge__",
+    "__getattribute__",
+    "__getstate__",
+    "__gt__",
+    "__hash__",
+    "__init__",
+    "__init_subclass__",
+    "__iter__",
+    "__le__",
+    "__len__",
+    "__lt__",
+    "__ne__",
+    "__new__",
+    "__or__",
+    "__rand__",
+    "__reduce__",
+    "__reduce_ex__",
+    "__repr__",
+    "__ror__",
+    "__rsub__",
+    "__rxor__",
+    "__setattr__",
+    "__sizeof__",
+    "__str__",
+    "__sub__",
+    "__subclasshook__",
+    "__xor__",
+    "copy",
+    "difference",
+    "intersection",
+    "isdisjoint",
+    "issubset",
+    "issuperset",
+    "symmetric_difference",
+    "union",
+];
+
 pub unsafe fn set_getattr(
     ptr: *mut Header,
     name: &str,
@@ -34,13 +148,23 @@ pub unsafe fn set_getattr(
         // **`union`**（task-46：从 stdlib 的临时补丁迁回 core ✓ —— `Lib/hashlib.py` 导入期
         // 就 `algorithms_available.union(...)`；round 20 为了先让 hashlib 导入在 stdlib 里
         // 临时挂了这一格，现按"一处真相"收进 core ✓）。
+        // **`clear`**（round 164 真 bug 修 ✗）：`Lib/_weakrefset.py:48` 的 `clear` 是 `self.data.clear()`
+        // ⇒ 本层 `set` 缺 `clear` ⇒ `weakref.WeakSet().clear()` 报 `'set' object has no attribute 'clear'` ✗
+        // （`threading._dangling.clear()` 也走它 ✓）。先前是**方法面缺口**，不是语义问题 ✓。
+        "clear" => set_clear_method_native,
         "union" => set_union_native,
+        // **`intersection`／`issubset`／`isdisjoint`／`difference`**（round 92）：`unittest.mock`
+        // 的 `_mock_set_magics` 用 `set.intersection` ✗ ⇒ 官方 `test__colorize` 的
+        // `mock.patch` 收尾报 `'set' object has no attribute 'intersection'` ✗。
+        "intersection" => set_intersection_native,
+        "difference" => set_difference_native,
+        "issubset" => set_issubset_native,
+        "isdisjoint" => set_isdisjoint_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -51,7 +175,7 @@ pub unsafe fn set_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -59,14 +183,88 @@ pub unsafe fn set_getattr(
 }
 
 /// 集合里有没有与 `item` 相等的元素 ✓（引擎统一比较口径 ✓）。
+///
+/// **哈希索引**（round 70）：可哈希元素走惰性索引 ✓（`{名字 for …}` 建 15 万项集合先前
+/// 逐项线性扫 ⇒ O(n²) ✗，`test_collections.test_large_size` 因此超时 ✗）；不可哈希退回线性 ✓。
 pub(crate) fn set_contains(
     instance: &Instance,
     set: NonNull<Header>,
     item: NonNull<Header>,
-) -> Option<usize> {
+) -> Option<NonNull<Header>> {
     // SAFETY: 调用方保证 set 是本实例的 `set`。
     let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
-    object.position_of(|candidate| crate::executor::values::values_equal_public(instance, candidate, item))
+    if crate::diag::flag_site!("PYAWA_SET_TRACE") {
+        // SAFETY: set/item 由调用方保证存活。
+        let item_ty = instance.type_name(instance.type_of(item));
+        eprintln!(
+            "[set-trace] set={set:p} item={:p} ty={item_ty} 现场={}",
+            item.as_ptr(),
+            instance.current_site()
+        );
+    }
+    if let Some(hash) = crate::executor::values::key_hash(instance, item) {
+        object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
+        for existing in object.candidates(hash) {
+            if crate::executor::values::values_equal_public(instance, existing, item) {
+                return Some(existing);
+            }
+        }
+        return None;
+    }
+    object
+        .position_of(|candidate| crate::executor::values::values_equal_public(instance, candidate, item))
+        .and_then(|position| object.item(position))
+}
+
+/// **往集合里加一项**（round 70）：已存在 ⇒ 归还这份引用并给 `Ok(false)` ✓；
+/// 不存在 ⇒ **转移**这份引用并给 `Ok(true)` ✓。可哈希走索引 ✓、不可哈希退回线性 ✓；
+/// **用户 `__eq__` 仍生效** ✓（`test_numeric_tower.test_hash_normalization` 的 HalibutProxy ✓）。
+pub(crate) fn set_insert(
+    instance: &Instance,
+    set: NonNull<Header>,
+    item: NonNull<Header>,
+) -> Result<bool, crate::ExecError> {
+    // SAFETY: 调用方保证 set 是本实例的 `set`。
+    let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+    let same = |candidate: NonNull<Header>| -> Result<bool, crate::ExecError> {
+        if crate::executor::protocol::has_custom_eq(instance, candidate)
+            || crate::executor::protocol::has_custom_eq(instance, item)
+        {
+            return crate::executor::protocol::equality_public(instance, candidate, item);
+        }
+        Ok(crate::executor::values::values_equal_public(instance, candidate, item))
+    };
+    if let Some(hash) = crate::executor::values::key_hash(instance, item) {
+        object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
+        for existing in object.candidates(hash) {
+            match same(existing) {
+                Ok(true) => {
+                    // SAFETY: 这份引用由调用方交来（转移语义），这里不存 ⇒ 归还 ✓。
+                    unsafe { instance.release_object(item.as_ptr()) };
+                    return Ok(false);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    // SAFETY: 同上。
+                    unsafe { instance.release_object(item.as_ptr()) };
+                    return Err(error);
+                }
+            }
+        }
+        object.insert_hashed(item, hash);
+        return Ok(true);
+    }
+    for position in 0..object.len() {
+        if let Some(existing) = object.item(position) {
+            if same(existing)? {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(item.as_ptr()) };
+                return Ok(false);
+            }
+        }
+    }
+    object.insert_raw(item);
+    Ok(true)
 }
 
 pub(crate) fn set_add_native(
@@ -82,10 +280,9 @@ pub(crate) fn set_add_native(
             "add() takes exactly one argument (0 given)",
         ));
     };
-    if set_contains(instance, set, *item).is_none() {
-        instance.retain(*item);
-        instance.set_insert_raw(set, *item);
-    }
+    // **哈希索引插入**（round 70）：`set_insert` 自己查重 ✓（转移语义 ⇒ 先 retain ✓）。
+    let owned = instance.retain(*item);
+    set_insert(instance, set, owned)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -102,10 +299,19 @@ pub(crate) fn set_discard_native(
             "discard() takes exactly one argument (0 given)",
         ));
     };
-    if let Some(index) = set_contains(instance, set, *item) {
+    if let Some(existing) = set_contains(instance, set, *item) {
         // SAFETY: 上面刚确认是本实例的 set。
         let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
-        if let Some(removed) = object.remove_at(index) {
+        // **指针索引删除**（round 88）：只摘那一个指针 ✓（下标不参与 ✓）；可哈希时 O(桶长) ✓。
+        let removed = match crate::executor::values::key_hash(instance, existing) {
+            Some(hash) => object.remove_ptr(existing, hash),
+            // 不可哈希（线性兜底命中的）⇒ 只能按指针线性找 ✓。
+            None => {
+                let position = object.position_of(|candidate| candidate == existing);
+                position.and_then(|position| object.remove_at(position))
+            }
+        };
+        if let Some(removed) = removed {
             // 被移除的那份引用由本对象持有 ⇒ 归还引擎 ✓
             unsafe { instance.release_object(removed.as_ptr()) };
         }
@@ -144,18 +350,34 @@ pub(crate) fn set_update_native(
             "update() takes exactly one argument (0 given)",
         ));
     };
-    let items = match instance.iterable_items(*iterable) {
+    let items = match instance.iterable_items(*iterable)? {
         Some(items) => items,
         None => {
             return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
         }
     };
+    // `iterable_items` 交的是**新引用** ⇒ 重复项归还、新项由 `set_insert_raw` 接手 ✓
+    //（先前重复项既不放、新项又多 retain 一次 ✗ ⇒ 两处泄漏；round 58 统一口径 ✓）。
     for item in items {
-        if set_contains(instance, set, item).is_none() {
-            instance.retain(item);
+        if set_contains(instance, set, item).is_some() {
+            instance.release(item);
+        } else {
             instance.set_insert_raw(set, item);
         }
     }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `set.clear()`（round 164）：清空并归还元素引用（复用 `set_clear` ✓ 一处真相）。
+pub(crate) fn set_clear_method_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    // SAFETY: `set` 是绑定来的本实例存活对象；`set_clear` 只清载荷并归还引用。
+    unsafe { set_clear(set.as_ptr(), instance) };
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -191,7 +413,7 @@ pub(crate) fn set_issuperset_native(
             "issuperset() takes exactly one argument (0 given)",
         ));
     };
-    let Some(items) = instance.iterable_items(*other) else {
+    let Some(items) = instance.iterable_items(*other)? else {
         return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
     };
     let superset = items
@@ -213,8 +435,30 @@ pub(crate) unsafe fn set_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut H
 pub(crate) unsafe fn set_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<SetObject>() };
+    // **索引先作废**（round 88）：索引里是元素的**地址**（非持有引用）⇒ 元素释放后必须一起清 ✓
+    // （否则 `clear` 之后的下一次查询会拿旧地址强转 ⇒ 悬垂读 ✗）。
+    *object.index.borrow_mut() = None;
     // **同 `list_clear`** ✗（第 206 轮修复 ✓）。
-    for value in core::mem::take(&mut *object.items.borrow_mut()) {
+    let values = core::mem::take(&mut *object.items.borrow_mut());
+    // **诊断（round 108，`PYAWA_DANGLING=1` 时）**：集合元素里若出现**已被释放**的指针，直接点名
+    // "集合地址／长度／下标／元素地址"，而不是只报一条 `set_clear` 的悬垂（那样看不出是哪个集合 ✓）。
+    if crate::diag::flag_site!("PYAWA_DANGLING") {
+        for (index, value) in values.iter().enumerate() {
+            // **注册类型不进活表**（由 `types` 注册表持有）⇒ 排除，避免误报 ✓。
+            if !instance.is_live_address(*value)
+                && !instance.is_registered_type(unsafe { core::ptr::NonNull::new_unchecked(value.as_ptr()) })
+            {
+                // SAFETY: 只做地址打印，不解引用。
+                panic!(
+                    "[set-clear] 集合 {ptr:p}（len={}）的下标 {index} 元素 {value:p} **已不在活表** \
+                     ⇒ 某处把元素放进集合却没留计数（现场/回溯见下）\n{}",
+                    values.len(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
+    }
+    for value in values {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(value.as_ptr()) };
     }
@@ -252,7 +496,17 @@ pub unsafe fn set_new(
         }
         _ => {
             borrowed = false;
-            let iterator = instance.iter_object(*source)?;
+            let iterator = match instance.iter_object(*source) {
+                Ok(iterator) => iterator,
+                Err(error) => {
+                    // **本次调用已分配的 `empty` 要还**（task-18 真泄漏修）：先前 `?` 直接上抛
+                    // ⇒ 每失败一次漏一个 set/frozenset（实测 `set(Plain())`／`frozenset(Plain())`
+                    // ×10000 各漏 10000 个）。错误语义不变：照样把 `iter_object` 的错误上抛。
+                    // SAFETY: `empty` 是本函数此前刚分配的新引用（此路径上无人再持有）。
+                    unsafe { instance.release_object(empty.as_ptr()) };
+                    return Err(error);
+                }
+            };
             loop {
                 match instance.advance_iterator(iterator)? {
                     Some(item) => items.push(item),
@@ -262,18 +516,15 @@ pub unsafe fn set_new(
             unsafe { instance.release_object(iterator.as_ptr()) };
         }
     }
-    // **去重靠 `set_contains` ＋ `set_insert_raw`** ✓（与 `set.add` **同一处** ✓）。
+    // **去重靠 `set_insert`** ✓（与 `set.add` **同一处** ✓；哈希索引增量维护 ✓ ——
+    // 先前用 `set_insert_raw`（作废索引）⇒ 每次插入后重建 O(n) ⇒ O(n²) ✗）。
     for item in items {
-        if set_contains(instance, empty, item).is_some() {
-            if !borrowed {
-                unsafe { instance.release_object(item.as_ptr()) };
-            }
-            continue;
-        }
-        if borrowed {
-            instance.retain(item);
-        }
-        instance.set_insert_raw(empty, item);
+        let owned = if borrowed {
+            instance.retain(item)
+        } else {
+            item
+        };
+        set_insert(instance, empty, owned)?;
     }
     Ok(empty)
 }
@@ -282,13 +533,20 @@ pub unsafe fn set_new(
 pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<SetObject>() };
+    // `P3-41`：与 `list`／`tuple`／`dict` 同口径的递归守卫（自引用 ⇒ `{...}`；
+    // 嵌套太深 ⇒ `RecursionError`，**不得**顶穿原生栈；守卫 RAII 摘除）。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("{...}".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
     // **子类的 repr 用子类名** ✓（第 410 轮，task-21 G2 顺带 ✓）：参照实测
     // `class St(set): pass` ⇒ `repr(St())` ＝ `'St()'` ✓（先前硬编码 `set()` ✗）。
     // 精确的 `set`／`frozenset` 保持原来的形式 ✓（`set()`／`frozenset()`）。
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let class = unsafe { &*ptr }.ty();
-    let exact_set = Some(class) == instance.type_named("set");
-    let exact_frozenset = Some(class) == instance.type_named("frozenset");
+    let exact_set = Some(class) == instance.hot_type(HotId::Set);
+    let exact_frozenset = Some(class) == instance.hot_type(HotId::FrozenSet);
     let class_text = instance.type_name(class).to_owned();
     let items = object.items();
     if items.is_empty() {
@@ -320,6 +578,71 @@ pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, 
 /// （参照实测：可接多个可迭代；`{1}.union(5)` ⇒ `TypeError: 'int' object is not iterable` ✓；
 /// 关键字实参 ⇒ `TypeError: set.union() takes no keyword arguments` ✓）。
 /// 去重口径与 `set.add` 同一处（`values_equal_public` ✓）。
+/// **集合二元运算符的类型字典入口**（round 216）：`set.__sub__`／`__or__`／`__and__`／`__xor__`
+/// （`test_collections.TestCounter.test_multiset_operations` 直接取它们 ✓）。绑定／未绑定都认 ✓。
+fn set_binary_op_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    symbol: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, rest) = match bound {
+        Some(left) => (left, args),
+        None => match args.split_first() {
+            Some((left, rest)) => (*left, rest),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "unbound method needs an argument",
+                ))
+            }
+        },
+    };
+    let Some(right) = rest.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{symbol} expected 1 argument, got 0"),
+        ));
+    };
+    Ok(crate::executor::set_operation(instance, left, *right, symbol))
+}
+
+pub(crate) fn set_sub_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "-")
+}
+
+pub(crate) fn set_or_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "|")
+}
+
+pub(crate) fn set_and_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "&")
+}
+
+pub(crate) fn set_xor_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    set_binary_op_native(instance, bound, args, "^")
+}
+
 pub(crate) fn set_union_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -406,11 +729,10 @@ pub(crate) fn set_union_native(
     }
     // `frozenset.union` 的结果仍是 frozenset ✓（参照实测）；其余给 set ✓。
     let receiver_type = instance.type_of(this);
-    let result_is_frozen = instance
-        .type_named("frozenset")
+    let result_is_frozen = instance.hot_type(HotId::FrozenSet)
         .is_some_and(|frozen| instance.is_subtype(receiver_type, frozen));
     if result_is_frozen {
-        let frozen_type = instance.type_named("frozenset").expect("frozenset 在引导期已登记");
+        let frozen_type = instance.hot_type(HotId::FrozenSet).expect("frozenset 在引导期已登记");
         let object = instance.alloc(SetObject::new(
             frozen_type,
             core::cell::RefCell::new(accumulated),
@@ -419,4 +741,205 @@ pub(crate) fn set_union_native(
     } else {
         Ok(instance.new_set(accumulated))
     }
+}
+
+/// 取"接收者"与其余实参的集合视图（`intersection`／`difference`／`issubset`／`isdisjoint` 共用）：
+/// 返回 `(接收者元素借用表, 方法名)`；实参不可迭代 ⇒ 参照文案的 `TypeError` ✓。
+fn set_method_receiver(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    name: &str,
+) -> Result<(NonNull<Header>, Vec<NonNull<Header>>), ExecError> {
+    let (this, rest) = match bound {
+        Some(this) => (this, args.to_vec()),
+        None => match args.split_first() {
+            Some((this, rest)) => (*this, rest.to_vec()),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("unbound method set.{name}() needs an argument"),
+                ))
+            }
+        },
+    };
+    Ok((this, rest))
+}
+
+/// **通用迭代取元素**（借用视图转成**新引用**表；调用方负责逐个归还 ✓）。
+fn collect_iterable_owned(
+    instance: &Instance,
+    argument: NonNull<Header>,
+) -> Result<Vec<NonNull<Header>>, ExecError> {
+    let iterator = match instance.iter_object(argument) {
+        Ok(iterator) => iterator,
+        Err(ExecError::Unsupported { .. }) | Err(ExecError::Raised { .. }) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!(
+                    "'{}' object is not iterable",
+                    instance.type_name(instance.type_of(argument))
+                ),
+            ))
+        }
+        Err(error) => return Err(error),
+    };
+    let mut collected: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(item)) => collected.push(item),
+            Ok(None) => break,
+            Err(error) => {
+                for item in collected {
+                    instance.release(item);
+                }
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(collected)
+}
+
+/// `set.intersection(other, …)`（round 92）：按 `values_equal` 判等；结果顺序按接收者 ✓。
+pub(crate) fn set_intersection_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set.intersection() takes no keyword arguments",
+        ));
+    }
+    let (this, rest) = set_method_receiver(instance, bound, args, "intersection")?;
+    if rest.is_empty() {
+        // 参照：没有实参 ⇒ 一份拷贝 ✓。
+        // **拷贝要自己那份引用**（round 108 真 bug 修 ✗）：`set_items` 给的是**借用**，而 `new_set`
+        // 的契约是**接手一批新引用** ⇒ 先前直接把借用交出去 ✗ ⇒ 新集合里的元素**没有计数** ✓
+        // （`PYAWA_DANGLING=1` 跑 `test_set` 的 `[set-clear] … 已不在活表` 现场：`set.intersection()`
+        // 无参拷贝的元素被原集合先释放 ⇒ 集合收尸时再减一次 ⇒ 悬垂/堆损坏 ✓）。
+        let items: Vec<NonNull<Header>> = instance
+            .set_items(this)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| instance.retain(item))
+            .collect();
+        return Ok(instance.new_set(items));
+    }
+    let mut others: Vec<Vec<NonNull<Header>>> = Vec::new();
+    for argument in &rest {
+        others.push(collect_iterable_owned(instance, *argument)?);
+    }
+    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| {
+        items.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, wanted)
+        })
+    };
+    let mut kept: Vec<NonNull<Header>> = Vec::new();
+    for item in instance.set_items(this).unwrap_or_default() {
+        if others.iter().all(|other| contains(other, item)) {
+            instance.retain(item);
+            kept.push(item);
+        }
+    }
+    for other in &others {
+        for item in other {
+            instance.release(*item);
+        }
+    }
+    Ok(instance.new_set(kept))
+}
+
+/// `set.difference(other, …)`（round 92）：接收者里不在任何实参里的元素 ✓（顺序按接收者 ✓）。
+pub(crate) fn set_difference_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set.difference() takes no keyword arguments",
+        ));
+    }
+    let (this, rest) = set_method_receiver(instance, bound, args, "difference")?;
+    let mut others: Vec<Vec<NonNull<Header>>> = Vec::new();
+    for argument in &rest {
+        others.push(collect_iterable_owned(instance, *argument)?);
+    }
+    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| {
+        items.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, wanted)
+        })
+    };
+    let mut kept: Vec<NonNull<Header>> = Vec::new();
+    for item in instance.set_items(this).unwrap_or_default() {
+        if !others.iter().any(|other| contains(other, item)) {
+            instance.retain(item);
+            kept.push(item);
+        }
+    }
+    for other in &others {
+        for item in other {
+            instance.release(*item);
+        }
+    }
+    Ok(instance.new_set(kept))
+}
+
+/// `set.issubset(other)`（round 92）：接收者的每个元素都在实参里 ✓（实参必须是单个可迭代 ✓）。
+pub(crate) fn set_issubset_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = set_method_receiver(instance, bound, args, "issubset")?;
+    let Some(argument) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "issubset() takes exactly one argument (0 given)",
+        ));
+    };
+    let other = collect_iterable_owned(instance, argument)?;
+    let missing = instance.set_items(this).unwrap_or_default().iter().any(|item| {
+        !other.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, *item)
+        })
+    });
+    for item in other {
+        instance.release(item);
+    }
+    Ok(instance.new_bool(!missing))
+}
+
+/// `set.isdisjoint(other)`（round 92）：接收者与实参没有公共元素 ✓。
+pub(crate) fn set_isdisjoint_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = set_method_receiver(instance, bound, args, "isdisjoint")?;
+    let Some(argument) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "isdisjoint() takes exactly one argument (0 given)",
+        ));
+    };
+    let other = collect_iterable_owned(instance, argument)?;
+    let shared = instance.set_items(this).unwrap_or_default().iter().any(|item| {
+        other.iter().any(|existing| {
+            crate::executor::values::values_equal_public(instance, *existing, *item)
+        })
+    });
+    for item in other {
+        instance.release(item);
+    }
+    Ok(instance.new_bool(!shared))
 }

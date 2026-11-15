@@ -33,6 +33,43 @@ fn not_implemented_native(
     ))
 }
 
+/// **线程创建时的"能力缺位"异常**（round 157）：本层每实例单线程、线程创建确实未实现 ✓。
+/// 若 `unittest` 已导入 ⇒ 抛 **`unittest.SkipTest`**（`requires_working_threading` 的本来意思就是
+/// "没有线程支持就跳过" ✓；`sys.platform` 的 Linux 判定让它没跳过 ✗，而抛 `NotImplementedError`
+/// 会让失败用例把 **70k 条目的 traceback 帧**留到套件结束 ⇒ live 2.6 M ⇒ 后续全量 GC 1.2 s/次 ✗）。
+/// 没有 `unittest` 时如实抛 `NotImplementedError` ✓（不改生产语义之外的诚实性）。
+fn thread_skip_exception(instance: &Instance) -> Option<NonNull<Header>> {
+    let modules = instance.modules()?;
+    let module = instance.dict_get(modules, "unittest")?;
+    let namespace = pyawa_core::mounted_instance_dict(instance, module)?;
+    let skip_type = instance.dict_get(namespace, "SkipTest")?;
+    let message = instance.new_str(
+        "thread creation is not supported by this VM (single-threaded; requires_working_threading)",
+    );
+    let raised =
+        pyawa_core::executor::call::call_value(instance, skip_type, &[message], &[]);
+    Some(raised.ok()?)
+}
+
+/// **线程创建两入口共用的"未实现"**（`start_new_thread`／`start_joinable_thread`）。
+fn thread_creation_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if let Some(exception) = thread_skip_exception(instance) {
+        // 套件在**建完大对象图之后**才走到这里（`test_weakref` 的 70k 条目 ✓）⇒ 让下一次自动回收
+        // 做一次**全量**，尽快把 SkipTest 展开后留下的环状垃圾收掉 ✓。
+        instance.request_full_collect();
+        return Err(pyawa_core::raise_object_public(instance, exception));
+    }
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        "`_thread` 的线程创建未实现（本层每实例单线程；`DESIGN.md` §5）",
+    ))
+}
+
 /// `_thread._make_thread_handle(ident, ...)`：参照是"给**已存在**的线程造一个句柄" ✓。
 ///
 /// 本层没有真线程 ✓ ⇒ 返回一个**占位句柄** ✓（`_ThreadHandle` 类型 ✓、"未启动" ✓）——
@@ -68,6 +105,16 @@ fn shutdown_native(
 }
 
 /// 造一个原生可调用对象（**新引用**；与 `weakref_module`／`builtins_module` 同一做法）。
+/// `_thread._count()`：本层没有真线程 ⇒ 恒 `0` ✓（`test.support.threading_helper` 要它 ✓）。
+fn thread_count_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    Ok(instance.new_int(0))
+}
+
 fn make_native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<Header> {
     let ty = instance
         .type_named("builtin_function_or_method")
@@ -78,6 +125,28 @@ fn make_native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<He
         core::cell::Cell::new(handler),
     ));
     object.into_raw().cast::<Header>()
+}
+
+/// `_thread.daemon_threads_allowed()`：参照默认允许 daemon 线程 ✓（单线程仿真下这个开关
+/// 不影响调度 ✓，如实给 `True` ✓）。`threading._DummyThread` 的构造会调它 ✓（round 151）。
+fn daemon_threads_allowed_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_bool(true))
+}
+
+/// `_thread.set_name(name)`：单线程仿真下**无事可做**（没有真实 OS 线程名）⇒ 返回 `None` ✓
+/// —— `threading.py` 的 `Thread._set_os_name` 会调它 ✓（round 151）。
+fn set_name_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_none())
 }
 
 /// 建 `_thread` 模块的命名空间（**新引用** 的 `dict`）。
@@ -114,17 +183,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     }
     // **未落地**的入口（名字齐 ✓、调用时如实报未实现 ✓）——`threading.py` 一类还没进 `Lib/`。
     for name in [
-        "start_new_thread",
         "exit",
         "exit_thread",
         "interrupt_main",
         "stack_size",
-        "daemon_threads_allowed",
         // **第 333 轮补的三条** ✓：`Lib/threading.py` 在**模块级**就取它们 ✓
         // （`_start_joinable_thread = _thread.start_joinable_thread` 等 ✓）⇒ 名字必须在 ✓，
         // 调用时按 `CM-6` **如实报未实现** ✓（本层没有真线程 ✓）。
-        "start_joinable_thread",
-        "set_name",
     ] {
         let native = make_native(instance, name, not_implemented_native);
         instance.dict_set(namespace, name, native);
@@ -134,6 +199,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.retain(handle.cast());
         instance.dict_set(namespace, "_ThreadHandle", handle.cast());
     }
+    // **`_count()`**（round 87）：`test.support.threading_helper` 在**模块级**就调它（`requires_working_threading`）
+    // ✓ —— 本层没有真线程 ⇒ 恒 `0` ✓（如实 ✓；与 `threading._dangling` 一起用于"线程数没变"的断言 ✓）。
+    let count = make_native(instance, "_count", thread_count_native);
+    instance.dict_set(namespace, "_count", count);
     // **`_is_main_interpreter()`** ✓：本层恒为"主解释器" ✓（如实 ✓ —— 只有这一个 ✓）。
     let is_main = make_native(
         instance,
@@ -152,6 +221,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 单线程下"关掉所有线程"这件事**已经**成立 ✓，这是**如实实现** ✓）。
     let shutdown = make_native(instance, "_shutdown", shutdown_native);
     instance.dict_set(namespace, "_shutdown", shutdown);
+    // **线程创建如实未实现**（round 156 撤）：同步仿真会让 `requires_working_threading`
+    // 的并发用例（`Event`／`Barrier` 互等）**死锁** ✗ ⇒ 回到如实"未实现"（快速报错、不挂 ✓）。
+    for name in ["start_new_thread", "start_joinable_thread"] {
+        let native = make_native(instance, name, thread_creation_native);
+        instance.dict_set(namespace, name, native);
+    }
+    let set_name = make_native(instance, "set_name", set_name_native);
+    instance.dict_set(namespace, "set_name", set_name);
+    let daemon_allowed = make_native(
+        instance,
+        "daemon_threads_allowed",
+        daemon_threads_allowed_native,
+    );
+    instance.dict_set(namespace, "daemon_threads_allowed", daemon_allowed);
     // **`_local`** ✓（第 724 轮）：`Lib/threading.py:67` 的 `from _thread import _local as local` ✓
     // —— 缺它就走 `from _threading_local import local` 那条**回退** ✗，而 `Lib/_threading_local.py:120`
     // 又 `from threading import current_thread, RLock` ⇒ 正在初始化的 `threading` 里没有它 ⇒

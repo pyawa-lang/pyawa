@@ -23,14 +23,20 @@ use core::ptr::NonNull;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pyawa_core::compile::{compile, instantiate, CheckTier, CompileError, Mode};
+use pyawa_core::compile::{
+    compile_with_host_functions, instantiate, CheckTier, CompileError, HostFunctionSignature,
+    Mode,
+};
 use pyawa_core::{
-    DictObject, ExecError, FloatObject, Frame, Header, Instance, IntObject, ListObject, StrObject,
+    AttributeObject, DictObject, ExecError, FloatObject, Frame, Header, Instance, IntObject,
+    ListObject, StrObject,
 };
 
 pub mod export;
 pub mod helpers;
 pub mod host;
+/// **`AB-69`** 的签名数据模型与边界检查（`pa_type_expr` 句柄版）。
+mod host_signature;
 /// **宿主平台 `errno` 数字表**（生成物；`CM-20`／`DESIGN.md` §9 第 20 条）。
 ///
 /// **为什么在 ABI crate**（task-20 ✓）：`pa_create` 是**所有 ABI 宿主**（CLI／语料 harness／
@@ -66,8 +72,10 @@ pub mod status {
     pub const PA_ERR_INVALID: i32 = 6;
     /// ABI 版本或尺寸不兼容（`AB-40`）。
     pub const PA_ERR_ABI: i32 = 7;
-    /// 预留区起点（`AB-20`：新增状态码**必须**落在 `8..=31`）。
-    pub const PA_ERR_RESERVED_FIRST: i32 = 8;
+    /// 属性/方法派发回调的"**未处理**"（`AB-73`；VM 内部回退，不直接暴露给 guest）。
+    pub const PA_ERR_NOTFOUND: i32 = 8;
+    /// 预留区起点（`AB-20`：新增状态码**必须**落在 `9..=31`）。
+    pub const PA_ERR_RESERVED_FIRST: i32 = 9;
     /// 预留区终点。
     pub const PA_ERR_RESERVED_LAST: i32 = 31;
 }
@@ -88,7 +96,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 3;
+pub const PA_ABI_MINOR: u32 = 14;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -316,6 +324,127 @@ where
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(status::PA_ERR_RUNTIME)
 }
 
+/// **宿主 C 函数的同一性比较**（`AB-69` 的签名按函数指针查）。
+///
+/// 口径：宿主在同一个进程里把**注册时用的那个指针**再传给 `pa_func_set_signature` ⇒ 值相等
+/// 就够用；Rust 的"跨 codegen unit 地址可能不同"警告在本用法下不成立（双方都是宿主传进来的
+/// 同一个函数指针值），故在此集中 `allow` 并注释，不散落到调用点。
+#[allow(unpredictable_function_pointer_comparisons)]
+fn same_host_function(left: host::PaHostFn, right: host::PaHostFn) -> bool {
+    left == right
+}
+
+/// **`AB-52`／M4**：把注册时 `pa_sig` 里的 `type_expr` 字符串求值成 `TyExpr`
+/// （与 `AB-69` 的句柄**同一表示**，`TS-56`）。
+///
+/// 失败策略（`TS-54`，未发布窗口内严格）：
+/// - 语法错／未知名／形态不合法 ⇒ `Err(可诊断消息)`，调用方回 `PA_ERR_INVALID`（**不静默降级**）；
+/// - **前向引用**暂未解析到（`ResolveError::Deferred`）⇒ 该形参/返回落 [`host_signature::TyExpr::Platform`]
+///   （平台类型：不检查；显式前向引用允许延迟，见 `TS-52`）；
+/// - `type_expr == NULL` ⇒ 未声明类型 ⇒ 同样 `Platform`。
+///
+/// 返回 `(params, ret, has_declared)`；`has_declared=false` ⇒ 整条签名没有任何类型信息
+/// （不必进 `host_typed_signatures`，保持"未声明 ⇒ 与今天完全一致"）。
+fn evaluate_pa_sig_types(
+    state: &pa_state,
+    signature: &host::Signature,
+    scope_globals: Option<NonNull<Header>>,
+) -> Result<(Vec<host_signature::TyExpr>, Option<host_signature::TyExpr>, bool), String> {
+    use pyawa_core::type_expr::{
+        evaluate_type_expression, ResolveError, ResolveScope, TypeAnnotationError,
+    };
+    let scope = ResolveScope {
+        instance: &state.instance,
+        globals: scope_globals,
+        tparams: &[],
+    };
+    let mut has_declared = false;
+    let mut evaluate = |text: &str| -> Result<host_signature::TyExpr, String> {
+        has_declared = true;
+        match evaluate_type_expression(&scope, text) {
+            Ok(semantic) => Ok(host_signature::TyExpr::from(semantic)),
+            // 前向引用延迟：落平台类型（显式延迟，不是"把坏注解吞掉"）。
+            Err(TypeAnnotationError::Resolve(ResolveError::Deferred(_))) => {
+                Ok(host_signature::TyExpr::Platform)
+            }
+            Err(TypeAnnotationError::Syntax(error)) => Err(format!(
+                "`AB-52`：`type_expr` 语法错（{error:?}）"
+            )),
+            Err(TypeAnnotationError::Resolve(error)) => {
+                Err(format!("`AB-52`：`type_expr` 求值失败（{error}）"))
+            }
+        }
+    };
+    let mut params = Vec::with_capacity(signature.params.len());
+    for param in &signature.params {
+        match &param.type_expr {
+            Some(text) => params.push(evaluate(text)?),
+            None => params.push(host_signature::TyExpr::Platform),
+        }
+    }
+    let ret = match &signature.ret_expr {
+        Some(text) => Some(evaluate(text)?),
+        None => None,
+    };
+    Ok((params, ret, has_declared))
+}
+
+/// 把 `AB-52` 字符串求值出的签名登记进 `host_typed_signatures`（`AB-69` 的同一账本）：
+/// - 边界运行期检查与编译期调用点检查由此对字符串通道**同样生效**（`TS-56`）；
+/// - 同一 C 函数已有 `AB-69` 句柄签名 ⇒ **不覆盖**（句柄更精确；两者应同表示，冲突以句柄为准）。
+fn register_pa_sig_typed_signature(
+    state: &mut pa_state,
+    function: host::PaHostFn,
+    params: Vec<host_signature::TyExpr>,
+    ret: Option<host_signature::TyExpr>,
+    flags: u32,
+) {
+    if state
+        .host_typed_signatures
+        .iter()
+        .any(|signature| same_host_function(signature.function, function))
+    {
+        return;
+    }
+    state
+        .host_typed_signatures
+        .push(host_signature::TypedSignature {
+            function,
+            params,
+            ret,
+            tparams: Vec::new(),
+            flags,
+        });
+}
+
+/// **`AB-69`**：把本实例已声明的 `pa_type_expr` 签名投影成编译期声明表（`TS-47` 调用点检查用）。
+///
+/// 同一 C 函数注册多次 ⇒ 每个注册名都带同一份声明 ✓（同实现同签名）。
+fn compiled_host_signatures(state: &pa_state) -> Vec<HostFunctionSignature> {
+    let mut signatures = Vec::new();
+    for signature in &state.host_typed_signatures {
+        let parameters: Vec<Option<String>> = signature
+            .params
+            .iter()
+            .map(host_signature::static_label)
+            .collect();
+        let returns = signature.ret.as_ref().and_then(host_signature::static_label);
+        for header in &state.host_functions {
+            // SAFETY: host_functions 只存本实例的宿主函数对象。
+            let host = unsafe { &*header.as_ptr().cast::<host::HostFunction>() };
+            if !same_host_function(host.function_pointer(), signature.function) {
+                continue;
+            }
+            signatures.push(HostFunctionSignature {
+                name: host.host_name().to_owned(),
+                parameters: parameters.clone(),
+                returns: returns.clone(),
+            });
+        }
+    }
+    signatures
+}
+
 /// **指针版边界**：`boundary` 只适配返回 `i32` 的入口（`AB-19`），返回借用视图
 /// （`*const c_char`）的入口用它。
 ///
@@ -369,12 +498,20 @@ macro_rules! state_or {
 
 // ---- 实例生命周期（`AB-55`／`AB-56`／`AB-57`）----
 
+/// **`AB-73`**：一个宿主类型的回调记录（`pa_set_type_ops` 写入；类型对象只存不透明字）。
+struct ObjectOpsRecord {
+    /// 所属实例（回调拿到 `pa_state *` 用；实例存活期间有效）。
+    state: *mut pa_state,
+    /// 回调副本（按自带尺寸读；`AB-43`）。
+    ops: host::TypeOps,
+}
+
 /// 实例句柄（`AB-14`：宿主只见**不透明**指针；头部与类型对象**禁止**出现在签名里）。
 ///
 /// 名字照 C 侧（`AB-45` 的单一头文件里就写作 `pa_state`），故这里显式关掉命名检查。
-#[allow(non_camel_case_types)]
 ///
 /// 字段是本 crate 私有的；宿主拿到的只是 `*mut pa_state`。
+#[allow(non_camel_case_types)]
 pub struct pa_state {
     /// 被驱动的实例（`OM-15`：类型注册表与对象堆都按实例存放）。
     instance: Instance,
@@ -388,6 +525,10 @@ pub struct pa_state {
     host_function_type: Option<NonNull<pyawa_core::TypeObject>>,
     /// 本实例注册过的宿主函数对象（**持有一份引用**，便于签名查询与析构时归还）。
     host_functions: Vec<NonNull<Header>>,
+    /// **`AB-73`**：绑定方法对象（`HostBoundMethod`）的类型（每实例一次，惰性创建）。
+    host_bound_method_type: Option<NonNull<pyawa_core::TypeObject>>,
+    /// **`AB-74`**：宿主经 `pa_raise_host_exception` 记录的类型化异常（边界处重抛；新引用）。
+    host_exception: Option<NonNull<Header>>,
     /// 本实例注册过的宿主类型（`AB-35`；`kind` → 类型）。
     host_types: Vec<host::RegisteredType>,
     /// **`AB-32`／`AB-33`**：九个能力域的注册状态（域索引见 [`capability`]）。
@@ -400,6 +541,37 @@ pub struct pa_state {
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
     message: Option<CString>,
+    /// **`co_filename` 的来源**（round 176）：CLI 在 `pa_exec_bytecode`／`pa_exec_string` 前设置；
+    /// 未设置时用测试占位名 `<pyawa-test>` ✓（`test_frame.ReprTest.test_repr` 要真实路径 ✓）。
+    program_filename: Option<String>,
+    /// **`AB-67`**：本实例注入过的宿主模块（宿主持有不透明句柄；模块对象由 `sys.modules`
+    /// 与这里**各持一份引用**，故脚本从 `sys.modules` 删掉也不会让句柄悬空 ✓）。
+    host_modules: Vec<Box<HostModule>>,
+    /// **`AB-67`** 的生命周期守卫：宿主函数回调期间（VM 正在执行）**禁止改模块结构** ✗。
+    /// 只在模块注册 API 里检查；置位／复位在 [`host_function_call`] 的边界内。
+    in_host_callback: bool,
+    /// **`AB-69`**：本实例创建的 `pa_type_expr` 句柄（宿主只能当不透明指针传回；`pa_destroy` 后失效）。
+    host_tys: Vec<Box<host_signature::TyExpr>>,
+    /// **`AB-69`**：已声明的宿主函数签名（按宿主 C 函数指针查；每个函数至多一条）。
+    host_typed_signatures: Vec<host_signature::TypedSignature>,
+    /// **`AB-73`**：宿主类型的 `pa_type_ops` 记录（类型对象的不透明字指向 `Box` 内容；
+    /// `pa_destroy` 时随实例释放）。
+    object_ops: Vec<Box<ObjectOpsRecord>>,
+    /// **`AB-69`**："签名与函数同一时刻给"的判据：每次注册记下当时的执行序号；
+    /// 声明签名时序号必须**未变**（说明注册后还没跑过任何脚本）✓。
+    host_function_serials: Vec<(host::PaHostFn, u64)>,
+    /// 本实例已经开始的执行序号（每次 `pa_exec_*` 进来自增）。
+    exec_serial: u64,
+}
+
+/// **`AB-67`**：一个已注入宿主模块的 ABI 侧记录（宿主拿到的 `pa_module` 就是指向它的不透明指针）。
+struct HostModule {
+    /// 模块对象（`AttributeObject`，名字空间挂在实例字典上）。**它同时是存活锚点**：
+    /// `new_host_module` 交回的初始引用一直留在这里（实例销毁时随堆释放）⇒ 就算脚本把
+    /// `sys.modules` 里的条目删了，名字空间也不会先被回收 ✓。
+    object: NonNull<Header>,
+    /// **完整点分名**（`sys.modules` 的键）。
+    full_name: String,
 }
 
 impl pa_state {
@@ -429,6 +601,10 @@ impl pa_state {
             ))
             .into_raw()
             .cast::<Header>();
+        // **`AB-68` 的前置**：ABI 宿主即使不装标准库，`import` 也必须有每实例的模块表与
+        // `sys.path`（`IM-*` 的语义就是读这两处 ✓）。`paL_openlibs` 由组合根产物提供（§12.13 #1）。
+        // 这里只装**最小 sys 骨架**（`sys.path` 空表 ＋ `sys.modules`），不装 builtins／标准库 ✓。
+        install_minimal_sys(&instance);
         Self {
             instance,
             stack: VirtualStack::new(),
@@ -442,6 +618,16 @@ impl pa_state {
             registrations: Vec::new(),
             diagnostic: false,
             message: None,
+            program_filename: None,
+            host_modules: Vec::new(),
+            in_host_callback: false,
+            host_tys: Vec::new(),
+            host_typed_signatures: Vec::new(),
+            object_ops: Vec::new(),
+            host_bound_method_type: None,
+            host_exception: None,
+            host_function_serials: Vec::new(),
+            exec_serial: 0,
         }
     }
 
@@ -469,6 +655,16 @@ impl pa_state {
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
+            program_filename: None,
+            host_modules: Vec::new(),
+            in_host_callback: false,
+            host_tys: Vec::new(),
+            host_typed_signatures: Vec::new(),
+            object_ops: Vec::new(),
+            host_bound_method_type: None,
+            host_exception: None,
+            host_function_serials: Vec::new(),
+            exec_serial: 0,
         }
     }
 
@@ -544,6 +740,1366 @@ pub unsafe extern "C" fn pa_create(host: *const pa_host, out: *mut *mut pa_state
     })
 }
 
+/// **最小 `sys` 骨架**（`AB-68` 的前置）：只装 `sys.path`（空表）与 `sys.modules`（含 `sys` 自己）。
+///
+/// 参照语义里 `sys` 也是模块对象（`import sys` 要能拿到它）；这里用与标准库组合根同一条形状：
+/// 模块表（`Instance::modules`）与 `sys.modules` 是**同一份 dict**（一处真相 ✓），`sys` 本身是
+/// `AttributeObject` 包着的名字空间 dict（`mounted_instance_dict` 可查 ✓）。
+fn install_minimal_sys(instance: &Instance) {
+    let modules = instance.new_dict();
+    let sys_namespace = instance.new_dict();
+    let path = instance.new_list(Vec::new());
+    instance.dict_set(sys_namespace, "path", path);
+    instance.dict_set(sys_namespace, "modules", modules);
+    let name = instance.new_str("sys");
+    instance.dict_set(sys_namespace, "__name__", name);
+    let module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let sys_object = instance
+        .alloc(AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(sys_namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    instance.dict_set(modules, "sys", sys_object);
+    instance.set_modules(Some(modules));
+}
+
+/// **把宿主给的目录表换成实例的 `sys.path`**（`AB-68`）：语义完全走 `IM-*`（只换 `sys.path`，
+/// 路径访问仍由 `fs` 能力域夹根 ✓）。`entries` 已由调用方**拷贝**（宿主的缓冲区返回后可释放 ✓）。
+fn set_search_path(instance: &Instance, entries: &[String]) -> bool {
+    let Some(modules) = instance.modules() else {
+        return false;
+    };
+    let Some(sys_module) = instance.dict_get(modules, "sys") else {
+        return false;
+    };
+    let Some(namespace) = pyawa_core::mounted_instance_dict(instance, sys_module) else {
+        return false;
+    };
+    let items: Vec<NonNull<Header>> = entries.iter().map(|entry| instance.new_str(entry)).collect();
+    let path = instance.new_list(items);
+    instance.dict_set(namespace, "path", path);
+    true
+}
+
+/// `pa_setpath(pa_state *state, const char *const *dirs, size_t n)`：**每实例 `sys.path`**（`AB-68`）。
+///
+/// `dirs == NULL` 或 `n == 0` ⇒ **清空**；否则逐项拷贝成 `str`（宿主缓冲区返回后可释放 ✓）。
+/// 路径能不能读由 **`fs` 能力域**决定（`CP-21`／`AB-32`），本函数只决定"在哪找" ✓。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`dirs` 非 `NULL` 时必须指向 `n` 个
+/// **NUL 结尾的 UTF-8 C 串**指针（每个非 `NULL`）。违反即返回 `PA_ERR_INVALID`，不解引用野指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_setpath(
+    state: *mut pa_state,
+    dirs: *const *const c_char,
+    count: usize,
+) -> i32 {
+    boundary(|| {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        let mut entries: Vec<String> = Vec::new();
+        if count > 0 {
+            if dirs.is_null() {
+                return status::PA_ERR_INVALID;
+            }
+            entries.reserve(count);
+            for index in 0..count {
+                // SAFETY: 调用方保证 `dirs` 指向 `count` 个可读指针（本函数 Safety 段）。
+                let pointer = unsafe { *dirs.add(index) };
+                // SAFETY: 同上，每个指针是 NUL 结尾的 C 串。
+                let Some(text) = (unsafe { host::read_c_string(pointer, 1 << 16) }) else {
+                    return status::PA_ERR_INVALID;
+                };
+                entries.push(text);
+            }
+        }
+        if set_search_path(&state.instance, &entries) {
+            status::PA_OK
+        } else {
+            state.set_message("`sys` 模块未装配（`AB-68` 的前置失败）");
+            status::PA_ERR_RUNTIME
+        }
+    })
+}
+
+// ---- `AB-67`：宿主模块注入（`pa_add_host_module` ＋ 原子 API）------------------------------
+
+/// **`AB-67`** 的保留名（顶层模块）：这些名字归 Pyawa 自己（结构／标准库），宿主**不得**覆盖 ✓。
+/// 追加式维护：以后标准库模块名稳定后，这里同步扩充；另外**注入时 `sys.modules` 里已有的名字**
+/// 一律视为保留（见 [`reserved_module_name`]）✓。
+const RESERVED_HOST_MODULE_NAMES: &[&str] = &["sys", "builtins", "_io", "io", "importlib", "_imp"];
+
+/// 简单标识符（模块名）：首字符字母或 `_`，其余字母／数字／`_`；`AB-67` 的树形名字**不允许点** ✗
+/// （带点名的子树走 `pa_module_addsubmodule`）。
+fn simple_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !(first.is_alphabetic() || first == '_') {
+        return false;
+    }
+    characters.all(|character| character.is_alphanumeric() || character == '_')
+}
+
+/// 顶层模块名是否保留（静态名单 ＋ 本实例 `sys.modules` 已有名字）。
+fn reserved_module_name(instance: &Instance, modules: NonNull<Header>, name: &str) -> bool {
+    RESERVED_HOST_MODULE_NAMES.contains(&name) || instance.dict_get(modules, name).is_some()
+}
+
+/// 建一个**普通 Python 模块对象**：名字空间 dict ＋ `__name__` ＋ `AttributeObject`（`module` 类型）。
+///
+/// 返回 `(模块对象, 名字空间)`；模块对象的**初始引用**由调用方持有（随后交给 `sys.modules`／父模块／
+/// 本实例的宿主模块表，具体见各 API）。
+fn new_host_module(instance: &Instance, full_name: &str) -> (NonNull<Header>, NonNull<Header>) {
+    let namespace = instance.new_dict();
+    let name = instance.new_str(full_name);
+    instance.dict_set(namespace, "__name__", name);
+    let module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let object = instance
+        .alloc(AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(namespace)),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    (object, namespace)
+}
+
+/// 把模块句柄解析成记录（**只认本实例登记过的指针** ✓：不 deref 任意宿主指针，避免 UB）。
+fn host_module_record<'a>(state: &'a pa_state, handle: *mut c_void) -> Option<&'a HostModule> {
+    if handle.is_null() {
+        return None;
+    }
+    state
+        .host_modules
+        .iter()
+        .find(|module| core::ptr::addr_of!(***module) as *const HostModule as *mut c_void == handle)
+        .map(|module| module.as_ref())
+}
+
+/// 取模块的名字空间（`mounted_instance_dict` 的同一份 dict；对象由记录持引用 ⇒ 存活 ✓）。
+fn module_namespace(instance: &Instance, module: &HostModule) -> Option<NonNull<Header>> {
+    pyawa_core::mounted_instance_dict(instance, module.object)
+}
+
+/// 模块注册类 API 的**统一前置检查**：诊断实例／回调期间／坏句柄 ⇒ 状态码。
+fn module_edit_gate(state: &mut pa_state, handle: *mut c_void) -> Result<(), i32> {
+    if state.diagnostic {
+        return Err(status::PA_ERR_ABI);
+    }
+    if state.in_host_callback {
+        state.set_message("`AB-67`：宿主函数回调内部禁止改模块结构（setup 阶段或两次调用之间才行）");
+        return Err(status::PA_ERR_INVALID);
+    }
+    if host_module_record(state, handle).is_none() {
+        state.set_message("`AB-67`：模块句柄无效（只认本实例 `pa_add_host_module`／`pa_module_addsubmodule` 交回的）");
+        return Err(status::PA_ERR_INVALID);
+    }
+    Ok(())
+}
+
+/// **`AB-67`**：`pa_add_host_module(st, name, pa_module *out)` —— 建一个**顶层宿主模块**并登记进
+/// 本实例的 `sys.modules`（`import <name>` 从第一行就能拿到 ✓）。名字不得是保留名／重复名，
+/// 且必须是**简单标识符**（树形子模块走 `pa_module_addsubmodule`）。
+///
+/// # Safety
+///
+/// `state` 存活；`name` 是 NUL 结尾 UTF-8；`out` 可写（成功时写入不透明句柄，失败不动）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_add_host_module(
+    state: *mut pa_state,
+    name: *const c_char,
+    out: *mut *mut c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        if state.in_host_callback {
+            state.set_message("`AB-67`：宿主函数回调内部禁止改模块结构");
+            return status::PA_ERR_INVALID;
+        }
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            state.set_message("`AB-67`：模块名必须是简单标识符（点分名走子模块 API）");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(modules) = state.instance.modules() else {
+            return status::PA_ERR_RUNTIME;
+        };
+        if reserved_module_name(&state.instance, modules, &text) {
+            state.set_message(&format!(
+                "`AB-67`：模块名 `{text}` 是保留名或已存在（禁止覆盖内置模块）"
+            ));
+            return status::PA_ERR_INVALID;
+        }
+        let (object, namespace) = new_host_module(&state.instance, &text);
+        // `sys.modules[<name>] = 模块对象`（`dict_set` 自己加一份引用 ✓）。
+        state.instance.dict_set(modules, &text, object);
+        // `namespace` 由模块对象持有（`mounted_instance_dict` 现取）⇒ 这里只锚住对象 ✓。
+        let _ = namespace;
+        state.host_modules.push(Box::new(HostModule {
+            object,
+            full_name: text,
+        }));
+        let handle = state
+            .host_modules
+            .last_mut()
+            .expect("刚 push 过")
+            .as_mut() as *mut HostModule as *mut c_void;
+        // SAFETY: out 可写（上面检查过）。
+        unsafe { *out = handle };
+        status::PA_OK
+    })
+}
+
+/// **`AB-78`**：模块注入函数的**统一投影**——"向模块对象写属性"（属性查找唯一，`AB-75`）。
+///
+/// 成功 ⇒ `PA_OK`；失败（模块对象拒写等）⇒ 归还异常引用并如实报错（`AB-22`）。
+fn module_attribute_write(
+    state: &mut pa_state,
+    module_object: NonNull<Header>,
+    name: &str,
+    value: NonNull<Header>,
+) -> i32 {
+    match pyawa_core::attribute_write(&state.instance, module_object, name, value) {
+        Ok(()) => status::PA_OK,
+        Err(error) => {
+            if let pyawa_core::ExecError::Raised { exception } = &error {
+                // 宿主侧只取状态码＋消息：显式丢弃异常引用（RAII 幂等）。
+                exception.discard();
+            }
+            state.set_message("`AB-78`：向模块对象写属性失败");
+            status::PA_ERR_RUNTIME
+        }
+    }
+}
+
+/// **`AB-67`**：`pa_module_setconst(st, module, name)` —— 把**栈顶**的值装成模块常量（**消费**栈顶，
+/// 语义同 `pa_setglobal`；值可以是裸数据或不透明句柄 ✓）。
+///
+/// # Safety
+///
+/// `state` 存活；`module` 是本实例交回的句柄；`name` 是 NUL 结尾 UTF-8。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_module_setconst(
+    state: *mut pa_state,
+    module: *mut c_void,
+    name: *const c_char,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if let Err(code) = module_edit_gate(state, module) {
+            return code;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            return status::PA_ERR_INVALID;
+        }
+        let Some(slot) = state.stack.pop_slot() else {
+            return status::PA_ERR_INVALID;
+        };
+        let module_object = host_module_record(state, module)
+            .map(|module| module.object)
+            .expect("gate 已确认句柄有效");
+        let code = module_attribute_write(state, module_object, &text, slot.object);
+        if slot.owned {
+            // 栈交出一份引用；属性写自己又加了一份 ⇒ 把栈这份还掉 ✓（借用则不用动）。
+            // SAFETY: slot.object 由本状态持有／借用，存活。
+            unsafe { state.instance.release_object(slot.object.as_ptr()) };
+        }
+        code
+    })
+}
+
+/// **`AB-67`**：`pa_module_addfunction(st, module, name, fn, const pa_sig *sig)` —— 把**宿主函数**
+/// 装进模块（签名**必须同时给**，`AB-25`／`AB-51`；后续 `AB-69` 的 `pa_type_expr` 签名走另一 API）。
+///
+/// # Safety
+///
+/// 同 `pa_module_setconst`，另：`sig` 按 `AB-51` 契约可读。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_module_addfunction(
+    state: *mut pa_state,
+    module: *mut c_void,
+    name: *const c_char,
+    function: host::PaHostFn,
+    sig: *const host::pa_sig,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if let Err(code) = module_edit_gate(state, module) {
+            return code;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            return status::PA_ERR_INVALID;
+        }
+        // AB-25：禁止无名签名的宿主函数。
+        // SAFETY: 调用方按契约给出 sig。
+        let Some(signature) = (unsafe { host::read_signature(sig) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        // **宿主模块的完整点分名**（task-6／缺口2：`__module__` 要报**所在模块**，
+        // 子模块取 `parent.child` —— 与 `sys.modules` 的键同一口径）。
+        let module_full_name = host_module_record(state, module)
+            .map(|module| module.full_name.clone())
+            .expect("gate 已确认句柄有效");
+        let module_object = host_module_record(state, module)
+            .map(|module| module.object)
+            .expect("gate 已确认句柄有效");
+        let namespace = host_module_record(state, module)
+            .and_then(|module| module_namespace(&state.instance, module))
+            .expect("gate 已确认句柄有效");
+        // **`AB-52`／M4**：字符串 `type_expr` 求值（作用域＝宿主模块命名空间：
+        // 名字先查模块自己的命名空间，再 builtins/类型注册表）。
+        let (typed_params, typed_ret, has_declared_types) = match evaluate_pa_sig_types(
+            state,
+            &signature,
+            Some(namespace),
+        ) {
+            Ok(evaluated) => evaluated,
+            Err(message) => {
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+        };
+        // SAFETY: 调用方按契约给出 sig。
+        let text_signature = unsafe { host::text_signature(&state.instance, sig) };
+        let created = create_host_function(state, &text, function, &signature, text_signature);
+        // **来源模块**（task-6／缺口2）：`pa_module_addfunction` 装的函数如实报宿主模块名。
+        state
+            .instance
+            .set_builtin_function_module(created, &module_full_name);
+        // **`AB-78`**：注入＝向模块对象写属性的投影（`created` 的初始引用由 `host_functions`
+        // 账本持有；属性写自己加一份）。
+        if module_attribute_write(state, module_object, &text, created) != status::PA_OK {
+            return status::PA_ERR_RUNTIME;
+        }
+        if has_declared_types {
+            register_pa_sig_typed_signature(
+                state,
+                function,
+                typed_params,
+                typed_ret,
+                signature.flags,
+            );
+        }
+        status::PA_OK
+    })
+}
+
+/// **`AB-79`**：把模块句柄对应的**模块对象**压栈（栈契约 **+1**；§12.13 #4）。
+///
+/// 使 C 宿主可对模块对象调用 `pa_set_object_ops`／`pa_setfield` 等普通对象 API（`AB-75` 模块态）。
+/// `module` 必须是本实例 `pa_add_host_module`／`pa_module_addsubmodule` 交回的句柄，否则
+/// `PA_ERR_INVALID`（`AB-22`）；同一句柄可多次上栈。
+///
+/// # Safety
+///
+/// `state`／`module` 按 `AB-67` 契约；`state` 存活。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushmodule(state: *mut pa_state, module: *mut c_void) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(record) = host_module_record(state, module) else {
+            state.set_message("`AB-79`：模块句柄无效（只认本实例交回的模块）");
+            return status::PA_ERR_INVALID;
+        };
+        let object = record.object;
+        // 模块对象由模块记录持有；栈要自己那份。
+        // SAFETY: object 由 host_modules 账本持有，实例存活期内有效。
+        unsafe { state.instance.incref_object(object.as_ptr()) };
+        state.stack.push_owned(object)
+    })
+}
+
+/// **`AB-67`**：`pa_module_addsubmodule(st, parent, name, pa_module *out)` —— 在已有宿主模块下建
+/// **子模块**（树形命名空间）：登记 `sys.modules["<parent>.<name>"]`、挂到父模块属性上 ✓。
+/// `import myapp.api`／`from myapp.api import f` 都靠这两步 ✓。
+///
+/// # Safety
+///
+/// 同 `pa_add_host_module`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_module_addsubmodule(
+    state: *mut pa_state,
+    parent: *mut c_void,
+    name: *const c_char,
+    out: *mut *mut c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if let Err(code) = module_edit_gate(state, parent) {
+            return code;
+        }
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if !simple_identifier(&text) {
+            return status::PA_ERR_INVALID;
+        }
+        let (parent_object, parent_name) = host_module_record(state, parent)
+            .map(|module| (module.object, module.full_name.clone()))
+            .expect("gate 已确认句柄有效");
+        let full_name = format!("{parent_name}.{text}");
+        let Some(modules) = state.instance.modules() else {
+            return status::PA_ERR_RUNTIME;
+        };
+        if state.instance.dict_get(modules, &full_name).is_some() {
+            state.set_message(&format!("`AB-67`：模块 `{full_name}` 已存在（禁止覆盖）"));
+            return status::PA_ERR_INVALID;
+        }
+        let (object, namespace) = new_host_module(&state.instance, &full_name);
+        // ① `sys.modules[<full>] = 子模块`；② 父模块属性 `<name> = 子模块`
+        // （`AB-78`：② 是"向模块对象写属性"的统一投影）。
+        state.instance.dict_set(modules, &full_name, object);
+        if module_attribute_write(state, parent_object, &text, object) != status::PA_OK {
+            return status::PA_ERR_RUNTIME;
+        }
+        let _ = namespace;
+        state.host_modules.push(Box::new(HostModule {
+            object,
+            full_name,
+        }));
+        let handle = state
+            .host_modules
+            .last_mut()
+            .expect("刚 push 过")
+            .as_mut() as *mut HostModule as *mut c_void;
+        // SAFETY: out 可写（上面检查过）。
+        unsafe { *out = handle };
+        status::PA_OK
+    })
+}
+
+// ---- `AB-69`：宿主函数签名（`pa_type_expr` 句柄版）-----------------------------------------------
+
+/// `pa_type_expr` 的**指针版边界**（`catch_unwind`；panic ⇒ `NULL` ＋ 实例消息，`AB-26` 同一口径）。
+fn boundary_ty<F>(state: *mut pa_state, body: F) -> *mut c_void
+where
+    F: FnOnce() -> *mut c_void,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(pointer) => pointer,
+        Err(_) => {
+            // SAFETY: state 由调用方按契约给出；`NULL` 时只返回 NULL。
+            if let Some(state) = unsafe { state.as_mut() } {
+                state.set_message("`pa_type_expr` 构造期间发生内部 panic（AB-26 边界已接住）");
+            }
+            core::ptr::null_mut()
+        }
+    }
+}
+
+/// 解析一个 `pa_type_expr` 句柄（**只认本实例建过的** ✓：不 deref 任意宿主指针）。
+fn ty_handle<'a>(state: &'a pa_state, handle: *mut c_void) -> Option<&'a host_signature::TyExpr> {
+    if handle.is_null() {
+        return None;
+    }
+    state
+        .host_tys
+        .iter()
+        .find(|ty| core::ptr::addr_of!(***ty) as *const host_signature::TyExpr as *mut c_void == handle)
+        .map(|ty| ty.as_ref())
+}
+
+/// 把一个类型表达式登记进实例并交出不透明句柄。
+fn push_ty(state: &mut pa_state, expression: host_signature::TyExpr) -> *mut c_void {
+    state.host_tys.push(Box::new(expression));
+    state
+        .host_tys
+        .last_mut()
+        .expect("刚 push 过")
+        .as_mut() as *mut host_signature::TyExpr as *mut c_void
+}
+
+/// `pa_type_expr` 构造的统一前置（诊断实例 ⇒ `NULL`）。返回 `true` 表示可以继续。
+fn ty_gate(state: &pa_state) -> bool {
+    !state.diagnostic
+}
+
+/// 具名类型解析：先查**运行时类型注册表**（内建名，如 `int`／`list`），再查**模块全局**（宿主类型
+/// 由 `pa_newtype` 注册时同时进了全局 ✓）。**解析时机＝声明签名时** ⇒ 宿主必须先注册类型再声明签名 ✓。
+fn resolve_named_type(state: &pa_state, name: &str) -> Option<NonNull<pyawa_core::TypeObject>> {
+    if let Some(ty) = state.instance.type_named(name) {
+        return Some(ty);
+    }
+    let value = state.instance.dict_get(state.globals, name)?;
+    state.instance.as_type(value)
+}
+
+/// `pa_type_expr pa_type_expr_runtime_tag(pa_state *state, int tag)`：`AB-63` 的运行时标签。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_runtime_tag(state: *mut pa_state, tag: i32) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        if !(stack::tag::PA_TNIL..=stack::tag::PA_TBYTES).contains(&tag) {
+            state.set_message("`pa_type_expr_runtime_tag`：tag 不在 `AB-63` 的取值域（0..=8）");
+            return core::ptr::null_mut();
+        }
+        push_ty(state, host_signature::TyExpr::RuntimeTag(tag))
+    })
+}
+
+/// `pa_type_expr pa_type_expr_named(pa_state *state, const char *name)`：具名类型（**同一性＝类型对象**）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_named(
+    state: *mut pa_state,
+    name: *const c_char,
+) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            state.set_message("`pa_type_expr_named`：name 不是合法 UTF-8 C 串");
+            return core::ptr::null_mut();
+        };
+        let Some(ty) = resolve_named_type(state, &text) else {
+            state.set_message(&format!(
+                "`pa_type_expr_named`：找不到类型 `{text}`（内置类型可由运行时解析；宿主类型须先 `pa_newtype`）"
+            ));
+            return core::ptr::null_mut();
+        };
+        push_ty(state, host_signature::TyExpr::Named(ty))
+    })
+}
+
+/// 读一个 `pa_type_expr` 句柄并 **clone** 出来（构造复合类型时用；句柄仍归实例所有 ✓）。
+fn clone_ty(state: &pa_state, handle: *mut c_void, what: &str) -> Option<host_signature::TyExpr> {
+    let Some(expression) = ty_handle(state, handle) else {
+        return None;
+    };
+    let _ = what;
+    Some(expression.clone())
+}
+
+/// `pa_type_expr pa_type_expr_list_of(pa_state *state, pa_type_expr elem)`：`list[T]`（边界只核 list 身份，`TS-35`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_list_of(state: *mut pa_state, elem: *mut c_void) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        let Some(elem) = clone_ty(state, elem, "elem") else {
+            state.set_message("`pa_type_expr_list_of`：elem 句柄无效");
+            return core::ptr::null_mut();
+        };
+        push_ty(state, host_signature::TyExpr::ListOf(Box::new(elem)))
+    })
+}
+
+/// `pa_type_expr pa_type_expr_dict_of(pa_state *state, pa_type_expr k, pa_type_expr v)`：`dict[K, V]`（只核 dict 身份）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_dict_of(
+    state: *mut pa_state,
+    key: *mut c_void,
+    value: *mut c_void,
+) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        let Some(key) = clone_ty(state, key, "k") else {
+            state.set_message("`pa_type_expr_dict_of`：k 句柄无效");
+            return core::ptr::null_mut();
+        };
+        let Some(value) = clone_ty(state, value, "v") else {
+            state.set_message("`pa_type_expr_dict_of`：v 句柄无效");
+            return core::ptr::null_mut();
+        };
+        push_ty(
+            state,
+            host_signature::TyExpr::DictOf(Box::new(key), Box::new(value)),
+        )
+    })
+}
+
+/// `pa_type_expr pa_type_expr_optional(pa_state *state, pa_type_expr t)`：`T?`（`None` 或 `T`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_optional(state: *mut pa_state, inner: *mut c_void) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        let Some(inner) = clone_ty(state, inner, "t") else {
+            state.set_message("`pa_type_expr_optional`：t 句柄无效");
+            return core::ptr::null_mut();
+        };
+        push_ty(state, host_signature::TyExpr::Optional(Box::new(inner)))
+    })
+}
+
+/// 从 `const pa_type_expr *` 读一段句柄（`n == 0` ⇒ 空；`NULL` 配 `n > 0` ⇒ `None`）。
+unsafe fn read_ty_array(
+    state: &pa_state,
+    handles: *const *mut c_void,
+    count: usize,
+) -> Option<Vec<host_signature::TyExpr>> {
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    if handles.is_null() {
+        return None;
+    }
+    let mut expressions = Vec::with_capacity(count);
+    for index in 0..count {
+        // SAFETY: 调用方保证数组可读 count 个指针。
+        let handle = unsafe { *handles.add(index) };
+        expressions.push(clone_ty(state, handle, "元素")?);
+    }
+    Some(expressions)
+}
+
+/// `pa_type_expr pa_type_expr_union(pa_state *state, const pa_type_expr *ts, size_t n)`：`T | U | …`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_union(
+    state: *mut pa_state,
+    members: *const *mut c_void,
+    count: usize,
+) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        // SAFETY: 调用方按 `n` 给出数组。
+        let Some(members) = (unsafe { read_ty_array(state, members, count) }) else {
+            state.set_message("`pa_type_expr_union`：成员句柄无效（或 NULL 配 n>0）");
+            return core::ptr::null_mut();
+        };
+        if members.is_empty() {
+            state.set_message("`pa_type_expr_union`：至少要有 1 个成员");
+            return core::ptr::null_mut();
+        }
+        push_ty(state, host_signature::TyExpr::Union(members))
+    })
+}
+
+/// `pa_type_expr pa_type_expr_callable(pa_state *state, const pa_type_expr *params, size_t n, pa_type_expr ret)`：`Callable[[…], R]`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_callable(
+    state: *mut pa_state,
+    params: *const *mut c_void,
+    count: usize,
+    ret: *mut c_void,
+) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        // SAFETY: 调用方按 `n` 给出数组。
+        let Some(params) = (unsafe { read_ty_array(state, params, count) }) else {
+            state.set_message("`pa_type_expr_callable`：形参句柄无效");
+            return core::ptr::null_mut();
+        };
+        let Some(ret) = clone_ty(state, ret, "ret") else {
+            state.set_message("`pa_type_expr_callable`：返回类型句柄无效");
+            return core::ptr::null_mut();
+        };
+        push_ty(
+            state,
+            host_signature::TyExpr::Callable {
+                params,
+                ret: Box::new(ret),
+            },
+        )
+    })
+}
+
+/// `pa_type_expr pa_type_expr_var(pa_state *state, const char *name)`：类型变量 `T`（配 `tparams`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_var(state: *mut pa_state, name: *const c_char) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            state.set_message("`pa_type_expr_var`：name 不是合法 UTF-8 C 串");
+            return core::ptr::null_mut();
+        };
+        if !simple_identifier(&text) {
+            state.set_message("`pa_type_expr_var`：类型变量名必须是简单标识符");
+            return core::ptr::null_mut();
+        }
+        push_ty(state, host_signature::TyExpr::Var(text))
+    })
+}
+
+/// `pa_type_expr pa_type_expr_apply(pa_state *state, pa_type_expr base, const pa_type_expr *args, size_t n)`：宿主泛型
+/// `Base[Args…]`；**边界只核基底**（擦除类型身份，`TS-35` ✓）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type_expr_apply(
+    state: *mut pa_state,
+    base: *mut c_void,
+    args: *const *mut c_void,
+    count: usize,
+) -> *mut c_void {
+    boundary_ty(state, || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null_mut();
+        };
+        if !ty_gate(state) {
+            return core::ptr::null_mut();
+        }
+        let Some(base) = clone_ty(state, base, "base") else {
+            state.set_message("`pa_type_expr_apply`：base 句柄无效");
+            return core::ptr::null_mut();
+        };
+        // SAFETY: 调用方按 `n` 给出数组。
+        let Some(args) = (unsafe { read_ty_array(state, args, count) }) else {
+            state.set_message("`pa_type_expr_apply`：类型实参句柄无效");
+            return core::ptr::null_mut();
+        };
+        push_ty(state, host_signature::TyExpr::Apply(Box::new(base), args))
+    })
+}
+
+/// `int pa_func_set_signature(pa_state *state, pa_host_fn function, const pa_type_expr *params, size_t nparams,
+/// pa_type_expr ret, const pa_type_expr *tparams, size_t ntparams, unsigned flags)`：**给已注册的宿主函数声明签名**。
+///
+/// 口径（`SPEC-c-abi` `AB-69`）：
+/// * 形状 v1：**带 `state` 参数**（签名按实例存 ✓；用户草案里的无 `state` 版无法满足 `AB-64`）；
+///   返回 `int` 状态码（`AB-19`），构造失败经 `pa_errmsg` 说明；
+/// * **与函数同一时刻给**：必须在该函数**注册之后、任何执行之前**（注册时记下执行序号；声明时
+///   序号必须未变）⇒ 晚声明 ⇒ `PA_ERR_INVALID`；
+/// * `params` 与注册时的 `pa_sig.nparams` **一一对应**（类型只在 `pa_type_expr` 里；可选／变参的
+///   **个数**语义仍由 `pa_sig` 的 `flags` 表达 ✓）；`flags` v1 保留（必须 0）；
+/// * 不声明 ＝ 未标注 ⇒ 不检查（与今天一致 ✓）。
+///
+/// # Safety
+///
+/// `state` 存活；`function` 是本实例注册过的 C 函数；`params`／`tparams` 按 `n` 给出句柄数组；
+/// 所有句柄都必须是本实例建过的 `pa_type_expr`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_func_set_signature(
+    state: *mut pa_state,
+    function: host::PaHostFn,
+    params: *const *mut c_void,
+    nparams: usize,
+    ret: *mut c_void,
+    tparams: *const *mut c_void,
+    ntparams: usize,
+    flags: u32,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        if state.in_host_callback {
+            state.set_message("`AB-69`：宿主函数回调内部不能声明签名（setup／调用之间才行）");
+            return status::PA_ERR_INVALID;
+        }
+        if flags != 0 {
+            state.set_message("`AB-69`：`flags` v1 保留，必须为 0");
+            return status::PA_ERR_INVALID;
+        }
+        // 已注册过？同时取注册时的形参个数／名字（用于一一对应校验）。
+        let mut found: Option<(String, usize)> = None;
+        for header in &state.host_functions {
+            // SAFETY: host_functions 只存本实例的宿主函数对象。
+            let host = unsafe { &*header.as_ptr().cast::<host::HostFunction>() };
+            if same_host_function(host.function_pointer(), function) {
+                found = Some((host.host_name().to_owned(), host.arity()));
+                break;
+            }
+        }
+        let Some((name, arity)) = found else {
+            state.set_message("`AB-69`：该 C 函数没有在本实例注册过（先 `pa_register`／`pa_module_addfunction`）");
+            return status::PA_ERR_INVALID;
+        };
+        // "同一时刻给"：注册时的执行序号必须仍是当前序号（注册后还没跑过脚本）。
+        let mut seen = false;
+        for (registered, serial) in &state.host_function_serials {
+            if same_host_function(*registered, function) {
+                seen = true;
+                if *serial != state.exec_serial {
+                    state.set_message(&format!(
+                        "`AB-69`：宿主函数 `{name}` 的签名必须在注册后、任何执行之前声明（已错过窗口）"
+                    ));
+                    return status::PA_ERR_INVALID;
+                }
+            }
+        }
+        if !seen {
+            state.set_message("`AB-69`：宿主函数注册序号缺失（内部不一致）");
+            return status::PA_ERR_RUNTIME;
+        }
+        if nparams != arity {
+            state.set_message(&format!(
+                "`AB-69`：`nparams`={nparams} 与注册时 `pa_sig.nparams`={arity} 不一致（类型只在 pa_type_expr 里）"
+            ));
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方按 `nparams` 给出数组。
+        let Some(params) = (unsafe { read_ty_array(state, params, nparams) }) else {
+            state.set_message("`AB-69`：形参类型句柄无效");
+            return status::PA_ERR_INVALID;
+        };
+        let ret = if ret.is_null() {
+            None
+        } else {
+            let Some(ret) = clone_ty(state, ret, "ret") else {
+                state.set_message("`AB-69`：返回类型句柄无效");
+                return status::PA_ERR_INVALID;
+            };
+            Some(ret)
+        };
+        // SAFETY: 调用方按 `ntparams` 给出数组。
+        let Some(tparams) = (unsafe { read_ty_array(state, tparams, ntparams) }) else {
+            state.set_message("`AB-69`：类型变量句柄无效");
+            return status::PA_ERR_INVALID;
+        };
+        let mut variable_names = Vec::with_capacity(tparams.len());
+        for expression in &tparams {
+            let host_signature::TyExpr::Var(name) = expression else {
+                state.set_message("`AB-69`：`tparams` 里的句柄必须是 `pa_type_expr_var` 建的");
+                return status::PA_ERR_INVALID;
+            };
+            variable_names.push(name.clone());
+        }
+        // 同一 C 函数至多一条签名；重复声明（仍在窗口内）⇒ 覆盖（宿主可改主意，窗口规则仍守 ✓）。
+        state
+            .host_typed_signatures
+            .retain(|signature| !same_host_function(signature.function, function));
+        state
+            .host_typed_signatures
+            .push(host_signature::TypedSignature {
+                function,
+                params,
+                ret,
+                tparams: variable_names,
+                flags,
+            });
+        status::PA_OK
+    })
+}
+
+/// **`AB-75`**：给任意对象（类型／实例／模块）装**统一协议钩子** `pa_object_ops`。
+///
+/// `object_index` 是**栈索引**（`AB-9`，**不消耗**）；`ops == NULL` ⇒ 清除（回到"不派发"）。
+/// 每对象一份（类型态与实例态互为独立键；类型态是该类型所有实例的默认，实例态覆盖之）。
+/// 回调在注册时**按自带尺寸拷贝**（宿主无需保活）；失败 ⇒ `PA_ERR_INVALID`（`AB-22`）。
+///
+/// # Safety
+///
+/// `ops` 要么 `NULL`、要么指向宿主按 `pa.h` 布局给出的 `pa_object_ops`（自带尺寸，界读 `AB-43`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_set_object_ops(
+    state: *mut pa_state,
+    object_index: i32,
+    ops: *const host::pa_type_ops,
+) -> i32 {
+    boundary(|| unsafe { set_object_ops_impl(state, object_index, ops, false) })
+}
+
+/// **`AB-73`**：`pa_set_type_ops` 是 [`pa_set_object_ops`] 的**类型版便捷投影**（`AB-78` 的
+/// 等价测试对象）：语义完全等价，只额外要求目标是 `pa_newtype` 注册的宿主类型（历史契约）。
+///
+/// # Safety
+///
+/// 同 [`pa_set_object_ops`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_set_type_ops(
+    state: *mut pa_state,
+    type_index: i32,
+    ops: *const host::pa_type_ops,
+) -> i32 {
+    boundary(|| unsafe { set_object_ops_impl(state, type_index, ops, true) })
+}
+
+/// `pa_set_object_ops`／`pa_set_type_ops` 的公共实现（`require_type` 区分投影的类型限定）。
+unsafe fn set_object_ops_impl(
+    state: *mut pa_state,
+    index: i32,
+    ops: *const host::pa_type_ops,
+    require_type: bool,
+) -> i32 {
+    let state = state_or!(state);
+    let Some(slot) = state.stack.get(index) else {
+        state.set_message("`AB-75`：栈索引越界");
+        return status::PA_ERR_INVALID;
+    };
+    if require_type {
+        if !state.instance.is_type_object(slot.object) {
+            state.set_message("`AB-73`：`type_index` 不是类型对象");
+            return status::PA_ERR_INVALID;
+        }
+        let ty = slot.object.cast::<pyawa_core::TypeObject>();
+        // SAFETY: 刚判过是类型对象，且由注册表持有。
+        if !unsafe { ty.as_ref() }.is_host_layout() {
+            state.set_message("`AB-73`：该类型不是 `pa_newtype` 注册的宿主类型");
+            return status::PA_ERR_INVALID;
+        }
+    }
+    // SAFETY: 调用方按契约给出 ops 指针。
+    let read = match unsafe { host::read_type_ops(ops) } {
+        Ok(read) => read,
+        Err(()) => {
+            state.set_message("`AB-75`：`pa_object_ops.size` 盖不住 `size` 字段");
+            return status::PA_ERR_INVALID;
+        }
+    };
+    match read {
+        // `NULL` ⇒ 清空（旧记录留在账本里，随实例释放）。
+        None => state.instance.set_object_ops(slot.object, None),
+        Some(ops) => {
+            let record = Box::new(ObjectOpsRecord { state, ops });
+            // `Box` 内容稳定 ⇒ token 在实例销毁前有效（记录由 `object_ops` 账本持有）。
+            let token = (&*record as *const ObjectOpsRecord) as usize;
+            state.object_ops.push(record);
+            let host_ops = pyawa_core::HostObjectOps {
+                getattr: ops
+                    .getattr_fn
+                    .map(|_| host_object_getattr as pyawa_core::HostObjectGetAttr),
+                setattr: ops
+                    .setattr_fn
+                    .map(|_| host_object_setattr as pyawa_core::HostObjectSetAttr),
+                token,
+            };
+            state.instance.set_object_ops(slot.object, Some(host_ops));
+        }
+    }
+    status::PA_OK
+}
+
+/// **`AB-73`** 的 `getattr` 回退槽实现：把宿主回调接到 VM 的属性通道上。
+///
+/// 契约：回调 `PA_OK` ⇒ 恰好压入一个值（VM 弹出并作为属性值）；`PA_ERR_NOTFOUND` ⇒
+/// `Ok(None)`（VM 继续默认）；其它 ⇒ 脚本可捕获的 `RuntimeError`（**不静默回退**）。
+///
+/// # Safety
+///
+/// 槽位契约见 `pyawa_core::HostGetAttrFn`。
+unsafe fn host_object_getattr(
+    pointer: *mut Header,
+    name: &str,
+    instance: &Instance,
+    token: usize,
+) -> Result<Option<NonNull<Header>>, pyawa_core::ExecError> {
+    // SAFETY: 调用方保证 pointer 是存活对象。
+    let object = unsafe { NonNull::new_unchecked(pointer) };
+    // SAFETY: 对象存活 ⇒ 类型对象由注册表持有。
+    let ty = unsafe { object.as_ref() }.ty();
+    let info = unsafe { ty.as_ref() };
+    // SAFETY: 非 0 的 token 只由本模块写入，且记录由 `pa_state.object_ops` 持有到实例销毁。
+    let record = unsafe { &*(token as *const ObjectOpsRecord) };
+    let Some(getattr_fn) = record.ops.getattr_fn else {
+        return Ok(None);
+    };
+    let Some(mut state) = NonNull::new(record.state) else {
+        return Ok(None);
+    };
+    let payload = if info.payload_size() == 0 {
+        core::ptr::null_mut()
+    } else {
+        // SAFETY: 宿主载荷由 VM 分配（`AB-58`），偏移由类型给出。
+        unsafe {
+            pointer
+                .cast::<u8>()
+                .add(info.payload_offset())
+                .cast::<core::ffi::c_void>()
+        }
+    };
+    let c_name = CString::new(name).map_err(|_| {
+        raise_runtime(
+            instance,
+            "宿主属性回调的名字里有 NUL（`AB-73`）",
+        )
+    })?;
+    // SAFETY: state 由记录持有、实例存活。
+    let before = unsafe { state.as_ref() }.stack.len();
+    // SAFETY: `record.state` 是创建该类型的实例；回调契约见 `pa.h`。
+    let code = unsafe {
+        getattr_fn(
+            state.as_ptr(),
+            payload,
+            c_name.as_ptr(),
+            name.len(),
+            record.ops.context,
+        )
+    };
+    // SAFETY: state 由记录持有、实例存活。
+    let state_ref = unsafe { state.as_mut() };
+    match code {
+        status::PA_OK => {
+            let after = state_ref.stack.len();
+            if after != before + 1 {
+                // 栈纪律被破坏：把多压的值收掉，再如实报错（不静默）。
+                while state_ref.stack.len() > before {
+                    if let Some(extra) = state_ref.stack.pop_slot() {
+                        if extra.owned {
+                            // SAFETY: 槽位持有这份引用。
+                            unsafe {
+                                state_ref.instance.release_object(extra.object.as_ptr())
+                            };
+                        }
+                    }
+                }
+                return Err(raise_runtime(
+                    instance,
+                    "宿主属性回调返回 `PA_OK` 但压栈个数不是 1（`AB-73`）",
+                ));
+            }
+            let Some(slot) = state_ref.stack.pop_slot() else {
+                return Err(raise_runtime(
+                    instance,
+                    "宿主属性回调返回 `PA_OK` 但没有值（`AB-73`）",
+                ));
+            };
+            if !slot.owned {
+                // SAFETY: 借用槽位；交回给调用方前要持有。
+                unsafe { state_ref.instance.incref_object(slot.object.as_ptr()) };
+            }
+            // **`AB-73` 绑定**：`getattr_fn` 返回的是**宿主函数对象** ⇒ 包成绑定方法
+            // （实例自动作第一个实参）。`pa_sig` 因此**含 `self`**；显式 `obj.m(obj, x)` 会多传
+            // 一个实参 ⇒ 实参个数/边界检查如实报错（不做双形态猜测）。
+            // SAFETY: slot.object 是从栈上弹出的存活对象。
+            let value_type = unsafe { slot.object.as_ref() }.ty();
+            if let Some(host_function_type) = state_ref.host_function_type {
+                if value_type == host_function_type {
+                    let method_type = match state_ref.host_bound_method_type {
+                        Some(method_type) => method_type,
+                        None => {
+                            let method_type = state_ref.instance.new_type(
+                                "host_bound_method",
+                                core::mem::size_of::<host::HostBoundMethod>(),
+                                pyawa_core::Slots::new(host_bound_method_dealloc)
+                                    .with_traverse(host_bound_method_traverse)
+                                    .with_clear(host_bound_method_clear)
+                                    .with_call(host_bound_method_call),
+                            );
+                            state_ref.host_bound_method_type = Some(method_type);
+                            method_type
+                        }
+                    };
+                    // SAFETY: object 是当前存活实例，先持有一份交给绑定方法。
+                    unsafe { state_ref.instance.incref_object(object.as_ptr()) };
+                    let bound = state_ref.instance.alloc(host::HostBoundMethod::new(
+                        method_type,
+                        slot.object,
+                        object,
+                        state.as_ptr(),
+                    ));
+                    return Ok(Some(bound.into_raw().cast::<Header>()));
+                }
+            }
+            Ok(Some(slot.object))
+        }
+        status::PA_ERR_NOTFOUND => Ok(None),
+        other => Err(raise_runtime(
+            instance,
+            &format!("宿主属性回调失败（状态码 {other}；`AB-73`）"),
+        )),
+    }
+}
+
+/// **`AB-73`** 绑定方法对象（`HostBoundMethod`）的 `dealloc`：只释放载荷本身。
+///
+/// # Safety
+///
+/// 槽位契约见 `pyawa_core::Slots`。
+unsafe fn host_bound_method_dealloc(ptr: *mut Header) {
+    // 子引用由 `clear` 释放（`OM-14`／`OM-20` 的分工）。
+    unsafe { pyawa_core::free_fixed_layout(ptr) };
+}
+
+unsafe fn host_bound_method_traverse(
+    ptr: *mut Header,
+    visit: &mut dyn FnMut(*mut Header),
+) {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let method = unsafe { &*ptr.cast::<host::HostBoundMethod>() };
+    visit(method.function().as_ptr());
+    visit(method.receiver().as_ptr());
+}
+
+unsafe fn host_bound_method_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 同上。
+    let method = unsafe { &*ptr.cast::<host::HostBoundMethod>() };
+    // SAFETY: 两份引用都由本对象持有。
+    unsafe {
+        instance.release_object(method.function().as_ptr());
+        instance.release_object(method.receiver().as_ptr());
+    }
+}
+
+/// **`AB-73`**：绑定方法的 `call` 槽——把接收者前插到实参表，再走宿主函数的调用路径
+/// （边界检查看到的正是 `pa_sig` 声明的完整形参，含 `self`）。
+///
+/// # Safety
+///
+/// 契约见 `pyawa_core::CallFn`。
+unsafe fn host_bound_method_call(
+    ptr: *mut Header,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    instance: &Instance,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let method = unsafe { &*ptr.cast::<host::HostBoundMethod>() };
+    let mut combined: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
+    combined.push(method.receiver());
+    combined.extend_from_slice(args);
+    // SAFETY: 函数对象由本对象持有、存活；`combined` 借用视图。
+    unsafe {
+        host_function_call(
+            method.function().as_ptr(),
+            None,
+            &combined,
+            kwargs,
+            instance,
+        )
+    }
+}
+
+/// **`AB-73`** 的 `setattr` 回退槽实现：值以**借用**槽压栈（`value_index = -1`），
+/// 回调**不消耗**它；`PA_OK` ⇒ 宿主已处理（VM 归还传入值的那份引用）；`PA_ERR_NOTFOUND` ⇒
+/// 未处理（VM 继续默认写）；其它 ⇒ 脚本可捕获 `RuntimeError`（**不静默回退**）。
+///
+/// # Safety
+///
+/// 槽位契约见 `pyawa_core::HostSetAttrFn`。
+unsafe fn host_object_setattr(
+    pointer: *mut Header,
+    name: &str,
+    value: Option<NonNull<Header>>,
+    instance: &Instance,
+    token: usize,
+) -> Result<bool, pyawa_core::ExecError> {
+    // `AB-73` 没有 delete 回调（`__delattr__` 不在本层）⇒ 删除原样交回默认。
+    let Some(value) = value else {
+        return Ok(false);
+    };
+    // SAFETY: 调用方保证 pointer 是存活对象。
+    let object = unsafe { NonNull::new_unchecked(pointer) };
+    // SAFETY: 对象存活 ⇒ 类型对象由注册表持有。
+    let ty = unsafe { object.as_ref() }.ty();
+    let info = unsafe { ty.as_ref() };
+    // SAFETY: 同 getattr 钩子（记录由 `pa_state.object_ops` 持有到实例销毁）。
+    let record = unsafe { &*(token as *const ObjectOpsRecord) };
+    let Some(setattr_fn) = record.ops.setattr_fn else {
+        return Ok(false);
+    };
+    let Some(mut state) = NonNull::new(record.state) else {
+        return Ok(false);
+    };
+    let payload = if info.payload_size() == 0 {
+        core::ptr::null_mut()
+    } else {
+        // SAFETY: 宿主载荷由 VM 分配（`AB-58`），偏移由类型给出。
+        unsafe {
+            pointer
+                .cast::<u8>()
+                .add(info.payload_offset())
+                .cast::<core::ffi::c_void>()
+        }
+    };
+    // SAFETY: state 由记录持有、实例存活。
+    let state_ref = unsafe { state.as_mut() };
+    let c_name = CString::new(name).map_err(|_| {
+        raise_runtime(instance, "宿主属性回调的名字里有 NUL（`AB-73`）")
+    })?;
+    let before = state_ref.stack.len();
+    // 值以**借用**槽压栈（回调不得消耗，`AB-9`／`AB-15`）。
+    if state_ref.stack.push_borrowed(value) != status::PA_OK {
+        return Err(raise_runtime(instance, "宿主属性回调的栈已满（`AB-73`）"));
+    }
+    // SAFETY: 回调契约见 `pa.h`。
+    let code = unsafe {
+        setattr_fn(
+            state.as_ptr(),
+            payload,
+            c_name.as_ptr(),
+            name.len(),
+            -1,
+            record.ops.context,
+        )
+    };
+    // 恢复栈：回调只许读 `-1`，不许压/弹（多出来的按持有释放；被弹掉 ⇒ 宿主违约，如实报错）。
+    if state_ref.stack.len() < before + 1 {
+        return Err(raise_runtime(
+            instance,
+            "宿主属性回调弹掉了栈上的值（`AB-73`）",
+        ));
+    }
+    while state_ref.stack.len() > before {
+        if let Some(extra) = state_ref.stack.pop_slot() {
+            if extra.owned {
+                // SAFETY: 槽位持有这份引用。
+                unsafe { state_ref.instance.release_object(extra.object.as_ptr()) };
+            }
+        }
+    }
+    match code {
+        status::PA_OK => Ok(true),
+        status::PA_ERR_NOTFOUND => Ok(false),
+        other => Err(raise_runtime(
+            instance,
+            &format!("宿主属性回调失败（状态码 {other}；`AB-73`）"),
+        )),
+    }
+}
+
+/// 造一条**脚本侧可捕获**的 `RuntimeError`（`AB-73` 的"不得静默回退"落点）。
+fn raise_runtime(instance: &Instance, message: &str) -> pyawa_core::ExecError {
+    instance.raise_builtin_error("RuntimeError", message)
+}
+
+/// **`AB-74`**：宿主抛**带类型**的异常（`SPEC-c-abi.md` 的 `AB-74`）。
+///
+/// `type_index` 是**栈索引**（`AB-9`），指向一个**类型对象**（不消耗），该类型必须是
+/// `BaseException` 的子类；VM 以该类型＋一个 `str` 实参（消息）**按普通构造语义**实例化并记录；
+/// 成功返回 **`PA_ERR_RUNTIME`**（宿主函数应直接 `return` 它），VM 在边界处把它作为 guest 异常
+/// 重抛（`except <类型>` 可捕获、traceback 不含跨边界帧）。非法 `type_index`／非异常类型／
+/// 非 UTF-8 消息 ⇒ `PA_ERR_INVALID`（`AB-22`）。
+///
+/// # Safety
+///
+/// `msg` 要么 `NULL`、要么可读 `len` 字节（`len < 0` ⇒ 以 NUL 结尾计长）；`state` 按 `AB-57`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_raise_host_exception(
+    state: *mut pa_state,
+    type_index: i32,
+    msg: *const c_char,
+    len: isize,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(slot) = state.stack.get(type_index) else {
+            state.set_message("`AB-74`：`type_index` 越界");
+            return status::PA_ERR_INVALID;
+        };
+        if !state.instance.is_type_object(slot.object) {
+            state.set_message("`AB-74`：`type_index` 不是类型对象");
+            return status::PA_ERR_INVALID;
+        }
+        let ty = slot.object.cast::<pyawa_core::TypeObject>();
+        let Some(base_exception) = state.instance.type_named("BaseException") else {
+            state.set_message("`AB-74`：引导期没有 `BaseException`");
+            return status::PA_ERR_RUNTIME;
+        };
+        if !state.instance.is_subtype(ty, base_exception) {
+            state.set_message("`AB-74`：`type_index` 不是 `BaseException` 的子类");
+            return status::PA_ERR_INVALID;
+        }
+        // 消息：`NULL` ⇒ 空串；`len < 0` ⇒ 以 NUL 结尾计长；否则恰好 `len` 字节（UTF-8）。
+        let message = if msg.is_null() {
+            String::new()
+        } else if len < 0 {
+            // SAFETY: 调用方保证 NUL 结尾。
+            match unsafe { host::read_c_string(msg, 4096) } {
+                Some(text) => text,
+                None => {
+                    state.set_message("`AB-74`：`msg` 超长或非法");
+                    return status::PA_ERR_INVALID;
+                }
+            }
+        } else {
+            // SAFETY: 调用方保证至少 len 字节可读。
+            let bytes = unsafe { core::slice::from_raw_parts(msg.cast::<u8>(), len as usize) };
+            match String::from_utf8(bytes.to_vec()) {
+                Ok(text) => text,
+                Err(_) => {
+                    state.set_message("`AB-74`：`msg` 不是合法 UTF-8");
+                    return status::PA_ERR_INVALID;
+                }
+            }
+        };
+        // 按普通构造语义实例化（`MyError(msg)`）：用户 `__init__` 抛错 ⇒ 那个异常作为 guest 异常。
+        let text = state.instance.new_str(&message);
+        let instantiated = pyawa_core::call_value(&state.instance, slot.object, &[text], &[]);
+        // SAFETY: text 是本函数持有的新引用（call_value 借用实参）。
+        unsafe { state.instance.release_object(text.as_ptr()) };
+        match instantiated {
+            Ok(exception) => {
+                if let Some(previous) = state.host_exception.replace(exception) {
+                    // SAFETY: 旧记录由本状态持有。
+                    unsafe { state.instance.release_object(previous.as_ptr()) };
+                }
+                status::PA_ERR_RUNTIME
+            }
+            Err(error) => {
+                // 构造失败：把构造异常也记录为宿主异常（guest 侧同样可捕获）；其它错误如实报。
+                if let pyawa_core::ExecError::Raised { exception } = &error {
+                    let pointer = exception.get();
+                    // SAFETY: 异常存活；记录要自己一份。
+                    unsafe { state.instance.incref_object(pointer.as_ptr()) };
+                    if let Some(previous) = state.host_exception.replace(pointer) {
+                        // SAFETY: 旧记录由本状态持有。
+                        unsafe { state.instance.release_object(previous.as_ptr()) };
+                    }
+                    // `error` 的 Drop 归还 `Err` 那份（`pending` 槽由下一次 raise 覆盖）。
+                    status::PA_ERR_RUNTIME
+                } else {
+                    state.set_message("`AB-74`：实例化宿主异常失败");
+                    status::PA_ERR_RUNTIME
+                }
+            }
+        }
+    })
+}
+
 /// `pa_destroy(pa_state *state)`：销毁实例（`AB-57`：**释放实例本身**）。
 ///
 /// 此后 `pa_state *` **不可用**（禁止解引用或复用），实例内全部句柄同时失效（`AB-18`）。
@@ -559,6 +2115,11 @@ pub unsafe extern "C" fn pa_destroy(state: *mut pa_state) -> i32 {
             return status::PA_ERR_INVALID;
         }
         // SAFETY: 由调用方保证这是 pa_create 交回且尚未销毁的指针。
+        let state = unsafe { &mut *state };
+        if let Some(exception) = state.host_exception.take() {
+            // SAFETY: 记录持有那份引用。
+            unsafe { state.instance.release_object(exception.as_ptr()) };
+        }
         drop(unsafe { Box::from_raw(state) });
         status::PA_OK
     })
@@ -781,6 +2342,7 @@ pub unsafe extern "C" fn pa_exec_string(
     let _ = take_panic_text();
     let outcome = boundary(|| {
         let state = state_or!(state);
+        state.exec_serial = state.exec_serial.wrapping_add(1);
         // `AB-61`：编译输入经 pa_options 过界（NULL ⇒ 浅层 ＋ 默认优化级）
         // SAFETY: 调用方按 read_options 的契约给出 options。
         let Some((check_tier, optimization)) = (unsafe { read_options(options) }) else {
@@ -809,7 +2371,15 @@ pub unsafe extern "C" fn pa_exec_string(
         let chunk = unsafe { host::read_c_string(chunkname, 4096) }
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "<string>".to_owned());
-        let unit = match compile(&source_text, &chunk, compile_mode, check_tier, optimization) {
+        let host_signatures = compiled_host_signatures(state);
+        let unit = match compile_with_host_functions(
+            &source_text,
+            &chunk,
+            compile_mode,
+            check_tier,
+            optimization,
+            &host_signatures,
+        ) {
             Ok(unit) => unit,
             Err(CompileError::Syntax(message)) => {
                 state.set_message(&message);
@@ -834,7 +2404,12 @@ pub unsafe extern "C" fn pa_exec_string(
         ensure_module_name(state);
         // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）
         install_main_module(state);
-        let code = instantiate(&state.instance, &unit);
+        // `co_filename`：显式设置过（CLI）就用它；否则**参照口径**＝`compile(source, filename, …)`
+        // 里的 `filename` 参数（本 ABI 的 `chunkname` ✓）⇒ `<string>` 一族 ✓。
+        let code = match state.program_filename.as_deref() {
+            Some(filename) => pyawa_core::compile::instantiate_named(&state.instance, &unit, filename),
+            None => pyawa_core::compile::instantiate_named(&state.instance, &unit, &chunk),
+        };
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
         // SAFETY: namespace 由本状态持有，存活。
@@ -845,10 +2420,26 @@ pub unsafe extern "C" fn pa_exec_string(
         // 先把（状态码, 诊断文本）定成不借本状态的值，再收掉帧与 code 的借用
         let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
             Ok(_) => (status::PA_OK, None),
-            Err(ExecError::Raised { exception }) => (
-                status::PA_ERR_RUNTIME,
-                Some(exception_message(&state.instance, exception)),
-            ),
+            Err(ExecError::Raised { exception }) => {
+                let message = Some(exception_message(&state.instance, exception.get()));
+                // **归还异常引用**（round 81）：见 `pyawa_core::RaiseRef::discard`（RAII，阶段 2/A）✓。
+                // **`SystemExit` 不能丢** ✗：宿主之后按它决定进程退出码／stderr 文本
+                //（`uncaught_system_exit` 读 `pending_exception` ✓）。
+                // SAFETY: exception 是存活对象；类型查表都在本实例内 ✓。
+                let raised_type = unsafe { exception.get().as_ref() }.ty();
+                let is_system_exit = state
+                    .instance
+                    .type_named("SystemExit")
+                    .is_some_and(|base| state.instance.is_subtype(raised_type, base));
+                if is_system_exit {
+                    // **保留 `pending` 槽**（CLI 还要读它决定退出码），只归还 `Err` 那份。
+                    exception.release_keeping_pending();
+                } else {
+                    // RAII：还 `Err` 那份；`pending` 槽若仍是它则清槽（同旧 `discard_raised`）。
+                    exception.discard();
+                }
+                (status::PA_ERR_RUNTIME, message)
+            }
             Err(ExecError::Interrupted) => (status::PA_ERR_INTERRUPT, None),
             Err(error) => (exec_error_status(&error), Some(exec_error_text(&error))),
         };
@@ -881,26 +2472,161 @@ pub unsafe extern "C" fn pa_exec_string(
     outcome
 }
 
-/// `pa_exec_file(st, path, mode, options)`：执行文件——**I/O 经能力层**（`IM-15`），能力层尚未
-/// 接线 ⇒ 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"已实现但拒绝"必须区分）。
+/// **`§15.3`** `pa_exec_file(st, path, mode, opts)`：执行文件（源经 **`fs` 域**读入，`IM-15`）。
 ///
-/// **未提供**先于参数校验：本版不区分 `path`／`mode`／`options` 是否合法（等能力层接线时再补，
-/// 那时 `mode` 按 `AB-60` 判、`options` 按 `AB-61` 判、非法 ⇒ `PA_ERR_INVALID`）。
+/// - 宿主注册了 `fs` 域（或使用电池版 `paL_newstate`）⇒ 读文件 → 复用 `pa_exec_string` 的
+///   编译/执行路径（`mode`/`opts` 语义同 `AB-60`/`AB-61`）；
+/// - **没有能力提供者**（最小 ABI 产物，宿主 `capabilities=NULL`）⇒ 如实 `PA_ERR_NOTIMPLEMENTED`
+///   （`AB-22`：这是"该嵌入没提供"而不是文件错误）；
+/// - 机器错误（ENOENT 等）⇒ `PA_ERR_RUNTIME` 并把 `errno` 写进 `pa_errmsg`（`AB-48`）。
 ///
 /// # Safety
 ///
-/// 同 [`pa_exec_string`]。
+/// `state`／`path`／`mode` 按 `AB-57`／`AB-60` 契约；`options` 按 `AB-61`。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_exec_file(
     state: *mut pa_state,
-    _path: *const c_char,
-    _mode: *const c_char,
-    _options: *const pa_options,
+    path: *const c_char,
+    mode: *const c_char,
+    options: *const pa_options,
 ) -> i32 {
+    install_panic_hook();
+    let _ = take_panic_text();
     boundary(|| {
         let state = state_or!(state);
-        state.set_message("pa_exec_file 未提供：文件 I/O 经能力层（`IM-15`），能力层尚未接线");
-        status::PA_ERR_NOTIMPLEMENTED
+        let Some(path_text) = (unsafe { host::read_c_string(path, 4096) }) else {
+            state.set_message("pa_exec_file：path 不是合法 C 字符串");
+            return status::PA_ERR_INVALID;
+        };
+        let source = match read_source_via_fs(state, path_text.as_bytes()) {
+            Ok(source) => source,
+            Err(code) => return code,
+        };
+        // 复用唯一的编译／执行入口（`mode`/`opts` 的校验也由它负责，不在本函数复制第二份）。
+        // SAFETY: state/path/mode/options 都是本函数按契约收到的指针；source 在调用期间存活。
+        unsafe {
+            pa_exec_string(
+                state as *mut pa_state,
+                source.as_ptr().cast(),
+                source.len() as isize,
+                path,
+                mode,
+                options,
+            )
+        }
+    })
+}
+
+/// 经 `fs` 域读整个文件（`pa_exec_file` 用）；错误已写 `pa_errmsg`，直接返回状态码。
+fn read_source_via_fs(state: &mut pa_state, path: &[u8]) -> Result<String, i32> {
+    let instance = &state.instance;
+    let handle = match instance.fs_open(path, 0, 0) {
+        Ok(handle) => handle,
+        Err(pyawa_core::CapabilityCallError::NotRegistered)
+        | Err(pyawa_core::CapabilityCallError::NotImplemented) => {
+            state.set_message(
+                "pa_exec_file 未提供：该宿主没有注册 `fs` 域（最小 ABI 产物无能力提供者；电池版 `paL_newstate` 有）",
+            );
+            return Err(status::PA_ERR_NOTIMPLEMENTED);
+        }
+        Err(pyawa_core::CapabilityCallError::Machine(errno)) => {
+            state.set_message(&format!("pa_exec_file：打开文件失败（errno {errno}）"));
+            return Err(status::PA_ERR_RUNTIME);
+        }
+    };
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        match instance.fs_read(handle, &mut buffer) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+            Err(pyawa_core::CapabilityCallError::Machine(errno)) => {
+                let _ = instance.fs_close(handle);
+                state.set_message(&format!("pa_exec_file：读取失败（errno {errno}）"));
+                return Err(status::PA_ERR_RUNTIME);
+            }
+            Err(_) => {
+                let _ = instance.fs_close(handle);
+                state.set_message("pa_exec_file：`fs` 域未提供读取能力");
+                return Err(status::PA_ERR_NOTIMPLEMENTED);
+            }
+        }
+    }
+    let _ = instance.fs_close(handle);
+    String::from_utf8(bytes).map_err(|_| {
+        state.set_message("pa_exec_file：文件不是合法 UTF-8（宿主用法错误）");
+        status::PA_ERR_INVALID
+    })
+}
+
+
+/// **CX-11-EXEMPT 白名单**：无 panic 面——只读 `len` 字节并拷进 `String`（长度上限由宿主给的 `len` 决定；
+/// 不分配实例对象、不执行脚本；非法指针／非 UTF-8 一律回 `PA_ERR_INVALID` ✓）。
+///
+/// `pa_set_program_filename(st, name, len)`（round 176）：**设置 `co_filename` 的来源**
+/// （CLI 在 `pa_exec_bytecode`／`pa_exec_string` 前调；不设 ⇒ 测试占位名 `<pyawa-test>` ✓）。
+///
+/// # Safety
+///
+/// `st` 必须是 `pa_create` 交回的存活状态；`name` 必须指向 `len` 个可读字节（NUL 不要求）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_set_program_filename(
+    st: *mut pa_state,
+    name: *const core::ffi::c_char,
+    len: isize,
+) -> i32 {
+    let Some(state) = (unsafe { st.as_mut() }) else {
+        return status::PA_ERR_INVALID;
+    };
+    if name.is_null() || len < 0 {
+        return status::PA_ERR_INVALID;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len as usize) };
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => {
+            state.program_filename = Some(text);
+            status::PA_OK
+        }
+        Err(_) => status::PA_ERR_INVALID,
+    }
+}
+
+/// `pa_set_memory_limit(st, limit)`：**每实例内存配额**（`AB-65`；`limit == 0` ⇒ 取消限制）。
+///
+/// 语义：活着的分配字节数（`OM-3` 的 `bytes_allocated`）超过 `limit` 时，分配器记一次命中，
+/// 运行时在**下一条指令边界**抛**可捕获的** `MemoryError`（不 abort ✗）。宿主可在任意时刻调用
+/// （改小到低于当前用量 ⇒ 下一次指令边界即抛 ✓）。配额区间按**活字节**算：对象释放后会回落，
+/// 处理块／`finally` 仍可继续执行 ✓。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_set_memory_limit(state: *mut pa_state, limit: u64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        state.instance.set_memory_limit(limit as usize);
+        status::PA_OK
+    })
+}
+
+/// `pa_memory_used(st, out)`：读取**当前**占用字节数（`OM-3` 的 `bytes_allocated`；`AB-66`）。
+///
+/// 宿主用它做指标／看门狗；`out` 必须可写（`NULL` ⇒ `PA_ERR_INVALID`）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`out` 要么 `NULL`、要么指向可写 `u64`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_memory_used(state: *mut pa_state, out: *mut u64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 out 可写。
+        unsafe { *out = state.instance.bytes_allocated() as u64 };
+        status::PA_OK
     })
 }
 
@@ -926,6 +2652,7 @@ pub unsafe extern "C" fn pa_exec_bytecode(
 ) -> i32 {
     boundary(|| {
         let state = state_or!(state);
+        state.exec_serial = state.exec_serial.wrapping_add(1);
         if buffer.is_null() || length <= 0 {
             state.set_message("字节码不合法：NULL 配非正长度（宿主用法错误）");
             return status::PA_ERR_INVALID;
@@ -963,7 +2690,15 @@ pub unsafe extern "C" fn pa_exec_bytecode(
         ensure_module_name(state);
         // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）：CLI 走的是**这一条**（产物路径 ✓）。
         install_main_module(state);
-        let code = instantiate(&state.instance, &unit);
+        // **`co_filename` 的来源**（round 176）：CLI 在 `pa_exec_bytecode` 前用
+        // `pa_set_program_filename` 给出**脚本路径** ✓（参照的 `f_code.co_filename` 就是它 ✓）。
+        if std::env::var_os("PYAWA_FILENAME_DEBUG").is_some() {
+            eprintln!("[filename] bytecode path program_filename={:?}", state.program_filename);
+        }
+        let code = match state.program_filename.as_deref() {
+            Some(filename) => pyawa_core::compile::instantiate_named(&state.instance, &unit, filename),
+            None => instantiate(&state.instance, &unit),
+        };
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
         // SAFETY: namespace 由本状态持有，存活。
@@ -973,10 +2708,26 @@ pub unsafe extern "C" fn pa_exec_bytecode(
             .alloc(Frame::for_code_with_namespace(frame_type, &code, namespace));
         let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
             Ok(_) => (status::PA_OK, None),
-            Err(ExecError::Raised { exception }) => (
-                status::PA_ERR_RUNTIME,
-                Some(exception_message(&state.instance, exception)),
-            ),
+            Err(ExecError::Raised { exception }) => {
+                let message = Some(exception_message(&state.instance, exception.get()));
+                // **归还异常引用**（round 81）：见 `pyawa_core::RaiseRef::discard`（RAII，阶段 2/A）✓。
+                // **`SystemExit` 不能丢** ✗：宿主之后按它决定进程退出码／stderr 文本
+                //（`uncaught_system_exit` 读 `pending_exception` ✓）。
+                // SAFETY: exception 是存活对象；类型查表都在本实例内 ✓。
+                let raised_type = unsafe { exception.get().as_ref() }.ty();
+                let is_system_exit = state
+                    .instance
+                    .type_named("SystemExit")
+                    .is_some_and(|base| state.instance.is_subtype(raised_type, base));
+                if is_system_exit {
+                    // **保留 `pending` 槽**（CLI 还要读它决定退出码），只归还 `Err` 那份。
+                    exception.release_keeping_pending();
+                } else {
+                    // RAII：还 `Err` 那份；`pending` 槽若仍是它则清槽（同旧 `discard_raised`）。
+                    exception.discard();
+                }
+                (status::PA_ERR_RUNTIME, message)
+            }
             Err(ExecError::Interrupted) => (status::PA_ERR_INTERRUPT, None),
             Err(error) => (exec_error_status(&error), Some(exec_error_text(&error))),
         };
@@ -1178,6 +2929,39 @@ pub unsafe extern "C" fn pa_type(state: *mut pa_state, index: i32) -> i32 {
             Some(slot) => tag_of(&state.instance, slot.object),
             None => status::PA_ERR_INVALID,
         }
+    })
+}
+
+/// **`AB-76`**：真实类型身份（`pa_type` 仍只给 `AB-63` 的值类别）。
+///
+/// 对任意值返回其**真实类型对象**的不透明句柄（借用，`AB-15`；实例存活期内有效）：
+/// 宿主对象 → 其注册类型、模块 → 模块类型、普通实例 → 其类、内建值 → 对应内建类型。
+/// 越界／`typeid_out == NULL` ⇒ `PA_ERR_INVALID`。类型身份**不**用 `PA_THANDLE` 猜。
+///
+/// # Safety
+///
+/// `typeid_out` 必须可写；`state` 按 `AB-57`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_typeid(
+    state: *mut pa_state,
+    index: i32,
+    typeid_out: *mut *mut c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if typeid_out.is_null() {
+            state.set_message("`AB-76`：`typeid_out` 为 NULL");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(slot) = state.stack.get(index) else {
+            state.set_message("`AB-76`：栈索引越界");
+            return status::PA_ERR_INVALID;
+        };
+        let ty = state.instance.type_of(slot.object);
+        // 类型对象由注册表持有、实例存活期内有效 ⇒ 借用句柄可直接交回（AB-14／AB-15）。
+        // SAFETY: 调用方保证 typeid_out 可写。
+        unsafe { *typeid_out = ty.cast::<Header>().as_ptr().cast() };
+        status::PA_OK
     })
 }
 
@@ -1446,7 +3230,7 @@ pub unsafe extern "C" fn pa_pushintstring(
         match outcome {
             Ok(value) => state.stack.push_owned(value),
             Err(pyawa_core::ExecError::Raised { exception }) => {
-                let message = exception_message(&state.instance, exception);
+                let message = exception_message(&state.instance, exception.get());
                 state.set_message(&message);
                 if over_limit {
                     status::PA_ERR_RUNTIME
@@ -1499,9 +3283,9 @@ pub unsafe extern "C" fn pa_toboolean(state: *mut pa_state, index: i32) -> i32 {
 
 /// `pa_tointeger(st, idx)`：整数转换；失败 `PA_ERR_INVALID`。
 ///
-/// **超出 `i64` 的整数**（`TS-45` 的任意精度）本接口**表达不了** ⇒ 如实返
-/// `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"用法错"分得开）——ABI 侧的大整数通道
-/// （字符串或字节）尚未定，别在这里截断。
+/// **超出 `i64` 的整数**本接口**表达不了** ⇒ 如实返 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"
+/// 与"用法错"分得开）。**任意精度走 `pa_tointstring`／`pa_pushintstring`（`AB-62`）**——§12.18 C6
+/// 复核结论：大整数 ABI 面**无新通道缺口**，本函数只承担 i64 投影；别在这里截断。
 ///
 /// # Safety
 ///
@@ -1523,7 +3307,9 @@ pub unsafe extern "C" fn pa_tointeger(state: *mut pa_state, index: i32, out: *mu
                 match payload.to_i64() {
                     Some(value) => value,
                     None => {
-                        state.set_message("这个整数超出 i64：ABI 的大整数通道尚未接线（`TS-45`）");
+                        state.set_message(
+                            "这个整数超出 i64：任意精度用 `pa_tointstring`（`AB-62`）；本函数只给 i64 投影（§12.18 C6）",
+                        );
                         return status::PA_ERR_NOTIMPLEMENTED;
                     }
                 }
@@ -1728,6 +3514,73 @@ pub unsafe extern "C" fn pa_tobytes(
     unsafe { boundary_ptr(state, read_view) }
 }
 
+/// **`AB-80`**：一次性把 `p[0..len]` 写回 `idx` 指向的 **`bytearray`** 数据区（栈契约 `—`）。
+///
+/// 唯一接受**恰好 `bytearray` 类型**的对象（子类也拒绝，与 core `Instance::write_bytearray_at`
+/// 同口径）；`bytes`／`memoryview`／非字节类型 ⇒ `PA_ERR_INVALID`。只写数据区、不扩容/不重分配；
+/// 范围用 `checked_add`（溢出/越界都拒绝，**不部分写**）；`len == 0` 且 `offset <= 当前长度`
+/// ⇒ no-op `PA_OK`；失败写 `pa_errmsg`（`AB-48`）。**不借出 VM 内存**。
+///
+/// # Safety
+///
+/// `state` 按 `AB-57` 存活；`p` 在 `len > 0` 时必须可读 `len` 字节（本函数只读、不保留）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_writetobytes(
+    state: *mut pa_state,
+    index: i32,
+    offset: usize,
+    p: *const c_void,
+    len: usize,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(slot) = state.stack.get(index) else {
+            state.set_message("`AB-80`：`idx` 越界");
+            return status::PA_ERR_INVALID;
+        };
+        // **恰好 `bytearray`**（子类拒绝；`bytes` 不可写）。
+        let bytearray = state.instance.type_named("bytearray").expect("bytearray 已登记");
+        if state.instance.type_of(slot.object) != bytearray {
+            let type_name = state.instance.type_name(state.instance.type_of(slot.object)).to_owned();
+            state.set_message(&format!(
+                "`AB-80`：只接受恰好 `bytearray`（当前是 `{type_name}`；`bytes`/子类/非字节均拒绝）"
+            ));
+            return status::PA_ERR_INVALID;
+        }
+        if p.is_null() && len > 0 {
+            state.set_message("`AB-80`：`p == NULL` 且 `len > 0`");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(end) = offset.checked_add(len) else {
+            state.set_message("`AB-80`：`offset + len` 溢出 usize");
+            return status::PA_ERR_INVALID;
+        };
+        // 当前长度（只用于范围校验；写回仍走 core 的同一把尺）。
+        let Some(current) = state.instance.bytes_like_value(slot.object) else {
+            state.set_message("`AB-80`：目标不是可写字节对象");
+            return status::PA_ERR_INVALID;
+        };
+        if end > current.len() {
+            state.set_message(&format!(
+                "`AB-80`：写入范围越界（offset {offset} + len {len} > 长度 {}）",
+                current.len()
+            ));
+            return status::PA_ERR_INVALID;
+        }
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            // SAFETY: 调用方按 Safety 段保证 p 在 len>0 时可读 len 字节。
+            unsafe { core::slice::from_raw_parts(p.cast::<u8>(), len) }
+        };
+        if !state.instance.write_bytearray_at(slot.object, offset, bytes) {
+            state.set_message("`AB-80`：写回失败（目标不是恰好 bytearray 或范围不符）");
+            return status::PA_ERR_INVALID;
+        }
+        status::PA_OK
+    })
+}
+
 /// `pa_newtable(st)`：新建表（本层就是 `dict`）（+1）。
 ///
 /// # Safety
@@ -1779,6 +3632,63 @@ pub unsafe extern "C" fn pa_newlist(state: *mut pa_state, length: i32) -> i32 {
             .into_raw()
             .cast::<Header>();
         state.stack.push_owned(object)
+    })
+}
+
+/// **`AB-70`**：`pa_tohandle(st, idx, void **payload_out)`（栈契约 `—`）。
+///
+/// 栈上 `idx` 指向**宿主对象**（`pa_newtype` 注册的类型或其 Python 子类）⇒ `PA_OK`，
+/// `*payload_out` 指向 **VM 分配**的载荷（`AB-58`；`payload_size == 0` ⇒ `NULL`）。
+/// **只借出、不转移**（`AB-15`／`AB-17`）：指针在下一次可能触发释放的调用前有效；
+/// 宿主**禁止** `free`／`realloc`。
+///
+/// 失败面：`idx` 越界／`payload_out == NULL`／**栈上不是宿主对象** ⇒ `PA_ERR_INVALID`。
+/// **判定"是不是我的句柄"不要用 `pa_type == PA_THANDLE`**：`list`／普通实例也报
+/// `PA_THANDLE`（`AB-63`）——这里按"类型是不是宿主布局"如实报错（`AB-22`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]；`payload_out` 必须可写（不可为 `NULL`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_tohandle(
+    state: *mut pa_state,
+    index: i32,
+    payload_out: *mut *mut core::ffi::c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if payload_out.is_null() {
+            state.set_message("pa_tohandle：payload_out 不能为 NULL");
+            return status::PA_ERR_INVALID;
+        }
+        let Some(object) = state.stack.get(index).map(|slot| slot.object) else {
+            state.set_message("pa_tohandle：栈索引越界");
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: 栈槽持有一份引用 ⇒ object 存活；类型对象由注册表持有。
+        let type_object = unsafe { object.as_ref() }.ty();
+        // SAFETY: 同上。
+        let layout = unsafe { type_object.as_ref() };
+        if !layout.is_host_layout() {
+            state.set_message("pa_tohandle：栈上那一项不是宿主对象句柄（AB-70）");
+            return status::PA_ERR_INVALID;
+        }
+        let payload_size = layout.instance_size().saturating_sub(layout.payload_offset());
+        let payload = if payload_size == 0 {
+            core::ptr::null_mut()
+        } else {
+            // SAFETY: 载荷紧跟头部、由 VM 分配（`AB-58`）；本函数只借出指针，不转移所有权。
+            unsafe {
+                object
+                    .as_ptr()
+                    .cast::<u8>()
+                    .add(layout.payload_offset())
+                    .cast::<core::ffi::c_void>()
+            }
+        };
+        // SAFETY: 调用方保证 `payload_out` 可写（上面判过非 NULL）。
+        unsafe { *payload_out = payload };
+        status::PA_OK
     })
 }
 
@@ -1845,9 +3755,7 @@ pub unsafe extern "C" fn pa_getglobal(state: *mut pa_state, name: *const c_char)
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
-            .entries()
-            .iter()
-            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+            .find_live_position(|key| str_equals(&state.instance, key, &text));
         match position {
             Some(position) => {
                 let (_, value) = mapping.entry(position).expect("刚查到的位置");
@@ -1856,10 +3764,9 @@ pub unsafe extern "C" fn pa_getglobal(state: *mut pa_state, name: *const c_char)
                 state.stack.push_owned(value)
             }
             None => {
-                let nil = state.instance.singletons().none();
-                // SAFETY: 单例由实例持有。
-                unsafe { state.instance.incref_object(nil.as_ptr()) };
-                state.stack.push_owned(nil)
+                // **§12.13 #3**：缺失名 ⇒ `PA_ERR_INVALID`（**不压栈**）；原"压 nil"作废。
+                state.set_message(&format!("`AB-15`：全局名 `{text}` 不存在"));
+                status::PA_ERR_INVALID
             }
         }
     })
@@ -1884,9 +3791,7 @@ pub unsafe extern "C" fn pa_setglobal(state: *mut pa_state, name: *const c_char)
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
-            .entries()
-            .iter()
-            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+            .find_live_position(|key| str_equals(&state.instance, key, &text));
         if let Some(position) = position {
             if let Some((old_key, old_value)) = mapping.remove(position) {
                 // SAFETY: 旧键值由字典持有。
@@ -1911,8 +3816,11 @@ pub unsafe extern "C" fn pa_setglobal(state: *mut pa_state, name: *const c_char)
 
 /// `pa_call(st, nargs, nresults)`：调用（−nargs+nresults）。
 ///
-/// 栈上是 `[…, 可调用, 实参…]`；成功后结果替换掉它们。异常经状态码 ＋ `pa_errmsg`。
-/// `nresults` 目前**必须**是 1（多返回值尚未定，见 `README.md`）。
+/// 栈上是 `[…, 可调用, 实参…]`；成功后结果替换掉它们（净 `−nargs−1+nresults`）。
+/// 异常经状态码 ＋ `pa_errmsg`。
+///
+/// **`AB-72`**：`nresults` 是**精确**结果数——`0` ⇒ 丢弃结果；`≥1` ⇒ 产出 `nresults` 项
+/// （v1 的调用固定产出 1 个结果，其余补 `None`；未来多值通道按"多截、少补 `None`"）。
 ///
 /// 本入口自己走 [`boundary`]（`CX-11`）——公共实现 [`call_inner`] **不含** `catch_unwind`。
 ///
@@ -1945,10 +3853,7 @@ unsafe fn call_inner(
     if nargs < 0 || nresults < 0 {
         return status::PA_ERR_INVALID;
     }
-    if nresults != 1 {
-        // 多返回值/调整结果数：规格未钉，先如实报未实现
-        return status::PA_ERR_NOTIMPLEMENTED;
-    }
+    let wanted_results = nresults as usize;
     let nargs = nargs as usize;
     if state.stack.len() < nargs + 1 {
         return status::PA_ERR_INVALID;
@@ -1971,10 +3876,26 @@ unsafe fn call_inner(
     let keep = state.stack.len() - nargs - 1;
     drain_stack(state, keep);
     match outcome {
-        Ok(result) => state.stack.push_owned(result),
+        Ok(result) => {
+            // **`AB-72`**：`nresults` 是**精确**结果数——不足补 `None`、超出截断。
+            // v1 的调用固定产出 **1** 个结果（多值通道未来才可能产出更多）。
+            if wanted_results == 0 {
+                // 丢弃结果（栈已收干净；结果那份引用由这里还）。
+                // SAFETY: result 是 `call_value` 交回的新引用，尚未进栈。
+                unsafe { state.instance.release_object(result.as_ptr()) };
+                return status::PA_OK;
+            }
+            state.stack.push_owned(result);
+            let none = state.instance.singletons().none();
+            for _ in 1..wanted_results {
+                let padding = state.instance.retain(none);
+                state.stack.push_owned(padding);
+            }
+            status::PA_OK
+        }
         Err(pyawa_core::ExecError::Raised { exception }) => {
             // 异常不跨边界逃逸（AB-21）：转成状态码 ＋ 可由宿主取回的信息
-            let message = exception_message(&state.instance, exception);
+            let message = exception_message(&state.instance, exception.get());
             state.message = std::ffi::CString::new(message).ok();
             status::PA_ERR_RUNTIME
         }
@@ -2047,48 +3968,31 @@ pub unsafe extern "C" fn pa_register(
         let Some(signature) = (unsafe { host::read_signature(sig) }) else {
             return status::PA_ERR_INVALID;
         };
-        // 宿主函数对象的类型（每实例一次）
-        let host_type = match state.host_function_type {
-            Some(ty) => ty,
-            None => {
-                let ty = state.instance.new_type(
-                    "host_function",
-                    core::mem::size_of::<host::HostFunction>(),
-                    pyawa_core::Slots::new(host_function_dealloc).with_call(host_function_call),
-                );
-                state.host_function_type = Some(ty);
-                ty
+        // **`AB-52`／M4**：注册时把 `type_expr` 字符串求值成与 `AB-69` 同形的表示
+        // （失败 ⇒ `PA_ERR_INVALID`，不静默降级；前向引用延迟 ⇒ 平台类型）。
+        let (typed_params, typed_ret, has_declared_types) = match evaluate_pa_sig_types(
+            state,
+            &signature,
+            Some(state.globals),
+        ) {
+            Ok(evaluated) => evaluated,
+            Err(message) => {
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
             }
         };
-        let object = host::HostFunction::new(
-            host_type,
-            function,
-            state as *mut pa_state,
-            text.clone(),
-            signature.ret_expr.clone(),
-            signature.params.clone(),
-            signature.flags,
-        );
-        let created = state
+        // SAFETY: 调用方按契约给出 sig。
+        let text_signature = unsafe { host::text_signature(&state.instance, sig) };
+        let created = create_host_function(state, &text, function, &signature, text_signature);
+        // **来源模块**（task-6／缺口2）：`pa_register` 把宿主函数装进**全局命名空间**
+        // ⇒ 参照的 `builtin_function_or_method` 口径是 `"builtins"`（与内建 `len` 同档）。
+        state
             .instance
-            .alloc_payload(object)
-            .cast::<Header>();
-        // 记下来（持有），并放进模块全局，脚本里按名字就能拿到
-        state.host_functions.push(created);
-        // `AB-53`／`AB-54`：注册账本（`.pyi` 导出与运行期读同一份）
-        state.registrations.push(export::Registration {
-            name: text.clone(),
-            is_type: false,
-            signature: signature.clone(),
-            is_final: false,
-            has_instance_dict: false,
-        });
+            .set_builtin_function_module(created, "builtins");
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
-            .entries()
-            .iter()
-            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+            .find_live_position(|key| str_equals(&state.instance, key, &text));
         if let Some(position) = position {
             if let Some((old_key, old_value)) = mapping.remove(position) {
                 // SAFETY: 旧键值由字典持有。
@@ -2102,8 +4006,109 @@ pub unsafe extern "C" fn pa_register(
         unsafe { state.instance.incref_object(created.as_ptr()) };
         let key = state.instance.new_str(&text);
         mapping.insert_raw(key, created);
+        if has_declared_types {
+            register_pa_sig_typed_signature(
+                state,
+                function,
+                typed_params,
+                typed_ret,
+                signature.flags,
+            );
+        }
         status::PA_OK
     })
+}
+
+/// 造一个**宿主函数对象**并登账（`pa_register` 与 `AB-67` 的 `pa_module_addfunction` 共用一处 ✓）。
+fn create_host_function(
+    state: &mut pa_state,
+    name: &str,
+    function: host::PaHostFn,
+    signature: &host::Signature,
+    text_signature: Option<String>,
+) -> NonNull<Header> {
+    // 宿主函数对象的类型（每实例一次）
+    let host_type = match state.host_function_type {
+        Some(ty) => ty,
+        None => {
+            let ty = state.instance.new_type(
+                "host_function",
+                core::mem::size_of::<host::HostFunction>(),
+                pyawa_core::Slots::new(host_function_dealloc)
+                .with_call(host_function_call)
+                .with_getattr(host_function_getattr),
+            );
+            // **`AB-54`**：给"运行期自描述"两条通用成员（`inspect.signature` 的入口）：
+            // - `__call__`：上游 `inspect` 对"非内建函数"的签名分支要求
+            //   `getattr_static(type(obj), "__call__")` 非空；这里放一个**委托**到 call 槽的
+            //   原生方法（也让 `fn.__call__(...)` 与 CPython 一致可用）；
+            // - `__text_signature__` 默认 `None`（与 CPython 里"无文本签名的内建函数"同形；
+            //   有注册签名时由**对象级旁表**在属性查找里优先投影出字符串）。
+            let call_method = state
+                .instance
+                .alloc(pyawa_core::BuiltinFunctionObject::new(
+                    state
+                        .instance
+                        .type_named("builtin_function_or_method")
+                        .expect("引导期已登记"),
+                    "__call__",
+                    core::cell::Cell::new(host_function_call_method),
+                ))
+                .into_raw()
+                .cast::<Header>();
+            state.instance.set_type_attribute(ty, "__call__", call_method);
+            // **`__get__`**：宿主函数在类属性里按普通函数绑定；同时让上游 `inspect` 的
+            // `ismethoddescriptor(obj)` 成立（它的 `_signature_is_builtin` 对"方法描述符"走
+            // `__text_signature__` 分支——本层没有 `getattr_static` 的完整面，这是可靠入口）。
+            let descriptor_get = state
+                .instance
+                .alloc(pyawa_core::BuiltinFunctionObject::new(
+                    state
+                        .instance
+                        .type_named("builtin_function_or_method")
+                        .expect("引导期已登记"),
+                    "__get__",
+                    core::cell::Cell::new(host_function_descriptor_get),
+                ))
+                .into_raw()
+                .cast::<Header>();
+            state.instance.set_type_attribute(ty, "__get__", descriptor_get);
+            let none = state.instance.retain(state.instance.singletons().none());
+            state.instance.set_type_attribute(ty, "__text_signature__", none);
+            state.host_function_type = Some(ty);
+            ty
+        }
+    };
+    let object = host::HostFunction::new(
+        host_type,
+        function,
+        state as *mut pa_state,
+        name.to_owned(),
+        signature.ret_expr.clone(),
+        signature.params.clone(),
+        signature.flags,
+    );
+    let created = state.instance.alloc_payload(object).cast::<Header>();
+    // **`AB-54`**：文本签名是注册信息的**投影**（给运行期 `inspect.signature` 读；与 `.pyi`
+    // 无关）。渲染不出诚实文本时 `None` ⇒ 不设，`__text_signature__` 如实是 `None`。
+    if let Some(text) = text_signature {
+        state.instance.set_text_signature(created, text);
+    }
+    // 记下来（持有），脚本里按名字就能拿到
+    state.host_functions.push(created);
+    // `AB-69`：签名必须在**注册后、任何执行前**声明 ⇒ 记下注册时的执行序号。
+    state
+        .host_function_serials
+        .push((function, state.exec_serial));
+    // `AB-53`／`AB-54`：注册账本（`.pyi` 导出与运行期读同一份）
+    state.registrations.push(export::Registration {
+        name: name.to_owned(),
+        is_type: false,
+        signature: signature.clone(),
+        is_final: false,
+        has_instance_dict: false,
+    });
+    created
 }
 
 /// 宿主函数对象的 `dealloc`（`OM-11` 的必填槽）。
@@ -2114,6 +4119,89 @@ pub unsafe extern "C" fn pa_register(
 unsafe fn host_function_dealloc(ptr: *mut Header) {
     // SAFETY: 调用方保证 ptr 是本类型的一个对象，且计数已归零、clear 已跑过。
     drop(unsafe { Box::from_raw(ptr.cast::<host::HostFunction>()) });
+}
+
+/// 宿主函数类型的 `__get__`（描述符面）：普通函数语义——绑定实例，类级取用返回自身。
+///
+/// # Safety
+///
+/// 契约见 `pyawa_core::NativeFn`。
+unsafe fn host_function_descriptor_get(
+    instance: &Instance,
+    this: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(function) = this else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' for 'host_function' objects needs an argument",
+        ));
+    };
+    match args.first() {
+        Some(target) if *target != instance.singletons().none() => {
+            // SAFETY: 两者都存活；绑定方法各持一份。
+            unsafe {
+                instance.incref_object(function.as_ptr());
+                instance.incref_object(target.as_ptr());
+            }
+            let method_type = instance.type_named("method").expect("method 类型已登记");
+            let bound = instance.alloc(pyawa_core::MethodObject::new(method_type, function, *target));
+            Ok(bound.into_raw().cast::<Header>())
+        }
+        // `__get__(None, owner)` ⇒ 未绑定，交回函数本身（同普通函数）。
+        _ => Ok(instance.retain(function)),
+    }
+}
+
+/// **`host_function` 的 `getattr` 槽**（2026-11-14）：把 `AB-54` 的 `__text_signature__`
+/// 与来源模块 `__module__` 两条旁表投影**下沉到本类型**（先前在 `attribute_lookup` 的通用
+/// 热路径上做两条名字比较；移到这里后普通对象属性读不再付那两次比较，见 `attribute.rs` 的注）。
+///
+/// 其余名字交回 `None`（继续走类型字典／实例字典，既有语义不变）。
+///
+/// # Safety
+///
+/// `ptr` 必须是本实例里存活的 `host_function` 对象；`instance` 与之匹配。
+unsafe fn host_function_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    match name {
+        "__module__" => {
+            let module = instance
+                .builtin_function_module(object)
+                .unwrap_or_else(|| "builtins".to_owned());
+            Some(instance.new_str(&module))
+        }
+        // 无注册文本签名的宿主函数与参照同形：属性给 `None`（有签名才给字符串）。
+        "__text_signature__" => Some(match instance.text_signature(object) {
+            Some(signature) => instance.new_str(&signature),
+            None => instance.new_none(),
+        }),
+        _ => None,
+    }
+}
+
+/// 宿主函数类型的 `__call__` 方法（`AB-54` 的 `inspect` 入口）：**委托**给 call 槽。
+///
+/// # Safety
+///
+/// 契约见 `pyawa_core::NativeFn`。
+unsafe fn host_function_call_method(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(object) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "宿主函数 __call__ 缺少 self"));
+    };
+    // SAFETY: 绑定契约保证 object 是本类型的存活对象。
+    unsafe { host_function_call(object.as_ptr(), bound, args, kwargs, instance) }
 }
 
 /// 宿主函数对象的 `call` 槽（`OM-11`）：实参压栈 → 调 C 函数 → 栈顶就是结果。
@@ -2150,6 +4238,24 @@ unsafe fn host_function_call(
             what: "诊断实例不能调用宿主函数（AB-56）",
         });
     }
+    // **`AB-69` ②**：声明过签名的宿主函数 ⇒ **边界运行期检查**（未声明 ⇒ 与今天完全一致 ✓）。
+    let typed_signature = state_ref
+        .host_typed_signatures
+        .iter()
+        .find(|signature| same_host_function(signature.function, host.function_pointer()))
+        .cloned();
+    if let Some(signature) = &typed_signature {
+        let param_flags: Vec<u32> = host.params().iter().map(|param| param.flags).collect();
+        if let Err(error) = host_signature::check_arguments(
+            instance,
+            host.host_name(),
+            &param_flags,
+            signature,
+            args,
+        ) {
+            return Err(error);
+        }
+    }
     // 把实参压栈（各持一份），随后交给宿主函数
     for argument in args {
         // SAFETY: 调用方保证实参存活。
@@ -2166,11 +4272,20 @@ unsafe fn host_function_call(
     }
     // AB-26：宿主函数内部的 panic 必须被捕获并转成状态码
     let base = state_ref.stack.len() - args.len();
+    // **`AB-67`**：回调期间禁止改模块结构（setup 阶段或两次调用之间才行）——本标志由
+    // `pa_add_host_module`／`pa_module_*` 检查；C 侧拿回了错误码，不是 UB ✓。
+    state_ref.in_host_callback = true;
     // SAFETY: 由注册时的契约保证 function 有效。
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         (host.function)(host.state)
     }))
     .unwrap_or(status::PA_ERR_RUNTIME);
+    state_ref.in_host_callback = false;
+    // **`AB-74`**：宿主记录了类型化异常 ⇒ 把它作为 guest 异常重抛（优先于状态码/结果）。
+    if let Some(exception) = state_ref.host_exception.take() {
+        drain_stack(state_ref, base);
+        return Err(pyawa_core::raise_object_public(instance, exception));
+    }
     // 收栈：宿主函数把结果留在**栈顶**
     let result = match outcome {
         status::PA_OK => {
@@ -2196,7 +4311,19 @@ unsafe fn host_function_call(
         }
     };
     match result {
-        Some(object) => Ok(object),
+        Some(object) => {
+            // **`AB-69` ②**：声明了返回类型 ⇒ 边界也核返回（同样归责插件 ✓）。
+            if let Some(signature) = &typed_signature {
+                if let Err(error) =
+                    host_signature::check_return(instance, host.host_name(), signature, object)
+                {
+                    // SAFETY: 上面刚为结果加了一份引用；错误路径要还掉。
+                    unsafe { instance.release_object(object.as_ptr()) };
+                    return Err(error);
+                }
+            }
+            Ok(object)
+        }
         None => {
             let nil = instance.singletons().none();
             // SAFETY: 单例由实例持有。
@@ -2276,9 +4403,12 @@ fn drain_stack(state: &mut pa_state, base: usize) {
 pub unsafe extern "C" fn pa_newtype(
     state: *mut pa_state,
     name: *const c_char,
+    base_index: i32,
     payload_size: usize,
-    dealloc: host::PaHostDealloc,
-    traverse: host::PaHostTraverse,
+    // **`AB-36`**：C 的 `NULL` 经 `Option<extern fn>` 的 niche 映射为 `None`（函数指针宿主的
+    // 标准 FFI 形态）⇒ 可安全判定并当场拒绝，而不是把 NULL 当可调用指针存下来。
+    dealloc: Option<host::PaHostDealloc>,
+    traverse: Option<host::PaHostTraverse>,
     sig: *const host::pa_sig,
 ) -> i32 {
     boundary(|| {
@@ -2287,11 +4417,51 @@ pub unsafe extern "C" fn pa_newtype(
         let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
             return status::PA_ERR_INVALID;
         };
+        // **`AB-36`**：`dealloc`／`traverse` **必须**非 NULL（§12.13 #2：当场拒绝并给消息，
+        // 不得拖到 `pa_newhandle` 才以空消息失败）。
+        let (Some(dealloc), Some(traverse)) = (dealloc, traverse) else {
+            state.set_message(
+                "`AB-36`：`pa_newtype` 的 `dealloc`／`traverse` 必须非 NULL（宿主类型必须提供生命周期钩子）",
+            );
+            return status::PA_ERR_INVALID;
+        };
+        // **`AB-77`**：`base_index == 0` ⇒ 无基类（`object`）；其余按 `AB-9` 栈索引
+        // （正/负均可，0 本来就不是合法栈索引）。基类必须是类型对象且非终态。
+        let object_type = state
+            .instance
+            .type_named("object")
+            .expect("object 在引导期已登记");
+        let base = if base_index == 0 {
+            object_type
+        } else {
+            let Some(slot) = state.stack.get(base_index) else {
+                state.set_message("`AB-77`：`base_index` 越界");
+                return status::PA_ERR_INVALID;
+            };
+            if !state.instance.is_type_object(slot.object) {
+                state.set_message("`AB-77`：`base_index` 不是类型对象");
+                return status::PA_ERR_INVALID;
+            }
+            let base = slot.object.cast::<pyawa_core::TypeObject>();
+            // SAFETY: 刚判过是类型对象，且由注册表持有。
+            if unsafe { base.as_ref() }.is_final() {
+                state.set_message("`AB-77`：基类被标记为 `PA_TYPE_FINAL`，不可继承");
+                return status::PA_ERR_INVALID;
+            }
+            base
+        };
         // AB-36：注册必须提供签名
         // SAFETY: 调用方按契约给出 sig。
         let Some(signature) = (unsafe { host::read_signature(sig) }) else {
             return status::PA_ERR_INVALID;
         };
+        // **`AB-52`／M5**：`pa_newtype` 的 `sig` 字符串也按同一解析器**校验**（坏类型表达式
+        // 在注册处即拒绝，`TS-54`）；其构造调用不经宿主函数边界，故只校验、不进 `host_typed_signatures`
+        // （`.pyi` 仍用原字符串，`AB-53`）。
+        if let Err(message) = evaluate_pa_sig_types(state, &signature, Some(state.globals)) {
+            state.set_message(&message);
+            return status::PA_ERR_INVALID;
+        }
         // `AB-37`：`PA_TYPE_FINAL` 反向选择"不可继承"
         let final_type = signature.flags & host::PA_TYPE_FINAL != 0;
         // `AB-58`：instance_size = 头部 ＋ 宿主载荷
@@ -2308,6 +4478,16 @@ pub unsafe extern "C" fn pa_newtype(
                 // `OM-14`／`AB-37`：`tp_dealloc` 得能被 Python 覆写（`__del__`）⇒ 挂 Python 级终结器
                 .with_finalize(pyawa_core::python_level_finalize),
         );
+        // **`AB-77`**：真实继承（覆盖 `new_type` 默认挂的 `object`）；MRO 由 C3 重算。
+        if base != object_type
+            && state
+                .instance
+                .register_bases(ty, vec![base])
+                .is_none()
+        {
+            state.set_message("`AB-77`：基类 MRO 不一致（C3 失败）");
+            return status::PA_ERR_INVALID;
+        }
         // SAFETY: ty 由注册表持有。
         let info = unsafe { ty.as_ref() };
         // `AB-58`／`OM-14`：宿主的 dealloc／traverse 记在**类型对象**上（子类天然共享）
@@ -2364,13 +4544,18 @@ pub unsafe extern "C" fn pa_newhandle(
     boundary(|| {
         let state = state_or!(state);
         let Some(object) = state.stack.get(index).map(|slot| slot.object) else {
+            state.set_message("`AB-59`：`pa_newhandle` 的 `type_index` 越界");
             return status::PA_ERR_INVALID;
         };
         let Some(type_object) = state.instance.as_type(object) else {
+            state.set_message("`AB-59`：`pa_newhandle` 的 `type_index` 不是类型对象");
             return status::PA_ERR_INVALID;
         };
         // SAFETY: type_object 由注册表持有。
         if !unsafe { type_object.as_ref() }.is_host_layout() {
+            state.set_message(
+                "`AB-58`：该类型不是 `pa_newtype` 注册的宿主类型（缺 `dealloc`／`traverse` 或非宿主布局）",
+            );
             return status::PA_ERR_INVALID;
         }
         let (created, payload) = state.instance.alloc_host_object(type_object);
@@ -2392,9 +4577,7 @@ fn set_global_value(state: &mut pa_state, name: &str, value: NonNull<Header>) {
     // SAFETY: globals 由本状态持有，存活。
     let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
     let position = mapping
-        .entries()
-        .iter()
-        .position(|(key, _)| str_equals(&state.instance, *key, name));
+        .find_live_position(|key| str_equals(&state.instance, key, name));
     if let Some(position) = position {
         if let Some((old_key, old_value)) = mapping.remove(position) {
             // SAFETY: 旧键值由字典持有。
@@ -2440,7 +4623,7 @@ pub unsafe extern "C" fn pa_getfield(
         match pyawa_core::attribute_read(&state.instance, object, &text) {
             Ok(value) => replace_top(&mut state.stack, &state.instance, value),
             Err(pyawa_core::ExecError::Raised { exception }) => {
-                state.message = std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                state.message = std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
                 status::PA_ERR_RUNTIME
             }
             Err(_) => status::PA_ERR_RUNTIME,
@@ -2488,7 +4671,7 @@ pub unsafe extern "C" fn pa_setfield(
             Ok(()) => status::PA_OK,
             Err(pyawa_core::ExecError::Raised { exception }) => {
                 state.message =
-                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                    std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
                 status::PA_ERR_RUNTIME
             }
             Err(_) => status::PA_ERR_RUNTIME,
@@ -2524,7 +4707,7 @@ pub unsafe extern "C" fn pa_gettable(state: *mut pa_state, index: i32) -> i32 {
             }
             Err(pyawa_core::ExecError::Raised { exception }) => {
                 state.message =
-                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                    std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
                 status::PA_ERR_RUNTIME
             }
             Err(_) => status::PA_ERR_RUNTIME,
@@ -2578,7 +4761,7 @@ unsafe fn settable_inner(state: *mut pa_state, index: i32) -> i32 {
         Ok(()) => status::PA_OK,
         Err(pyawa_core::ExecError::Raised { exception }) => {
             state.message =
-                std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
             status::PA_ERR_RUNTIME
         }
         Err(_) => status::PA_ERR_RUNTIME,

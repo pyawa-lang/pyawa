@@ -24,8 +24,22 @@
 ## 3. 快慢两档验收
 
 - **快档**（轮内反复用）：`tools/quickcheck.sh`（编译 ＋ 编译期用例 ＋ 关键护栏 ＋ 可选探针）。
-- **慢档**（每笔提交前一次）：十项 `&&` 闸门（`cargo check --workspace --all-targets` 0 警告／逐字节／`tests/ci/check.py`／`stability.py`／`heap_and_concurrency.py`／对拍普通与 `PYAWA_DANGLING=1`／语料下限 182／夹具 490）。
-- **禁止**用慢档做轮内迭代；**禁止**用快档替代提交前闸门。
+- **提交前快档**（`tools/fastcheck.sh`）：`cargo check --all-targets` 0 警告 ＋ 逐字节 ＋ `tests/ci/check.py` ＋ 夹具 ＋ 语料下限 ＋ 少量"必须保持绿"的官方套件烟测（含基线计数断言，不放松判定）。
+- **慢档**（`tools/roundcheck.sh`）：十二项 `&&` 闸门（`cargo check --workspace --all-targets` 0 警告／逐字节／`tests/ci/check.py`／`stability.py`／`heap_and_concurrency.py`／对拍普通与 `PYAWA_DANGLING=1`／语料下限 182／夹具 490）＋ 官方全量 survey，**两者并行**跑（闸门内 ③ 由 ⑤ 覆盖、⑨⑩ 并行；survey 默认 `--jobs 4` 让核）。
+- **分档节奏（2026-11-09 用户批准提速）**：
+  - **行为变更轮**（改动默认路径／运行时语义）：提交前必须 `tools/roundcheck.sh` 全绿（十二项 ＋ survey）；
+  - **纯诊断轮／默认零输出轮**：`tools/fastcheck.sh` 全绿即可提交；但**每两轮至少一次** `tools/roundcheck.sh`，且下一次行为变更轮必须补；
+  - survey 同节奏：行为变更轮必跑；诊断轮可并到"每两轮一次"的整轮验收里。
+- **环境上限下的等价分块**（round 132 起；DSH 会话单条命令约 **600 s** 被 `SIGTERM` 时）：
+  `tools/roundcheck.sh` 整体（gate 800+ s）与完整 survey 都跑不完 ⇒ 用
+  `tools/gate_chunk.sh small|stability|heap|conformance` **四块**分别跑（合起来＝十二项；第 12 项失败路径 GC 探针随 `small` 块跑，各块日志
+  `target/roundcheck/chunk-*.log`），survey 用 `python3 tools/libtests_survey.py --release --resume --seconds 420`
+  **多次续跑**直至跑满 397 文件（进度 `target/libtests_survey.progress.json`，`--timeout` 口径不变）。
+  四块全绿 ＋ survey 跑满 ⇒ 视为**慢档等价通过** ✓（台账里写明分块数字）。
+  survey 分片跑法：每片 `--start/--end` 跑完把 `target/libtests_survey.tsv` cp 到
+  `target/recon/<名字>.tsv`；全部分片完成后用
+  `python3 tools/libtests_survey_merge.py target/recon/<名字>_*.tsv [--extra 名字:kind:理由]` 合并并打印统计 ✓。
+- **禁止**用慢档做轮内迭代；**禁止**用快档替代**行为变更轮**的提交前闸门。
 
 ## 4. 时间盒与升级
 
@@ -41,9 +55,11 @@
   差 10 笔，且"已修待提交"的两条其实早已提交。）
 - 长复盘进随代码提交的台账；**不得**只写台账（`agents-rules/commit-rule.md` §1：禁止纯台账提交）。
 
+- **本页有硬上限**（`CX-23`／`CX-24`，机检 `tests/ci/check.py` 的 `T-CX-14`／`T-CX-15`）：**≤ 40 行**；**禁止**写逐轮复盘（历史只进 `docs/rounds/`）；**HEAD 行必须是短哈希**（真实提交、能 `git cat-file -e`），**禁止**写指针。超限或写指针 ⇒ 闸门红 ⇒ 不得提交。
+
 ## 6. 先易后难（取活顺序）
 
-1. **能过十项闸门的增量**优先（解析器／语义修复、收账）；
+1. **能过十二项闸门的增量**优先（解析器／语义修复、收账）；
 2. **需要新载荷类型／新环境**的活**整体推迟**，不拿轮次去磨；
 3. 取活按"**阻塞最多模块的报错签名**"队列，而不是按 fan-in 想象；
 4. 收账后**必须**两道必检：**逐个导入** ＋ **无关脚本 `startup ok`**（`tools/find_syncable.py` 的"通过"不足以证明可入 `Lib/`）。
@@ -52,3 +68,20 @@
 
 - 目标设 `maxGoalRounds` 上限；**达到上限即停**（`round-limit`），不自动续跑。
 - 加预算 ≠ 放宽本规则：**预算增加时，规则照旧**（一轮一落地）。
+
+## 8. 完成口径（"做完"的定义，2026-11-13 修 bug 起）
+
+> 真实事故：用户明确说"继续做，做完"，agent 在梯次最小项提交后仍以"下一步等你定"收尾；
+> 把**可自走的质量收尾**（精确位点、补全/跳转深度、测试与文档）当成"可选、要用户拍板"，
+> 造成"说做完 ≠ 做完"✗。根因不是模型个性，是规则漏洞：§"先问再动"过宽 ＋ 缺完成口径。
+
+- **"做完／完成／继续做完"** ⇒ 目标（工单／梯次）范围内的**已知未完成项清零**：
+  1. 该工单的验收条目**全过**（命令＋结果可复现）；
+  2. 已知质量边界**要么实现、要么明确写成"范围外"**（一行，附理由与判据），不得留悬念；
+  3. 收尾报告只列**真正需要用户拍板**的事项（设计决策／ABI 发布／新扩张），不得把可自走事项
+     包装成"下一步由你定"✗。
+- **目标写法**：`create_goal` 的 objective 必须覆盖"完成口径"（验收全过 ＋ 已知边界处置），
+  不能只写"最小项／MVP"；中途发现范围比目标大 ⇒ **继续做**，或把扩大部分明确记为范围外并
+  说明原因——**两种都算落地，停手不算** ✗。
+- **免请示范围**：已授权工单内的实现细节、质量收尾（位点精度／深度／测试／文档／CI 接线）
+  **不需要**请示 ✓；只有 `AGENTS.md` 列的"必须请示"四类才停手等用户 ✗。

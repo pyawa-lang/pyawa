@@ -67,6 +67,37 @@ impl Instance {
     /// provider 句柄 → **能力表分配的新 `fd`**（`CP-31`）。
     pub fn fs_open(&self, path: &[u8], flags: i32, mode: u32) -> Result<u64, CapabilityCallError> {
         let resolved = self.resolve_path(path)?;
+        // **尾随 `/` 的系统调用语义**（round 109 真 bug 修）：词法解析会丢尾斜杠（`CP-22` 夹具钉住
+        // "解析器归一化" ✓）⇒ 但 `open("nope/", O_CREAT|O_WRONLY)` 在参照里是 **EISDIR** ✗，
+        // 先前交付 provider 的是 `nope`（无斜杠）⇒ **静默创建普通文件** ✗（官方
+        // `test_shutil.test_copyfile_nonexistent_dir` ✓）。这里在 open 这一格补回语义：
+        // 写／创建 ⇒ `EISDIR`；只读 ⇒ 目标是目录 `EISDIR`、普通文件 `ENOTDIR`、不存在 `ENOENT` ✓。
+        let trailing_slash = path.len() > 1
+            && path.ends_with(b"/")
+            && path.iter().any(|byte| *byte != b'/');
+        if trailing_slash {
+            let write = flags
+                & (pyawa_capabilities::fs::open_flag::WRONLY
+                    | pyawa_capabilities::fs::open_flag::RDWR
+                    | pyawa_capabilities::fs::open_flag::CREAT
+                    | pyawa_capabilities::fs::open_flag::TRUNC
+                    | pyawa_capabilities::fs::open_flag::APPEND)
+                != 0;
+            let errno = if write {
+                self.path_errno("EISDIR", 21)
+            } else {
+                match self.fs_stat_raw(&resolved) {
+                    Ok(info) if info.is_dir => self.path_errno("EISDIR", 21),
+                    Ok(_) => self.path_errno("ENOTDIR", 20),
+                    Err(CapabilityCallError::Machine(errno)) => errno,
+                    Err(CapabilityCallError::NotImplemented)
+                    | Err(CapabilityCallError::NotRegistered) => {
+                        return Err(CapabilityCallError::NotImplemented)
+                    }
+                }
+            };
+            return Err(CapabilityCallError::Machine(errno));
+        }
         self.fs_open_raw(&resolved, flags, mode)
     }
 
@@ -110,6 +141,139 @@ impl Instance {
         };
         let mut errno = 0i32;
         match stat(table.state, path.as_ptr(), path.len(), &mut info, &mut errno) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(info),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **改文件模式**（`chmod(name, mode)`；round 97）：`fs.chmod` 槽（`CP-23` 的属主面未接线 ✓，
+    /// 模式位 provider 支持 ✓）。名字先经 VM 解析器（与 `fs_stat` 同一口径 ✓）。
+    pub fn fs_chmod(&self, path: &[u8], mode: u32) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let chmod = table.chmod.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match chmod(
+            table.state,
+            resolved.as_ptr(),
+            resolved.len(),
+            mode,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **改访问／修改时间**（`utime(name, atime, mtime)`；round 107）：`fs.utime` 槽 ✓
+    /// （秒级；provider 用 `FileTimes` ✓）。名字先经 VM 解析器（与 `fs_stat` 同一口径 ✓）。
+    /// **跟随叶子的纳秒级 `utime`**（`round 109`；capability `utime_ns` 追加槽 ⇒ `PA_ABI_MINOR` 6）。
+    /// 旧的 `fs_utime` 只有秒精度 ⇒ `shutil.copystat` 丢 ns ✗（`test_filecmp` 的辅助 ✓）。
+    pub fn fs_utime_ns(
+        &self,
+        path: &[u8],
+        atime_ns: i64,
+        mtime_ns: i64,
+    ) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let utime_ns = table.utime_ns.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match utime_ns(
+            table.state,
+            resolved.as_ptr(),
+            resolved.len(),
+            atime_ns,
+            mtime_ns,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **不跟随符号链接的 `utime`**（`round 109`；capability `lutime` 追加槽 ⇒ `PA_ABI_MINOR` 5）。
+    pub fn fs_lutime(
+        &self,
+        path: &[u8],
+        atime_ns: i64,
+        mtime_ns: i64,
+    ) -> Result<(), CapabilityCallError> {
+        // **叶子不跟随**（round 109 真 bug 修）：先前用 `resolve_path`（跟随叶子 ✓）⇒ 断链在解析时
+        // 就 `ENOENT` ✗，`lutime` 根本到不了 provider ✗（`shutil` 的 dangling symlink 复制 ✓）。
+        let resolved = self.resolve_path_parent(path)?;
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let lutime = table.lutime.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match lutime(
+            table.state,
+            resolved.as_ptr(),
+            resolved.len(),
+            atime_ns,
+            mtime_ns,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    pub fn fs_utime(&self, path: &[u8], atime: i64, mtime: i64) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path(path)?;
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let utime = table.utime.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match utime(
+            table.state,
+            resolved.as_ptr(),
+            resolved.len(),
+            atime,
+            mtime,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **经 `fs` 域按 `fd` 取元信息**（`fstat(file)`；`CP-31` 的 `fd → provider 句柄` 解析在这里 ✓）。
+    ///
+    /// 动因（round 91）：`os.fstat` 未接线 ⇒ 官方 `test_bufio` 的 `PyBufferSizeTest.__init__`
+    /// 直接 `AttributeError: 'module' object has no attribute 'fstat'` ✗（该文件只剩这 2 个错误 ✓）。
+    /// 标准流 `0/1/2` 不占能力表槽位 ⇒ `fs_provider_handle` 直接当下标用 ✓（`_io` 的既有约定 ✓）。
+    pub fn fs_fstat(&self, fd: u64) -> Result<pyawa_capabilities::fs::FileInfo, CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let fstat = table.fstat.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.fs_provider_handle(fd)?;
+        let mut info = pyawa_capabilities::fs::FileInfo {
+            size: 0,
+            mode: 0,
+            is_dir: false,
+            dev: 0,
+            ino: 0,
+        };
+        let mut errno = 0i32;
+        match fstat(
+            table.state,
+            pyawa_capabilities::fs::Handle(handle),
+            &mut info,
+            &mut errno,
+        ) {
             pyawa_capabilities::fs::CapStatus::Ok => Ok(info),
             pyawa_capabilities::fs::CapStatus::Unimplemented => {
                 Err(CapabilityCallError::NotImplemented)
@@ -324,7 +488,7 @@ impl Instance {
             }
         })();
         // 目录句柄用完即还（与 `_io` 的 `open` 同口径：能力表引用计数归零才调 provider close）。
-        let _ = self.fs_close(fd);
+        crate::executor::runtime::discard_capability_result(self.fs_close(fd));
         outcome
     }
 
@@ -405,6 +569,56 @@ impl Instance {
         let mut errno = 0i32;
         match unlink(table.state, path.as_ptr(), path.len(), &mut errno) {
             pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **经 `fs` 域建目录**（`P3-40`；名字先经 VM 路径解析器 `CP-21`／`CP-32`，叶子**不跟随**符号链接）。
+    ///
+    /// `mode` 是 POSIX 权限位（provider 交给 `mkdir(2)`；**平台 umask 由内核施加** ✓）。
+    pub fn fs_mkdir(&self, path: &[u8], mode: u32) -> Result<(), CapabilityCallError> {
+        let resolved = self.resolve_path_parent(path)?;
+        self.fs_mkdir_raw(&resolved, mode)
+    }
+
+    /// `fs_mkdir` 的 provider 直达面（**名字已解析**）。
+    fn fs_mkdir_raw(&self, path: &[u8], mode: u32) -> Result<(), CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let mkdir = table.mkdir.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match mkdir(table.state, path.as_ptr(), path.len(), mode, &mut errno) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **经 `fs` 域造管道**（`P3-40` 的追加槽；`CP-30`／`AB-41` 次版本 4）。
+    ///
+    /// provider 交两个**不透明句柄**；本层各给一个**实例能力表下标**（`CP-31`）⇒ 返回
+    /// `(读端 fd, 写端 fd)`，动态段从 **3** 起（0／1／2 标准流不占槽）。槽缺失（≤1.3 的旧宿主）
+    /// 或 provider 给 `None` ⇒ `NotImplemented`（`CP-3`：只有这个操作未实现）。
+    pub fn fs_pipe(&self) -> Result<(u64, u64), CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let pipe = table.pipe.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut read_handle = pyawa_capabilities::fs::Handle(0);
+        let mut write_handle = pyawa_capabilities::fs::Handle(0);
+        let mut errno = 0i32;
+        match pipe(
+            table.state,
+            &mut read_handle,
+            &mut write_handle,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok((
+                self.capability_register(pyawa_capabilities::DOMAIN_FS, read_handle.0),
+                self.capability_register(pyawa_capabilities::DOMAIN_FS, write_handle.0),
+            )),
             pyawa_capabilities::fs::CapStatus::Unimplemented => {
                 Err(CapabilityCallError::NotImplemented)
             }

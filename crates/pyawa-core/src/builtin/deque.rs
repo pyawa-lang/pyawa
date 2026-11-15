@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`iterator_traverse`、`set_clear`、`set_getattr`、`set_traverse` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::{Cell, RefCell};
 use crate::builtin_objects::{BuiltinFunctionObject, DequeObject, MethodObject, NativeFn};
 use crate::executor::ExecError;
@@ -45,15 +46,70 @@ pub unsafe fn deque_new(
     }
     let deque = instance.alloc(DequeObject::new(class, RefCell::new(Vec::new()), Cell::new(maxlen)));
     if let Some(iterable) = iterable {
-        // **摊开可迭代对象**（`collect_iterable` 是既有的公开入口 ✓ —— 一处真相 ✓）
-        for value in instance.collect_iterable(iterable)? {
-            // SAFETY: value 由调用方那份引用持有，这里新增一份交给 deque ✓。
-            unsafe { instance.incref_object(value.as_ptr()) };
-            deque.get().push_back(instance, value);
-        }
+        // **摊开可迭代对象**（round 86：走迭代器协议 ✓，见 `deque_extend_from_iterable`）
+        deque_extend_from_iterable(instance, deque.get(), iterable, false)?;
     }
     Ok(deque.into_raw().cast::<Header>())
 }
+/// **`deque.__init__(iterable=(), maxlen=None)`**（round 114）：`NewFn` **拿不到关键字** ✗ ⇒
+/// `deque([], maxlen=7)` 的 `maxlen` 先前被静默丢弃 ✗（`pprint` 的 `deque([], maxlen=7)` 期望 ✓）。
+/// 这里收关键字并**按新 `maxlen` 裁头** ✓（填充仍由 `deque_new` 做 ✓，本函数**不**重复 extend ✗）。
+fn deque_init_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // **两种形态**：实例上显式调用（`bound=Some`）与类型实例化后的 `type_call`（`bound=None`、
+    // self 在 `args[0]` ✓）—— 与 `container_receiver` 同一口径 ✓。
+    let (receiver, rest) = crate::builtin_objects::container_receiver(bound, args);
+    let Some(owner) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "deque.__init__ 缺少 self"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*owner.as_ptr().cast::<DequeObject>() };
+    let mut maxlen = object.raw_maxlen();
+    let parse = |value: NonNull<Header>| -> Result<Option<usize>, ExecError> {
+        if unsafe { value.as_ref() }.ty() == instance.singletons().none_type() {
+            return Ok(None);
+        }
+        let Some(number) = instance.int_of(value).and_then(|value| value.to_i64()) else {
+            return Err(instance.raise_builtin_error("TypeError", "'maxlen' must be an integer"));
+        };
+        if number < 0 {
+            return Err(instance.raise_builtin_error("ValueError", "maxlen must be non-negative"));
+        }
+        Ok(Some(number as usize))
+    };
+    for (key, value) in kwargs {
+        let Some(text) = instance.text_of(*key) else {
+            return Err(instance.raise_builtin_error("TypeError", "keywords must be strings"));
+        };
+        match text {
+            "maxlen" => {
+                if let Some(parsed) = parse(*value)? {
+                    maxlen = parsed;
+                }
+            }
+            "iterable" => {}
+            _ => {
+                let name = text.to_owned();
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("deque() got an unexpected keyword argument '{name}'"),
+                ));
+            }
+        }
+    }
+    if let Some(positional) = rest.get(1).copied() {
+        if let Some(parsed) = parse(positional)? {
+            maxlen = parsed;
+        }
+    }
+    object.set_raw_maxlen(instance, maxlen);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// **`deque` 的方法面**（照 `set_getattr` 的手法 ✓：名字 → 原生，再包成**绑定方法** ✓）。
 pub unsafe fn deque_getattr(
     ptr: *mut Header,
@@ -71,6 +127,9 @@ pub unsafe fn deque_getattr(
         return Some(instance.new_int(raw as i64));
     }
     let handler: NativeFn = match name {
+        // **`__len__`／`__iter__`**（round 114）：`len(deque)` 与 `pprint` 的迭代 ✓。
+        "__len__" => deque_len_native,
+        "__iter__" => deque_iter_native,
         "append" => deque_append_native,
         "appendleft" => deque_appendleft_native,
         "pop" => deque_pop_native,
@@ -88,8 +147,7 @@ pub unsafe fn deque_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -100,7 +158,7 @@ pub unsafe fn deque_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -180,6 +238,39 @@ pub(crate) unsafe fn deque_popleft_native(
     unsafe { instance.release_object(value.as_ptr()) };
     Ok(value)
 }
+/// **把任意可迭代对象摊进 deque**（round 86）：走**迭代器协议** ✓（`iter_object` ＋
+/// `advance_iterator`；`advance` 交的是**新引用** ⇒ `push_*` 直接接手 ✓）。先前走
+/// `collect_iterable` ✗ ⇒ 只认 list／tuple／set／frozenset ⇒ `deque(deque(...))`／
+/// `d.extend(生成器)` 报"bytes(<可迭代>)：只接线了 …"（张冠李戴的消息）✗。
+fn deque_extend_from_iterable(
+    instance: &Instance,
+    object: &DequeObject,
+    iterable: NonNull<Header>,
+    front: bool,
+) -> Result<(), ExecError> {
+    let iterator = instance.iter_object(iterable)?;
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(value)) => {
+                if front {
+                    object.push_front(instance, value);
+                } else {
+                    object.push_back(instance, value);
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                // SAFETY: iterator 是 `iter_object` 交出的新引用。
+                unsafe { instance.release_object(iterator.as_ptr()) };
+                return Err(error);
+            }
+        }
+    }
+    // SAFETY: 同上。
+    unsafe { instance.release_object(iterator.as_ptr()) };
+    Ok(())
+}
+
 /// 把一份实参（可迭代）摊进 deque 的某一端 ✓。
 pub(crate) unsafe fn deque_extend_common(
     instance: &Instance,
@@ -191,15 +282,7 @@ pub(crate) unsafe fn deque_extend_common(
     let Some(iterable) = args.first() else {
         return Err(instance.raise_builtin_error("TypeError", "extend expected 1 argument"));
     };
-    for value in instance.collect_iterable(*iterable)? {
-        // SAFETY: value 由调用方那份引用持有 ✓。
-        unsafe { instance.incref_object(value.as_ptr()) };
-        if front {
-            object.push_front(instance, value);
-        } else {
-            object.push_back(instance, value);
-        }
-    }
+    deque_extend_from_iterable(instance, object, *iterable, front)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 /// `deque.extend(iterable)` ✓。
@@ -372,8 +455,7 @@ pub(crate) unsafe fn deque_copy_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let (object, _) = deque_self!(instance, bound, _args, "copy");
     let items = object.items();
-    let deque_type = instance
-        .type_named("deque")
+    let deque_type = instance.hot_type(HotId::Deque)
         .expect("deque 在引导期已登记");
     let copy = instance.alloc(DequeObject::new(
         deque_type,
@@ -422,4 +504,74 @@ pub(crate) unsafe fn deque_repr(ptr: *mut Header, instance: &Instance) -> Result
     } else {
         Ok(format!("deque({body}, maxlen={maxlen})"))
     }
+}
+
+
+/// `deque.__len__`（round 114；`pprint._pprint_deque` 的 `len(object)` ✓）。
+fn deque_len_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (receiver, _) = crate::builtin_objects::container_receiver(bound, args);
+    let Some(this) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "deque.__len__ 缺少 self"));
+    };
+    // SAFETY: 本类型族载荷。
+    let object = unsafe { &*this.as_ptr().cast::<DequeObject>() };
+    Ok(instance.new_int(object.len() as i64))
+}
+
+/// `deque.__iter__`（round 114）：交**快照列表**的迭代器 ✓（`pprint._format_items` 只迭代一次 ✓；
+/// 活体 deque 迭代器再补 ✓ —— 如实登记）。
+fn deque_iter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (receiver, _) = crate::builtin_objects::container_receiver(bound, args);
+    let Some(this) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "deque.__iter__ 缺少 self"));
+    };
+    // SAFETY: 本类型族载荷。
+    let object = unsafe { &*this.as_ptr().cast::<DequeObject>() };
+    let items: Vec<NonNull<Header>> = object
+        .items()
+        .into_iter()
+        .map(|item| instance.retain(item))
+        .collect();
+    let snapshot = instance.new_list(items);
+    let iterator = instance.iter_object(snapshot);
+    instance.release(snapshot);
+    iterator
+}
+
+/// **把 `deque.__init__` 挂进类型命名空间**（round 114）：必须等 `builtin_function_or_method`
+/// 登记之后（引导段太早 ✗）⇒ 由 `collections` 模块建 `deque` 时调用 ✓。
+pub fn install_deque_init(instance: &Instance) {
+    let Some(deque_type) = instance.hot_type(HotId::Deque) else {
+        return;
+    };
+    let Some(namespace) = instance.type_namespace(deque_type.cast()) else {
+        return;
+    };
+    let init = make_deque_init_native(instance);
+    instance.dict_set(namespace, "__init__", init);
+    instance.release(init);
+}
+
+/// 造 `deque.__init__` 的原生可调用对象（**新引用** ✓）。
+pub fn make_deque_init_native(instance: &Instance) -> NonNull<Header> {
+    let ty = instance.hot_type(HotId::BuiltinFunctionOrMethod)
+        .expect("builtin_function_or_method 在引导期已登记");
+    instance
+        .alloc(BuiltinFunctionObject::new(
+            ty,
+            "__init__",
+            Cell::new(deque_init_native),
+        ))
+        .into_raw()
+        .cast::<Header>()
 }

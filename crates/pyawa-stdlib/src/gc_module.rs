@@ -208,7 +208,9 @@ fn collect_native(
         return Err(instance.raise_builtin_error("ValueError", "invalid generation"));
     }
     // **单代**：任何合法代都跑同一趟全量循环回收（如实偏差见模块头）。
-    Ok(instance.new_int(instance.collect() as i64))
+    // **按代**：`collect(0)`／`collect(1)` 是年轻代语义 ⇒ 跳过孤儿类型回收（快 ✓）；
+    // `collect()`／`collect(2)` 全量 ✓（`free_after` 家族用默认参数 ✓）。
+    Ok(instance.new_int(instance.collect_explicit_generation(generation >= 2) as i64))
 }
 
 /// `gc.isenabled()`：用户可见的启用状态（默认启用；`disable()` 之后为假）。
@@ -333,14 +335,80 @@ macro_rules! unimplemented_native {
 unimplemented_native!(get_objects_native, "get_objects", "本层没有活对象全量表可供枚举");
 unimplemented_native!(get_referrers_native, "get_referrers", "本层没有引用图可反查");
 unimplemented_native!(get_referents_native, "get_referents", "本层没有逐对象引用遍历口");
-unimplemented_native!(is_tracked_native, "is_tracked", "本层没有逐对象追踪位访问器");
+/// **`gc.is_tracked(obj)`**（round 120）：本层没有逐对象追踪位 ✗，按**参照口径的近似**给：
+/// 标量（`None`／`bool`／`int`／`float`／`str`／`bytes`／`frozenset` 等不可变原子）⇒ `False`，
+/// 其余（容器／用户实例／函数…）⇒ `True` ✓。**如实登记**：不是真实的追踪位查询 ✓。
+fn is_tracked_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "is_tracked() takes exactly one argument (0 given)",
+        ));
+    };
+    let name = instance.type_name(instance.type_of(object));
+    let atomic = matches!(
+        name.as_str(),
+        "NoneType" | "bool" | "int" | "float" | "complex" | "str" | "bytes" | "frozenset"
+    );
+    Ok(instance.new_bool(!atomic))
+}
 unimplemented_native!(is_finalized_native, "is_finalized", "本层没有逐对象终结状态访问器");
 unimplemented_native!(freeze_native, "freeze", "本层没有冻结区");
 unimplemented_native!(unfreeze_native, "unfreeze", "本层没有冻结区");
-unimplemented_native!(get_count_native, "get_count", "本层是单代回收，没有分代计数器");
+// **`gc.get_count()`**（round 92，真实现 ✓）：本层是**单代**回收 ⇒ `(自上次回收以来的分配数, 0, 0)`
+// ✓（与 `get_threshold` 的既有口径一致：分代计数是已登记的偏差 ✗，这里如实给 0 而不编假值 ✓）。
+fn get_count_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (young, middle, old) = instance.gc_get_count();
+    Ok(instance.new_tuple(vec![
+        instance.new_int(young as i64),
+        instance.new_int(middle as i64),
+        instance.new_int(old as i64),
+    ]))
+}
 unimplemented_native!(get_stats_native, "get_stats", "本层是单代回收，没有分代统计");
-unimplemented_native!(get_debug_native, "get_debug", "本层没有调试通道");
-unimplemented_native!(set_debug_native, "set_debug", "本层没有调试通道");
+// **`gc.get_debug`／`gc.set_debug`**（round 92，真实现 ✓）：官方 `test_gc` 的 `setUpModule`
+// 第一句就是 `gc.get_debug()`（先前 `NotImplementedError` ⇒ setUpModule 直接 ERROR ✗）。
+// 本层没有调试通道 ⇒ 只忠实保存/回报位 ✓（`DEBUG_*` 常量已在命名空间里 ✓）。
+fn get_debug_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_int(instance.gc_debug() as i64))
+}
+
+fn set_debug_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set_debug() missing required argument 'flags' (pos 1)",
+        ));
+    };
+    let Some(flags) = instance.int_of(value).and_then(|value| value.to_i64()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "an integer is required",
+        ));
+    };
+    instance.set_gc_debug(flags as u64);
+    Ok(instance.retain(instance.singletons().none()))
+}
 
 /// 建 `gc` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {

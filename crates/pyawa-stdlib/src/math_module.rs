@@ -268,7 +268,43 @@ fn int_argument(instance: &Instance, args: &[NonNull<Header>], name: &str) -> Re
     instance
         .int_of(*value)
         .and_then(|value| value.to_i64())
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "'something else' object cannot be interpreted as an integer"))
+        .ok_or_else(|| {
+            let kind = instance.type_name(instance.type_of(*value)).to_owned();
+            // 参照口径：给**别的类型**报这句话；大整数（本层 `to_i64` 不认）不在这一档：
+            // 见 `big_int_argument` ✓（round 67 起 `gcd`／`lcm` 走它 ✓）。
+            instance.raise_builtin_error(
+                "TypeError",
+                &format!("'{kind}' object cannot be interpreted as an integer"),
+            )
+        })
+}
+
+/// 取一个**任意精度整数**实参（round 67）：`math.gcd`／`lcm` 要收大整数 ✓
+/// （`fractions.Fraction.__new__` 拿 `7 * (2**61-1)` 调 `math.gcd` ✓）。
+fn big_int_argument(
+    instance: &Instance,
+    value: NonNull<Header>,
+    name: &str,
+) -> Result<pyawa_core::bigint::BigInt, ExecError> {
+    instance.int_of(value).map(|value| value.to_bigint()).ok_or_else(|| {
+        let kind = instance.type_name(instance.type_of(value)).to_owned();
+        instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() argument must be an integer, not {kind}"),
+        )
+    })
+}
+
+/// 两个 `BigInt` 的最大公约数 ✓（非负 ✓）。
+fn gcd_big(a: &pyawa_core::bigint::BigInt, b: &pyawa_core::bigint::BigInt) -> pyawa_core::bigint::BigInt {
+    let mut a = a.abs();
+    let mut b = b.abs();
+    while !b.is_zero() {
+        let (_, remainder) = a.divmod_floor(&b).unwrap_or((pyawa_core::bigint::BigInt::zero(), pyawa_core::bigint::BigInt::zero()));
+        a = b;
+        b = remainder;
+    }
+    a
 }
 
 /// 定义域错（照参照的消息 ✓）。
@@ -527,23 +563,13 @@ fn gcd_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let mut acc = 0i64;
+    // **任意精度** ✓（round 67）：`fractions` 拿 `7 * (2**61-1)` 这类大整数来调 ✓。
+    let mut acc = pyawa_core::bigint::BigInt::zero();
     for argument in args {
-        let value = int_argument(instance, core::slice::from_ref(argument), "gcd")?.abs();
-        acc = gcd_pair(acc, value);
+        let value = big_int_argument(instance, *argument, "gcd")?;
+        acc = gcd_big(&acc, &value);
     }
-    Ok(instance.new_int(acc))
-}
-
-/// 两个整数的最大公约数 ✓。
-fn gcd_pair(a: i64, b: i64) -> i64 {
-    let (mut a, mut b) = (a, b);
-    while b != 0 {
-        let next = a % b;
-        a = b;
-        b = next;
-    }
-    a
+    Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(acc)))
 }
 
 /// `math.lcm(*integers)` ✓（没有实参 ⇒ 1 ✓；任一为 0 ⇒ 0 ✓）。
@@ -553,16 +579,20 @@ fn lcm_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let mut acc = 1i64;
+    let mut acc = pyawa_core::bigint::BigInt::from_i64(1);
     for argument in args {
-        let value = int_argument(instance, core::slice::from_ref(argument), "lcm")?.abs();
-        if value == 0 {
+        let value = big_int_argument(instance, *argument, "lcm")?.abs();
+        if value.is_zero() {
             return Ok(instance.new_int(0));
         }
-        let divisor = gcd_pair(acc, value);
-        acc = acc / divisor * value;
+        let divisor = gcd_big(&acc, &value);
+        let (quotient, _) = acc.divmod_floor(&divisor).unwrap_or((
+            pyawa_core::bigint::BigInt::zero(),
+            pyawa_core::bigint::BigInt::zero(),
+        ));
+        acc = quotient.mul(&value);
     }
-    Ok(instance.new_int(acc))
+    Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(acc)))
 }
 
 /// `math.isqrt(n)` ✓（负数 ⇒ `ValueError: isqrt() argument must be nonnegative` ✓）。
@@ -572,14 +602,39 @@ fn isqrt_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let value = int_argument(instance, args, "isqrt")?;
-    if value < 0 {
+    let Some(raw) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "isqrt() takes exactly one argument (0 given)",
+        ));
+    };
+    let value = big_int_argument(instance, *raw, "isqrt")?;
+    if value.signum() < 0 {
         return Err(instance.raise_builtin_error(
             "ValueError",
             "isqrt() argument must be nonnegative",
         ));
     }
-    Ok(instance.new_int((value as f64).sqrt() as i64))
+    // **牛顿迭代**（任意精度 ✓，round 67）：`x_{k+1} = (x_k + n/x_k) / 2` ✓。
+    if value.is_zero() || value == pyawa_core::bigint::BigInt::from_i64(1) {
+        return Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(value)));
+    }
+    let bits = value.bit_length();
+    let mut guess = pyawa_core::bigint::BigInt::from_i64(2)
+        .pow_u32(((bits + 1) / 2) as u32);
+    loop {
+        let (quotient, _) = value
+            .divmod_floor(&guess)
+            .unwrap_or((pyawa_core::bigint::BigInt::zero(), pyawa_core::bigint::BigInt::zero()));
+        let next = guess.add(&quotient).divmod_floor(&pyawa_core::bigint::BigInt::from_i64(2))
+            .map(|(half, _)| half)
+            .unwrap_or_else(pyawa_core::bigint::BigInt::zero);
+        if next.cmp(&guess) != core::cmp::Ordering::Less {
+            break;
+        }
+        guess = next;
+    }
+    Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(guess)))
 }
 
 /// `math.factorial(n)` ✓（负数 ⇒ `ValueError: factorial() not defined for negative values` ✓）。
@@ -625,6 +680,44 @@ predicate!(isfinite_native, "isfinite", |value| value.is_finite());
 
 /// `math.fsum(iterable)` ✓（本层按**普通求和** ✓ —— 参照用 Neumaier 补偿求和 ✗，
 /// 极端情形下末位会不同 ✓，如实登记在台账里 ✓）。
+/// **`math.modf(x)`**（C1 日常面）：返回 `(小数部分, 整数部分)` 两个 `float`（都带 x 的符号）✓。
+///
+/// 动因：`Lib/_pydatetime.py` 的 `fromtimestamp` 用它（`email.utils.formatdate` →
+/// `datetime.fromtimestamp`）⇒ 先前缺 `modf` ⇒ `urllib.request` 打开 `file://` 直接
+/// `AttributeError: 'module' object has no attribute 'modf'` ✗。
+fn modf_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "modf() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("modf() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    let value = real_argument(instance, args[0])?;
+    // 参照 3.14.4 实测：`modf(inf)` ⇒ `(0.0, inf)`、`modf(-inf)` ⇒ `(-0.0, -inf)`、
+    // `modf(nan)` ⇒ `(nan, nan)`；有限值 ⇒ `(fract, trunc)`（两者都带 x 的符号 ✓）。
+    let (fraction, integral) = if value.is_nan() {
+        (f64::NAN, f64::NAN)
+    } else if value.is_infinite() {
+        (0.0f64.copysign(value), value)
+    } else {
+        (value.fract(), value.trunc())
+    };
+    let fraction_object = instance.new_float(fraction);
+    let integral_object = instance.new_float(integral);
+    Ok(instance.new_tuple(vec![fraction_object, integral_object]))
+}
+
 fn fsum_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -635,11 +728,97 @@ fn fsum_native(
         return Err(instance.raise_builtin_error("TypeError", "fsum() takes exactly one argument (0 given)"));
     };
     let mut sum = 0.0f64;
-    for value in instance.collect_iterable(*iterable)? {
-        let number = real_argument(instance, value)?;
-        sum += number;
+    // **走迭代器协议**（round 134 重试）：`statistics.py` 的 `fsum(map(...))`／生成器都用它 ✓。
+    let iterator = instance.iter_object(*iterable)?;
+    loop {
+        let next = instance.advance_iterator(iterator);
+        match next {
+            Ok(Some(value)) => {
+                let outcome = real_argument(instance, value);
+                instance.release(value);
+                match outcome {
+                    Ok(number) => sum += number,
+                    Err(error) => {
+                        instance.release(iterator);
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
     }
+    instance.release(iterator);
     Ok(instance.new_float(sum))
+}
+
+/// **`math.prod(iterable, *, start=1)`**（round 225）：`collections.Counter.elements` 的 doctest
+/// 要 `math.prod(counter.elements())` ✓（`test_collections` 的 `elements` ✓）。整数用任意精度核心
+/// （走 `arithmetic_public` 的 `"*"` ✓，与 `sum` 同族口径 ✓）。
+fn prod_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(iterable) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "prod() takes at least 1 argument (0 given)",
+        ));
+    };
+    let mut start = instance.new_int(1);
+    for (name, value) in kwargs {
+        match instance.text_of(*name).unwrap_or_default() {
+            "start" => {
+                instance.release(start);
+                instance.retain(*value);
+                start = *value;
+            }
+            other => {
+                instance.release(start);
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("prod() got an unexpected keyword argument '{other}'"),
+                ));
+            }
+        }
+    }
+    let iterator = instance.iter_object(*iterable)?;
+    let mut product = start;
+    loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(value)) => {
+                let outcome = pyawa_core::executor::arithmetic::arithmetic_public(
+                    instance,
+                    product,
+                    value,
+                    "*",
+                    0,
+                );
+                instance.release(value);
+                instance.release(product);
+                match outcome {
+                    Ok(result) => product = result,
+                    Err(error) => {
+                        instance.release(iterator);
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                instance.release(product);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(product)
 }
 
 /// **`math.erfc(x)`**（第 406 轮 ✓）：`statistics.py:141` 导入期就要这个名字 ✓
@@ -702,18 +881,65 @@ fn sumprod_native(
             &format!("sumprod() takes exactly 2 arguments ({} given)", args.len()),
         ));
     }
-    let left = instance.collect_iterable(args[0])?;
-    let right = instance.collect_iterable(args[1])?;
-    if left.len() != right.len() {
-        return Err(instance.raise_builtin_error(
-            "ValueError",
-            "Inputs are not the same length",
-        ));
-    }
+    // **迭代器协议**（round 134 重试）：`statistics.py:682` 的
+    // `sumprod((xi - xbar for xi in x), (yi - ybar for yi in y))` ✓。
+    let left_iterator = instance.iter_object(args[0])?;
+    let right_iterator = instance.iter_object(args[1])?;
     let mut total = 0.0f64;
-    for (pair_left, pair_right) in left.into_iter().zip(right) {
-        total += real_argument(instance, pair_left)? * real_argument(instance, pair_right)?;
+    loop {
+        let left = match instance.advance_iterator(left_iterator) {
+            Ok(value) => value,
+            Err(error) => {
+                instance.release(left_iterator);
+                instance.release(right_iterator);
+                return Err(error);
+            }
+        };
+        let right = match instance.advance_iterator(right_iterator) {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(left) = left {
+                    instance.release(left);
+                }
+                instance.release(left_iterator);
+                instance.release(right_iterator);
+                return Err(error);
+            }
+        };
+        let (Some(left_value), Some(right_value)) = (left, right) else {
+            if let Some(left) = left {
+                instance.release(left);
+            }
+            if let Some(right) = right {
+                instance.release(right);
+            }
+            // **两个迭代器只在"循环出口/错误出口"释放一次**（round 134 真双放修 ✗）：先前这里先释放、
+            // `break` 后又走到循环后的释放 ⇒ 同一迭代器被放两次（`PYAWA_DANGLING=1` 实测悬垂 ✓）。
+            if left.is_none() && right.is_none() {
+                break;
+            }
+            instance.release(left_iterator);
+            instance.release(right_iterator);
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "Inputs are not the same length",
+            ));
+        };
+        let left_number = real_argument(instance, left_value);
+        let right_number = real_argument(instance, right_value);
+        instance.release(left_value);
+        instance.release(right_value);
+        match (left_number, right_number) {
+            (Ok(left_number), Ok(right_number)) => total += left_number * right_number,
+            (Err(error), _) | (_, Err(error)) => {
+                instance.release(left_iterator);
+                instance.release(right_iterator);
+                return Err(error);
+            }
+        }
     }
+    instance.release(left_iterator);
+    instance.release(right_iterator);
     Ok(instance.new_float(total))
 }
 
@@ -758,8 +984,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("isinf", isinf_native as NativeFn),
         ("isfinite", isfinite_native as NativeFn),
         ("fsum", fsum_native as NativeFn),
+        ("modf", modf_native as NativeFn),
         ("erfc", erfc_native as NativeFn),
         ("sumprod", sumprod_native as NativeFn),
+        ("prod", prod_native as NativeFn),
         // **P3-38 S3e-2**（task-65）：`test_math` 导入期/用例要 `isclose`／`nextafter` ✓
         ("isclose", isclose_native as NativeFn),
         ("nextafter", nextafter_native as NativeFn),

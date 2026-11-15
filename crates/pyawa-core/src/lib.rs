@@ -9,7 +9,13 @@
 
 // **`dict.fromkeys`** ✓（第 184 轮）：实现在 core（要看容器内部 ✓）⇒ 从根**再导出** ✓ ——
 // `builtin_objects` 是**私有模块** ✗，stdlib 直接调不到 ✓（与 `weakref_new` 同一个教训 ✓）。
+pub use builtin::context::locals_native;
 pub use builtin::dict::dict_fromkeys_native;
+pub use builtin::object::object_dir_native;
+pub use builtin::object::object_comparison_not_implemented_native;
+pub use builtin::object::object_getstate_native;
+pub use builtin::object::object_reduce_native;
+pub use builtin::object::object_sizeof_native;
 pub use builtin::object::object_init_native;
 // **`builtins.compile()`**（task-43）：stdlib 的 `compile` 注册与 `exec`/`eval` 的 code 对象分支用它。
 pub use builtin::compile::{
@@ -32,7 +38,15 @@ pub use builtin_objects::{
 };
 pub use builtin::function::function_descriptor_get;
 pub use builtin_objects::weakref_dunder_new;
+/// **Unicode 大小写映射**（`tools/gen_unicode.py` 生成；`P3-42` round 44）。
+pub mod unicode_case;
+pub use builtin_objects::{
+    weakref_hash_state, weakref_key_hash_state, weakref_state, weakref_store_hash,
+    weakref_store_key_hash, weakref_target,
+};
 pub use builtin_objects::reversed_new;
+/// **内建 `iter`／`reversed` 函数对象的引导期缓存**（round 232；`it.__reduce__()` 用 ✓）。
+pub use builtin_objects::cache_builtin_iterator_function;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::dir_new;
 pub use builtin_objects::enumerate_new;
@@ -50,16 +64,32 @@ pub use builtin::thread::thread_get_ident_native;
 pub use builtin::function::function_code_native;
 pub use builtin::function::function_globals_native;
 mod diag;
+/// **B 引用账本**（task-16）：`ExecError::Raised` 生成/移交/消费诊断（`PYAWA_GC_LOG=4`，默认零成本）。
+pub(crate) mod error_ledger;
+/// **RAII 异常引用守卫**（阶段 2/A）：`ExecError::Raised`/`pending` 旧值的所有权由 Drop 兜底。
+pub mod raise_guard;
+pub use raise_guard::{PendingRef, RaiseRef};
+/// **内部集合的快速哈希**（round 248 性能，A2-3）：见模块文档。
+pub(crate) mod fast_hash;
 pub mod argdecode;
 pub mod bigint;
+pub mod host_env;
 /// **WTF-8 编解码**（P3-38 S1）：允许孤立代理的 UTF-8 超集；供 `str` 存储迁移（S2）复用。
 pub mod wtf8;
 mod builtin;
 mod builtin_objects;
+mod call_edge;
 mod cell;
 mod classes;
 mod code;
 pub mod compile;
+/// **TS 注解表达式的语法模型**（`SPEC-type-system.md` §16 的 `TS-52`；M1/M2）。
+pub mod type_expr;
+pub mod protocols;
+pub use type_expr::{
+    evaluate_type_expression, resolve_type_expr, ResolveError, ResolveScope, SemanticType,
+    TypeAnnotationError, TypeExpr,
+};
 /// **`_tokenize` 的词法底层** ✓（task-19 ✓，一处真相：就是编译器的词法器 ✓）。
 pub use compile::lexer::{python_tokens, PythonToken, PythonTokenKind};
 pub mod builtin_types;
@@ -78,6 +108,7 @@ pub mod opcode_metadata;
 mod refcount;
 mod singleton;
 mod type_object;
+mod unicode_names;
 mod value;
 
 pub use builtin_objects::{
@@ -94,11 +125,14 @@ pub use executor::{mounted_instance_dict,
 };
 pub use format::repr_float;
 pub use format::SpecError;
-pub use frame::{Frame, FrameError};
+pub use frame::{line_at, Frame, FrameError};
 pub use header::{Header, PyObject, HEADER_SIZE_BYTES};
 pub use instance::{Instance, INT_MAX_STR_DIGITS_DEFAULT, INT_MAX_STR_DIGITS_THRESHOLD, CapabilityCallError};
+pub(crate) use instance::HotId;
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
+pub use instance::{HostObjectGetAttr, HostObjectOps, HostObjectSetAttr};
+pub use protocols::{ProtocolCase, PROTOCOL_CASES};
 pub use type_object::{
     HostDealloc, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
     HAS_INSTANCE_DICT,
@@ -106,7 +140,19 @@ pub use type_object::{
 pub use value::Value;
 
 /// `_contextvars.copy_context()` 的实现入口（第 332 轮；stdlib 的模块要用 ✓）。
+pub use builtin_objects::new_classmethod;
+
+/// **AST 解析回调**（round 86）：`compile(..., PyCF_ONLY_AST)` 交给 `_ast` 模块登记的实现 ✓
+/// （core 不依赖 stdlib：由 stdlib 在引导期把函数指针登记进实例 ✓）。
+pub type AstParserFn =
+    fn(&crate::Instance, &str, &str)
+        -> Result<core::ptr::NonNull<crate::Header>, crate::ExecError>;
 pub use builtin_objects::copy_context_value;
 pub use builtin::thread::thread_handle_new;
+pub use builtin::thread::{thread_handle_mark_done, thread_handle_getattr};
 pub use builtin_objects::filter_new;
 pub use builtin_objects::map_new;
+
+pub use builtin::namespace::{build_simple_namespace_type, make_simple_namespace};
+
+pub use builtin::deque::install_deque_init;

@@ -17,8 +17,8 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "getattr", "hasattr", "hash",
-    "exec", "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "format", "getattr", "hasattr", "hash", "aiter", "anext",
+    "exec", "filter", "globals", "hex", "locals", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type", "vars",
@@ -37,6 +37,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("bool", bool_native as pyawa_core::NativeFn),
         ("dict", dict_native as pyawa_core::NativeFn),
         ("float", float_native as pyawa_core::NativeFn),
+        // **`format(value, spec)`**（round 97）：`Lib/test/test_tempfile.py` 的 `format(mode, '03o')`
+        // 直接用内建名 ✗ ⇒ 先前 `NameError: name 'format' is not defined` ✗（`test_tempfile` 的
+        // subTest 标签多处 ✓；`Lib/` 里 `format()` 用法也广 ✓）。
+        ("format", format_native as pyawa_core::NativeFn),
         ("getattr", getattr_native as pyawa_core::NativeFn),
         ("hasattr", hasattr_native as pyawa_core::NativeFn),
         ("setattr", setattr_native as pyawa_core::NativeFn),
@@ -53,6 +57,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("any", any_native as pyawa_core::NativeFn),
         ("bin", bin_native as pyawa_core::NativeFn),
         ("callable", callable_native as pyawa_core::NativeFn),
+        // **`aiter`／`anext`**（round 231）：`Lib/contextlib.py:214/221` 的
+        // `await anext(self.gen)` 是 `AsyncContextManager` 的关键一步 ✓ —— 先前这两个内建
+        // **根本不存在** ⇒ `test_contextlib_async` 的 `AsyncContextManagerTestCase` 整族
+        // `NameError: name 'anext' is not defined` ✗。
+        ("aiter", aiter_native as pyawa_core::NativeFn),
+        ("anext", anext_native as pyawa_core::NativeFn),
         ("chr", chr_native as pyawa_core::NativeFn),
         ("hex", hex_native as pyawa_core::NativeFn),
         // **`hash()`**（task-31）：int／float／bool／str／bytes／tuple／None／complex（见下方实现块）
@@ -66,6 +76,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
+        ("locals", pyawa_core::locals_native as pyawa_core::NativeFn),
         ("eval", eval_native as pyawa_core::NativeFn),
         ("exec", exec_native as pyawa_core::NativeFn),
         // **`compile()`**（task-43）：core 的实现（`pyawa_core::compile_native`）——这里只注册 ✓。
@@ -89,6 +100,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("ord", ord_native as pyawa_core::NativeFn),
         // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
         ("print", print_native as pyawa_core::NativeFn),
+        // **交互模式的显示钩子**（round 51）：`compile(..., "single")` 生成的代码按这个名字调用
+        // （见 `pyawa_core::compile::INTERACTIVE_DISPLAY_HOOK`）；语义与 `sys.displayhook` 同一份 ✓。
+        (
+            "__pyawa_displayhook__",
+            crate::sys_module::displayhook_native as pyawa_core::NativeFn,
+        ),
         // **`open`** ✓（task-18 ✓）：**一处真相**是 `_io` 那个 [`crate::io_module::open_native`] ✓
         // —— 这里只把**同一个实现**接到 `builtins` 上 ✓（不另写一份 ✓）。
         ("open", crate::io_module::open_native as pyawa_core::NativeFn),
@@ -101,8 +118,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     ];
     for (name, handler) in natives {
         let function = make_native(instance, name, *handler);
+        // **`iter`／`reversed` 的函数对象缓存**（round 232）：`it.__reduce__()` 要交出**内建那个
+        // 函数**（用户换掉 `builtins.iter` 也不影响 ✓）⇒ 引导期登记一份借用指针 ✓。
+        pyawa_core::cache_builtin_iterator_function(name, function);
         instance.dict_set(namespace, name, function);
     }
+    // **`__debug__`**（round 236）：参照的解释器常量，值恒 `True`（`-O` 除外 ✓；本层还没有 `-O` 语义
+    // ⇒ 恒 `True` ✓）——`Lib/test/test_exceptions.py` 等一大片一导入就 `NameError: name '__debug__'` ✗。
+    instance.dict_set(namespace, "__debug__", instance.singletons().boolean(true));
     // **`object`**（第 132 轮）：参照里它是所有类的根 ✓（`class X(object)` 是很常见的写法 ✓，
     // `_bootstrap.py` 里就有 ✓）。类型对象在引导期已登记 ✓ ⇒ 按名字取出来放进名字空间 ✓。
     // 注意：`int`／`str` 等**内建类型名**本层目前是 native 函数（不是类型对象 ✗）⇒
@@ -180,18 +203,22 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     if let Some(dict_type) = instance.type_named("dict") {
         if let Some(type_namespace) = instance.type_namespace(dict_type.cast()) {
             let method = make_native(instance, "fromkeys", dict_fromkeys_native as pyawa_core::NativeFn);
-            instance.dict_set(type_namespace, "fromkeys", method);
+            // **包成 `classmethod`**（round 122）：参照 `dict.fromkeys` 是类方法 ⇒
+            // `dictlike.fromkeys(...)` 绑 `dictlike` 交实例 ✓、`mydict.__new__` 覆写生效 ✓
+            //（`test_dict.test_fromkeys` ✓）。先前裸原生函数 ⇒ 拿不到类 ✗。
+            let classmethod = pyawa_core::new_classmethod(instance, method);
+            instance.dict_set(type_namespace, "fromkeys", classmethod);
+            instance.release(method);
+            instance.release(classmethod);
         }
     }
-    // **`function.__code__`／`__globals__` 进 `function` 的类型字典** ✓（第 214 轮）：
-    // `Lib/types.py` 要 `type(FunctionType.__code__)` ✓ 与 `type(FunctionType.__globals__)` ✓
-    // —— 类级取法先前取不到 ✗（与 `str.join` **同款** ✓）。
+    // **`function.__code__`／`__globals__`**（第 214 轮起在**类型字典**里；task-8／缺口4 改成
+    // **真正的描述符实例**）：`Lib/types.py` 的 `type(FunctionType.__code__)`／
+    // `type(FunctionType.__globals__)` 要分别落到 `getset_descriptor`／`member_descriptor` ✓
+    // ⇒ 安装点在 **core** 的 `executor::protocol::install_builtin_descriptors`（本函数末尾调用 ✓）：
+    // 那里能取到 `AttributeObject` 载荷与原生的 `__get__` 分派（stdlib 不许 `unsafe` ⇒ 只做组织 ✓）。
     if let Some(function_type) = instance.type_named("function") {
         if let Some(type_namespace) = instance.type_namespace(function_type.cast()) {
-            let code_method = make_native(instance, "__code__", pyawa_core::function_code_native as pyawa_core::NativeFn);
-            instance.dict_set(type_namespace, "__code__", code_method);
-            let globals_method = make_native(instance, "__globals__", pyawa_core::function_globals_native as pyawa_core::NativeFn);
-            instance.dict_set(type_namespace, "__globals__", globals_method);
             // **`function.__get__`** ✓（第 410 轮，task-21 ✓）：`enum.py` 的 `_is_descriptor` 靠
             // `hasattr(obj, '__get__')` 把类体里的**普通函数**认成描述符 ✓（否则 `Flag._get_value`
             // 会被当成枚举成员 ✗）。
@@ -225,6 +252,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
                 "__new__",
                 pyawa_core::object_new_native as pyawa_core::NativeFn,
             );
+            // **文本签名**（round 86）：`inspect.signature` 的类签名靠它 ✓。
+            instance.set_text_signature(new_method, "($type, *args, **kwargs)");
             instance.dict_set(object_namespace, "__new__", new_method);
             // **数据类型也要"看起来有 `__new__`"** ✓（第 252 轮）：`Lib/enum.py` 的 `_find_data_type_`
             // 靠 `'__new__' in base.__dict__` 认数据类型 ✓（第 247 轮探针实测本层缺它 ⇒ `ReprEnum` 族
@@ -372,12 +401,50 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {
             let method = make_native(instance, "__init__", pyawa_core::object_init_native as pyawa_core::NativeFn);
+            instance.set_text_signature(method, "($self, /, *args, **kwargs)");
             instance.dict_set(type_namespace, "__init__", method);
+
             // **`__str__`／`__repr__`** ✓（第 210 轮）：默认 `<X object at 0x…>` ✓（`Lib/types.py` 要 ✓）。
             let str_method = make_native(instance, "__str__", pyawa_core::object_text_native as pyawa_core::NativeFn);
             instance.dict_set(type_namespace, "__str__", str_method);
             let repr_method = make_native(instance, "__repr__", pyawa_core::object_text_native as pyawa_core::NativeFn);
             instance.dict_set(type_namespace, "__repr__", repr_method);
+            // **`object` 的其余 dunder 行为面**（round 87）：`dir(<实例>)` 现在会列出这些名字
+            // （见 `dir_new` 的 OBJECT_DUNDERS）⇒ 属性通道必须真能取到（否则 `rlcompleter` 的
+            // parens 判据不齐 ✓）。
+            for (name, handler) in [
+                ("__lt__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__le__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__gt__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__ge__", pyawa_core::object_comparison_not_implemented_native as pyawa_core::NativeFn),
+                ("__sizeof__", pyawa_core::object_sizeof_native as pyawa_core::NativeFn),
+                ("__getstate__", pyawa_core::object_getstate_native as pyawa_core::NativeFn),
+                ("__reduce__", pyawa_core::object_reduce_native as pyawa_core::NativeFn),
+            ] {
+                let native = make_native(instance, name, handler);
+                instance.dict_set(type_namespace, name, native);
+            }
+            // **`object.__dir__`**（round 87）：`rlcompleter` 要 `getattr(obj,'__dir__')` 是绑定方法 ✓。
+            let dir_method = make_native(instance, "__dir__", pyawa_core::object_dir_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__dir__", dir_method);
+            // **内建类型自己的文本签名**（round 87）：`inspect.signature(staticmethod/classmethod/
+            // property)` 要非空签名（参照 `(function, /)`；否则 rlcompleter 给 `staticmethod()` 而非
+            // 期望的 `staticmethod(` ✗）。
+            for (type_name, signature) in [
+                ("staticmethod", "(function, /)"),
+                ("classmethod", "(function, /)"),
+                ("property", "(fget=None, fset=None, fdel=None, doc=None)"),
+            ] {
+                if let Some(ty) = instance.type_named(type_name) {
+                    instance.set_type_text_signature(ty.cast::<Header>(), signature);
+                }
+            }
+            // **`object.__init_subclass__` 的文本签名**（round 86）：`_collections_abc` 一类
+            // 在 `dir(None)` 里给 `__init_subclass__`，`inspect.signature` 要它 '' 参数 ⇒ 结果是 `()`
+            // （`test_rlcompleter` 的 expected 有 `None.__init_subclass__()` ✓）。
+            if let Some(init_subclass) = instance.dict_get(type_namespace, "__init_subclass__") {
+                instance.set_text_signature(init_subclass, "($type, /)");
+            }
         }
     }
     // **`Ellipsis`／`NotImplemented` 两个名字** ✓（第 215 轮）：`Lib/types.py` 要 `type(Ellipsis)` ✓
@@ -402,7 +469,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
 ///
 /// 目的地是**组合根装好的那个 `sys.stdout` 对象**（内建名字空间里的 `__stdout__` ✓）——
 /// 字节经 `_io` 的文本层走 `fs` 域的 `write` 槽 ✓（`CM-26`：**不设临时 sink** ✓）。
-fn print_native(
+pub(crate) fn print_native(
     instance: &Instance,
     _self_object: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
@@ -412,8 +479,19 @@ fn print_native(
         opcode: 0,
         what: "`print` 需要内建名字空间（组合根装配）",
     })?;
-    let default_stdout = instance
-        .dict_get(builtins, "__stdout__")
+    // **`sys.stdout` 每次调用都现取** ✓（round 51）：参照的 `print` 读的是**当前的** `sys.stdout`
+    // —— `Lib/doctest.py` 会把 `sys.stdout` 换成一个 `StringIO` 来捕获输出 ✓。先前一律走
+    // `builtins.__stdout__` 的静态快路 ✗ ⇒ doctest 的每个表达式都"Got nothing" ✗。
+    let canonical_stdout = instance.dict_get(builtins, "__stdout__");
+    // **取 `sys` 模块的 `stdout` 属性**：模块对象是 `AttributeObject`（不是 `dict`）⇒ 必须走
+    // **属性通道** ✓；先前误用 `dict_get`（把模块对象当字典强转）⇒ SIGBUS ✗（round 51 实测）。
+    let sys_module = instance
+        .modules()
+        .and_then(|modules| instance.dict_get(modules, "sys"));
+    let current_stdout = sys_module
+        .and_then(|module| instance.attribute_optional_of(module, "stdout").ok().flatten());
+    let default_stdout = current_stdout
+        .or(canonical_stdout)
         .ok_or(ExecError::Unsupported {
             opcode: 0,
             what: "`sys.stdout` 尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
@@ -474,7 +552,9 @@ fn print_native(
         Some(value) if value == none => Some(default_stdout),
         Some(value) => Some(value),
     };
-    let is_default_stdout = target == Some(default_stdout);
+    // **快路只对"规范的 `__stdout__`"开** ✓：`sys.stdout` 被换掉（doctest／unittest 的重定向）⇒
+    // 走属性通道调那个对象的 `write` ✓（否则捕获不到 ✗）。
+    let is_default_stdout = target == canonical_stdout;
 
     if is_default_stdout {
         let mut bytes: Vec<u8> = Vec::new();
@@ -674,7 +754,7 @@ fn hash_native(
     Ok(instance.new_int(hash_object(instance, args[0])?))
 }
 
-fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, ExecError> {
+pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, ExecError> {
     let ty = instance.type_of(object);
     if ty == instance.singletons().none_type() {
         return Ok(HASH_NONE);
@@ -701,6 +781,46 @@ fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, Exec
     if let Some((real, imag)) = instance.complex_value(object) {
         return Ok(pyawa_core::executor::hash_complex_parts(real, imag));
     }
+    // **`weakref.ref` 的哈希 ＝ 目标的哈希** ✓（`P3-41` round 40 修 ✗）：参照的
+    // `_weakref.ref.__hash__` 就是 `hash(目标)`（目标不可哈希 ⇒ 同一 TypeError ✓）。
+    // 没有它 ⇒ 同一目标的两个 `ref` 哈希不同 ⇒ `WeakSet` 的 set 去重不成立 ⇒ `_abc_cache`
+    // 一次 `isinstance` 长一条 ⇒ 成员查询线性增长（`test_userstring` 的 O(n²) 源头之一）。
+    // **真弱引用**（round 59）：算过就缓存（目标死后仍能删键 ✓）；活着就按目标算并缓存；
+    // 已死且没缓存 ⇒ 参照原话 `TypeError: weak object has gone away` ✓。
+    if let Some(state) = pyawa_core::weakref_hash_state(instance, object) {
+        if let Some(cached) = state {
+            return Ok(cached);
+        }
+        return match pyawa_core::weakref_state(instance, object).flatten() {
+            Some(target) => {
+                let value = hash_object(instance, target)?;
+                pyawa_core::weakref_store_hash(instance, object, value);
+                Ok(value)
+            }
+            None => Err(instance.raise_builtin_error("TypeError", "weak object has gone away")),
+        };
+    }
+    // **`frozenset` 的哈希**（round 221）：必须与 `_collections_abc.Set._hash` **逐位一致** ✓
+    //（`test_collections.TestCollectionABCs.test_Set_hash_matches_frozenset` 用
+    // `hash(fs) == Set._hash(fs)` 钉住 ✓）。算法照抄：`MAX = sys.maxsize`、`MASK = 2*MAX+1`
+    // ＝ `u64::MAX` ⇒ 全程 `u64` 环绕，最后折成 `i64`；`-1` 特例改 `590923713` ✓。
+    if let Some(frozen) = instance.type_named("frozenset") {
+        if instance.is_subtype(ty, frozen) {
+            // 安全口径：走 `Instance::set_items`（借用视图 ✓，stdlib 禁 `unsafe` ✓）。
+            let items = instance.set_items(object).unwrap_or_default();
+            let n = items.len() as u64;
+            let mut h = 1_927_868_237u64.wrapping_mul(n + 1);
+            for item in items {
+                let hash = hash_object(instance, item)? as u64;
+                let mixed = (hash ^ (hash << 16) ^ 89869747).wrapping_mul(3_644_798_167);
+                h ^= mixed;
+            }
+            h ^= (h >> 11) ^ (h >> 25);
+            h = h.wrapping_mul(69069).wrapping_add(907_133_923);
+            let signed = h as i64;
+            return Ok(if signed == -1 { 590_923_713 } else { signed });
+        }
+    }
     // 参照明确不可哈希的内建（参照置 `__hash__ = None`）⇒ 与参照同文案。
     let name = type_name(instance, object);
     for unhashable in ["list", "dict", "set", "bytearray"] {
@@ -712,6 +832,30 @@ fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, Exec
                 "TypeError",
                 &format!("unhashable type: '{name}'"),
             ));
+        }
+    }
+    // **`object()` 实例的哈希**（round 221）：参照 `object.__hash__` 是**身份哈希** ✓
+    //（`hashtest` 里 `{object(), object(), object()}` 进 frozenset 要能算 ✓，
+    // `Set._hash` 与 `hash(frozenset)` 用同一个函数 ⇒ 只要**同一对象恒定**就一致 ✓）。
+    if instance
+        .type_named("object")
+        .is_some_and(|object_type| ty == object_type)
+    {
+        let address = object.as_ptr() as u64;
+        // 轮流移位（`_Py_HashPointer` 的形状 ✓）；避免 `-1` 那个哨兵 ✓。
+        let rotated = address.rotate_left(16);
+        let value = rotated as i64;
+        return Ok(if value == -1 { -2 } else { value });
+    }
+    // **宿主对象**（`PLAN` §12.12 oracle）：`attribute_optional_of` 会先在类型 MRO 命中
+    // `object.__hash__`，永远走不到宿主回退 ⇒ 先走统一协议入口（宿主优先）。
+    if instance.has_host_object_ops(object) {
+        if let Some(result) = instance.call_protocol_method(object, "__hash__", &[])? {
+            let value = instance.int_value(result);
+            instance.release(result);
+            if let Some(value) = value {
+                return Ok(value);
+            }
         }
     }
     // 用户类：参照走 `object.__hash__`（身份哈希）⇒ 本层调它的 `__hash__`（同一协议面）。
@@ -739,6 +883,16 @@ fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, Exec
                 ));
             }
         }
+    }
+    // **身份哈希一族**（round 103）：函数／绑定方法／类型／模块在参照里都是 **id 基**哈希 ✓
+    // （`hash(f) == hash(f)`、不同函数几乎不同 ✓）—— 先前落到"未接线"✗ ⇒ `pprint` 的
+    // `_dispatch[type(obj).__repr__]`（拿函数当 dict 键 ✓）当场 `NotImplementedError` ✗
+    //（官方 `test_pkg`／`test_rlcompleter` 的收尾 ✓）。与 `object.__hash__` 同口径 ✓。
+    if matches!(
+        name.as_str(),
+        "function" | "builtin_function_or_method" | "method" | "type" | "module"
+    ) {
+        return Ok(((object.as_ptr() as isize) >> 4) as i64);
     }
     // 可哈希但本轮没接的内建（frozenset 等）：如实未实现，不拿身份哈希冒充。
     Err(instance.raise_builtin_error(
@@ -1236,8 +1390,11 @@ fn abs_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "abs", args, 1)?;
     let value = args[0];
-    if let Some(integer) = instance.int_value(value) {
-        return Ok(instance.new_int(integer.abs()));
+    // **任意精度整数** ✓（round 66）：先前只认装得下 `i64` 的（`int_value`）✗ ⇒
+    // `abs(2**300)` 报 `bad operand type for abs(): 'int'` ✗（`test_numeric_tower` 实测 ✓）。
+    if let Some(integer) = instance.int_of(value) {
+        let wide = integer.to_bigint().abs();
+        return Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(wide)));
     }
     if let Some(number) = instance.float_value(value) {
         return Ok(instance.new_float(number.abs()));
@@ -1245,6 +1402,12 @@ fn abs_native(
     // **`abs(complex)` ⇒ 模（float）**（task-31；参照 `abs(1+2j)` ⇒ `2.23606797749979` ✓）。
     if let Some((real, imag)) = instance.complex_value(value) {
         return Ok(instance.new_float(real.hypot(imag)));
+    }
+    // **宿主对象**：统一协议入口（宿主 `getattr_fn` 优先，`PLAN` §12.12 oracle）。
+    if instance.has_host_object_ops(value) {
+        if let Some(result) = instance.call_protocol_method(value, "__abs__", &[])? {
+            return Ok(result);
+        }
     }
     let message = format!("bad operand type for abs(): '{}'", type_name(instance, value));
     Err(instance.raise_builtin_error("TypeError", &message))
@@ -1454,6 +1617,49 @@ fn hex_native(
 }
 
 /// `callable(x)`：**有 `call` 槽就返回 `True`**（`OM-11`），否则 `False`。
+/// **`aiter(obj)`**（round 231）：照参照等价于 `type(obj).__aiter__(obj)` ✓。
+fn aiter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "aiter", args, 1)?;
+    let Some(method) = instance.attribute_optional_of(args[0], "__aiter__")? else {
+        let name = type_name(instance, args[0]);
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not an async iterable"),
+        ));
+    };
+    let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+    instance.release(method);
+    outcome
+}
+
+/// **`anext(iterator[, default])`**（round 231）：照参照等价于 `type(it).__anext__(it)` ✓
+/// （返回值是 **awaitable**，由调用方 `await` ✓）。
+/// **如实说** ✗：带 `default` 的那一形态目前**不拦截 `StopAsyncIteration`**（只在 await 时才抛，
+/// 本函数已经返回了 awaitable ✗）——`Lib` 里目前只有无 default 的用法（`contextlib.py` ✓）。
+fn anext_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "anext", args, 1)?;
+    let Some(method) = instance.attribute_optional_of(args[0], "__anext__")? else {
+        let name = type_name(instance, args[0]);
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not an async iterator"),
+        ));
+    };
+    let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+    instance.release(method);
+    outcome
+}
+
 fn callable_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1469,6 +1675,56 @@ fn callable_native(
 ///
 /// 实测：`isinstance(1, 5)` ⇒
 /// `isinstance() arg 2 must be a type, a tuple of types, or a union`。
+/// **`isinstance` 的 ABC 快速通道**（round 73）：`collections.abc` 的 `__instancecheck__` 是纯
+/// Python（两个 `WeakSet` 查缓存 ＋ `__subclasshook__`），本层每次 ~45 µs ⇒ 用"ABC 失效计数"做键
+/// 缓存结果 ✓。只对**元类恰是 `ABCMeta`** 的类启用 ✓（自定义元类的 `__instancecheck__` 可能有
+/// 副作用 ⇒ 不缓存 ✗）。
+fn isinstance_abc_fast(
+    instance: &Instance,
+    subject: NonNull<Header>,
+    class: NonNull<Header>,
+) -> Result<Option<bool>, ExecError> {
+    let Some(cls) = instance.as_type(class) else {
+        return Ok(None);
+    };
+    let Some(abcmeta) = instance.type_named("ABCMeta") else {
+        return Ok(None);
+    };
+    if instance.type_of(class) != abcmeta {
+        return Ok(None);
+    }
+    // `ABCMeta._abc_invalidation_counter`（类属性，经元类查到）——register 时 ＋1 ✓。
+    let Some(counter_object) = instance.attribute_optional_of(class, "_abc_invalidation_counter")?
+    else {
+        return Ok(None);
+    };
+    let counter = instance
+        .int_of(counter_object)
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0) as u64;
+    instance.release(counter_object);
+    let subject_type = instance.type_of(subject);
+    let key = (cls.as_ptr() as usize, subject_type.as_ptr() as usize, counter);
+    if let Some(cached) = instance.isinstance_cache_get(key) {
+        return Ok(Some(cached));
+    }
+    // 未命中 ⇒ 走 Python 的 `__instancecheck__`（带回值）✓。
+    let Some(method) = instance.attribute_optional_of(class, "__instancecheck__")? else {
+        return Ok(None);
+    };
+    instance.retain(subject);
+    let outcome = pyawa_core::executor::call_value(instance, method, &[subject], &[]);
+    instance.release(method);
+    let returned = match outcome {
+        Ok(value) => value,
+        Err(error) => return Err(error),
+    };
+    let matched = pyawa_core::executor::truthiness_public(instance, returned, 0)?;
+    instance.release(returned);
+    instance.isinstance_cache_put(key, matched);
+    Ok(Some(matched))
+}
+
 fn isinstance_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1477,6 +1733,9 @@ fn isinstance_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "isinstance", args, 2)?;
     let subject = args[0];
+    if let Some(matched) = isinstance_abc_fast(instance, subject, args[1])? {
+        return Ok(instance.new_bool(matched));
+    }
     let matches = type_matches(instance, subject, args[1], "isinstance")?;
     Ok(instance.new_bool(matches))
 }
@@ -1525,6 +1784,40 @@ fn type_matches_against(
     expected: NonNull<Header>,
     caller: &str,
 ) -> Result<bool, ExecError> {
+    // **`array.array` 的惰性虚拟子类注册**（round 226）：参照里 `array.array` 被注册成
+    // `MutableSequence` ✓（`test_collections.TestCollectionABCs.test_MutableSequence` ✓）。
+    // `array` 模块 `build` 的时机太早（`collections.abc` 是**包**，桥未接包导入 ✗）⇒
+    // 第一次被问到时补一次；失败不致命（保持"未注册"语义 ✓）。
+    if instance.type_name(subject_type) == "array" {
+        static ARRAY_REGISTER_TRIED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if ARRAY_REGISTER_TRIED.get().is_none() {
+            if let Some(target) = instance.as_type(expected) {
+                let target_name = instance
+                    .attribute_optional_of(target.cast::<Header>(), "__name__")?
+                    .and_then(|name| instance.text_of(name))
+                    .unwrap_or_default()
+                    .to_owned();
+                if target_name == "MutableSequence" {
+                    if let Some(register) =
+                        instance.attribute_optional_of(target.cast::<Header>(), "register")?
+                    {
+                        let subclass = subject_type.cast::<Header>();
+                        // SAFETY: subject_type 由注册表持有、存活。
+                        if let Ok(result) = pyawa_core::executor::call::call_value(
+                            instance,
+                            register,
+                            &[subclass],
+                            &[],
+                        ) {
+                            instance.release(result);
+                        }
+                        instance.release(register);
+                        let _ = ARRAY_REGISTER_TRIED.set(());
+                    }
+                }
+            }
+        }
+    }
     if let Some(target) = instance.as_type(expected) {
         // **元类钩子优先** ✓（第 722 轮）：参照的 `isinstance`／`issubclass` 走
         // `type(U).__instancecheck__`／`__subclasscheck__` ✓ —— `Lib/_py_abc.py:92/108` 正是 ABC 的
@@ -1568,6 +1861,16 @@ fn call_type_hook(
 ) -> Result<Option<bool>, ExecError> {
     // **元类**：`type(U)` ✓。
     let metaclass = instance.type_of(target).cast::<Header>();
+    // **快路径：先在类型字典里看有没有这个钩子** ✓（`P3-41` round 40 修 ✗）：
+    // 绝大多数类是普通类（元类就是 `type`）⇒ 没有 `__instancecheck__`／`__subclasscheck__` ✓。
+    // 先前直接 `attribute_optional_of` ⇒ 缺失时**内部造 `AttributeError`** ⇒ 本层异常对象带
+    // 回溯捕获 ⇒ 单次 `isinstance` **5.4 ms** ✗（实测 `test_userstring` 的
+    // `isinstance(sub, UserString)` 每个 5 ms、整个测试文件因此跑不完 ✓）。
+    // 类型字典查不到 ⇒ 直接判"没有钩子"（与 `attribute_optional_of` 同结果，但没有异常成本 ✓）。
+    let metaclass_type = metaclass.cast::<pyawa_core::TypeObject>();
+    if instance.type_lookup(metaclass_type, hook).is_none() {
+        return Ok(None);
+    }
     let Some(callable) = instance.attribute_optional_of(metaclass, hook)? else {
         return Ok(None);
     };
@@ -1592,8 +1895,15 @@ fn id_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
+    // 参照：`id(1, x=1)` ⇒ `TypeError: id() takes no keyword arguments` ✓（round 63）。
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "id() takes no keyword arguments",
+        ));
+    }
     need_args(instance, "id", args, 1)?;
     Ok(instance.new_int(args[0].as_ptr() as usize as i64))
 }
@@ -1700,25 +2010,41 @@ fn resolve_namespaces(
         }
         Ok(())
     };
-    match (explicit_globals, explicit_locals) {
-        (Some(globals), Some(locals)) => {
-            check_dict(locals)?;
-            Ok((Some(globals), locals, false, false))
+    // **`exec`／`eval` 往 globals 注入 `__builtins__`**（round 114，照参照 `_PyFrame_Init`）：globals 里没有
+    // 这一格 ⇒ 塞进**当前内建名字空间**（`instance.builtins()` 的 dict；借用口径 ⇒ 无需额外 incref ✓）。
+    // `test_descrtut` 的 `exec("x = 3; print(x)", a)` 之后 `sorted(a.keys())` 期望含 `'__builtins__'` ✓。
+    let ensure_builtins = |globals: Option<NonNull<Header>>| {
+        if let Some(globals) = globals {
+            if instance.dict_get(globals, "__builtins__").is_none() {
+                if let Some(builtins) = instance.builtins() {
+                    instance.dict_set(globals, "__builtins__", builtins);
+                }
+            }
         }
-        (Some(globals), None) => Ok((Some(globals), globals, false, false)),
-        (None, Some(locals)) => {
-            check_dict(locals)?;
-            let (implicit_globals, implicit_locals) = pyawa_core::implicit_namespaces(instance);
-            instance.release(implicit_locals);
-            let globals_owned = implicit_globals.is_some();
-            Ok((implicit_globals, locals, false, globals_owned))
-        }
-        (None, None) => {
-            let (globals, locals) = pyawa_core::implicit_namespaces(instance);
-            let globals_owned = globals.is_some();
-            Ok((globals, locals, true, globals_owned))
-        }
-    }
+    };
+    ensure_builtins(explicit_globals);
+    let resolved: (Option<NonNull<Header>>, NonNull<Header>, bool, bool) =
+        match (explicit_globals, explicit_locals) {
+            (Some(globals), Some(locals)) => {
+                check_dict(locals)?;
+                Ok::<_, ExecError>((Some(globals), locals, false, false))
+            }
+            (Some(globals), None) => Ok::<_, ExecError>((Some(globals), globals, false, false)),
+            (None, Some(locals)) => {
+                check_dict(locals)?;
+                let (implicit_globals, implicit_locals) = pyawa_core::implicit_namespaces(instance);
+                instance.release(implicit_locals);
+                let globals_owned = implicit_globals.is_some();
+                Ok::<_, ExecError>((implicit_globals, locals, false, globals_owned))
+            }
+            (None, None) => {
+                let (globals, locals) = pyawa_core::implicit_namespaces(instance);
+                let globals_owned = globals.is_some();
+                Ok::<_, ExecError>((globals, locals, true, globals_owned))
+            }
+        }?;
+    ensure_builtins(resolved.0);
+    Ok(resolved)
 }
 
 /// **`ascii(obj)`** ✓（task-19 第 3 轮 ✓）：参照口径 ＝ **`repr(obj)` 再把非 ASCII 转义** ✓
@@ -1750,6 +2076,140 @@ fn ascii_native(
     Ok(instance.new_str(&out))
 }
 
+/// **`format(value, format_spec='')`**（round 97）。
+///
+/// 口径：`spec` 空 ⇒ `str(value)` ✓；否则先走对象的 `__format__` ✓；没有就用**本函数的整数格式化**
+/// （`d/o/x/X/b` ＋ 填充/对齐/宽度/正负号 ✓ —— `test_tempfile` 只要 `'03o'` ✓）。
+/// **如实记** ✗：浮点/千分位/精度等复杂格式未在本地实现（有 `__format__` 的对象走它 ✓）。
+fn format_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "format() missing required argument 'value' (pos 1)",
+        ));
+    };
+    let spec = args
+        .get(1)
+        .copied()
+        .or_else(|| {
+            kwargs.iter().find_map(|(key, value)| {
+                instance
+                    .text_of(*key)
+                    .filter(|text| *text == "format_spec")
+                    .map(|_| *value)
+            })
+        })
+        .and_then(|value| instance.text_of(value))
+        .unwrap_or("")
+        .to_owned();
+    // **宿主对象**：统一协议入口（宿主 `getattr_fn` 优先；`attribute_optional_of` 会先命中
+    // `object.__format__` 的默认实现而永远走不到宿主回退）。
+    if instance.has_host_object_ops(value) {
+        let spec_value = instance.new_str(&spec);
+        let outcome = instance.call_protocol_method(value, "__format__", &[spec_value]);
+        instance.release(spec_value);
+        if let Ok(Some(result)) = outcome {
+            return Ok(result);
+        }
+    }
+    // **属性通道唯一入口**（`PLAN` §12.12 机检）：空 spec 也必须先问 `__format__`（宿主
+    // `getattr_fn` 可能就是唯一实现）；只有"内建数值/int 快路"保留原位（等价测试在 stdlib）。
+    if let Ok(Some(method)) = instance.attribute_optional_of(value, "__format__") {
+        let spec_value = instance.new_str(&spec);
+        let outcome = pyawa_core::executor::call::call_value(instance, method, &[spec_value], &[]);
+        instance.release(spec_value);
+        instance.release(method);
+        if let Ok(result) = outcome {
+            return Ok(result);
+        }
+    }
+    if !spec.is_empty() {
+        if let Some(number) = instance.int_of(value).and_then(|number| number.to_i64()) {
+            if let Some(text) = format_int_spec(&spec, number) {
+                return Ok(instance.new_str(&text));
+            }
+        }
+        // 不认识的 spec：如实退回 `str(value)`（比抛未实现更接近"可用"；复杂面另记 ✓）。
+    }
+    let str_type = instance.type_named("str").expect("str 已登记");
+    pyawa_core::executor::call::call_value(instance, str_type.cast(), &[value], &[])
+}
+
+/// **整数格式化**（`format(value, spec)` 的本地实现）：`fill/align/sign/0/width/type` ✓。
+fn format_int_spec(spec: &str, number: i64) -> Option<String> {
+    let chars: Vec<char> = spec.chars().collect();
+    let mut position = 0usize;
+    let mut fill: Option<char> = None;
+    let mut align: Option<char> = None;
+    if chars.len() >= 2 && matches!(chars[1], '<' | '>' | '^' | '=') {
+        fill = Some(chars[0]);
+        align = Some(chars[1]);
+        position = 2;
+    } else if chars.first().is_some_and(|first| matches!(first, '<' | '>' | '^' | '=')) {
+        align = Some(chars[0]);
+        position = 1;
+    }
+    let mut sign: Option<char> = None;
+    if chars.get(position).is_some_and(|c| matches!(c, '+' | '-' | ' ')) {
+        sign = Some(chars[position]);
+        position += 1;
+    }
+    let mut zero = false;
+    if chars.get(position) == Some(&'0') {
+        zero = true;
+        position += 1;
+    }
+    let mut width = 0usize;
+    while let Some(digit) = chars.get(position).and_then(|c| c.to_digit(10)) {
+        width = width * 10 + digit as usize;
+        position += 1;
+    }
+    let kind = chars.get(position).copied().unwrap_or('d');
+    if position + 1 < chars.len() {
+        return None;
+    }
+    let magnitude = number.unsigned_abs();
+    let body = match kind {
+        'd' | 'n' => magnitude.to_string(),
+        'b' => format!("{magnitude:b}"),
+        'o' => format!("{magnitude:o}"),
+        'x' => format!("{magnitude:x}"),
+        'X' => format!("{magnitude:X}"),
+        'c' => char::from_u32(magnitude as u32)?.to_string(),
+        _ => return None,
+    };
+    let prefix = if number < 0 {
+        "-".to_owned()
+    } else {
+        match sign {
+            Some('+') => "+".to_owned(),
+            Some(' ') => " ".to_owned(),
+            _ => String::new(),
+        }
+    };
+    let padding = width.saturating_sub(prefix.chars().count() + body.chars().count());
+    let fill_char = fill.unwrap_or(if zero { '0' } else { ' ' });
+    let effective_align = align.unwrap_or(if zero { '=' } else { '>' });
+    let separator: String = core::iter::repeat(fill_char).take(padding).collect();
+    Some(match effective_align {
+        '=' => format!("{prefix}{separator}{body}"),
+        '<' => format!("{prefix}{body}{separator}"),
+        '^' => {
+            let left = padding / 2;
+            let right = padding - left;
+            let left_fill: String = core::iter::repeat(fill_char).take(left).collect();
+            let right_fill: String = core::iter::repeat(fill_char).take(right).collect();
+            format!("{left_fill}{prefix}{body}{right_fill}")
+        }
+        _ => format!("{separator}{prefix}{body}"),
+    })
+}
+
 fn repr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1770,6 +2230,25 @@ fn iter_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "iter", args, 1)?;
+    // **`iter(callable, sentinel)`**（round 85）：两参形态 ⇒ `callable_iterator` ✓
+    // （先前忽略第二参、直接 `iter_object(callable)` ⇒ `TypeError: 'method' object is not iterable`
+    // ⇒ `Lib/tokenize.py` 的 `iter(readline, b"")` 炸 ⇒ `inspect.signature` 的文本签名解析全挂 ✗）。
+    if args.len() == 2 {
+        // 参照：第一参必须可调用（`iter(1, 2)` ⇒ `TypeError: iter(v, w): v must be callable` ✓）。
+        if !instance.is_callable(args[0]) {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "iter(v, w): v must be callable",
+            ));
+        }
+        return Ok(instance.new_callable_iterator(args[0], args[1]));
+    }
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("iter expected at most 2 arguments, got {}", args.len()),
+        ));
+    }
     instance.iter_object(args[0])
 }
 
@@ -1787,12 +2266,54 @@ fn pow_native(
             "pow expected at most 3 arguments",
         ));
     }
+    // **浮点／混合面＋负指数→浮点**（round 99）：参照 `pow(2,-1)==0.5` ✓、浮点走 `f64::powf`
+    // （C `pow` 的边界语义 ✓ —— 官方 `test_pow` 的 `test_powfloat`／`test_bug705231` ✓）。
+    // 先前一律报"只接整数／负指数未接线" ✗。
+    // 数值统一取 `f64`：**浮点**走 `float_value`、**整数**走 `int_value` 的 `as f64` ✓
+    // （`pow(2.0, 0)` 的指数是**整数 0** ✓ —— 只看浮点会漏掉这类混合形态 ✗）。
+    let as_float = |value: NonNull<Header>| {
+        instance
+            .float_value(value)
+            .or_else(|| instance.int_value(value).map(|number| number as f64))
+    };
+    let float_base = as_float(args[0]);
+    let float_exponent = as_float(args[1]);
+    let is_float_input = |value: NonNull<Header>| {
+        instance.type_name(instance.type_of(value)) == "float"
+    };
+    let wants_float = float_base.is_some()
+        && float_exponent.is_some()
+        && (is_float_input(args[0]) || is_float_input(args[1]));
+    // **负指数的整数输入**（两参）⇒ 参照给浮点结果 ✓（`2**-1 == 0.5` ✓）。
+    let integer_negative = args.len() == 2
+        && instance.int_of(args[0]).is_some()
+        && instance.int_of(args[1]).map(|exponent| exponent.to_i64().unwrap_or(0) < 0).unwrap_or(false);
+    if (wants_float || integer_negative) && args.len() == 2 {
+        let base = float_base
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 的底数无法转浮点"))?;
+        let exponent = float_exponent
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 的指数无法转浮点"))?;
+        let result = base.powf(exponent);
+        if base == 0.0 && exponent < 0.0 {
+            return Err(instance.raise_builtin_error(
+                "ZeroDivisionError",
+                "0.0 cannot be raised to a negative power",
+            ));
+        }
+        return Ok(instance.new_float(result));
+    }
+    if args.len() == 3 && (wants_float || is_float_input(args[0]) || is_float_input(args[1])) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "pow() 3rd argument not allowed unless all arguments are integers",
+        ));
+    }
     let base = instance
         .int_of(args[0])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 只接整数或浮点"))?;
     let exponent = instance
         .int_of(args[1])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 只接整数或浮点"))?;
     let base = base.to_bigint();
     let exponent = exponent.to_bigint();
     // **两参**：任意精度快速幂 ✓（第 406 轮：先前是 `i64` 的 `wrapping_mul` 循环 ✗ ⇒
@@ -1871,6 +2392,23 @@ fn bigint_modpow(base: &BigInt, exponent: &BigInt, modulus: &BigInt) -> BigInt {
     if modulus.cmp(&one) == core::cmp::Ordering::Equal {
         return BigInt::from_i64(0);
     }
+    // **小模数快路**（round 67）：模数装得下 `u64` 时用 `u128` 逐位乘加 ✓ —— 先前
+    // 每步都建 `BigInt`（`mul` ＋ `mod`）✗ ⇒ `pow(a, 2**50000, 小素数)` **3~13 s** ✗
+    //（`test_pow.test_big_exp` 的 50000 位指数随机测试因此从"快"变"超时"✓）。
+    // `m ≤ u64::MAX` ⇒ `(m-1)^2 < 2^128` ⇒ `u128` 乘法安全 ✓。
+    if let Some(m) = modulus.to_u64() {
+        let m = m as u128;
+        let mut result: u128 = 1 % m;
+        let mut factor = bigint_mod(base, modulus).to_u64().unwrap_or(0) as u128 % m;
+        let bits = exponent.bit_length();
+        for index in 0..bits {
+            if exponent.bit(index) {
+                result = result * factor % m;
+            }
+            factor = factor * factor % m;
+        }
+        return BigInt::from_u64(result as u64);
+    }
     let mut result = BigInt::from_i64(1);
     let mut factor = bigint_mod(base, modulus);
     let mut remaining = exponent.clone();
@@ -1938,12 +2476,72 @@ fn divmod_native(
             &format!("unsupported operand type(s) for divmod(): '{left}' and '{right}'"),
         ));
     }
-    let left = instance
-        .int_value(args[0])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "divmod() 目前只接整数（浮点面随后补）"))?;
-    let right = instance
-        .int_value(args[1])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "divmod() 目前只接整数（浮点面随后补）"))?;
+    // **浮点面**（round 87）：`divmod(7.3, 2)` ⇒ `(3.0, 1.3000…)` ✓（参照：商向下取整为 float ✓、
+    // 余数与被除数同号规则按 CPython 的 `fmod` ＋ 修正 ✓）。`test_abstract_numbers` 的 `MyReal`
+    // 用 `float()` 参与 ✓。
+    let float_operand = |value: NonNull<Header>| {
+        instance
+            .float_value(value)
+            .or_else(|| instance.int_value(value).map(|int| int as f64))
+    };
+    if instance.float_value(args[0]).is_some() || instance.float_value(args[1]).is_some() {
+        let (Some(left), Some(right)) = (float_operand(args[0]), float_operand(args[1])) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "divmod() 的实参必须是数值",
+            ));
+        };
+        if right == 0.0 {
+            return Err(instance.raise_builtin_error(
+                "ZeroDivisionError",
+                "float divmod()",
+            ));
+        }
+        // CPython 口径（floatobject.c 的 `float_divmod`）：先 `fmod` 再按符号修正 ✓。
+        let mut modulo = left % right;
+        let mut quotient = (left - modulo) / right;
+        if modulo != 0.0 && (right < 0.0) != (modulo < 0.0) {
+            modulo += right;
+            quotient -= 1.0;
+        }
+        let quotient = if quotient != 0.0 {
+            let floored = quotient.floor();
+            if (right < 0.0) != (floored < 0.0) {
+                floored + 1.0
+            } else {
+                floored
+            }
+        } else {
+            quotient
+        };
+        let pair = instance.new_tuple(vec![
+            instance.new_float(quotient),
+            instance.new_float(modulo),
+        ]);
+        return Ok(pair);
+    }
+    let left = instance.int_value(args[0]);
+    let right = instance.int_value(args[1]);
+    // **非整数 ⇒ 按 `//` 与 `%` 的协议回退**（round 87）：参照的 `divmod(a, b)` 对自定义对象就是
+    // `(a // b, a % b)` ✓（`test_abstract_numbers` 的 `MyReal` 只实现 `__floordiv__`／`__mod__` ✓）。
+    let (Some(left), Some(right)) = (left, right) else {
+        let quotient = pyawa_core::executor::arithmetic::arithmetic_public(
+            instance,
+            args[0],
+            args[1],
+            "//",
+            0,
+        )?;
+        let remainder = pyawa_core::executor::arithmetic::arithmetic_public(
+            instance,
+            args[0],
+            args[1],
+            "%",
+            0,
+        )?;
+        let pair = instance.new_tuple(vec![quotient, remainder]);
+        return Ok(pair);
+    };
     if right == 0 {
         return Err(instance.raise_builtin_error("ZeroDivisionError", "integer division or modulo by zero"));
     }
@@ -2061,7 +2659,7 @@ fn list_native(
     need_args(instance, "list", args, 0)?;
     let items = match args.first() {
         Some(iterable) => instance
-            .iterable_items(*iterable)
+            .iterable_items(*iterable)?
             .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
         None => Vec::new(),
     };
@@ -2078,7 +2676,7 @@ fn tuple_native(
     need_args(instance, "tuple", args, 0)?;
     let items = match args.first() {
         Some(iterable) => instance
-            .iterable_items(*iterable)
+            .iterable_items(*iterable)?
             .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
         None => Vec::new(),
     };
@@ -2095,7 +2693,7 @@ fn set_native(
     need_args(instance, "set", args, 0)?;
     let items = match args.first() {
         Some(iterable) => instance
-            .iterable_items(*iterable)
+            .iterable_items(*iterable)?
             .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
         None => Vec::new(),
     };
@@ -2301,9 +2899,8 @@ fn getattr_native(
 /// 把 `ExecError::Raised` 里的 **AttributeError 完整吞掉**（参照的"探测"口径）。
 ///
 /// 返回 `true` ＝ 确实是 AttributeError 且已吞；`false` ＝ 不是（调用方原样上抛）。
-/// **两份所有权都要还**：`executor::runtime::raise` 给"实例状态"与 `Err(Raised)` 各一份引用 ⇒
-/// 先 `set_pending_exception(None)` 取回状态那份并归还，再归还 `Err` 里的那份
-/// （同 `executor/import.rs` 的 `ignore_missing_submodule` 先例 ✓）。
+/// **阶段 2/A 起**：`Err(Raised)` 里那份是 `RaiseRef` 守卫——`discard()` 一处还清
+/// （`Err` 那份 ＋ 若 `pending` 槽仍是它则清槽还槽里那份），不再有"两份所有权手工对齐"。
 fn swallow_attribute_error(instance: &Instance, error: &ExecError) -> bool {
     let ExecError::Raised { exception } = error else {
         return false;
@@ -2312,13 +2909,11 @@ fn swallow_attribute_error(instance: &Instance, error: &ExecError) -> bool {
         return false;
     };
     // SAFETY: `Raised` 里的异常对象由实例的 `pending_exception` 保活（存活）。
-    if !instance.is_subtype(instance.type_of(*exception), attribute_error) {
+    if !instance.is_subtype(instance.type_of(exception.get()), attribute_error) {
         return false;
     }
-    if let Some(previous) = instance.set_pending_exception(None) {
-        instance.release(previous);
-    }
-    instance.release(*exception);
+    // **RAII**：`discard` ＝ 旧"清槽（还旧 pending）＋还 `Err` 那份"（幂等，随后的 Drop 不重复）。
+    exception.discard();
     true
 }
 
@@ -2538,7 +3133,7 @@ fn candidate_items(
         return Err(instance.raise_builtin_error("TypeError", &message));
     }
     if args.len() == 1 {
-        return match instance.iterable_items(args[0]) {
+        return match instance.iterable_items(args[0])? {
             Some(items) => Ok(items),
             None => {
                 let message = format!("'{}' object is not iterable", type_name(instance, args[0]));
@@ -2666,7 +3261,7 @@ fn sorted_native(
         Some(value) => instance.bool_value(value).unwrap_or(false),
         None => false,
     };
-    let items = match instance.iterable_items(args[0]) {
+    let items = match instance.iterable_items(args[0])? {
         Some(items) => items,
         None => {
             let message = format!("'{}' object is not iterable", type_name(instance, args[0]));
@@ -2722,7 +3317,7 @@ fn sorted_native(
 
 /// 取一个可迭代对象摊成一批**新引用**；不是可迭代的就报实测那条 `TypeError`。
 fn items_of(instance: &Instance, object: NonNull<Header>) -> Result<Vec<NonNull<Header>>, ExecError> {
-    match instance.iterable_items(object) {
+    match instance.iterable_items(object)? {
         Some(items) => Ok(items),
         None => {
             let message = format!("'{}' object is not iterable", type_name(instance, object));
@@ -2751,19 +3346,22 @@ fn sum_native(
     };
     for item in items_of(instance, args[0])? {
         let next = instance.add_values(total, item);
-        instance.release(item);
         match next {
             Some(value) => {
                 instance.release(total);
+                instance.release(item);
                 total = value;
             }
             None => {
+                // **先取类型名、再释放**（round 133 真 UAF 修 ✗）：先前先 `release(item)` 再
+                // `type_name(item)` ⇒ 读已释放对象（`test_statistics` 的 sum(混类型) 实测 SIGSEGV ✓）。
                 let message = format!(
                     "unsupported operand type(s) for +: '{}' and '{}'",
                     type_name(instance, total),
                     type_name(instance, item)
                 );
                 instance.release(total);
+                instance.release(item);
                 return Err(instance.raise_builtin_error("TypeError", &message));
             }
         }

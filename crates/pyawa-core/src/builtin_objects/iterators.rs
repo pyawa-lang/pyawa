@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -18,6 +19,10 @@ py_object! {
         finished: Cell<bool>,
         /// **已经开始过**（`send` 的"刚创建"判定：刚创建的生成器只接受 `send(None)`）。
         started: Cell<bool>,
+        /// **正在执行**（round 56）：重入（生成器体里调 `next(自己)`）参照报
+        /// `ValueError: generator already executing` ✓；先前**不查** ✗ ⇒ 递归恢复同一帧 ⇒
+        /// 帧操作 `StackUnderflow`（`test_genexps` 的 `g = (next(me) for i in range(10))` ✓）。
+        running: Cell<bool>,
     }
 }
 
@@ -30,8 +35,13 @@ py_object! {
     pub struct AsendObject {
         /// 要推进的异步生成器（**本对象持有一份引用**）。
         generator: NonNull<Header>,
-        /// `asend(值)` 送进去的值（`__anext__()` 时为 `None`）。
+        /// `asend(值)`／`athrow(异常)` 带进去的值（`__anext__()`／`aclose()` 时为 `None`）。
         sent: RefCell<Option<NonNull<Header>>>,
+        {
+            /// **操作模式**（round 233）：`0` 正常推进（`asend`／`__anext__` ✓）、`1` `aclose()`、
+            /// `2` `athrow(exc)`（异常对象放在 `sent` ✓）。
+            mode: core::cell::Cell<u8>
+        }
     }
 }
 
@@ -46,6 +56,16 @@ py_object! {
         target: NonNull<Header>,
         /// 游标（下一个要取的下标）。
         index: Cell<usize>,
+        {
+            /// **字典迭代的键集版本守卫**（`P3-41` round 42）：首次推进时记下 `dict.version`，
+            /// 之后每次推进比对 ⇒ 迭代中改键就报 `RuntimeError: dictionary changed size during
+            /// iteration` ✓（参照口径；先前**不检测** ⇒ `for i in d: d[i+1]=1` 永远不结束 ✗）。
+            guard: Cell<u64>,
+            /// 首个推进时的**长度**（区分"改大小"与"改键集"两档文案 ✓）。
+            guard_len: Cell<usize>,
+            /// 守卫是否已武装（`Cell<bool>` 的默认值是 `false` ✓）。
+            armed: Cell<bool>,
+        }
     }
 }
 
@@ -169,6 +189,22 @@ pub enum ItStateKind {
     Zip {
         /// 各内层迭代器（一个 `list`，**本对象持有一份引用**；每个元素本身也是迭代器引用）。
         iterators: NonNull<Header>,
+    },
+    /// **内建 `map(function, *iterables)`**（`P3-41` round 41：由**急求值**改正为惰性 ✓）。
+    ///
+    /// 语义同 `zip`（各 inner 各取一项，任一耗尽就收摊）＋ 每行交 `function(*row)` ✓。
+    Map {
+        /// 映射函数（**本对象持有一份引用**）。
+        function: NonNull<Header>,
+        /// 各内层迭代器（一个 `list`，**本对象持有一份引用**）。
+        iterators: NonNull<Header>,
+    },
+    /// **内建 `filter(function, iterable)`**（同轮改正为惰性 ✓）；`predicate` 是 `None` ⇒ 按真值筛。
+    Filter {
+        /// 谓词（**本对象持有一份引用**；可能是 `None`）。
+        predicate: NonNull<Header>,
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
     },
     /// `itertools.pairwise(iterable)`：两两成对（`(0,1)`、`(1,2)`…），`previous` 是上一项。
     Pairwise {
@@ -300,6 +336,17 @@ pub(crate) unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*
             visit(fillvalue.as_ptr());
         }
         ItStateKind::Zip { iterators } => visit(iterators.as_ptr()),
+        ItStateKind::Map {
+            function,
+            iterators,
+        } => {
+            visit(function.as_ptr());
+            visit(iterators.as_ptr());
+        }
+        ItStateKind::Filter { predicate, inner } => {
+            visit(predicate.as_ptr());
+            visit(inner.as_ptr());
+        }
         ItStateKind::Compress { data, selectors } => {
             visit(data.as_ptr());
             visit(selectors.as_ptr());
@@ -407,6 +454,21 @@ pub(crate) unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
             // SAFETY: 该引用由本对象持有（列表里的迭代器引用由列表自己管）。
             unsafe { instance.release_object(iterators.as_ptr()) };
         }
+        ItStateKind::Map {
+            function,
+            iterators,
+        } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(function.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(iterators.as_ptr()) };
+        }
+        ItStateKind::Filter { predicate, inner } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(predicate.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(inner.as_ptr()) };
+        }
         ItStateKind::Compress { data, selectors } => {
             // SAFETY: 两份引用都由本对象持有。
             unsafe { instance.release_object(data.as_ptr()) };
@@ -463,6 +525,11 @@ impl CountIteratorObject {
         self.current.get()
     }
 
+    /// 步长（round 185：`range_iterator` 的 `__reduce__` 要按它算剩余值）。
+    pub fn step(&self) -> i64 {
+        self.step.get()
+    }
+
     /// 推进一格；超出 `i64` 给 `None`（**不静默回绕**——任意精度的口径还没裁，见 `§5.2.6`）。
     pub fn bump(&self) -> Option<i64> {
         let next = self.current.get().checked_add(self.step.get())?;
@@ -478,6 +545,7 @@ impl AsendObject {
             .with_traverse(asend_traverse)
             .with_clear(asend_clear)
             .with_repr(asend_repr)
+            .with_getattr(asend_getattr)
     }
 
     /// 要推进的异步生成器（**借用**）。
@@ -510,6 +578,60 @@ pub(crate) unsafe fn asend_clear(ptr: *mut Header, instance: &Instance) {
     if let Some(sent) = object.sent.replace(None) {
         // SAFETY: 同上。
         unsafe { instance.release_object(sent.as_ptr()) };
+    }
+}
+
+/// **`async_generator_asend.__next__()`**（round 243）：参照的 asend 对象可以被**迭代器协议**驱动
+/// （`Lib/test/test_asyncgen.py` 的 `compare_generators` 就是 `an.__next__()` 逐次推进 ✓）。
+/// 语义：每次推进底层一次——又让出 ⇒ `StopIteration(值)`（把"await 完成"的值交出来 ✓）；
+/// 底层跑完 ⇒ `StopAsyncIteration` ✓；底层抛 ⇒ 原样透出 ✓。
+unsafe fn asend_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            unsafe fn handler(
+                instance: &Instance,
+                bound: Option<NonNull<Header>>,
+                _args: &[NonNull<Header>],
+                _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+            ) -> Result<NonNull<Header>, crate::ExecError> {
+                let Some(this) = bound else {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "descriptor '__next__' needs an argument",
+                    ));
+                };
+                // SAFETY: 槽位契约保证是本类型的存活对象。
+                let object = unsafe { &*this.as_ptr().cast::<AsendObject>() };
+                let inner = object.generator();
+                // **已跑完**：照 `__anext__` 交 `StopAsyncIteration` ✓。
+                // SAFETY: 类型身份已确认。
+                let inner_object = unsafe { &*inner.as_ptr().cast::<crate::builtin_objects::GeneratorObject>() };
+                if inner_object.finished() {
+                    return Err(crate::executor::async_generator_exhausted(instance));
+                }
+                match crate::executor::resume_generator(instance, inner, object.sent())? {
+                    crate::executor::GeneratorOutcome::Yielded(value) => {
+                        // 让出的值转成 `StopIteration(value)` 的 `args`（新引用交给异常载荷 ✓）。
+                        let exception = crate::builtin_objects::exception_instance(
+                            instance,
+                            "StopIteration",
+                            vec![value],
+                        );
+                        Err(crate::ExecError::Raised { exception: crate::raise_guard::RaiseRef::from_owned(instance, exception) })
+                    }
+                    crate::executor::GeneratorOutcome::Returned(_value) => {
+                        Err(crate::executor::async_generator_exhausted(instance))
+                    }
+                }
+            }
+            let handler: crate::NativeFn = handler;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        _ => None,
     }
 }
 
@@ -550,6 +672,16 @@ impl GeneratorObject {
     pub fn mark_started(&self) {
         self.started.set(true);
     }
+
+    /// 是否**正在执行**（重入守卫）。
+    pub fn running(&self) -> bool {
+        self.running.get()
+    }
+
+    /// 置／清"正在执行"。
+    pub fn set_running(&self, value: bool) {
+        self.running.set(value);
+    }
 }
 
 /// 协程的 `repr`：与生成器同一套逻辑，只是词不同（实测 `<coroutine object f at 0x…>`）。
@@ -586,13 +718,42 @@ pub(crate) unsafe fn async_generator_asend_native(
     make_asend(instance, generator, args.first().copied())
 }
 
+/// `async_generator.aclose()`：交出一个 `AsendObject`（mode=1），`await` 时按
+/// `GeneratorExit` 推进到底并吞掉 `GeneratorExit`／`StopAsyncIteration` ✓（round 233）。
+pub(crate) unsafe fn async_generator_aclose_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("aclose 是绑定方法，必须有 self");
+    let object = make_asend(instance, generator, None)?;
+    // SAFETY: 刚造的 AsendObject。
+    unsafe { &*object.as_ptr().cast::<AsendObject>() }.mode.set(1);
+    Ok(object)
+}
+
+/// `async_generator.athrow(exc)`：交出一个 `AsendObject`（mode=2，异常放 `sent`）✓（round 233）。
+pub(crate) unsafe fn async_generator_athrow_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("athrow 是绑定方法，必须有 self");
+    let object = make_asend(instance, generator, args.first().copied())?;
+    // SAFETY: 刚造的 AsendObject。
+    unsafe { &*object.as_ptr().cast::<AsendObject>() }.mode.set(2);
+    Ok(object)
+}
+
 /// 造一个 `AsendObject`（**新引用**）。
 pub(crate) fn make_asend(
     instance: &Instance,
     generator: NonNull<Header>,
     sent: Option<NonNull<Header>>,
 ) -> Result<NonNull<Header>, ExecError> {
-    let asend_type = instance.type_named("async_generator_asend").expect("引导期已登记");
+    let asend_type = instance.hot_type(HotId::Asend).expect("引导期已登记");
     // SAFETY: generator 由调用方保证存活，本对象要自己那份。
     unsafe { instance.incref_object(generator.as_ptr()) };
     let sent_reference = match sent {
@@ -666,6 +827,57 @@ impl IteratorObject {
     pub fn advance(&self) {
         self.index.set(self.index.get() + 1);
     }
+
+    /// **标记已耗尽**（round 110）：`index = usize::MAX` 是哨兵 —— 参照的迭代器一旦吐过
+    /// `StopIteration` 就**永久耗尽** ✓（`list_tests.test_exhausted_iterator`：耗尽后 `append(9)`
+    /// 不能再吐 ✓；`test_tier2_invalidates_iterator` ✓）。先前只看"下标 < 当前长度" ✗
+    /// ⇒ 追加元素后又"复活" ✗。
+    pub fn set_index(&self, value: usize) {
+        self.index.set(value);
+    }
+
+    pub fn mark_exhausted(&self) {
+        self.index.set(usize::MAX);
+    }
+
+    /// 是否已被标记耗尽。
+    pub fn is_exhausted(&self) -> bool {
+        self.index.get() == usize::MAX
+    }
+
+    /// **pickle 反序列化回填游标**（round 111）：直接写 `index` ✓（`__setstate__` 用）。
+    pub fn set_index_for_pickle(&self, index: usize) {
+        self.index.set(index);
+    }
+
+    /// **字典迭代的版本守卫**：第一次推进时记下 `(版本, 长度)`；之后版本变 ⇒ 给
+    /// `RuntimeError` 的**两档文案**（照参照：长度也变 ⇒ `changed size`；只变键集 ⇒ `changed keys` ✓）。
+    /// 非字典迭代器的 `target` 不是 `dict` ⇒ 调用方不调它 ✓。
+    pub fn check_dict_version(
+        &self,
+        instance: &Instance,
+    ) -> Result<Option<&'static str>, ()> {
+        // SAFETY: target 由本对象持有，存活；调用方只在 `dict_keyiterator` 上调。
+        let dict = unsafe { &*self.target.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+        let version = dict.version();
+        let length = dict.len();
+        if self.armed.get() {
+            if self.guard.get() != version {
+                return Err(());
+            }
+            return Ok(None);
+        }
+        self.guard.set(version);
+        self.guard_len.set(length);
+        self.armed.set(true);
+        let _ = instance;
+        Ok(None)
+    }
+
+    /// 守卫武装时记下的长度（给"两档文案"用 ✓）。
+    pub fn guard_len(&self) -> usize {
+        self.guard_len.get()
+    }
 }
 
 /// `OM-40`：列出迭代器持有的引用。
@@ -681,4 +893,623 @@ pub(crate) unsafe fn iterator_clear(ptr: *mut Header, instance: &Instance) {
     let object = unsafe { &*ptr.cast::<IteratorObject>() };
     // SAFETY: 该引用由本对象持有。
     unsafe { instance.release_object(object.target().as_ptr()) };
+}
+
+/// **内建迭代器的属性面**（round 111）：`__next__`／`__iter__`／`__reduce__`／`__setstate__`。
+///
+/// 为什么必须有：① `iter(x).__next__` 在参照里可取 ✓（本层先前 AttributeError ✗）；
+/// ② **pickle** 在 protocol 0/1 走 `__reduce_ex__` 的二元组 ⇒ `save_global` 按模块名找类型
+/// ⇒ `Can't pickle <class 'list_iterator'>: it's not found as builtins.list_iterator` ✗；
+/// 参照的迭代器都实现了 `__reduce__`（`(iter, (target,), next_index)` 形 ✓）与 `__setstate__` ✓
+///（`list_tests.test_iterator_pickle`／`test_reversed_pickle` ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // 迭代器的 `__iter__` 回自身 ✓。
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__reduce__" => {
+            let handler: crate::NativeFn = iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, "__reduce__", handler))
+        }
+        // **`__reduce_ex__` 也走同一处** ✓（round 119）：pickle 优先调 `__reduce_ex__(proto)` ✓；
+        // 先前只在 `__reduce__` 上给 ⇒ 惰性建的 `dict_itemiterator`／`dict_valueiterator` 落回
+        // 默认"按类型构造" ⇒ `TypeError: cannot create '…' instances` ✗
+        //（`test_itemiterator_pickling`／`test_valuesiterator_pickling` ✓）。
+        "__reduce_ex__" => {
+            let handler: crate::NativeFn = iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, "__reduce_ex__", handler))
+        }
+        "__setstate__" => {
+            let handler: crate::NativeFn = iterator_setstate_native;
+            Some(bind_iterator_method(instance, ptr, "__setstate__", handler))
+        }
+        _ => None,
+    }
+}
+
+/// **`range_iterator`／`longrange_iterator` 的属性面**（round 185）：`__next__`／`__iter__`／
+/// `__reduce__`／`__reduce_ex__` —— 后两者是官方 `test_iter` 的 `check_pickle` 一族所需 ✓。
+///
+/// 载荷是 `ItStateObject`（与 `IteratorObject` 布局不同 ✗）⇒ **不能**走 `iterator_getattr` ✓。
+/// `__reduce__` 给 `(iter, (剩余值列表,))`：不 mutate 原迭代器 ✓（按 `Islice{position,start,stop,step}`
+/// ＋内层 `count{current,step}` **算术**推出剩余值 ✓；超 1e6 项不接（返回 Unsupported，如实 ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn range_iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // 迭代器的 `__iter__` 回自身 ✓。
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__reduce__" | "__reduce_ex__" => {
+            let handler: crate::NativeFn = range_iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, name, handler))
+        }
+        _ => None,
+    }
+}
+
+/// `range_iterator.__reduce__()`：`(iter, (剩余值列表,))` ✓（见 [`range_iterator_getattr`] 的口径）。
+fn range_iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce__() 需要迭代器实例"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let state = unsafe { &*iterator.as_ptr().cast::<ItStateObject>() };
+    let crate::builtin_objects::ItStateKind::Islice {
+        inner,
+        start,
+        position,
+        stop,
+        step,
+    } = state.kind()
+    else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "range_iterator 的状态不是 Islice",
+        ));
+    };
+    // 内层必须是 `count`（`range` 就是 `islice(count(...))` ✓；见 bootstrap 的注释 ✓）。
+    // SAFETY: inner 由本对象持有，存活；类型名先核过。
+    let inner_name = instance.type_name(instance.type_of(inner));
+    if inner_name != "count" {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("range_iterator 的内层不是 count（是 '{inner_name}'）"),
+        ));
+    }
+    // SAFETY: 类型名刚确认是 count ⇒ 载荷布局是 `CountIteratorObject` ✓。
+    let counter = unsafe { &*inner.as_ptr().cast::<CountIteratorObject>() };
+    let (current, stride) = (counter.current(), counter.step());
+    let bound = if stop < 0 { i64::MAX } else { start.max(stop) };
+    if bound.saturating_sub(position) > 1_000_000 {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range_iterator.__reduce__：剩余项超过 1e6（如实未接线）",
+        });
+    }
+    let mut remaining: Vec<NonNull<Header>> = Vec::new();
+    for index in position..bound {
+        let wanted = index >= start
+            && (stop < 0 || index < stop)
+            && (index - start) % step == 0;
+        if !wanted {
+            continue;
+        }
+        let value = current.saturating_add(index.saturating_mul(stride));
+        remaining.push(instance.new_int(value));
+    }
+    let Some(callable) = instance
+        .builtins()
+        .and_then(|builtins| instance.dict_get(builtins, "iter"))
+    else {
+        return Err(instance.raise_builtin_error("RuntimeError", "内建 iter 不可用"));
+    };
+    let list = instance.new_list(remaining);
+    let args = instance.new_tuple(vec![list]);
+    Ok(instance.new_tuple(vec![instance.retain(callable), args]))
+}
+
+/// **`callable_iterator` 的属性面**（round 185）：`__next__`／`__iter__`／`__reduce__`。
+///
+/// 参照的 reduce 形态是 `(iter, (callable, sentinel))`（**无 state** ✓）：进度状态由**被 pickle 的
+/// callable 自身**携带 ✓（`test_iter.test_iter_callable` 的 `check_pickle` ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn callable_iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__reduce__" | "__reduce_ex__" => {
+            let handler: crate::NativeFn = callable_iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, name, handler))
+        }
+        _ => None,
+    }
+}
+
+fn callable_iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce__() 需要迭代器实例"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<CallableIteratorObject>() };
+    let Some(callable) = instance
+        .builtins()
+        .and_then(|builtins| instance.dict_get(builtins, "iter"))
+    else {
+        return Err(instance.raise_builtin_error("RuntimeError", "内建 iter 不可用"));
+    };
+    let args = instance.new_tuple(vec![
+        instance.retain(object.callable()),
+        instance.retain(object.sentinel()),
+    ]);
+    Ok(instance.new_tuple(vec![instance.retain(callable), args]))
+}
+
+/// 把原生函数绑到迭代器实例上（与 `list_getattr` 同一手法 ✓）。
+#[allow(unsafe_code)]
+fn bind_iterator_method(
+    instance: &Instance,
+    ptr: *mut Header,
+    name: &str,
+    handler: crate::NativeFn,
+) -> NonNull<Header> {
+    let builtin_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
+        .expect("引导期已登记");
+    let native = instance.alloc(crate::BuiltinFunctionObject::new(
+        builtin_type,
+        Box::leak(name.to_string().into_boxed_str()),
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(crate::MethodObject::new(
+        instance.hot_type(HotId::Method).expect("method 已登记"),
+        native_raw,
+        unsafe { NonNull::new_unchecked(ptr) },
+    ));
+    bound.into_raw().cast::<Header>()
+}
+
+/// `it.__next__()` 的原生实现：推进本迭代器（与 `advance_iterator` 同一处真相 ✓）。
+#[allow(unsafe_code)]
+fn iterator_next_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__next__() 需要迭代器实例",
+        ));
+    };
+    match crate::executor::advance_iterator(instance, iterator, 0)? {
+        Some(value) => Ok(value),
+        None => Err(instance.raise_builtin_error("StopIteration", "")),
+    }
+}
+
+/// `it.__setstate__(state)`：`pickle` 反序列化回填游标 ✓（正向 = next 下标；反向 = next+1 ✓）。
+#[allow(unsafe_code)]
+fn iterator_setstate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__setstate__() 需要迭代器实例",
+        ));
+    };
+    let Some(state) = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_of(value))
+        .and_then(|number| number.to_i64())
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__setstate__() 要整数"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+    let type_name = instance.type_name(instance.type_of(iterator));
+    let reverse = matches!(type_name.as_str(), "list_reverseiterator" | "reversed");
+    let index = if reverse { state.saturating_add(1) } else { state };
+    if index < 0 {
+        return Err(instance.raise_builtin_error("TypeError", "__setstate__() 游标为负"));
+    }
+    // 直接写游标（`IteratorObject` 没有 set_index；用 Cell 的方法经 `advance` 不适用于此）。
+    object.set_index_for_pickle(index as usize);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **内建 `iter`／`reversed` 的进程级缓存**（round 232 真 bug 修 ✗）：`it.__reduce__()` 要交出的
+/// **就是内建那个函数对象** ✓ —— 参照在 C 层直接持有 ✓，用户把 `builtins.iter` 换成别的对象也**不影响**
+/// ✓（`test_iter.test_reduce_mutating_builtins_iter` 正是这个用例 ✓）。先前每次去 `builtins` 字典**按名查**
+/// ✗ ⇒ 被换掉后拿到假对象／查不到 ⇒ `RuntimeError: 内建 iter／reversed 不可用` ✗。
+/// 引导期由 stdlib 侧把**造好的原生函数**登记进来（借用指针，函数对象与内建字典同寿 ✓）。
+static CACHED_ITER_BUILTIN: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+/// 见 [`CACHED_ITER_BUILTIN`]。
+static CACHED_REVERSED_BUILTIN: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// 登记内建 `iter`／`reversed` 的函数对象（**借用指针**，调用方保证与内建字典同寿 ✓）。
+pub fn cache_builtin_iterator_function(name: &str, function: NonNull<Header>) {
+    let slot = match name {
+        "iter" => &CACHED_ITER_BUILTIN,
+        "reversed" => &CACHED_REVERSED_BUILTIN,
+        _ => return,
+    };
+    slot.store(function.as_ptr() as usize, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// `it.__reduce__()`：返回 `(iter|reversed, (target,), state)` ✓（形状照参照实测 ✓）。
+#[allow(unsafe_code)]
+fn iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__reduce__() 需要迭代器实例",
+        ));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+    let type_name = instance.type_name(instance.type_of(iterator));
+    let reverse = matches!(type_name.as_str(), "list_reverseiterator" | "reversed");
+    let callable_name = if reverse { "reversed" } else { "iter" };
+    // **优先用引导期缓存的那一份** ✓（用户换掉 `builtins.iter` 也不影响 ✓）；没有缓存（单测里
+    // 手工建 Instance 的情形）再回退到按名查 ✓。
+    let cached = if reverse {
+        CACHED_REVERSED_BUILTIN.load(core::sync::atomic::Ordering::Relaxed)
+    } else {
+        CACHED_ITER_BUILTIN.load(core::sync::atomic::Ordering::Relaxed)
+    };
+    let callable = if cached != 0 {
+        // SAFETY: 登记时约定与内建字典同寿、非空。
+        unsafe { NonNull::new_unchecked(cached as *mut Header) }
+    } else {
+        let Some(callable) = instance
+            .builtins()
+            .and_then(|builtins| instance.dict_get(builtins, callable_name))
+        else {
+            return Err(instance.raise_builtin_error(
+                "RuntimeError",
+                "内建 iter／reversed 不可用",
+            ));
+        };
+        callable
+    };
+    // **耗尽形态**照参照：`(iter|reversed, ([],))` —— **二**元组、参数是**空列表**、没有状态 ✓
+    //（实测 `reversed([...])` 耗尽后 `__reduce__()` ⇒ `(<class 'reversed'>, ([],))` ✓；正反向同款 ✓）。
+    // 这一档必须单列：耗尽游标（正向 `usize::MAX`／反向 0）直接当 state 传给 `__setstate__` 会
+    // 越界（先前反向 `saturating_sub` 给 0 ⇒ 反序列化后多吐一个元素 ✗，`test_reversed_pickle` 的
+    // "empty iterator" 档 `[10] != []` ✓）。
+    let exhausted = if reverse {
+        object.index() == 0
+    } else {
+        object.is_exhausted()
+    };
+    if exhausted {
+        let empty = instance.new_list(Vec::new());
+        return Ok(instance.new_tuple(vec![
+            instance.retain(callable),
+            instance.new_tuple(vec![empty]),
+        ]));
+    }
+    // **dict 的 items()／values() 迭代器在参照里被 pickle 成"列表快照"** ✓（round 119）：
+    // 实测 `iter(d.items()).__reduce_ex__(4)` ⇒ `(<built-in function iter>, ([('a', 1), …],))`，
+    // 反序列化得到 **list_iterator** ✓（视图本身**不可** pickle ✓，直接交视图会 `PicklingError` ✗）。
+    let target = if type_name == "dict_itemiterator" {
+        let entries = instance
+            .dict_entries(object.target())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, value)| {
+                instance.new_tuple(vec![instance.retain(key), instance.retain(value)])
+            })
+            .collect();
+        instance.new_list(entries)
+    } else if type_name == "dict_valueiterator" {
+        let values = instance
+            .dict_entries(object.target())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, value)| instance.retain(value))
+            .collect();
+        instance.new_list(values)
+    } else {
+        instance.retain(object.target())
+    };
+    let args = instance.new_tuple(vec![target]);
+    let state = if reverse {
+        object.index().saturating_sub(1) as i64
+    } else {
+        object.index() as i64
+    };
+    Ok(instance.new_tuple(vec![
+        instance.retain(callable),
+        args,
+        instance.new_int(state),
+    ]))
+}
+
+py_object! {
+    /// **序列协议（`__getitem__`）的惰性迭代器**（round 85；参照名 `iterator`）：
+    /// 每次 `__next__` 用**当前下标**调 `target[index]`，`IndexError` ⇒ `StopIteration`（耗尽）✓。
+    /// 先前是"`iter()` 里一次性把整个序列物化" ✗ ⇒ 对**无限序列**（`__getitem__` 永不抛
+    /// IndexError，如 `test_iter` 的 `UnlimitedSequenceClass`）当场死循环 ✗。
+    pub struct SequenceIteratorObject {
+        /// 被索引的对象（**本对象持有一份引用**）。
+        target: NonNull<Header>,
+        /// 下一个要取的下标 ✓。
+        index: core::cell::Cell<usize>,
+            /// **已耗尽**（round 187，默认初始化组 ✓）：撞过 `IndexError` 就**永久耗尽** ✓
+            /// （`test_iter.test_sinkstate_sequence`：耗尽后把 `a.n` 改大也不得再吐元素 ✓）。
+            exhausted: core::cell::Cell<bool>
+    }
+}
+
+impl SequenceIteratorObject {
+    /// 槽位表：`dealloc` ＋ `traverse`／`clear`。
+    pub fn slots() -> crate::type_object::Slots {
+        crate::type_object::Slots::new(Self::dealloc)
+            .with_traverse(sequence_iterator_traverse)
+            .with_clear(sequence_iterator_clear)
+            // **`__next__`／`__iter__`／`__setstate__`** 属性面（round 85）✓。
+            .with_getattr(sequence_iterator_getattr)
+    }
+
+    /// 被索引的对象（借用）。
+    pub fn target(&self) -> NonNull<Header> {
+        self.target
+    }
+
+    /// 当前下标（借用）。
+    pub fn index(&self) -> usize {
+        self.index.get()
+    }
+
+    /// 写回下标（`__setstate__`／推进用）✓。
+    pub fn set_index(&self, index: usize) {
+        self.index.set(index);
+    }
+
+    /// 已耗尽（借用）。
+    pub fn exhausted(&self) -> bool {
+        self.exhausted.get()
+    }
+
+    /// 标记耗尽。
+    pub fn set_exhausted(&self) {
+        self.exhausted.set(true);
+    }
+
+    /// `__setstate__` 回填：清掉耗尽标记 ✓（反序列化后按新下标继续 ✓）。
+    pub fn clear_exhausted(&self) {
+        self.exhausted.set(false);
+    }
+}
+
+unsafe fn sequence_iterator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<SequenceIteratorObject>() };
+    // 访问器形态（`gc_field_coverage` 的判据要求 `object.<字段>(` ✓）。
+    visit(object.target().as_ptr());
+}
+
+unsafe fn sequence_iterator_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &mut *ptr.cast::<SequenceIteratorObject>() };
+    // SAFETY: 这份引用由本对象持有（`clear` 只会跑一次 ✓）。
+    unsafe { instance.release_object(object.target.as_ptr()) };
+}
+
+/// `sequence_iterator` 的属性面：`__next__`／`__iter__`／`__setstate__` ✓
+/// （`__reduce__` 暂不给：需要 `iter(target)` 形式的重建器，留后续轮 ✓ —— 如实）。
+pub unsafe fn sequence_iterator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    match name {
+        "__next__" => {
+            let handler: crate::NativeFn = iterator_next_native;
+            Some(bind_iterator_method(instance, ptr, "__next__", handler))
+        }
+        "__iter__" => {
+            // SAFETY: ptr 是本类型的存活对象。
+            unsafe { instance.incref_object(ptr) };
+            Some(unsafe { NonNull::new_unchecked(ptr) })
+        }
+        "__setstate__" => {
+            let handler: crate::NativeFn = sequence_iterator_setstate_native;
+            Some(bind_iterator_method(instance, ptr, "__setstate__", handler))
+        }
+        // **`__reduce__`／`__reduce_ex__`**（round 185）：参照 `iterator` 的形态是
+        // `(iter, (target,), index)` ✓（`test_iter` 的 seq-class pickle 用例 ✓；`__setstate__` 已在上面 ✓）。
+        "__reduce__" | "__reduce_ex__" => {
+            let handler: crate::NativeFn = sequence_iterator_reduce_native;
+            Some(bind_iterator_method(instance, ptr, name, handler))
+        }
+        _ => None,
+    }
+}
+
+/// `sequence_iterator.__reduce__()`：`(iter, (target,), index)` ✓。
+fn sequence_iterator_reduce_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce__() 需要迭代器实例"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<SequenceIteratorObject>() };
+    let Some(callable) = instance
+        .builtins()
+        .and_then(|builtins| instance.dict_get(builtins, "iter"))
+    else {
+        return Err(instance.raise_builtin_error("RuntimeError", "内建 iter 不可用"));
+    };
+    // **已耗尽** ⇒ 参照给 `(iter, ((),))`（空迭代器；`test_iter.test_mutating_seq_class_iter_pickle`
+    // 的 exhausted 档 ✓）——耗尽闩不可放入 state，所以直接交空序列 ✓。
+    if object.exhausted() {
+        let empty = instance.new_tuple(Vec::new());
+        let args = instance.new_tuple(vec![empty]);
+        return Ok(instance.new_tuple(vec![instance.retain(callable), args]));
+    }
+    let args = instance.new_tuple(vec![instance.retain(object.target())]);
+    Ok(instance.new_tuple(vec![
+        instance.retain(callable),
+        args,
+        instance.new_int(object.index() as i64),
+    ]))
+}
+
+/// `it.__setstate__(state)`（序列迭代器，round 85）：负数**夹到 0**（参照行为：
+/// `test_iter_neg_setstate` 里 `setstate(-42)` 之后 `next` 给 `0, 1` ✓）。
+fn sequence_iterator_setstate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterator) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__setstate__() 需要迭代器实例",
+        ));
+    };
+    let Some(state) = args
+        .first()
+        .copied()
+        .and_then(|value| instance.int_of(value))
+        .and_then(|number| number.to_i64())
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__setstate__() 要整数"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*iterator.as_ptr().cast::<SequenceIteratorObject>() };
+    object.set_index(usize::try_from(state).unwrap_or(0));
+    // **`__setstate__` 是"重新定位"** ⇒ 清掉耗尽标记 ✓（`test_iter.test_mutating_seq_class_iter_pickle` ✓）。
+    object.clear_exhausted();
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+py_object! {
+    /// **`iter(callable, sentinel)` 的迭代器**（round 85，参照名 `callable_iterator`）：
+    /// 每次 `__next__` 调 `callable()`，结果 `== sentinel` 就 `StopIteration`（结果本身不再交出）✓。
+    /// 两个字段都**持有引用** ⇒ 挂 `traverse`／`clear` ✓（`OM-40`／`OM-20` ②）。
+    pub struct CallableIteratorObject {
+        /// 被反复调用的可调用对象（**本对象持有一份引用**）。
+        callable: NonNull<Header>,
+        /// 停止哨兵值（**本对象持有一份引用**）。
+        sentinel: NonNull<Header>,
+            /// **已耗尽**（round 187，默认初始化组 ✓）：参照的 `callable_iterator` 一旦撞到哨兵就
+            /// **永久耗尽** ✓（`test_iter.test_sinkstate_callable`：`list(b)==range(5)` 之后再来 `list(b)`
+            /// 必须是 `[]` ✓）。
+            exhausted: Cell<bool>
+    }
+}
+
+impl CallableIteratorObject {
+    /// 槽位表：`dealloc` ＋ `traverse`／`clear`。
+    pub fn slots() -> crate::type_object::Slots {
+        crate::type_object::Slots::new(Self::dealloc)
+            .with_traverse(callable_iterator_traverse)
+            .with_clear(callable_iterator_clear)
+    }
+
+    /// 被调用的可调用对象（借用）。
+    pub fn callable(&self) -> NonNull<Header> {
+        self.callable
+    }
+
+    /// 停止哨兵（借用）。
+    pub fn sentinel(&self) -> NonNull<Header> {
+        self.sentinel
+    }
+
+    /// 已耗尽（借用）。
+    pub fn exhausted(&self) -> bool {
+        self.exhausted.get()
+    }
+
+    /// 标记耗尽。
+    pub fn set_exhausted(&self) {
+        self.exhausted.set(true);
+    }
+}
+
+/// 遍历两格引用（生成器/迭代器可成环 ⇒ 必须走 GC ✓）。
+unsafe fn callable_iterator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<CallableIteratorObject>() };
+    visit(object.callable().as_ptr());
+    visit(object.sentinel().as_ptr());
+}
+
+/// 交出两格引用（`OM-21`：逐个释放）。
+unsafe fn callable_iterator_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &mut *ptr.cast::<CallableIteratorObject>() };
+    // SAFETY: 这两份引用由本对象持有。
+    unsafe {
+        instance.release_object(object.callable.as_ptr());
+        instance.release_object(object.sentinel.as_ptr());
+    }
 }

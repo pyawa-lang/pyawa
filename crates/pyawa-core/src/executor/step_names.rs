@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, code: &CodeObject, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -12,17 +13,15 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     // **不是** `co_consts`／`co_names`。前三个是**类型对象**，后两个取 builtins 里的函数。
                     let value = match oparg {
                         0 => instance.type_value(
-                            instance
-                                .type_named("AssertionError")
+                            instance.hot_type(HotId::AssertionError)
                                 .expect("AssertionError 在内建表里"),
                         ),
                         1 => instance.type_value(
-                            instance
-                                .type_named("NotImplementedError")
+                            instance.hot_type(HotId::NotImplementedError)
                                 .expect("NotImplementedError 在内建表里"),
                         ),
                         2 => instance.type_value(
-                            instance.type_named("tuple").expect("tuple 在内建表里"),
+                            instance.hot_type(HotId::Tuple).expect("tuple 在内建表里"),
                         ),
                         3 | 4 => {
                             let name = if oparg == 3 { "all" } else { "any" };
@@ -63,8 +62,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                         .ok_or(ExecError::Unsupported {
                             opcode: opcode_number,
                             what: "co_names 下标越界",
-                        })?
-                        .to_owned();
+                        })?;
                     let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
                         opcode: opcode_number,
                         what: "LOAD_NAME 需要命名空间帧（模块／类体）",
@@ -95,23 +93,51 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                         .ok_or(ExecError::Unsupported {
                             opcode: opcode_number,
                             what: "co_names 下标越界",
-                        })?
-                        .to_owned();
+                        })?;
                     // **低位那把 `NULL` 要压在"值之后"** ✓（第 156 轮抓到的真 bug ✓）：`CALL` 期望
                     //   `[可调用, NULL]`（NULL 在**上** ✓ —— 模块级的 `LOAD_NAME; PUSH_NULL` 就是这个形状，
                     //   一直能跑 ✓）；先前这里把 NULL 压在**值之前** ✗ ⇒ `CALL` 把 NULL 当可调用 ⇒
                     //   `TypeError: 'NULL' object is not callable` ✓（实测：**函数里调用任何内建都崩** ✗，
                     //   而 `return 5` 之类的非调用语句都好 ✓ ⇒ 夹具只比编译 ✗、语料又没覆盖 ⇒ 一直没暴露 ✗）。
                     // 顺序：**全局 → 内建**（`LOAD_GLOBAL` 不看局部）
-                    let found = frame
-                        .get()
-                        .effective_globals()
-                        .and_then(|mapping| lookup_in_mapping(instance, mapping, &name))
-                        .or_else(|| {
-                            instance
-                                .builtins()
-                                .and_then(|builtins| lookup_in_mapping(instance, builtins, &name))
-                        });
+                    let mut found = None;
+                    if let Some(mapping) = frame.get().effective_globals() {
+                        found = lookup_in_mapping(instance, mapping, &name);
+                        // **全局映射的 `__missing__` 回退**（round 87，参照口径）：`eval(code, MyGlobals())`
+                        // 里 `MyGlobals(dict)` 定义 `__missing__` ⇒ `LOAD_GLOBAL` 未命中时参照会调它 ✓
+                        //（`test_dynamic.test_load_global_specialization_failure_keeps_oparg` 钉住 ✓）。
+                        // 先前直接落到 builtins ⇒ `NameError` ✗。
+                        if found.is_none() {
+                            // **只对"非纯 dict"的全局映射查 `__missing__`**（round 88 性能修 ✗）：
+                            // 纯 `dict` 没有 `__missing__` ✓ ⇒ 先前每次**内建名加载**都要走一趟属性通道
+                            // （含异常吞掉）⇒ 全脚本变慢（实测 `test_collections` 60 s ⇒ 110 s ✗）。
+                            // 类型不是 `dict` 才走这条路（`eval(code, MyGlobals())` 的子类 ✓）。
+                            let mapping_type = instance.type_of(mapping);
+                            let plain_dict = instance.hot_type(HotId::Dict)
+                                .is_some_and(|dict| dict == mapping_type);
+                            if !plain_dict {
+                                if let Some(hook) = instance.type_lookup(mapping_type, "__missing__") {
+                                    let key = instance.new_str(&name);
+                                    // 未绑定函数：`self` 是全局映射本身 ✓（借用 ⇒ 调用方持有 ✓）。
+                                    let outcome = crate::executor::call::call_callable(
+                                        instance,
+                                        hook,
+                                        Some(mapping),
+                                        vec![key],
+                                        Vec::new(),
+                                        0,
+                                    );
+                                    instance.release(key);
+                                    found = Some(outcome?);
+                                }
+                            }
+                        }
+                    }
+                    if found.is_none() {
+                        found = instance
+                            .builtins()
+                            .and_then(|builtins| lookup_in_mapping(instance, builtins, &name));
+                    }
                     match found {
                         Some(value) => {
                             push(instance, frame.get(), value)?;
@@ -133,27 +159,22 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                         .ok_or(ExecError::Unsupported {
                             opcode: opcode_number,
                             what: "co_names 下标越界",
-                        })?
-                        .to_owned();
+                        })?;
                     let mapping = frame.get().effective_globals().ok_or(ExecError::Unsupported {
                         opcode: opcode_number,
                         what: "STORE_GLOBAL 需要全局映射（函数记着定义处的全局）",
                     })?;
                     let value = frame.get().pop()?;
-                    // SAFETY: mapping 由帧或函数持有，存活。
-                    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-                    let position = dict
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| str_matches_public(instance, *existing, &name));
-                    if let Some(position) = position {
-                        if let Some((old_key, old_value)) = dict.remove(position) {
-                            release(instance, old_key);
-                            release(instance, old_value);
-                        }
+                    // **哈希索引写**（round 250 性能，A2-5）：先按名字摘旧项（哈希找），再 `insert_hashed`
+                    // 增量维护索引（先前 `find_live_position` 线性扫＋`insert_raw` 让索引整体作废 ✗）。
+                    if let Some((old_key, old_value)) = instance.dict_remove_by_name(mapping, name) {
+                        release(instance, old_key);
+                        release(instance, old_value);
                     }
-                    let key = instance.new_str(&name);
-                    dict.insert_raw(key, value);
+                    let key = instance.new_str(name);
+                    let hash = crate::executor::values::hash_text(name);
+                    // SAFETY: mapping 由帧或函数持有，存活。
+                    unsafe { &*mapping.as_ptr().cast::<DictObject>() }.insert_hashed(key, value, hash);
                 }
                 "DELETE_GLOBAL" => {
                     let name = code
@@ -161,24 +182,16 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                         .ok_or(ExecError::Unsupported {
                             opcode: opcode_number,
                             what: "co_names 下标越界",
-                        })?
-                        .to_owned();
+                        })?;
                     let mapping = frame.get().effective_globals().ok_or(ExecError::Unsupported {
                         opcode: opcode_number,
                         what: "DELETE_GLOBAL 需要全局映射",
                     })?;
-                    // SAFETY: mapping 由帧或函数持有，存活。
-                    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-                    let position = dict
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| str_matches_public(instance, *existing, &name));
-                    match position {
-                        Some(position) => {
-                            if let Some((old_key, old_value)) = dict.remove(position) {
-                                release(instance, old_key);
-                                release(instance, old_value);
-                            }
+                    // **哈希索引删**（round 250 性能，A2-5）。
+                    match instance.dict_remove_by_name(mapping, name) {
+                        Some((old_key, old_value)) => {
+                            release(instance, old_key);
+                            release(instance, old_value);
                         }
                         None => {
                             let message = format!("name '{name}' is not defined");
@@ -197,8 +210,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                         .ok_or(ExecError::Unsupported {
                             opcode: opcode_number,
                             what: "co_names 下标越界",
-                        })?
-                        .to_owned();
+                        })?;
                     let namespace = frame.get().namespace().ok_or_else(|| ExecError::Unsupported {
                         opcode: opcode_number,
                         // **把"要存的名字"报出来**（第 339 轮）：先前只有一句"需要命名空间帧" ✗ ⇒
@@ -231,7 +243,7 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                     // ⇒ `enum` 收不到成员（`TypeError: 'NoneType' object is not iterable` ✓）⇒ 整包 `unittest` 进不来 ✓。
                     // 依据：`NEXT.md`（R2 闸门）＋ `PYAWA_NS_DEBUG` 探针（类体赋值从不打 `setitem`）。
                     let ns_type = unsafe { namespace.as_ref() }.ty();
-                    let dict_setitem = instance.type_lookup(builtin_type(instance, "dict"), "__setitem__");
+                    let dict_setitem = instance.type_lookup(instance.hot_type(HotId::Dict).expect("dict 已登记"), "__setitem__");
                     let overrides_setitem = instance
                         .type_lookup(ns_type, "__setitem__")
                         .is_some_and(|found| Some(found) != dict_setitem);
@@ -248,19 +260,16 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                         release(instance, value);
                         outcome?;
                     } else {
-                        let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
-                        let position = mapping
-                            .entries()
-                            .iter()
-                            .position(|(existing, _)| str_matches_public(instance, *existing, &name));
-                        if let Some(position) = position {
-                            if let Some((old_key, old_value)) = mapping.remove(position) {
-                                release(instance, old_key);
-                                release(instance, old_value);
-                            }
+                        // **哈希索引写**（round 250 性能，A2-5）：摘旧项＋增量插入 ✓。
+                        if let Some((old_key, old_value)) = instance.dict_remove_by_name(namespace, name) {
+                            release(instance, old_key);
+                            release(instance, old_value);
                         }
-                        let key = instance.new_str(&name);
-                        mapping.insert_raw(key, value);
+                        let key = instance.new_str(name);
+                        let hash = crate::executor::values::hash_text(name);
+                        // SAFETY: namespace 由帧持有，存活。
+                        unsafe { &*namespace.as_ptr().cast::<DictObject>() }
+                            .insert_hashed(key, value, hash);
                     }
                 }
                 "DELETE_NAME" => {
@@ -269,24 +278,16 @@ pub(super) fn step_names<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, c
                         .ok_or(ExecError::Unsupported {
                             opcode: opcode_number,
                             what: "co_names 下标越界",
-                        })?
-                        .to_owned();
+                        })?;
                     let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
                         opcode: opcode_number,
                         what: "DELETE_NAME 需要命名空间帧（模块／类体）",
                     })?;
-                    // SAFETY: namespace 由帧持有，存活。
-                    let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
-                    let position = mapping
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| str_matches_public(instance, *existing, &name));
-                    match position {
-                        Some(position) => {
-                            if let Some((old_key, old_value)) = mapping.remove(position) {
-                                release(instance, old_key);
-                                release(instance, old_value);
-                            }
+                    // **哈希索引删**（round 250 性能，A2-5）。
+                    match instance.dict_remove_by_name(namespace, name) {
+                        Some((old_key, old_value)) => {
+                            release(instance, old_key);
+                            release(instance, old_value);
                         }
                         None => {
                             let message = format!("name '{name}' is not defined");

@@ -4,13 +4,14 @@
 //! * 仍在原处的被引用项：`async_generator_anext_native`、`async_generator_asend_native`、`exception_instance`、`resume_with_sent`、`stop_iteration`、`thrown_exception` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, ExceptionObject, GeneratorObject, MethodObject, NativeFn};
 use crate::executor::ExecError;
 use core::ptr::NonNull;
 use crate::header::Header;
 use crate::instance::Instance;
-use crate::builtin_objects::{async_generator_anext_native, async_generator_asend_native, exception_instance, resume_with_sent, thrown_exception};
+use crate::builtin_objects::{async_generator_aclose_native, async_generator_anext_native, async_generator_asend_native, async_generator_athrow_native, exception_instance, resume_with_sent, thrown_exception};
 
 
 pub unsafe fn generator_getattr(
@@ -36,30 +37,77 @@ pub unsafe fn generator_getattr(
                 unsafe { instance.incref_object(ptr) };
                 return Some(owner);
             }
-            // `__anext__()` 交出 awaitable（我们的 `AsendObject`）；`asend(v)` 同形、带值
-            "__anext__" | "asend" => {
-                let method_type = instance
-                    .type_named("builtin_function_or_method")
+            // `__anext__()` 交出 awaitable（我们的 `AsendObject`）；`asend(v)` 同形、带值；
+            // `aclose()`／`athrow(e)` 也走这一层（round 233：mode 不同 ✓）。
+            "__anext__" | "asend" | "aclose" | "athrow" => {
+                let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("引导期已登记");
-                let handler: NativeFn = if name == "asend" {
-                    async_generator_asend_native
-                } else {
-                    async_generator_anext_native
+                let (handler, method_name): (NativeFn, &'static str) = match name {
+                    "asend" => (async_generator_asend_native, "asend"),
+                    "aclose" => (async_generator_aclose_native, "aclose"),
+                    "athrow" => (async_generator_athrow_native, "athrow"),
+                    _ => (async_generator_anext_native, "async_generator"),
                 };
                 let native = instance.alloc(BuiltinFunctionObject::new(
                     method_type,
-                    "async_generator",
+                    method_name,
                     Cell::new(handler),
                 ));
                 let native_raw = native.into_raw().cast::<Header>();
                 // SAFETY: ptr 由槽位契约保证存活，方法对象要自己那份 self。
                 unsafe { instance.incref_object(ptr) };
                 let bound = instance.alloc(MethodObject::new(
-                    instance.type_named("method").expect("method 已登记"),
+                    instance.hot_type(HotId::Method).expect("method 已登记"),
                     native_raw,
                     owner,
                 ));
                 return Some(bound.into_raw().cast::<Header>());
+            }
+            _ => {}
+        }
+    }
+    // **生成器的 getset 属性面**（round 60）：参照的 `gi_frame`／`gi_running`／`gi_code`／
+    // `gi_suspended`／`gi_yieldfrom` 是类型上的 getset 描述符 ⇒ `dir(g)` 里也看得到 ✓。
+    // 本层没有 getset 描述符 ⇒ 在**属性通道**里直接给值 ✓（`dir` 另行补名，见 `dir_new`）。
+    if is_generator {
+        // SAFETY: ptr 由槽位契约保证存活。
+        let object = unsafe { &*ptr.cast::<GeneratorObject>() };
+        match name {
+            "gi_running" => {
+                let raw = instance.singletons().boolean(object.running());
+                return Some(instance.retain(raw));
+            }
+            "gi_frame" => {
+                if object.finished() {
+                    return Some(instance.retain(instance.singletons().none()));
+                }
+                let frame = object.frame();
+                // SAFETY: 帧由生成器持有，这里新增一份交给调用方。
+                unsafe { instance.incref_object(frame.as_ptr()) };
+                return Some(frame);
+            }
+            "gi_code" => {
+                let frame = object.frame();
+                // SAFETY: 帧由生成器持有，存活。
+                let code = unsafe { &*frame.as_ptr().cast::<crate::Frame>() }.code();
+                return match code {
+                    Some(code) => {
+                        // SAFETY: code 由帧持有，这里新增一份交给调用方。
+                        unsafe { instance.incref_object(code.as_ptr()) };
+                        Some(code)
+                    }
+                    None => Some(instance.retain(instance.singletons().none())),
+                };
+            }
+            "gi_suspended" => {
+                // 挂起 = "已经开始且还没跑完"（与参照实测口径一致 ✓）。
+                let suspended = object.started() && !object.finished();
+                let raw = instance.singletons().boolean(suspended);
+                return Some(instance.retain(raw));
+            }
+            "gi_yieldfrom" => {
+                // `yield from` 的当前委托对象：本层没有单独记录 ⇒ 如实给 `None` ✓。
+                return Some(instance.retain(instance.singletons().none()));
             }
             _ => {}
         }
@@ -71,16 +119,24 @@ pub unsafe fn generator_getattr(
         "close" => generator_close_native,
         _ => return None,
     };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     // 方法对象要自己持有函数与 self 各一份引用
-    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "generator", Cell::new(handler)));
+    // **方法名照参照**（round 96）：先前一律叫 `generator` ✗ ⇒ `repr`／`__name__` 与 `__doc__` 都分不开
+    // `send`／`throw`／`close`／`__next__` ✓（`test_genexps` 的 doctest 要看 `__next__.__doc__` ✓）。
+    let method_name: &'static str = match name {
+        "__next__" => "__next__",
+        "send" => "send",
+        "throw" => "throw",
+        "close" => "close",
+        _ => "generator",
+    };
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, method_name, Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: ptr 是本类型的存活对象（槽位契约）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         // SAFETY: ptr 由槽位契约保证非空（是本类型的存活对象）。
         unsafe { NonNull::new_unchecked(ptr) },
@@ -164,7 +220,9 @@ pub(crate) unsafe fn generator_throw_native(
     let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
     if object.finished() || !object.started() {
         // 还没进去（或已经结束）⇒ 抛在调用处
-        return Err(ExecError::Raised { exception });
+        return Err(ExecError::Raised {
+            exception: crate::raise_guard::RaiseRef::from_owned(instance, exception),
+        });
     }
     match crate::executor::resume_generator_with_raise(instance, generator, exception)? {
         crate::executor::GeneratorOutcome::Yielded(value) => Ok(value),
@@ -216,30 +274,29 @@ pub(crate) unsafe fn generator_close_native(
         Ok(crate::executor::GeneratorOutcome::Returned(value)) => Ok(value),
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
-            let generator_exit = instance
-                .type_named("GeneratorExit")
+            let ty = unsafe { exception.get().as_ref() }.ty();
+            let generator_exit = instance.hot_type(HotId::GeneratorExit)
                 .expect("异常层次在引导期已登记");
             if instance.is_subtype(ty, generator_exit) {
                 // SAFETY: 这一份由本函数持有。
-                unsafe { instance.release_object(exception.as_ptr()) };
+                unsafe { instance.release_object(exception.get().as_ptr()) };
                 Ok(none())
             } else if instance.type_name(ty) == "StopIteration" {
                 // 生成器内部抛 `StopIteration` ⇒ `close` 交出它的返回值（有就取第一个实参）
                 // SAFETY: 类型身份已确认。
-                let exception_object = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
+                let exception_object = unsafe { &*exception.get().as_ptr().cast::<ExceptionObject>() };
                 let value = exception_object.args().first().copied();
                 match value {
                     Some(value) => {
                         // SAFETY: 值由异常对象持有，这里新增一份交给调用方。
                         unsafe { instance.incref_object(value.as_ptr()) };
                         // SAFETY: 异常那份由本函数持有。
-                        unsafe { instance.release_object(exception.as_ptr()) };
+                        unsafe { instance.release_object(exception.get().as_ptr()) };
                         Ok(value)
                     }
                     None => {
                         // SAFETY: 同上。
-                        unsafe { instance.release_object(exception.as_ptr()) };
+                        unsafe { instance.release_object(exception.get().as_ptr()) };
                         Ok(none())
                     }
                 }

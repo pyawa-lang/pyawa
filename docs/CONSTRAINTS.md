@@ -58,6 +58,12 @@
 | **CX-20** | **"未决"节不得把已决项当成待定**：各规格（`docs/SPEC-*.md`）的**「未决」节与「尚未写出」节**里提到的 `§13-N`，**不得**属于 `DESIGN.md` §13「已决」清单——**除非**该行或其前 3 行内明确出现"已决／原先／关闭／不再是"之一（那就属**历史说明**，不是待定声明）。理由：决定落地后没人提醒各规格更新，**假缺口会累积**（本条由来：一次实扫命中 27 处） | `AGENTS.md` 完成度如实 ＋ `DESIGN.md` §13 | **能**（正则扫描 ＋ 上下文白名单） |
 | **CX-21** | **每个持引用的字段都必须被 `traverse` 与 `clear` 覆盖**（`OM-12`），**新增字段时同样适用**。**由 Rust 侧 `T-CX-12` 在 CI 中承担**（含注入用例）；**不设 `check.py` 扫描**——字段级覆盖要在 Rust 侧看注册表与代码，Python 侧只能查账本一致性 | `OM-12` | **能**（由 `T-CX-12` 承担） |
 | **CX-22** | **`pyawa-stdlib` 的 `src/` 不得出现核心的**具体布局类型名**（`IntObject`／`ListObject`／`DictObject`／`SetObject`／`BytesObject` 一族）——载荷布局**不进 ABI**（`OM-6`），stdlib 只能走核心的**安全入口**。**允许** `Header`／`Instance`（句柄与安全 API 的类型） | `OM-6`；与 `CX-3`／`CX-4`／`CX-6` 同为"源码扫描"族 | **能**（纯文本扫描） |
+| **CX-23** | **`NEXT.md` 是单页交接**：**≤ 40 行**；只写 状态／下一条命令／未修 bug＋判据；**禁止**在本页写逐轮复盘（历史只进 `docs/rounds/`）。机检：`T-CX-14` |
+| **CX-24** | **`NEXT.md` 的 HEAD 行必须是短哈希**（`git rev-parse --short HEAD` 的输出，且 `git cat-file -e` 能解析）；**禁止**写指针（如「见 `git log -1`」）。机检：`T-CX-15` |
+| ~~`T-CX-16`~~ | **已撤回**（2026-11-13）：提交正文不再要求授权行，机检废弃（`CX-25`） |
+| `T-CX-17` | **核心五 crate 零三方依赖**：`[dependencies]` 只能指向 workspace 内部；第三方只许在 `pyawa-lsp` 且不得被核心反向依赖（`CX-27`） |
+| `T-CX-18` | **文档章节编号唯一且连续**：`## N. ` 形式在同一文件内不重复、不缺号（`CX-28`） |
+| **CX-30** | **核心四个模块禁止裸丢弃 `Result`**：`Err(_) =>`／`if let Err(_)`／把 `.is_ok()`／`.is_err()` 的 bool 当语句丢掉／`let _ = <Result 调用>` 出现即红；合法丢弃**必须**走 `discard_error`／`discard_attribute_error`／`discard_raised`（或同口径的显式"丢弃"入口）。历史欠账与非 `Result` 的合法写法在检查的**白名单**里逐条登记并做**棘轮**（只许缩不许涨）；扫描面见 §3.1 | 阶段 0-C（禁止裸丢弃 `Result`；`REQUIREMENTS.md` 后果 10 的可 CI 强制项） | **能**（纯文本扫描 ＋ 白名单棘轮；`T-CX-20`） |
 
 - **CX-14** 上表"能"的条目**必须**在 CI 里可执行；"不能"的条目**必须**保持占位，
   **禁止**在实现前写成"已就位"。
@@ -67,13 +73,14 @@
 
 ### 3.1 静态检查的扫描范围
 
-三条"扫代码"的约束，范围**必须**如下。范围是这些约束**定义的一部分**，不是实现细节——
+四条"扫代码"的约束，范围**必须**如下。范围是这些约束**定义的一部分**，不是实现细节——
 因此**不另领编号**：
 
 | 约束 | 扫哪里 | **不**扫哪里 |
 |---|---|---|
 | `CX-3`／`CX-6` | `crates/pyawa-core/src/` | 该 crate 的 `tests/` |
 | `CX-4` | `crates/pyawa-core/src/` ＋ `crates/pyawa-capabilities/src/` ＋ `crates/pyawa-stdlib/src/` | `crates/pyawa-runtime/`（它**就是**平台依赖的集中点，`DESIGN.md` §7 原则 5）、各 crate 的 `tests/` |
+| `CX-30` | `crates/pyawa-core/src/executor.rs` ＋ `…/executor/`、`…/instance.rs` ＋ `…/instance/`、`…/builtin.rs` ＋ `…/builtin/`、`…/builtin_objects/mod.rs` ＋ `…/builtin_objects/`（**四个模块**，目录＋模块根） | `crates/pyawa-core/src/` 下其余模块文件（`builtin_types.rs`／`classes.rs`／`frame.rs` 等）与**全部** `tests/`：v1 只收最集中的四个模块，阶段 1 修完后可扩大（扩大范围＝改本行，不算新约束） |
 
 - **理由**：这三条约束的是**随包发布的实现**；`tests/` 目录里的夹具代码不随包发布。
 - **`pyawa-stdlib` 从第一个模块起就纳入 `CX-4`**：它自己的硬约束写着"**禁止**把 OS 与 libc
@@ -114,6 +121,24 @@
 | `T-CX-11` | **假缺口扫描**：各规格「未决」「尚未写出」节里凡提到属"已决"的 `§13-N`，该行或其前 3 行内**必须**有"已决／原先／关闭／不再是"之一；否则红（`CX-20`） |
 | `T-CX-12` | **持引用字段覆盖率**：`GC_TRACKED` 的每个持引用字段都被 `traverse`／`clear` 覆盖；**新增字段漏项必须红**（`CX-21`） |
 | `T-CX-13` | **stdlib 布局隔离**：`crates/pyawa-stdlib/src/` 不出现具体布局类型名（`*Object` 一族）；`Header`／`Instance` **允许**（`CX-22`） |
+| `T-CX-14` | **NEXT 单页上限**：`NEXT.md` ≤ 40 行且最长行 ≤ 4000 字符；超限即红（`CX-23`） |
+| `T-CX-15` | **NEXT HEAD 行**：必须是短哈希且能解析为真实提交；写指针即红（`CX-24`） |
+| `T-CX-19` | **ABI 符号面**：导出 ⊆ `pa.h` 声明 ⊆ 规格提及；总数 ≤ 120（`CX-29`） |
+| `T-CX-20` | **核心四个模块禁止裸丢弃 `Result`**：`Err(_) =>`／`if let Err(_)`／`.is_ok()`／`.is_err()` 当语句丢弃／`let _ = <Result 调用>` 为零；白名单（含历史欠账与非 `Result` 写法）只许缩（`CX-30`）；`selftest.py` 有"注入 `Err(_) =>` 必须红"用例 |
+
+
+- **`CX-25`** **授权记录不写进提交信息** ✗：谁授权、批准了什么，留在 PR／issue 的对话里；`commit message` 只写改动与理由 ✓（`T-CX-16` 已撤回，不设机检）。
+- **`CX-26`** 对规范下断言必须**当场查证**（`grep`／`read`）并写出「文件:编号」；**禁止**凭记忆断言 ✗。
+- **`CX-27`** **第三方依赖的边界**：`pyawa-core`／`pyawa-abi`／`pyawa-capabilities` **零第三方** ✓；`pyawa-runtime` **只依赖 workspace 内部** ✓；`pyawa-stdlib` 的既有第三方仅限 `regex`／`fancy-regex` ✓（新增须先改本条）；`pyawa-lsp` **允许**第三方（协议/序列化 ✓），但**不得被核心反向依赖** ✗（机检 `T-CX-17` ✓）。
+- **`CX-28`** 文档的二级章节编号（`## N. `）**在本文件内唯一且从 1 连续** ✓；子节标题（`## 3b.`／`## 5.9`）不计入 ✗；`docs/rounds/` 为历史台账不扫描 ✓（机检 `T-CX-18`）。
+- **`CX-30` 的边界**（如实登记）core 四个模块（`executor`／`instance`／`builtin`／`builtin_objects`，含模块根文件）**禁止裸丢弃 `Result`**：`Err(_) =>`／`if let Err(_)`／`while let Err(_)`／把 `.is_ok()`／`.is_err()` 的 bool 当**语句**丢掉／`let _ = <Result 调用>` 一律红；**合法**做法是显式丢弃（`discard_error`／`discard_attribute_error`／`discard_raised`，或按同一"显式"口径新增的统一入口）。白名单 `RESULT_DISCARD_ALLOWED` 逐条登记"阶段 1 之前的历史欠账"与"结构性非 `Result`（`Utf8Error`／`ParseIntError`／`FrameError`／`CapabilityCallError`／`Option` 等）"，**只许缩**（条目失效不删同样红；新增条目超过高水位即红）。**如实登记的边界** ✗：①`let _ = <变量/元组>` 静态无类型信息 ⇒ 不判（阶段 1 可用类型/宏收口）；②`.ok()` 把 `Err` 转 `Option` 的 45 处不在本规则（其错误引用同样可能泄漏，登记为阶段 1 的延伸面）；③白名单以"同文件 ＋ 行文本锚点"匹配（换行/缩进漂移不影响，但**修好必须删条目**）。机检 `T-CX-20` ✓。
+
+> **阶段 2/A（2026-11-14）之后**：`ExecError::Raised` 已改 **RAII 守卫**（`RaiseRef`：`Drop` 自动
+> 归还 `Err` 那份引用；`discard()` 连 `pending` 槽一并清）⇒ "裸丢弃 `Result`"**不再泄漏引用**。
+> 本约束保留为**可审计风格规则**（防复制旧的"交回裸指针、由调用方记得释放"模式；终结器泄漏正是
+> 那种模式），白名单棘轮与扫描面不变；`discard_raised` 函数已由 `RaiseRef::discard` 取代。
+- **`CX-29`** ABI 的**符号面必须三面一致**：`#[no_mangle] extern "C"` 的**导出符号集合** ⊆ `pa.h` **声明集合** ⊆ `SPEC-c-abi.md` **提及集合**；导出与声明的总数都**不得超过** `AB-1` 的预算 **120**。扫描面：`crates/pyawa-abi/src/` ＋ `crates/pyawa-runtime/src/`（`paL_newstate` 按 `§15.4` 由组合根实现）＋ `crates/pyawa-abi/include/pa.h` ＋ `docs/SPEC-c-abi.md`。**禁止影子导出**（`AB-6`）。**过渡清单当前为空**（`PLAN-milestones.md` §12.4 #8 已于 2026-11-14 收口：`pa_set_program_filename` 已补进 `pa.h`／规格）——**棘轮**：新增影子导出立即红；将来若出现过渡项必须显式列入，修好后不删同样红 ✓（机检 `T-CX-19`）。
+
 
 ---
 

@@ -44,11 +44,11 @@ fn error_text(instance: &Instance, error: ExecError) -> String {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             let name = unsafe { ty.as_ref() }.name().to_owned();
             // SAFETY: exception 是存活对象。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default();
             format!("{name}: {message}")
@@ -238,14 +238,10 @@ fn unimplemented_faces_say_so_and_get_freeze_count_is_zero() {
         "get_objects",
         "get_referrers",
         "get_referents",
-        "is_tracked",
         "is_finalized",
         "freeze",
         "unfreeze",
-        "get_count",
         "get_stats",
-        "get_debug",
-        "set_debug",
     ] {
         let handler = native(&instance, namespace, name);
         let argument = instance.new_int(0);
@@ -256,6 +252,34 @@ fn unimplemented_faces_say_so_and_get_freeze_count_is_zero() {
             "`gc.{name}` 要如实 NotImplementedError 并挂账：{text}"
         );
     }
+    // **`is_tracked` 自 round 120 起是「近似真实现」**（按不可变原子类型判 ✓）：官方
+    // `test_dict.test_copy_maintains_tracking` 要 `is_tracked(d.copy()) is True` ✓。
+    let is_tracked = native(&instance, namespace, "is_tracked");
+    let integer = instance.new_int(0);
+    let tracked = call(&instance, is_tracked, &[integer], &[]).expect("is_tracked(0)");
+    assert!(!instance.truthiness_of(tracked).expect("bool"), "0 不是被追踪对象");
+    let empty = instance.new_dict();
+    let tracked = call(&instance, is_tracked, &[empty], &[]).expect("is_tracked({})");
+    assert!(instance.truthiness_of(tracked).expect("bool"), "dict 应当被追踪");
+
+    // **round 92 起真实现**：`get_debug`／`set_debug`／`get_count`（官方 `test_gc` 的
+    // `setUpModule` 第一句就是 `gc.get_debug()`）—— 语义：调试位**忠实保存/回报**（本层没有
+    // 调试通道 ⇒ 只有可观测的读回 ✓）；`get_count` 是单代回收 ⇒ `(分配数, 0, 0)` ✓。
+    let get_debug = native(&instance, namespace, "get_debug");
+    let before = call(&instance, get_debug, &[], &[]).expect("get_debug()");
+    assert_eq!(int_of(&instance, before), 0, "默认调试位 0");
+    let set_debug = native(&instance, namespace, "set_debug");
+    let flags = instance.new_int(38); // DEBUG_LEAK
+    call(&instance, set_debug, &[flags], &[]).expect("set_debug(38)");
+    let after = call(&instance, get_debug, &[], &[]).expect("get_debug() after set");
+    assert_eq!(int_of(&instance, after), 38, "set_debug 之后要读回同一组位");
+    let get_count = native(&instance, namespace, "get_count");
+    let count = call(&instance, get_count, &[], &[]).expect("get_count()");
+    let items = instance.tuple_items(count).expect("get_count 返回 tuple");
+    assert_eq!(items.len(), 3, "get_count 是 3 元组");
+    assert!(int_of(&instance, items[0]) >= 0, "第 1 格是自上次回收的分配数");
+    assert_eq!(int_of(&instance, items[1]), 0, "单代回收 ⇒ 第 2 格 0");
+    assert_eq!(int_of(&instance, items[2]), 0, "单代回收 ⇒ 第 3 格 0");
     // `get_freeze_count()`：没有 freeze 机制 ⇒ 如实 0（这是真值，不是占位）
     let handler = native(&instance, namespace, "get_freeze_count");
     let value = call(&instance, handler, &[], &[]).expect("get_freeze_count()");

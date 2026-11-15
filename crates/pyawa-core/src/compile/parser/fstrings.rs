@@ -476,7 +476,8 @@ pub(crate) fn parse_fstring_parts(
                     literal_line = line_now;
                     literal_col = col_now;
                 }
-                let (decoded, consumed) = lex_string_escape(&characters, index)?;
+                // f-string 的 `contents` 从**内容起点**开始 ⇒ 错误位置的字面量起点是 0 ✓。
+                let (decoded, consumed) = lex_string_escape(&characters, index, 0, characters.len())?;
                 literal.extend_from_slice(&decoded);
                 walk!(index + consumed);
             }

@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, decoder: &mut Decoder, instruction: &Instruction, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -29,7 +30,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let iterator = frame.get().peek()?;
                     // SAFETY: iterator 在帧值栈上，存活。
                     let ty = unsafe { iterator.as_ref() }.ty();
-                    if ty == builtin_type(instance, "generator") {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") {
                         // 生成器：`FOR_ITER` 的"取下一个"就是**恢复生成器的帧**（驱动实测骨架
                         // `CALL → GET_ITER → FOR_ITER`）；让出就压让出的值，跑完就走耗尽路径。
                         // SAFETY: 类型身份已确认。
@@ -109,7 +110,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let iterable = frame.get().pop()?;
                     // SAFETY: iterable 是刚出栈的存活对象。
                     let ty = unsafe { iterable.as_ref() }.ty();
-                    if ty == builtin_type(instance, "generator") || is_iterator_type(instance, ty) {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") || is_iterator_type(instance, ty) {
                         frame.get().push(iterable)?;
                     } else {
                         // **回退走 `iter_value`**（与 `GET_ITER` **同一处实现** ✓）：`iterator_type_for`
@@ -140,12 +141,12 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     // **本层的 `async def` 编成生成器**（已登记的近似）⇒ `async for` 也得认它 ✓
                     // （第 306 轮）：否则 `async for` 一到运行期就报
                     // `'async for' requires an object with __aiter__ method, got generator` ✗。
-                    if ty == builtin_type(instance, "generator") {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") {
                         push(instance, frame.get(), value)?;
                         release(instance, value);
                         return Ok(Step::Continue);
                     }
-                    if ty == builtin_type(instance, "async_generator") {
+                    if ty == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记") {
                         push(instance, frame.get(), value)?;
                         release(instance, value);
                     } else {
@@ -169,6 +170,30 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                                 push(instance, frame.get(), iterator)?;
                                 release(instance, iterator);
                             }
+                            // **宿主 getattr 槽交出的已绑定方法**（`AB-73`/`AB-75`）：直接调用。
+                            Ok(Attribute::Owned(bound)) => {
+                                let iterator =
+                                    call_callable(instance, bound, None, Vec::new(), Vec::new(), opcode_number)?;
+                                release(instance, bound);
+                                push(instance, frame.get(), iterator)?;
+                                release(instance, iterator);
+                            }
+                            Ok(Attribute::Value(method)) => {
+                                // SAFETY: value 由调用方持有（本帧栈刚弹出，close 前不释放）。
+                                unsafe { instance.incref_object(value.as_ptr()) };
+                                let iterator = call_callable(
+                                    instance,
+                                    method,
+                                    Some(value),
+                                    Vec::new(),
+                                    Vec::new(),
+                                    opcode_number,
+                                );
+                                // SAFETY: 刚新增的那份引用。
+                                unsafe { instance.release_object(value.as_ptr()) };
+                                release(instance, value);
+                                push(instance, frame.get(), iterator?)?;
+                            }
                             _ => {
                                 release(instance, value);
                                 return Err(raise_builtin(
@@ -191,7 +216,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     // **本层的 `async def` 编成生成器**（已登记的近似）⇒ 异步迭代时把它自己当 awaitable
                     // 压上去（与 `async_generator` 同一条路 ✓，第 306 轮）—— 否则 `async for` 报
                     // `'async for' requires an object with __anext__ method, got generator` ✗。
-                    if ty == builtin_type(instance, "generator") {
+                    if ty == instance.hot_type(HotId::Generator).expect("generator 已登记") {
                         // SAFETY: iterator 由帧值栈持有，这里新增一份交给新压上的那一格。
                         unsafe { instance.incref_object(iterator.as_ptr()) };
                         push(instance, frame.get(), iterator)?;
@@ -235,14 +260,27 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     }
                 }
                 "END_ASYNC_FOR" => {
+                    if crate::diag::flag_site!("PYAWA_AF_DEBUG") {
+                        let mut names: Vec<String> = Vec::new();
+                        for value in frame.get().stack_snapshot() {
+                            // SAFETY: 值栈里的项都存活。
+                            let ty = unsafe { value.as_ref() }.ty();
+                            names.push(instance.type_name(ty).to_owned());
+                        }
+                        eprintln!(
+                            "[end-async-for] depth={} off={} target={:?} stack={names:?}",
+                            frame.get().depth(),
+                            instruction.offset,
+                            instruction.jump_target()
+                        );
+                    }
                     // 实测净 −2。栈是 `[async iterator, 异常]`（异常在 TOS）：
                     // `StopAsyncIteration` ⇒ 丢掉异常与迭代器、跳到循环之后；
                     // 其余 ⇒ 原样重抛（把异常交回派发器）。
                     let exception = frame.get().pop()?;
                     // SAFETY: exception 是存活对象。
                     let ty = unsafe { exception.as_ref() }.ty();
-                    let stop_async_iteration = instance
-                        .type_named("StopAsyncIteration")
+                    let stop_async_iteration = instance.hot_type(HotId::StopAsyncIteration)
                         .expect("异常层次在引导期已登记");
                     if instance.is_subtype(ty, stop_async_iteration) {
                         release(instance, exception);
@@ -253,7 +291,9 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         }
                     } else {
                         release(instance, frame.get().pop()?);
-                        return Err(ExecError::Raised { exception });
+                        return Err(ExecError::Raised {
+                            exception: crate::raise_guard::RaiseRef::from_owned(instance, exception),
+                        });
                     }
                 }
                 "CLEANUP_THROW" => {
@@ -262,8 +302,7 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let exception = frame.get().pop()?;
                     // SAFETY: exception 是存活对象。
                     let ty = unsafe { exception.as_ref() }.ty();
-                    let stop_iteration = instance
-                        .type_named("StopIteration")
+                    let stop_iteration = instance.hot_type(HotId::StopIteration)
                         .expect("异常层次在引导期已登记");
                     if instance.is_subtype(ty, stop_iteration) {
                         // SAFETY: 类型身份已确认。
@@ -294,11 +333,11 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     let value = frame.get().pop()?;
                     // SAFETY: value 是帧值栈上的存活对象。
                     let ty = unsafe { value.as_ref() }.ty();
-                    let is_coroutine = ty == builtin_type(instance, "coroutine");
-                    let is_async_generator = ty == builtin_type(instance, "async_generator");
+                    let is_coroutine = ty == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
+                    let is_async_generator = ty == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
                     // `async_generator.__anext__()` 交出的 awaitable：它**就是** awaitable
-                    let is_asend = ty == builtin_type(instance, "async_generator_asend");
-                    let is_generator = ty == builtin_type(instance, "generator");
+                    let is_asend = ty == instance.hot_type(HotId::Asend).expect("async_generator_asend 已登记");
+                    let is_generator = ty == instance.hot_type(HotId::Generator).expect("generator 已登记");
                     let iterable_coroutine = is_generator && {
                         // SAFETY: 类型身份已确认。
                         let object = unsafe { &*value.as_ptr().cast::<GeneratorObject>() };
@@ -364,10 +403,10 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     // SAFETY: receiver 在帧值栈上，存活。
                     let receiver_type = unsafe { receiver.as_ref() }.ty();
                     // 生成器与协程走**同一条**恢复路径（载荷同形）；协程的 `throw`／`close` 也一样
-                    let is_generator = receiver_type == builtin_type(instance, "generator");
-                    let is_coroutine = receiver_type == builtin_type(instance, "coroutine");
-                    let is_async_generator = receiver_type == builtin_type(instance, "async_generator");
-                    let is_asend = receiver_type == builtin_type(instance, "async_generator_asend");
+                    let is_generator = receiver_type == instance.hot_type(HotId::Generator).expect("generator 已登记");
+                    let is_coroutine = receiver_type == instance.hot_type(HotId::Coroutine).expect("coroutine 已登记");
+                    let is_async_generator = receiver_type == instance.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
+                    let is_asend = receiver_type == instance.hot_type(HotId::Asend).expect("async_generator_asend 已登记");
                     if is_asend {
                         // `await agen.__anext__()`：推进**底层**异步生成器一次。
                         // 送进去的值以包装对象里记着的为准（`__anext__()` 是 `None`）。
@@ -375,18 +414,103 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         let asend = unsafe { &*receiver.as_ptr().cast::<AsendObject>() };
                         let inner = asend.generator();
                         let carried = asend.sent();
+                        let mode = asend.mode.get();
                         release(instance, sent);
-                        match resume_generator(instance, inner, carried)? {
-                            GeneratorOutcome::Yielded(value) => {
-                                // **一步完成**：`await asend` 的语义就是"推进一次并把值交出来"
-                                // （实测 `asend.send(None)` ⇒ `StopIteration(值)`），所以这里走
-                                // "耗尽"那一支——压值并跳到 `END_SEND`，**不**让出去。
-                                frame.get().push(value)?;
-                                decoder.set_position(target);
+                        // **`aclose()`**（round 233）：把 `GeneratorExit` 抛进底层并**推进到底**，
+                        // 吞掉 `GeneratorExit`／`StopAsyncIteration`，`await` 结果是 `None` ✓。
+                        if mode == 1 {
+                            let generator_exit_type = instance.hot_type(HotId::GeneratorExit)
+                                .expect("GeneratorExit 在引导期已登记");
+                            let exception = crate::executor::format::new_exception(
+                                instance,
+                                generator_exit_type,
+                                "",
+                            );
+                            let mut outcome = resume_generator_with_raise(instance, inner, exception);
+                            loop {
+                                match outcome {
+                                    Ok(GeneratorOutcome::Yielded(value)) => {
+                                        release(instance, value);
+                                        let exception = crate::executor::format::new_exception(
+                                            instance,
+                                            generator_exit_type,
+                                            "",
+                                        );
+                                        outcome =
+                                            resume_generator_with_raise(instance, inner, exception);
+                                    }
+                                    Ok(GeneratorOutcome::Returned(value)) => {
+                                        release(instance, value);
+                                        break;
+                                    }
+                                    Err(ExecError::Raised { exception }) => {
+                                        // SAFETY: exception 是存活对象。
+                                        let ty = unsafe { exception.get().as_ref() }.ty();
+                                        let is_swallowed = instance.hot_type(HotId::GeneratorExit)
+                                            .is_some_and(|base| instance.is_subtype(ty, base))
+                                            || instance.hot_type(HotId::StopAsyncIteration)
+                                                .is_some_and(|base| instance.is_subtype(ty, base));
+                                        if is_swallowed {
+                                            exception.discard();
+                                            break;
+                                        }
+                                        return Err(ExecError::Raised { exception });
+                                    }
+                                    Err(other) => return Err(other),
+                                }
                             }
-                            GeneratorOutcome::Returned(value) => {
-                                frame.get().push(value)?;
-                                decoder.set_position(target);
+                            push(instance, frame.get(), instance.singletons().none())?;
+                            decoder.set_position(target);
+                            return Ok(Step::Continue);
+                        }
+                        // **`athrow(exc)`**（round 233）：把 `carried` 里的异常抛进底层 ✓；
+                        // 让出的值照 `asend` 的"一步完成"口径交出去 ✓。
+                        if mode == 2 {
+                            let exception = carried.ok_or(()).map_err(|_| {
+                                instance.raise_builtin_error("TypeError", "athrow 缺少异常对象")
+                            })?;
+                            match resume_generator_with_raise(instance, inner, exception)? {
+                                GeneratorOutcome::Yielded(value) => {
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                }
+                                GeneratorOutcome::Returned(value) => {
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                }
+                            }
+                            return Ok(Step::Continue);
+                        }
+                        // **中间 await 的让出要"内循环"消化**（round 244）：异步生成器体里的
+                        // `await` 也走 `YIELD_VALUE`（`SEND; YIELD_VALUE 1; RESUME 3; …` ✓）——
+                        // 那些让出**不是**生成器的值 ✗，要原样再驱动下去；只有**生成器语句的 `yield`**
+                        // 才是"`await asend` 完成"的那一刻 ✓（`test_asyncgen` 的
+                        // `test_async_gen_iteration_01`：`await awaitable()` 让出的 `('result',)`
+                        // 先前被当成值交出去 ⇒ 列表里混进 `('result',)` ✗）。
+                        let mut carried_value = carried;
+                        loop {
+                            match resume_generator(instance, inner, carried_value)? {
+                                GeneratorOutcome::Yielded(value) => {
+                                    if generator_suspended_inside_await(inner) {
+                                        // 中间让出：丢掉让出值（外层的驱动者会看到 `None` 以外的
+                                        // 值后再送 `None` —— 本层的 `async for`／`run_until_complete`
+                                        // 都送 `None` ✓，如实按 `None` 继续 ✓）。
+                                        release(instance, value);
+                                        carried_value = Some(instance.singletons().none());
+                                        continue;
+                                    }
+                                    // **一步完成**：`await asend` 的语义就是"推进一次并把值交出来"
+                                    // （实测 `asend.send(None)` ⇒ `StopIteration(值)`），所以这里走
+                                    // "耗尽"那一支——压值并跳到 `END_SEND`，**不**让出去。
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                    break;
+                                }
+                                GeneratorOutcome::Returned(value) => {
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                    break;
+                                }
                             }
                         }
                         return Ok(Step::Continue);
@@ -447,4 +571,37 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
         _ => unreachable!("step_iterators 只接收本族的 opcode"),
     }
     Ok(Step::Continue)
+}
+
+/// **生成器是不是停在 `await` 的 `SEND` 循环里**（round 244）：帧的指令指针指向
+/// `SEND; YIELD_VALUE 1; RESUME 3` 那条回边的 `RESUME` 处时，前一条是 `YIELD_VALUE`、
+/// 再往前（跳过 `SEND` 的那格内联缓存）是 `SEND` ⇒ 这次让出是**中间 await**，不是
+/// 生成器语句的 `yield` ✓（判据实测：`async def g(): await x` 与 `async def g(): yield 1`
+/// 的让出位点同形，唯一区别是前者前面有 `SEND` ✓）。
+pub(crate) fn generator_suspended_inside_await(generator: NonNull<Header>) -> bool {
+    // SAFETY: 调用方保证 generator 是本实例里存活的生成器。
+    let object = unsafe { &*generator.as_ptr().cast::<crate::builtin_objects::GeneratorObject>() };
+    let frame_header = object.frame();
+    // SAFETY: 帧由生成器持有，存活。
+    let frame = unsafe { &*frame_header.as_ptr().cast::<crate::frame::Frame>() };
+    let Some(code_header) = frame.code() else {
+        return false;
+    };
+    // SAFETY: code 由帧持有，存活。
+    let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+    let bytes = code.code();
+    let ip = frame.instruction_pointer();
+    // 让出后恢复点＝`RESUME`（1 码元）；前一条 `YIELD_VALUE`（1 码元）；再前是 `SEND`（2 码元）。
+    if ip < 3 {
+        return false;
+    }
+    let opcode_at = |unit: usize| -> u16 {
+        if unit * 2 + 1 < bytes.len() {
+            u16::from(bytes[unit * 2])
+        } else {
+            0
+        }
+    };
+    // `RESUME`(128) 前是 `YIELD_VALUE`(120)；再往前跳过 `SEND`(106) 的内联缓存（1 格）。
+    opcode_at(ip) == 128 && opcode_at(ip - 1) == 120 && opcode_at(ip - 3) == 106
 }

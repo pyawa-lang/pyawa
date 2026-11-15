@@ -365,7 +365,7 @@ fn a_class_without_init_refuses_arguments() {
         Err(ExecError::Raised { exception }) => {
             // SAFETY: exception 是存活对象。
             let message = unsafe {
-                &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>()
+                &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>()
             }
             .message_with(&instance)
             .unwrap_or_default();

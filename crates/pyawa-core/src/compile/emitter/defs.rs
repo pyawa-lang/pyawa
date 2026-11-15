@@ -328,6 +328,7 @@ pub(crate) fn emit_param_thunk(
         nlocals: 1,
         // thunk 嵌在外壳函数里 ⇒ `CO_NESTED`（参照实测 0x13 ✓）。
         flags: 0x13,
+        firstlineno: 1,
         names: Vec::new(),
         varnames: vec![".format".to_owned()],
         cellvars: Vec::new(),
@@ -382,6 +383,8 @@ impl Emitter {
         kwonly: &[Parameter],
         returns: Option<&AnnotationSource>,
         returns_span: Option<Span>,
+        varargs_annotation: Option<&(AnnotationSource, Option<Span>)>,
+        varkw_annotation: Option<&(AnnotationSource, Option<Span>)>,
         // **`__annotate__` 单元的自由变量**（task-24 泛型函数外壳 ✓）：类型参数名 ✓（普通函数空表 ✓）。
         annotate_freevars: &[String],
         span: Span,
@@ -440,7 +443,9 @@ impl Emitter {
             .iter()
             .chain(kwonly.iter())
             .any(|parameter| parameter.annotation.is_some())
-            || returns.is_some();
+            || returns.is_some()
+            || varargs_annotation.is_some()
+            || varkw_annotation.is_some();
         if annotated {
             // **`__annotate__` 单元的 qualname** ✓（参照实测）：模块级 ⇒ `__annotate__` ✓；
             // **类体里定义**的方法 ⇒ `<类 qualname>.__annotate__` ✓（**不是** `.<locals>.` 那一段 ✗
@@ -467,6 +472,8 @@ impl Emitter {
                 &annotate_qualname,
                 parameters,
                 kwonly,
+                varargs_annotation,
+                varkw_annotation,
                 returns,
                 returns_span,
                 annotate_freevars,
@@ -518,6 +525,9 @@ impl Emitter {
     pub(crate) fn emit_class_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）：类体里的 `class __D` 存成 `_C__D`（实测）；
+        // `name` 只管 code 名／qualname／`__qualname__` 常量。
+        binding: &String,
         span: &Span,
         first_line: &u32,
         decorators: &[Expression],
@@ -531,6 +541,7 @@ impl Emitter {
                 if !type_params.is_empty() {
                     return self.emit_generic_class_statement(
                         name,
+                        binding,
                         span,
                         first_line,
                         decorators,
@@ -575,9 +586,18 @@ impl Emitter {
                 // （收了也发不出 `LOAD_FAST_BORROW`：模块没有 cell／free 槽。`Lib/` 全量编译实测到
                 // `varnames=["name"]` 的 panic ✓）。
                 if self.kind != ScopeKind::Module {
+                    // **类体里的方法 `nonlocal`**（round 117）：类作用域的 `analyze_cells` 因
+                    // `cellvars` 已含 `__classdict__` 提前返回 ✗ ⇒ `nested.demanded` 为空 ✗ ⇒
+                    // 方法声明的 `nonlocal count` 传不下去 ✗（`UnboundLocalError` ✓）。
+                    let mut class_nonlocals: Vec<String> = Vec::new();
+                    super::super::symbols::collect_nested_scope_nonlocals(body, &mut class_nonlocals);
+                    if crate::diag::flag_site!("PYAWA_NL_DEBUG") {
+                        eprintln!("[cls] qualname={} nonlocals={:?} cellvars={:?} freevars={:?} varnames={:?}", self.qualname, class_nonlocals, self.unit.cellvars, self.unit.freevars, self.unit.varnames);
+                    }
                     for referenced in global_load_names(&nested)
                         .into_iter()
                         .chain(nested.demanded.clone())
+                        .chain(class_nonlocals)
                         // **方法单元**里的名字也要算候选 ✓（task-12 ✓）：类体**自己**不读、但方法体里
                         // 引用外层局部时（`def make(): base = 10; class K: def plain(self): return base`），
                         // 那句 `LOAD_GLOBAL base` 落在**方法的 code 常量**里 ✗ —— 只看类体的 `co_names`
@@ -615,7 +635,7 @@ impl Emitter {
                         // 元组元素是**本层 cell 槽的 `LOAD_FAST_BORROW`** ✓（与 `Def` 同口径 ✓）。
                         let slot = self
                             .deref_slot(free)
-                            .expect("自由变量必在本层 cell／free 表里");
+                            .unwrap_or_else(|| panic!("自由变量必在本层 cell／free 表里: free={free} qualname={} cellvars={:?} freevars={:?} varnames={:?}", self.qualname, self.unit.cellvars, self.unit.freevars, self.unit.varnames));
                         self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
@@ -720,7 +740,8 @@ impl Emitter {
                 }
                 // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒
                 // "函数里定义类"当场撞"需要命名空间帧" ✓ —— 与处理器那两处同族 ✓）。
-                self.emit_store_name(*span, name);
+                // 私有名改写（task-5）：存的是**改写后的绑定名**（code 名仍是 `name`）。
+                self.emit_store_name(*span, binding);
                 // 收尾两条跟整段（与 `def` 同规则，实测）
                 self.epilogue_span = *span;
                 Ok(())
@@ -760,6 +781,9 @@ impl Emitter {
     pub(crate) fn emit_def_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）：类体／class 内作用域里的 `def __m` 存成 `_C__m`
+        //（实测）；`name` 只管 code 名／qualname。
+        binding: &String,
         decorators: &[Expression],
         span: &Span,
         first_line: &u32,
@@ -767,16 +791,22 @@ impl Emitter {
         kwonly: &[Parameter],
         varargs: &Option<String>,
         varkw: &Option<String>,
+        varargs_annotation: &Option<(AnnotationSource, Option<Span>)>,
+        varkw_annotation: &Option<(AnnotationSource, Option<Span>)>,
         returns: &Option<AnnotationSource>,
         returns_span: &Option<Span>,
         body: &[Statement],
         type_params: &[TypeParam],
+        // **`async def`／异步生成器**（round 219）：给嵌套单元的 `co_flags` 定 0x80／0x200 ✓。
+        is_async: bool,
+        async_generator: bool,
     ) -> Result<(), CompileError> {
                 // **PEP 695**：带类型参数 ⇒ 整条 `def` 包进 `<generic parameters of f>` 外壳 ✓
                 //（普通函数照旧走下面那条老路 ✓）。
                 if !type_params.is_empty() {
                     return self.emit_generic_def_statement(
                         name,
+                        binding,
                         decorators,
                         span,
                         first_line,
@@ -784,6 +814,8 @@ impl Emitter {
                         kwonly,
                         varargs,
                         varkw,
+                        varargs_annotation,
+                        varkw_annotation,
                         returns,
                         returns_span,
                         body,
@@ -826,6 +858,7 @@ impl Emitter {
                     ScopeKind::Function,
                     // **类体里定义** ⇒ 方法（多置 `0x8000000`）
                     self.kind == ScopeKind::Class,
+                    is_async,
                     &[],
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
@@ -839,21 +872,48 @@ impl Emitter {
                 // 方法体里引用 `T` 时，方法单元要走**同一条**闭包分析 ✓（`LOAD_DEREF` 才发得出 ✓）。
                 if matches!(self.kind, ScopeKind::Function | ScopeKind::Class) {
                     // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
-                    // 光靠名字交集会漏 ✓）—— 只在函数体里收 ✓（类作用域不是 `nonlocal` 的目标 ✗）。
-                    if self.kind == ScopeKind::Function {
-                        collect_nonlocals(body, &mut closure_freevars);
+                    // 光靠名字交集会漏 ✓）。**类作用域也是通道**（round 117）：方法里的
+                    // `nonlocal x` 跳过类体指回外层函数 ✓ —— 先前只对 `Function` 收 ✗ ⇒
+                    // 方法拿不到 free 槽 ⇒ 运行期 `UnboundLocalError` ✗
+                    //（`test_dict.test_str_nonstr` 的 `Key3.__eq__` ✓）。
+                    if matches!(self.kind, ScopeKind::Function | ScopeKind::Class) {
+                        let mut declared: Vec<String> = Vec::new();
+                        collect_nonlocals(body, &mut declared);
+                        // **只收本层真有槽的**（cell／free）✓：类作用域**没有**普通局部这一说
+                        //（类体的名字是 `STORE_NAME` 的名字空间项 ✓）⇒ 只认 cell／free ✗
+                        //（否则探测编译时把 `nonlocal` 名当有槽 ⇒ 发闭包元组时 panic ✗）。
+                        for name in declared {
+                            let from_here = if self.kind == ScopeKind::Class {
+                                self.unit.cellvars.iter().any(|cell| cell == &name)
+                                    || self.unit.freevars.iter().any(|free| free == &name)
+                            } else {
+                                self.plain_local_slot(&name).is_some()
+                                    || self.unit.cellvars.iter().any(|cell| cell == &name)
+                                    || self.unit.freevars.iter().any(|free| free == &name)
+                            };
+                            if from_here && !closure_freevars.iter().any(|item| item == &name) {
+                                closure_freevars.push(name);
+                            }
+                        }
                     }
                     // **内层向外索取的名字**（含隔着若干层的需求 ✓）
                     for wanted in nested.demanded.clone() {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &wanted)
+                        let from_here = self.plain_local_slot(&wanted).is_some()
                             || self.unit.cellvars.iter().any(|cell| cell == &wanted)
                             || self.unit.freevars.iter().any(|free| free == &wanted);
                         if from_here && !closure_freevars.iter().any(|item| item == &wanted) {
                             closure_freevars.push(wanted);
                         }
                     }
-                    for referenced in global_load_names(&nested) {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                    // **两层闭包**（round 117）：`nested` 里的**下一层**函数把本层局部当全局读时，
+                    // 那句 `LOAD_GLOBAL` 落在下下一层的 code 常量里 ⇒ 只看 `global_load_names(&nested)`
+                    // 看不到 ✗ ⇒ 本层不建 cell ✗ ⇒ 重编 `nested` 时 `deref_slot` 落空 ⇒ 编译期 panic
+                    //（`test_builtin.test_exec_closure` 的 `make_closure_functions` ✓）。
+                    for referenced in global_load_names(&nested)
+                        .into_iter()
+                        .chain(nested_unit_names(&nested))
+                    {
+                        let from_here = self.plain_local_slot(&referenced).is_some()
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
                             || self.unit.freevars.iter().any(|free| free == &referenced);
                         if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
@@ -875,6 +935,7 @@ impl Emitter {
                             ScopeKind::Function,
                             // 类体里定义 ⇒ 方法（多置 `0x8000000` ✓）
                             self.kind == ScopeKind::Class,
+                            is_async,
                             &closure_freevars,
                             Span::new(*first_line, *first_line, 0, 0),
                         )?;
@@ -944,12 +1005,32 @@ impl Emitter {
                         // 不是探针能顶的 ⇒ 如实报错，不静默发错代码 ✗。
                         let slot = self
                             .deref_slot(free)
-                            .expect("自由变量必在本层 cell／free 表里");
+                            .unwrap_or_else(|| panic!("自由变量必在本层 cell／free 表里: free={free} qualname={} cellvars={:?} freevars={:?} varnames={:?}", self.qualname, self.unit.cellvars, self.unit.freevars, self.unit.varnames));
                         self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
                 }
-                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, &annotate_freevars, *span)?;
+                // **`async def` 的 `co_flags`**（round 219）：参照里协程是
+                // `0x83`（`0x3|0x80`）、异步生成器是 `0x203`（`0x3|0x200`）——两者**都不带**
+                // `0x20` ✓。本层先前把 async 一律当生成器（`0x23`）⇒ `_collections_abc` 的
+                // `coroutine = type(_coro)` 就是 **generator 类型** ✗ ⇒
+                // `Coroutine.register(generator)` 把**所有生成器**注册成协程 ✗
+                //（`test_collections.TestOneTrickPonyABCs` 的 Awaitable／Coroutine 反例 ✓）。
+                if is_async {
+                    nested.flags &= !0x20;
+                    nested.flags |= if async_generator { 0x200 } else { 0x80 };
+                }
+                self.emit_function_object(
+                    nested,
+                    parameters,
+                    kwonly,
+                    returns.as_ref(),
+                    *returns_span,
+                    varargs_annotation.as_ref(),
+                    varkw_annotation.as_ref(),
+                    &annotate_freevars,
+                    *span,
+                )?;
                 if !closure_freevars.is_empty() {
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
                 }
@@ -964,15 +1045,16 @@ impl Emitter {
                     // （会被内层捕获 ✓），就**从没写进 cell** ✗ ⇒ 后面 `LOAD_DEREF` 读到**空 cell** ✗
                     //（实测 `Lib/os.py` 的 `_create_environ_mapping`：`def encode(...)` 是 cell ✓ ⇒
                     //  读到 `NameError: cannot access free variable 'encode'` ✗）。
-                    if let Some(slot) = self.deref_slot(name) {
+                    // 私有名改写（task-5）：局部名／cell 名都用**改写后的绑定名**。
+                    if let Some(slot) = self.deref_slot(binding) {
                         self.emit_indexed(*span, "STORE_DEREF", slot);
                     } else {
                         // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
-                        let slot = self.slot_of(name);
+                        let slot = self.slot_of(binding);
                         self.emit_indexed(*span, "STORE_FAST", slot);
                     }
                 } else {
-                    let name_index = self.intern_name(name);
+                    let name_index = self.intern_name(binding);
                     self.emit_indexed(*span, "STORE_NAME", name_index);
                 }
                 // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
@@ -1019,6 +1101,9 @@ impl Emitter {
             exception_entries: Vec::new(),
             comprehension_locals: Vec::new(),
             pending_cleanups: Vec::new(),
+
+            local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+            name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
             pending_fused_load: None,
             handler_segments: Vec::new(),
             clause_condition_tail: Span::synthetic(),
@@ -1032,11 +1117,15 @@ impl Emitter {
             with_return_span: None,
             with_exit_stack: Vec::new(),
             with_body_end: None,
+            with_return_holes: Vec::new(),
             finally_stack: Vec::new(),
             handler_stack: Vec::new(),
+            handler_exit_cleanups: Vec::new(),
             block_depth: 0,
             block_tail: false,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
+            try_depth: 0,
             with_depth: 0,
             condition_landings: Vec::new(),
             collect_condition_exits: false,
@@ -1070,13 +1159,16 @@ impl Emitter {
     pub(crate) fn emit_type_alias_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）：类体里 `type __X = …` 存成 `_C__X`（实测）；
+        // `name` 只管 code 名／qualname。
+        binding: &String,
         _name_span: &Span,
         type_params: &[TypeParam],
         value: &Expression,
         span: &Span,
     ) -> Result<(), CompileError> {
         if !type_params.is_empty() {
-            return self.emit_generic_type_alias_statement(name, type_params, value, span);
+            return self.emit_generic_type_alias_statement(name, binding, type_params, value, span);
         }
         let qualname = match self.kind {
             ScopeKind::Module => name.clone(),
@@ -1092,6 +1184,7 @@ impl Emitter {
             nlocals: 1,
             // **在函数里 ⇒ `CO_NESTED`（0x13）** ✓（参照实测 `def outer(): type Y = int` ✓）。
             flags: if self.kind == ScopeKind::Function { 0x13 } else { 0x3 },
+            firstlineno: 1,
             names: Vec::new(),
             varnames: vec![".format".to_owned()],
             cellvars: Vec::new(),
@@ -1146,7 +1239,7 @@ impl Emitter {
         self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 1);
         self.emit_indexed(*span, "BUILD_TUPLE", 3);
         self.emit_named(*span, "CALL_INTRINSIC_1", 11);
-        self.emit_store_name(*span, name);
+        self.emit_store_name(*span, binding);
         self.epilogue_span = *span;
         Ok(())
     }
@@ -1160,6 +1253,7 @@ impl Emitter {
     pub(crate) fn emit_generic_type_alias_statement(
         &mut self,
         name: &String,
+        binding: &String,
         type_params: &[TypeParam],
         value: &Expression,
         span: &Span,
@@ -1189,6 +1283,7 @@ impl Emitter {
             nlocals: 1,
             // thunk 定义在外壳**函数**里 ⇒ `CO_NESTED`（0x13 ✓）。
             flags: 0x13,
+            firstlineno: 1,
             names: Vec::new(),
             varnames: vec![".format".to_owned()],
             cellvars: Vec::new(),
@@ -1243,6 +1338,7 @@ impl Emitter {
             posonlyargcount: 0,
             kwonlyargcount: 0,
             nlocals: 0,
+            firstlineno: 1,
             // 壳定义在**函数里**（或泛型外壳的类体里 ✓）⇒ `CO_NESTED`（0x13 ✓）；模块级 0x3 ✓。
             flags: if self.kind == ScopeKind::Function
                 || self.qualname.contains(".<locals>.")
@@ -1323,15 +1419,16 @@ impl Emitter {
         self.emit_named(*span, "MAKE_FUNCTION", 0);
         self.emit_named(*span, "PUSH_NULL", 0);
         self.emit_named(*span, "CALL", 0);
+        // 私有名改写（task-5）：局部名／cell 名／命名空间项都用**改写后的绑定名**。
         if self.kind == ScopeKind::Function {
-            if let Some(slot) = self.deref_slot(name) {
+            if let Some(slot) = self.deref_slot(binding) {
                 self.emit_indexed(*span, "STORE_DEREF", slot);
             } else {
-                let slot = self.slot_of(name);
+                let slot = self.slot_of(binding);
                 self.emit_indexed(*span, "STORE_FAST", slot);
             }
         } else {
-            self.emit_store_name(*span, name);
+            self.emit_store_name(*span, binding);
         }
         self.epilogue_span = *span;
         Ok(())
@@ -1346,6 +1443,8 @@ impl Emitter {
     pub(crate) fn emit_generic_class_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）；`name` 只管 code 名／qualname。
+        binding: &String,
         span: &Span,
         first_line: &u32,
         decorators: &[Expression],
@@ -1466,6 +1565,7 @@ impl Emitter {
             kwonlyargcount: 0,
             nlocals: 0,
             flags: 0x3,
+            firstlineno: 1,
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
@@ -1623,7 +1723,8 @@ impl Emitter {
         for decorator_span in decorator_spans.iter().rev() {
             self.emit_named(*decorator_span, "CALL", 0);
         }
-        self.emit_store_name(*span, name);
+        // 私有名改写（task-5）：存**改写后的绑定名**。
+        self.emit_store_name(*span, binding);
         self.epilogue_span = *span;
         Ok(())
     }
@@ -1635,6 +1736,8 @@ impl Emitter {
     pub(crate) fn emit_generic_def_statement(
         &mut self,
         name: &String,
+        // **私有名改写后的绑定名**（`task-5`）；`name` 只管 code 名／qualname。
+        binding: &String,
         decorators: &[Expression],
         span: &Span,
         first_line: &u32,
@@ -1642,6 +1745,8 @@ impl Emitter {
         kwonly: &[Parameter],
         varargs: &Option<String>,
         varkw: &Option<String>,
+        varargs_annotation: &Option<(AnnotationSource, Option<Span>)>,
+        varkw_annotation: &Option<(AnnotationSource, Option<Span>)>,
         returns: &Option<AnnotationSource>,
         returns_span: &Option<Span>,
         body: &[Statement],
@@ -1692,7 +1797,9 @@ impl Emitter {
             .iter()
             .chain(kwonly.iter())
             .any(|parameter| parameter.annotation.is_some())
-            || returns.is_some();
+            || returns.is_some()
+            || varargs_annotation.is_some()
+            || varkw_annotation.is_some();
         // **内层函数**：先探针一遍 ⇒ 体内引用类型参数 ⇒ 成为内层的自由变量（⇒ 类型参数成 cell ✓）
         let mut nested = compile_scope(
             name,
@@ -1707,6 +1814,7 @@ impl Emitter {
             body,
             ScopeKind::Function,
             self.kind == ScopeKind::Class,
+            false,
             &[],
             Span::new(*first_line, *first_line, 0, 0),
         )?;
@@ -1746,6 +1854,7 @@ impl Emitter {
                 body,
                 ScopeKind::Function,
                 false,
+                false,
                 &body_freevars,
                 Span::new(*first_line, *first_line, 0, 0),
             )?;
@@ -1769,6 +1878,7 @@ impl Emitter {
             kwonlyargcount: 0,
             nlocals: 0,
             flags: 0x3,
+            firstlineno: 1,
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
@@ -1818,6 +1928,8 @@ impl Emitter {
                 &annotate_qualname,
                 parameters,
                 kwonly,
+                varargs_annotation.as_ref(),
+                varkw_annotation.as_ref(),
                 returns.as_ref(),
                 *returns_span,
                 &annotate_freevars,
@@ -1862,15 +1974,16 @@ impl Emitter {
         for decorator_span in decorator_spans.iter().rev() {
             self.emit_named(*decorator_span, "CALL", 0);
         }
+        // 私有名改写（task-5）：局部名／cell 名／命名空间项都用**改写后的绑定名**。
         if self.kind == ScopeKind::Function {
-            if let Some(slot) = self.deref_slot(name) {
+            if let Some(slot) = self.deref_slot(binding) {
                 self.emit_indexed(*span, "STORE_DEREF", slot);
             } else {
-                let slot = self.slot_of(name);
+                let slot = self.slot_of(binding);
                 self.emit_indexed(*span, "STORE_FAST", slot);
             }
         } else {
-            let name_index = self.intern_name(name);
+            let name_index = self.intern_name(binding);
             self.emit_indexed(*span, "STORE_NAME", name_index);
         }
         self.epilogue_span = *span;
@@ -1882,6 +1995,8 @@ impl Emitter {
         qualname: &str,
         parameters: &[Parameter],
         kwonly: &[Parameter],
+        varargs_annotation: Option<&(AnnotationSource, Option<Span>)>,
+        varkw_annotation: Option<&(AnnotationSource, Option<Span>)>,
         returns: Option<&AnnotationSource>,
         returns_span: Option<Span>,
         // **自由变量**（task-24 泛型函数 ✓）：注解里引用的类型参数名 ✓（声明序 ✓）。普通函数空表 ✓。
@@ -1895,9 +2010,14 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
+            try_depth: 0,
             with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
             mode: self.mode,
             tier: self.tier,
@@ -1922,8 +2042,10 @@ impl Emitter {
             defer_return_literal: false,
             with_exit_stack: Vec::new(),
             with_body_end: None,
+            with_return_holes: Vec::new(),
             finally_stack: Vec::new(),
             handler_stack: Vec::new(),
+            handler_exit_cleanups: Vec::new(),
             condition_landings: Vec::new(),
             collect_condition_exits: false,
             pending_condition_copies: Vec::new(),
@@ -1954,6 +2076,7 @@ impl Emitter {
                 kwonlyargcount: 0,
                 nlocals: 1,
                 flags: 0x3,
+                firstlineno: 1,
                 names: Vec::new(),
                 varnames: vec!["format".to_owned()],
                 cellvars: Vec::new(),
@@ -2004,8 +2127,58 @@ impl Emitter {
         emitter.emit_named(span, "RAISE_VARARGS", 1);
         emitter.mark_label(end);
         let mut count = 0usize;
-        // 注解字典按**声明次序**：位置参数 → 仅关键字 → `'return'`（实测）
-        for parameter in parameters.iter().chain(kwonly.iter()) {
+        // 注解字典按**声明次序**：位置参数 → `*args` → 仅关键字 → `**kw` → `'return'`
+        // （round 55 实测：`def g(a:int,*args:str,b:float,**kw:bool)->None` ⇒
+        //  `{'a','args','b','kw','return'}` ✓，`*args`／`**kw` 排在它们各自的位置 ✓）。
+        let emit_named_annotation =
+            |emitter: &mut Emitter, name: &str, annotation: &AnnotationSource, annotation_span: Option<Span>| -> Result<(), CompileError> {
+                let key = emitter.intern_constant(Constant::Str(name.to_owned()));
+                emitter.emit_indexed(span, "LOAD_CONST", key);
+                let at = annotation_span.unwrap_or(span);
+                match annotation {
+                    // **PEP 646 的星号注解**（`def f(*args: *b)`，round 55）：参照把注解值按
+                    // **恰好解包一项**算 —— `*b` 求值成元组再 `UNPACK_SEQUENCE 1`（元素本身才是
+                    // `__annotations__['args']` ✓）；零项／多项分别报
+                    // `ValueError: not enough values to unpack (expected 1, got 0)`／
+                    // `too many values to unpack (expected 1)` ✓（`test_pep646_syntax` 逐字比 ✓）。
+                    AnnotationSource::Expression(Expression::Starred(inner, _)) => {
+                        emitter.emit_at(
+                            at,
+                            opcode::opcode("BUILD_LIST").expect("BUILD_LIST 在表里"),
+                            0,
+                        );
+                        emitter.emit_expression(inner)?;
+                        emitter.emit_at(
+                            at,
+                            opcode::opcode("LIST_EXTEND").expect("LIST_EXTEND 在表里"),
+                            1,
+                        );
+                        emitter.emit_at(
+                            at,
+                            opcode::opcode("CALL_INTRINSIC_1").expect("CALL_INTRINSIC_1 在表里"),
+                            6,
+                        );
+                        emitter.emit_named(at, "UNPACK_SEQUENCE", 1);
+                    }
+                    AnnotationSource::Expression(expression) => emitter.emit_expression(expression)?,
+                    AnnotationSource::Type(label) => {
+                        emitter.emit_annotation_expression(label, at, classdict_slot)
+                    }
+                }
+                Ok(())
+            };
+        for parameter in parameters.iter() {
+            let Some(annotation) = parameter.annotation.as_ref() else {
+                continue;
+            };
+            emit_named_annotation(&mut emitter, &parameter.name, annotation, parameter.annotation_span)?;
+            count += 1;
+        }
+        if let Some((annotation, annotation_span)) = varargs_annotation {
+            emit_named_annotation(&mut emitter, "args", annotation, *annotation_span)?;
+            count += 1;
+        }
+        for parameter in kwonly.iter() {
             let Some(annotation) = parameter.annotation.as_ref() else {
                 continue;
             };
@@ -2023,6 +2196,10 @@ impl Emitter {
                     emitter.emit_annotation_expression(label, annotation_span, classdict_slot)
                 }
             }
+            count += 1;
+        }
+        if let Some((annotation, annotation_span)) = varkw_annotation {
+            emit_named_annotation(&mut emitter, "kw", annotation, *annotation_span)?;
             count += 1;
         }
         if let Some(annotation) = returns {
@@ -2069,9 +2246,14 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
+            try_depth: 0,
             with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
             mode: self.mode,
             tier: self.tier,
@@ -2096,8 +2278,10 @@ impl Emitter {
             defer_return_literal: false,
             with_exit_stack: Vec::new(),
             with_body_end: None,
+            with_return_holes: Vec::new(),
             finally_stack: Vec::new(),
             handler_stack: Vec::new(),
+            handler_exit_cleanups: Vec::new(),
             condition_landings: Vec::new(),
             collect_condition_exits: false,
             pending_condition_copies: Vec::new(),
@@ -2128,6 +2312,7 @@ impl Emitter {
                 kwonlyargcount: 0,
                 nlocals: 1,
                 flags: 0x3,
+                firstlineno: 1,
                 names: Vec::new(),
                 varnames: vec!["format".to_owned()],
                 cellvars: Vec::new(),

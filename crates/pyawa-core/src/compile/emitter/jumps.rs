@@ -184,7 +184,7 @@ impl Emitter {
     pub(crate) fn flush_jumps(&mut self) {
         // **字节码转储**（第 390 轮，门控 `PYAWA_DUMP_CODE=1`）：放在 `flush_jumps` 开头 ——
         // 此刻 `self.labels` **已全部落点** ✓ ⇒ 每条跳转都能解析出目标 unit ✓（与参照 dis 逐条对照用 ✓）。
-        if crate::diag::flag("PYAWA_DUMP_CODE") {
+        if crate::diag::flag_site!("PYAWA_DUMP_CODE") {
             eprintln!(
                 // **带代码对象名** ✓（第 651 轮）：`Lib/re` 一次 dump 上万个单元 ✗ ⇒ 没有名字
                 // 根本对应不回具体函数 ✓（判据② 的岔口就是这么找的 ✓）。
@@ -258,7 +258,7 @@ impl Emitter {
             // **跳转落点诊断** ✓（第 629 轮，门控 `PYAWA_JUMP_DEBUG=1`）：把"指令码元 → 目标码元 → 相对实参"
             // 打出来 ✓ —— 量长跳落点用 ✓（`widen_extended_args` 插 `EXTENDED_ARG` 时若没修正实参 ✗，
             // 这里就是那把尺子 ✓：`Lib/re` 的长循环正是这么跳进体里的 ✓）。
-            if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_JUMP_DEBUG") {
                 eprintln!(
                     "[jump] name={} 码元 {here} 目标码元 {target} 向后={backward} 实参={argument} size={size}",
                     self.unit.name
@@ -295,7 +295,7 @@ impl Emitter {
                 break;
             }
         }
-        if !self.wide_jumps.is_empty() && crate::diag::flag("PYAWA_JUMP_DEBUG") {
+        if !self.wide_jumps.is_empty() && crate::diag::flag_site!("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] 加宽未收敛（64 轮）：{:?}", self.wide_jumps);
         }
     }
@@ -312,7 +312,7 @@ impl Emitter {
                 *slot = Some(*full);
             }
         }
-        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] name={} 需要加宽的跳转 {} 条：{:?}", self.unit.name, wide.len(), wide);
         }
         let word_count = self.unit.code.len() / 2;

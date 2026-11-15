@@ -52,10 +52,10 @@ fn error_text(instance: &pyawa_core::Instance, error: pyawa_core::ExecError) -> 
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: 异常对象由实例保活。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             let name = unsafe { ty.as_ref() }.name().to_owned();
             // SAFETY: 同上。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default();
             format!("{name}: {message}")
@@ -329,10 +329,13 @@ fn run_source(vm: &Vm, source: &str, name: &str) -> Result<NonNull<Header>, Stri
             .instance
             .dict_get(namespace, name)
             .unwrap_or_else(|| panic!("命名空间里应当有 {name}"))),
-        Err(pyawa_core::ExecError::Raised { exception }) => Err(error_text(
-            &vm.instance,
-            pyawa_core::ExecError::Raised { exception },
-        )),
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            // RAII：守卫直接 move 给 `error_text`（Drop 时归还异常引用）。
+            Err(error_text(
+                &vm.instance,
+                pyawa_core::ExecError::Raised { exception },
+            ))
+        }
         Err(other) => Err(format!("{other:?}")),
     }
 }

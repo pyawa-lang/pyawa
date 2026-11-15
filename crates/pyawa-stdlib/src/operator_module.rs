@@ -74,7 +74,17 @@ fn eq_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "eq", args)?;
-    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
+    // **走完整富比较协议**（round 112，真缺口）：`==` 要派发用户 `__eq__`／反射、`__eq__ = None` 要报
+    // `TypeError`、容器与子类优先级照 `COMPARE_OP` 同一处真相 ✓ —— 先前用 `values_equal_public`（**值相等**
+    // 快照，不含 dunder 派发）✗ ⇒ `test_binop` 的 `op_sequence(eq, A, A)` 记不到任何调用 ✗。
+    // **富结果语义**（round 138）：与 `==` 算子同口径（`test_richcmp.Vector` 的 `operator.eq` 也返回 Vector ✓）。
+    use pyawa_core::executor::protocol::RichCompare;
+    match pyawa_core::executor::protocol::equality_compare_result(instance, *left, *right, "==", 0)? {
+        Some(RichCompare::Value(value)) => return Ok(value),
+        Some(RichCompare::Fallback) => return Ok(instance.new_bool(*left == *right)),
+        None => {}
+    }
+    let equal = pyawa_core::executor::protocol::compare_public(instance, *left, *right, "==", 0)?;
     Ok(instance.new_bool(equal))
 }
 
@@ -86,8 +96,16 @@ fn ne_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "ne", args)?;
-    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
-    Ok(instance.new_bool(!equal))
+    // **`!=` 同样走完整协议**（含 `__ne__ = None` 报 `TypeError` 的"None 阻断"语义 ✓）；
+    // 富结果语义（round 138）：与 `!=` 算子同口径。
+    use pyawa_core::executor::protocol::RichCompare;
+    match pyawa_core::executor::protocol::equality_compare_result(instance, *left, *right, "!=", 0)? {
+        Some(RichCompare::Value(value)) => return Ok(value),
+        Some(RichCompare::Fallback) => return Ok(instance.new_bool(*left != *right)),
+        None => {}
+    }
+    let different = pyawa_core::executor::protocol::compare_public(instance, *left, *right, "!=", 0)?;
+    Ok(instance.new_bool(different))
 }
 
 /// `operator.is_(a, b)`（身份）。
@@ -144,8 +162,25 @@ fn ordering_native(
     args: &[NonNull<Header>],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, name, args)?;
-    let truth = pyawa_core::executor::protocol::compare_public(instance, *left, *right, symbol, 0)?;
-    Ok(instance.new_bool(truth))
+    // **富结果语义**（round 138）：与 `<` 算子同口径 —— 用户类实现返回**结果对象**本身 ✓
+    // （`test_richcmp.Vector` 的 `operator.lt` 也要求返回 Vector ✓）；否则原 bool 兜底 ✓。
+    use pyawa_core::executor::protocol::RichCompare;
+    match pyawa_core::executor::protocol::order_compare_result(instance, *left, *right, symbol, 0)? {
+        Some(RichCompare::Value(value)) => Ok(value),
+        Some(RichCompare::Fallback) => Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "'{symbol}' not supported between instances of '{}' and '{}'",
+                instance.type_name(instance.type_of(*left)),
+                instance.type_name(instance.type_of(*right))
+            ),
+        )),
+        None => {
+            let truth =
+                pyawa_core::executor::protocol::compare_public(instance, *left, *right, symbol, 0)?;
+            Ok(instance.new_bool(truth))
+        }
+    }
 }
 
 /// `operator.lt(a, b)`。
@@ -396,9 +431,33 @@ fn index_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let only = one_argument(instance, args)?;
-    if instance.int_value(*only).is_some() {
-        // `int`／`bool` 的整数载荷直接给一份新引用（`bool` 也走这里：`index(True) == 1`）
-        return Ok(instance.new_int(instance.int_value(*only).unwrap_or_default()));
+    if let Some(value) = instance.int_of(*only) {
+        // **任意精度**（round 67）：`bool` ⇒ int 1；大整数原值交回 ✓（先前只认 `i64` ✗ ⇒
+        // `random.randrange(-10**300, 10**300)` 报 `'int' object cannot be interpreted as an integer` ✗）。
+        if value.to_i64().is_some() && instance.type_name(instance.type_of(*only)) == "bool" {
+            return Ok(instance.new_int(value.to_i64().unwrap_or_default()));
+        }
+        return Ok(instance.retain(*only));
+    }
+    // **`__index__` 协议**（round 67）：参照的 `operator.index` 认它 ✓；
+    // 返回非 `int` ⇒ `TypeError: __index__ returned non-int (type X)` ✓。
+    if let Some(method) =
+        pyawa_core::executor::attribute::attribute_optional(instance, *only, "__index__")
+            .ok()
+            .flatten()
+    {
+        let outcome = pyawa_core::executor::call::call_value(instance, method, &[], &[]);
+        instance.release(method);
+        let result = outcome?;
+        if instance.int_of(result).is_none() {
+            let kind = instance.type_name(instance.type_of(result)).to_owned();
+            instance.release(result);
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("__index__ returned non-int (type {kind})"),
+            ));
+        }
+        return Ok(result);
     }
     let name = instance.type_name(instance.type_of(*only));
     Err(instance.raise_builtin_error(
@@ -456,6 +515,89 @@ fn call_native(
 ///
 /// 实测：`length_hint([1,2])` ⇒ `2`、`length_hint("abc")` ⇒ `3`、`length_hint(5)` ⇒ `0`、
 /// `length_hint(5, 9)` ⇒ `9`。走核心的**安全**入口 [`pyawa_core::Instance::length_of`]。
+/// **`operator.countOf(seq, value)`**（round 185）：等于 `value` 的元素个数 ✓
+/// （逐项 `==`：先走富比较（用户 `__eq__`／反射），拿不到结果再退回结构相等 ✓；
+/// **序列元素在左** ✓ —— 与 `in` 的迭代回退同口径）。
+fn operator_element_equals(
+    instance: &Instance,
+    item: NonNull<Header>,
+    target: NonNull<Header>,
+) -> Result<bool, ExecError> {
+    match pyawa_core::executor::protocol::equality_compare_result(instance, item, target, "==", 0)? {
+        Some(pyawa_core::executor::protocol::RichCompare::Value(value)) => {
+            let truth = instance.truthiness_of(value)?;
+            instance.release(value);
+            Ok(truth)
+        }
+        _ => Ok(pyawa_core::values_equal_public(instance, item, target)),
+    }
+}
+
+fn count_of_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (sequence, target) = two_arguments(instance, "countOf", args)?;
+    let iterator = pyawa_core::executor::iter::iter_value(instance, *sequence)?;
+    let mut count = 0i64;
+    loop {
+        match pyawa_core::executor::runtime::advance(instance, iterator) {
+            Ok(Some(item)) => {
+                let equal = operator_element_equals(instance, item, *target);
+                instance.release(item);
+                if equal? {
+                    count += 1;
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Ok(instance.new_int(count))
+}
+
+/// **`operator.indexOf(seq, value)`**（round 185）：第一个等于 `value` 的下标 ✓；
+/// 找不到 ⇒ `ValueError: sequence.index(x): x not in sequence` ✓（参照文案）。
+fn index_of_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (sequence, target) = two_arguments(instance, "indexOf", args)?;
+    let iterator = pyawa_core::executor::iter::iter_value(instance, *sequence)?;
+    let mut index = 0i64;
+    loop {
+        match pyawa_core::executor::runtime::advance(instance, iterator) {
+            Ok(Some(item)) => {
+                let equal = operator_element_equals(instance, item, *target);
+                instance.release(item);
+                if equal? {
+                    instance.release(iterator);
+                    return Ok(instance.new_int(index));
+                }
+                index += 1;
+            }
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(iterator);
+                return Err(error);
+            }
+        }
+    }
+    instance.release(iterator);
+    Err(instance.raise_builtin_error(
+        "ValueError",
+        "sequence.index(x): x not in sequence",
+    ))
+}
+
 fn length_hint_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -697,6 +839,8 @@ fn build_named(
         ("concat", concat_native as pyawa_core::NativeFn),
         ("call", call_native as pyawa_core::NativeFn),
         ("length_hint", length_hint_native as pyawa_core::NativeFn),
+        ("countOf", count_of_native as pyawa_core::NativeFn),
+        ("indexOf", index_of_native as pyawa_core::NativeFn),
         ("itemgetter", itemgetter_native as pyawa_core::NativeFn),
         ("attrgetter", attrgetter_native as pyawa_core::NativeFn),
         // **P3-38 S3e-2**（task-65）：参照 `operator` 还导出**双下划线别名**（`operator.__lt__` 等，

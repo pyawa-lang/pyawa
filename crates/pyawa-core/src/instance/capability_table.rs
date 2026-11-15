@@ -283,7 +283,9 @@ impl Instance {
     pub(crate) fn capability_close_all(&self) {
         let entries = self.capability_table.borrow_mut().drain();
         for entry in entries {
-            let _ = self.capability_provider_close(entry);
+            crate::executor::runtime::discard_capability_result(
+                self.capability_provider_close(entry),
+            );
         }
     }
 

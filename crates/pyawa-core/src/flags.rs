@@ -18,6 +18,11 @@ pub const FINALIZING: u32 = 1 << 3;
 pub const RESERVED_MASK: u32 = 0b1111 << 4;
 /// **OM-7** bit 8–31：类型相关，由类型对象自行定义。
 pub const TYPE_MASK: u32 = !0b1111_1111;
+/// **本层内部用**（bit 8，属 [`TYPE_MASK`] 区）：这个对象是**注册表里的类型对象**。
+///
+/// round 251 性能（A2-6）：通用释放路径要判"是不是类型对象"（类型对象由注册表持有、绝不在这里
+/// 释放）——先前每次**在升序地址表上二分** ✗ ⇒ 建类型时置位、释放时**一次位测** ✓。
+pub const TYPE_OBJECT: u32 = 1 << 8;
 /// 本层已定义的位（bit 0–3），其余位留给预留区与类型。
 pub const CORE_MASK: u32 = IMMORTAL | GC_TRACKED | HAS_WEAKREFS | FINALIZING;
 

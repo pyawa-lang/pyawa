@@ -54,11 +54,11 @@ fn message_of(instance: &Instance, error: ExecError) -> String {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let text = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let text = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(instance)
                 .unwrap_or_default();
             // SAFETY: 类型名读的是类型对象。
-            let name = unsafe { &*exception.as_ptr() }.ty();
+            let name = unsafe { &*exception.get().as_ptr() }.ty();
             format!("{}: {text}", instance.type_name(name))
         }
         other => panic!("应当是脚本异常，实际 {other:?}"),

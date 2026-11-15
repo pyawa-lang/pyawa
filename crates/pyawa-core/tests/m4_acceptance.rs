@@ -264,10 +264,13 @@ fn tbc8_checkpoints_are_visible_at_annotated_boundaries() {
 #[test]
 fn tbc9_type_errors_carry_direction_expected_actual_and_position() {
     // ① 坏实参 ⇒ `TypeBoundaryError`，方向 argument，归责调用方（`TS-10`）。
+    //    **判据要点**：运行期边界检查必须可观测。实参用**未标注变量** `u`（静态判不出 ⇒
+    //    `TS-47` ② 交运行期）；字面量 `f("s")` 那种**静态可判**的不符现在在编译期就报
+    //    （`TS-47` 尽力而为的调用点检查，见 `tests/check_diagnostics.rs`）——两条路径分工不同。
     let vm = Vm::new();
     let (type_name, message) = run_expecting_raise(
         &vm,
-        "def f(x: int) -> int:\n    return x\nresult = f(\"s\")\n",
+        "def f(x: int) -> int:\n    return x\nu = \"s\"\nresult = f(u)\n",
         TEST_FILENAME,
         CheckTier::Deep,
     );

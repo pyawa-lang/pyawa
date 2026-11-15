@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# **慢档闸门**（`round-rule.md` §3）：十项 `&&` 链收成一条命令，并**报墙钟** ✓。
+# **慢档闸门**（`round-rule.md` §3）：十二项 `&&` 链收成一条命令，并**报墙钟** ✓。
 #
 # 用法：tools/slowcheck.sh          # 全跑（debug 档）；每项报耗时；**按退出码**判红绿（不 grep 日志 ✓）
 #       tools/slowcheck.sh --quiet  # 只报最后一行汇总
-#       tools/slowcheck.sh --release  # **release 档**（闸门提速：同一十项、同一判定；
+#       tools/slowcheck.sh --release  # **release 档**（闸门提速：同一十二项、同一判定；
 #                                     #   先做步骤 0 构建 release CLI，②③⑨⑩ 用 `cargo test --release`，
 #                                     #   ⑤⑥ 传 `--release`；默认档命令／输出逐字不变）
 #      SLOWCHECK_PROFILE=release tools/slowcheck.sh   # 同上（环境变量式）
 #
-# 为什么要有它 ✓：这十项是每笔提交前的必跑项 ✗，先前每次手打（易漏项、易把 `&&` 写成并列 ✗）。
+# 为什么要有它 ✓：这十二项是每笔提交前的必跑项 ✗，先前每次手打（易漏项、易把 `&&` 写成并列 ✗）。
 # 判据只认**退出码** ✓：任一项非 0 ⇒ 立刻停并打印该项日志尾部 ✓（`run-rule.md` §2「开工先定验收」✓）。
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -20,6 +20,7 @@ mkdir -p "$CARGO_HOME"
 
 QUIET=0
 PROFILE=debug
+export PROFILE
 for arg in "$@"; do
   case "$arg" in
     --quiet) QUIET=1 ;;
@@ -48,14 +49,14 @@ PY_PROFILE_ARGS=()
 if [ "$PROFILE" = "release" ]; then
   CARGO_TEST_PROFILE=(--release)
   PY_PROFILE_ARGS=(--release)
-  echo "slowcheck: profile=release（同一十项／同一判定；先做步骤 0 预热 release 构建）"
+  echo "slowcheck: profile=release（同一十二项／同一判定；先做步骤 0 预热 release 构建）"
   begin=$(date +%s)
-  if cargo build --release -p pyawa-runtime --bin pyawa >"$LOGDIR/0.log" 2>&1; then
+  if cargo build --release -p pyawa-runtime --lib --bin pyawa >"$LOGDIR/0.log" 2>&1; then
     end=$(date +%s)
-    [ "$QUIET" = "0" ] && printf ' 0/10 ✓ %-58s %3ds\n' "cargo build --release -p pyawa-runtime --bin pyawa（步骤 0）" "$((end - begin))"
+    [ "$QUIET" = "0" ] && printf ' 0/12 ✓ %-58s %3ds\n' "cargo build --release -p pyawa-runtime --lib --bin pyawa（步骤 0）" "$((end - begin))"
   else
     end=$(date +%s)
-    printf ' 0/10 ✗ %-58s %3ds  （日志 %s）\n' "cargo build --release -p pyawa-runtime --bin pyawa（步骤 0）" "$((end - begin))" "$LOGDIR/0.log"
+    printf ' 0/12 ✗ %-58s %3ds  （日志 %s）\n' "cargo build --release -p pyawa-runtime --lib --bin pyawa（步骤 0）" "$((end - begin))" "$LOGDIR/0.log"
     tail -20 "$LOGDIR/0.log"
     echo "slowcheck: 红 ✗（步骤 0：release 构建失败）  墙钟 $(( $(date +%s) - START ))s"
     exit 1
@@ -69,15 +70,28 @@ step() {
   begin=$(date +%s)
   if "$@" >"$LOGDIR/$STEP_NO.log" 2>&1; then
     end=$(date +%s)
-    [ "$QUIET" = "0" ] && printf '%2d/10 ✓ %-58s %3ds\n' "$STEP_NO" "$name" "$((end - begin))"
+    [ "$QUIET" = "0" ] && printf '%2d/12 ✓ %-58s %3ds\n' "$STEP_NO" "$name" "$((end - begin))"
     return 0
   fi
   end=$(date +%s)
-  printf '%2d/10 ✗ %-58s %3ds  （日志 %s）\n' "$STEP_NO" "$name" "$((end - begin))" "$LOGDIR/$STEP_NO.log"
+  printf '%2d/12 ✗ %-58s %3ds  （日志 %s）\n' "$STEP_NO" "$name" "$((end - begin))" "$LOGDIR/$STEP_NO.log"
   tail -20 "$LOGDIR/$STEP_NO.log"
   FAILED=1
   return 1
 }
+
+# **第 1 项（release 档）＝基准闸＋内存子集**（round 253 从末尾**前移**：12 项重活跑完后 CPU 降频
+# 会把 `bench_hot` 读数抬高 → 假红 ✗；放在构建之后量最接近真实能力 ✓）。判定口径不变：退出码非 0 即红 ✓。
+if [ "$PROFILE" = "release" ]; then
+  # **环境隔离（2026-11-14）**：bench 的 `builtin_call` 档对进程布局敏感（`bench_gate` 首段已登记）；
+  # 本脚本给 cargo 导出的 `CARGO_HOME`／`PROFILE` 会随继承环境进入测量（同一二进制在
+  # `PROFILE=release CARGO_HOME=…` 下 +20%，剥掉后 +5%；HEAD 二进制同样复现 ⇒ 非代码回退）。
+  # `bench_gate` 本意就是**干净环境**量能力 ⇒ 这里显式剥掉两个**构建期**变量再量，不动判定阈值。
+  step "基准闸：性能回退（bench_gate）＋ 内存 memcheck 子集（20 例）" \
+    bash -c 'env -u CARGO_HOME -u PROFILE python3 tools/bench_gate.py && tools/memcheck.sh --bin target/release/pyawa --limit 20' || true
+  if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项：见上）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
+fi
+
 
 # ① 编译（0 警告） ✗ ② 逐字节 ✗ ③ 全量测试（含关键护栏） ✗ ④～⑥ CI 三件 ✗ ⑦⑧ 语料下限与夹具 ✗ ⑨⑩ 对拍（普通 ＋ 悬垂哨兵 ✓）
 step "cargo check --workspace --all-targets（0 警告）" \
@@ -88,9 +102,11 @@ if [ "$FAILED" = "1" ]; then
 fi
 step "cargo test -p pyawa-core --test compile（逐字节）" cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-core --test compile || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
-step "cargo test --workspace" cargo test "${CARGO_TEST_PROFILE[@]}" --workspace || true
-if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
-step "python3 tests/ci/check.py" python3 tests/ci/check.py || true
+# ③ 与 ⑤ **同一条命令**：⑤ `stability` 会把 `cargo test --workspace`（同档）连跑 3 次并比对计数 ⇒
+# ⑤ 绿则 ③ 必然绿 ✓（旧版这里串行重跑一遍纯属浪费 ≈109 s；判定口径不变 ✓）。
+STEP_NO=$((STEP_NO + 1))
+[ "$QUIET" = "0" ] && printf '%2d/12 ✓ %-58s %3s（由 ⑤ 覆盖：同一命令 3 次全绿）\n' "$STEP_NO" "cargo test --workspace" "(0)"
+step "python3 tests/ci/check.py ＋ C 参考宿主 ＋ 宿主可用性/协议 oracle ＋ 能力布局机检" bash -c 'python3 tests/ci/check.py && python3 tests/ci/t_ref_host.py && python3 tests/ci/check_capability_layout.py && if [ "$PROFILE" = "release" ]; then python3 tests/ci/host_usability_probe.py --release && cargo test -p pyawa-abi --release --test protocol_oracle --test protocol_host_dispatch; else cargo build -p pyawa-runtime --lib && python3 tests/ci/host_usability_probe.py && cargo test -p pyawa-abi --test protocol_oracle --test protocol_host_dispatch; fi' || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 step "python3 tests/ci/stability.py" python3 tests/ci/stability.py "${PY_PROFILE_ARGS[@]}" || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
@@ -100,14 +116,43 @@ step "python3 tools/check_fixture_cases.py" python3 tools/check_fixture_cases.py
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 step "python3 tools/check_corpus_floor.py" python3 tools/check_corpus_floor.py || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
-step "cargo test -p pyawa-abi --test conformance" cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance || true
+# ⑨⑩ **并行执行**（闸门提速；两条命令互相独立、各自判退出码 ⇒ 判定口径不变 ✓）。
+begin=$(date +%s)
+( cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance >"$LOGDIR/9.log" 2>&1 ) &
+_PID9=$!
+( env PYAWA_DANGLING=1 cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance >"$LOGDIR/10.log" 2>&1 ) &
+_PID10=$!
+wait "$_PID9"; _RC9=$?
+wait "$_PID10"; _RC10=$?
+end=$(date +%s)
+_ELAPSED=$((end - begin))
+STEP_NO=$((STEP_NO + 1))
+if [ "$_RC9" = "0" ]; then
+  [ "$QUIET" = "0" ] && printf '%2d/12 ✓ %-58s %3ds（与 ⑩ 并行，合计墙钟）\n' "$STEP_NO" "cargo test -p pyawa-abi --test conformance" "$_ELAPSED"
+else
+  printf '%2d/12 ✗ %-58s %3ds（与 ⑩ 并行；日志 %s）\n' "$STEP_NO" "cargo test -p pyawa-abi --test conformance" "$_ELAPSED" "$LOGDIR/9.log"
+  tail -20 "$LOGDIR/9.log"
+  FAILED=1
+fi
+STEP_NO=$((STEP_NO + 1))
+if [ "$_RC10" = "0" ]; then
+  [ "$QUIET" = "0" ] && printf '%2d/12 ✓ %-58s %3ds（与 ⑨ 并行，合计墙钟）\n' "$STEP_NO" "PYAWA_DANGLING=1 cargo test -p pyawa-abi --test conformance" "$_ELAPSED"
+else
+  printf '%2d/12 ✗ %-58s %3ds（与 ⑨ 并行；日志 %s）\n' "$STEP_NO" "PYAWA_DANGLING=1 cargo test -p pyawa-abi --test conformance" "$_ELAPSED" "$LOGDIR/10.log"
+  tail -20 "$LOGDIR/10.log"
+  FAILED=1
+fi
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
-step "PYAWA_DANGLING=1 cargo test -p pyawa-abi --test conformance" \
-  env PYAWA_DANGLING=1 cargo test "${CARGO_TEST_PROFILE[@]}" -p pyawa-abi --test conformance || true
+
+# ⑫ **失败路径 GC 收支探针**（task-16 D 接闸，2026-11-14）：11 条失败路径的 `tb` 收支 ＋
+#    N=10000/20000 缩放判据（可复跑判据见 `tests/ci/failure_path_leaks.py` 头注）；
+#    阶段 1 修前 6/11 RED，修后必须 11/11 绿。步骤内先构建 CLI（release 档是 no-op ✓）。
+step "python3 tests/ci/failure_path_leaks.py（失败路径 GC 收支）" \
+  bash -c "cargo build ${CARGO_TEST_PROFILE[*]:-} -p pyawa-runtime --bin pyawa >/dev/null 2>&1 && python3 tests/ci/failure_path_leaks.py --binary target/${PROFILE}/pyawa" || true
 if [ "$FAILED" = "1" ]; then echo "slowcheck: 红 ✗（第 $STEP_NO 项）  墙钟 $(( $(date +%s) - START ))s"; exit "$STEP_NO"; fi
 
 if [ "$PROFILE" = "release" ]; then
-  echo "slowcheck: OK ✓（十项全绿）  墙钟 $(( $(date +%s) - START ))s  [profile=release]"
+  echo "slowcheck: OK ✓（十二项全绿）  墙钟 $(( $(date +%s) - START ))s  [profile=release]"
 else
-  echo "slowcheck: OK ✓（十项全绿）  墙钟 $(( $(date +%s) - START ))s"
+  echo "slowcheck: OK ✓（十二项全绿）  墙钟 $(( $(date +%s) - START ))s"
 fi

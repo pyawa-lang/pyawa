@@ -275,20 +275,8 @@ fn big_int_from_words(
     words: &[u64],
     bits: usize,
 ) -> Result<NonNull<Header>, ExecError> {
-    let mut value = BigInt::zero();
-    for (index, word) in words.iter().enumerate().rev() {
-        let mut word = *word;
-        if index + 1 == words.len() {
-            let used = bits - index * 64;
-            if used < 64 {
-                word &= (1u64 << used) - 1;
-            }
-        }
-        let shifted = value.shl(64).ok_or_else(|| {
-            instance.raise_builtin_error("OverflowError", "getrandbits：位移溢出")
-        })?;
-        value = shifted.bit_or(&BigInt::from_u64(word));
-    }
+    // **O(n) 直接拼接**（round 88）：先前逐字 `shl(64)` ＋ `bit_or` 是 O(n²) ⇒ 2G 位卡死 ✗。
+    let value = BigInt::from_words_le(words, bits);
     Ok(instance.new_int_value(IntValue::from_big(value)))
 }
 

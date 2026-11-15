@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：（无） ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, FloatObject, MethodObject, NativeFn};
 use crate::executor::ExecError;
@@ -19,14 +20,26 @@ pub unsafe fn float_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
+    // **数值属性**（round 66）：`float.real`（自身）与 `float.imag`（恒 `0.0`）✓ ——
+    // `decimal.py` 的 `_convert_for_comparison` 会读 `other.imag` ✓（`test_numeric_tower` 实测 ✓）。
+    if name == "real" {
+        // SAFETY: ptr 是本类型的存活对象。
+        unsafe { instance.incref_object(ptr) };
+        return Some(unsafe { NonNull::new_unchecked(ptr) });
+    }
+    if name == "imag" {
+        return Some(instance.new_float(0.0));
+    }
+    // **`float.conjugate()`**（round 87）：`numbers.Real` 的抽象接口要求它 ✓ ——
+    // `test_abstract_numbers` 的 `float(7.3).conjugate() == 7.3` 钉住 ✓（参照里实数返回自身 ✓）。
     let handler: NativeFn = match name {
         "is_integer" => float_is_integer_native,
         "as_integer_ratio" => float_as_integer_ratio_native,
+        "conjugate" => float_conjugate_native,
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -37,11 +50,24 @@ pub unsafe fn float_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
     Some(bound.into_raw().cast::<Header>())
+}
+
+/// `float.conjugate()`（round 87）：实数返回自身 ✓（`numbers.Real` 的抽象接口要它 ✓）。
+pub(crate) fn float_conjugate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(value) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "conjugate() 缺少 self"));
+    };
+    Ok(instance.retain(value))
 }
 
 /// `float.is_integer()` ✓（第 352 轮）：有限且小数部分为 0 ⇒ `True` ✓（`inf`／`nan` ⇒ `False` ✓）。
@@ -78,23 +104,56 @@ pub(crate) fn float_as_integer_ratio_native(
         return Err(instance.raise_builtin_error("TypeError", "as_integer_ratio 只接浮点"));
     };
     if value.is_nan() {
-        return Err(instance.raise_builtin_error("ValueError", "cannot convert NaN to integer ratio"));
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "cannot convert NaN to integer ratio",
+        ));
     }
     if value.is_infinite() {
-        return Err(instance.raise_builtin_error("OverflowError", "cannot convert Infinity to integer ratio"));
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "cannot convert Infinity to integer ratio",
+        ));
     }
-    let mut numerator = value;
-    let mut denominator = 1.0f64;
-    // 最多 1100 次（`f64` 的最小次正规约 2^-1074 ✓）⇒ 有界 ✓
-    while numerator.fract() != 0.0 && denominator < 1e300 {
-        numerator *= 2.0;
-        denominator *= 2.0;
+    // **精确整数比（任意精度）** ✓（round 67）：先前用 `f64` 乘 2 再 `as i64` ✗ ⇒
+    // 大指数／次正规浮点会**饱和成 `i64::MAX`** ✗（实测 `1e-300.as_integer_ratio()` 给
+    // 分母 `9223372036854775807` ✗；`_pydecimal.Decimal.from_float` 因此算错哈希 ⇒
+    // `test_numeric_tower.test_binary_floats` 红 ✓）。
+    // 做法：拆 `f64` 的位（尾数整数 ＋ 2 的指数），约掉尾数的 2 因子，再用 `BigInt` 拼 ✓。
+    let bits = value.to_bits();
+    let sign = (bits >> 63) & 1 == 1;
+    let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1u64 << 52) - 1);
+    let (mut mantissa, mut exponent) = if exponent_bits == 0 {
+        // 次正规：0.fraction × 2^-1022 ⇒ fraction × 2^-1074
+        (fraction, -1074i32)
+    } else {
+        (fraction | (1u64 << 52), exponent_bits - 1075)
+    };
+    if mantissa == 0 {
+        let zero = instance.new_int(0);
+        let one = instance.new_int(1);
+        return Ok(instance.new_tuple(vec![zero, one]));
     }
-    let pair = vec![
-        instance.new_int(numerator as i64),
-        instance.new_int(denominator as i64),
-    ];
-    Ok(instance.new_tuple(pair))
+    while mantissa & 1 == 0 {
+        mantissa >>= 1;
+        exponent += 1;
+    }
+    let mut numerator = crate::bigint::BigInt::from_u64(mantissa);
+    let mut denominator = crate::bigint::BigInt::from_u64(1);
+    if exponent >= 0 {
+        numerator = numerator.mul(&crate::bigint::BigInt::from_u64(2).pow_u32(exponent as u32));
+    } else {
+        denominator = denominator.mul(&crate::bigint::BigInt::from_u64(2).pow_u32((-exponent) as u32));
+    }
+    if sign {
+        numerator = numerator.neg();
+    }
+    let numerator = instance
+        .new_int_value(crate::bigint::IntValue::from_big(numerator));
+    let denominator = instance
+        .new_int_value(crate::bigint::IntValue::from_big(denominator));
+    Ok(instance.new_tuple(vec![numerator, denominator]))
 }
 
 /// **`float.fromhex(str)` 的类型级入口**（第 406 轮 ✓）：`_pylong.py:260` 导入期就用
@@ -248,7 +307,10 @@ pub unsafe fn float_new(
                 let number = match body {
                     "inf" | "infinity" => f64::INFINITY,
                     "nan" => f64::NAN,
-                    _ => match trimmed.parse::<f64>() {
+                    // **解析去掉符号后的 `body`**（round 113 真 bug 修 ✗）：先前解析 `trimmed`（还带 `-`）
+                    // 之后再按 `negative` 取负 ⇒ `float('-1.0')` 变 **1.0** ✗（`float(' -1.0')` 同样 ✗）。
+                    // `test_optparse` 的 `nargs` 负坐标用例直接钉住 ✓。
+                    _ => match body.parse::<f64>() {
                         Ok(number) => number,
                         Err(_) => {
                             return Err(instance.raise_builtin_error(
@@ -266,11 +328,59 @@ pub unsafe fn float_new(
                     "TypeError",
                     "float() argument must be a string or a real number, not 'complex'",
                 ));
+            } else if let Some(method) =
+                crate::executor::attribute::attribute_optional(instance, *only, "__float__")
+                    .ok()
+                    .flatten()
+            {
+                // **`float(obj)` 走 `__float__`** ✓（round 66）：`numbers.Rational.__float__` 之类
+                // 是纯 Python 方法（`fractions.Fraction` 继承它 ✓）；先前只认内建数字类型 ✗。
+                let outcome = crate::executor::call::call_value(instance, method, &[], &[]);
+                unsafe { instance.release_object(method.as_ptr()) };
+                let result = outcome?;
+                let Some(number) = instance.float_value(result) else {
+                    let kind = instance.type_name(instance.type_of(result)).to_owned();
+                    unsafe { instance.release_object(result.as_ptr()) };
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("__float__ returned non-float (type {kind})"),
+                    ));
+                };
+                unsafe { instance.release_object(result.as_ptr()) };
+                number
+            } else if let Some(bytes) = instance.bytes_like_value(*only) {
+                // **`float(b'1.5')`**（参照也收 bytes／bytearray ✓；解析口径同字符串 ✓）。
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let trimmed = text.trim();
+                let lowered = trimmed.to_ascii_lowercase();
+                let (negative, body) = match lowered.strip_prefix('-') {
+                    Some(rest) => (true, rest),
+                    None => (false, lowered.strip_prefix('+').unwrap_or(&lowered)),
+                };
+                let number = match body {
+                    "inf" | "infinity" => f64::INFINITY,
+                    "nan" => f64::NAN,
+                    _ => match body.parse::<f64>() {
+                        Ok(number) => number,
+                        Err(_) => {
+                            return Err(instance.raise_builtin_error(
+                                "ValueError",
+                                &format!("could not convert string to float: {trimmed}"),
+                            ));
+                        }
+                    },
+                };
+                if negative { -number } else { number }
             } else {
-                return Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "float_new：这个实参形态还没接线（字符串解析等）",
-                });
+                // **其余实参形态 ⇒ 参照的 `TypeError`**（round 131 真缺口）：先前落"未接线" ✗ ⇒
+                // `float(None)` 一类把整个套件 abort 掉（`test_statistics` 实测 type=NoneType ✓）。
+                let kind = instance.type_name(instance.type_of(*only));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!(
+                        "float() argument must be a string or a real number, not '{kind}'"
+                    ),
+                ));
             }
         }
         _ => {

@@ -214,6 +214,35 @@ pub const FINAL_TYPE: u32 = 1 << 3;
 /// 内建类型（`ValueError('x')` 一类）的 `new` 槽是自己实现的，**不**该吃这条规则。
 pub const GENERIC_ALLOCATION: u32 = 1 << 2;
 
+/// **内部**类型标志：这个类型的**命名空间里挂了 `__module__`**（用户类，或带模块标记的原生类型）。
+///
+/// 凭什么有用（round 248 性能，A2-3）：二元运算的"**用户覆写 dunder**"判据是"定义者自己的字典里有
+/// `__module__`"（见 `arithmetic::call_user_dunder`）⇒ 每条 `BINARY_OP` 都要走 MRO + 字典查表 ✗。
+/// 这个位让**常见路径（内建操作数）**一次位测就跳过整条链 ✓，而"谁可能命中"在**建类型时**就定死
+/// （用户类 / 带模块标记的原生类型 / 它们的子类）⇒ 语义不变 ✓。
+pub const DUNDER_CAPABLE: u32 = 1 << 4;
+
+/// **内部**类型标志：本类型是**本层接线的迭代器类型**（`ITERATOR_TYPE_NAMES` 里名字的"首个登记"）。
+///
+/// round 249 性能（A2-4）：先前每个 `FOR_ITER` 要拿 36 个名字的缓存指针逐个比 ✗；现在建类型时
+/// 一次名字比对就定死，热路径一次位测 ✓（"首个登记"与 `type_named` 的"先登记者优先"口径一致 ✓）。
+pub const IS_ITERATOR_TYPE: u32 = 1 << 5;
+
+/// **内部**类型标志：本类型有**专用推进分支**（`advance_dedicated` 的 25 个名字之一，"首个登记"）。
+///
+/// round 249 性能（A2-4）：`advance_iterator` 每轮一次的"专用类型集合"哈希查改成一次位测 ✓。
+pub const DEDICATED_ITERATOR_TYPE: u32 = 1 << 6;
+
+/// **内部**类型标志：`__slots__` 声明**查过**（round 250 性能，A2-5）。
+///
+/// 属性写每次都要问"这个类型声明了 `__slots__` 吗"（`type_namespace`＋`dict_get` ✗）；答案在
+/// 类型创建后不变（参照里类创建后写 `__slots__` 也不生效 ✓）⇒ 查一次记在类型位上 ✓。
+pub const SLOTS_CHECKED: u32 = 1 << 7;
+
+/// **内部**类型标志：`__slots__` 声明确实存在（与 [`SLOTS_CHECKED`] 一起用：0＝没查，
+/// `SLOTS_CHECKED`＝查过且没有，两位都有＝查过且有 ✓）。
+pub const SLOTS_DECLARED: u32 = 1 << 8;
+
 /// **内部**类型标志：这个类型的实例把属性字典**内联在载荷里**（载荷是 [`crate::AttributeObject`]）。
 ///
 /// 用户类的实例走这条；宿主／固定布局的实例（例如 `list` 的子类）**没有**这一位，
@@ -244,6 +273,15 @@ py_object! {
         host_dealloc: Cell<Option<HostDealloc>>,
         /// **`OM-14`** 宿主类型：宿主提供的 `traverse`（`OM-36`：列出全部直接引用）。
         host_traverse: Cell<Option<HostTraverse>>,
+        {
+            /// **类型 ID**（round 249 性能，A2-4）：本实例内单调递增（`0` 也是合法 id；元类型＝0）。
+            /// 由 `Instance::alloc_type_raw` 构造后赋值一次；用于 MRO 位图与热路径按 id 查表 ✓。
+            type_id: Cell<u32>,
+            /// **MRO 成员 id 位图**（round 249 性能，A2-4）：`register_bases` 时建一次；
+            /// `is_subtype` 变成"下标＋位与"O(1) ✓（先前每判一次都要 `mro()` **clone** 一个 Vec ✗）。
+            /// 空 ⇒ 还没建（调用方回退线性扫 ✓）。
+            mro_ids: RefCell<Vec<u64>>,
+        }
     }
 }
 
@@ -271,6 +309,97 @@ impl TypeObject {
     /// 槽位表（只读副本；槽位表在类型创建后不再改动）。
     pub fn slots(&self) -> Slots {
         self.slots
+    }
+
+    /// **round 248 性能（A2-3）**：这个类型的命名空间可能命中"用户覆写 dunder"（见 [`DUNDER_CAPABLE`]）。
+    pub fn mark_dunder_capable(&self) {
+        self.type_flags.set(self.type_flags.get() | DUNDER_CAPABLE);
+    }
+
+    /// 同上的**只读**版（热路径：一次位测 ✓）。
+    pub fn is_dunder_capable(&self) -> bool {
+        self.type_flags.get() & DUNDER_CAPABLE != 0
+    }
+
+    /// **round 249 性能（A2-4）**：本类型的实例内 id（元类型＝0，随后按登记顺序递增）。
+    #[inline]
+    pub fn type_id(&self) -> u32 {
+        self.type_id.get()
+    }
+
+    /// 由 `alloc_type_raw` 在构造后**赋值一次** ✓。
+    pub(crate) fn set_type_id(&self, id: u32) {
+        self.type_id.set(id);
+    }
+
+    /// **round 249 性能（A2-4）**：按 id 位图判"`super_id` 在不在本类型的 MRO 里"。
+    /// `None` ＝位图还没建（调用方回退线性扫 ✓）；一次 `RefCell` 借用＋一次位测 ✓。
+    #[inline]
+    pub fn mro_bitmap_contains(&self, super_id: u32) -> Option<bool> {
+        let bits = self.mro_ids.borrow();
+        if bits.is_empty() {
+            return None;
+        }
+        let index = (super_id / 64) as usize;
+        let bit = 1u64 << (super_id % 64);
+        Some(bits.get(index).is_some_and(|word| word & bit != 0))
+    }
+
+    /// **round 249 性能（A2-4）**：用当前 MRO 重建 id 位图（`register_bases` 后调用一次 ✓；
+    /// MRO 之后不再变化 ⇒ 位图是稳定的 ✓）。
+    pub fn rebuild_mro_bitmap(&self) {
+        let mro = self.mro.borrow();
+        let mut highest = 0usize;
+        for member in mro.iter() {
+            // SAFETY: MRO 里的类型都由本实例注册表持有、存活。
+            highest = highest.max(unsafe { member.as_ref() }.type_id() as usize);
+        }
+        let mut bits = vec![0u64; highest / 64 + 1];
+        for member in mro.iter() {
+            // SAFETY: 同上。
+            let id = unsafe { member.as_ref() }.type_id() as usize;
+            bits[id / 64] |= 1u64 << (id % 64);
+        }
+        *self.mro_ids.borrow_mut() = bits;
+    }
+
+    /// **round 250 性能（A2-5）**：`__slots__` 检查状态（`None` ＝还没查；`Some(bool)` ＝查过）。
+    pub(crate) fn slots_declaration(&self) -> Option<bool> {
+        let flags = self.type_flags.get();
+        if flags & SLOTS_CHECKED == 0 {
+            return None;
+        }
+        Some(flags & SLOTS_DECLARED != 0)
+    }
+
+    /// 记下 `__slots__` 检查结果 ✓。
+    pub(crate) fn mark_slots_declaration(&self, declared: bool) {
+        let mut flags = self.type_flags.get() | SLOTS_CHECKED;
+        if declared {
+            flags |= SLOTS_DECLARED;
+        }
+        self.type_flags.set(flags);
+    }
+
+    /// **round 249 性能（A2-4）**：标成"本层接线的迭代器类型"（建类型时按名字定死 ✓）。
+    pub(crate) fn mark_iterator_type(&self) {
+        self.type_flags.set(self.type_flags.get() | IS_ITERATOR_TYPE);
+    }
+
+    /// 是不是本层接线的迭代器类型（热路径一次位测 ✓）。
+    pub fn is_iterator_kind(&self) -> bool {
+        self.type_flags.get() & IS_ITERATOR_TYPE != 0
+    }
+
+    /// **round 249 性能（A2-4）**：标成"有专用推进分支"（建类型时按名字定死 ✓）。
+    pub(crate) fn mark_dedicated_iterator(&self) {
+        self.type_flags
+            .set(self.type_flags.get() | DEDICATED_ITERATOR_TYPE);
+    }
+
+    /// 有没有专用推进分支（热路径一次位测 ✓）。
+    pub fn is_dedicated_iterator_kind(&self) -> bool {
+        self.type_flags.get() & DEDICATED_ITERATOR_TYPE != 0
     }
 
     /// 是不是**定长宿主布局**（`OM-14`／`AB-58`：载荷紧跟在头部之后、由 VM 分配）。
@@ -316,6 +445,15 @@ impl TypeObject {
         self.mro.borrow().clone()
     }
 
+    /// **round 249 性能（A2-4）**：只读借用 MRO（**不 clone** ✓）。
+    ///
+    /// 热路径的"MRO 遍历"一律走这个：先前 `mro()` 每次返回**克隆的 `Vec`** ⇒ 类型查找／属性查找／
+    /// 二元运算的 dunder 查找每查一次都付一次分配 ✗（perf：`type_lookup_owner`＋malloc/免费 共 ≈5%）。
+    #[inline]
+    pub fn with_mro<R>(&self, f: impl FnOnce(&[NonNull<TypeObject>]) -> R) -> R {
+        f(&self.mro.borrow())
+    }
+
     /// 登记基类与 MRO。
     ///
     /// *临时*：内建类型层次**手工登记**（`TS-40` 要求 `bool ⊂ int`）；完整的 C3 线性化、
@@ -332,9 +470,16 @@ impl TypeObject {
 
     /// 设置类型字典（**新引用**，由类型对象接手）。
     pub fn set_dict(&self, mapping: Option<NonNull<Header>>) {
-        if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
-            if let Some(mapping) = mapping {
-                eprintln!("[setdict] 类型字典 ← {:p}", mapping.as_ptr());
+        if crate::diag::flag_site!("PYAWA_SETDICT_DEBUG") {
+            // **round 123 诊断**：带上类型名，便于把"泄漏的类字典"反查到具体类/路径 ✓。
+            let name = self.name();
+            match mapping {
+                Some(mapping) => eprintln!(
+                    "[setdict] 类型 {name} 字典 ← {:p} rc={}",
+                    mapping.as_ptr(),
+                    unsafe { &*mapping.as_ptr() }.refcount()
+                ),
+                None => eprintln!("[setdict] 类型 {name} 字典 ← None"),
             }
         }
         *self.dict.borrow_mut() = mapping;

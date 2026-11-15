@@ -28,6 +28,10 @@ impl Drop for Instance {
             self.gc_head.set(ptr::null_mut());
             self.gc_count.set(0);
             self.bytes_allocated.set(0);
+            self.memory_limit.set(0);
+            self.memory_hit.set(false);
+        self.memory_ceiling.set(0);
+            self.memory_ceiling.set(0);
             return;
         }
         let live: Vec<usize> = self.live.borrow().iter().copied().collect();
@@ -35,6 +39,15 @@ impl Drop for Instance {
             let header = unsafe { NonNull::new_unchecked(address as *mut Header) };
             // SAFETY: 每个地址都由本实例分配且尚未释放；类型对象在下一段之前一直存活。
             unsafe { Self::force_free(header) };
+        }
+        // **复用池里的内存**（round 251，A2-6）：不在活表里，但仍是本实例分配的内存 ⇒ 这里还掉 ✓。
+        for ptr in core::mem::take(&mut *self.tuple_pool.borrow_mut()) {
+            // SAFETY: 池里的对象都是本实例分配、尚未 dealloc 的 ✓。
+            unsafe { Self::force_free(ptr) };
+        }
+        for ptr in core::mem::take(&mut *self.int_pool.borrow_mut()) {
+            // SAFETY: 同上。
+            unsafe { Self::force_free(ptr) };
         }
 
         let types = core::mem::take(&mut *self.types.borrow_mut());
@@ -48,6 +61,8 @@ impl Drop for Instance {
         self.gc_head.set(ptr::null_mut());
         self.gc_count.set(0);
         self.bytes_allocated.set(0);
+        self.memory_limit.set(0);
+        self.memory_hit.set(false);
     }
 }
 

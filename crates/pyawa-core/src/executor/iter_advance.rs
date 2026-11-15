@@ -6,11 +6,94 @@
 //! （父模块 `pub(crate) use` 再导出）✓。
 
 use crate::executor::*;
+use crate::HotId;
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::IteratorObject;
 use crate::TupleObject;
 use core::ptr::NonNull;
+
+/// **专用推进分支链**（round 145 提取）：只有"有专用分支"的迭代器类型才走这里 ✓
+/// （调用方先用 [`Instance::is_dedicated_iterator_type`] 一次哈希查过滤 ✓ —— 普通
+/// `list_iterator`／`range_iterator` 不再逐个比 20+ 内建名 ✗）。
+fn advance_dedicated(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Option<Result<Option<NonNull<Header>>, ExecError>> {
+    // SAFETY: iterator 是存活对象（调用方已确认是迭代器）✓。
+    let ty = unsafe { iterator.as_ref() }.ty();
+    if instance.hot_type_is(HotId::ListReverseIterator, ty) {
+        return Some(advance_list_reverseiterator(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Reversed, ty) {
+        return Some(advance_reversed(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Count, ty) {
+        return Some(advance_count(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Repeat, ty) {
+        return Some(advance_repeat(instance, iterator, opcode));
+    }
+    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
+    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
+    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
+    if instance.hot_type_is(HotId::Islice, ty)
+        || instance.hot_type_is(HotId::RangeIterator, ty)
+        || instance.hot_type_is(HotId::LongRangeIterator, ty) {
+        return Some(advance_islice(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Product, ty) {
+        return Some(advance_product(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Permutations, ty) {
+        return Some(advance_permutations(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Compress, ty) {
+        return Some(advance_compress(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Combinations, ty)
+        || instance.hot_type_is(HotId::CombinationsWithReplacement, ty) {
+        return Some(advance_combinations(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Zip, ty) {
+        return Some(advance_zip(instance, iterator, opcode));
+    }
+    // **内建 `map`／`filter`**（`P3-41` round 41）：参照里它们是**惰性迭代器** ✓。
+    if instance.hot_type_is(HotId::Map, ty) {
+        return Some(advance_map(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Filter, ty) {
+        return Some(advance_filter(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::ZipLongest, ty) {
+        return Some(advance_zip_longest(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Pairwise, ty) {
+        return Some(advance_pairwise(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Batched, ty) {
+        return Some(advance_batched(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Cycle, ty) {
+        return Some(advance_cycle(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Accumulate, ty) {
+        return Some(advance_accumulate(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Starmap, ty) {
+        return Some(advance_starmap(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Takewhile, ty)
+        || instance.hot_type_is(HotId::Dropwhile, ty)
+        || instance.hot_type_is(HotId::Filterfalse, ty) {
+        return Some(advance_takewhile(instance, iterator, opcode));
+    }
+    if instance.hot_type_is(HotId::Chain, ty) {
+        return Some(advance_chain(instance, iterator, opcode));
+    }
+    None
+}
 
 pub(crate) fn advance_iterator(
     instance: &Instance,
@@ -25,10 +108,31 @@ pub(crate) fn advance_iterator(
         let method = match attribute_optional(instance, iterator, "__next__") {
             Ok(Some(method)) => method,
             Ok(None) => {
+                let iterator_type = unsafe { iterator.as_ref() }.ty();
+                let name = instance.type_name(iterator_type).to_owned();
+                if crate::diag::flag_site!("PYAWA_ITER_DEBUG") {
+                    eprintln!(
+                        "[advance_iterator] 不可迭代：type={name} site={}",
+                        instance.current_site()
+                    );
+                }
+                // **用户自定义类的迭代器 ⇒ 参照口径的 `TypeError`**（round 135）：`test_iter.test_3720`
+                // 的 `BadIterator` 在 `__next__` 里 `del BadIterator.__next__` ⇒ 参照抛
+                // `TypeError: 'BadIterator' object is not iterable` 且被测试捕获 ✓；先前落 `Unsupported`
+                //（宿主当"未接线"直接 abort）✗ ⇒ `test_iter` 整档被首格截断 ✓。
+                // **内建迭代器保持 `Unsupported`**（既有口径）：改成 `TypeError` 会让 `test_itertools`
+                // 的 10M 空链用例走异常路径变慢（113 s ⇒ 越过 120 s 线 ⇒ 该套件 ok→timeout ✗，实测过 ✓）。
+                if instance.is_user_type_object(iterator_type) {
+                    instance.release(iterator);
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("'{name}' object is not iterable"),
+                    ));
+                }
                 return Err(ExecError::Unsupported {
                     opcode,
                     what: "这个对象既不是内建迭代器，也没有 `__next__`",
-                })
+                });
             }
             Err(error) => return Err(error),
         };
@@ -38,9 +142,11 @@ pub(crate) fn advance_iterator(
             Ok(value) => Ok(Some(value)),
             Err(ExecError::Raised { exception }) => {
                 // SAFETY: exception 是存活对象。
-                let raised = unsafe { exception.as_ref() }.ty();
-                if instance.is_subtype(raised, exception_type(instance, "StopIteration")) {
-                    release(instance, exception);
+                let raised = unsafe { exception.get().as_ref() }.ty();
+                if instance.is_subtype(raised, instance.hot_type(HotId::StopIteration).expect("StopIteration 已登记")) {
+                    // **吞异常要连 `pending_exception` 槽那份一起还**（round 169）：`raise()` 给槽加过
+                    // 一份保活；只还 `Err` 那份 ⇒ 槽永久钉住"异常＋回溯＋帧" ✗（`discard_raised` 一处真相 ✓）。
+                    exception.discard();
                     Ok(None)
                 } else {
                     Err(ExecError::Raised { exception })
@@ -49,78 +155,149 @@ pub(crate) fn advance_iterator(
             Err(other) => Err(other),
         };
     }
-    if ty == builtin_type(instance, "list_reverseiterator") {
-        return advance_list_reverseiterator(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "reversed") {
-        return advance_reversed(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "count") {
-        return advance_count(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "repeat") {
-        return advance_repeat(instance, iterator, opcode);
-    }
-    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
-    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
-    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
-    if ty == builtin_type(instance, "islice")
-        || Some(ty) == instance.type_named("range_iterator")
-        || Some(ty) == instance.type_named("longrange_iterator") {
+    // **`range` 迭代器快路径**（round 145 性能）：`for i in range(N)` 是最高频循环 ⇒ 先直接认
+    // 两种 range 迭代器（类型名 O(1) 查）再走专用分支过滤 ✓（先前要过 6+ 个内建名比较 ✗）。
+    if instance.hot_type_is(HotId::RangeIterator, ty)
+        || instance.hot_type_is(HotId::LongRangeIterator, ty)
+    {
         return advance_islice(instance, iterator, opcode);
     }
-    if ty == builtin_type(instance, "product") {
-        return advance_product(instance, iterator, opcode);
+    // **专用分支过滤**（round 145 性能）：普通迭代器一次哈希查就跳过整条链 ✓。
+    if instance.is_dedicated_iterator_type(ty) {
+        if let Some(result) = advance_dedicated(instance, iterator, opcode) {
+            return result;
+        }
     }
-    if ty == builtin_type(instance, "permutations") {
-        return advance_permutations(instance, iterator, opcode);
+    // **序列协议迭代器**（round 85）：`target[index]`（走**属性通道** ⇒ 用户的 `__getitem__` ✓），
+    // `IndexError` ⇒ 耗尽（结果不再交出）✓；下标只在**成功**后推进 ✓。
+    if instance.hot_type_is(HotId::Iterator, ty) {
+        let object = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::SequenceIteratorObject>() };
+        // **耗尽后永久耗尽**（round 187）：参照撞过 `IndexError` 后不再取下标 ✓
+        //（`test_iter.test_sinkstate_sequence`：耗尽后把 `a.n` 改大也必须是 `[]` ✓）。
+        if object.exhausted() {
+            return Ok(None);
+        }
+        let target = object.target();
+        let index = object.index();
+        let key = instance.new_int(index as i64);
+        let outcome = crate::executor::subscript::subscript_read(instance, target, key);
+        release(instance, key);
+        return match outcome {
+            Ok(value) => {
+                object.set_index(index + 1);
+                Ok(Some(value))
+            }
+            Err(ExecError::Raised { exception }) => {
+                let raised = unsafe { exception.get().as_ref() }.ty();
+                let index_error = instance.hot_type(HotId::IndexError).expect("IndexError 已登记");
+                // **`StopIteration` 也当耗尽**（round 187）：序列协议里 `__getitem__` 抛
+                // `StopIteration` 的旧式序列照参照**结束循环** ✓（`test_iter.test_stop_sequence` ✓）。
+                let stop_iteration = instance
+                    .hot_type(HotId::StopIteration)
+                    .expect("StopIteration 在引导期已登记");
+                if instance.is_subtype(raised, index_error)
+                    || instance.is_subtype(raised, stop_iteration)
+                {
+                    exception.discard();
+                    // **标记永久耗尽**（round 187）。
+                    object.set_exhausted();
+                    Ok(None)
+                } else {
+                    Err(ExecError::Raised { exception })
+                }
+            }
+            Err(other) => Err(other),
+        };
     }
-    if ty == builtin_type(instance, "compress") {
-        return advance_compress(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "combinations")
-        || ty == builtin_type(instance, "combinations_with_replacement") {
-        return advance_combinations(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "zip") {
-        return advance_zip(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "zip_longest") {
-        return advance_zip_longest(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "pairwise") {
-        return advance_pairwise(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "batched") {
-        return advance_batched(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "cycle") {
-        return advance_cycle(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "accumulate") {
-        return advance_accumulate(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "starmap") {
-        return advance_starmap(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "takewhile")
-        || ty == builtin_type(instance, "dropwhile")
-        || ty == builtin_type(instance, "filterfalse") {
-        return advance_takewhile(instance, iterator, opcode);
-    }
-    if ty == builtin_type(instance, "chain") {
-        return advance_chain(instance, iterator, opcode);
+    // **`iter(callable, sentinel)`**（round 85）：每步调 `callable()`，结果 `== sentinel` ⇒ 耗尽
+    // （**结果本身不再交出** ✓；参照 `callable_iterator` ✓）。两个字段是自有引用、指向迭代器外，
+    // 载荷与 `IteratorObject` 不同 ⇒ 必须在通用强转**之前**分派 ✓。
+    if instance.hot_type_is(HotId::CallableIterator, ty) {
+        let object = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::CallableIteratorObject>() };
+        // **耗尽后永久耗尽**（round 187）：参照撞到哨兵后不再调 callable ✓
+        //（`test_iter.test_sinkstate_callable` 的第二次 `list(b) == []` ✓）。
+        if object.exhausted() {
+            return Ok(None);
+        }
+        let callable = object.callable();
+        let sentinel = object.sentinel();
+        let result = call_value(instance, callable, &[], &[])?;
+        // **重入耗尽**（round 200，gh-101892）：`callable` 自己把本迭代器耗尽了（例如它内部
+        // `list(iterator)`）——参照的口径是"**本次结果不再交出**，直接 `StopIteration`" ✓；
+        // 先前只看"返回值 == 哨兵" ⇒ 重入耗尽后仍把结果交出去 ✗（`test_iter.test_iter_function_
+        // concealing_reentrant_exhaustion` 实测 "StopIteration not raised" ✓）。
+        if object.exhausted() {
+            release(instance, result);
+            return Ok(None);
+        }
+        if crate::executor::values_equal_public(instance, result, sentinel) {
+            release(instance, result);
+            object.set_exhausted();
+            return Ok(None);
+        }
+        return Ok(Some(result));
     }
     // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
     let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
-    let target = object.target();
-    let index = object.index();
-    let length = iterable_length(instance, target, opcode)?;
-    if index >= length {
+    // **字典迭代中改键 ⇒ `RuntimeError`**（`P3-41` round 42；参照口径）——
+    // 先前不检测 ⇒ `for i in d: d[i+1] = 1` 的循环**永不结束**（`test_dict.test_mutating_iteration`）。
+    // 文案两档照参照：长度变了 ⇒ `changed size`；只变键集 ⇒ `changed keys` ✓。
+    // **`items()`／`values()` 的迭代器同样要检测**（round 119）：参照里对 dict 的
+    // key／value／item 三种迭代器都报 `RuntimeError: dictionary changed size during iteration` ✓
+    //（`test_dict.test_mutating_iteration_delete_over_items`／`..._values` ✓）。
+    // 用**缓存指针**比较（这几个类型是**按需建**的：惰性建之前不存在 ✓，缓存按代数重建 ✓）。
+    let dict_iterator = instance.hot_type_is(HotId::DictKeyIterator, ty)
+        || instance.hot_type_is(HotId::DictValueIterator, ty)
+        || instance.hot_type_is(HotId::DictItemIterator, ty);
+    if dict_iterator {
+        // SAFETY: 类型身份刚确认。
+        let dict = unsafe { &*object.target().as_ptr().cast::<crate::builtin_objects::DictObject>() };
+        let changed = match object.check_dict_version(instance) {
+            Err(()) => true,
+            Ok(_) => false,
+        };
+        if changed {
+            let message = if object.guard_len() != dict.len() {
+                "dictionary changed size during iteration"
+            } else {
+                "dictionary keys changed during iteration"
+            };
+            return Err(instance.raise_builtin_error("RuntimeError", message));
+        }
+    }
+    // **耗尽哨兵**（round 110）：吐过 `StopIteration` 就永久耗尽 ✓（见 `mark_exhausted` 注释）。
+    if object.is_exhausted() {
         return Ok(None);
     }
-    let item = iterable_item(instance, target, index, opcode)?;
-    object.advance();
+    let target = object.target();
+    let index = object.index();
+    let dict_iterator = instance.hot_type_is(HotId::DictValueIterator, ty)
+        || instance.hot_type_is(HotId::DictItemIterator, ty)
+        || instance.hot_type_is(HotId::DictKeyIterator, ty);
+    let item = if dict_iterator {
+        let dict = unsafe { &*target.as_ptr().cast::<DictObject>() };
+        let Some((position, (key, value))) = dict.next_live_entry(index) else {
+            object.mark_exhausted();
+            return Ok(None);
+        };
+        object.set_index(position + 1);
+        if instance.hot_type_is(HotId::DictValueIterator, ty) {
+            instance.retain(value)
+        } else if instance.hot_type_is(HotId::DictItemIterator, ty) {
+            instance.new_tuple(vec![instance.retain(key), instance.retain(value)])
+        } else {
+            instance.retain(key)
+        }
+    } else {
+        let length = iterable_length(instance, target, opcode)?;
+        if index >= length {
+            object.mark_exhausted();
+            return Ok(None);
+        }
+        let item = iterable_item(instance, target, index, opcode)?;
+        object.advance();
+        item
+    };
     Ok(Some(item))
 }
 
@@ -673,6 +850,120 @@ fn advance_zip(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Re
         return Ok(Some(instance.new_tuple(row)));
 }
 
+/// 内建 **`map`** 的推进分支（`P3-41` round 41：从"急求值成列表"改正为惰性）。
+///
+/// 语义同 `zip`（各 inner 各取一项，**任一耗尽就收摊** ✓）＋ 每行交 `function(*row)` ✓；
+/// 函数抛异常 ⇒ 原样上抛（本轮已取的项都归还 ✓）。
+fn advance_map(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    // SAFETY: 类型身份刚确认。
+    let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
+    let crate::builtin_objects::ItStateKind::Map {
+        function,
+        iterators,
+    } = state.kind()
+    else {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "map 的状态不对",
+        });
+    };
+    // SAFETY: iterators 是本迭代器持有的 list。
+    let list = unsafe { &*iterators.as_ptr().cast::<crate::ListObject>() };
+    if list.is_empty() {
+        // `map(f)` 不合法（至少两个实参）⇒ 这里只是防御；空表 ⇒ 立刻耗尽。
+        return Ok(None);
+    }
+    let mut row: Vec<NonNull<Header>> = Vec::with_capacity(list.len());
+    for index in 0..list.len() {
+        let inner = list.item(index).expect("下标在范围内");
+        match advance_iterator(instance, inner, opcode)? {
+            Some(item) => row.push(item),
+            None => {
+                for item in row {
+                    release(instance, item);
+                }
+                return Ok(None);
+            }
+        }
+    }
+    // **`row` 是 `advance_iterator` 交来的新引用**（round 96 真泄漏修 ✗）：`call_value` 自己会
+    // 为实参 `incref` 一份 ✓ ⇒ 这里必须把**本函数的**那份还掉 ✗（先前直接漏还 ⇒ `map` 消费的每个
+    // 元素永不释放 ⇒ 官方 `test_genexps` 的「Verify re-use of tuples」拿不到 freelist 复用、
+    // 且 `map` 在大流上内存一路涨 ✓）。
+    let outcome = call_value(instance, function, &row, &[]);
+    for item in row {
+        release(instance, item);
+    }
+    outcome.map(Some)
+}
+
+/// 内建 **`filter`** 的推进分支（`P3-41` round 41：从"急求值成列表"改正为惰性）。
+///
+/// `predicate` 为 `None` ⇒ 按**真值**筛（参照语义 ✓）；否则「谓词为真就让出、为假继续取」✓。
+fn advance_filter(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    // SAFETY: 类型身份刚确认。
+    let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
+    let crate::builtin_objects::ItStateKind::Filter { predicate, inner } = state.kind() else {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "filter 的状态不对",
+        });
+    };
+    loop {
+        let Some(item) = advance_iterator(instance, inner, opcode)? else {
+            return Ok(None);
+        };
+        // **真值判定与"让出那份引用"是两件事**（round 88 真 bug 修 ✗）：先前 `predicate is None`
+        // 分支把 `item` 当 `verdict` 一起 `release`，再 `return Ok(Some(item))` ✗ ⇒ **返回的是
+        // 已经释放的指针** ⇒ 调用方（`str.join`／`list` 等）拿它再放一次就是双放／堆损坏 ✗
+        // （实测最小复现：`prog = '%(p)s' % dict(p="p"); ' '.join(filter(None, [prog]));
+        // prog.removeprefix(...)` 在 `PYAWA_QUARANTINE=1` 下报"incref 撞上已释放对象（str）" ✗；
+        // 这也让 `test_platform`／`test_random`／`test_urlparse`／`test_webbrowser` 在
+        // `PYAWA_DANGLING=1` 下报内存安全类失败 ✓）。
+        // 正确口径：**判真值期间 `item` 一直归本函数** ✓；`truthy` 才把那份引用**交出去**，
+        // 否则归还 ✓。有 predicate 时 predicate 的返回值另算一份（`call_value` 会 incref 实参 ✓）。
+        let truthy = if predicate == instance.singletons().none() {
+            match truthiness(instance, item, opcode) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, item);
+                    return Err(error);
+                }
+            }
+        } else {
+            let verdict = match call_value(instance, predicate, &[item], &[]) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, item);
+                    return Err(error);
+                }
+            };
+            let truthy = match truthiness(instance, verdict, opcode) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, verdict);
+                    release(instance, item);
+                    return Err(error);
+                }
+            };
+            release(instance, verdict);
+            truthy
+        };
+        if truthy {
+            return Ok(Some(item));
+        }
+        release(instance, item);
+    }
+}
+
 /// `zip_longest` 的推进分支（从 `advance_iterator` 原样搬来）。
 fn advance_zip_longest(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
@@ -959,12 +1250,12 @@ fn advance_starmap(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -
         // `'int' object is not iterable`）
         // SAFETY: item 是存活对象。
         let item_type = unsafe { item.as_ref() }.ty();
-        let arguments: Option<Vec<NonNull<Header>>> = if item_type == builtin_type(instance, "tuple")
+        let arguments: Option<Vec<NonNull<Header>>> = if instance.hot_type_is(HotId::Tuple, item_type)
         {
             // SAFETY: 类型身份已确认。
             let tuple = unsafe { &*item.as_ptr().cast::<TupleObject>() };
             Some((0..tuple.len()).filter_map(|index| tuple.item(index)).collect())
-        } else if item_type == builtin_type(instance, "list") {
+        } else if instance.hot_type_is(HotId::List, item_type) {
             // SAFETY: 类型身份已确认。
             let list = unsafe { &*item.as_ptr().cast::<crate::ListObject>() };
             Some((0..list.len()).filter_map(|index| list.item(index)).collect())

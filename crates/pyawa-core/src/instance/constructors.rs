@@ -4,6 +4,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -16,7 +17,7 @@ impl Instance {
                     return Some((true, value as f64));
                 }
             }
-            if self.type_named("float") == Some(ty) {
+            if self.hot_type(HotId::Float) == Some(ty) {
                 return Some((false, self.float_value(object)?));
             }
             None
@@ -43,7 +44,7 @@ impl Instance {
                     _ => return None,
                 }
             }
-            let ty = self.type_named("bytearray")?;
+            let ty = self.hot_type(HotId::ByteArray)?;
             return Some(
                 self.alloc(crate::builtin_objects::BytearrayObject::new(
                     ty,
@@ -108,8 +109,7 @@ impl Instance {
     /// 同样用"`AttributeObject` ＋ 实例字典"那一档惰性建出 ✓，装 `__args__`＝两元的 `tuple` ✓。
     /// **如实说** ✗：联合目前只是"**装得下**" ✓（不参与 `isinstance`／匹配 ✓，随 `P3-*` 再接 ✓）。
     pub fn new_union_type(&self, left: NonNull<Header>, right: NonNull<Header>) -> NonNull<Header> {
-        let union_type = self
-            .type_named("UnionType")
+        let union_type = self.hot_type(HotId::UnionType)
             .unwrap_or_else(|| self.new_attribute_type("UnionType"));
         let object = self
             .alloc(crate::builtin_objects::AttributeObject::new(
@@ -120,21 +120,22 @@ impl Instance {
             .cast::<Header>();
         // 两元 `tuple` ✓（`new_tuple` 接管传入的引用 ✓）。
         let args = self.new_tuple(vec![left, right]);
-        let _ = self.set_attribute_value(object, "__args__", args);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__args__", args),
+        );
         unsafe { self.release_object(args.as_ptr()) };
         object
     }
 
     pub fn new_generic_alias(&self, origin: NonNull<Header>, args: NonNull<Header>) -> NonNull<Header> {
-        let alias_type = self
-            .type_named("GenericAlias")
+        let alias_type = self.hot_type(HotId::GenericAlias)
             .unwrap_or_else(|| self.new_attribute_type("GenericAlias"));
         // **`__mro_entries__` 随第一次造别名装上** ✓（task-20 第 2 轮 ✓）：引导期那遍可能还没建
         // `GenericAlias` 类型 ✗ ⇒ 这里**幂等**补 ✓（`class T(Mapping[str, str])` 靠它换基类 ✓）。
         if let Some(namespace) = self.type_namespace(alias_type.cast()) {
             if self.dict_get(namespace, "__mro_entries__").is_none() {
-                let function_type = self
-                    .type_named("builtin_function_or_method")
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("builtin_function_or_method 在引导期已登记");
                 let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
                     function_type,
@@ -148,9 +149,34 @@ impl Instance {
             // **`__getattr__` 也随第一次造别名装上** ✓（task-24 尾件 ✓）：别名缺属性转给
             // `__origin__` ✓（参照 `_GenericAlias` ✓）—— `Lib/typing.py` 的 `_ProtocolMeta.__new__`
             // 读 `base.__name__` 靠它 ✓。
+            // **`__eq__`**（round 222）：`list[int] == list[int]` ✓（比 `__origin__`／`__args__`）。
+            if self.dict_get(namespace, "__eq__").is_none() {
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
+                    .expect("builtin_function_or_method 在引导期已登记");
+                let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    function_type,
+                    "__eq__",
+                    core::cell::Cell::new(
+                        crate::builtin_objects::generic_alias_eq as crate::NativeFn,
+                    ),
+                ));
+                self.dict_set(namespace, "__eq__", function.into_raw().cast::<Header>());
+            }
+            // **`__call__` 也随第一次造别名装上**（round 216）：`Group[int, list[int]](1,[2])` ✓。
+            if self.dict_get(namespace, "__call__").is_none() {
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
+                    .expect("builtin_function_or_method 在引导期已登记");
+                let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    function_type,
+                    "__call__",
+                    core::cell::Cell::new(
+                        crate::builtin_objects::generic_alias_call as crate::NativeFn,
+                    ),
+                ));
+                self.dict_set(namespace, "__call__", function.into_raw().cast::<Header>());
+            }
             if self.dict_get(namespace, "__getattr__").is_none() {
-                let function_type = self
-                    .type_named("builtin_function_or_method")
+                let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
                     .expect("builtin_function_or_method 在引导期已登记");
                 let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
                     function_type,
@@ -170,8 +196,31 @@ impl Instance {
             .into_raw()
             .cast::<Header>();
         // `set_attribute_value` 收**借用** ✓ ⇒ 不额外加减 ✓。
-        let _ = self.set_attribute_value(object, "__origin__", origin);
-        let _ = self.set_attribute_value(object, "__args__", args);
+        crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__origin__", origin),
+        );
+        // **`__args__` 恒是 `tuple`**（round 224 重落 round 222 的本体 ✓）：参照
+        // `list[int].__args__ == (int,)` ✓（`Group[int, list[int]].__args__ == (int, list[int])` ✓）；
+        // round 222 版曾被误判为"堆损坏源"撤回 —— round 224 查明真凶是
+        // `generic_alias_call` 的实参**双重释放**（见 `formatting.rs` 的注释 ✓）：
+        // 包元组只是让 `test_non_generic_subscript` 首次走到别名调用那行、从而**暴露**了它 ✓。
+        // 引用账：`new_tuple` 吃**新引用** ⇒ 先补一份；`set_attribute_value` 收借用、自己再计一份 ✓
+        // ⇒ 装完还掉构造器这份 ✓。
+        if self.tuple_items(args).is_some() {
+            crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__args__", args),
+        );
+        } else {
+            unsafe { self.incref_object(args.as_ptr()) };
+            let args_tuple = self.new_tuple(vec![args]);
+            crate::executor::runtime::discard_exec_result(
+            self,
+            self.set_attribute_value(object, "__args__", args_tuple),
+        );
+            unsafe { self.release_object(args_tuple.as_ptr()) };
+        }
         object
     }
 
@@ -183,7 +232,7 @@ impl Instance {
     pub fn new_repeat_iterator(&self, value: NonNull<Header>, remaining: i64) -> NonNull<Header> {
         // SAFETY: 调用方按 `OM-16` 保证 value 存活。
         unsafe { self.incref_object(value.as_ptr()) };
-        let ty = self.type_named("repeat").expect("引导期已登记 repeat 类型");
+        let ty = self.hot_type(HotId::Repeat).expect("引导期已登记 repeat 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Repeat {
@@ -209,7 +258,7 @@ impl Instance {
     ) -> NonNull<Header> {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self.type_named("islice").expect("引导期已登记 islice 类型");
+        let ty = self.hot_type(HotId::Islice).expect("引导期已登记 islice 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Islice {
@@ -270,8 +319,7 @@ impl Instance {
             self.incref_object(data.as_ptr());
             self.incref_object(selectors.as_ptr());
         }
-        let ty = self
-            .type_named("compress")
+        let ty = self.hot_type(HotId::Compress)
             .expect("引导期已登记 compress 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -322,7 +370,7 @@ impl Instance {
         // SAFETY: 调用方保证 pools 存活。
         unsafe { self.incref_object(pools.as_ptr()) };
         let indices = self.new_list(Vec::new());
-        let ty = self.type_named("product").expect("引导期已登记 product 类型");
+        let ty = self.hot_type(HotId::Product).expect("引导期已登记 product 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Product {
@@ -341,8 +389,7 @@ impl Instance {
         // SAFETY: 调用方保证 pool 存活。
         unsafe { self.incref_object(pool.as_ptr()) };
         let indices = self.new_list(Vec::new());
-        let ty = self
-            .type_named("permutations")
+        let ty = self.hot_type(HotId::Permutations)
             .expect("引导期已登记 permutations 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -365,10 +412,58 @@ impl Instance {
     pub fn new_zip_iterator(&self, iterators: NonNull<Header>) -> NonNull<Header> {
         // SAFETY: 调用方保证 iterators 存活。
         unsafe { self.incref_object(iterators.as_ptr()) };
-        let ty = self.type_named("zip").expect("引导期已登记 zip 类型");
+        let ty = self.hot_type(HotId::Zip).expect("引导期已登记 zip 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Zip { iterators }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个内建 **`map`** 迭代器（`P3-41` round 41；**新引用**；两个入参都**借用**）。
+    ///
+    /// `iterators` 是一个 `list`，元素都是迭代器（模块面先用 `iter_object` 造好 ✓）。
+    pub fn new_map_iterator(
+        &self,
+        function: NonNull<Header>,
+        iterators: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(function.as_ptr());
+            self.incref_object(iterators.as_ptr());
+        }
+        let ty = self.hot_type(HotId::Map).expect("引导期已登记 map 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Map {
+                function,
+                iterators,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个内建 **`filter`** 迭代器（**新引用**；两个入参都**借用**；`predicate` 可以是 `None`）。
+    pub fn new_filter_iterator(
+        &self,
+        predicate: NonNull<Header>,
+        inner: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(predicate.as_ptr());
+            self.incref_object(inner.as_ptr());
+        }
+        let ty = self.hot_type(HotId::Filter).expect("引导期已登记 filter 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Filter {
+                predicate,
+                inner,
+            }),
         ))
         .into_raw()
         .cast::<Header>()
@@ -384,8 +479,7 @@ impl Instance {
             self.incref_object(iterators.as_ptr());
             self.incref_object(fillvalue.as_ptr());
         }
-        let ty = self
-            .type_named("zip_longest")
+        let ty = self.hot_type(HotId::ZipLongest)
             .expect("引导期已登记 zip_longest 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -402,8 +496,7 @@ impl Instance {
     pub fn new_pairwise_iterator(&self, inner: NonNull<Header>) -> NonNull<Header> {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self
-            .type_named("pairwise")
+        let ty = self.hot_type(HotId::Pairwise)
             .expect("引导期已登记 pairwise 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -420,8 +513,7 @@ impl Instance {
     pub fn new_batched_iterator(&self, inner: NonNull<Header>, size: i64) -> NonNull<Header> {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self
-            .type_named("batched")
+        let ty = self.hot_type(HotId::Batched)
             .expect("引导期已登记 batched 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -440,7 +532,7 @@ impl Instance {
         // SAFETY: 调用方保证 inner 存活。
         unsafe { self.incref_object(inner.as_ptr()) };
         let cache = self.new_list(Vec::new());
-        let ty = self.type_named("cycle").expect("引导期已登记 cycle 类型");
+        let ty = self.hot_type(HotId::Cycle).expect("引导期已登记 cycle 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Cycle {
@@ -467,8 +559,7 @@ impl Instance {
                 self.incref_object(value.as_ptr());
             }
         }
-        let ty = self
-            .type_named("accumulate")
+        let ty = self.hot_type(HotId::Accumulate)
             .expect("引导期已登记 accumulate 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -493,8 +584,7 @@ impl Instance {
             self.incref_object(inner.as_ptr());
             self.incref_object(function.as_ptr());
         }
-        let ty = self
-            .type_named("starmap")
+        let ty = self.hot_type(HotId::Starmap)
             .expect("引导期已登记 starmap 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -514,7 +604,7 @@ impl Instance {
     pub fn new_chain_iterator(&self, outer: NonNull<Header>) -> NonNull<Header> {
         // SAFETY: 调用方保证 outer 存活。
         unsafe { self.incref_object(outer.as_ptr()) };
-        let ty = self.type_named("chain").expect("引导期已登记 chain 类型");
+        let ty = self.hot_type(HotId::Chain).expect("引导期已登记 chain 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Chain {
@@ -530,7 +620,7 @@ impl Instance {
     ///
     /// `current` 是**下一个**要吐的值。只含整数 ⇒ 不持对象引用。
     pub fn new_count_iterator(&self, current: i64, step: i64) -> NonNull<Header> {
-        let ty = self.type_named("count").expect("引导期已登记 count 类型");
+        let ty = self.hot_type(HotId::Count).expect("引导期已登记 count 类型");
         self.alloc(crate::builtin_objects::CountIteratorObject::new(
             ty,
             core::cell::Cell::new(current),
@@ -554,4 +644,301 @@ impl Instance {
         unsafe { ty.as_ref() }.mark_has_instance_dict();
         ty
     }
+}
+
+/// **`mappingproxy` 的构造**（round 112）：`types.MappingProxyType = type(type.__dict__)` ✓ ——
+/// 参照的 `type.__dict__` 是 **mappingproxy** 对象 ✓；本层先前直接交命名空间 dict ✗ ⇒
+/// `type(type.__dict__)` 得到 **dict** ✗ ⇒ `pprint._dispatch` 里 `mappingproxy.__repr__` 覆盖了
+/// `dict.__repr__` 的条目 ⇒ **每个 dict 都走 mappingproxy 的打印分支** ⇒ 无限递归 ✗
+/// （`test_pprint` 一团 RecursionError ✓）。
+///
+/// 口径：载荷**照样是 `DictObject`**（MRO 里把 `dict` 作为基类 ⇒ 方法面／下标／`len` 全可用 ✓）；
+/// 构造时**复制**一份条目（参照是**只读视图**；本层如实登记为"快照"，写操作不会回写底层 ✓）。
+#[allow(unsafe_code)]
+pub unsafe fn mappingproxy_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(source) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "mappingproxy() takes exactly one argument",
+        ));
+    };
+    let Some(source_entries) = instance.dict_entries(source) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "mappingproxy() argument must be a mapping",
+        ));
+    };
+    let entries: Vec<(NonNull<Header>, NonNull<Header>)> = source_entries
+        .into_iter()
+        .map(|(key, value)| {
+            // SAFETY: 借用视图 ⇒ 新字典各持一份。
+            unsafe {
+                instance.incref_object(key.as_ptr());
+                instance.incref_object(value.as_ptr());
+            }
+            (key, value)
+        })
+        .collect();
+    let proxy = instance
+        .alloc(DictObject::new(class, core::cell::RefCell::new(entries)))
+        .into_raw()
+        .cast::<Header>();
+    // **记来源类型**（round 114）：`copy()`／`repr` 要还原（`OrderedDict`／`dict`）✓。
+    let source_type = instance.type_of(source);
+    if Some(source_type) != instance.hot_type(HotId::Dict) {
+        instance.register_mappingproxy_source(proxy, source_type);
+    }
+    Ok(proxy)
+}
+
+impl Instance {
+    /// **记一份 `mappingproxy` 的来源类型**（round 114）。
+    pub fn register_mappingproxy_source(
+        &self,
+        proxy: NonNull<Header>,
+        source_type: NonNull<crate::TypeObject>,
+    ) {
+        self.mappingproxy_sources
+            .borrow_mut()
+            .insert(proxy.as_ptr() as usize, source_type);
+    }
+
+    /// 取 `mappingproxy` 的来源类型（没有 ⇒ `None`：来源就是普通 dict ✓）。
+    pub fn mappingproxy_source(&self, proxy: NonNull<Header>) -> Option<NonNull<crate::TypeObject>> {
+        self.mappingproxy_sources
+            .borrow()
+            .get(&(proxy.as_ptr() as usize))
+            .copied()
+    }
+
+    /// **`iter(callable, sentinel)`**（round 85）：造一个 `callable_iterator`（**新引用** ✓、
+    /// 两格引用各 retain 一份 ✓）。
+    pub fn new_callable_iterator(
+        &self,
+        callable: NonNull<Header>,
+        sentinel: NonNull<Header>,
+    ) -> NonNull<Header> {
+        let ty = self.hot_type(HotId::CallableIterator)
+            .expect("callable_iterator 在引导期已登记");
+        // SAFETY: 调用方保证两者存活；本对象各持一份。
+        unsafe {
+            self.incref_object(callable.as_ptr());
+            self.incref_object(sentinel.as_ptr());
+        }
+        self.alloc(crate::builtin_objects::CallableIteratorObject::new(
+            ty, callable, sentinel, core::cell::Cell::new(false),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// **登记一个"活视图" `mappingproxy`**（round 125）：`.mapping` 用 ✓。
+    pub fn register_mappingproxy_live(&self, proxy: NonNull<Header>, source: NonNull<Header>) {
+        // **源要持一份强引用**（round 195 真 bug 修 ✗）：先前只记**裸指针** ⇒ 源字典先死、
+        // 代理还活着时 `sync_mappingproxy` 会读已释放的源（UAF）✗。
+        // SAFETY: source 由调用方保证存活；登记表要自己那份。
+        unsafe { self.incref_object(source.as_ptr()) };
+        if let Some(previous) = self
+            .mappingproxy_live
+            .borrow_mut()
+            .insert(proxy.as_ptr() as usize, source)
+        {
+            // SAFETY: 被顶下来的那份由登记表持有。
+            unsafe { self.release_object(previous.as_ptr()) };
+        }
+    }
+
+    /// **代理释放时的注销**（round 195）：把活视图登记与来源类型都摘掉，并**归还源的那份强引用** ✓。
+    ///
+    /// 不注销的后果（实测）：代理地址被之后的新 dict 复用 ⇒ `sync_mappingproxy` 拿**陈旧登记**
+    /// 把老源（`test_views_mapping` 里 `d["foo"]="bar"]`）的条目**拷进新 dict** ⇒
+    /// `{} != {'foo':'bar'}` 那种"陈旧内容"随机出现 ✗（`test_dict.test_constructor` 2/5 偶发）。
+    pub fn forget_mappingproxy(&self, proxy: *mut crate::Header) {
+        let address = proxy as usize;
+        if let Some(source) = self.mappingproxy_live.borrow_mut().remove(&address) {
+            // SAFETY: 登记表持有的一份。
+            unsafe { self.release_object(source.as_ptr()) };
+        }
+        self.mappingproxy_sources.borrow_mut().remove(&address);
+    }
+
+    /// 取 `mappingproxy` 的活来源（没有 ⇒ `None`）。
+    pub fn mappingproxy_live_source(&self, proxy: NonNull<Header>) -> Option<NonNull<Header>> {
+        self.mappingproxy_live
+            .borrow()
+            .get(&(proxy.as_ptr() as usize))
+            .copied()
+    }
+
+    /// **把活视图代理的快照与源字典同步**（round 125）：`m == d` 一类入口先调 ✓。
+    /// 旧条目逐项归还（借用视图 ⇒ 需要自己 retain 新的）✓。
+    pub fn sync_mappingproxy(&self, proxy: NonNull<Header>) {
+        // **只对真的是 `mappingproxy` 的对象同步**（round 195；调用点在 `==` 上，操作数可能是普通 dict
+        // ⇒ 陈旧地址登记会把普通 dict 当成活视图 ✗）。
+        let is_proxy = self.hot_type(HotId::MappingProxy)
+            .is_some_and(|proxy_type| self.type_of(proxy) == proxy_type);
+        if !is_proxy {
+            return;
+        }
+        let Some(source) = self.mappingproxy_live_source(proxy) else {
+            return;
+        };
+        // **源必须还活着**（强引用已在登记时持有 ⇒ 正常不会死；这里再兜一层，防"登记前就死"的旧路径）✓。
+        if !self.is_live_address(source) {
+            self.forget_mappingproxy(proxy.as_ptr());
+            return;
+        }
+        let Some(entries) = self.dict_entries(source) else {
+            return;
+        };
+        // SAFETY: proxy 是 mappingproxy（DictObject 同构布局）✓。
+        let dict = unsafe { &*proxy.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+        // 清掉旧快照（键值各一份引用要归还 ✓）。
+        let old_entries = dict.entries();
+        dict.entries.borrow_mut().clear();
+        dict.hashes.borrow_mut().clear();
+        dict.deleted.set(0);
+        for (key, value) in old_entries {
+            // SAFETY: 旧引用由代理持有。
+            unsafe {
+                self.release_object(key.as_ptr());
+                self.release_object(value.as_ptr());
+            }
+        }
+        for (key, value) in entries {
+            // SAFETY: 键值由源 dict 持有；代理要自己那两份。
+            unsafe {
+                self.incref_object(key.as_ptr());
+                self.incref_object(value.as_ptr());
+            }
+            self.dict_insert_raw(proxy, key, value);
+        }
+    }
+
+    /// **按来源类型"复制"一份映射**（round 114）：`mappingproxy.copy()` 用 ✓ ——
+    /// 来源是 `OrderedDict` 一类 ⇒ 构造它的新实例 ✓（pprint 的 `mappingproxy(OrderedDict([...]))` ✓）；
+    /// 来源是普通 dict ⇒ 新 dict ✓。
+    pub fn mappingproxy_copy_like(&self, proxy: NonNull<Header>) -> Option<NonNull<Header>> {
+        let entries = self.dict_entries(proxy)?;
+        let dict = self.new_dict();
+        for (key, value) in entries {
+            self.dict_insert_raw(dict, self.retain(key), self.retain(value));
+        }
+        match self.mappingproxy_source(proxy) {
+            None => Some(dict),
+            Some(source_type) => {
+                // 调来源类型的构造函数（`OrderedDict(dict)` ✓）；实参所有权**转移**给调用 ✓。
+                let result = crate::executor::call::call_callable(
+                    self,
+                    source_type.cast::<Header>(),
+                    None,
+                    vec![dict],
+                    Vec::new(),
+                    0,
+                );
+                match result {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        // 构造失败 ⇒ 退普通 dict（如实降级 ✓；正常类不会到这里）。
+                        // **探针丢异常要还引用**（round 198 真泄漏修 ✗）。
+                        crate::executor::runtime::discard_error(self, &error);
+                        self.release(dict);
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    /// **把一份 dict 包成 `mappingproxy`**（round 112；`type.__dict__` 那条读法用 ✓）：
+    /// 载荷是**复制**的条目（本层如实登记为快照 ✓）。
+    pub fn mappingproxy_of(&self, source: NonNull<Header>) -> Option<NonNull<Header>> {
+        let class = self.hot_type(HotId::MappingProxy)?;
+        let entries = self.dict_entries(source)?;
+        let copied: Vec<(NonNull<Header>, NonNull<Header>)> = entries
+            .into_iter()
+            .map(|(key, value)| {
+                // SAFETY: 借用视图 ⇒ 新字典各持一份。
+                unsafe {
+                    self.incref_object(key.as_ptr());
+                    self.incref_object(value.as_ptr());
+                }
+                (key, value)
+            })
+            .collect();
+        Some(
+            self.alloc(DictObject::new(class, core::cell::RefCell::new(copied)))
+                .into_raw()
+                .cast::<Header>(),
+        )
+    }
+}
+
+/// `mappingproxy` 的 `repr`：`mappingproxy({...})` ✓（内层照 dict 的 repr）。
+pub unsafe fn mappingproxy_repr(
+    ptr: *mut Header,
+    instance: &Instance,
+) -> Result<String, crate::ExecError> {
+    let object = NonNull::new(ptr).expect("调用方保证非空");
+    // **有来源类型**（`OrderedDict` 等）⇒ 内层照它的 repr ✓（`mappingproxy(OrderedDict([...]))` ✓）。
+    if instance.mappingproxy_source(object).is_some() {
+        if let Some(copied) = instance.mappingproxy_copy_like(object) {
+            // SAFETY: copied 是新引用。
+            let text = instance.object_repr(copied);
+            unsafe { instance.release_object(copied.as_ptr()) };
+            return Ok(format!("mappingproxy({})", text?));
+        }
+    }
+    // SAFETY: 载荷与 dict 同构。
+    let inner = unsafe { crate::builtin_objects::dict_repr(ptr, instance) }?;
+    Ok(format!("mappingproxy({inner})"))
+}
+
+/// **`mappingproxy.copy()`**（round 114）：交**按来源类型复制**的映射 ✓（见
+/// [`Instance::mappingproxy_copy_like`]）。
+pub(crate) fn mappingproxy_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, _) = crate::builtin_objects::container_receiver(bound, args);
+    let Some(proxy) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "copy() 需要 mappingproxy"));
+    };
+    instance
+        .mappingproxy_copy_like(proxy)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "mappingproxy 的载荷不是映射"))
+}
+
+/// **`mappingproxy` 的属性面**：`copy` 走自己的实现 ✓，其余委托 `dict_getattr` ✓。
+pub unsafe fn mappingproxy_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if name == "copy" {
+        let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
+            .expect("builtin_function_or_method 已登记");
+        let native = instance.alloc(BuiltinFunctionObject::new(
+            method_type,
+            "copy",
+            core::cell::Cell::new(mappingproxy_copy_native),
+        ));
+        let native_raw = native.into_raw().cast::<Header>();
+        // SAFETY: 方法对象要自己那份 self。
+        unsafe { instance.incref_object(ptr) };
+        let bound = instance.alloc(crate::MethodObject::new(
+            instance.hot_type(HotId::Method).expect("method 已登记"),
+            native_raw,
+            unsafe { NonNull::new_unchecked(ptr) },
+        ));
+        return Some(bound.into_raw().cast::<Header>());
+    }
+    // SAFETY: 契约同上（槽位保证 ptr 是本类型族存活对象）。
+    unsafe { crate::builtin_objects::dict_getattr(ptr, name, instance) }
 }

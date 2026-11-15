@@ -174,6 +174,47 @@ fn stream_writeln(
 
 /// `flush()` ✓：本层**没有缓冲**（每次 `write` 都已经经 `fs` 出去 ✓）⇒ 无事可做 ✓ ——
 /// **如实**返回 `None` ✓，不是"假装刷新" ✗（确实没有东西可刷 ✓）。
+/// `sys.stdout.fileno()` 一族（round 95）：返回标准流描述符（`1`／`2`）✓。
+///
+/// 动因：`Lib/shutil.py` 的 `get_terminal_size` 在**导入期**就 `sys.__stdout__.fileno()` ✗ ⇒
+/// 官方 `test_shutil` 一上来 `AttributeError: '_io.TextIOWrapper' object has no attribute 'fileno'` ✗。
+fn stream_fileno(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "fileno 要绑定实例"))?;
+    let value = instance
+        .attribute_optional_of(this, "_handle")
+        .ok()
+        .flatten()
+        .and_then(|handle| instance.int_of(handle))
+        .and_then(|value| value.to_i64())
+        .unwrap_or(1);
+    Ok(instance.new_int(value))
+}
+
+/// `isatty()`：本层标准流在**非终端**宿主上按参照返回 `False` ✓（终端检测能力域随后补）。
+fn stream_isatty(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_bool(false))
+}
+
+/// 恒 `False` 的一族（`writable`／`readable`／`seekable` 之外的布尔面）：返回值由调用处决定 ✓。
+fn stream_false(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_bool(false))
+}
+
 fn stream_flush(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -344,6 +385,97 @@ fn stderr_writeln(
 ///
 /// **逐对象**挂方法 ✓：`stdout` 与 `stderr` 是**同一种类型**（类型只登记一次 ✓），但**句柄不同**
 /// ⇒ 方法必须按对象分 ✓ —— 塞进共享类型字典会把两个句柄混成一个 ✗。
+/// **最小 `sys.stdin`**（round 49）：`Lib/pdb.py:954` 一类代码会读写 `sys.stdin`（`doctest` 的
+/// `pdb.set_trace` 补丁路径触到它 ✓）。本层**没有**真实标准输入读取能力（`CM-26` 方向）⇒
+/// 如实给"**恒 EOF**"的文本流：`read()`／`readline()` ⇒ `''`、`readlines()` ⇒ `[]`、
+/// `isatty()` ⇒ `False`；属性面照 `sys.stdout` 的同款最小面 ✓（不伪造交互能力 ✗）。
+pub fn make_stdin_stream(instance: &Instance) -> NonNull<Header> {
+    let stream_type = match instance.type_named(TEXT_WRAPPER) {
+        Some(existing) => existing,
+        None => instance.new_attribute_type(TEXT_WRAPPER),
+    };
+    let attributes = instance.new_dict();
+    for (name, handler) in [
+        ("read", stdin_read as NativeFn),
+        ("readline", stdin_read as NativeFn),
+        ("readlines", stdin_readlines as NativeFn),
+        ("flush", stream_flush as NativeFn),
+        ("close", stdin_none as NativeFn),
+        ("isatty", stdin_false as NativeFn),
+        ("readable", stdin_true as NativeFn),
+        ("writable", stdin_false as NativeFn),
+        ("seekable", stdin_false as NativeFn),
+    ] {
+        let native = crate::builtins_module::make_native(instance, name, handler);
+        instance.dict_set(attributes, name, native);
+        instance.release(native);
+    }
+    let closed = instance.new_bool(false);
+    instance.dict_set(attributes, "closed", closed);
+    instance.release(closed);
+    for (name, value) in [
+        ("encoding", STREAM_ENCODING_NAME),
+        ("errors", "surrogateescape"),
+        ("name", "<stdin>"),
+        ("mode", "r"),
+    ] {
+        let text = instance.new_str(value);
+        instance.dict_set(attributes, name, text);
+        instance.release(text);
+    }
+    let object = instance.alloc(AttributeObject::new(
+        stream_type,
+        RefCell::new(Some(attributes)),
+    ));
+    let object_header = object.into_raw().cast::<Header>();
+    object_header
+}
+
+fn stdin_read(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_str(""))
+}
+
+fn stdin_readlines(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_list(Vec::new()))
+}
+
+fn stdin_none(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.singletons().none())
+}
+
+fn stdin_false(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.retain(instance.singletons().boolean(false)))
+}
+
+fn stdin_true(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.retain(instance.singletons().boolean(true)))
+}
+
 pub fn make_stream(instance: &Instance, handle: u64) -> NonNull<Header> {
     // **类型只登记一次**：`stdout` 与 `stderr` 是同一种文本流 ✓。重复 `new_attribute_type`
     // 用同名会写坏类型注册表 ✗（第 94 轮实测：子进程退出时 `tcache_thread_shutdown():
@@ -396,9 +528,38 @@ pub fn make_stream(instance: &Instance, handle: u64) -> NonNull<Header> {
     let line_buffering = instance.new_bool(false);
     instance.dict_set(attributes, "line_buffering", line_buffering);
     instance.release(line_buffering);
+    // `fileno()` 要读它 ✓（`write` 用的 handler 已经把句柄写死在闭包里，这里只存一份数据 ✓）。
+    let handle_value = instance.new_int(handle as i64);
+    instance.dict_set(attributes, "_handle", handle_value);
+    instance.release(handle_value);
     let object = instance.alloc(AttributeObject::new(
         stream_type,
         RefCell::new(Some(attributes)),
     ));
-    object.into_raw().cast::<Header>()
+    let object_header = object.into_raw().cast::<Header>();
+    // **标准流的 fd／tty 面绑成"绑定方法"**（round 95）：`shutil.get_terminal_size` 导入期要
+    // `sys.__stdout__.fileno()` ✗（实例字典里放**裸函数**时取到的是值、调用不带 self ✗ ⇒
+    // `TypeError: fileno 要绑定实例` ✗）。这里显式造 MethodObject 绑上去 ✓。
+    for (name, handler) in [
+        ("fileno", stream_fileno as NativeFn),
+        ("isatty", stream_isatty as NativeFn),
+        ("writable", stream_flush as NativeFn),
+        ("readable", stream_false as NativeFn),
+        ("seekable", stream_false as NativeFn),
+    ] {
+        let native = crate::builtins_module::make_native(instance, name, handler);
+        let method_type = instance
+            .type_named("method")
+            .expect("`method` 类型已登记");
+        let bound = instance.alloc(pyawa_core::MethodObject::new(
+            method_type,
+            native,
+            object_header,
+        ));
+        let bound_header = bound.into_raw().cast::<Header>();
+        // `set_attribute_value` 是**借用语义**（它自己 retain ✓）⇒ 这里那份新引用用完即还 ✓。
+        let _ = instance.set_attribute_value(object_header, name, bound_header);
+        instance.release(bound_header);
+    }
+    object_header
 }

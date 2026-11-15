@@ -138,7 +138,7 @@ fn compare_digest_matches_the_reference() {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             assert_eq!(unsafe { ty.as_ref() }.name(), "TypeError");
         }
@@ -150,7 +150,7 @@ fn compare_digest_matches_the_reference() {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             assert_eq!(unsafe { ty.as_ref() }.name(), "TypeError");
         }
@@ -191,7 +191,7 @@ fn attributes_and_new_and_honest_boundaries() {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             assert_eq!(unsafe { ty.as_ref() }.name(), "NotImplementedError");
         }
@@ -203,7 +203,7 @@ fn attributes_and_new_and_honest_boundaries() {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             assert_eq!(unsafe { ty.as_ref() }.name(), "ValueError");
         }
@@ -215,7 +215,7 @@ fn attributes_and_new_and_honest_boundaries() {
     match error {
         ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
+            let ty = unsafe { exception.get().as_ref() }.ty();
             // SAFETY: ty 由注册表持有。
             assert_eq!(unsafe { ty.as_ref() }.name(), "NotImplementedError");
         }

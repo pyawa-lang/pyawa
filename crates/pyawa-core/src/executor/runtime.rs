@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`advance_iterator`、`ascii_escape`、`float_digits`、`integer_digits`、`localsplus_name`、`new_exception`、`pad_number`、`pad_text`、`release` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::executor::{advance_iterator, ascii_escape, float_digits, integer_digits, localsplus_name, new_exception, pad_number, pad_text, release};
 use crate::executor::ExecError;
 use crate::frame::Frame;
@@ -46,16 +47,6 @@ pub(crate) fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObjec
         .unwrap_or_else(|| panic!("TS-41：{name} 应当已注册"))
 }
 
-/// 一个 `str` 对象的内容是否等于给定的 Rust 字符串。
-pub(crate) fn str_matches_public(instance: &Instance, raw: NonNull<Header>, expected: &str) -> bool {
-    // SAFETY: 调用方保证 raw 是存活对象。
-    if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
-        return false;
-    }
-    // P3-38 S2c：内部**合法 ASCII** 名字比较走合法视图（WTF-8 ⇒ false，不 panic ✓）
-    instance.text_of(raw) == Some(expected)
-}
-
 /// **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测先撞上的是
 /// `codecs.py` 的 `raise SystemError('… %s' % e)` ✓（`encodings.*` 那一族因此全红 ✗）。
 ///
@@ -67,6 +58,47 @@ pub(crate) fn str_matches_public(instance: &Instance, raw: NonNull<Header>, expe
 /// - 错误消息照实测：`not enough arguments for format string`／
 ///   `not all arguments converted during string formatting`／
 ///   `%d format: a real number is required, not str` ✓。
+/// `%*`／`%.*` 的**实参取宽**（`P3-42` round 44）：取下一个位置实参（tuple 形态）或单个右操作数，
+/// 必须是整数（参照 `TypeError: * wants int` ✓）。
+fn format_star_argument(
+    instance: &Instance,
+    items: &Option<Vec<NonNull<Header>>>,
+    right: NonNull<Header>,
+    argument_index: &mut usize,
+) -> Result<i64, ExecError> {
+    let value = match items {
+        Some(items) => *items.get(*argument_index).ok_or_else(|| {
+            instance.raise_builtin_error("TypeError", "not enough arguments for format string")
+        })?,
+        None => {
+            if *argument_index > 0 {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "not enough arguments for format string",
+                ));
+            }
+            right
+        }
+    };
+    *argument_index += 1;
+    match instance.int_of(value) {
+        // **超出 C `ssize_t` 的星号实参** ⇒ 参照给 `OverflowError`（不是饱和 ✗）：
+        // `'%*s' % (sys.maxsize + 1, '')` ✓（`test_formatting` 钉住）。
+        Some(number) => match number.to_i64() {
+            Some(fits) => Ok(fits),
+            None => {
+                let type_name = if number.to_bigint().signum() < 0 { "negative" } else { "positive" };
+                let _ = type_name;
+                Err(instance.raise_builtin_error(
+                    "OverflowError",
+                    "Python int too large to convert to C ssize_t",
+                ))
+            }
+        },
+        None => Err(instance.raise_builtin_error("TypeError", "* wants int")),
+    }
+}
+
 pub(crate) fn percent_format(
     instance: &Instance,
     template: &str,
@@ -86,11 +118,9 @@ pub(crate) fn percent_format(
     // ⇒ 生成类的 `__repr__`（`repr_fmt % self` ✓）**自递归** ✓（实测 `RecursionError` ✓）。
     // 参照口径 ✓：`%` 的右操作数是 tuple **或 tuple 子类** ⇒ 位置实参 ✓；dict **或子类** ⇒ 映射 ✓。
     let right_type = instance.type_of(right);
-    let is_tuple_like = instance
-        .type_named("tuple")
+    let is_tuple_like = instance.hot_type(HotId::Tuple)
         .is_some_and(|tuple| instance.is_subtype(right_type, tuple));
-    let is_dict_like = instance
-        .type_named("dict")
+    let is_dict_like = instance.hot_type(HotId::Dict)
         .is_some_and(|dict| instance.is_subtype(right_type, dict));
     let items: Option<Vec<NonNull<Header>>> =
         if is_tuple_like { instance.tuple_items(right) } else { None };
@@ -115,16 +145,30 @@ pub(crate) fn percent_format(
             cursor += 1;
             continue;
         }
-        // `%(名字)`
+        // `%(名字)`：**括号要配平** ✓（`P3-42` round 44）：参照支持
+        // `'%((foo))s' % {'(foo)': 'bar'}` ✓ —— 先前在**第一个** `)` 就停 ⇒ 键取成 `'(foo'` ✗。
         let mut key: Option<String> = None;
         if characters[cursor] == '(' {
             cursor += 1;
+            let mut depth = 1usize;
             let mut name = String::new();
-            while cursor < characters.len() && characters[cursor] != ')' {
-                name.push(characters[cursor]);
+            while cursor < characters.len() {
+                let character = characters[cursor];
+                if character == '(' {
+                    depth += 1;
+                    name.push(character);
+                } else if character == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    name.push(character);
+                } else {
+                    name.push(character);
+                }
                 cursor += 1;
             }
-            if cursor >= characters.len() {
+            if cursor >= characters.len() || depth != 0 {
                 return Err(instance.raise_builtin_error("ValueError", "incomplete format key"));
             }
             cursor += 1;
@@ -144,30 +188,50 @@ pub(crate) fn percent_format(
             }
             cursor += 1;
         }
-        // 宽度
-        if cursor < characters.len() && characters[cursor] == '*' {
-            return Err(instance.raise_builtin_error(
-                "NotImplementedError",
-                "`%*` 的宽度取自实参尚未接线（宽度写死在格式串里可以）",
-            ));
-        }
+        // 宽度（`*` ⇒ 从实参取；负数 ⇒ 左对齐 ＋ 绝对值 ✓，照参照）
         let mut width: Option<usize> = None;
-        while cursor < characters.len() && characters[cursor].is_ascii_digit() {
-            let digit = characters[cursor] as usize - '0' as usize;
-            width = Some(width.unwrap_or(0) * 10 + digit);
+        if cursor < characters.len() && characters[cursor] == '*' {
+            let number = format_star_argument(instance, &items, right, &mut argument_index)?;
+            if number < 0 {
+                left_align = true;
+                width = Some(number.unsigned_abs() as usize);
+            } else {
+                width = Some(number as usize);
+            }
             cursor += 1;
+        } else {
+            while cursor < characters.len() && characters[cursor].is_ascii_digit() {
+                let digit = characters[cursor] as usize - '0' as usize;
+                let next = width.unwrap_or(0).saturating_mul(10).saturating_add(digit);
+                // **宽度上限** ✓：参照对离谱宽度给 `ValueError: width too big`
+                // （`'%%%df' % (2**64)` 那条 ✓）；`INT_MAX` 以内才收。
+                if next > i32::MAX as usize {
+                    return Err(instance.raise_builtin_error("ValueError", "width too big"));
+                }
+                width = Some(next);
+                cursor += 1;
+            }
         }
-        // 精度
+        // 精度（`.*` 同样取实参；负数按 0 ✓）
         let mut precision: Option<usize> = None;
         if cursor < characters.len() && characters[cursor] == '.' {
             cursor += 1;
-            let mut value = 0usize;
-            while cursor < characters.len() && characters[cursor].is_ascii_digit() {
-                let digit = characters[cursor] as usize - '0' as usize;
-                value = value * 10 + digit;
+            if cursor < characters.len() && characters[cursor] == '*' {
+                let number = format_star_argument(instance, &items, right, &mut argument_index)?;
+                precision = Some(if number < 0 { 0 } else { number as usize });
                 cursor += 1;
+            } else {
+                let mut value = 0u64;
+                while cursor < characters.len() && characters[cursor].is_ascii_digit() {
+                    let digit = characters[cursor] as u64 - '0' as u64;
+                    value = value.saturating_mul(10).saturating_add(digit);
+                    if value > i32::MAX as u64 {
+                        return Err(instance.raise_builtin_error("ValueError", "precision too big"));
+                    }
+                    cursor += 1;
+                }
+                precision = Some(value as usize);
             }
-            precision = Some(value);
         }
         // 长度修饰符（参照忽略）
         while cursor < characters.len() && matches!(characters[cursor], 'h' | 'l' | 'L') {
@@ -353,6 +417,21 @@ pub(crate) fn percent_format(
             pad_text(&mut out, &body, width, left_align);
         }
     }
+    // **模板里一个转换都没有、却给了实参** ⇒ 照参照报错 ✓（`'abc' % X()`／`'abc' % (1, 2)`）。
+    // 先前只在**用过转换**后才查 ✓ ⇒ `'abc'.__mod__(X())` 静默返回 `'abc'` ✗（`test_formatting` ✓）。
+    if argument_index == 0 {
+        let supplied = match &items {
+            Some(items) => !items.is_empty(),
+            // 单个实参（含 dict）都算"给了" ✓；右操作数是空 tuple 时才不算 ✓。
+            None => true,
+        };
+        if supplied {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "not all arguments converted during string formatting",
+            ));
+        }
+    }
     // 位置实参没被用完 ⇒ 照参照报错 ✓（`'%s' % (1, 2)`）
     if positional_used {
         if let Some(items) = &items {
@@ -382,7 +461,7 @@ pub(crate) fn unsupported_operand(
         &{
             // **句首站点** ✓（第 663 轮，门控 `PYAWA_BINOP_DEBUG=1`）：两个类型名放句首 ✓
             //（尾巴会被长消息挤掉 ✗ —— 这是这条链上反复吃过亏的地方 ✓）。
-            if crate::diag::flag("PYAWA_BINOP_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_BINOP_DEBUG") {
                 let left_show = instance
                     .object_repr(left)
                     .unwrap_or_else(|_| "<读不出>".to_owned());
@@ -400,20 +479,220 @@ pub(crate) fn unsupported_operand(
 }
 
 /// 抛一个异常：记在实例上（借它保活）并交出错误（`BC-60` ②）。
+///
+/// `#[track_caller]`：B 引用账本（task-16）用它把"生成点"记到 `raise()` 的**调用者**
+/// （`raise_builtin` 一族同样 `#[track_caller]` ⇒ 能穿透到真正的创建处）。
+#[track_caller]
 pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
+    // **按"站点"盯异常**（round 192 诊断）：`PYAWA_WATCH_SITE=<site 子串>` 时，
+    // 该站点抛出的异常打回溯（找泄漏的 AttributeError 是哪条 Rust 路径造的 ✓）。
+    static WATCH_SITE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if crate::diag::flag_cached("PYAWA_WATCH_SITE", &WATCH_SITE) {
+        let wanted = std::env::var_os("PYAWA_WATCH_SITE")
+            .expect("刚确认设置过")
+            .to_string_lossy()
+            .into_owned();
+        let site = instance.current_site();
+        if site.contains(&wanted) {
+            eprintln!(
+                "[watch-site] raise at {site}\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+            // **顺带把这一颗盯住**（`PYAWA_WATCH_SITE_WATCH=1`）：之后它的每次 incref/decref
+            // 都会打现场＋回溯 ⇒ 找出"谁加了引用没还" ✓。
+            if std::env::var_os("PYAWA_WATCH_SITE_WATCH").is_some() {
+                instance.watch_address(exception);
+            }
+        }
+    }
+    // **异常分配位点诊断**（round 165）：`PYAWA_EXC_SITE=1` 时记下"哪个位点抛的"。
+    static EXC_SITE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if crate::diag::flag_cached("PYAWA_EXC_SITE", &EXC_SITE) {
+        instance.record_exception_site(exception, instance.current_site());
+    }
     // **两份所有权**：实例状态一份、`Err(Raised)` 一份——所以这里必须为状态**新增**一份。
     // 少了这一步就是双重所有权：状态与错误各自以为"我持有它"，先释放的一方让另一方悬垂
     // （症状：调用方拿到 `Err(Raised)` 里的异常对象时读到已释放内存）。
     // `Err(Raised)` 那一份由派发器接手（`push` 进值栈）或由调用方消费。
     // SAFETY: exception 由调用方保证存活。
     unsafe { instance.incref_object(exception.as_ptr()) };
-    if let Some(previous) = instance.set_pending_exception(Some(exception)) {
-        release(instance, previous);
+    attach_traceback(instance, exception);
+    // 旧 pending 由 `PendingRef` 的 Drop 归还（阶段 2/A：不再有"交回裸指针要记得还"）。
+    let _previous = instance.replace_pending(Some(exception));
+    // **B 引用账本**（task-16）：`PYAWA_GC_LOG=4` 时记"生成一次 ＋ 移交 pending 一次"；
+    // 关闭时本调用只是一次 `OnceLock` 读（在异常路径上，正常路径零分支）。
+    crate::error_ledger::record_raised(instance, exception);
+    // **RAII 守卫接管 `Err` 那份所有权**（阶段 2/A）：调用方丢弃错误时 Drop 自动归还。
+    ExecError::Raised {
+        exception: crate::raise_guard::RaiseRef::from_owned(instance, exception),
     }
-    ExecError::Raised { exception }
+}
+
+/// **丢弃一个"已交出去的"未捕获异常**（round 81）：`Err(Raised)` 那一份引用 + `pending_exception`
+/// 槽里同款那份一并归还 ✓（宿主已把消息格式化到自己的槽里，异常对象不再需要 ✓）。
+///
+/// 动因：`pa_exec_string` 一族的错误分支只取消息、**两份引用都不还** ✗ ⇒ 宿主每执行一次抛异常的脚本
+/// 就漏一个"异常＋回溯链＋整帧局部"（嵌入宿主长期运行会持续涨内存 ✗）。只核指针、不解引用 ✓。
+/// **丢掉一个 `ExecError`**（round 198）：「有就调用、没有就算了」一类的探针分支里，
+/// `Err(Raised)` 里那份异常引用**必须还**（否则每探一次泄漏"异常＋回溯＋帧" ✗）。
+/// 统一走 `discard_raised`（release `Err` 那份 ＋ 若 `pending` 仍是它则清槽）✓。
+pub(crate) fn discard_error(_instance: &Instance, error: &ExecError) {
+    // **RAII 后这里只是"提前丢弃"**：`RaiseRef::discard` 幂等，Drop 也走同一条路。
+    if let ExecError::Raised { exception } = error {
+        exception.discard();
+    }
+}
+
+/// **显式丢弃一个 `Result<(), ExecError>`**（`CX-30`／task-18）：给"错误确实可忽略、但**不许泄漏
+/// 异常引用**"的调用点用（`set_attribute_value`／`instance_attribute_set`／探针失败等）。
+///
+/// `Err(Raised)` 的异常引用走 [`discard_error`] 还清（`Err` 那份 ＋ `pending` 槽若仍是它）；
+/// 其余变体无引用载荷，直接忘掉。**语义不变**：调用方本来就不处理这个错误。
+pub(crate) fn discard_exec_result(instance: &Instance, result: Result<(), ExecError>) {
+    if let Err(error) = result {
+        discard_error(instance, &error);
+    }
+}
+
+/// **显式丢弃一个 `Result<(), CapabilityCallError>`**（`CX-30` 的"统一显式丢弃入口"）：
+/// 能力调用错误**无引用载荷**，命名化只为把"裸 `let _ =`"变成可审计的入口。
+pub(crate) fn discard_capability_result(
+    result: Result<(), crate::CapabilityCallError>,
+) {
+    let _ = result;
+}
+
+/// **发一条 `DeprecationWarning`**（round 48）：从核心侧**惰性**走 Python 的 `warnings.warn` ✓ ——
+/// `Lib/warnings.py` 在 `_warnings` 缺席时回退到纯 Python `_py_warnings` ✓，所以只要 `warnings`
+/// 已在 `sys.modules` 里、且有 `warn`，就能被 `catch_warnings(record=True)` 记到 ✓。
+///
+/// 边界（如实 ✓）：① `warnings` **还没被 import** 时静默跳过（参照会惰性 import；本层从 Rust 侧
+/// 主动触发 import 会与循环导入打架 ✗，留后续轮）；② `warn` 自己抛的异常也**吞掉**（参照里
+/// `simplefilter("error")` 会把警告变异常，本层未接线 —— 留后续轮）。
+pub(crate) fn warn_deprecation(instance: &Instance, message: &str) {
+    let Some(modules) = instance.modules() else {
+        return;
+    };
+    let Some(warnings) = instance.dict_get(modules, "warnings") else {
+        return;
+    };
+    let warn = match crate::executor::attribute::attribute_optional(instance, warnings, "warn") {
+        Ok(Some(warn)) => warn,
+        Ok(None) => return,
+        Err(error) => {
+            // **探针失败要还异常**（round 256 真泄漏修 ✗）。
+            discard_error(instance, &error);
+            return;
+        }
+    };
+    let text = instance.new_str(message);
+    let category = instance.type_value(
+        instance.hot_type(HotId::DeprecationWarning)
+            .expect("DeprecationWarning 已登记"),
+    );
+    let outcome = crate::executor::call::call_value(instance, warn, &[text, category], &[]);
+    // SAFETY: 这些都是本函数持有的新引用。
+    unsafe {
+        instance.release_object(warn.as_ptr());
+        instance.release_object(text.as_ptr());
+        instance.release_object(category.as_ptr());
+    }
+    if let Ok(result) = outcome {
+        release(instance, result);
+    } else if let Err(ExecError::Raised { exception }) = outcome {
+        // SAFETY: 错误里那份引用在这里消费。
+        unsafe { instance.release_object(exception.get().as_ptr()) };
+    }
+}
+
+/// **给异常挂上当前帧的 traceback**（round 49）：`Lib/doctest.py:1407` 的
+/// `exc.__traceback__.tb_next` 钉住 —— 先前只有 `RAISE_VARARGS` 的显式 `raise` 才挂 ✗，而
+/// **直接构造 `Err(Raised)`** 的路径（`compile()` 的 SyntaxError、生成器 `throw` 的首抛先）全都没挂
+/// ⇒ doctest 一比较回溯就是 `'NoneType' object has no attribute 'tb_next'` ✗。
+/// **尽力而为**（没有当前帧、或异常没有实例字典 ⇒ 如实不挂 ✓）。
+pub(crate) fn attach_traceback(instance: &Instance, exception: NonNull<Header>) {
+    if crate::diag::flag_site!("PYAWA_NO_TRACEBACK_ATTACH") {
+        return;
+    }
+    // **控制流异常不挂回溯**（round 159）：`unittest.SkipTest` 只携带"理由字符串"（`str(e)` ✓），
+    // 从不读 `__traceback__`；而挂上回溯后，**被测函数的整条帧链**（含 70k 条目的局部）会跟着异常
+    // 活到套件结束 ⇒ live 2.6 M ⇒ 全量 GC 1.3 s/次 ✗（实测 `test_weakref` 类内 177 s 的 GC）。
+    // 这是**文档化的如实偏差**：SkipTest 的 `__traceback__` 为 `None`（参照会挂 ✓）。
+    // 其它所有异常照旧挂 ✓（`test_raise`／doctest 一族要 `tb_next` ✓）。
+    let exception_type = instance.type_of(exception);
+    if instance.type_name(exception_type) == "SkipTest" {
+        return;
+    }
+    let Some(frame) = instance.current_frame() else {
+        return;
+    };
+    // **保住"最近一次抛出"槽**（round 84）：下面的属性探针（`attribute_optional_of`）会对
+    // **没有实例字典**的异常内部抛一个 `AttributeError`（`raise()` 会把 `pending_exception`
+    // 换成它、并释放掉原异常那份保活）⇒ 宿主随后读 `pending_exception` 会拿到
+    // `AttributeError`（`assignment_emission` 的 TS-47 用例即中 ✓）。
+    // 这里存一份**自有引用**，函数结束时把槽恢复成原来的指针 ✓（引用账：临时 +1 起、最后归还 ✓）。
+    let saved_pending = instance.pending_exception();
+    if let Some(pointer) = saved_pending {
+        // SAFETY: 槽里的指针对应存活对象（由实例保活）。
+        unsafe { instance.incref_object(pointer.as_ptr()) };
+    }
+    // 结束时把槽**先清空**、再把开头那份**自有引用转交**给槽（见函数尾 ✓）。
+    // **把旧回溯接到新回溯的 `tb_next` 上**（round 53，照参照的重抛语义 ✓）：先前直接
+    // `set_attribute_value` **替换** ✗ ⇒ 旧回溯（连同它持有的帧链）在**正在抛出新异常的路径里**
+    // 就被释放 ⇒ 那条链上的帧/代码对象与调用栈/GC 相互踩踏 ⇒ `test_extcall` 稳定堆损坏
+    // （`PYAWA_NO_TRACEBACK_ATTACH=1` 或"只挂第一次"都不崩，round 52/53 实测 ✓）。
+    // 现在旧回溯由新回溯的 `tb_next` **继续持有** ⇒ 替换/释放都安全 ✓，`tb_next` 也终于成链 ✓。
+    // **可选属性探针走"丢弃即还"的统一口**（task-18 `.ok()` 族）：先前 `.ok().flatten()` 把
+    // `Err(Raised)` 那份异常引用丢掉（异常无实例字典 / 探针抛错时漏一颗）。这里用
+    // `attribute_optional_discarding`（探针失败 ⇒ 内部 `discard_error`，返回 `None`）✓。
+    let previous = instance
+        .attribute_optional_discarding(exception, "__traceback__")
+        .filter(|value| *value != instance.singletons().none());
+    // **同一帧不重复入链**（round 188）：异常在协议层（`iter()`／`next()`）里被"重新抛出"时，
+    // 本层会再走一次 `raise()` ⇒ 先前给**同一个帧**又接一节 tb ✗（`__init__` 会出现两节 ✓ 参照只一节 ✗）。
+    // 若已有回溯的第一节就是当前帧 ⇒ 不新建、直接沿用（更深的链原样保留 ✓）。
+    if let Some(previous) = previous {
+        if let Some(previous_frame) = instance.attribute_optional_discarding(previous, "tb_frame") {
+            if previous_frame == frame {
+                // **探针交出的 `previous_frame` 也要还**（round 197 真泄漏修 ✗）：它来自
+                // `attribute_optional_of`（**新引用**）；先前这个早退分支只还了 `previous`（回溯对象），
+                // 把 `previous_frame` 那份漏了 ⇒ 帧 rc 永远多 1 ⇒ 整条帧链（局部变量）不释放 ✗
+                // （实测 `fai2.py`：`S.__getitem__` 帧 +3/−2、末态 rc=1、`A.__del__` 不跑 ✓）。
+                // SAFETY: 探针交出的新引用。
+                unsafe { instance.release_object(previous_frame.as_ptr()) };
+                // SAFETY: previous 是上面探针交出的新引用。
+                unsafe { instance.release_object(previous.as_ptr()) };
+                // **恢复"最近一次抛出"槽**（阶段 2/A）：一次性换回开头保住的那份——
+                // 被顶下来的当前值由 `PendingRef` 的 Drop 归还。
+                let _restored = instance.replace_pending(saved_pending);
+                return;
+            }
+            // SAFETY: 探针交出的新引用，比较完即还。
+            unsafe { instance.release_object(previous_frame.as_ptr()) };
+        }
+    }
+    let traceback = instance.new_traceback(frame);
+    if let Some(previous) = previous {
+        crate::executor::runtime::discard_exec_result(
+        instance,
+        instance.set_attribute_value(traceback, "tb_next", previous),
+    );
+        // SAFETY: previous 是 `attribute_optional_of` 交出的新引用。
+        unsafe { instance.release_object(previous.as_ptr()) };
+    }
+    // **尽力而为**（异常实例若没有实例字典，如实不挂 ✓）。
+    crate::executor::runtime::discard_exec_result(
+        instance,
+        instance.set_attribute_value(exception, "__traceback__", traceback),
+    );
+    release(instance, traceback);
+    // 恢复"最近一次抛出"槽（见开头 ✓）：一次性换回开头保住的那份（探针可能把槽换成
+    // `AttributeError`，被顶下来的由 `PendingRef` 的 Drop 归还）。
+    let _restored = instance.replace_pending(saved_pending);
 }
 
 /// 抛一个内建异常（带消息）。
+#[track_caller]
 pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> ExecError {
     let exception = new_exception(instance, exception_type(instance, name), message);
     raise(instance, exception)
@@ -423,6 +702,7 @@ pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> E
 ///
 /// 给 `pyawa-stdlib` 用（`CX-22`：stdlib 侧不能碰异常载荷布局）——`sys.exit` 要造
 /// `SystemExit(载荷)`，而载荷的**读取**在 [`uncaught_system_exit`] 里（同一处真相）。
+#[track_caller]
 pub fn raise_builtin_with_args_public(
     instance: &Instance,
     name: &str,
@@ -460,8 +740,7 @@ pub fn uncaught_system_exit(
 ) -> Option<ExitDisposition> {
     // SAFETY: exception 由调用方保证存活。
     let ty = unsafe { exception.as_ref() }.ty();
-    let is_system_exit = instance
-        .type_named("SystemExit")
+    let is_system_exit = instance.hot_type(HotId::SystemExit)
         .is_some_and(|base| instance.is_subtype(ty, base));
     // SAFETY: ty 由注册表持有。
     if !is_system_exit

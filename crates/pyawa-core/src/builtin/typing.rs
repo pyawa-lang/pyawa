@@ -14,6 +14,7 @@
 //! **如实范围** ✗（轮 1 只到"装得下"）：`__repr__`／`__or__`／`__typing_subst__` 等 `TypeVar` 的
 //! 方法面未接 ✓；`Generic` 的 `__class_getitem__`／`__init_subclass__` 参数收集在轮 3 ✓。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::builtin_objects::{AttributeObject, BuiltinFunctionObject};
@@ -238,7 +239,7 @@ fn finish_typevar(
 /// `_typing.NoDefault` 单例（**惰性**挂在 `NoDefaultType` 的类型命名空间里 ✓ —— 与 `memoryview`
 /// 的 `__mro_entries__` 同款 ✓）。
 pub fn no_default_singleton(instance: &Instance) -> NonNull<Header> {
-    let Some(no_default_type) = instance.type_named("NoDefaultType") else {
+    let Some(no_default_type) = instance.hot_type(HotId::NoDefaultType) else {
         return instance.singletons().none();
     };
     if let Some(namespace) = instance.type_namespace(no_default_type.cast()) {
@@ -354,7 +355,7 @@ pub fn typealias_from_parts(
     params: NonNull<Header>,
     thunk: NonNull<Header>,
 ) -> Result<NonNull<Header>, ExecError> {
-    let Some(alias_type) = instance.type_named("TypeAliasType") else {
+    let Some(alias_type) = instance.hot_type(HotId::TypeAliasType) else {
         return Err(instance.raise_builtin_error("RuntimeError", "TypeAliasType 还没有登记"));
     };
     let object = instance
@@ -507,24 +508,40 @@ pub fn generic_init_subclass_native(
     } else if let Some(original) = instance.dict_get(namespace, "__orig_bases__") {
         for base in instance.tuple_items(original).unwrap_or_default() {
             if let Ok(Some(args)) = instance.attribute_optional_of(base, "__args__") {
-                // **`__args__` 可能不是元组** ✓（如实：本层的 `GenericAlias` 单参下标存的是**那个参数本身** ✓
-                // —— 参照恒为元组 ✓）：元组就摊开 ✓，否则当成一个参数 ✓。
+                // **`__args__` 可能不是元组** ✓：元组就摊开 ✓，否则当成一个参数 ✓。
                 match instance.tuple_items(args) {
                     Some(items) => params.extend(items),
                     None => params.push(args),
                 }
+                // **`args` 是新引用** ⇒ 拷完指针就还 ✓（round 227 修泄漏 ✗）。
+                instance.release(args);
             }
         }
     }
     if params.is_empty() {
-        // **参照口径** ✓（`Lib/typing.py:1174` 的 `_generic_init_subclass`）：没有类型参数时
-        // **`Protocol`**（按类名 ✓）与 **`TypedDict`**（按元类名 ✓）**不报** ✗ —— 它们的
-        // `__init_subclass__` 自己会接着做 ✓（实测 `class Protocol(Generic, metaclass=_ProtocolMeta)`
-        // 在参照里正常建类 ✓；先前一律报 ⇒ `import typing` 卡在这里 ✗）。
+        // **参照口径** ✓（`Lib/typing.py:1174` 的 `_generic_init_subclass`）：
+        // `error = (Generic in cls.__bases__ and cls.__name__ != 'Protocol'
+        //           and type(cls) != _TypedDictMeta)` —— 只有**直接基类**里出现**裸 `Generic`**
+        // 才报 ✗；`Protocol` 自己与 `TypedDict` 元类、以及**只经 `Protocol` 间接继承**的类
+        // （`class SupportsInt(Protocol)`）都不报 ✓（round 65：先前"params 空就报" ⇒
+        // `import typing` 在 `SupportsInt` 处红 ✗）。
         // SAFETY: `cls` 是类型对象（`__init_subclass__` 的绑定契约 ✓）。
         let class_name = unsafe { cls.cast::<TypeObject>().as_ref() }.name().to_owned();
         let metaclass_name = instance.type_name(unsafe { cls.as_ref() }.ty());
-        if class_name != "Protocol" && metaclass_name != "_TypedDictMeta" {
+        // 直接基类里有**裸 `Generic`** 吗？（按引导期注册的类型身份比 ✓）
+        let generic = instance.hot_type(HotId::Generic);
+        let bases = instance.tuple_items(
+            instance
+                .attribute_optional_of(cls, "__bases__")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| instance.new_tuple(Vec::new())),
+        )
+        .unwrap_or_default();
+        let plain_generic = generic
+            .map(|generic| bases.iter().any(|base| *base == generic.cast::<Header>()))
+            .unwrap_or(false);
+        if plain_generic && class_name != "Protocol" && metaclass_name != "_TypedDictMeta" {
             return Err(instance.raise_builtin_error(
                 "TypeError",
                 "Cannot inherit from plain Generic",
@@ -605,8 +622,7 @@ pub fn placeholder_type(instance: &Instance, name: &'static str) -> NonNull<Type
 
 /// 供 stdlib 模块装配用：把 `_idfunc` 包成 `builtin_function_or_method` ✓。
 pub fn make_function(instance: &Instance, name: &'static str, handler: crate::NativeFn) -> NonNull<Header> {
-    let function_type = instance
-        .type_named("builtin_function_or_method")
+    let function_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     let object = instance.alloc(BuiltinFunctionObject::new(
         function_type,

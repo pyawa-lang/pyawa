@@ -89,13 +89,38 @@ impl Emitter {
             self.emit_named_none("COPY", 3);
             self.emit_named_none("POP_EXCEPT", 0);
             self.emit_named_none("RERAISE", 1);
-            self.record_exception(
-                plan.region_starts[index],
-                plan.region_end,
-                cleanup_starts[index],
-                self.handler_depth + 2 * (index + 1),
-                true,
-            );
+            // **受保护区按体内 `return` 的死代码洞切开**（round 109，照参照异常表 ✓）：
+            // 洞（退出调用＋取值＋`RET`）本身不归本层；洞**之后**的正常流语句仍归本层 ✓。
+            // 没有洞时就是原来的单区间 `[region_start, body_end)` ✓（夹具不变 ✓）。
+            let mut segment_start = plan.region_starts[index];
+            let mut holes: Vec<(usize, usize)> = plan.return_holes.clone();
+            holes.sort_unstable();
+            for (hole_start, hole_end) in holes {
+                if hole_start > segment_start {
+                    let segment_end = hole_start.min(plan.body_end);
+                    if segment_end > segment_start {
+                        self.record_exception(
+                            segment_start,
+                            segment_end,
+                            cleanup_starts[index],
+                            self.handler_depth + 2 * (index + 1),
+                            true,
+                        );
+                    }
+                }
+                if hole_end > segment_start {
+                    segment_start = hole_end;
+                }
+            }
+            if segment_start < plan.body_end {
+                self.record_exception(
+                    segment_start,
+                    plan.body_end,
+                    cleanup_starts[index],
+                    self.handler_depth + 2 * (index + 1),
+                    true,
+                );
+            }
             self.record_exception(
                 cleanup_starts[index],
                 cleanup_ends[index],
@@ -144,14 +169,36 @@ impl Emitter {
         // `break` 的调用方已 `loops.pop()` 弹掉**内层**帧 ✓ ⇒ 此刻若有循环帧，它就是**外层** ✓；
         // 外层那个迭代器从未被弹 ✓ ⇒ 跳到它的 `continue_target`（`for`＝`FOR_ITER`、`while`＝条件起点 ✓）
         // 时栈契约正好对得上 ✓（跳到块尾会 `StackUnderflow` ✗ —— 第 264 轮实测 ✓）。
-        if let Some(outer) = self.loops.last().cloned() {
-            self.emit_directed_jump(
-                    position,
-                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
-                    outer.continue_target,
-                    true,
-                );
-            return Ok(false);
+        // **嵌套在另一层 `with` 体里 ⇒ 不能跳回外层的循环续点** ✗（round 45 修）：
+        // 本层 `with` 的退出调用**已经发过** ✓，但外层 `with` 的退出调用还在**后面** ✓ ——
+        // 此刻跳循环续点会**跳过外层退出调用** ⇒ 外层的 (上下文, `__exit__`) 两格留在栈上 ✗
+        // （实测 `for …: with A(): with B(): pass` 的循环第二轮 `FOR_ITER` 取到 `A` 实例、
+        // 报"这个对象既不是内建迭代器" ⇒ `test_frame` 状态 5 ✓）。
+        // 正确去向＝**外层块尾**（`block_end_labels.last()`，正好是外层 `with` 体的出口，
+        // 即外层退出调用之前 ✓）⇒ 交给下面的兜底分支 ✓。
+        // 注意：只对**正常 `with` 出口**（`containing_depth == None`）收紧；`break`／`continue`
+        // 的重放路径（`Some`）它们的 `with` 退出调用已在出口臂里发过 ✓，这里的循环／收尾规则照旧 ✓。
+        // **还必须"直接位于循环体内"**（round 93 真 bug 修 ✗）：`for …: try: with A(): pass` 里
+        // 本层 `with` 的正常出口**不该**跳回 `FOR_ITER` ✗ —— 循环体里 `try` 之后的语句会被整段
+        // 跳过（实测：`for i in [1]: try: with open(...): pass; except OSError: pass; print("B")`
+        // 的 `print("B")` 不执行 ✓；`os.walk` 正是这个形状 ⇒ 遍历体一个条目都不进、整棵树不 yield
+        // ⇒ `shutil.rmtree` 只对根目录调 `rmdir` 得 ENOTEMPTY ✗）。
+        // 判据：`block_depth` 恰好是"循环体那一层"（循环帧的 `block_depth` 是进入循环体**之前**
+        // 的深度 ✓）⇒ 中间夹了 `try`／`if`／`with` 任何一层块时都改走下面的**块尾兜底** ✓。
+        let directly_in_loop_body = self
+            .loops
+            .last()
+            .is_some_and(|outer| self.block_depth == outer.block_depth + 1);
+        if (self.with_depth == 0 || containing_depth.is_some()) && directly_in_loop_body {
+            if let Some(outer) = self.loops.last().cloned() {
+                self.emit_directed_jump(
+                        position,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        outer.continue_target,
+                        true,
+                    );
+                return Ok(false);
+            }
         }
         // **作用域收尾只对"尾块"发** ✓（task-17 ✓）：`if/else` 的**非尾**分支体里最后一条是
         // `with` 时（`emit_block(else_body, branch_tail=false)` ⇒ 这里的 `block_tail` 是假 ✗），
@@ -162,7 +209,8 @@ impl Emitter {
         // **`break` 的退出路径例外** ✓：它重放的 `rest` 在语义上接回**作用域层**继续走
         // （`containing_depth = Some(1)`；嵌套的 depth > 1 已在上面提前返回）⇒ 收尾照发 ✓
         // —— 否则 `for …: break` 这类会退化成"跳块尾"，栈契约与参照都不对 ✗。
-        if (self.block_tail || containing_depth.is_some())
+        if (self.with_depth == 0 || containing_depth.is_some())
+            && (self.block_tail || containing_depth.is_some())
             && self.emit_scope_tail(self.last_span)
         {
             return Ok(true);
@@ -334,7 +382,20 @@ impl Emitter {
                 self.emit_indexed(span, "STORE_FAST", *slot);
             }
             self.emit_at(span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
-            self.record_exception(cleanup.region_start, cleanup.region_end, target, self.handler_depth + 2, false);
+            // **按内层异步区间分段**（round 243）：清理区间不得把异步层的 `SEND` 区间包进去 ✗ ——
+            // 一模一样的栈深度语义（同一个 `target`／`depth`），只是**拆成互不重叠的几段** ✓。
+            let mut regions = cleanup.async_regions.clone();
+            regions.sort_unstable();
+            let mut cursor = cleanup.region_start;
+            for (start, end) in regions {
+                if start > cursor {
+                    self.record_exception(cursor, start.min(cleanup.region_end), target, self.handler_depth + 2, false);
+                }
+                cursor = cursor.max(end);
+            }
+            if cursor < cleanup.region_end {
+                self.record_exception(cursor, cleanup.region_end, target, self.handler_depth + 2, false);
+            }
         }
         Ok(())
     }
@@ -386,7 +447,7 @@ impl Emitter {
             self.loop_last_if = in_loop_body
                 && index == last_index
                 && matches!(statement, Statement::If { else_body, .. } if else_body.is_empty());
-            if crate::diag::flag("PYAWA_LOOPLASTIF_DEBUG") {
+            if crate::diag::flag_site!("PYAWA_LOOPLASTIF_DEBUG") {
                 eprintln!(
                     "[loop_last_if] in_loop_body={in_loop_body} index={index} last={last_index} if={}",
                     matches!(statement, Statement::If { .. })
@@ -598,7 +659,7 @@ impl Emitter {
         depth: usize,
         lasti: bool,
     ) {
-        if crate::diag::flag("PYAWA_TRY_DEPTH_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_TRY_DEPTH_DEBUG") {
             eprintln!(
                 "[try_depth] 记账 depth={depth} for_depth={} handler_depth={} with_depth={}",
                 self.loops.iter().filter(|f| f.is_for).count(),
@@ -634,6 +695,17 @@ impl Emitter {
 
     /// 把异常表条目编码成 `BC-54` 的字节串（4 个 6-bit varint／条，**码元**为单位）。
     pub(crate) fn encode_exceptiontable(&self) -> Vec<u8> {
+        if crate::diag::flag_site!("PYAWA_DUMP_CODE") {
+            for (start, end, target, depth, lasti) in &self.exception_entries {
+                eprintln!(
+                    "[exctable] {} start={} end={} target={} depth={depth} lasti={lasti}",
+                    self.unit.name,
+                    start / 2,
+                    end / 2,
+                    target / 2
+                );
+            }
+        }
         let mut out = Vec::new();
         // **条目要按 `start` 递增排序** ✓（第 167 轮：与参照逐字节对齐后才现形 ✓ —— 内容相同但顺序相反 ✗；
         //   参照是递增 ✓，我们是记录序 ✗）。用**稳定排序** ✓，同 `start` 时保持记录序 ✓。

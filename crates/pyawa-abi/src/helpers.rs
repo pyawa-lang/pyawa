@@ -3,11 +3,13 @@
 //! §15.4 只给名字与语义、**没有给签名**；本层按 `AB-19`（跨边界函数必须返回状态码）统一取
 //! "**状态码 ＋ 出参**"形态，签名写在 `include/pa.h` 里（那处就是唯一定义处）。
 //!
-//! 三处**结构性限制**（不是偷懒，写在 `README.md` 与 `pa.h`）：
-//! - `paL_error` 的 C 变参格式化**做不到**：稳定版 Rust 不能定义 C 变参函数（要 `vsnprintf`）。
-//!   本层取"调用方先拼好消息"的单参数形态；`format` 那一路等 `AB-44` 的版本策略裁定后再定。
-//! - `paL_openlibs`／`paL_dostring`／`paL_dofile` 分别要标准库（`P3-14`）与编译器（`P3-12`）
-//! - `paL_where` 要 traceback（`OM-28` 尚未接线）、`paL_requiref` 要模块系统（`IM-`）
+//! 接线状态（§12.18 C 组）：
+//! - `paL_dostring`／`paL_dofile`：已接（走 `pa_exec_string`／`pa_exec_file` ＋ `paL_execresult`；
+//!   `int mode`：0＝python、1＝pyawa）；
+//! - `paL_where`：`code:line` 视图（当前帧／`f_back` 链；数据面 `OM-42`、链语义 `BC-60`）；
+//! - `paL_requiref`：已接（`sys.modules` → 宿主 `openf` → `import_through_bridge`）；
+//! - `paL_errorf`：C 头 `static inline`（宿主侧 `vsnprintf`，不新增导出符号）；
+//! - `paL_openlibs` **由组合根（`pyawa-runtime`）提供**（§12.13 #1；本 crate 不再导出它）。
 //!
 //! **`CX-11`**：本层每个 `paL_` 导出入口都自己走 [`crate::boundary`]——panic 绝不跨 FFI 边界。
 
@@ -317,6 +319,33 @@ pub unsafe extern "C" fn paL_ref(state: *mut pa_state, index: i32, out: *mut i32
     })
 }
 
+/// **`AB-73`**：`paL_getref(st, ref)` —— 把注册表里的值**压栈**（`+1`，新引用）。
+///
+/// 供宿主"属性回调返回已保存的可调用值"（例如方法函数）用：注册阶段 `paL_ref` 保存，
+/// 回调里 `paL_getref` 压回。非法键 ⇒ `PA_ERR_INVALID`。
+///
+/// # Safety
+///
+/// 同 [`paL_checkinteger`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paL_getref(state: *mut pa_state, reference: i32) -> i32 {
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        if reference < 1 || reference as usize > state_ref.registry.len() {
+            return PA_ERR_INVALID;
+        }
+        let Some(object) = state_ref.registry[reference as usize - 1] else {
+            return PA_ERR_INVALID;
+        };
+        // 借用 → 持有（`AB-15`）：压栈交 VM 一份引用。
+        // SAFETY: 注册表持有这份引用。
+        unsafe { state_ref.instance.incref_object(object.as_ptr()) };
+        state_ref.stack.push_owned(object)
+    })
+}
+
 /// `paL_unref(st, ref)`：释放注册表里的键（**1 起**；与 `paL_ref` 的返回值对应）。
 ///
 /// # Safety
@@ -346,7 +375,8 @@ pub unsafe extern "C" fn paL_unref(state: *mut pa_state, reference: i32) -> i32 
 
 /// `paL_traceback(st, msg)`：附加上下文信息。
 ///
-/// 本层**尚无 traceback 对象**（`OM-28` 未接线）⇒ 目前只把信息并入 `pa_errmsg`，不伪造结构。
+/// 只把信息并入 `pa_errmsg`；**不修改** `__traceback__`（traceback 数据面见 `OM-42`、链语义
+/// 见 `BC-60`）。
 ///
 /// # Safety
 ///
@@ -369,22 +399,70 @@ pub unsafe extern "C" fn paL_traceback(state: *mut pa_state, msg: *const c_char)
     })
 }
 
-/// `paL_where(st, level, out, len)`：当前位置串——**要 traceback**（`OM-28`）⇒ 未提供。
+/// `paL_where(st, level, out, len)`：**当前帧（或沿 `f_back` 第 `level` 层）的 `code:line` 串**。
+///
+/// - `level < 0`／`out == NULL` ⇒ `PA_ERR_INVALID`；
+/// - 无帧／无 code／链不足 `level` 层 ⇒ `PA_ERR_NOTIMPLEMENTED`（如实，不编造位置）；
+/// - 行号无法定位 ⇒ 行号 `0`（与 `OM-42` 的 `tb_lineno` 同口径）；
+/// - 出参是**借用视图**（下次调用前有效，`AB-15`）；`len` 可为 `NULL`。
+/// - traceback 数据面见 `OM-42`、链语义见 `BC-60`／`T-BC-22`。
 ///
 /// # Safety
 ///
-/// 同 [`paL_checkinteger`]。
+/// 同 [`paL_checkinteger`]；`out` 可写，`len` 可为 `NULL`。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_where(
-    _state: *mut pa_state,
-    _level: i32,
-    _out: *mut *const c_char,
-    _len: *mut usize,
+    state: *mut pa_state,
+    level: i32,
+    out: *mut *const c_char,
+    len: *mut usize,
 ) -> i32 {
     boundary(|| {
-        PA_ERR_NOTIMPLEMENTED
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        if out.is_null() || level < 0 {
+            return PA_ERR_INVALID;
+        }
+        let Some(mut frame) = state_ref.instance.current_frame() else {
+            set_message(state_ref, "paL_where：当前没有 Python 帧（不在执行期）");
+            return PA_ERR_NOTIMPLEMENTED;
+        };
+        for _ in 0..level {
+            // SAFETY: frame 是本实例存活帧。
+            let current = unsafe { &*frame.as_ptr().cast::<pyawa_core::Frame>() };
+            let Some(previous) = current.f_back() else {
+                set_message(state_ref, "paL_where：调用链不足 level 层");
+                return PA_ERR_NOTIMPLEMENTED;
+            };
+            frame = previous;
+        }
+        // SAFETY: frame 是当前帧（存活对象）。
+        let current = unsafe { &*frame.as_ptr().cast::<pyawa_core::Frame>() };
+        let Some(code_ptr) = current.code() else {
+            set_message(state_ref, "paL_where：当前帧没有 code");
+            return PA_ERR_NOTIMPLEMENTED;
+        };
+        // SAFETY: code_ptr 是当前帧持有的 code 对象。
+        let code = unsafe { &*code_ptr.as_ptr().cast::<pyawa_core::CodeObject>() };
+        let name = code.name();
+        // SAFETY: line_at 只读 code + 指令偏移。
+        let line = pyawa_core::line_at(code, current.instruction_pointer()).unwrap_or(0);
+        let text = format!("{name}:{line}");
+        state_ref.view = Some(text.into_bytes());
+        let Some(bytes) = &state_ref.view else {
+            return PA_ERR_RUNTIME;
+        };
+        if !len.is_null() {
+            // SAFETY: 调用方保证 len 可写。
+            unsafe { *len = bytes.len() };
+        }
+        // SAFETY: 借用视图在下次调用前有效；out 可写。
+        unsafe { *out = bytes.as_ptr().cast::<c_char>() };
+        PA_OK
     })
 }
+
 
 /// `paL_error(st, msg)`：抛错（信息进 `pa_errmsg`）。
 ///
@@ -436,18 +514,103 @@ pub unsafe extern "C" fn paL_execresult(state: *mut pa_state, status: i32) -> i3
 ///
 /// # Safety
 ///
-/// 同 [`paL_checkinteger`]。
+/// `paL_requiref(st, name, openf, glb)`：**取或加载模块**。
+///
+/// - `sys.modules` 已有 ⇒ 压模块（+1）；`glb != 0` 时同时写全局同名；
+/// - 否则：`openf != NULL` ⇒ 调宿主 open 函数（`int (*)(pa_state*)`，须压入恰好一个模块值）；
+///   `openf == NULL` ⇒ 经 `pyawa_core::executor::import_through_bridge` 走 `sys.path` 模块加载；
+/// - 拿到模块后登记进 `sys.modules`（与导入系统同一份 dict），`glb != 0` 写全局，最后压栈（+1）。
+/// - 加载失败 ⇒ `PA_ERR_RUNTIME`＋消息；`sys.modules` 缺失 ⇒ `PA_ERR_NOTIMPLEMENTED`。
+///
+/// # Safety
+///
+/// 同 [`paL_checkinteger`]；`name` NUL 结尾；`openf` 非 NULL 时必须是
+/// `int (*)(pa_state *)` 形态且返回 `PA_OK` 时压入恰好一个值。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_requiref(
-    _state: *mut pa_state,
-    _name: *const c_char,
-    _openf: *const c_void,
-    _global: i32,
+    state: *mut pa_state,
+    name: *const c_char,
+    openf: *const c_void,
+    glb: i32,
 ) -> i32 {
     boundary(|| {
-        PA_ERR_NOTIMPLEMENTED
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        // SAFETY: 调用方保证 name NUL 结尾。
+        let Some(name_text) = (unsafe { crate::host::read_c_string(name, 4096) }) else {
+            return PA_ERR_INVALID;
+        };
+        let Some(modules) = state_ref.instance.modules() else {
+            set_message(state_ref, "paL_requiref：本实例没有模块表（未装 stdlib／模块系统）");
+            return PA_ERR_NOTIMPLEMENTED;
+        };
+        if let Some(module) = state_ref.instance.dict_get(modules, &name_text) {
+            // SAFETY: module 由模块表持有；栈要自己那份。
+            unsafe { state_ref.instance.incref_object(module.as_ptr()) };
+            if glb != 0 {
+                crate::set_global_value(state_ref, &name_text, module);
+            }
+            return state_ref.stack.push_owned(module);
+        }
+        // ① 宿主 open 函数（须压入恰好一个模块值）。
+        if !openf.is_null() {
+            // SAFETY: 调用方按 Safety 段保证 openf 是 `int (*)(pa_state*)`。
+            let open: unsafe extern "C" fn(*mut pa_state) -> i32 = unsafe {
+                core::mem::transmute(openf)
+            };
+            let before = state_ref.stack.len();
+            // SAFETY: 同上。
+            let code = unsafe { open(state) };
+            if code != PA_OK {
+                return code;
+            }
+            if state_ref.stack.len() != before + 1 {
+                set_message(state_ref, "paL_requiref：openf 返回 PA_OK 但没有压入恰好一个值");
+                return PA_ERR_RUNTIME;
+            }
+            let Some(slot) = state_ref.stack.pop_slot() else {
+                return PA_ERR_RUNTIME;
+            };
+            let module = slot.object;
+            if !slot.owned {
+                // SAFETY: 借用槽位；登记与压栈各要一份 ⇒ 先补一份自己持有。
+                unsafe { state_ref.instance.incref_object(module.as_ptr()) };
+            }
+            state_ref.instance.dict_set(modules, &name_text, module);
+            if glb != 0 {
+                crate::set_global_value(state_ref, &name_text, module);
+            }
+            return state_ref.stack.push_owned(module);
+        }
+        // ② 走模块系统的 import（`sys.path`），与 `import` 同一条加载路径。
+        match pyawa_core::executor::import_through_bridge(&state_ref.instance, &name_text) {
+            Ok(Some(module)) => {
+                // SAFETY: 模块由实例持有；栈要自己那份。
+                unsafe { state_ref.instance.incref_object(module.as_ptr()) };
+                if glb != 0 {
+                    crate::set_global_value(state_ref, &name_text, module);
+                }
+                state_ref.stack.push_owned(module)
+            }
+            Ok(None) => {
+                set_message(
+                    state_ref,
+                    &format!("paL_requiref：找不到模块 `{name_text}`（`sys.path` 无匹配）"),
+                );
+                PA_ERR_RUNTIME
+            }
+            Err(_) => {
+                set_message(
+                    state_ref,
+                    &format!("paL_requiref：加载模块 `{name_text}` 失败"),
+                );
+                PA_ERR_RUNTIME
+            }
+        }
     })
 }
+
 
 /// `paL_setfuncs(st, regs, n)`：批量注册（`n < 0` 表示以 `name == NULL` 结尾）。
 ///
@@ -483,18 +646,6 @@ pub unsafe extern "C" fn paL_setfuncs(
     })
 }
 
-/// `paL_openlibs(st)`：打开标准库——**要标准库**（`P3-14`）⇒ 未提供。
-///
-/// # Safety
-///
-/// 同 [`paL_checkinteger`]。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn paL_openlibs(_state: *mut pa_state) -> i32 {
-    boundary(|| {
-        PA_ERR_NOTIMPLEMENTED
-    })
-}
-
 /// `paL_dostring(st, s, mode)`：执行字符串——**本层现在卡在别处**：`§15.4` 只给名字与语义、
 /// 没给签名，`pa.h` 里这个 `int mode` 的**取值域也没人写过**（编译器已经有了：核心层
 /// `pa_exec_string` 已落地，`AB-60` 管的是它的**字符串** `mode`）⇒ 替这里发明一个 int 编码
@@ -502,31 +653,89 @@ pub unsafe extern "C" fn paL_openlibs(_state: *mut pa_state) -> i32 {
 ///
 /// # Safety
 ///
-/// 同 [`paL_checkinteger`]。
+/// `paL_dostring(st, s, mode)`：执行字符串并统一收尾（`int mode`：`0`＝`"python"`、
+/// `1`＝`"pyawa"`；其它 ⇒ `PA_ERR_INVALID`）。成功时按 `paL_execresult` 压 `True`（+1）。
+///
+/// # Safety
+///
+/// 同 [`paL_checkinteger`]；`s` NUL 结尾。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_dostring(
-    _state: *mut pa_state,
-    _source: *const c_char,
-    _mode: i32,
+    state: *mut pa_state,
+    source: *const c_char,
+    mode: i32,
 ) -> i32 {
     boundary(|| {
-        PA_ERR_NOTIMPLEMENTED
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        if source.is_null() {
+            return PA_ERR_INVALID;
+        }
+        let Some(mode_text) = exec_mode_text(mode) else {
+            set_message(state_ref, "paL_dostring：mode 只能是 0（python）或 1（pyawa）");
+            return PA_ERR_INVALID;
+        };
+        // SAFETY: source 由调用方保证 NUL 结尾；其余按 pa_exec_string 契约。
+        let status = unsafe {
+            crate::pa_exec_string(
+                state,
+                source,
+                -1,
+                b"<string>\0".as_ptr().cast(),
+                mode_text,
+                core::ptr::null(),
+            )
+        };
+        // SAFETY: state 已校验存活；paL_execresult 只读写状态/栈。
+        unsafe { paL_execresult(state, status) }
     })
 }
+
 
 /// `paL_dofile(st, path, mode)`：执行文件——前置同 [`paL_dostring`]（`int mode` 未定义），
 /// 且本层不碰文件系统 ⇒ 未提供。
 ///
 /// # Safety
 ///
-/// 同 [`paL_checkinteger`]。
+/// `paL_dofile(st, path, mode)`：执行文件并统一收尾（`mode` 语义同 [`paL_dostring`]；
+/// 文件经 **`fs` 域**读，无 provider ⇒ `PA_ERR_NOTIMPLEMENTED`，机器错误 ⇒ `PA_ERR_RUNTIME`）。
+///
+/// # Safety
+///
+/// 同 [`paL_checkinteger`]；`path` NUL 结尾。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_dofile(
-    _state: *mut pa_state,
-    _path: *const c_char,
-    _mode: i32,
+    state: *mut pa_state,
+    path: *const c_char,
+    mode: i32,
 ) -> i32 {
     boundary(|| {
-        PA_ERR_NOTIMPLEMENTED
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        if path.is_null() {
+            return PA_ERR_INVALID;
+        }
+        let Some(mode_text) = exec_mode_text(mode) else {
+            set_message(state_ref, "paL_dofile：mode 只能是 0（python）或 1（pyawa）");
+            return PA_ERR_INVALID;
+        };
+        // SAFETY: path 由调用方保证 NUL 结尾；mode/opts 按 pa_exec_file 契约。
+        let status = unsafe {
+            crate::pa_exec_file(state, path, mode_text, core::ptr::null())
+        };
+        // SAFETY: state 已校验存活。
+        unsafe { paL_execresult(state, status) }
     })
 }
+
+/// `int mode` → `pa_exec_string` 的 mode 串（`0` python／`1` pyawa）。
+fn exec_mode_text(mode: i32) -> Option<*const c_char> {
+    match mode {
+        0 => Some(b"python\0".as_ptr().cast()),
+        1 => Some(b"pyawa\0".as_ptr().cast()),
+        _ => None,
+    }
+}
+

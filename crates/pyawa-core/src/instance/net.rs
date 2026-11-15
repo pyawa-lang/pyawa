@@ -140,6 +140,227 @@ impl Instance {
         }
     }
 
+    /// **`bind(sock, family, addr)`**（`CP-39` 的 v1 线格式：`AF_INET` 是 4B 地址＋2B 端口）。
+    pub fn net_bind(
+        &self,
+        fd: u64,
+        family: i32,
+        addr: &[u8],
+    ) -> Result<(), CapabilityCallError> {
+        let table = self.net_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let bind = table.bind.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.net_provider_handle(fd)?;
+        let mut errno = 0i32;
+        match bind(
+            table.state,
+            pyawa_capabilities::net::SocketHandle(handle),
+            family,
+            addr.as_ptr(),
+            addr.len(),
+            &mut errno,
+        ) {
+            pyawa_capabilities::net::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::net::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::net::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **`connect(sock, family, addr)`**。
+    pub fn net_connect(
+        &self,
+        fd: u64,
+        family: i32,
+        addr: &[u8],
+    ) -> Result<(), CapabilityCallError> {
+        let table = self.net_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let connect = table.connect.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.net_provider_handle(fd)?;
+        let mut errno = 0i32;
+        match connect(
+            table.state,
+            pyawa_capabilities::net::SocketHandle(handle),
+            family,
+            addr.as_ptr(),
+            addr.len(),
+            &mut errno,
+        ) {
+            pyawa_capabilities::net::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::net::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::net::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **`listen(sock, backlog)`**。
+    pub fn net_listen(&self, fd: u64, backlog: i32) -> Result<(), CapabilityCallError> {
+        let table = self.net_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let listen = table.listen.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.net_provider_handle(fd)?;
+        let mut errno = 0i32;
+        match listen(
+            table.state,
+            pyawa_capabilities::net::SocketHandle(handle),
+            backlog,
+            &mut errno,
+        ) {
+            pyawa_capabilities::net::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::net::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::net::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **`accept(sock)`** ⇒ `(新 fd, 地址族, `CP-39` 线格式地址)`（两段式出参：总长超容量就扩缓冲重试）。
+    pub fn net_accept(
+        &self,
+        fd: u64,
+    ) -> Result<(u64, i32, Vec<u8>), CapabilityCallError> {
+        let table = self.net_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let accept = table.accept.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.net_provider_handle(fd)?;
+        let mut capacity = 64usize;
+        loop {
+            let mut new_handle = pyawa_capabilities::net::SocketHandle(0);
+            let mut family = 0i32;
+            let mut buffer = vec![0u8; capacity];
+            let mut total = 0usize;
+            let mut errno = 0i32;
+            match accept(
+                table.state,
+                pyawa_capabilities::net::SocketHandle(handle),
+                &mut new_handle,
+                &mut family,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut total,
+                &mut errno,
+            ) {
+                pyawa_capabilities::net::CapStatus::Ok => {
+                    if total > buffer.len() {
+                        capacity = total;
+                        continue;
+                    }
+                    buffer.truncate(total);
+                    let allocated = self
+                        .capability_register(pyawa_capabilities::DOMAIN_NET, new_handle.0);
+                    return Ok((allocated, family, buffer));
+                }
+                pyawa_capabilities::net::CapStatus::Unimplemented => {
+                    return Err(CapabilityCallError::NotImplemented)
+                }
+                pyawa_capabilities::net::CapStatus::Machine => {
+                    return Err(CapabilityCallError::Machine(errno))
+                }
+            }
+        }
+    }
+
+    /// `getsockname`／`getpeername` 的共同实现（两段式出参）。
+    fn net_socket_address(
+        &self,
+        fd: u64,
+        peer: bool,
+    ) -> Result<(i32, Vec<u8>), CapabilityCallError> {
+        let table = self.net_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let slot = if peer { table.getpeername } else { table.getsockname };
+        let resolve = slot.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.net_provider_handle(fd)?;
+        let mut capacity = 64usize;
+        loop {
+            let mut family = 0i32;
+            let mut buffer = vec![0u8; capacity];
+            let mut total = 0usize;
+            let mut errno = 0i32;
+            match resolve(
+                table.state,
+                pyawa_capabilities::net::SocketHandle(handle),
+                &mut family,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut total,
+                &mut errno,
+            ) {
+                pyawa_capabilities::net::CapStatus::Ok => {
+                    if total > buffer.len() {
+                        capacity = total;
+                        continue;
+                    }
+                    buffer.truncate(total);
+                    return Ok((family, buffer));
+                }
+                pyawa_capabilities::net::CapStatus::Unimplemented => {
+                    return Err(CapabilityCallError::NotImplemented)
+                }
+                pyawa_capabilities::net::CapStatus::Machine => {
+                    return Err(CapabilityCallError::Machine(errno))
+                }
+            }
+        }
+    }
+
+    /// **`getsockname(sock)`** ⇒ `(地址族, `CP-39` 线格式地址)`。
+    pub fn net_getsockname(&self, fd: u64) -> Result<(i32, Vec<u8>), CapabilityCallError> {
+        self.net_socket_address(fd, false)
+    }
+
+    /// **`getpeername(sock)`** ⇒ `(地址族, `CP-39` 线格式地址)`。
+    pub fn net_getpeername(&self, fd: u64) -> Result<(i32, Vec<u8>), CapabilityCallError> {
+        self.net_socket_address(fd, true)
+    }
+
+    /// **`shutdown(sock, how)`**。
+    pub fn net_shutdown(&self, fd: u64, how: i32) -> Result<(), CapabilityCallError> {
+        let table = self.net_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let shutdown = table.shutdown.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.net_provider_handle(fd)?;
+        let mut errno = 0i32;
+        match shutdown(
+            table.state,
+            pyawa_capabilities::net::SocketHandle(handle),
+            how,
+            &mut errno,
+        ) {
+            pyawa_capabilities::net::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::net::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::net::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **`setsockopt(sock, level, name, value)`**（值按裸字节转发）。
+    pub fn net_setsockopt(
+        &self,
+        fd: u64,
+        level: i32,
+        name: i32,
+        value: &[u8],
+    ) -> Result<(), CapabilityCallError> {
+        let table = self.net_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let setsockopt = table.setsockopt.ok_or(CapabilityCallError::NotImplemented)?;
+        let handle = self.net_provider_handle(fd)?;
+        let mut errno = 0i32;
+        match setsockopt(
+            table.state,
+            pyawa_capabilities::net::SocketHandle(handle),
+            level,
+            name,
+            value.as_ptr(),
+            value.len(),
+            &mut errno,
+        ) {
+            pyawa_capabilities::net::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::net::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::net::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     /// **经 `net` 域关闭 fd**（`CP-17`：幂等）。表项释放；别名计数归零才调 provider `close`。
     pub fn net_close(&self, fd: u64) -> Result<(), CapabilityCallError> {
         // 域未注册 ⇒ 与其它 net 方法同一口径（`CP-2`）。

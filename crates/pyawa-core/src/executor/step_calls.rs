@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_calls<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -20,72 +21,272 @@ pub(super) fn step_calls<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, o
     }
 }
 
+/// **`DICT_MERGE`／`DICT_UPDATE` 的源映射条目**（round 50）：`dict` 走快路；其余按**映射协议**
+/// （`keys()` ＋ `__getitem__`）取 ✓。每项都是**新引用**（键值各一份）。
+fn mapping_entries(
+    instance: &Instance,
+    source: NonNull<Header>,
+) -> Result<Vec<(NonNull<Header>, NonNull<Header>)>, ExecError> {
+    let source_type = unsafe { source.as_ref() }.ty();
+    if source_type == instance.hot_type(HotId::Dict).expect("dict 已登记") {
+        // SAFETY: 类型身份已确认。
+        let dict = unsafe { &*source.as_ptr().cast::<DictObject>() };
+        let mut entries = Vec::new();
+        for (key, value) in dict.entries() {
+            // SAFETY: 键值由源字典持有，这里各新增一份交给调用方。
+            unsafe {
+                instance.incref_object(key.as_ptr());
+                instance.incref_object(value.as_ptr());
+            }
+            entries.push((key, value));
+        }
+        return Ok(entries);
+    }
+    let Some(keys_method) = attribute_optional(instance, source, "keys")? else {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "不是映射（没有 keys）",
+        });
+    };
+    let keys = crate::executor::call::call_value(instance, keys_method, &[], &[]);
+    // SAFETY: keys_method 是新引用。
+    unsafe { instance.release_object(keys_method.as_ptr()) };
+    let keys = keys?;
+    let iterator = match instance.iter_object(keys) {
+        Ok(iterator) => iterator,
+        Err(error) => {
+            // SAFETY: keys 是本函数持有的新引用。
+            unsafe { instance.release_object(keys.as_ptr()) };
+            return Err(error);
+        }
+    };
+    // SAFETY: keys 的引用由迭代器接手（`iter_object` 的契约是新增一份、keys 仍归本函数）。
+    unsafe { instance.release_object(keys.as_ptr()) };
+    let getitem = match attribute_optional(instance, source, "__getitem__")? {
+        Some(method) => method,
+        None => {
+            // SAFETY: iterator 是本函数持有的新引用。
+            unsafe { instance.release_object(iterator.as_ptr()) };
+            return Err(ExecError::Unsupported {
+                opcode: 0,
+                what: "不是映射（没有 __getitem__）",
+            });
+        }
+    };
+    let mut entries = Vec::new();
+    loop {
+        let next = instance.advance_iterator(iterator);
+        let key = match next {
+            Ok(Some(key)) => key,
+            Ok(None) => break,
+            Err(error) => {
+                // SAFETY: 两份引用都归本函数。
+                unsafe {
+                    instance.release_object(getitem.as_ptr());
+                    instance.release_object(iterator.as_ptr());
+                }
+                return Err(error);
+            }
+        };
+        let value = crate::executor::call::call_value(instance, getitem, &[key], &[]);
+        // **成功时 `key` 的引用随条目一起转交** ✓（round 57 真 bug ✗）：先前无条件
+        // `release_object(key)` ✗ ⇒ `entries` 里存的是**已释放的键**（引用计数归零）⇒ 之后
+        // `insert_raw` 把死指针放进目标字典 ⇒ 字典释放时再放一次 ⇒ **堆损坏／UAF** ✓
+        // （最小复现：`class MyDict(dict): pass; def s1(**kw): return kw` 循环
+        //  `md = MyDict({'a':1,'b':2}); s1(**md)` ⇒ `test_extcall` 的间歇崩溃正是它 ✓）。
+        // 只有出错路径才需要归还这份键 ✓。
+        match value {
+            Ok(value) => entries.push((key, value)),
+            Err(error) => {
+                // SAFETY: key 是新引用（成功路径已转交，这里只处理失败 ✓）。
+                unsafe { instance.release_object(key.as_ptr()) };
+                // SAFETY: 同上。
+                unsafe {
+                    instance.release_object(getitem.as_ptr());
+                    instance.release_object(iterator.as_ptr());
+                }
+                return Err(error);
+            }
+        }
+    }
+    // SAFETY: 两份引用都归本函数。
+    unsafe {
+        instance.release_object(getitem.as_ptr());
+        instance.release_object(iterator.as_ptr());
+    }
+    Ok(entries)
+}
+
+/// **被调对象的显示名**（round 50，`DICT_MERGE` 的参照报文要用）：
+/// 函数／绑定方法／内建函数 ⇒ `模块.限定名()`（`builtins` 省前缀）；类型 ⇒ `名字()`；
+/// 其余可调用实例 ⇒ 它的 `repr`（**不带** `()` —— 与参照实测一致 ✓）。
+fn callee_display(instance: &Instance, callable: NonNull<Header>) -> Option<String> {
+    if instance.is_type_object(callable) {
+        // SAFETY: 刚判过是类型对象。
+        let name = unsafe { &*callable.as_ptr().cast::<crate::TypeObject>() }.name().to_owned();
+        return Some(format!("{name}()"));
+    }
+    let callable_type = unsafe { callable.as_ref() }.ty();
+    let function_type = instance.hot_type(HotId::Function).expect("function 已登记");
+    let method_type = instance.hot_type(HotId::Method);
+    let builtin_type_obj = instance.hot_type(HotId::BuiltinFunctionOrMethod);
+    let underlying = if callable_type == function_type {
+        Some(callable)
+    } else if Some(callable_type) == method_type {
+        // SAFETY: 类型身份刚确认。
+        Some(unsafe { &*callable.as_ptr().cast::<MethodObject>() }.function())
+    } else if Some(callable_type) == builtin_type_obj {
+        Some(callable)
+    } else {
+        None
+    };
+    if let Some(underlying) = underlying {
+        let attribute = |name: &str| -> Option<String> {
+            instance
+                .attribute_optional_discarding(underlying, name)
+                .and_then(|value| {
+                    let text = instance.text_of(value).map(|text| text.to_owned());
+                    // SAFETY: 刚取到的新引用。
+                    unsafe { instance.release_object(value.as_ptr()) };
+                    text
+                })
+        };
+        let qualname = attribute("__qualname__").or_else(|| attribute("__name__"));
+        if let Some(qualname) = qualname {
+            let module = attribute("__module__");
+            return Some(match module {
+                Some(module) if module != "builtins" && !module.is_empty() => {
+                    format!("{module}.{qualname}()")
+                }
+                _ => format!("{qualname}()"),
+            });
+        }
+    }
+    match instance.object_repr(callable) {
+        Ok(text) => Some(text),
+        Err(error) => {
+            // `repr` 抛错时这份 `Err(Raised)` 也要还（task-18 `.ok()` 族；这里本就要"取不到就算了"）。
+            crate::executor::runtime::discard_error(instance, &error);
+            None
+        }
+    }
+}
+
 /// `DICT_MERGE | DICT_UPDATE` 的分派臂（从 `step_calls` 原样搬来）。
 fn step_calls_dict_merge<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
     match name {
             "DICT_MERGE" | "DICT_UPDATE" => {
-                // 实测净 −1：把 TOS 那个字典并进 TOS1，然后弹掉 TOS。
-                // `DICT_UPDATE` 覆盖同名键；`DICT_MERGE` 遇到同名键要报错——那条消息在参照实现里
-                // 带着**函数的 qualname**（实测：`__main__.demo() got multiple values for keyword
-                // argument 'a'`），而此刻调用者还在栈下好几层，本层取不到，所以如实报未接线。
+                // 实测净 −1：把 TOS 那个映射并进 TOS1，然后弹掉 TOS。
+                // `DICT_UPDATE` 覆盖同名键；`DICT_MERGE` 遇到同名键要报错 —— 那条消息在参照实现里
+                // 带着**被调对象的限定名**（`__main__.f() got multiple values for keyword argument 'a'`
+                // ✓）。被调对象在栈下 4 格（`[可调用, self|NULL, 实参, 目标 dict, 源映射]`）⇒
+                // round 50 从这里取名字；先前如实报未接线 ✗。
+                let is_merge = name == "DICT_MERGE";
+                // 取被调对象的显示名（在弹栈**之前**取，源映射仍在 TOS ✓）。
+                let callee = {
+                    let snapshot = frame.get().stack_snapshot();
+                    if snapshot.len() >= 5 {
+                        let callable = snapshot[snapshot.len() - 5];
+                        callee_display(instance, callable)
+                    } else {
+                        None
+                    }
+                };
                 let source = frame.get().pop()?;
                 let destination = frame.get().peek()?;
-                // SAFETY: 两个都在帧值栈上，存活。
-                let source_type = unsafe { source.as_ref() }.ty();
-                let destination_type = unsafe { destination.as_ref() }.ty();
-                if source_type != builtin_type(instance, "dict")
-                    || destination_type != builtin_type(instance, "dict")
-                {
-                    release(instance, source);
+                // SAFETY: destination 在帧值栈上，存活。
+                if unsafe { destination.as_ref() }.ty() != instance.hot_type(HotId::Dict).expect("dict 已登记") {
+                    // SAFETY: source 是新引用。
+                    unsafe { instance.release_object(source.as_ptr()) };
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "DICT_MERGE／DICT_UPDATE 只接线了 dict（映射协议随后补）",
+                        what: "DICT_MERGE／DICT_UPDATE 的目标必须是 dict（编译器保证）",
                     });
                 }
-                // SAFETY: 类型身份已确认。
-                let source_entries = unsafe { &*source.as_ptr().cast::<DictObject>() }.entries();
-                // SAFETY: 同上。
-                let destination_dict = unsafe { &*destination.as_ptr().cast::<DictObject>() };
-                let is_merge = name == "DICT_MERGE";
-                for (key, value) in source_entries {
-                    let position = destination_dict
-                        .entries()
-                        .iter()
-                        .position(|(existing, _)| values_equal(instance, *existing, key));
-                    if let Some(existing_position) = position {
+                let entries = match mapping_entries(instance, source) {
+                    Ok(entries) => entries,
+                    Err(ExecError::Unsupported { .. }) => {
+                        // **不是映射** ⇒ 参照的 TypeError：`DICT_MERGE`（调用实参）带被调对象与
+                        // 类型名（`__main__.f() argument after ** must be a mapping, not int` ✓）；
+                        // `DICT_UPDATE`（dict 显示 `{**x}`）是另一句 `'int' object is not a mapping` ✓
+                        // （`test_unpack_ex` 的 doctest 逐字比较 ✓，round 52 实测）。
+                        let source_type_name =
+                            instance.type_name(unsafe { source.as_ref() }.ty()).to_owned();
+                        // SAFETY: source 是新引用。
+                        unsafe { instance.release_object(source.as_ptr()) };
+                        let message = if is_merge {
+                            let callee = callee.unwrap_or_else(|| "?".to_owned());
+                            format!(
+                                "{callee} argument after ** must be a mapping, not {source_type_name}"
+                            )
+                        } else {
+                            format!("'{source_type_name}' object is not a mapping")
+                        };
+                        return Err(instance.raise_builtin_error("TypeError", &message));
+                    }
+                    Err(error) => {
+                        // SAFETY: source 是新引用。
+                        unsafe { instance.release_object(source.as_ptr()) };
+                        return Err(error);
+                    }
+                };
+                for (key, value) in entries {
+                    // SAFETY: destination 在帧值栈上，存活；键值由本函数持有。
+                    let destination_dict = unsafe { &*destination.as_ptr().cast::<DictObject>() };
+                    let existing = destination_dict
+                        .find_live_position(|candidate| values_equal(instance, candidate, key));
+                    if let Some(position) = existing {
                         if is_merge {
-                            release(instance, source);
-                            return Err(ExecError::Unsupported {
-                                opcode: opcode_number,
-                                what: "DICT_MERGE 的同名键错误要函数的 qualname（参照实现的消息带它）",
-                            });
+                            // 参照用 `%U`（`str(键)`）再套单引号 ⇒ `'a'`／`'1'`／`'('x',)'` ✓
+                            // （round 62：先前用 `repr` 且**不加引号** ⇒ 非 str 键少一对引号 ✗）。
+                            let key_text = instance
+                                .object_str_native(key)
+                                .unwrap_or_else(|_| "?".to_owned());
+                            // SAFETY: 键值都是本函数持有的新引用。
+                            unsafe {
+                                instance.release_object(key.as_ptr());
+                                instance.release_object(value.as_ptr());
+                                instance.release_object(source.as_ptr());
+                            }
+                            let callee = callee.clone().unwrap_or_else(|| "?".to_owned());
+                            return Err(instance.raise_builtin_error(
+                                "TypeError",
+                                &format!(
+                                    "{callee} got multiple values for keyword argument '{key_text}'"
+                                ),
+                            ));
                         }
                         let (old_key, old_value) = destination_dict
-                            .remove(existing_position)
+                            .remove(position)
                             .expect("刚查到的位置");
                         release(instance, old_key);
                         release(instance, old_value);
                     }
-                    // SAFETY: 键值由源字典持有，这里各新增一份引用交给目标字典。
-                    unsafe {
-                        instance.incref_object(key.as_ptr());
-                        instance.incref_object(value.as_ptr());
-                    }
                     destination_dict.insert_raw(key, value);
                 }
-                release(instance, source);
+                // SAFETY: source 是本函数持有的新引用。
+                unsafe { instance.release_object(source.as_ptr()) };
             }
         _ => unreachable!("step_calls_dict_merge 只接收 DICT_MERGE | DICT_UPDATE"),
     }
     Ok(Step::Continue)
 }
 
-/// `CALL_FUNCTION_EX` 的分派臂（从 `step_calls` 原样搬来）。
 fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
     match name {
             "CALL_FUNCTION_EX" => {
                 // 实测净 −3；栈自下而上是 `[可调用, self|NULL, 实参 tuple, 关键字 dict|NULL]`
                 // （`f(*a)` 的发射里第二个 `PUSH_NULL` 就是"没有关键字"那一格）。
+                // **被调对象的显示名**（round 50）：`argument after * must be an iterable` 的参照
+                // 报文要带它（`__main__.f() argument after * must be an iterable, not int` ✓）。
+                let callee = {
+                    let snapshot = frame.get().stack_snapshot();
+                    if snapshot.len() >= 4 {
+                        callee_display(instance, snapshot[snapshot.len() - 4])
+                    } else {
+                        None
+                    }
+                };
                 let keyword_source = frame.get().pop()?;
                 let argument_source = frame.get().pop()?;
                 let self_or_null = frame.get().pop()?;
@@ -112,7 +313,7 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 // ⇒ 先认下这一种，再走后面的通用路 ✓。
                 if argument_source == null {
                     // 空实参 ⇒ 什么也不用做 ✓（`args` 已是空表 ✓）
-                } else if argument_type == builtin_type(instance, "tuple") {
+                } else if argument_type == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
                     // SAFETY: 类型身份已确认。
                     let arguments = unsafe { &*argument_source.as_ptr().cast::<TupleObject>() };
                     args.reserve(arguments.len());
@@ -122,23 +323,47 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         unsafe { instance.incref_object(value.as_ptr()) };
                         args.push(value);
                     }
-                } else if let Some(items) = instance.iterable_items(argument_source) {
-                    args.reserve(items.len());
-                    for item in items {
-                        instance.retain(item);
-                        args.push(item);
-                    }
                 } else {
-                    release(instance, callable);
-                    release(instance, argument_source);
-                    release(instance, keyword_source);
-                    if let Some(bound) = bound_self {
-                        release(instance, bound);
+                    // **通用摊开**（round 58 重写）：`iterable_items` 现在**把异常原样上抛** ✓，
+                    // 不再是"吞掉异常当提前结束"✗。三种结果：
+                    // `Ok(Some(items))` ⇒ 直接收下这批**新引用** ✓；
+                    // `Ok(None)` ⇒ 根本不是可迭代 ⇒ 参照的 `argument after * must be an iterable`
+                    // （带被调对象名 ✓）；`Err(error)` ⇒ 用户 `__iter__`／生成器里抛的错**原样传播** ✓
+                    // （`test_extcall` 的 `g(*(broken() for …))`／`g(*BrokenIterable1())` ⇒ `myerror` ✓）。
+                    match instance.iterable_items(argument_source) {
+                        Ok(Some(items)) => args = items,
+                        Ok(None) => {
+                            let argument_type_name = instance.type_name(argument_type).to_owned();
+                            release(instance, callable);
+                            release(instance, argument_source);
+                            release(instance, keyword_source);
+                            if let Some(bound) = bound_self {
+                                release(instance, bound);
+                            }
+                            for item in args {
+                                release(instance, item);
+                            }
+                            let callee = callee.unwrap_or_else(|| "?".to_owned());
+                            return Err(instance.raise_builtin_error(
+                                "TypeError",
+                                &format!(
+                                    "{callee} argument after * must be an iterable, not {argument_type_name}"
+                                ),
+                            ));
+                        }
+                        Err(error) => {
+                            release(instance, callable);
+                            release(instance, argument_source);
+                            release(instance, keyword_source);
+                            if let Some(bound) = bound_self {
+                                release(instance, bound);
+                            }
+                            for item in args {
+                                release(instance, item);
+                            }
+                            return Err(error);
+                        }
                     }
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "argument after * must be an iterable",
-                    });
                 }
                 release(instance, argument_source);
 
@@ -146,7 +371,7 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 if keyword_source != null {
                     // SAFETY: 类型身份检查在下面。
                     let keyword_type = unsafe { keyword_source.as_ref() }.ty();
-                    if keyword_type != builtin_type(instance, "dict") {
+                    if keyword_type != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                         for value in args {
                             release(instance, value);
                         }
@@ -174,8 +399,19 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 release(instance, keyword_source);
 
                 let result =
-                    call_callable(instance, callable, bound_self, args, kwargs, opcode_number)?;
-                frame.get().push(result)?;
+                    call_callable(instance, callable, bound_self, args, kwargs, opcode_number);
+                // **`bound_self` 是借用**（`call_callable` 契约）：本函数持有它那一份 ⇒ 调用完要还 ✓
+                // （`P3-41` round 43：先前漏还 ⇒ `f(*args)`／装饰器形态每次漏一份 receiver ✓）。
+                if let Some(self_object) = bound_self {
+                    release(instance, self_object);
+                }
+                // **`callable` 是 CALL_FUNCTION_EX 从栈上弹出的"新引用"** ⇒ 调用后必须归还 ✓
+                // （round 102 真 bug 修 ✗：先前**只在错误路径**归还、成功路径漏了 ⇒ 每次 `f(*args)` 漏一份
+                //  **被调对象**：`A(*args)` 会漏类对象一份 ⇒ `test.support.check_free_after_iterating`
+                //  里类对象 rc 永远回不到 1 ⇒ 类型/实例环不收 ⇒ `test_dict`/`test_list` 的
+                //  `test_free_after_iterating` 恒红 ✓。返回错误时也在这里归还 ⇒ 不再泄漏 ✓）。
+                release(instance, callable);
+                frame.get().push(result?)?;
             }
         _ => unreachable!("step_calls_call_function_ex 只接收 CALL_FUNCTION_EX"),
     }
@@ -197,11 +433,23 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let value = frame.get().peek()?;
                         // SAFETY: value 在帧值栈上，存活。
                         let ty = unsafe { value.as_ref() }.ty();
+                        // **`+bool` ⇒ `int`** ✓（round 47；参照 `+True` ⇒ `1`、`type` 是 `int` ✓）。
+                        // 先前"原地不动" ✗ ⇒ `+False` 仍是 `False` ✓（`test_bool.test_math` 钉住 ✓）。
+                        if ty == instance.singletons().bool_type() {
+                            let value = frame.get().pop()?;
+                            let truth = instance
+                                .bool_value(value)
+                                .expect("类型刚确认是 bool");
+                            release(instance, value);
+                            let result = instance.new_int(i64::from(truth));
+                            push(instance, frame.get(), result)?;
+                            release(instance, result);
+                            return Ok(Step::Continue);
+                        }
                         // **浮点也要过**（第 318 轮）：`+1.5` 参照给 `1.5` ✓ —— 先前只接
                         // 整数／布尔 ✗ ⇒ `f(+1.5)` 报"只接线了整数／布尔" ✗。
                         if ty != instance.singletons().int_type()
-                            && ty != instance.singletons().bool_type()
-                            && ty != builtin_type(instance, "float")
+                            && ty != instance.hot_type(HotId::Float).expect("float 已登记")
                         {
                             // **实例走 `__pos__`**（第 220 轮；`MS-19`：能力缺口必须修 ✓）：
                             // 参照对**没有** `__pos__` 的对象报
@@ -241,8 +489,8 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let mut use_all = false;
                         if let Some(exported) = exported {
                             let exported_type = instance.type_of(exported);
-                            let tuple_type = builtin_type(instance, "tuple");
-                            let list_type = builtin_type(instance, "list");
+                            let tuple_type = instance.hot_type(HotId::Tuple).expect("tuple 已登记");
+                            let list_type = instance.hot_type(HotId::List).expect("list 已登记");
                             // **元组与列表分开取** ✗（第 413 轮）：先前把两种类型塞进同一个
                             // `if`，再**只**试 `tuple_items` ✗ ⇒ list 形态（`__all__ = ["x"]` ✓）
                             // 取不到 ⇒ 退回"全部公开名"✗（`from moda import *` 把 `y`／`os` 也搬进来 ✓）。
@@ -285,7 +533,48 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                             }
                         }
                         for name in names {
-                            let Some(value) = instance.dict_get(attributes, &name) else {
+                            // **`__all__` 里的子模块**（round 103）：参照的 `_handle_fromlist`
+                            // 在属性缺失且模块是**包**时会 `import 包.名字` ✓ —— 官方
+                            // `test_pkg.test_6`（`__all__ = ['spam','ham','eggs']` 三个子模块 ✓）靠它 ✓；
+                            // 先前直接 `AttributeError` ✗。
+                            let mut found = instance.dict_get(attributes, &name);
+                            if found.is_none() {
+                                if let Some(module_name) =
+                                    crate::executor::module_text(instance, module, "__name__")
+                                {
+                                    let is_package = instance
+                                        .attribute_optional_discarding(module, "__path__")
+                                        .is_some();
+                                    if is_package {
+                                        if let Some(modules) = instance.modules() {
+                                            let full = format!("{module_name}.{name}");
+                                            // **`load_module` 失败的那颗异常要还**（task-14 #f 同族，
+                                            // 写域内顺带修）：这里的语义是"尝试导入子模块，失败就算了"
+                                            // ✓ ⇒ 但 `.is_ok()` 把 `Err(Raised)` 整个丢掉 ⇒ 每失败
+                                            // 一次漏一颗 `ModuleNotFoundError→traceback→帧` 链
+                                            // （实测 `from pkg import *`（`__all__` 里有不存在的名字）
+                                            // ×5000 ⇒ `tb_created−tb_freed` 净增 5000，直方图
+                                            // `ModuleNotFoundError=5000`）。照 `discard_error` 口径还掉。
+                                            match crate::executor::import::load_module(
+                                                instance,
+                                                modules,
+                                                &full,
+                                                opcode_number,
+                                            ) {
+                                                Ok(_) => {
+                                                    found = instance.dict_get(attributes, &name);
+                                                }
+                                                Err(error) => {
+                                                    crate::executor::runtime::discard_error(
+                                                        instance, &error,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let Some(value) = found else {
                                 let module_name =
                                     crate::executor::module_text(instance, module, "__name__")
                                         .unwrap_or_else(|| "?".to_owned());
@@ -305,7 +594,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let value = frame.get().pop()?;
                         // SAFETY: value 是刚出栈的存活对象。
                         let ty = unsafe { value.as_ref() }.ty();
-                        if ty != builtin_type(instance, "list") {
+                        if ty != instance.hot_type(HotId::List).expect("list 已登记") {
                             release(instance, value);
                             return Err(ExecError::Unsupported {
                                 opcode: opcode_number,
@@ -333,7 +622,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                     // - `INTRINSIC_TYPEALIAS`（11）：**只注册编号** ✓（轮 2 落语义 ✓，如实报未接线 ✓）。
                     "INTRINSIC_TYPEVAR" => {
                         let name = frame.get().pop()?;
-                        let Some(typevar_type) = instance.type_named("TypeVar") else {
+                        let Some(typevar_type) = instance.hot_type(HotId::TypeVar) else {
                             release(instance, name);
                             return Err(ExecError::Unsupported {
                                 opcode: opcode_number,
@@ -348,8 +637,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                     }
                     "INTRINSIC_SUBSCRIPT_GENERIC" => {
                         let params = frame.get().pop()?;
-                        let generic = instance
-                            .type_named("Generic")
+                        let generic = instance.hot_type(HotId::Generic)
                             .unwrap_or_else(|| instance.new_attribute_type("Generic"));
                         let base = instance.new_generic_alias(generic.cast(), params);
                         release(instance, params);
@@ -362,7 +650,7 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         // `TypeAliasType` 实例 ✓（`__value__` 惰性 ✓）。
                         let tuple = frame.get().pop()?;
                         // SAFETY: tuple 是帧值栈上的存活对象。
-                        let is_tuple = unsafe { tuple.as_ref() }.ty() == builtin_type(instance, "tuple");
+                        let is_tuple = unsafe { tuple.as_ref() }.ty() == instance.hot_type(HotId::Tuple).expect("tuple 已登记");
                         if !is_tuple {
                             release(instance, tuple);
                             return Err(ExecError::Unsupported {
@@ -402,16 +690,49 @@ fn step_calls_call_intrinsic_1<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let value = frame.get().peek()?;
                         // SAFETY: value 在帧值栈上，存活。
                         let ty = unsafe { value.as_ref() }.ty();
-                        let stop_iteration = instance
-                            .type_named("StopIteration")
+                        let stop_iteration = instance.hot_type(HotId::StopIteration)
                             .expect("StopIteration 在异常层次里");
+                        // **异步生成器**（round 245）：词是 `async generator raised StopIteration` ✗
+                        //（`Lib/test/test_asyncgen.py` 的 exception_06 按参照原话断言 ✓）。
+                        let is_async_generator = {
+                            let flags = match frame.get().code() {
+                                // SAFETY: code 由帧持有，存活。
+                                Some(code) => unsafe { code.cast::<crate::CodeObject>().as_ref() }.flags(),
+                                None => 0,
+                            };
+                            flags & 0x200 != 0
+                        };
                         if instance.is_subtype(ty, stop_iteration) {
-                            release(instance, frame.get().pop()?);
+                            let original = frame.get().pop()?;
+                            let message = if is_async_generator {
+                                "async generator raised StopIteration"
+                            } else {
+                                "generator raised StopIteration"
+                            };
                             let exception = new_exception(
                                 instance,
-                                exception_type(instance, "RuntimeError"),
-                                "generator raised StopIteration",
+                                instance.hot_type(HotId::RuntimeError).expect("RuntimeError 已登记"),
+                                message,
                             );
+                            // **PEP 479 的包装要带走 cause／context** ✓（round 64）：参照的
+                            // `RuntimeError` 把原 `StopIteration` 作为 `__cause__` 与
+                            // `__context__`，并把 `__suppress_context__` 置真
+                            //（`test_generator_stop.test_stopiteration_wrapping_context` ✓）。
+                            // 这两个字段住在 `ExceptionObject` **载荷**里（getattr 也只读载荷 ✓）。
+                            // 原异常要给**两份**引用（cause 与 context 各一份 ✓）+ 本函数自己那份
+                            // = **3 份** ⇒ 先各加一份（两次 ✓）再在下面还自己那份 ✓。
+                            unsafe {
+                                instance.incref_object(original.as_ptr());
+                                instance.incref_object(original.as_ptr());
+                            }
+                            let _ = crate::builtin_objects::ExceptionObject::set_cause_context_suppress(
+                                instance,
+                                exception,
+                                Some(original),
+                                Some(original),
+                                true,
+                            );
+                            release(instance, original);
                             frame.get().push(exception)?;
                         }
                         // 不是 `StopIteration` 就原样留着（净 0）
@@ -451,7 +772,10 @@ fn step_calls_call_intrinsic_2<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                         let params = frame.get().pop()?;
                         let function = frame.get().pop()?;
                         // 挂不上就**原样放过** ✓（轮 2 的外壳走的是函数对象 ✓）。
-                        let _ = instance.set_attribute_value(function, "__type_params__", params);
+                        crate::executor::runtime::discard_exec_result(
+                            instance,
+                            instance.set_attribute_value(function, "__type_params__", params),
+                        );
                         release(instance, params);
                         push(instance, frame.get(), function)?;
                         release(instance, function);
@@ -460,7 +784,7 @@ fn step_calls_call_intrinsic_2<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                     "INTRINSIC_TYPEVAR_WITH_BOUND" => {
                         let thunk = frame.get().pop()?;
                         let name = frame.get().pop()?;
-                        let Some(typevar_type) = instance.type_named("TypeVar") else {
+                        let Some(typevar_type) = instance.hot_type(HotId::TypeVar) else {
                             release(instance, thunk);
                             release(instance, name);
                             return Err(ExecError::Unsupported {
@@ -588,10 +912,9 @@ fn step_calls_make_function<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>
                 let code_header = frame.get().pop()?;
                 // SAFETY: code_header 是本实例的存活对象（由常量表持有）。
                 let code_type_ok = unsafe { code_header.as_ref() }.ty();
-                let code_object_type = instance
-                    .type_named("CodeObject")
+                let code_object_type = instance.hot_type(HotId::CodeObject)
                     .map(|ty| ty)
-                    .unwrap_or_else(|| builtin_type(instance, "object"));
+                    .unwrap_or_else(|| instance.hot_type(HotId::Object).expect("object 已登记"));
                 if code_type_ok != code_object_type {
                     release(instance, code_header);
                     return Err(ExecError::Unsupported {
@@ -607,7 +930,7 @@ fn step_calls_make_function<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>
                     unsafe { instance.incref_object(mapping.as_ptr()) };
                 }
                 let object = instance.alloc(FunctionObject::new(
-                    builtin_type(instance, "function"),
+                    instance.hot_type(HotId::Function).expect("function 已登记"),
                     code_header,
                     Vec::new(),
                     None,
@@ -630,7 +953,7 @@ fn step_calls_set_function_attribute<'a>(instance: &'a Instance, frame: &Owned<'
                 let function = frame.get().pop()?;
                 let attribute = frame.get().pop()?;
                 // SAFETY: function 是帧值栈上的存活对象。
-                if unsafe { function.as_ref() }.ty() != builtin_type(instance, "function") {
+                if unsafe { function.as_ref() }.ty() != instance.hot_type(HotId::Function).expect("function 已登记") {
                     release(instance, attribute);
                     release(instance, function);
                     return Err(ExecError::Unsupported {
@@ -649,7 +972,7 @@ fn step_calls_set_function_attribute<'a>(instance: &'a Instance, frame: &Owned<'
                     }
                     2 => {
                         // kwdefaults：一个 dict（实测）
-                        if unsafe { attribute.as_ref() }.ty() != builtin_type(instance, "dict") {
+                        if unsafe { attribute.as_ref() }.ty() != instance.hot_type(HotId::Dict).expect("dict 已登记") {
                             release(instance, attribute);
                             release(instance, function);
                             return Err(ExecError::Unsupported {
@@ -714,7 +1037,7 @@ fn step_calls_call<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: 
                 let keyword_count = match names {
                     Some(names) => {
                         // SAFETY: names 是帧值栈上的存活对象。
-                        if unsafe { names.as_ref() }.ty() != builtin_type(instance, "tuple") {
+                        if unsafe { names.as_ref() }.ty() != instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
                             release(instance, names);
                             return Err(ExecError::Unsupported {
                                 opcode: opcode_number,
@@ -793,7 +1116,7 @@ fn step_calls_call<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: 
                 let mut bound_self = bound_self;
                 if let Some(self_object) = bound_self {
                     // SAFETY: callable 是帧值栈上的存活对象。
-                    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "method") {
+                    if unsafe { callable.as_ref() }.ty() == instance.hot_type(HotId::Method).expect("method 已登记") {
                         args.insert(0, self_object);
                         bound_self = None;
                     }
@@ -807,6 +1130,15 @@ fn step_calls_call<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: 
                     opcode_number,
                 );
                 release(instance, callable);
+                // **`bound_self` 是借用**（`call_callable` 的契约：调用方持有）⇒ 这一格由
+                // 帧值栈 push 时 retain 过，调用完必须还 ✓（`P3-41` round 43 修 ✗：先前漏还
+                // ⇒ `a.m()` 每调一次 `a` 的 refcount +1，`test_weakref` 的 70000 个键值全留在堆上 ✓）。
+                if let Some(self_object) = bound_self {
+                    release(instance, self_object);
+                }
+                // **返回值是"新引用"** ✓：`Frame::push` 是"接管"语义 ⇒ 直接交，不能再经
+                // `push(instance, …)`（那会 `own()` 再 retain 一次 ⇒ **每调用漏一份返回值引用** ✗；
+                // `P3-41` round 43 实测：`f(a)` 返回 `a` 时 `a` 的 refcount 每次 +1 ✓）。
                 frame.get().push(result?)?;
             }
         _ => unreachable!("step_calls_call 只接收 CALL | CALL_KW"),

@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`MAX_REPEAT_BYTES`、`MAX_REPEAT_ITEMS`、`builtin_type`、`opcode_of`、`push` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use crate::executor::{MAX_REPEAT_BYTES, MAX_REPEAT_ITEMS, builtin_type, opcode_of};
 use crate::builtin_objects::BytesObject;
 use crate::executor::ExecError;
@@ -24,20 +25,6 @@ pub(crate) fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Opti
     instance.int_of(raw)
 }
 
-/// **下标**载荷 → `i64`：非整数与**超出 `i64` 的整数**分开报（"未接线"的理由不同）。
-pub(crate) fn index_payload(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
-    let Some(value) = integer_payload(instance, raw) else {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（字符串／浮点键与 `__index__` 尚未接线；切片走专门路径）",
-        });
-    };
-    value.to_i64().ok_or(ExecError::Unsupported {
-        opcode,
-        what: "下标超出 i64 尚未接线（`TS-45` 只点名四则／整除／取模／幂）",
-    })
-}
-
 /// 数值载荷（`int`／`bool`／`float`）。
 pub(crate) fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Option<f64> {
     if let Some(value) = integer_payload(instance, raw) {
@@ -45,7 +32,7 @@ pub(crate) fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Opti
     }
     // SAFETY: 调用方保证 raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
-    if ty == builtin_type(instance, "float") {
+    if ty == instance.hot_type(HotId::Float).expect("float 已登记") {
         // SAFETY: 类型身份已确认。
         return Some(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value());
     }
@@ -69,7 +56,7 @@ pub(crate) fn sequence_items(
         value
     };
 
-    if ty == builtin_type(instance, "tuple") {
+    if ty == instance.hot_type(HotId::Tuple).expect("tuple 已登记") {
         // SAFETY: 类型身份已确认。
         return Ok(unsafe { &*raw.as_ptr().cast::<TupleObject>() }
             .items()
@@ -78,7 +65,7 @@ pub(crate) fn sequence_items(
             .map(owned)
             .collect());
     }
-    if ty == builtin_type(instance, "list") {
+    if ty == instance.hot_type(HotId::List).expect("list 已登记") {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<ListObject>() }
             .items()
@@ -86,7 +73,7 @@ pub(crate) fn sequence_items(
             .map(owned)
             .collect());
     }
-    if ty == builtin_type(instance, "set") {
+    if ty == instance.hot_type(HotId::Set).expect("set 已登记") {
         // **集合**也走这里：`SET_UPDATE` 的源是折叠出来的 `frozenset` 常量（第 249 轮），
         // 解包一个集合在参照里本来也合法 ⇒ 元素序照集合内部序（观测面只比集合语义）
         // SAFETY: 类型身份已确认。
@@ -111,7 +98,7 @@ pub(crate) fn sequence_items(
     // **兜底：走迭代器协议** ✓（第 314 轮接线；tuple／list／set／str 已在上面走快路 ✓）。
     // 契约（`executor/iter.rs`／`runtime.rs` 注释 ✓）：`iter_value` 给**新引用** ✓、
     // `advance` 给 `Some(元素新引用)` ✓ ⇒ 迭代器那份用完要还 ✓、元素直接收 ✓。
-    if crate::diag::flag("PYAWA_ITER_DEBUG") {
+    if crate::diag::flag_site!("PYAWA_ITER_DEBUG") {
         eprintln!("[unpack] opcode={_opcode} 走迭代器兜底");
     }
     let iterator = instance.iter_object(raw)?;
@@ -142,6 +129,19 @@ pub(crate) fn normalize_index(index: i64, length: usize) -> Option<usize> {
 ///
 /// 判据是 `tests/fixture-slice-3.14.json`（`tools/gen_slice_fixture.py` 实测：16 种切法
 /// × `bytes`／`str`／`list`／`tuple`）。
+/// **`slice` 对象 ⇒ 命中下标表**（`P3-42` 的公开入口：stdlib 里做序列类型的切片用 ✓）。
+///
+/// 与执行器的 `subscript_slice` **同一处实现**（`slice_bounds` ＋ `slice_positions` ✓）——
+/// 一处真相：切片边界规则不在 stdlib 里另写一遍 ✓。
+pub fn slice_pick_public(
+    instance: &Instance,
+    key: NonNull<Header>,
+    length: usize,
+) -> Result<Vec<usize>, ExecError> {
+    let (start, stop, step) = slice_bounds(instance, key, length)?;
+    Ok(slice_positions(start, stop, step))
+}
+
 pub(crate) fn slice_bounds(
     instance: &Instance,
     key: NonNull<Header>,
@@ -157,7 +157,10 @@ pub(crate) fn slice_bounds(
     let (lower, upper) = if step > 0 { (0, length) } else { (-1, length - 1) };
     let adjust = |value: i64| {
         if value < 0 {
-            let shifted = value + length;
+            // **饱和加法**（`P3-42` round 44）：`value` 可能是 `bound` 饱和出来的 `i64::MIN`
+            // （`'abc'[-sys.maxsize - 1::-1]` 一类）⇒ 直接 `+ length` 会**回绕成巨大正数**
+            // ⇒ 负步长分支给出 `usize` 越界 panic ✗。饱和后夹到 `lower`（`-1`）✓。
+            let shifted = value.saturating_add(length);
             if shifted < lower {
                 lower
             } else {
@@ -192,20 +195,54 @@ pub(crate) fn slice_bounds(
     Ok((start, stop, step))
 }
 
+/// **标量下标**（容器读）：整数（含**超出 `i64` 的大整数**，按方向饱和后由 `normalize_index`
+/// 给 `IndexError` ✓）或 `__index__` 对象 ✓；否则按**该容器口径**报参照同形的 `TypeError`。
+///
+/// `kind`：`"string"`／`"byte"` 两种参照文案带引号且**无** "or slices"；其余（`list`／`tuple`／
+/// `bytearray`）带 "or slices" ✓（本机 3.14.4 逐条实测）。
+pub(crate) fn scalar_index(
+    instance: &Instance,
+    raw: NonNull<Header>,
+    kind: &str,
+) -> Result<i64, ExecError> {
+    if let Some(number) = instance.int_of(raw) {
+        return Ok(number.to_i64().unwrap_or_else(|| {
+            if number.to_bigint().signum() < 0 {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }));
+    }
+    if let Ok(Some(value)) = instance.index_value(raw) {
+        return Ok(value);
+    }
+    let type_name = instance.type_name(instance.type_of(raw));
+    let message = match kind {
+        "string" => format!("string indices must be integers, not '{type_name}'"),
+        "byte" => format!("byte indices must be integers, not '{type_name}'"),
+        other => format!("{other} indices must be integers or slices, not {type_name}"),
+    };
+    Err(instance.raise_builtin_error("TypeError", &message))
+}
+
 /// 切片要取的那些下标（有序；长度天然不超过序列长度）。
 pub(crate) fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
     let mut out = Vec::new();
+    // **饱和加法**（`P3-42` round 44）：`step` 可以是 `sys.maxsize` 量级（`s[1:None:sys.maxsize]`）⇒
+    // `at += step` 会**回绕成负值** ⇒ 循环不终止／把负下标 `as usize` 成 2^63 ⇒ 越界 panic ✗。
+    // 饱和后 `at` 单调越过 `stop` ⇒ 正常收摊 ✓。
     if step > 0 {
         let mut at = start;
         while at < stop {
             out.push(at as usize);
-            at += step;
+            at = at.saturating_add(step);
         }
     } else {
         let mut at = start;
         while at > stop {
             out.push(at as usize);
-            at += step;
+            at = at.saturating_add(step);
         }
     }
     out
@@ -276,12 +313,16 @@ pub(crate) fn sequence_repeat(
     let right_type = unsafe { right.as_ref() }.ty();
     let is_text_left = left_type == instance.singletons().str_type();
     let is_text_right = right_type == instance.singletons().str_type();
-    let is_bytes_left = Some(left_type) == instance.type_named("bytes");
-    let is_bytes_right = Some(right_type) == instance.type_named("bytes");
-    let is_list_left = left_type == builtin_type(instance, "list");
-    let is_list_right = right_type == builtin_type(instance, "list");
-    let is_tuple_left = left_type == builtin_type(instance, "tuple");
-    let is_tuple_right = right_type == builtin_type(instance, "tuple");
+    let is_bytes_left = Some(left_type) == instance.hot_type(HotId::Bytes);
+    let is_bytes_right = Some(right_type) == instance.hot_type(HotId::Bytes);
+    // **子类也算**（round 106）：参照 `list.__mul__`／`tuple.__mul__` 对子类同样成立 ✓
+    //（官方 `test_list.test_mul` 的 `class subclass(list)` ✓）；结果给**普通** list／tuple ✓。
+    let list_base = instance.hot_type(HotId::List).expect("list 已登记");
+    let tuple_base = instance.hot_type(HotId::Tuple).expect("tuple 已登记");
+    let is_list_left = instance.is_subtype(left_type, list_base);
+    let is_list_right = instance.is_subtype(right_type, list_base);
+    let is_tuple_left = instance.is_subtype(left_type, tuple_base);
+    let is_tuple_right = instance.is_subtype(right_type, tuple_base);
     let sequence_left = is_text_left || is_bytes_left || is_list_left || is_tuple_left;
     let sequence_right = is_text_right || is_bytes_right || is_list_right || is_tuple_right;
     let (sequence, count_object) = if sequence_left && !sequence_right {
@@ -298,6 +339,11 @@ pub(crate) fn sequence_repeat(
         return Err(instance.raise_builtin_error("OverflowError", "cannot fit 'int' into an index-sized integer"));
     };
     let count = count.max(0) as usize;
+    // **`tuple * 1` 返回同一个对象**（round 110）：参照 `tuple_repeat` 的 `count == 1` 分支是
+    // `Py_NewRef(self)` ✓ —— `seq_tests.test_repeat` 钉住 `id(s) == id(s*1)` ✓；先前一律造新元组 ✗。
+    if is_tuple_left && count == 1 {
+        return Ok(Some(instance.retain(sequence)));
+    }
     // SAFETY: sequence 是存活对象。
     let sequence_type = unsafe { sequence.as_ref() }.ty();
     if sequence_type == instance.singletons().str_type() {
@@ -312,24 +358,27 @@ pub(crate) fn sequence_repeat(
         if bytes_len.saturating_mul(count) > MAX_REPEAT_BYTES {
             return Err(instance.raise_builtin_error("MemoryError", "string repetition too large"));
         }
+        // **大块分配前置预算**（OM-3 扩）：先问配额再分配，避免"先吃满宿主再抛" ✗
+        instance.ensure_memory_budget(bytes_len.saturating_mul(count))?;
         return instance
             .str_repeat(sequence, count)
             .map(Some)
             .ok_or_else(|| instance.raise_builtin_error("MemoryError", "string repetition too large"));
     }
-    if Some(sequence_type) == instance.type_named("bytes") {
+    if Some(sequence_type) == instance.hot_type(HotId::Bytes) {
         // SAFETY: 同上。
         let value = unsafe { &*sequence.as_ptr().cast::<BytesObject>() }.value().to_vec();
         if value.len().saturating_mul(count) > MAX_REPEAT_BYTES {
             return Err(instance.raise_builtin_error("MemoryError", "bytes repetition too large"));
         }
+        instance.ensure_memory_budget(value.len().saturating_mul(count))?;
         let mut repeated = Vec::with_capacity(value.len().saturating_mul(count));
         for _ in 0..count {
             repeated.extend_from_slice(&value);
         }
         return Ok(Some(instance.new_bytes(&repeated)));
     }
-    let items: Vec<NonNull<Header>> = if sequence_type == builtin_type(instance, "list") {
+    let items: Vec<NonNull<Header>> = if instance.is_subtype(sequence_type, list_base) {
         // SAFETY: 同上。
         let object = unsafe { &*sequence.as_ptr().cast::<ListObject>() };
         (0..object.len()).filter_map(|index| object.item(index)).collect()
@@ -341,6 +390,13 @@ pub(crate) fn sequence_repeat(
     if items.len().saturating_mul(count) > MAX_REPEAT_ITEMS {
         return Err(instance.raise_builtin_error("MemoryError", "sequence repetition too large"));
     }
+    // 指针表 ＋ 头部（保守估计；实际元素对象是共享的 ✓）。
+    instance.ensure_memory_budget(
+        items
+            .len()
+            .saturating_mul(count)
+            .saturating_mul(core::mem::size_of::<NonNull<Header>>()),
+    )?;
     let mut repeated: Vec<NonNull<Header>> = Vec::with_capacity(items.len().saturating_mul(count));
     for _ in 0..count {
         for item in &items {
@@ -349,7 +405,7 @@ pub(crate) fn sequence_repeat(
             repeated.push(*item);
         }
     }
-    if sequence_type == builtin_type(instance, "list") {
+    if instance.is_subtype(sequence_type, list_base) {
         Ok(Some(instance.new_list(repeated)))
     } else {
         Ok(Some(instance.new_tuple(repeated)))

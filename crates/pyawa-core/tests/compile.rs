@@ -378,11 +378,20 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
         .expect("不再报错：不折，运行期用任意精度算");
     // 负号／减法**已接线**（第 212 轮）、`@`／`@=` 也**已接线**（第 221 轮）⇒ 都不再是"未接线"样本。
     // 这里改验一条仍然没接的：**链式比较**（`a < b < c` 一律如实报 `Unsupported`）
-    // 第 262 轮起：链式比较**已接线**、第 278 轮起**函数里嵌套 `def`** 也接线 ⇒
-    // 断言换成仍未实现的那个：`\N{…}` 具名转义（要整张 Unicode 名字表，属 M3 数据面）。
+    // 第 262 轮起：链式比较**已接线**、第 278 轮起**函数里嵌套 `def`** 也接线；
+    // 第 259 轮（C2）起 **`\N{…}` 具名转义也已接线**（1.56 MB 名字表）⇒ 这里断言**编得过** ✓。
+    // 仍"如实报 Unsupported"的样本改用**映射模式 `**rest` 捕获**（`test_patma` 实测同一口径 ✓）。
+    compile(
+        "x = \"\\N{BULLET}\"\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect("`\\N{…}` 已接线（C2）");
     assert!(matches!(
         compile(
-            "x = \"\\N{BULLET}\"\n",
+            "match d:\n    case {**rest}:\n        pass\n",
             "<t>",
             Mode::PurePython,
             CheckTier::Shallow,
@@ -394,12 +403,15 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
     // 但参照实现支持（上游 `_bootstrap.py` 里就有 ✓，`for a, b in xs:` 的体里一句 `a` ✓）
     // ⇒ 现在断言**编得过**，且产物是 `LOAD_NAME` ＋ `POP_TOP` ✓。
     assert!(compile("x", "<t>", Mode::PurePython, CheckTier::Shallow, 0).is_ok());
-    // 字符串转义未接线
-    // 第 250 轮：字符串转义**已接线** ⇒ 这一条改断言真正的未实现（`\N{…}` 要 Unicode 名字表）
-    assert!(matches!(
-        compile("x = '\\N{BULLET}'", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
-        Err(CompileError::Unsupported(_))
-    ));
+    // 字符串转义：第 250 轮起已接线、第 259 轮起 `\N{…}` 也接线 ⇒ 断言**编得过** ✓。
+    compile(
+        "x = '\\N{BULLET}'",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect("`\\N{…}` 已接线（C2）");
 }
 
 #[test]

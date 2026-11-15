@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+# 与 AGENTS.md「硬线」一致：
+#  - fast：每次 push/PR —— check.py（18 项，秒级）＋ 构建 ＋ ABI/核心测试 ＋ pyawa check 语料
+#  - full：PR／手动／每周 —— slowcheck 11 项（含基准闸：性能回退 + memcheck 子集）
+jobs:
+  fast:
+    name: 快速闸门（check.py ＋ 构建 ＋ 测试）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
+          fetch-depth: 0
+      - name: 环境
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind gcc
+          rustc --version && cargo --version
+      - name: 构建（release）
+        run: tools/cargo.sh build --release -p pyawa-runtime --bin pyawa
+      # 必须先跑 ABI 测试：M3-COVERAGE 的 ④⑤ 依赖它产出的
+      # target/conformance/{self-check.md,report.md}（target/ 不进仓库）
+      - name: ABI ＋ 核心 ＋ LSP 测试（release）
+        run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core -p pyawa-lsp
+      - name: 文档/规格/编号闸门（18 项）
+        run: python3 tests/ci/check.py
+      # PLAN §11.1 ④：check.py 之后对 407 语料（.py）跑 pyawa check——只编译不执行，
+      # 期望 0 诊断、退出码 0（LSP 线①的语料回归闸）。
+      - name: pyawa check 语料（407 个 .py ⇒ 0 诊断）
+        run: |
+          awk -F'\t' 'NF>=2 && $1 !~ /^#/ {print "tests/conformance/corpus/" $1}' \
+            tests/conformance/corpus/manifest.tsv > /tmp/pyawa-check-corpus.txt
+          wc -l /tmp/pyawa-check-corpus.txt
+          target/release/pyawa check $(cat /tmp/pyawa-check-corpus.txt)
+
+  full:
+    name: 完整闸门（slowcheck 11 项）
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
+          fetch-depth: 0
+      - name: 环境
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind gcc
+          rustc --version && cargo --version
+      # slowcheck 的第 5 项（check.py 的 M3-COVERAGE ④⑤）依赖 conformance 测试产出的
+      # target/conformance/{self-check.md,report.md}；本地有残留，CI 全新 clone 必须先生成
+      - name: 生成 conformance 报告（供 slowcheck 第 5 项使用）
+        run: tools/cargo.sh test --release -p pyawa-abi --test conformance
+      - name: slowcheck（11 项：含基准闸＝性能回退 ＋ memcheck 子集）
+        run: tools/slowcheck.sh --release
+
+      - name: 上传失败日志（artifact）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slowcheck-logs-${{ github.job }}
+          path: |
+            target/slowcheck/*.log
+            target/conformance/*.md
+          if-no-files-found: ignore
+
+  weekly:
+    name: 每周全量（slowcheck ＋ 内存棘轮）
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
+          fetch-depth: 0
+      - name: 环境
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind gcc
+      # slowcheck 的第 5 项（check.py 的 M3-COVERAGE ④⑤）依赖 conformance 测试产出的
+      # target/conformance/{self-check.md,report.md}；本地有残留，CI 全新 clone 必须先生成
+      - name: 生成 conformance 报告（供 slowcheck 第 5 项使用）
+        run: tools/cargo.sh test --release -p pyawa-abi --test conformance
+      - name: slowcheck
+        run: tools/slowcheck.sh --release
+
+      - name: 上传失败日志（artifact）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slowcheck-logs-${{ github.job }}
+          path: |
+            target/slowcheck/*.log
+            target/conformance/*.md
+          if-no-files-found: ignore
+      - name: 全量内存棘轮（memdangle_survey）
+        run: python3 tools/memdangle_survey.py --seconds 3000 || true

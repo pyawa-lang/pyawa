@@ -90,6 +90,7 @@
 //! 制表符缩进、嵌套函数定义、负数常量、字符串转义、任意精度整数（`i64` 溢出）、
 //! `EXTENDED_ARG`（`oparg > 255`）、位置表（`BC-18`）、扩展模式的边界检查指令（`BC-23`…`BC-28`）。
 
+use crate::HotId;
 use crate::opcode;
 
 /// 编译模式（`BC-14`：**显式入参**，禁止从全局或环境推断）。
@@ -237,6 +238,10 @@ pub struct CompiledUnit {
     pub nlocals: usize,
     /// `co_flags`。
     pub flags: u32,
+    /// **`co_firstlineno`**（round 176）：模块＝1，函数／类体＝`def`／`class` 那一行 ✓
+    /// （参照口径；本层先前一律 1 ⇒ `test_frame.test_repr` 的 `offset` 全错 ✗）。
+    /// `0` ＝ 未知（从 `.pyac` 旧格式读回时不会出现——格式版本已随字段一起升 ✓）。
+    pub firstlineno: usize,
     /// `co_names`。
     pub names: Vec<String>,
     /// `co_varnames`。
@@ -308,6 +313,125 @@ impl Span {
     }
 }
 
+/// **`compile(source, filename, "single")` 的交互式编译**（round 51）：与 [`compile`] 同一条路，
+/// 只是把**顶层表达式语句**包成一次显示钩子调用 —— 参照的交互模式会把每个表达式的值经
+/// `sys.displayhook` 打出来 ✓（`doctest` 的每个示例表达式都靠它 ✓）。
+///
+/// 显示钩子用**内建名字** [`INTERACTIVE_DISPLAY_HOOK`]（stdlib 的 `builtins` 里登记，见
+/// `crates/pyawa-stdlib`）—— 这样生成的模块级代码**不需要**先 `import sys` ✓。
+pub const INTERACTIVE_DISPLAY_HOOK: &str = "__pyawa_displayhook__";
+
+/// 见 [`INTERACTIVE_DISPLAY_HOOK`]；`mode`／`tier`／`optimization` 的契约同 [`compile`]。
+pub fn compile_interactive(
+    source: &str,
+    filename: &str,
+    mode: Mode,
+    tier: CheckTier,
+    optimization: u8,
+) -> Result<CompiledUnit, CompileError> {
+    let _ = optimization;
+    let lexed = lex(source, mode)?;
+    let mut statements = parse_module(&lexed)?;
+    // **私有名改写**（`task-5`）：在**所有**下游（typecheck／符号分析／发射）之前做一次。
+    // 交互式显示的包装用 `__pyawa_displayhook__`（dunder ⇒ 不受改写影响）。
+    mangle::mangle_module(&mut statements);
+    // **`nonlocal` 绑定的编译期校验**（task-12）：改写之后做 ⇒ 报错名是改写后的名字（参照同）。
+    validate_nonlocal_bindings(&statements)?;
+    wrap_interactive_expressions(&mut statements);
+    if mode == Mode::Extension {
+        typecheck::check(&statements, filename, &[])?;
+    }
+    let unit = compile_scope(
+        "<module>",
+        "<module>",
+        &[],
+        &[],
+        None,
+        None,
+        None,
+        mode,
+        tier,
+        &statements,
+        ScopeKind::Module,
+        false,
+        false,
+        &[],
+        Span::synthetic(),
+    )?;
+    verify::check(&unit)?;
+    Ok(unit)
+}
+
+/// **交互式显示**：把**模块级代码对象里**的表达式语句包成显示钩子调用 ✓（round 63）。
+///
+/// 参照的交互编译器把 `INTRINSIC_PRINT` 加在**模块层代码**的每条表达式语句上——**包括
+/// `if`／`for`／`while`／`try`／`with` 的体**（`dis` 实测 ✓）；**不进** `def`／`class` 体
+/// （那是独立代码对象，参照也不加 ✓）。先前只包**顶层**一条 ✗ ⇒ doctest 里 `try: …; True`
+/// 这类例子显示不出值（`test_extcall` 的 `silence = id(1, *{}); True` ⇒ "Got nothing" ✓）。
+fn wrap_interactive_expressions(statements: &mut [Statement]) {
+    for statement in statements.iter_mut() {
+        match statement {
+            Statement::Expression(value, span) => {
+                let display = Expression::Name(INTERACTIVE_DISPLAY_HOOK.to_owned(), *span);
+                let original =
+                    core::mem::replace(value, Expression::Constant(Constant::None, *span));
+                let order = vec![PositionalArgument::Plain(original.clone())];
+                *value = Expression::Call {
+                    function: Box::new(display),
+                    arguments: vec![original],
+                    positional_order: order,
+                    star_arguments: Vec::new(),
+                    keywords: Vec::new(),
+                    dict_arguments: Vec::new(),
+                    callee_span: *span,
+                    span: *span,
+                };
+            }
+            // 递归进**同一代码对象**的复合语句体（`def`／`class` 体是独立代码对象 ⇒ 跳过 ✓）。
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                wrap_interactive_expressions(then_body);
+                wrap_interactive_expressions(else_body);
+            }
+            Statement::For {
+                body, else_body, ..
+            }
+            | Statement::While {
+                body, else_body, ..
+            } => {
+                wrap_interactive_expressions(body);
+                wrap_interactive_expressions(else_body);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                wrap_interactive_expressions(body);
+                for handler in handlers.iter_mut() {
+                    wrap_interactive_expressions(&mut handler.body);
+                }
+                wrap_interactive_expressions(else_body);
+                wrap_interactive_expressions(finally_body);
+            }
+            Statement::With { body, .. } => {
+                wrap_interactive_expressions(body);
+            }
+            Statement::Match { cases, .. } => {
+                for case in cases.iter_mut() {
+                    wrap_interactive_expressions(&mut case.body);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 编译一段源码（`BC-16`：纯函数——同样的入参给同样的产物）。
 ///
 /// `mode`（`BC-14`）、`tier`（`TS-31`）与 `optimization`（`IM-19`）都是**显式编译输入**，
@@ -323,21 +447,143 @@ pub fn compile(
     tier: CheckTier,
     optimization: u8,
 ) -> Result<CompiledUnit, CompileError> {
-    // `BC-14`：模式是显式入参，词法期就按它分流（`TS-46` 的 `?` 只在扩展模式是词素）。
-    // `BC-15` 要求纯 Python 模式拒绝扩展语法 ⇒ 纯模式下 `?` 仍是词法期的 `Syntax` 错误。
-    // `TS-31`：档位同层显式传入；深层档位目前不改发射（见 `CheckTier` 的说明）。
-    // `IM-19`／`IM-21`：优化级同层显式传入，同样暂不改发射。
+    // 无宿主函数声明（普通宿主／测试）⇒ 与既有行为逐字节一致（`AB-69` ③）。
+    compile_with_host_functions(source, filename, mode, tier, optimization, &[])
+}
+/// 一条**编译期诊断**（`TS-41` 批量诊断；`pyawa check` 与 LSP 的数据源）。
+///
+/// 字段口径（PLAN §10.1 的 `--format=json`）：`file`／`line`（1 基）／`col`（1 基）／`code`／
+/// `severity`／`message`。`code` 取值：`"syntax"`（词法／语法）／`"unsupported"`（尚未接线）／
+/// `"type"`（`TS-47` 静态类型）。**只编译不执行**：本结构只由 [`check_source`] 产出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// 源文件名（调用方给的 `filename`，不解析/不规范化）。
+    pub file: String,
+    /// 行号（**1 基**；提取不到时 0）。
+    pub line: u32,
+    /// 列号（**1 基**；提取不到时 0）。
+    pub col: u32,
+    /// 诊断类别：`"syntax"`／`"unsupported"`／`"type"`。
+    pub code: String,
+    /// 严重级：v1 全是 `"error"`（`TS-41` 只要求错误诊断；警告将来加值）。
+    pub severity: String,
+    /// 消息文本（与执行路径的编译错误同源 ✓）。
+    pub message: String,
+}
+
+/// **只编译不执行**的诊断入口（`pyawa check`／LSP 的数据源）：返回**批量**诊断（不遇首错即止）。
+///
+/// 口径（PLAN §10.1）：
+/// * `.py`（[`Mode::PurePython`]）**只出语法类**诊断（`TS-26`／`MS-19`：`.py` 的标注**不产生**
+///   任何检查）；`.pyawa`（[`Mode::Extension`]）出语法 ＋ `TS-47` 类型诊断；
+/// * 词法／语法错误最多一条（解析器本身不继续），**类型诊断批量收集**（`TS-41`）；
+/// * 不改动任何既有编译行为：执行路径仍用 [`compile`]／[`compile_with_host_functions`]。
+pub fn check_source(source: &str, filename: &str, mode: Mode) -> Vec<Diagnostic> {
+    let lexed = match lex(source, mode) {
+        Ok(lexed) => lexed,
+        Err(error) => return vec![diagnostic_from_error(filename, &error)],
+    };
+    let statements = match parse_module(&lexed) {
+        Ok(statements) => statements,
+        Err(error) => return vec![diagnostic_from_error(filename, &error)],
+    };
+    let mut statements = statements;
+    // **私有名改写**（`task-5`）：诊断与执行路径看到同一套名字。
+    mangle::mangle_module(&mut statements);
+    // **`nonlocal` 绑定的编译期校验**（task-12）：`check` 也报同一条 SyntaxError 诊断。
+    if let Err(error) = validate_nonlocal_bindings(&statements) {
+        return vec![diagnostic_from_error(filename, &error)];
+    }
+    if mode != Mode::Extension {
+        // `.py`：**只语法**（`TS-26`／`MS-19`）——解析通过就 0 诊断。
+        return Vec::new();
+    }
+    typecheck::check_diagnostics(&statements, filename, &[])
+        .into_iter()
+        .map(|diagnostic| Diagnostic {
+            file: filename.to_owned(),
+            line: diagnostic.line,
+            col: diagnostic.col,
+            code: "type".to_owned(),
+            severity: "error".to_owned(),
+            message: diagnostic.message,
+        })
+        .collect()
+}
+
+/// 把一条编译错误折成诊断（行／列从消息里的"第 L 行／列 C"标记提取；没有就 0）。
+fn diagnostic_from_error(filename: &str, error: &CompileError) -> Diagnostic {
+    let (code, message) = match error {
+        CompileError::Syntax(message) => ("syntax", message.clone()),
+        CompileError::Unsupported(message) => ("unsupported", message.clone()),
+        CompileError::TypeAssignment(message) => ("type", message.clone()),
+    };
+    let (line, col) = extract_message_location(&message);
+    Diagnostic {
+        file: filename.to_owned(),
+        line,
+        col,
+        code: code.to_owned(),
+        severity: "error".to_owned(),
+        message,
+    }
+}
+
+/// 从错误消息里提取位置：找中文标记 `第 <n> 行` 与 `列 <n>`（词法／语法错误的既有格式）。
+///
+/// 提取不到 ⇒ `(0, 0)`（`--format=json` 的字段仍在，`T-CX-8` 的"字段齐全"不受影响 ✓）。
+fn extract_message_location(message: &str) -> (u32, u32) {
+    fn number_after(text: &str, marker: &str) -> Option<u32> {
+        let start = text.find(marker)? + marker.len();
+        let digits: String = text[start..]
+            .chars()
+            .skip_while(|character| *character == ' ')
+            .take_while(|character| character.is_ascii_digit())
+            .collect();
+        digits.parse().ok()
+    }
+    let line = number_after(message, "第 ").unwrap_or(0);
+    let col = number_after(message, "列 ").unwrap_or(0);
+    (line, col)
+}
+
+/// **`AB-69`**：编译期调用点检查用的宿主函数声明（类型用**静态标签名**；`None` ＝ 平台类型／未知）。
+///
+/// 由 ABI 层从 `pa_type_expr` 签名投影出来（只投影**静态可判**的标签：int/bool/float/str/bytes/
+/// list/dict 一族；宿主不透明类型与泛型参数投影成 `None` ⇒ 编译期放行、边界运行期兜底）。
+#[derive(Debug, Clone, Default)]
+pub struct HostFunctionSignature {
+    /// 宿主函数在模块全局里的名字。
+    pub name: String,
+    /// 形参类型标签（与注册时的 `pa_sig.nparams` 一一对应）。
+    pub parameters: Vec<Option<String>>,
+    /// 返回类型标签（`None` ＝ 未声明／不可静态判定）。
+    pub returns: Option<String>,
+}
+
+/// **`AB-69`**：带宿主函数声明表的编译入口（`TS-47` 的**调用点检查**用）。
+///
+/// 其它行为与 [`compile`] 完全一致；`host_functions` 只影响扩展模式（`Mode::Extension`）的
+/// 静态检查，**不改发射**（`TS-5`：产物逐字节不变）。
+pub fn compile_with_host_functions(
+    source: &str,
+    filename: &str,
+    mode: Mode,
+    tier: CheckTier,
+    optimization: u8,
+    host_functions: &[HostFunctionSignature],
+) -> Result<CompiledUnit, CompileError> {
+    // 口径与 [`compile`] 逐字相同；唯一区别是扩展模式的静态检查多一张宿主函数声明表。
     let _ = optimization;
     let lexed = lex(source, mode)?;
-    let statements = parse_module(&lexed)?;
-    // **`TS-47` 的编译期一半**（静态赋值检查）：**只在扩展模式**跑（`TS-5`：`.py` 的标注
-    // 不产生任何检查、产物逐字节不变）。能静态判定的不符在这里就报 `TypeAssignment`；
-    // 判不出的留给运行期 `CHECK_ASSIGNMENT`（`BC-65`）兜住。
+    let mut statements = parse_module(&lexed)?;
+    // **私有名改写**（`task-5`）：一次性改写，下游全部看到改写过的一致名字。
+    mangle::mangle_module(&mut statements);
+    // **`nonlocal` 绑定的编译期校验**（task-12）：与参照同——编译期、在符号分析之前报错。
+    validate_nonlocal_bindings(&statements)?;
     if mode == Mode::Extension {
-        typecheck::check(&statements, filename)?;
+        typecheck::check(&statements, filename, host_functions)?;
     }
-    // 注意：**空模块与"只有 `pass` 的模块"在参照里都编得过**（实测：`RESUME; LOAD_CONST None;
-    // RETURN_VALUE`）⇒ 这里**不能**因为"一条语句都没有"报错（`pass` 不产生指令、也不进语句表）
     let unit = compile_scope(
         "<module>",
         "<module>",
@@ -351,22 +597,58 @@ pub fn compile(
         &statements,
         ScopeKind::Module,
         false,
+        false,
         &[],
         Span::synthetic(),
     )?;
-    // **编译期不变量** ✓（第 207 轮）：模块作用域也过一遍 ✓。
     verify::check(&unit)?;
     Ok(unit)
 }
 
+
+mod nfkc;
 mod symbols;
 mod verify;
 use self::symbols::*;
+
+// **类体私有名改写**（`task-5`）：parse 之后、符号分析／typecheck／发射之前对 AST 做**一次**
+// 文本改写（CPython 的 private name mangling）——见 `mangle` 模块头注释的实测口径。
+mod mangle;
 
 mod emitter;
 use self::emitter::*;
 
 mod parser;
+mod coverage;
+
+/// **TS 注解表达式字符串 → [`crate::type_expr::TypeExpr`]**（`SPEC-type-system.md` §16 的
+/// `TS-52`；M2 的公开入口）。
+///
+/// 纯语法层：**与实例无关**（不做名称解析/求值——那是 `TS-53` 的下一层）；语法错误/多余尾巴
+/// 一律 `CompileError::Syntax`（宿主侧按 `AB-22` 映射成 `PA_ERR_INVALID`）。
+pub fn parse_type_expression(
+    text: &str,
+) -> Result<crate::type_expr::TypeExpr, CompileError> {
+    parser::parse_type_expression_text(text)
+}
+
+/// **标注覆盖率与严格档位**（`SPEC-type-system.md` §10 的 `TS-23`／`TS-24`／`TS-25`；M5）。
+///
+/// 纯编译期（`TS-24`）：词法→语法→遍历 AST，按 `TS-39` 分列统计（位置参数／仅关键字／
+/// `*args`／`**kwargs`／返回／变量）＋模式（`IM-1`）＋档位（`TS-31`）。语法错 ⇒ `CompileError`
+/// （与 `compile` 同一档；不跑类型检查、不发射，供宿主"不加载脚本先查覆盖率"）。
+pub fn annotation_coverage(
+    source: &str,
+    _filename: &str,
+    mode: Mode,
+    tier: CheckTier,
+) -> Result<coverage::AnnotationCoverage, CompileError> {
+    let lexed = lex(source, mode)?;
+    let statements = parse_module(&lexed)?;
+    Ok(coverage::collect(&statements, mode, tier))
+}
+
+pub use coverage::{AnnotationCoverage, AnnotationTally};
 use self::parser::*;
 
 mod typecheck;
@@ -433,6 +715,9 @@ fn compile_class_scope(
     let mut emitter = Emitter {
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
         mode,
         tier,
@@ -472,10 +757,14 @@ fn compile_class_scope(
         defer_return_literal: false,
         with_exit_stack: Vec::new(),
         with_body_end: None,
+        with_return_holes: Vec::new(),
         finally_stack: Vec::new(),
         handler_stack: Vec::new(),
+        handler_exit_cleanups: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
+            try_depth: 0,
             with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
@@ -500,6 +789,7 @@ fn compile_class_scope(
             kwonlyargcount: 0,
             nlocals: 0,
             flags: 0,
+            firstlineno: span.line_start as usize,
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
@@ -630,7 +920,7 @@ fn compile_class_scope(
     }
     // `__static_attributes__`：**静态收集**方法体里写过的 `self.X`（实测：字母序去重）
     let mut static_names: Vec<String> = Vec::new();
-    collect_static_attributes(body, &mut static_names);
+    collect_static_attributes(body, name, &mut static_names);
     static_names.sort();
     static_names.dedup();
     let attributes = emitter.intern_constant(Constant::Tuple(
@@ -691,6 +981,9 @@ fn compile_scope(
     kind: ScopeKind,
     // `method`：**在 `class` 体里定义**（实测：方法的 `co_flags` 多一位 `0x8000000`）
     method: bool,
+    // **`async def`／异步生成器**（round 243）：前言要 `RETURN_GENERATOR; POP_TOP` ✓
+    //（纯协程没有 `yield` ⇒ `statements_have_yield` 看不到 ⇒ 必须由调用方告知 ✓）。
+    is_async_scope: bool,
     // `freevars`：本作用域的**自由变量**（外层 cell 名，按引用序）——闭包用（第 291 轮）
     freevars: &[String],
     resume_span: Span,
@@ -714,6 +1007,9 @@ fn compile_scope(
     let mut emitter = Emitter {
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
+
+        local_slots: std::cell::RefCell::new(std::collections::HashMap::new()),
+        name_indices: std::cell::RefCell::new(std::collections::HashMap::new()),
         pending_fused_load: None,
         mode,
         tier,
@@ -745,10 +1041,14 @@ fn compile_scope(
         defer_return_literal: false,
         with_exit_stack: Vec::new(),
         with_body_end: None,
+        with_return_holes: Vec::new(),
         finally_stack: Vec::new(),
         handler_stack: Vec::new(),
+        handler_exit_cleanups: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            pending_async_for: Vec::new(),
+            try_depth: 0,
             with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
@@ -785,6 +1085,11 @@ fn compile_scope(
             freevars: Vec::new(),
             demanded: Vec::new(),
             // `varnames` 的顺序（实测／`argbind.rs` 记着）：位置参数 → 仅关键字 → `*args` → `**kw`
+            firstlineno: if name == "<module>" {
+                1
+            } else {
+                resume_span.line_start as usize
+            },
             nlocals: parameters.len()
                 + kwonly.len()
                 + usize::from(varargs.is_some())
@@ -831,6 +1136,9 @@ fn compile_scope(
     if kind == ScopeKind::Function {
         collect_scope_locals(&mut emitter, statements);
         analyze_cells(&mut emitter, statements, qualname, mode, tier);
+        // **槽缓存定稿后重建**（round 71）：`analyze_cells` 只在**有 cell** 时才重排 `varnames`；
+        // 无 cell 时缓存仍是空的 ⇒ 之后每个名字第一次查都线性扫（千参函数 O(n²) ✗）。
+        emitter.rebuild_local_slot_cache();
     }
     if !freevars.is_empty() {
         // **合成指令没有位点**（实测：参照给 `COPY_FREE_VARS`／`MAKE_CELL` 的是全 `None` ✓，
@@ -848,13 +1156,35 @@ fn compile_scope(
         // **`MAKE_CELL` 也没有位点**（实测全 `None` ＝ `BC-4` 扩的对齐点 ✓）
         emitter.emit_none(opcode::opcode("MAKE_CELL").expect("MAKE_CELL 在表里"), slot);
     }
+    // **异步生成器的编译期禁令**（round 244，照参照原文案 ✓）：
+    //   `yield from` ⇒ `SyntaxError: 'yield from' inside async function` ✓；
+    //   带值的 `return` ⇒ `SyntaxError: 'return' with value in async generator` ✓
+    //（`Lib/test/test_asyncgen.py` 的 5 个语法档靠这两条 ✓；先前本层接受 ⇒ 全红 ✗）。
+    if is_async_scope && statements_have_yield(body) {
+        if crate::compile::symbols::statements_have_yield_from(body) {
+            return Err(CompileError::Syntax(
+                "'yield from' inside async function".to_owned(),
+            ));
+        }
+        if crate::compile::symbols::statements_have_return_value(body) {
+            return Err(CompileError::Syntax(
+                "'return' with value in async generator".to_owned(),
+            ));
+        }
+    }
     // **生成器前言**（第 124 轮实测）：`RETURN_GENERATOR` ＋ `POP_TOP`，位点＝`(def 行, def 行, None, None)` ✓
     // **生成器还要一条异常表条目** ✓（第 167 轮定案）：参照的生成器体**整段受保护** ✓
     //（`(start=2, len=7, target=9, depth=0, lasti=True)` 码元 ✓），处理块落在收尾那条
     // `CALL_INTRINSIC_1 3; RERAISE 1` ✓ —— 我们先前**整张表是空的** ✗。**体的起点**＝前言之后、
     // `RESUME` 之前 ✓（此处 ✓），右端在收尾那里取 ✓。
     let mut generator_body_start: Option<usize> = None;
-    if kind == ScopeKind::Function && statements_have_yield(body) {
+    // **协程也有同一条前言**（round 236）：参照的 `async def`（不带 `yield` 的纯协程）反汇编也是
+    // `RETURN_GENERATOR; POP_TOP; RESUME 0` ✓ —— `POP_TOP` 吃掉首次 `send(None)` 压进来的那个
+    // `None` ✓（本层 `resume_generator` 一律压 sent ⇒ 没这条就会**永久多留一格** ✗，
+    // `async for` 的异常表 `depth` 当场差 1 ⇒ `END_ASYNC_FOR` 路径 `StackUnderflow` ✗）。
+    if kind == ScopeKind::Function
+        && (statements_have_yield(body) || is_async_scope)
+    {
         emitter.emit_line_only(resume_span.line_start, "RETURN_GENERATOR", 0);
         emitter.emit_line_only(resume_span.line_start, "POP_TOP", 0);
         generator_body_start = Some(emitter.unit.code.len());
@@ -909,10 +1239,12 @@ fn compile_scope(
     }
     // **源码序预登记**（名字），见 `pre_intern` 的说明
     pre_intern(&mut emitter, body);
+
     // 作用域体按**统一语句块**发射（块尾标签、死代码、"`try` 之后停止"都在 `emit_block` 里）
     // **尾块 ＝ true**（第 279 轮）：作用域体落下去就走到末尾 ⇒ 末尾那条 `if` 的每个分支
     // 都要补隐式 `return` ✓；类体那条走 `kind` 自己的判据（类体没有隐式 `return` ✓）⇒ 传 `false` ✓。
     emitter.emit_block(body, true)?;
+
     // 收尾顺序照实测：
     //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
     //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
@@ -1209,6 +1541,15 @@ enum MapItem {
     Unpack(Expression),
 }
 
+/// 调用实参的一项（**保序**；round 54 引入，见 [`Expression::Call`] 的 `positional_order`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PositionalArgument {
+    /// 普通位置实参。
+    Plain(Expression),
+    /// `*可迭代` 实参。
+    Star(Expression),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expression {
     Int(i64, Span),
@@ -1239,6 +1580,9 @@ enum Expression {
     /// ⇒ 再见到 `[` 就按**下标**解析 ⇒ 报"``[`` 之后要 `]`，实际 `Some(For)`" ✗
     /// （`Lib/traceback.py:1258` 正卡它，那一族 **15** 个模块 ✓）。
     YieldFrom(Box<Expression>, Span),
+    /// **`await <表达式>`**（round 220）：真接线（`GET_AWAITABLE` ＋ `SEND` 等待循环 ✓）；
+    /// 先前"透明"近似（`await X` 直接当 `X`）✗ —— 有了 `coroutine` 类型后必须等 ✓。
+    Await(Box<Expression>, Span),
     /// **列表字面量**（`[]`／`[1, 2]`）。实测发射：元素按序先发，再 `BUILD_LIST <个数>`
     /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
     List(Vec<Expression>, Span),
@@ -1350,8 +1694,13 @@ enum Expression {
     /// `span` 是**整段调用**（`CALL`／`CALL_KW` 用）。
     Call {
         function: Box<Expression>,
-        /// 位置实参（在 `*` 之前）。
+        /// 位置实参（把 `*` 项摘掉后的列表；供符号分析／类型检查按"只关心表达式"遍历 ✓）。
         arguments: Vec<Expression>,
+        /// **实参在源码里的真实交错顺序**（round 54）：`print(*[1], *[2], 3)` 的 `3` 在
+        /// 两个星号实参**之后** —— 只看 `arguments`（[3]）＋ `star_arguments`（[[1],[2]]）
+        /// 会把顺序拼成 `3 1 2` ✗。发射器按这一列还原"前导普通实参 ＋ 逐个 `*`／普通"的
+        /// 参照形状（`BUILD_LIST n; … LIST_EXTEND 1; … LIST_APPEND 1; …` ✓）。
+        positional_order: Vec<PositionalArgument>,
         /// `*expr`（本层只接线一个）。
         star_arguments: Vec<Expression>,
         /// `名字=值`。
@@ -1454,6 +1803,7 @@ impl Expression {
             | Expression::Bytes(_, span)
             | Expression::Yield(_, span)
             | Expression::YieldFrom(_, span)
+            | Expression::Await(_, span)
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
             | Expression::List(_, span)
@@ -1494,6 +1844,9 @@ struct PendingCleanup {
     scaffold: Span,
     region_start: usize,
     region_end: usize,
+    /// **异步层的 `SEND` 区间**（round 243）：清理条的区间要**绕开**它们（照参照"清理块按内层区间分段" ✓），
+    /// 否则异常派发会命中清理入口、`END_ASYNC_FOR` 拿到的栈就错了 ✗（round 242 实测 ✓）。
+    async_regions: Vec<(usize, usize)>,
     label: usize,
 }
 
@@ -1553,6 +1906,8 @@ struct Generator {
     target: ComprehensionTarget,
     iterable: Expression,
     conditions: Vec<Expression>,
+    /// **`async for` 那一层**（round 243）：`[i async for i in aiter]` ✓（`P3-35`）。
+    is_async: bool,
 }
 
 impl ComprehensionTarget {
@@ -1612,51 +1967,138 @@ fn write_exception_varint(out: &mut Vec<u8>, value: usize) {
 /// 都被当成 cell（`class C: def m(self, x): if x: …` ⇒ 多出 `MAKE_CELL` ✗，被夹具当场抓住 ✓）。
 /// **表达式里有没有 `yield`**（第 219 轮）✓：给"所在作用域是不是生成器"用 ✓。
 ///
-/// **不下潜到嵌套的 `Lambda`** ✓ —— 那里面的 `yield` 属于**它自己** ✓（它自成作用域 ✓）。
-fn expressions_have_yield(expression: &Expression) -> bool {
+/// `plain` 为真时连 `yield`（`yield <值>` 那半）也算；`yield from` **永远**算（调用方要
+/// "有没有任何让出"时传 `true`，只查 `yield from` 的语法档时传 `false`）。
+///
+/// **作用域边界**（逐条实测本机 3.14.4 定的，见 §12.1 的修因）：
+/// - **不下潜到 `lambda` 的体** ✓ —— 那里面的 `yield` 属于**它自己** ✓（它自成作用域 ✓）；
+/// - 但**下潜 `lambda` 形参默认值** ✓ —— 默认值在外层求值（实测：`def f(): return
+///   (lambda x=(yield): x)` 的 `f` 是生成器）；
+/// - **推导式只下潜最外层可迭代对象** ✓ —— 3.12+ 的内联形态里它在外层求值（实测：
+///   `def f(): r = [x for x in (yield)]` 的 `f` 是生成器）；元素／条件／内层迭代在推导
+///   作用域里，`yield` 写在那里是 `SyntaxError`；
+/// - 其余同层求值的子表达式全部下潜（含关键字实参、`**` 实参、三元、链式比较、f-string 插值、
+///   切片、比较、`await` 的操作数）。
+fn expression_has_yield(expression: &Expression, plain: bool) -> bool {
     match expression {
-        Expression::Yield(..) => true,
-        Expression::Lambda { .. } => false,
+        Expression::Yield(value, _) => {
+            plain || value.as_deref().is_some_and(|value| expression_has_yield(value, plain))
+        }
+        // `yield from` 在两种查询里都算命中（生成器判定与"async def 里不许 yield from"）。
+        Expression::YieldFrom(..) => true,
+        Expression::Await(value, _) => expression_has_yield(value, plain),
+        // **不下潜 lambda 的体**，但**形参默认值属于外层** ✓。
+        Expression::Lambda { parameters, kwonly, .. } => parameters
+            .iter()
+            .chain(kwonly.iter())
+            .any(|parameter| {
+                parameter
+                    .default
+                    .as_ref()
+                    .is_some_and(|value| expression_has_yield(value, plain))
+            }),
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
-        | Expression::TupleLiteral(items, _) => items.iter().any(expressions_have_yield),
+        | Expression::TupleLiteral(items, _) => {
+            items.iter().any(|item| expression_has_yield(item, plain))
+        }
         Expression::Map(items, _) => items.iter().any(|item| match item {
-            MapItem::Pair(key, value) => expressions_have_yield(key) || expressions_have_yield(value),
-            MapItem::Unpack(value) => expressions_have_yield(value),
+            MapItem::Pair(key, value) => {
+                expression_has_yield(key, plain) || expression_has_yield(value, plain)
+            }
+            MapItem::Unpack(value) => expression_has_yield(value, plain),
         }),
         Expression::Attribute(value, _, _)
         | Expression::Starred(value, _)
         | Expression::Unary(_, value, _)
-        | Expression::Not(value, _) => expressions_have_yield(value),
-        Expression::Binary(_, left, right, _) => {
-            expressions_have_yield(left) || expressions_have_yield(right)
+        | Expression::Not(value, _) => expression_has_yield(value, plain),
+        Expression::Binary(_, left, right, _)
+        | Expression::Compare(left, _, right, _)
+        | Expression::Subscript(left, right, _) => {
+            expression_has_yield(left, plain) || expression_has_yield(right, plain)
         }
-        Expression::Subscript(value, index, _) => {
-            expressions_have_yield(value) || expressions_have_yield(index)
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => [lower, upper, step].iter().any(|part| {
+            part.as_deref()
+                .is_some_and(|value| expression_has_yield(value, plain))
+        }),
+        Expression::ChainedCompare { operands, .. } => {
+            operands.iter().any(|value| expression_has_yield(value, plain))
         }
-        Expression::Walrus { value, .. } => expressions_have_yield(value),
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            expression_has_yield(condition, plain)
+                || expression_has_yield(then_value, plain)
+                || expression_has_yield(else_value, plain)
+        }
+        Expression::Walrus { value, .. } => expression_has_yield(value, plain),
         // **`BC-63`**：空合并／空安全链两个操作数都在本层求值 ⇒ 照常下潜
         Expression::NullCoalesce(left, right, _) => {
-            expressions_have_yield(left) || expressions_have_yield(right)
+            expression_has_yield(left, plain) || expression_has_yield(right, plain)
         }
         Expression::SafeChain { receiver, rest, .. } => {
-            expressions_have_yield(receiver) || expressions_have_yield(rest)
+            expression_has_yield(receiver, plain) || expression_has_yield(rest, plain)
         }
         // 空安全链的基底占位不是真表达式（不可能是 `yield`）
         Expression::ChainSubject(_) => false,
-        Expression::BoolOp { values, .. } => values.iter().any(expressions_have_yield),
+        Expression::BoolOp { values, .. } => {
+            values.iter().any(|value| expression_has_yield(value, plain))
+        }
+        // **f-string**：插值表达式（以及格式规格里的插值）都在本层求值 ✓。
+        Expression::FString { parts, .. } => parts
+            .iter()
+            .any(|part| fstring_part_has_yield(part, plain)),
+        // **推导式**（3.12+ 内联形态）：只有**最外层的可迭代对象**在外层求值 ✓。
+        Expression::Comprehension { generators, .. } => generators
+            .first()
+            .is_some_and(|generator| expression_has_yield(&generator.iterable, plain)),
         Expression::Call {
             function,
             arguments,
             star_arguments,
+            keywords,
+            dict_arguments,
             ..
         } => {
-            // **如实说** ✗：关键字实参那一列随后补 ✓（`yield` 出现在那里极罕见 ✓）。
-            expressions_have_yield(function)
-                || arguments.iter().any(expressions_have_yield)
-                || star_arguments.iter().any(expressions_have_yield)
+            expression_has_yield(function, plain)
+                || arguments
+                    .iter()
+                    .any(|argument| expression_has_yield(argument, plain))
+                || star_arguments
+                    .iter()
+                    .any(|argument| expression_has_yield(argument, plain))
+                || keywords
+                    .iter()
+                    .any(|(_, value)| expression_has_yield(value, plain))
+                || dict_arguments
+                    .iter()
+                    .any(|value| expression_has_yield(value, plain))
         }
         _ => false,
+    }
+}
+
+/// f-string 的一段里有没有让出（格式规格本身也可再嵌插值 ✓）。
+fn fstring_part_has_yield(part: &FStringPart, plain: bool) -> bool {
+    match part {
+        FStringPart::Literal { .. } | FStringPart::LiteralWtf8 { .. } => false,
+        FStringPart::Formatted {
+            expression, spec, ..
+        } => {
+            expression_has_yield(expression, plain)
+                || spec.as_ref().is_some_and(|spec| {
+                    spec.iter()
+                        .any(|part| fstring_part_has_yield(part, plain))
+                })
+        }
     }
 }
 
@@ -1722,6 +2164,9 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
         // **`yield`／`yield from`**：里面的表达式也在本层求值 ✓。
         Expression::Yield(Some(value), _) => find_lambda_demands(value, out),
         Expression::YieldFrom(value, _) => find_lambda_demands(value, out),
+        // **`await <表达式>`**（round 220）：里面可能有 lambda／genexpr 作为实参
+        //（`await staggered.staggered_race((... for ...), …)` ✓）⇒ 必须往下走 ✓。
+        Expression::Await(value, _) => find_lambda_demands(value, out),
         Expression::Binary(_, left, right, _)
         | Expression::Compare(left, _, right, _)
         | Expression::Subscript(left, right, _) => {
@@ -1881,6 +2326,9 @@ struct LoopFrame {
     /// `POP_TOP; JUMP_FORWARD` 到 if 之后 ✓；先前一律发作用域收尾 ⇒ **函数提前 return** ✗／
     /// 模块后半段静默不执行 ✗ —— 真 `enum.py` 的 `_find_new_` 就是这么返回 None 的 ✓）。
     block_depth: usize,
+    /// **进入本循环时 `with_exit_stack` 的层数**（round 45 ✓）：`break`／`continue` 只该退出
+    /// **循环体内**那几层 `with` ✓（`with cm: for …: break` 里外层那层**不能**退 ✗）。
+    with_levels: usize,
 }
 
 /// 增强赋值的**目标**（三种形态各自一套栈序，实测见 [`Statement::AugAssign`]）。
@@ -2055,6 +2503,10 @@ enum Statement {
     /// `type` 是**软关键字** ✓（`type(x)`／`type = 1` 照旧当普通表达式 ✓）。
     TypeAlias {
         name: String,
+        /// **私有名改写后的绑定名**（`task-5`）：`type __X = …` 在类体里存成 `_C__X`（实测），
+        /// 而 code 名／qualname 仍是源码名 ⇒ 两个名字分开放（`name` 只做 code 身份）。
+        /// 非类作用域里 `binding == name`。
+        binding: String,
         name_span: Span,
         /// 类型参数（空 ＝ 非泛型别名 ✓）。
         type_params: Vec<TypeParam>,
@@ -2234,6 +2686,10 @@ enum Statement {
     /// `class <名字> [(<基类…>)]: <体>`
     Class {
         name: String,
+        /// **私有名改写后的绑定名**（`task-5`）：`class __D:` 在类体里存成 `_C__D`（实测），
+        /// 而 code 名／qualname／`__qualname__` 常量仍是源码名 ⇒ 两个名字分开放。
+        /// 非类作用域里 `binding == name`。
+        binding: String,
         span: Span,
         first_line: u32,
         /// **装饰器** ✓（第 220 轮）：`@deco class C:` ✓ —— 与 `Def` 同口径 ✓
@@ -2250,6 +2706,9 @@ enum Statement {
     },
     Def {
         name: String,
+        /// **私有名改写后的绑定名**（`task-5`）：`def __m` 在类体里存成 `_C__m`（实测），
+        /// 而 code 名／qualname 仍是源码名 ⇒ 两个名字分开放。非类作用域里 `binding == name`。
+        binding: String,
         /// **装饰器**（`@<表达式>`，**源码序** ✓）：发射时先按序求值、再逆序 `CALL 0` 包上去 ✓
         decorators: Vec<Expression>,
         span: Span,
@@ -2262,6 +2721,11 @@ enum Statement {
         varargs: Option<String>,
         /// `**kw` 的名字（`None` ⇒ 没有）。
         varkw: Option<String>,
+        /// **`*args` 上的注解**（round 55）：`Option<(注解来源, 注解跨度)>`。
+        /// 先前解析后**丢弃** ✗ ⇒ `f.__annotations__` 缺 `'args'` 项 ✗（`test_pep646_syntax` ✓）。
+        varargs_annotation: Option<(AnnotationSource, Option<Span>)>,
+        /// **`**kw` 上的注解**（同上 ✓）。
+        varkw_annotation: Option<(AnnotationSource, Option<Span>)>,
         /// 返回注解（两种来源，同 [`Parameter::annotation`]）。
         returns: Option<AnnotationSource>,
         /// 返回注解在源码里的跨度（`__annotate__` 单元的 `LOAD_GLOBAL` 取它，实测）。
@@ -2269,6 +2733,10 @@ enum Statement {
         body: Vec<Statement>,
         /// **PEP 695 类型参数**（task-24 ✓）：`def f[T]` 的 `[T]` ✓（同 `Class` 那一格 ✓）。
         type_params: Vec<TypeParam>,
+        /// **`async def`**（round 219）：编译器据此给 `co_flags` 置 `CO_COROUTINE`（0x80）✓。
+        is_async: bool,
+        /// **异步生成器**（`async def` ＋ 用户写的 `yield` ⇒ `CO_ASYNC_GENERATOR` 0x200）✓。
+        async_generator: bool,
     },
     /// **`a ??= b` 空合并赋值**（`BC-63`，**扩展模式**；语句形态）。
     ///
@@ -2292,6 +2760,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Yield(..) => Ok(None),
         Expression::YieldFrom(..) => Ok(None),
+        Expression::Await(..) => Ok(None),
         Expression::Comprehension { .. } => Ok(None),
         Expression::ChainedCompare { .. } => Ok(None),
         Expression::Conditional { .. } => Ok(None),
@@ -2456,6 +2925,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Yield(..) => None,
         Expression::YieldFrom(..) => None,
+        Expression::Await(..) => None,
         Expression::Comprehension { .. } => None,
         Expression::ChainedCompare { .. } => None,
         Expression::Conditional { .. } => None,
@@ -2546,13 +3016,36 @@ pub fn instantiate<'a>(
     instance: &'a crate::Instance,
     unit: &CompiledUnit,
 ) -> crate::Owned<'a, crate::CodeObject> {
-    let code_type = instance
-        .type_named("CodeObject")
+    // 测试路径的默认口径（`<pyawa-test>`）；正式 loader／CLI 走 [`instantiate_named`] ✓。
+    instantiate_named(instance, unit, "<pyawa-test>")
+}
+
+/// 按 [`CompiledUnit`] 造 `CodeObject`，**`co_filename` 由调用方给**（round 176）：
+/// 参照的 `co_filename` 就是源码文件名／`<string>`／`<stdin>` ✓；本层先前在**所有**路径上
+/// 写死 `<pyawa-test>` ✗ ⇒ CLI 跑脚本时 `frame.f_code.co_filename`／`f_repr` 全是占位名 ✗
+/// （`test_frame.ReprTest.test_repr` 逐字断言真实路径 ✓）。
+pub fn instantiate_named<'a>(
+    instance: &'a crate::Instance,
+    unit: &CompiledUnit,
+    filename: &str,
+) -> crate::Owned<'a, crate::CodeObject> {
+    let code_type = instance.hot_type(HotId::CodeObject)
         .expect("CodeObject 在引导期已登记");
     let consts: Vec<Option<core::ptr::NonNull<crate::Header>>> = unit
         .constants
         .iter()
-        .map(|constant| instantiate_constant(instance, constant))
+        // **嵌套单元默认仍用占位文件名**（round 178 回归修 ✗）：给嵌套单元真文件名会让
+        // `inspect`／`linecache` 找到源码 ⇒ 触发 `ast.parse`（本层 AST 解析只接了签名面）⇒
+        // **67 个官方套件从 runtime 变成 unimplemented 级 abort**（survey 实测 79/136/180/2 ✗）。
+        // 想试真名：`PYAWA_NESTED_FILENAMES=1`（仅供后续补齐 AST 后翻默认 ✓）。
+        .map(|constant| {
+            let nested = if crate::diag::flag_site!("PYAWA_NESTED_FILENAMES") {
+                Some(filename)
+            } else {
+                None
+            };
+            instantiate_constant(instance, constant, nested)
+        })
         .collect();
     // `CodeObject::name` 目前是 `&'static str`（`BC-4` 的临时形态）⇒ 这里泄漏一份。
     // 这条路径是"编译产物 → 可执行 code object"的**测试**用途，可接受；正式 loader 接上时
@@ -2562,9 +3055,19 @@ pub fn instantiate<'a>(
         code_type,
         static_name,
         unit.qualname.clone(),
-        "<pyawa-test>".to_owned(),
-        // `co_firstlineno`（测试路径固定 1）
-        1,
+        filename.to_owned(),
+        // **`co_firstlineno`**（round 176）：参照里函数是 `def` 那一行、模块是 1 ✓。
+        // 本层先前一律 1 ✗ ⇒ `outer.__code__.co_firstlineno` 一族全错 ✗（`test_frame.test_repr`
+        // 的 `offset = outer.__code__.co_firstlineno` 就靠它 ✓）。函数的**第一条指令**是
+        // `RESUME`、位置表首项就是 `(def 行, …)` ✓ ⇒ 取 `positions[0].0` 即可 ✓。
+        if unit.firstlineno > 0 {
+            unit.firstlineno
+        } else {
+            unit.positions
+                .iter()
+                .find_map(|(line, _, _, _)| *line)
+                .unwrap_or(1) as usize
+        },
         // **`co_stacksize`**：本层给的是**保守上界**（见 `stack_bound` 的说明）
         stack_bound(&unit),
         unit.nlocals,
@@ -2633,6 +3136,7 @@ fn constant_expression(expression: &Expression) -> Option<Constant> {
 fn instantiate_constant(
     instance: &crate::Instance,
     constant: &Constant,
+    filename: Option<&str>,
 ) -> Option<core::ptr::NonNull<crate::Header>> {
     match constant {
         Constant::None => Some(instance.retain(instance.singletons().none())),
@@ -2651,11 +3155,11 @@ fn instantiate_constant(
         // - `A.B`／`[a, b]`／前向引用串 ⇒ 静态解析不了 ⇒ 按 `Any`（**放行** ✓，并如实记 ✓）。
         Constant::AnnUnion { left, right } => {
             let marker = instance.new_str("Union");
-            let left = instantiate_constant(instance, left)?;
-            let right = instantiate_constant(instance, right)?;
+            let left = instantiate_constant(instance, left, filename)?;
+            let right = instantiate_constant(instance, right, filename)?;
             Some(instance.new_tuple(vec![marker, left, right]))
         }
-        Constant::AnnSubscript { base, .. } => instantiate_constant(instance, base),
+        Constant::AnnSubscript { base, .. } => instantiate_constant(instance, base, filename),
         Constant::AnnList(_) | Constant::AnnAttribute { .. } | Constant::AnnString(_) => {
             Some(instance.new_str("Any"))
         }
@@ -2683,7 +3187,10 @@ fn instantiate_constant(
         Constant::Slice { start, stop, step } => {
             Some(instance.new_slice(*start, *stop, *step))
         }
-        Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
+        Constant::Code(inner) => Some(match filename {
+            Some(filename) => instantiate_named(instance, inner, filename).into_raw().cast(),
+            None => instantiate(instance, inner).into_raw().cast(),
+        }),
         Constant::Names(names) => {
             let items: Vec<core::ptr::NonNull<crate::Header>> =
                 names.iter().map(|name| instance.new_str(name)).collect();
@@ -2693,7 +3200,7 @@ fn instantiate_constant(
             // 折叠出来的 `frozenset`：这里以**集合对象**落地（`SET_UPDATE` 只按可迭代取元素）
             let mut items = Vec::with_capacity(parts.len());
             for part in parts {
-                items.push(instantiate_constant(instance, part)?);
+                items.push(instantiate_constant(instance, part, filename)?);
             }
             Some(instance.new_set(items))
         }
@@ -2701,7 +3208,7 @@ fn instantiate_constant(
         Constant::Tuple(parts) => {
             let mut items = Vec::with_capacity(parts.len());
             for part in parts {
-                items.push(instantiate_constant(instance, part)?);
+                items.push(instantiate_constant(instance, part, filename)?);
             }
             Some(instance.new_tuple(items))
         }

@@ -4,12 +4,14 @@
 //! * 仍在原处的被引用项：`copy_context_value` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::{Cell, RefCell};
 use crate::builtin_objects::{BuiltinFunctionObject, ContextObject, ContextVarObject, MethodObject, NativeFn, TokenObject};
 use crate::executor::ExecError;
 use core::ptr::NonNull;
 use crate::header::Header;
 use crate::instance::Instance;
+use crate::frame::Frame;
 use crate::builtin_objects::copy_context_value;
 
 
@@ -113,8 +115,7 @@ pub unsafe fn context_var_getattr(
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -125,7 +126,7 @@ pub unsafe fn context_var_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -190,8 +191,7 @@ pub(crate) unsafe fn context_var_set_native(
     object.push_value(*value);
     // SAFETY: owner 由方法对象持有 ⇒ Token 要自己那份 ✓。
     unsafe { instance.incref_object(owner.as_ptr()) };
-    let token_type = instance
-        .type_named("Token")
+    let token_type = instance.hot_type(HotId::Token)
         .expect("Token 在引导期已登记");
     let token = instance.alloc(TokenObject::new(token_type, owner, old));
     Ok(token.into_raw().cast::<Header>())
@@ -211,7 +211,7 @@ pub(crate) unsafe fn context_var_reset_native(
         return Err(instance.raise_builtin_error("TypeError", "reset() takes exactly one argument (0 given)"));
     };
     // SAFETY: token 由调用方保证存活。
-    if unsafe { token.as_ref() }.ty() != instance.type_named("Token").unwrap_or(unsafe { token.as_ref() }.ty()) {
+    if unsafe { token.as_ref() }.ty() != instance.hot_type(HotId::Token).unwrap_or(unsafe { token.as_ref() }.ty()) {
         return Err(instance.raise_builtin_error("ValueError", "Token was created in a different Context"));
     }
     // SAFETY: 类型身份刚确认。
@@ -243,12 +243,22 @@ pub unsafe fn context_getattr(
         "get" => context_not_implemented_native,
         "__contains__" => context_not_implemented_native,
         "copy" => context_not_implemented_native,
-        "run" => context_not_implemented_native,
+        // **`Context` 的映射面最小接线**（round 202）：参照的 `contextvars.Context` 是
+        // `collections.abc.Mapping`（`ctx[var]`／`len(ctx)`／`iter(ctx)` 都成立 ✓）。先前
+        // 只有 `get`/`__contains__`/`copy` 三个"如实拒绝" ⇒ `test_context` 里 `ctx2[c]`
+        // 走下标协议时报"下标只接线了 …这里是 'Context'"直接中止 ✗（survey 里从 runtime
+        // 退化成 unimplemented ✓）。这里补三个最小面：取值（有值返回、无值报 `KeyError`）、
+        // 长度（本层没有独立状态 ⇒ 0 ✓ 如实登记）、迭代（空迭代器 ✓ 如实登记）。
+        "__getitem__" => context_getitem_native,
+        "__len__" => context_len_native,
+        "__iter__" => context_iter_native,
+        // **`run` 接线**（round 151）：单线程仿真下"当前上下文"就是全局 ⇒ 直接同步调用 ✓
+        //（`threading.Thread.start` 的 `self._context.run(self.run)` 靠它 ✓）。
+        "run" => context_run_native,
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -259,7 +269,7 @@ pub unsafe fn context_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -292,7 +302,7 @@ pub(crate) unsafe fn context_get_native(
         return Err(instance.raise_builtin_error("TypeError", "get() takes at least 1 argument"));
     };
     // SAFETY: var 由调用方保证存活。
-    if unsafe { var.as_ref() }.ty() == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty()) {
+    if unsafe { var.as_ref() }.ty() == instance.hot_type(HotId::ContextVar).unwrap_or(unsafe { var.as_ref() }.ty()) {
         // SAFETY: 类型身份刚确认。
         let object = unsafe { &*var.as_ptr().cast::<ContextVarObject>() };
         if let Some(value) = object.current() {
@@ -322,9 +332,61 @@ pub(crate) unsafe fn context_contains_native(
         return Err(instance.raise_builtin_error("TypeError", "__contains__ 需要 1 个实参"));
     };
     let found = unsafe { var.as_ref() }.ty()
-        == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty())
+        == instance.hot_type(HotId::ContextVar).unwrap_or(unsafe { var.as_ref() }.ty())
         && unsafe { &*var.as_ptr().cast::<ContextVarObject>() }.current().is_some();
     Ok(instance.new_bool(found))
+}
+#[allow(dead_code)]
+
+/// `context[var]` ✓：有值返回、无值报 `KeyError`（照 `Mapping.__getitem__` 口径 ✓）。
+pub(crate) unsafe fn context_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = bound;
+    let Some(var) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "__getitem__ 需要 1 个实参"));
+    };
+    // SAFETY: var 由调用方保证存活。
+    let is_context_var = unsafe { var.as_ref() }.ty()
+        == instance.hot_type(HotId::ContextVar).unwrap_or(unsafe { var.as_ref() }.ty());
+    if is_context_var {
+        // SAFETY: 类型身份刚确认。
+        let object = unsafe { &*var.as_ptr().cast::<ContextVarObject>() };
+        if let Some(value) = object.current() {
+            return Ok(instance.retain(value));
+        }
+        // 参照口径：`Context[var]` 只看"本上下文里有没有值"，**不看** `var` 的默认值 ✓
+        //（`contextvars.Context()[var]` 即使 `var` 有 default 也报 `KeyError` ✓）。
+    }
+    Err(instance.raise_builtin_error("KeyError", "context 里没有这个变量"))
+}
+#[allow(dead_code)]
+
+/// `len(context)` ✓：本层没有独立状态 ⇒ **0**（如实登记 ✓）。
+pub(crate) unsafe fn context_len_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_int(0))
+}
+#[allow(dead_code)]
+
+/// `iter(context)` ✓：本层没有独立状态 ⇒ **空迭代器**（如实登记 ✓）。
+pub(crate) unsafe fn context_iter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let empty = instance.new_list(Vec::new());
+    let iterator = crate::executor::iter_value(instance, empty);
+    instance.release(empty);
+    iterator
 }
 #[allow(dead_code)]
 
@@ -351,11 +413,120 @@ pub(crate) unsafe fn context_run_native(
     let Some((callable, rest)) = args.split_first() else {
         return Err(instance.raise_builtin_error("TypeError", "run() missing required argument 'callable' (pos 1)"));
     };
-    let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(rest.len());
-    for argument in rest {
-        // SAFETY: 实参由调用方持有 ⇒ 新增一份交给调用 ✓。
-        unsafe { instance.incref_object(argument.as_ptr()) };
-        call_args.push(*argument);
+    // **双重释放真 bug 修**（round 254 B3-3；与 round 224／227 同族 ✗）：先前 `kwargs.to_vec()`
+    // 把**借来的**键／值直接交给 `call_callable`（转移语义 ⇒ 它会逐项 release ✗）⇒ 每次
+    // `ctx.run(f, k=obj)` 给 `obj` 净 −1 ✗（实测 `sys.getrefcount` 变成垃圾值）。
+    // 统一走 `TransferredCallArgs`（逐项 retain、`into_raw` 转移、`Drop` 兜异常路径 ✓）。
+    let (call_args, call_kwargs) =
+        crate::call_edge::TransferredCallArgs::from_borrowed(instance, rest, kwargs).into_raw();
+    crate::executor::call::call_callable(instance, *callable, None, call_args, call_kwargs, 0)
+}
+
+/// **`locals()`**（round 74）：返回**当前帧**的局部名快照字典 ✓（参照：模块层 `locals() is globals()`，
+/// 函数层是"形参＋局部"的映射视图；本层给**快照 dict** —— 文档化的**如实偏差** ✗：对返回值的修改
+/// 不会写回帧，参照的写回语义随后补 ✓）。
+///
+/// 动因：`test_threading_local`／`Lib/pdb.py` 一族直接用 `locals()`；先前内建表里**没有**它 ✗
+/// ⇒ `NameError: name 'locals' is not defined` ✗。
+pub fn locals_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(frame_header) = instance.current_frame() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "locals() 需要正在执行的帧",
+        ));
+    };
+    // SAFETY: 当前帧由实例在 execute 期间持有，存活 ✓。
+    let frame = unsafe { &*frame_header.as_ptr().cast::<Frame>() };
+    // **模块层**：`locals() is globals()` ✓（命名空间就是全局映射 ✓）。
+    if frame.globals().is_none() {
+        if let Some(namespace) = frame.namespace() {
+            return Ok(instance.retain(namespace));
+        }
     }
-    crate::executor::call::call_callable(instance, *callable, None, call_args, kwargs.to_vec(), 0)
+    let mapping = instance.new_dict();
+    let Some(code_header) = frame.code() else {
+        return Ok(mapping);
+    };
+    // SAFETY: 帧持有一份 code 引用（BC-42），帧存活期间有效 ✓。
+    let code = unsafe { &*code_header.as_ptr().cast::<crate::code::CodeObject>() };
+    for slot in 0..frame.local_count() {
+        let Some(name) = code.varname(slot) else {
+            continue;
+        };
+        let Ok(Some(value)) = frame.local(slot) else {
+            continue;
+        };
+        // `dict_set` 自己会 retain 值 ✓，键由这里造 ✓。
+        instance.dict_set(mapping, name, value);
+    }
+    Ok(mapping)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一个**不保留实参**的原生函数（测试用：返回 `None` 的新引用）。
+    ///
+    /// # Safety
+    ///
+    /// 遵守 `NativeFn` 契约（借用视图 ＋ 新引用返回值）。
+    unsafe fn passthrough_native(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        _args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, ExecError> {
+        // SAFETY: 单例由实例持有。
+        Ok(instance.retain(instance.singletons().none()))
+    }
+
+    fn make_native(instance: &Instance) -> NonNull<Header> {
+        let function_type = instance
+            .hot_type(crate::HotId::BuiltinFunctionOrMethod)
+            .expect("builtin_function_or_method 已登记");
+        instance
+            .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                function_type,
+                "b3_target",
+                core::cell::Cell::new(passthrough_native),
+            ))
+            .into_raw()
+            .cast::<Header>()
+    }
+
+    /// **B3-3 回归锁**：`context_run_native` 的 `kwargs` 以前是 `kwargs.to_vec()`（借来的指针
+    /// 交给转移语义的 `call_callable` ⇒ 每次净 −1 ✗；实测 `sys.getrefcount` 变垃圾值）；
+    /// 现在走 `TransferredCallArgs` ⇒ 调用后实参计数**回到原值** ✓。
+    #[test]
+    fn run_kwargs_do_not_double_release() {
+        let instance = Instance::new();
+        let callable = make_native(&instance);
+        let key = instance.new_str("k");
+        let value = instance.new_str("v");
+        // SAFETY: 三个对象都由本测试持有。
+        let before_key = unsafe { (&*key.as_ptr()).refcount() };
+        let before_value = unsafe { (&*value.as_ptr()).refcount() };
+        let args = [callable, value];
+        let kwargs = [(key, value)];
+        // SAFETY: 实参在调用期间存活（本测试持有）。
+        let result = unsafe { context_run_native(&instance, None, &args, &kwargs) }
+            .expect("context.run 的转发调用应成功");
+        // SAFETY: 调用来回后对象仍由本测试持有。
+        assert_eq!(unsafe { (&*key.as_ptr()).refcount() }, before_key, "kwargs 键被多放／少放 ✗");
+        assert_eq!(
+            unsafe { (&*value.as_ptr()).refcount() },
+            before_value,
+            "kwargs 值（同时是位置实参）被多放／少放 ✗"
+        );
+        instance.release(result);
+        instance.release(callable);
+        instance.release(key);
+        instance.release(value);
+    }
 }

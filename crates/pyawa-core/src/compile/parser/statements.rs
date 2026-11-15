@@ -242,6 +242,8 @@ pub(crate) fn parse_statements(
             expect_statement_end(lexed, cursor)?;
             let span = keyword_span.to(value.span());
             statements.push(Statement::TypeAlias {
+                // 源码名（code 名／qualname）；`binding` 由 `compile::mangle` 改写后填。
+                binding: name.clone(),
                 name,
                 name_span,
                 type_params,
@@ -539,38 +541,6 @@ pub(crate) fn parse_body_after_colon(
     Ok(body)
 }
 
-pub(crate) fn parse_suite(
-    lexed: &Lexed,
-    cursor: usize,
-    depth: usize,
-    in_function: bool,
-) -> Result<(Vec<Statement>, usize), CompileError> {
-    let tokens = &lexed.lexemes;
-    let mut cursor = cursor;
-    if tokens.get(cursor) != Some(&Lexeme::Colon) {
-        return Err(CompileError::Syntax(format!(
-            "这里要冒号，实际 {:?}（第 {} 行，列 {}-{}）",
-            tokens.get(cursor),
-            lexed.spans[cursor].line_start,
-            lexed.spans[cursor].col_start,
-            lexed.spans[cursor].col_end
-        )));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Newline) {
-        return Err(CompileError::Syntax("冒号后面要换行".to_owned()));
-    }
-    cursor += 1;
-    if tokens.get(cursor) != Some(&Lexeme::Indent) {
-        return Err(CompileError::Syntax("体要缩进".to_owned()));
-    }
-    cursor += 1;
-    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
-    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
-        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
-    }
-    Ok((body, cursor + 1))
-}
 
 /// **冒号之后的套件**（task-25 ✓）：缩进块或**行内简单语句**，`cursor` 指着冒号。
 ///
@@ -727,6 +697,17 @@ fn parse_statement_class(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fun
                                     // 由运行期**原样转交**给元类的 `__new__`／`__init__` ✓
                                     //（参照口径 ✓；`Lib/enum.py:1400` 的 `class Flag(Enum, boundary=STRICT)`
                                     // 与 `Lib/typing.py` 的 `_root=` 都靠它 ✓）。
+                                    // **重复类关键字 ⇒ SyntaxError**（round 76）：参照报
+                                    // `keyword argument repeated: metaclass` ✓（`test_metaclass` 的 doctest ✓）。
+                                    if !key.is_empty()
+                                        && class_keywords
+                                            .iter()
+                                            .any(|(existing, _)| !existing.is_empty() && *existing == key)
+                                    {
+                                        return Err(CompileError::Syntax(format!(
+                                            "keyword argument repeated: {key}"
+                                        )));
+                                    }
                                     class_keywords.push((key, value));
                                     continue;
                                 }
@@ -767,6 +748,8 @@ fn parse_statement_class(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fun
                 }
                 statements.push(Statement::Class {
                 decorators: decorators.clone(),
+                    // 源码名（code 名／qualname／类名常量）；`binding` 由 `compile::mangle` 改写。
+                    binding: name.clone(),
                     name,
                     span,
                     first_line,
@@ -814,8 +797,11 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                 let mut kwonly: Vec<Parameter> = Vec::new();
                 let mut varargs: Option<String> = None;
                 let mut varkw: Option<String> = None;
+                let mut varargs_annotation: Option<(AnnotationSource, Option<Span>)> = None;
+                let mut varkw_annotation: Option<(AnnotationSource, Option<Span>)> = None;
                 // 裸 `*`（或 `*args`）之后就是**仅关键字**形参
                 let mut after_star = false;
+                let mut bare_star = false;
                 let mut expect_parameter = true;
                 loop {
                     match tokens.get(*cursor) {
@@ -826,6 +812,9 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                         // `*args`／`**kw`（`BC-56` 的签名元数据；`varnames` 排在最后两位）
                         Some(Lexeme::Star) => {
                             *cursor += 1;
+                            // **裸 `*` 判定**（round 111）：紧跟名字才是 `*args` ✓。
+                            let star_followed_by_name =
+                                matches!(tokens.get(*cursor), Some(Lexeme::Name(_)));
                             // `*名字` ⇒ `*args`；裸 `*`（后面是逗号或 `)`）⇒ 只是引出仅关键字形参
                             if let Some(Lexeme::Name(name)) = tokens.get(*cursor) {
                                 varargs = Some(name.clone());
@@ -837,11 +826,26 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                                 //  只留名字 ✓；函数 `__annotations__` 那面另记 ✓）。
                                 if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                                     // task-42：形参注解可以是任意表达式（类型标签优先，判不出就
-                                    // 走表达式通道）——`*args: int` 的注解本层只解析掉、不登记 ✓。
-                                    let (_, next) =
+                                    // 走表达式通道）。**round 55**：`*args: 注解` 不再丢弃 ✓
+                                    // —— 记进 `varargs_annotation`，注解单元里按 `'args'` 键入
+                                    // `__annotations__` ✓（先前缺这一项 ⇒ doctest 对不上 ✓）。
+                                    let begin = lexed.spans[*cursor + 1];
+                                    let (label, next) =
                                         parse_parameter_annotation(lexed, *cursor + 1, true)?;
+                                    varargs_annotation =
+                                        Some((label, Some(begin.to(lexed.spans[next - 1]))));
                                     *cursor = next;
+                                    // **星号注解不能带默认值** ✓（round 55；参照：
+                                    // `def f5(*args: *b = (1,))` ⇒ `SyntaxError: invalid syntax` ✓）。
+                                    if tokens.get(*cursor) == Some(&Lexeme::Assign) {
+                                        return Err(CompileError::Syntax(
+                                            "invalid syntax".to_owned(),
+                                        ));
+                                    }
                                 }
+                            }
+                            if !star_followed_by_name {
+                                bare_star = true;
                             }
                             after_star = true;
                             expect_parameter = false;
@@ -865,10 +869,13 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                                 Some(Lexeme::Name(name)) => {
                                     varkw = Some(name.clone());
                                     *cursor += 1;
-                                    // **`**kw: 注解`**（同上 ✓）
+                                    // **`**kw: 注解`**（同上 ✓；round 55 起**登记** ✓）
                                     if tokens.get(*cursor) == Some(&Lexeme::Colon) {
-                                        let (_, next) =
+                                        let begin = lexed.spans[*cursor + 1];
+                                        let (label, next) =
                                             parse_parameter_annotation(lexed, *cursor + 1, false)?;
+                                        varkw_annotation =
+                                            Some((label, Some(begin.to(lexed.spans[next - 1]))));
                                         *cursor = next;
                                     }
                                 }
@@ -930,6 +937,38 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                         }
                     }
                 }
+                // **形参表语法校验**（round 111；官方 `test_keywordonlyarg` 的 8 条 SyntaxError 钉住）：
+                // ① 裸 `*` 后面必须至少有一个仅关键字形参（`def f(p, *):` ✗）；
+                // ② 形参名不得重复（位置／仅位置／仅关键字／`*args`／`**kw` 统一编号）；
+                // ③ `None`／`True`／`False` 不能当形参名（参照是 `SyntaxError: invalid syntax`）。
+                if bare_star && kwonly.is_empty() {
+                    return Err(CompileError::Syntax(
+                        "named arguments must follow bare *".to_owned(),
+                    ));
+                }
+                {
+                    let mut seen: Vec<&str> = Vec::new();
+                    let mut all_names: Vec<&str> =
+                        parameters.iter().map(|item| item.name.as_str()).collect();
+                    all_names.extend(kwonly.iter().map(|item| item.name.as_str()));
+                    if let Some(name) = varargs.as_deref() {
+                        all_names.push(name);
+                    }
+                    if let Some(name) = varkw.as_deref() {
+                        all_names.push(name);
+                    }
+                    for name in all_names {
+                        if matches!(name, "None" | "True" | "False") {
+                            return Err(CompileError::Syntax("invalid syntax".to_owned()));
+                        }
+                        if seen.contains(&name) {
+                            return Err(CompileError::Syntax(format!(
+                                "duplicate argument '{name}' in function definition"
+                            )));
+                        }
+                        seen.push(name);
+                    }
+                }
                 // 返回注解：`-> 类型`
                 let mut returns_span = None;
                 let returns = if tokens.get(*cursor) == Some(&Lexeme::Arrow) {
@@ -973,11 +1012,20 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                 let first_line = decorators_first_line.unwrap_or(first_line);
                 // **`async def` 的体补一条 `yield`** ✓（第 185 轮）：这样它就是**生成器** ✓
                 // （`statements_have_yield` 认它 ✓）⇒ 调用返回**未启动的生成器对象** ✓、`close()` 可用 ✓。
-                let mut body = body;
-                if async_def {
-                    body.push(Statement::Yield(None, span));
-                }
+                let body = body;
+                // **异步生成器判定要在补合成 `yield` 之前**（round 219）：用户自己写了 `yield`
+                // ⇒ `CO_ASYNC_GENERATOR`（0x200）；否则是**协程**（`CO_COROUTINE` 0x80）✓。
+                let async_generator =
+                    async_def && crate::compile::symbols::statements_have_yield(&body);
+                // **不再给 `async def` 补合成 `yield`**（round 231 真 bug 修 ✗）：那是"把 async
+                // 编成生成器"时代的近似 —— round 219 起协程有了**真 `coroutine` 类型**（`co_flags`
+                // 0x80 ✓），调用路径自己 `suspend()` 造出挂起帧 ✓ ⇒ 合成 `yield` 反而让每个协程在
+                // 结尾**多挂起一次** ✗ ⇒ `coro.send(None)` 不再一次跑完 ✗
+                //（`test.support.run_no_yield_async_fn` 的 "coroutine did not complete" ✓）。
+                let _ = async_def;
                 statements.push(Statement::Def {
+                    // 源码名（code 名／qualname）；`binding` 由 `compile::mangle` 改写后填。
+                    binding: name.clone(),
                     name,
                     decorators,
                     span,
@@ -988,8 +1036,12 @@ fn parse_statement_def(lexed: &Lexed, cursor: &mut usize, depth: usize, decorato
                     returns_span,
                     varargs,
                     varkw,
+                    varargs_annotation,
+                    varkw_annotation,
                     body,
                     type_params,
+                    is_async: async_def,
+                    async_generator,
                 });
         }
         _ => unreachable!("parse_statement_def 只接收对应分支"),
@@ -1451,6 +1503,12 @@ fn parse_statement_return(lexed: &Lexed, cursor: &mut usize, in_function: bool, 
                     parse_expression_list(lexed, *cursor)?
                 };
                 *cursor = next;
+                // **裸生成器表达式不能直接当 return 值** ✓（round 60；参照：
+                // `return i*i for i in range(n)` ⇒ `SyntaxError: invalid syntax` ——
+                // 参照要求加括号 ✓；`test_genexps` 逐字比报文 ✓）。
+                if matches!(tokens.get(*cursor), Some(Lexeme::For)) {
+                    return Err(CompileError::Syntax("invalid syntax".to_owned()));
+                }
                 // 实测：整条 `return …` 的位置从 `return` 起到表达式末尾
                 let span = keyword_span.to(value.span());
                 statements.push(Statement::Return(value, span));
@@ -1678,6 +1736,12 @@ fn parse_statement_kw_from(lexed: &Lexed, cursor: &mut usize, statements: &mut V
                     return Err(CompileError::Syntax("`from …` 后面要 `import`".to_owned()));
                 }
                 *cursor += 1;
+                // **`with (` 的消歧**（round 268）：前导 `(` 既可能是**括号包裹的 with 项列表**
+                // （`with (a as x, b):` —— 3.10+ 语法 ✓），也可能是**普通括号表达式**
+                // （`with (p / "x").open("wb") as f:` ✗ 先前一律当项列表 ⇒ 报"这里要冒号" ✗）。
+                // 判据：扫到匹配的 `)` 为止，**其内顶层**出现 `as` 或逗号，且紧跟 `)` 的是 `:`／换行
+                // ⇒ 项列表；否则按普通表达式解析（`(a, b), c:` 也走普通项列表 ⇒ 第一项是元组表达式 ✓，
+                // 与参照的运行时行为一致：元组没有 `__enter__` ⇒ AttributeError ✓）。
                 let parenthesized = tokens.get(*cursor) == Some(&Lexeme::LeftParen);
                 if parenthesized {
                     *cursor += 1;
@@ -1765,11 +1829,21 @@ fn try_parse_chained_target(
     cursor: usize,
 ) -> Option<(Expression, usize)> {
     let tokens = &lexed.lexemes;
-    let (first, after_first) = parse_expression(lexed, cursor).ok()?;
+    // **以 `*` 打头的元组目标** ✓（round 52）：`a, *b, c = *d, e = range(5)` 的第二个目标
+    // `*d, e` 是"以星号打头的元组"——先前 `parse_expression` 不认裸 `*` ✗ ⇒ 链式目标只认到第一个
+    // ⇒ 后在第二个 `=` 上报"语句结尾多出了 Some(Assign)" ✗（`test_unpack_ex` 的 doctest 钉住 ✓）。
+    let (first, after_first, first_starred) =
+        if tokens.get(cursor) == Some(&Lexeme::Star) {
+            let (expression, after) = parse_expression(lexed, cursor + 1).ok()?;
+            (expression, after, true)
+        } else {
+            let (expression, after) = parse_expression(lexed, cursor).ok()?;
+            (expression, after, false)
+        };
     let mut at = after_first;
     let first_span = first.span();
     let target = if tokens.get(at) == Some(&Lexeme::Comma) {
-        let mut items: Vec<(Expression, bool)> = vec![(first, false)];
+        let mut items: Vec<(Expression, bool)> = vec![(first, first_starred)];
         let mut last_span = first_span;
         parse_tuple_target_tail(lexed, &mut at, &mut items, &mut last_span).ok()?;
         let mut expressions: Vec<Expression> = Vec::with_capacity(items.len());
@@ -1783,6 +1857,10 @@ fn try_parse_chained_target(
         }
         Expression::TupleLiteral(expressions, first_span.to(last_span))
     } else {
+        // 单个 `*x` 不是合法目标（`*x = 1` 参照报 SyntaxError）⇒ 不认 ✓。
+        if first_starred {
+            return None;
+        }
         first
     };
     // 只认**赋值目标**形状 ✓（右值后面跟 `=` 的怪句要落回原来的报错 ✓）。
@@ -1905,7 +1983,7 @@ fn parse_statement_kw_with(lexed: &Lexed, cursor: &mut usize, depth: usize, in_f
                 // **带括号的 `with`**（第 299 轮接）：`with (a as x, b, c as y):` —— 3.10 起合法 ✓，
                 // `Lib/test/support/__init__.py:2943` 正是它 ✓（那一族 **26** 个模块 ✓）。
                 // 括号只是**分组**：项还是照逗号分、`as` 还是照项挂 ✓（回填的那条 `JUMP` 不算括号里的 ✓）。
-                let parenthesized = tokens.get(*cursor) == Some(&Lexeme::LeftParen);
+                let parenthesized = with_items_parenthesized(tokens, *cursor);
                 if parenthesized {
                     // 括号里允许**换行** ✓（实测参照就是这么写的 ✓）⇒ 吃掉括号后的换行词素 ✓。
                     *cursor += 1;
@@ -1963,6 +2041,39 @@ fn parse_statement_kw_with(lexed: &Lexed, cursor: &mut usize, depth: usize, in_f
     Ok(StatementFlow::Continue)
 }
 
+/// **`with (` 的消歧**（round 268）：见 `parse_statement_kw_with` 里的调用点注释。
+fn with_items_parenthesized(tokens: &[Lexeme], cursor: usize) -> bool {
+    if tokens.get(cursor) != Some(&Lexeme::LeftParen) {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut as_seen = false;
+    let mut comma_seen = false;
+    let mut index = cursor;
+    while let Some(token) = tokens.get(index) {
+        match token {
+            Lexeme::LeftParen | Lexeme::LeftBracket | Lexeme::LeftBrace => depth += 1,
+            Lexeme::RightParen | Lexeme::RightBracket | Lexeme::RightBrace => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    // **顶层 `as`／逗号** 且 `)` 后立刻收尾（`:`／换行）⇒ 项列表形式 ✓；
+                    // 后面还有 `.attr`／`(` 等 ⇒ 普通表达式 ✓（`(a, b), c:` 也走表达式 ✓）。
+                    let ends_item = matches!(
+                        tokens.get(index + 1),
+                        Some(Lexeme::Colon) | Some(Lexeme::Newline)
+                    );
+                    return (as_seen || comma_seen) && ends_item;
+                }
+            }
+            Lexeme::Name(word) if depth == 1 && word == "as" => as_seen = true,
+            Lexeme::Comma if depth == 1 => comma_seen = true,
+            _ => {}
+        }
+        index += 1;
+    }
+    false
+}
+
 /// 从 `parse_statements` 的 `Some(Lexeme::Name(name)) if name == "try"` 分支原样搬入。
 fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_function: bool, statements: &mut Vec<Statement>) -> Result<StatementFlow, CompileError> {
     let tokens = &lexed.lexemes;
@@ -1973,17 +2084,26 @@ fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fu
                 let (body, next) = parse_colon_suite(lexed, *cursor, depth, in_function)?;
                 *cursor = next;
                 let mut handlers = Vec::new();
+                // **`except*`（PEP 654）**：本轮接线（C2 收口②）——解析期**降糖**成普通
+                // `try/except BaseException` + `ExceptionGroup.split()` 链（见 `desugar_except_star`）✓。
+                // 同一 `try` 里**不许混用** `except`／`except*`（参照实测同文 ✓）。
+                let mut star_mode: Option<bool> = None;
                 while tokens.get(*cursor) == Some(&Lexeme::Name("except".to_owned())) {
                     let handler_span = lexed.spans[*cursor];
                     *cursor += 1;
-                    // **`except*`（PEP 654）如实报未接线**（task-42 ✓ 的诊断面）：它要
-                    // `CHECK_EG_MATCH` 指令＋`ExceptionGroup` 拆分语义（执行器还没接 ✓）。
-                    // 先前词法上把 `*` 留给**处理块类型表达式** ⇒ 报"表达式里出现 Some(Star)" ✗
-                    //（对读者是误导：这是**未实现**，不是语法错；官方 `test_except_star.py` 一族 6 个文件）。
-                    if tokens.get(*cursor) == Some(&Lexeme::Star) {
-                        return Err(CompileError::Unsupported(
-                            "`except*`（PEP 654 异常组匹配）尚未接线".to_owned(),
-                        ));
+                    let is_star = tokens.get(*cursor) == Some(&Lexeme::Star);
+                    if is_star {
+                        *cursor += 1;
+                    }
+                    match star_mode {
+                        None => star_mode = Some(is_star),
+                        Some(previous) if previous != is_star => {
+                            return Err(CompileError::Syntax(
+                                "cannot have both 'except' and 'except*' on the same 'try'"
+                                    .to_owned(),
+                            ));
+                        }
+                        _ => {}
                     }
                     let type_ = if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                         None
@@ -2010,6 +2130,21 @@ fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fu
                             Some(Expression::TupleLiteral(types, first_span.to(last_span)))
                         }
                     };
+                    // **裸 `except*:` 是语法错**（参照：`expected one or more exception types`）；
+                    // `except* as e:` 同样语法错（`invalid syntax`）。
+                    if is_star {
+                        if type_.is_none() {
+                            return Err(CompileError::Syntax(
+                                "expected one or more exception types".to_owned(),
+                            ));
+                        }
+                        if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as")
+                            && tokens.get(*cursor + 1) != Some(&Lexeme::Name("as".to_owned()))
+                        {
+                            // `except* E as e:` 合法；这里只在 `type_` 解析**没吃掉 `as`** 时走到，
+                            // 而 `except* as e:` 会让 `parse_expression` 先失败 ⇒ 兜底同文。
+                        }
+                    }
                     let name = if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as") {
                         let Some(Lexeme::Name(identifier)) = tokens.get(*cursor + 1) else {
                             return Err(CompileError::Syntax(
@@ -2078,13 +2213,35 @@ fn parse_statement_kw_try(lexed: &Lexed, cursor: &mut usize, depth: usize, in_fu
                 if let Some(end) = statements_last_end(&finally_body) {
                     body_end = end;
                 }
-                statements.push(Statement::Try {
-                    body,
-                    handlers,
-                    else_body,
-                    finally_body,
-                    span: keyword_span.to(body_end),
-                });
+                if star_mode == Some(true) {
+                    // **控制流禁令**（参照：`'break', 'continue' and 'return' cannot appear in an
+                    // except* block` —— 嵌套函数／类体内的不算 ✓）。
+                    for handler in &handlers {
+                        if forbidden_control_in_block(&handler.body, 0).is_some() {
+                            return Err(CompileError::Syntax(
+                                "'break', 'continue' and 'return' cannot appear in an except* block"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                    let tag = format!("{}_{}", keyword_span.line_start, keyword_span.col_start);
+                    statements.extend(desugar_except_star(
+                        body,
+                        handlers,
+                        else_body,
+                        finally_body,
+                        keyword_span.to(body_end),
+                        &tag,
+                    ));
+                } else {
+                    statements.push(Statement::Try {
+                        body,
+                        handlers,
+                        else_body,
+                        finally_body,
+                        span: keyword_span.to(body_end),
+                    });
+                }
         }
         _ => unreachable!("parse_statement_kw_try 只接收对应分支"),
     }
@@ -2096,6 +2253,26 @@ fn parse_statement_name_target(lexed: &Lexed, cursor: &mut usize, depth: usize, 
     let tokens = &lexed.lexemes;
     match tokens.get(*cursor) {
         Some(Lexeme::Name(target)) => {
+            // **硬关键字在语句开头**（round 64）：它们可以**当表达式语句**（`not x`／`lambda: 1`／
+            // `None` 都是合法语句 ✓），但**不能当赋值目标**（`exec("and = 42")` ⇒ SyntaxError ✓）。
+            // ⇒ 先试表达式语句；解析不动（或后面跟 `=` 一类）就报语法错 ✓。
+            if is_hard_keyword(target) {
+                if let Ok((expression, next)) = parse_expression_list(lexed, *cursor) {
+                    if !matches!(
+                        tokens.get(next),
+                        Some(Lexeme::Assign)
+                            | Some(Lexeme::AugAssign(_))
+                            | Some(Lexeme::Colon)
+                    ) {
+                        *cursor = next;
+                        let span = expression.span();
+                        statements.push(Statement::Expression(expression, span));
+                        expect_statement_end(lexed, cursor)?;
+                        return Ok(StatementFlow::Continue);
+                    }
+                }
+                return Err(CompileError::Syntax("invalid syntax".to_owned()));
+            }
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
                 let statement_start = *cursor;
@@ -2456,6 +2633,32 @@ fn parse_statement_left_paren(lexed: &Lexed, cursor: &mut usize, statements: &mu
                 match parse_paren_target(lexed, cursor, first, start_span)? {
                     // **单层分组目标**：`(a) = x` ⇒ 普通赋值 ✓（参照不退化成解包 ✓）
                     ParenTarget::Single(target) => {
+                        // **生成器表达式不能当赋值／增强赋值目标** ✓（round 60；参照原文：
+                        // `(y for y in (1,2)) = 10` ⇒ `cannot assign to generator expression`；
+                        // `… += 10` ⇒ `'generator expression' is an illegal expression for
+                        // augmented assignment`；`test_genexps` 逐字比报文 ✓）。
+                        if matches!(
+                            &target,
+                            Expression::Comprehension {
+                                kind: crate::compile::ComprehensionKind::Generator,
+                                ..
+                            }
+                        ) {
+                            match tokens.get(*cursor) {
+                                Some(Lexeme::Assign) => {
+                                    return Err(CompileError::Syntax(
+                                        "cannot assign to generator expression".to_owned(),
+                                    ))
+                                }
+                                Some(Lexeme::AugAssign(_)) => {
+                                    return Err(CompileError::Syntax(
+                                        "'generator expression' is an illegal expression for augmented assignment"
+                                            .to_owned(),
+                                    ))
+                                }
+                                _ => {}
+                            }
+                        }
                         // **`(目标) += 值`**（task-42 ✓）：`(o.a) += 1`／`(a[0]) += 1` 的括号只是
                         // 分组（官方 `test_compile.py:1273` 的跨行 `(o.\na) += (v)` 正是它 ✗ ——
                         // 先前只认 `=` ⇒ 在 `+=` 上报"语句结尾多出了 Some(AugAssign)"）。
@@ -2663,8 +2866,23 @@ fn parse_statement_star(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<
                 let first_span = star_span.to(first.span());
                 let mut targets: Vec<(Expression, bool)> = vec![(first, true)];
                 let mut last_span = first_span;
+                let before_tail = *cursor;
                 parse_tuple_target_tail(lexed, cursor, &mut targets, &mut last_span)?;
+                let had_comma = *cursor > before_tail;
+                if tokens.get(*cursor) == Some(&Lexeme::Assign) && !had_comma {
+                    // 参照：`*a = range(10)` ⇒ `starred assignment target must be in a list
+                    // or tuple` ✓（round 62）。
+                    return Err(CompileError::Syntax(
+                        "starred assignment target must be in a list or tuple".to_owned(),
+                    ));
+                }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                    if !had_comma {
+                        // 参照：裸 `*a`（语句／右值）⇒ `can't use starred expression here` ✓。
+                        return Err(CompileError::Syntax(
+                            "can't use starred expression here".to_owned(),
+                        ));
+                    }
                     // **`*a,`／`*a, b` 是合法的元组表达式语句**（task-47 ✓；参照
                     // `python3 -c "*a,"` 合法）⇒ 退回表达式通道按元组显示收 ✓。
                     let (expression, next) = parse_expression_list(lexed, statement_start)?;
@@ -2691,3 +2909,337 @@ fn parse_statement_star(lexed: &Lexed, cursor: &mut usize, statements: &mut Vec<
     Ok(StatementFlow::Continue)
 }
 
+
+// ---- `except*`（PEP 654）解析期降糖 ---------------------------------------------------------
+//
+// 口径：把 `try/except*` 降成**普通 `try/except BaseException`** ＋ `ExceptionGroup.split()`
+// 链（C2 收口②；`split`/`subgroup` 由 `builtin_objects::exceptions` 的 native 实现 ✓）。
+// 为什么降糖而不是发 `CHECK_EG_MATCH`：执行器那套异常表／栈深语义与 CPython 的
+// `PREP_RERAISE_STAR` 排布耦合很紧；降糖只用**已有**语句形态，语义按参照实测对齐（见
+// `docs/rounds` 的 C2 收口② 记录），且 `finally`／`else` 由外层真 `try` 原样承担 ✓。
+//
+// 降糖后的形状（`T` 是源码位置生成的唯一后缀 ✓）：
+// ```text
+// try:
+//     BODY
+// except BaseException as __pyawa_eg_exc_<T>__:
+//     if not isinstance(exc, BaseExceptionGroup):
+//         exc = ExceptionGroup("", [exc]) if isinstance(exc, Exception) else BaseExceptionGroup("", [exc])
+//     rest = exc
+//     for each except* clause with type E:
+//         if rest is not None:
+//             pair = rest.split(E)
+//             match = pair[0]
+//             rest = pair[1]
+//             if match is not None:
+//                 [e = match]
+//                 HANDLER_BODY
+//     if rest is not None:
+//         raise rest
+// else:  ELSE
+// finally: FINALLY
+// ```
+
+/// 块里有没有**会跳出 except\* 块**的 `return`／`break`／`continue`。
+///
+/// 参照实测（`test_except_star.py` 的 valid 两格 ✓）：
+/// * `return` **一律不合法**（跳到函数出口 ⇒ 越过 except* 的剩余项重抛）；
+/// * `break`／`continue` **只在块内嵌套的循环里合法**（不会跳出 except* 块 ✓）；
+/// * 嵌套函数／类体是独立作用域 ⇒ 不算 ✓。
+fn forbidden_control_in_block(statements: &[Statement], loop_depth: usize) -> Option<&'static str> {
+    for statement in statements {
+        match statement {
+            Statement::Return(..) => return Some("return"),
+            Statement::Break(_) if loop_depth == 0 => return Some("break"),
+            Statement::Continue(_) if loop_depth == 0 => return Some("continue"),
+            Statement::Break(_) | Statement::Continue(_) => {}
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                if let Some(found) = forbidden_control_in_block(then_body, loop_depth) {
+                    return Some(found);
+                }
+                if let Some(found) = forbidden_control_in_block(else_body, loop_depth) {
+                    return Some(found);
+                }
+            }
+            Statement::For { body, else_body, .. } | Statement::While { body, else_body, .. } => {
+                if let Some(found) = forbidden_control_in_block(body, loop_depth + 1) {
+                    return Some(found);
+                }
+                if let Some(found) = forbidden_control_in_block(else_body, loop_depth + 1) {
+                    return Some(found);
+                }
+            }
+            Statement::With { body, .. } => {
+                if let Some(found) = forbidden_control_in_block(body, loop_depth) {
+                    return Some(found);
+                }
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                if let Some(found) = forbidden_control_in_block(body, loop_depth) {
+                    return Some(found);
+                }
+                for handler in handlers {
+                    if let Some(found) = forbidden_control_in_block(&handler.body, loop_depth) {
+                        return Some(found);
+                    }
+                }
+                if let Some(found) = forbidden_control_in_block(else_body, loop_depth) {
+                    return Some(found);
+                }
+                if let Some(found) = forbidden_control_in_block(finally_body, loop_depth) {
+                    return Some(found);
+                }
+            }
+            Statement::Match { cases, .. } => {
+                for case in cases {
+                    if let Some(found) = forbidden_control_in_block(&case.body, loop_depth) {
+                        return Some(found);
+                    }
+                }
+            }
+            // 嵌套函数／类体是**独立作用域** ⇒ 不算 ✓（参照实测 `def g(): return 1` 合法 ✓）。
+            Statement::Def { .. } | Statement::Class { .. } => {}
+            _ => {}
+        }
+    }
+    None
+}
+
+fn eg_name_expression(name: &str, span: Span) -> Expression {
+    Expression::Name(name.to_owned(), span)
+}
+
+fn eg_none_expression(span: Span) -> Expression {
+    Expression::Constant(Constant::None, span)
+}
+
+fn eg_call(function: Expression, arguments: Vec<Expression>, span: Span) -> Expression {
+    let positional_order = arguments
+        .iter()
+        .cloned()
+        .map(PositionalArgument::Plain)
+        .collect();
+    Expression::Call {
+        function: Box::new(function),
+        arguments,
+        positional_order,
+        star_arguments: Vec::new(),
+        keywords: Vec::new(),
+        dict_arguments: Vec::new(),
+        callee_span: span,
+        span,
+    }
+}
+
+fn eg_attribute(object: Expression, name: &str, span: Span) -> Expression {
+    Expression::Attribute(Box::new(object), name.to_owned(), span)
+}
+
+fn eg_subscript(object: Expression, index: i64, span: Span) -> Expression {
+    Expression::Subscript(
+        Box::new(object),
+        Box::new(Expression::Int(index, span)),
+        span,
+    )
+}
+
+fn eg_is_none(value: Expression, span: Span) -> Expression {
+    Expression::Compare(
+        Box::new(value),
+        CompareOperator::Is,
+        Box::new(eg_none_expression(span)),
+        span,
+    )
+}
+
+fn eg_not(value: Expression, span: Span) -> Expression {
+    Expression::Not(Box::new(value), span)
+}
+
+fn eg_assign(target: &str, value: Expression, span: Span) -> Statement {
+    Statement::Assign {
+        target: target.to_owned(),
+        target_span: span,
+        value,
+        span,
+    }
+}
+
+fn eg_if(condition: Expression, then_body: Vec<Statement>, span: Span) -> Statement {
+    Statement::If {
+        span,
+        condition,
+        then_body,
+        else_body: Vec::new(),
+    }
+}
+
+/// 纯位置生成的临时名后缀（同一文件里 `line_start`＋`col_start` 唯一 ✓）。
+fn eg_temporary_name(tag: &str, kind: &str) -> String {
+    format!("__pyawa_eg_{kind}_{tag}__")
+}
+
+/// `try/except*` 的**降糖**（形状见本节文件头注释 ✓）。
+fn desugar_except_star(
+    body: Vec<Statement>,
+    handlers: Vec<Handler>,
+    else_body: Vec<Statement>,
+    finally_body: Vec<Statement>,
+    span: Span,
+    tag: &str,
+) -> Vec<Statement> {
+    let exc_name = eg_temporary_name(tag, "exc");
+    let rest_name = eg_temporary_name(tag, "rest");
+    let match_name = eg_temporary_name(tag, "match");
+    let pair_name = eg_temporary_name(tag, "pair");
+    let condition_name = eg_temporary_name(tag, "cond");
+    let mut chain: Vec<Statement> = Vec::new();
+    // ① 非异常组 ⇒ 包成组（`Exception` 叶子 ⇒ `ExceptionGroup`；否则 `BaseExceptionGroup` ✓）。
+    let wrap = Expression::Conditional {
+        condition: Box::new(eg_call(
+            eg_name_expression("isinstance", span),
+            vec![
+                eg_name_expression(&exc_name, span),
+                eg_name_expression("Exception", span),
+            ],
+            span,
+        )),
+        then_value: Box::new(eg_call(
+            eg_name_expression("ExceptionGroup", span),
+            vec![
+                Expression::Str(String::new(), span),
+                Expression::List(vec![eg_name_expression(&exc_name, span)], span),
+            ],
+            span,
+        )),
+        else_value: Box::new(eg_call(
+            eg_name_expression("BaseExceptionGroup", span),
+            vec![
+                Expression::Str(String::new(), span),
+                Expression::List(vec![eg_name_expression(&exc_name, span)], span),
+            ],
+            span,
+        )),
+        span,
+    };
+    chain.push(eg_if(
+        eg_not(
+            eg_call(
+                eg_name_expression("isinstance", span),
+                vec![
+                    eg_name_expression(&exc_name, span),
+                    eg_name_expression("BaseExceptionGroup", span),
+                ],
+                span,
+            ),
+            span,
+        ),
+        vec![eg_assign(&exc_name, wrap.clone(), span)],
+        span,
+    ));
+    // ② rest = exc
+    chain.push(eg_assign(&rest_name, eg_name_expression(&exc_name, span), span));
+    // ③ 逐条 `except*`：split 出匹配组、绑定、跑体、把剩余留给下一条。
+    for handler in handlers {
+        let Handler {
+            type_,
+            name,
+            body: handler_body,
+            ..
+        } = handler;
+        let Some(type_) = type_ else {
+            continue;
+        };
+        // **条件表达式总要���值一次**（参照实测：即使 `rest` 已空、后续子句的
+        // `except* matcher()` 仍会被求值一次 ✓ —— 先前整段包在 `if rest is not None` 里 ⇒ 漏求值 ✗）。
+        chain.push(eg_assign(&condition_name, type_, span));
+        let mut guard_body: Vec<Statement> = Vec::new();
+        guard_body.push(eg_assign(
+            &pair_name,
+            eg_call(
+                eg_attribute(eg_name_expression(&rest_name, span), "split", span),
+                vec![eg_name_expression(&condition_name, span)],
+                span,
+            ),
+            span,
+        ));
+        guard_body.push(eg_assign(
+            &match_name,
+            eg_subscript(eg_name_expression(&pair_name, span), 0, span),
+            span,
+        ));
+        guard_body.push(eg_assign(
+            &rest_name,
+            eg_subscript(eg_name_expression(&pair_name, span), 1, span),
+            span,
+        ));
+        let mut match_body: Vec<Statement> = Vec::new();
+        if let Some(name) = name {
+            match_body.push(eg_assign(&name, eg_name_expression(&match_name, span), span));
+        }
+        // **让处理块体里的 `sys.exception()` 看到"匹配出的子组"**（参照口径 ✓）：普通
+        // `except` 的体里 `sys.exception()` 是刚捕到的异常；`except*` 里则应等于绑定给
+        // `as e` 的那个匹配组（`test_except_star` 的 `assertEqual(sys.exception(), match)` ✓）。
+        // 降糖做法：把体包进 `try: raise <match> except BaseException: 体` —— 体运行期间
+        // 当前异常就是 `<match>`，体结束/抛出后自动恢复 ✓。
+        let wrapped_body = vec![Statement::Try {
+            body: vec![Statement::Raise {
+                value: Some(eg_name_expression(&match_name, span)),
+                cause: None,
+                span,
+            }],
+            handlers: vec![Handler {
+                type_: None,
+                name: None,
+                body: handler_body,
+                span,
+            }],
+            else_body: Vec::new(),
+            finally_body: Vec::new(),
+            span,
+        }];
+        match_body.extend(wrapped_body);
+        guard_body.push(eg_if(
+            eg_not(eg_is_none(eg_name_expression(&match_name, span), span), span),
+            match_body,
+            span,
+        ));
+        chain.push(eg_if(
+            eg_not(eg_is_none(eg_name_expression(&rest_name, span), span), span),
+            guard_body,
+            span,
+        ));
+    }
+    // ④ 剩余未处理的叶子 ⇒ 成组重抛（`split` 保结构／保消息 ✓）。
+    chain.push(eg_if(
+        eg_not(eg_is_none(eg_name_expression(&rest_name, span), span), span),
+        vec![Statement::Raise {
+            value: Some(eg_name_expression(&rest_name, span)),
+            cause: None,
+            span,
+        }],
+        span,
+    ));
+    vec![Statement::Try {
+        body,
+        handlers: vec![Handler {
+            type_: None,
+            name: Some(exc_name),
+            body: chain,
+            span,
+        }],
+        else_body,
+        finally_body,
+        span,
+    }]
+}

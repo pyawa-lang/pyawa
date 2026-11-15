@@ -16,6 +16,7 @@
 //! 其余（`repr`／`copy`／`__eq__`／`__or__`／`__missing__` 覆写语义／`isinstance(d, dict)` ✓ 等）
 //! 未接 ✓ —— 撞上再补 ✓。
 
+use crate::HotId;
 use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
@@ -30,8 +31,7 @@ const DATA: &str = "_data";
 
 /// 造一个原生可调用对象（**新引用** ✓；与 `collections_module`／`typing.rs` 同一做法 ✓）。
 fn make_native(instance: &Instance, name: &'static str, handler: NativeFn) -> NonNull<Header> {
-    let ty = instance
-        .type_named("builtin_function_or_method")
+    let ty = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("builtin_function_or_method 在引导期已登记");
     let object = instance.alloc(BuiltinFunctionObject::new(ty, name, Cell::new(handler)));
     object.into_raw().cast::<Header>()
@@ -39,7 +39,7 @@ fn make_native(instance: &Instance, name: &'static str, handler: NativeFn) -> No
 
 /// 取实例字典里的**私有**属性（**借用** ✓；不是 `defaultdict` 实例或没建字典 ⇒ `None` ✓）。
 fn private_attr(instance: &Instance, this: NonNull<Header>, key: &str) -> Option<NonNull<Header>> {
-    let expected = instance.type_named("defaultdict")?;
+    let expected = instance.hot_type(HotId::DefaultDict)?;
     // SAFETY: 调用方保证 this 是存活对象；类型身份查注册表。
     if unsafe { this.as_ref() }.ty() != expected {
         return None;
@@ -86,7 +86,163 @@ pub unsafe fn defaultdict_new(
     let data = instance.new_dict();
     instance.dict_set(attributes, DATA, data);
     instance.release(data);
+    // **第二个位置实参＝初始映射**（round 114）：`defaultdict(int, zip(words, count()))` ✓
+    //（`test_pprint.test_default_dict` ✓）；更新走 `dict.update` 的同一实现 ✓。
+    if let Some(source) = args.get(1).copied() {
+        let update = make_native(
+            instance,
+            "update",
+            crate::builtin::dict::dict_update_native as NativeFn,
+        );
+        // `call_callable` **转移**实参所有权（会 release 每个实参）⇒ 这里交它一份**新引用** ✓
+        //（`source` 是借用视图 —— 直接交会 double free ✗）。可调用对象是**借用** ✓。
+        // SAFETY: source 由调用方保证存活。
+        unsafe { instance.incref_object(source.as_ptr()) };
+        let produced = crate::executor::call::call_callable(
+            instance,
+            update,
+            Some(data),
+            vec![source],
+            Vec::new(),
+            0,
+        );
+        instance.release(update);
+        instance.release(produced?);
+    }
     Ok(object)
+}
+
+/// **`defaultdict` 的 dict 面**（round 114）：`pprint._pprint_default_dict` 要 `len(object)`／
+/// `object.items()`／内层 repr ✓ —— 先前只有 4 个方法 ✗ ⇒ `object of type 'defaultdict' has no len()` ✗
+/// （`test_pprint.test_default_dict` ✓）。
+fn receiver(bound: Option<NonNull<Header>>, args: &[NonNull<Header>]) -> Option<NonNull<Header>> {
+    bound.or_else(|| args.first().copied())
+}
+
+fn dd_len_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "len() 需要 defaultdict"))?;
+    let data = data_of(instance, this)?;
+    let length = instance.dict_entries(data).map(|entries| entries.len()).unwrap_or(0);
+    Ok(instance.new_int(length as i64))
+}
+
+fn dd_items_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "items() 需要 defaultdict"))?;
+    let data = data_of(instance, this)?;
+    let entries = instance.dict_entries(data).unwrap_or_default();
+    let pairs: Vec<NonNull<Header>> = entries
+        .into_iter()
+        .map(|(key, value)| {
+            instance.new_tuple(vec![instance.retain(key), instance.retain(value)])
+        })
+        .collect();
+    Ok(instance.new_list(pairs))
+}
+
+fn dd_keys_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "keys() 需要 defaultdict"))?;
+    let data = data_of(instance, this)?;
+    let keys: Vec<NonNull<Header>> = instance
+        .dict_entries(data)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, _)| instance.retain(key))
+        .collect();
+    Ok(instance.new_list(keys))
+}
+
+fn dd_values_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "values() 需要 defaultdict"))?;
+    let data = data_of(instance, this)?;
+    let values: Vec<NonNull<Header>> = instance
+        .dict_entries(data)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, value)| instance.retain(value))
+        .collect();
+    Ok(instance.new_list(values))
+}
+
+fn dd_iter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "__iter__() 需要 defaultdict"))?;
+    let data = data_of(instance, this)?;
+    instance.iter_object(data)
+}
+
+fn dd_get_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "get() 需要 defaultdict"))?;
+    let Some(key) = args.get(1).copied().or_else(|| {
+        // 绑定时 args[0] 就是 key ✓；未绑定时 args[1] 是 key ✓（args[0] 是 self）。
+        if bound.is_some() { args.first().copied() } else { args.get(1).copied() }
+    }) else {
+        return Err(instance.raise_builtin_error("TypeError", "get expected at least 1 argument, got 0"));
+    };
+    let data = data_of(instance, this)?;
+    let index = if bound.is_some() { 2usize } else { 2usize };
+    let default = if bound.is_some() { args.get(1) } else { args.get(2) };
+    let _ = index;
+    if let Some(position) = instance.dict_lookup_key_checked(data, key)? {
+        let entries = instance.dict_entries(data).unwrap_or_default();
+        if let Some((_, value)) = entries.get(position).copied() {
+            return Ok(instance.retain(value));
+        }
+    }
+    match default {
+        Some(value) => Ok(instance.retain(*value)),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
+fn dd_repr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "__repr__() 需要 defaultdict"))?;
+    let data = data_of(instance, this)?;
+    let none = instance.singletons().none();
+    let factory = private_attr(instance, this, FACTORY).unwrap_or(none);
+    let factory_text = instance.object_repr(factory)?;
+    let data_text = instance.object_repr(data)?;
+    Ok(instance.new_str(&format!("defaultdict({factory_text}, {data_text})")))
 }
 
 /// **`defaultdict` 的属性面** ✓：`default_factory` 交回工厂 ✓（`dict_get` 是**借用** ⇒
@@ -147,7 +303,7 @@ pub unsafe fn defaultdict_getitem(
         crate::executor::call::call_callable(instance, factory, None, Vec::new(), Vec::new(), 0)?;
     // **写回**：`subscript_set` 借用键、**接管值** ✓ ⇒ 先添一份给字典、我们这份交给调用方 ✓。
     instance.retain(produced);
-    crate::executor::subscript::subscript_set(instance, data, key, produced, 0)?;
+    crate::executor::subscript::subscript_set_inner(instance, data, key, produced, 0)?;
     Ok(produced)
 }
 
@@ -169,7 +325,7 @@ pub unsafe fn defaultdict_setitem(
     };
     let data = data_of(instance, this)?;
     instance.retain(value);
-    crate::executor::subscript::subscript_set(instance, data, key, value, 0)?;
+    crate::executor::subscript::subscript_set_inner(instance, data, key, value, 0)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -212,9 +368,174 @@ pub unsafe fn defaultdict_clear(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+
+// ---- **日常面增量**（C1 工单第 5 项） -------------------------------------------------
+//
+// 参照 `collections.defaultdict` 是 **dict 子类**；本层的实现是 `AttributeObject`（内层 `_data`
+// 字典）—— 照 `CM-6` 如实登记"不是 dict 子类" ✗，但**日常操作**（`copy`／`copy.copy`／
+// `d | dict`／`dict | d`／`d |= dict`／`==`）按参照语义补齐 ✓。
+
+/// 取一份**与 `this` 同类型、同工厂**的新 `defaultdict`（内层 `_data` 是新空字典）。
+/// 返回 `(新实例, 其 `_data` 借用)` ✓。
+fn fresh_like(
+    instance: &Instance,
+    this: NonNull<Header>,
+) -> Result<(NonNull<Header>, NonNull<Header>), ExecError> {
+    let ty = instance.type_of(this);
+    let none = instance.singletons().none();
+    let factory = private_attr(instance, this, FACTORY).unwrap_or(none);
+    let retained_factory = instance.retain(factory);
+    let args = [retained_factory];
+    // SAFETY: `ty` 是注册表里的类型对象；实参是存活借用。
+    let fresh = unsafe { defaultdict_new(ty.cast(), &args, instance) }?;
+    instance.release(retained_factory);
+    // **换掉新实例的空 `_data`**：`dict_set` 接管一份引用（旧空字典由它释放 ✓）。
+    let view = unsafe { &*fresh.as_ptr().cast::<AttributeObject>() };
+    let Some(attributes) = view.attributes() else {
+        instance.release(fresh);
+        return Err(instance.raise_builtin_error("RuntimeError", "defaultdict 的内部字典丢了"));
+    };
+    let fresh_data = instance.new_dict();
+    instance.dict_set(attributes, DATA, fresh_data);
+    instance.release(fresh_data);
+    let data = data_of(instance, fresh)?;
+    Ok((fresh, data))
+}
+
+/// 把 `source` 的条目并入 `target`（都是本实例里的 dict；借用视图 ⇒ 副本进 `target` ✓）。
+fn merge_entries(
+    instance: &Instance,
+    target: NonNull<Header>,
+    source: NonNull<Header>,
+) -> Result<(), ExecError> {
+    let entries = instance.dict_entries(source).unwrap_or_default();
+    for (key, value) in entries {
+        // SAFETY: 两个字典都由调用方保证存活；`subscript_write` 自己新增一份值的引用 ✓。
+        crate::executor::subscript::subscript_write(instance, target, key, value)?;
+    }
+    Ok(())
+}
+
+/// `other` 若是 dict 族 ⇒ 它的条目来源（dict 本体或 defaultdict 的 `_data`）✓；否则 `None`。
+fn mapping_entries_of(instance: &Instance, other: NonNull<Header>) -> Option<NonNull<Header>> {
+    if instance.hot_type_is(HotId::DefaultDict, instance.type_of(other)) {
+        return data_of(instance, other).ok();
+    }
+    instance.dict_entries(other).map(|_| other)
+}
+
+fn unsupported_or(instance: &Instance, operator: &str, other: NonNull<Header>) -> ExecError {
+    instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "unsupported operand type(s) for {operator}: 'defaultdict' and '{}'",
+            instance.type_name(instance.type_of(other))
+        ),
+    )
+}
+
+/// `dd.copy()` ／ `copy.copy(dd)`（`__copy__` 同款）：同工厂的新 `defaultdict` ✓。
+fn dd_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = receiver(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "copy() 需要 defaultdict"))?;
+    let source = data_of(instance, this)?;
+    let (fresh, target) = fresh_like(instance, this)?;
+    merge_entries(instance, target, source)?;
+    Ok(fresh)
+}
+
+/// `d | dict`（PEP 584）：结果仍是**同工厂的 defaultdict**，右侧覆盖 ✓。
+fn dd_or_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = crate::builtin_objects::container_receiver(bound, args);
+    let (Some(this), Some(other)) = (this, rest.first().copied()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__or__ expected 2 arguments"));
+    };
+    let Some(other_entries) = mapping_entries_of(instance, other) else {
+        return Err(unsupported_or(instance, "|", other));
+    };
+    let source = data_of(instance, this)?;
+    let (fresh, target) = fresh_like(instance, this)?;
+    merge_entries(instance, target, source)?;
+    merge_entries(instance, target, other_entries)?;
+    Ok(fresh)
+}
+
+/// `dict | d`（PEP 584）：结果取**右脚**（d）的工厂，左侧先、右侧覆盖 ✓。
+fn dd_ror_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = crate::builtin_objects::container_receiver(bound, args);
+    let (Some(this), Some(other)) = (this, rest.first().copied()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__ror__ expected 2 arguments"));
+    };
+    let Some(other_entries) = mapping_entries_of(instance, other) else {
+        return Err(unsupported_or(instance, "|", other));
+    };
+    let source = data_of(instance, this)?;
+    let (fresh, target) = fresh_like(instance, this)?;
+    merge_entries(instance, target, other_entries)?;
+    merge_entries(instance, target, source)?;
+    Ok(fresh)
+}
+
+/// `d |= dict`：原地并入并交回自身 ✓。
+fn dd_ior_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = crate::builtin_objects::container_receiver(bound, args);
+    let (Some(this), Some(other)) = (this, rest.first().copied()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__ior__ expected 2 arguments"));
+    };
+    let Some(other_entries) = mapping_entries_of(instance, other) else {
+        return Err(unsupported_or(instance, "|=", other));
+    };
+    let data = data_of(instance, this)?;
+    merge_entries(instance, data, other_entries)?;
+    Ok(instance.retain(this))
+}
+
+/// `==`／`!=`：按内层字典的**结构相等**比（`defaultdict` 与 dict／defaultdict 都认 ✓；
+/// 其它类型 ⇒ `NotImplemented` 语义由调用方回落 ⇒ 这里给 `false` ✓）。
+fn dd_eq_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = crate::builtin_objects::container_receiver(bound, args);
+    let Some(this) = this else {
+        return Err(instance.raise_builtin_error("TypeError", "__eq__ 需要 defaultdict"));
+    };
+    let Some(other) = rest.first().copied() else {
+        return Ok(instance.singletons().boolean(false));
+    };
+    let Some(other_entries) = mapping_entries_of(instance, other) else {
+        return Ok(instance.singletons().boolean(false));
+    };
+    let data = data_of(instance, this)?;
+    let equal = crate::executor::values_equal_public(instance, data, other_entries);
+    Ok(instance.singletons().boolean(equal))
+}
+
 /// 取／建 `defaultdict` 类型（**幂等** ✓；`_collections` 装配时调用 ✓）。
 pub fn build_defaultdict_type(instance: &Instance) -> NonNull<TypeObject> {
-    if let Some(existing) = instance.type_named("defaultdict") {
+    if let Some(existing) = instance.hot_type(HotId::DefaultDict) {
         return existing;
     }
     let ty = instance.alloc_type_raw(
@@ -224,18 +545,36 @@ pub fn build_defaultdict_type(instance: &Instance) -> NonNull<TypeObject> {
             .with_new(defaultdict_new)
             .with_getattr(defaultdict_getattr),
     );
-    if let Some(object_type) = instance.type_named("object") {
+    if let Some(object_type) = instance.hot_type(HotId::Object) {
         assert!(
             instance.register_bases(ty, vec![object_type]).is_some(),
             "OM-13：defaultdict 的 MRO 应当可线性化"
         );
     }
+    // 命名空间里会写 `__module__` ⇒ 二元运算的用户-dunder 预筛位置上（round 248 性能，A2-3 ✓）。
+    instance.mark_dunder_capable(ty);
     if let Some(namespace) = instance.type_namespace(ty.cast()) {
-        let methods: [(&'static str, NativeFn); 4] = [
+        let methods: [(&'static str, NativeFn); 18] = [
             ("__getitem__", defaultdict_getitem),
             ("__setitem__", defaultdict_setitem),
             ("__contains__", defaultdict_contains),
             ("clear", defaultdict_clear),
+            // **dict 面**（round 114：`pprint` 的 defaultdict 分支要它们 ✓）。
+            ("__len__", dd_len_native),
+            ("__iter__", dd_iter_native),
+            ("__repr__", dd_repr_native),
+            ("items", dd_items_native),
+            ("keys", dd_keys_native),
+            ("values", dd_values_native),
+            ("get", dd_get_native),
+            // **日常面**（C1）：copy／copy.copy／`|`／`|=`／相等 ✓
+            ("copy", dd_copy_native),
+            ("__copy__", dd_copy_native),
+            ("__or__", dd_or_native as NativeFn),
+            ("__ror__", dd_ror_native as NativeFn),
+            ("__ior__", dd_ior_native as NativeFn),
+            ("__eq__", dd_eq_native as NativeFn),
+            ("__ne__", dd_eq_native as NativeFn),
         ];
         for (name, handler) in methods {
             let function = make_native(instance, name, handler);

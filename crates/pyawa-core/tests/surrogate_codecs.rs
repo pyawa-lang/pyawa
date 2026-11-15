@@ -50,12 +50,12 @@ fn error_parts(instance: &Instance, error: ExecError) -> (String, Option<String>
         panic!("期望抛异常，实际 {error:?}");
     };
     // SAFETY: 异常对象由本测试持有。
-    let ty = unsafe { exception.as_ref() }.ty();
+    let ty = unsafe { exception.get().as_ref() }.ty();
     // SAFETY: 类型由注册表持有。
     let name = unsafe { ty.as_ref() }.name().to_owned();
     // SAFETY: 异常对象是 ExceptionObject 布局。
     let message =
-        unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }.message_with(instance);
+        unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }.message_with(instance);
     (name, message)
 }
 

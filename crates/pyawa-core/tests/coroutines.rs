@@ -158,10 +158,8 @@ fn call_method<'a>(
     match vm.run(&code) {
         Ok(value) => Ok((Some(value), None)),
         Err(pyawa_core::ExecError::Raised { exception }) => {
-            let type_name = vm.instance.type_name(vm.instance.type_of(exception));
-            let text = vm.instance.object_str(exception).expect("异常对象的 str");
-            // SAFETY: exception 是存活对象，归还本函数这一份。
-            unsafe { vm.instance.release_object(exception.as_ptr()) };
+            let type_name = vm.instance.type_name(vm.instance.type_of(exception.get()));
+            let text = vm.instance.object_str(exception.get()).expect("异常对象的 str");
             Ok((None, Some((type_name, text))))
         }
         Err(other) => Err(other),

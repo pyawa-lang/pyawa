@@ -67,7 +67,7 @@ fn raise_error(instance: &Instance, class: NonNull<Header>, message: &str) -> Ex
                 arguments,
                 0,
             );
-            ExecError::Raised { exception }
+            ExecError::Raised { exception: pyawa_core::RaiseRef::from_owned(instance, exception) }
         }
         Err(error) => error,
     }

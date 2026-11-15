@@ -4,6 +4,7 @@
 //! * 仍在原处的被引用项：`bound_list`、`container_contains_native`、`str_getattr`、`tuple_clear`、`tuple_traverse` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
+use crate::HotId;
 use core::cell::Cell;
 use crate::builtin_objects::{BuiltinFunctionObject, DictObject, ListObject, MethodObject, NativeFn, SetObject, TupleObject};
 use crate::executor::ExecError;
@@ -51,20 +52,94 @@ pub(crate) fn list_index_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let list = bound_list(instance, bound)?;
-    let Some(wanted) = args.first() else {
+    let Some(wanted) = args.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
             "index() takes at least 1 argument",
         ));
     };
-    // SAFETY: 绑定的是本类型的存活对象。
+    // **区间**（round 110）：`list.index(x, start, end)` 的 start/end 照切片归一化 ✓
+    //（负数加长度、夹到 `0..=len` ✓；`start > len` ⇒ 直接 ValueError ✓）。
+    // **活体遍历**：`__eq__` 可能把表清空／改小（`seq_tests.test_index` 的 `EvilCmp` ✓）⇒
+    // 每轮重读长度、比较期间自己持一份 ✓（先前的借用快照会悬垂 ✗）。
+    // SAFETY: 绑定的是本实例的 list。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    match object.position_where(|item| {
-        crate::executor::values::values_equal_public(instance, item, *wanted)
-    }) {
-        Some(index) => Ok(instance.new_int(index as i64)),
-        None => Err(instance.raise_builtin_error("ValueError", " is not in list")),
+    let length = object.len() as i64;
+    let (start, end) = list_range_bounds(instance, args, length, "index")?;
+    let mut position = start;
+    while position < end && position < object.len() as i64 {
+        let item = object.item(position as usize).expect("刚查过长度，下标在范围内");
+        // **富比较协议**：用户 `__eq__` 生效 ✓、异常原样传播 ✓；比较期间持一份引用 ✓。
+        unsafe { instance.incref_object(item.as_ptr()) };
+        let verdict = crate::executor::protocol::equality_public(instance, item, wanted);
+        unsafe { instance.release_object(item.as_ptr()) };
+        if verdict? {
+            return Ok(instance.new_int(position));
+        }
+        position += 1;
     }
+    Err(instance.raise_builtin_error("ValueError", " is not in list"))
+}
+
+/// `list.index(x, start, end)` 的区间归一化（round 110；与 `str.find` 家族同口径 ✓）。
+/// `list.clear()`／`copy()`／`reverse()` 的**零实参**检查（round 110）：参照对多给的实参报
+/// `TypeError: list.clear() takes no arguments (1 given)` ✓（官方 `list_tests.test_clear`／
+/// `test_copy` 的 `assertRaises(TypeError, u.clear, None)` ✓）。
+fn reject_extra_arguments(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    method: &str,
+) -> Result<(), crate::ExecError> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "list.{method}() takes no arguments ({} given)",
+            args.len()
+        ),
+    ))
+}
+
+fn list_range_bounds(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    length: i64,
+    method: &str,
+) -> Result<(i64, i64), crate::ExecError> {
+    let mut values: [Option<i64>; 2] = [None, None];
+    for (index, value) in args.iter().skip(1).take(2).enumerate() {
+        if instance.type_of(*value) == instance.singletons().none_type() {
+            continue;
+        }
+        if let Some(number) = instance.int_of(*value) {
+            let saturated = number.to_i64().unwrap_or_else(|| {
+                if number.to_bigint().signum() < 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            });
+            values[index] = Some(saturated);
+            continue;
+        }
+        let name = instance.type_name(instance.type_of(*value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{method}() 的 start／end 要整数，不是 '{name}'"),
+        ));
+    }
+    let normalize = |value: Option<i64>, default: i64| match value {
+        Some(number) => {
+            let shifted = if number < 0 { number + length } else { number };
+            shifted.clamp(0, length)
+        }
+        None => default,
+    };
+    let start = normalize(values[0], 0);
+    let end = normalize(values[1], length);
+    Ok((start, end))
 }
 /// `count(x)`：相等元素个数 ✓。
 pub(crate) fn list_count_native(
@@ -80,11 +155,22 @@ pub(crate) fn list_count_native(
             "count() takes exactly one argument",
         ));
     };
-    let items = instance.list_items(list).unwrap_or_default();
-    let count = items
-        .into_iter()
-        .filter(|item| crate::executor::values::values_equal_public(instance, *item, *wanted))
-        .count() as i64;
+    // **富比较协议**（round 110）：`count` 和 `in` 同一口径（用户 `__eq__` 生效、异常传播 ✓）；
+    // 活体遍历 ＋ 每轮重读长度（`__eq__` 改表时不悬垂 ✓）。
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    let mut count = 0i64;
+    let mut index = 0usize;
+    while index < object.len() {
+        let item = object.item(index).expect("刚查过长度，下标在范围内");
+        unsafe { instance.incref_object(item.as_ptr()) };
+        let verdict = crate::executor::protocol::equality_public(instance, item, *wanted);
+        unsafe { instance.release_object(item.as_ptr()) };
+        if verdict? {
+            count += 1;
+        }
+        index += 1;
+    }
     Ok(instance.new_int(count))
 }
 /// `reverse()`：就地反转 ✓（只动顺序，不碰引用 ✓）。
@@ -143,6 +229,9 @@ pub(crate) fn list_sort_native(
         };
         decorated.push((item, item_key));
     }
+    // **排序期间被改表**要报 `ValueError`（参照 `list modified during sort` ✓）：比较键是用户代码，
+    // 可能 `append`／`clear` 本表（`list_tests.test_sort` 的 `selfmodifyingComparison` ✓）。
+    let original_length = object.len();
     let mut failure: Option<String> = None;
     decorated.sort_by(|left, right| match instance.order_of(left.1, right.1) {
         Some(ordering) => ordering,
@@ -159,6 +248,19 @@ pub(crate) fn list_sort_native(
     });
     if reverse {
         decorated.reverse();
+    }
+    if object.len() != original_length {
+        // 清掉装饰期的两份引用，再报参照口径的 `ValueError` ✓（列表本身保持被改后的样子 ✓）。
+        for (item, item_key) in decorated {
+            unsafe {
+                instance.release_object(item.as_ptr());
+                instance.release_object(item_key.as_ptr());
+            }
+        }
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "list modified during sort",
+        ));
     }
     // 写回：**原地** ✓ —— 先逐项弹出旧引用并归还 ✓，再按新序 `append` ✓（元素那一份**转交**列表 ✓），
     // 键那一份是临时 ⇒ 还掉 ✓（两边各正好一份 ✓ ⇒ 不重不漏 ✓）。
@@ -180,9 +282,10 @@ pub(crate) fn list_sort_native(
 pub(crate) fn list_reverse_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    reject_extra_arguments(instance, args, "reverse")?;
     let list = bound_list(instance, bound)?;
     // SAFETY: 绑定的是本类型的存活对象。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
@@ -193,9 +296,10 @@ pub(crate) fn list_reverse_native(
 pub(crate) fn list_clear_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
+    reject_extra_arguments(instance, args, "clear")?;
     let list = bound_list(instance, bound)?;
     // SAFETY: 绑定的是本实例的 list。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
@@ -218,8 +322,21 @@ pub(crate) fn list_remove_native(
     };
     // SAFETY: 绑定的是本实例的 list。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    let index = object.position_where(|item| crate::executor::values::values_equal_public(instance, item, *target));
-    match index {
+    // **富比较协议**（round 110）：`remove` 与 `in` 同口径（用户 `__eq__` 生效 ✓、顺序短路 ✓）。
+    let mut found = None;
+    let mut index = 0usize;
+    while index < object.len() {
+        let item = object.item(index).expect("刚查过长度，下标在范围内");
+        unsafe { instance.incref_object(item.as_ptr()) };
+        let verdict = crate::executor::protocol::equality_public(instance, item, *target);
+        unsafe { instance.release_object(item.as_ptr()) };
+        if verdict? {
+            found = Some(index);
+            break;
+        }
+        index += 1;
+    }
+    match found {
         Some(at) => {
             if let Some(removed) = object.remove_at(at) {
                 unsafe { instance.release_object(removed.as_ptr()) };
@@ -230,13 +347,23 @@ pub(crate) fn list_remove_native(
     }
 }
 /// **`list` 的方法面**（第 143 轮）：照 `str_getattr` 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
-pub unsafe fn list_getattr(
-    ptr: *mut Header,
-    name: &str,
-    instance: &Instance,
-) -> Option<NonNull<Header>> {
-    let handler: NativeFn = match name {
+/// **`list` 的方法名 → 原生实现**（round 151 提取；`list_getattr` 与"类型级未绑定描述符"共用 ✓）。
+pub fn list_method_handler(name: &str) -> Option<NativeFn> {
+let handler: NativeFn = match name {
         "append" => list_append_native,
+        // **`list` 的 dunder／`copy` 面**（round 106）：官方 `list_tests`／`seq_tests` 大量直接调用
+        // `u.__getitem__`／`u.__setitem__`／`u.__delitem__`／`u.copy()`／`u.__iadd__` 一族 ✓ ——
+        // 先前这些名字在实例上**取不到** ✗（`AttributeError: 'list' object has no attribute ...`）。
+        "__init__" => list_init_native,
+        "__getitem__" => list_dunder_getitem,
+        "__setitem__" => list_dunder_setitem,
+        "__delitem__" => list_dunder_delitem,
+        "__iter__" => list_dunder_iter,
+        "__reversed__" => list_dunder_reversed,
+        "__add__" => list_dunder_add,
+        "__iadd__" => list_dunder_iadd,
+        "__imul__" => list_dunder_imul,
+        "copy" => list_copy_native,
         "__contains__" => container_contains_native,
         "__len__" => crate::builtin_objects::container_len_native,
         "extend" => list_extend_native,
@@ -250,10 +377,72 @@ pub unsafe fn list_getattr(
         "remove" => list_remove_native,
         _ => return None,
     };
+    Some(handler)
+}
+
+/// **`dir(list)` 的参照名字面**（round 152）：`test_descrtut` tut3 逐项钉住 ✓ ——
+/// 本层 `list` 类型字典只存了少数方法名（其余在 `getattr` 槽里）⇒ `dir(type)` 走 MRO 字典会少名字 ✗
+/// ⇒ 这里给一张**参照表面表**（`dir` 补名字用；能取到值仍由属性通道决定 ✓）。
+pub const LIST_TYPE_DIR_NAMES: &[&str] = &[
+    "__add__",
+    "__class__",
+    "__class_getitem__",
+    "__contains__",
+    "__delattr__",
+    "__delitem__",
+    "__dir__",
+    "__doc__",
+    "__eq__",
+    "__format__",
+    "__ge__",
+    "__getattribute__",
+    "__getitem__",
+    "__getstate__",
+    "__gt__",
+    "__hash__",
+    "__iadd__",
+    "__imul__",
+    "__init__",
+    "__init_subclass__",
+    "__iter__",
+    "__le__",
+    "__len__",
+    "__lt__",
+    "__mul__",
+    "__ne__",
+    "__new__",
+    "__reduce__",
+    "__reduce_ex__",
+    "__repr__",
+    "__reversed__",
+    "__rmul__",
+    "__setattr__",
+    "__setitem__",
+    "__sizeof__",
+    "__str__",
+    "__subclasshook__",
+    "append",
+    "clear",
+    "copy",
+    "count",
+    "extend",
+    "index",
+    "insert",
+    "pop",
+    "remove",
+    "reverse",
+    "sort",
+];
+
+pub unsafe fn list_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = list_method_handler(name)?;
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -264,12 +453,234 @@ pub unsafe fn list_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
     Some(bound.into_raw().cast::<Header>())
 }
+/// `list.__getitem__(self, key)`（round 106）：整数／切片都走**一处真相**的 `subscript_get` ✓。
+fn list_dunder_getitem(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__getitem__() takes exactly one argument (0 given)",
+        ));
+    };
+    // **原生 `list.__getitem__` 不派发用户覆写**（否则用户 `__getitem__` 里调它会递归 ✗）。
+    crate::executor::subscript::subscript_get_inner(instance, list, key, 0)
+}
+
+/// `list.__setitem__(self, key, value)`。
+fn list_dunder_setitem(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let (Some(key), Some(value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__setitem__() takes exactly 2 arguments",
+        ));
+    };
+    // **值那份要按 `subscript_set` 的"接管"契约先 retain**（round 104 真 bug 修 ✗）：本函数是
+    // **原生** `__setitem__`，`args` 是**借用视图**（`call_callable` 的 native 分支调用后会释放
+    // 实参）✗ —— 先前把借用指针直接交给"接管值"的 `subscript_set` ⇒ 写入失败路径里值被释放一次、
+    // native 分支返回后又释放一次 ⇒ **同一个值双放** ✓（round 102 的融合存取修复让对象更早被释放，
+    // 于是在 `test_list.test_set_subscript` 暴露；`PYAWA_REF_TRACE=...BT_ALL` 现场：两次 -1 都
+    // 落在 `subscript_set ← list_dunder_setitem` 与 `call_callable` ✓）。
+    instance.retain(value);
+    crate::executor::subscript::subscript_set_inner(instance, list, key, value, 0)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `list.__delitem__(self, key)`。
+fn list_dunder_delitem(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__delitem__() takes exactly one argument (0 given)",
+        ));
+    };
+    crate::executor::subscript::subscript_del_inner(instance, list, key, 0)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `list.__iter__(self)`：交现成的迭代器 ✓。
+fn list_dunder_iter(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    instance.iter_object(list)
+}
+
+/// `list.__reversed__(self)`：**新列表**（反向快照 ✓；本层没有 lazy reverseiterator）。
+fn list_dunder_reversed(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    // **真正的 `list_reverseiterator`**（round 111 真 bug 修 ✗）：参照的反向迭代器**引用原列表** ✓、
+    // 游标是"下一个要取的下标 ＋ 1" ✓ —— 先前把列表**快照**成新 list 再正向迭代 ✗ ⇒
+    // ① 类型名给 `list_iterator` ✗；② 快照看不到之后对原列表的修改 ✗
+    //（`test_reversed_pickle`：反序列化后 `a[:] = data` 期望反向迭代反映新数据 ✓）。
+    let length = instance.list_items(list).map(|items| items.len()).unwrap_or(0);
+    let iterator_type = instance.hot_type(HotId::ListReverseIterator)
+        .expect("list_reverseiterator 已登记");
+    // 迭代器要自己那份原列表引用 ✓。
+    unsafe { instance.incref_object(list.as_ptr()) };
+    let iterator = instance.alloc(crate::builtin_objects::IteratorObject::new(
+        iterator_type,
+        list,
+        core::cell::Cell::new(length),
+    ));
+    Ok(iterator.into_raw().cast::<Header>())
+}
+
+/// `list.__add__(self, other)`：与 `+` 同一处（`concat_public` ✓）。
+fn list_dunder_add(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(other) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__add__() takes exactly one argument (0 given)",
+        ));
+    };
+    crate::executor::iter::concat_public(instance, list, other, 0)
+}
+
+/// `list.__iadd__(self, other)`：**就地**扩展 ✓（保持对象身份；官方 `list_tests.test_iadd` ✓）。
+fn list_dunder_iadd(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(other) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__iadd__() takes exactly one argument (0 given)",
+        ));
+    };
+    // **`list.__iadd__` 直调语义**：接受任意可迭代（`[1].__iadd__((2,))` ✓）、非可迭代报
+    // `TypeError: 'int' object is not iterable` ✓（`test_list.test_iadd` 的 `assertRaises` 钉住 ✓）。
+    // **操作符 `l += x` 的特殊口径在 `protocol::inplace_add` 里**（round 114）：右侧不是 list／tuple 时
+    // 不走这里的就地扩展，而是回退到 `+` 的反射协议（参照实测 `list += UserList` ⇒ 结果类型 **UserList** ✓）。
+    let name = instance.type_name(instance.type_of(other));
+    let Some(items) = instance.iterable_items(other).map_err(|error| error)? else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not iterable"),
+        ));
+    };
+    for item in items {
+        // SAFETY: 元素由另一列表持有，存活；本列表要自己那份。
+        unsafe { instance.incref_object(item.as_ptr()) };
+        instance.list_append(list, item);
+    }
+    Ok(instance.retain(list))
+}
+
+/// `list.__imul__(self, count)`：走 `*=` 的就地重复（一处真相 ✓）。
+fn list_dunder_imul(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(count_value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__imul__() takes exactly one argument (0 given)",
+        ));
+    };
+    let Some(count) = instance.index_value(count_value)? else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "can't multiply sequence by non-int of type",
+        ));
+    };
+    // **就地重复、返回同一个对象**（round 110 真 bug 修 ✗）：先前走通用 `inplace_arithmetic`
+    // ⇒ 返回新列表 ✗ ⇒ `s *= 10` 后 `id(s) != oldid` ✗（`list_tests.test_imul`／`test_repeat` ✓）。
+    // **上限守卫生效**：`sys.maxsize` 一类 ⇒ `MemoryError`（`test_list_resize_overflow` ✓）。
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    const MAX_REPEAT_ITEMS: i64 = 1 << 33;
+    if count > 0 && object.len() as i64 >= MAX_REPEAT_ITEMS / count.max(1) {
+        return Err(instance.raise_builtin_error(
+            "MemoryError",
+            "list 重复后长度过大",
+        ));
+    }
+    if count <= 0 {
+        while let Some(item) = object.pop_last() {
+            unsafe { instance.release_object(item.as_ptr()) };
+        }
+        return Ok(instance.retain(list));
+    }
+    let original: Vec<NonNull<Header>> = object
+        .items()
+        .iter()
+        .map(|item| instance.retain(*item))
+        .collect();
+    for _ in 1..count {
+        for item in &original {
+            unsafe { instance.incref_object(item.as_ptr()) };
+            object.append(*item);
+        }
+    }
+    // 自己那份临时引用归还 ✓（元素由列表各持一份 ✓）。
+    for item in original {
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+    Ok(instance.retain(list))
+}
+
+/// `list.copy()`：**浅拷贝** ✓（官方 `list_tests.test_copy` ✓）。
+fn list_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    reject_extra_arguments(instance, args, "copy")?;
+    let list = bound_list(instance, bound)?;
+    let items: Vec<NonNull<Header>> = instance
+        .list_items(list)
+        .unwrap_or_default()
+        .into_iter()
+        // **借用 → 新引用**（`new_list` 吃所有权 ✓；round 106 修 ✗）。
+        .map(|item| instance.retain(item))
+        .collect();
+    Ok(instance.new_list(items))
+}
+
 pub(crate) fn list_append_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -307,7 +718,7 @@ pub(crate) fn list_append_descriptor(
             "unbound method list.append() needs an argument",
         ));
     };
-    let list_type = instance.type_named("list").expect("list 已登记");
+    let list_type = instance.hot_type(HotId::List).expect("list 已登记");
     if !instance.is_subtype(instance.type_of(owner), list_type) {
         return Err(instance.raise_builtin_error(
             "TypeError",
@@ -346,14 +757,15 @@ pub(crate) fn list_extend_native(
             "extend() takes exactly one argument (0 given)",
         ));
     };
-    let items = match instance.iterable_items(*iterable) {
+    let items = match instance.iterable_items(*iterable)? {
         Some(items) => items,
         None => {
             return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
         }
     };
+    // `iterable_items` 交的是**新引用** ⇒ `list_append` 直接**接手**（先前多 retain 一次 ✗
+    // ⇒ 每项漏一份、`list.extend` 循环把计数顶穿 ✓；round 58 统一口径 ✓）。
     for item in items {
-        instance.retain(item);
         instance.list_append(list, item);
     }
     Ok(instance.retain(instance.singletons().none()))
@@ -477,6 +889,52 @@ pub(crate) unsafe fn list_clear(ptr: *mut Header, instance: &Instance) {
     }
 }
 /// `list()`：空列表。
+/// **`list.__init__(self, iterable=(), /)`**（round 110）：**清空后重填** ✓ ——
+/// `list_tests.test_init` 钉住「Init clears previous values」「Init overwrites previous values」✓；
+/// 先前 `list` 的 `__init__` 取不到（实例上 AttributeError ✗，且 `a.__init__([4,5,6])` 不生效 ✗）。
+pub(crate) fn list_init_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // `list.__init__` 只收一个位置实参（可迭代）；关键字一律不收（参照 `list() takes no keyword
+    // arguments` ✓）。
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "list() takes no keyword arguments",
+        ));
+    }
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "list expected at most 1 argument, got {}",
+                args.len()
+            ),
+        ));
+    }
+    let list = bound_list(instance, bound)?;
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    while let Some(item) = object.pop_last() {
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+    if let Some(source) = args.first().copied() {
+        // 复用 `list_new` 的"任意可迭代"口径：先收集（各自持一份新引用），再交给列表 ✓。
+        let iterator = instance.iter_object(source)?;
+        loop {
+            match instance.advance_iterator(iterator)? {
+                Some(item) => object.append(item),
+                None => break,
+            }
+        }
+        unsafe { instance.release_object(iterator.as_ptr()) };
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 pub unsafe fn list_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
@@ -487,14 +945,31 @@ pub unsafe fn list_new(
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let mut borrowed = true;
     if let Some(source) = args.first() {
-        let source_ty = instance.type_name(instance.type_of(*source));
+        let source_type = instance.type_of(*source);
+        let source_ty = instance.type_name(source_type);
+        // **子类覆写了 `__iter__` ⇒ 必须走迭代协议**（round 111）：先前按**类型名**走载荷快路 ✗
+        // ⇒ `LyingTuple((2,)).__iter__()` 明明只吐 `1`，`list(...)` 却按底层元组给 `[2]` ✗
+        //（`seq_tests.test_constructors` 的 `LyingTuple`／`LyingList` ✓）。
+        let default_iter = |base: &str| {
+            instance
+                .type_lookup_owner(source_type, "__iter__")
+                .map(|(owner, _)| {
+                    Some(owner) == instance.type_named(base)
+                        || Some(owner) == instance.hot_type(HotId::Object)
+                })
+                .unwrap_or(true)
+        };
         match source_ty.as_str() {
-            "list" => items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
-            "tuple" => items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
-            "set" | "frozenset" => {
+            "list" if default_iter("list") => {
+                items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec()
+            }
+            "tuple" if default_iter("tuple") => {
+                items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec()
+            }
+            "set" | "frozenset" if default_iter(&source_ty) => {
                 items = unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
             }
-            "dict" => {
+            "dict" if default_iter("dict") => {
                 items = unsafe { &*source.as_ptr().cast::<DictObject>() }
                     .entries()
                     .into_iter()
@@ -533,18 +1008,32 @@ pub unsafe fn list_new(
 pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<ListObject>() };
-    if !instance.enter_repr(ptr as usize) {
-        return Ok("[...]".to_owned());
-    }
-    let items = object.items();
+    // `P3-41`：自引用 ⇒ `[...]`；嵌套太深 ⇒ `RecursionError`（**不得**顶穿原生栈 ✗）；
+    // 守卫用 RAII 摘除（任何提前 `?` 返回都不留脏条目）。
+    let _guard = match instance.enter_repr(ptr as usize) {
+        crate::instance::ReprEntry::Cycle => return Ok("[...]".to_owned()),
+        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
+        crate::instance::ReprEntry::Entered(scope) => scope,
+    };
+    // **活体遍历**（round 110 真 bug 修 ✗）：元素的 `__repr__` 可能**改表**（`test_list.test_repr_mutate`
+    // 的元素会 `mylist.pop()` ✓）—— 参照 `list_repr` 每轮重读 `Py_SIZE` ✓、且比较期间元素要自己持一份 ✓；
+    // 先前借 `object.items()` 快照（无引用）✗ ⇒ 元素被 pop 释放后 `element_repr` 读悬垂指针 ✗
+    //（实测 68 GB 分配失败 abort ✗）。
     let mut text = String::from("[");
-    for (index, item) in items.iter().enumerate() {
+    let mut index = 0usize;
+    while index < object.len() {
+        let item = object.item(index).expect("刚查过长度，下标在范围内");
+        // SAFETY: 元素由列表持有；`__repr__` 期间本函数自己持一份 ✓。
+        unsafe { instance.incref_object(item.as_ptr()) };
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&crate::executor::protocol::element_repr(instance, *item)?);
+        let rendered = crate::executor::protocol::element_repr(instance, item);
+        // SAFETY: 归还本函数那一份。
+        unsafe { instance.release_object(item.as_ptr()) };
+        text.push_str(&rendered?);
+        index += 1;
     }
     text.push(']');
-    instance.leave_repr(ptr as usize);
     Ok(text)
 }

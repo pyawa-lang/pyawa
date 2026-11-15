@@ -4,7 +4,53 @@
 
 use super::*;
 
+/// **refcount 毒值**（round 107 确定性诊断）：对象真正释放前把 `refcount` 写成这个值；之后任何
+/// `incref`／`release` 再碰它 ⇒ 当场 panic 并带现场＋Rust 回溯（比 glibc 的 `malloc`/`double-linked`
+/// 崩溃更早、且能直接指出**第二次释放**来自哪条 Rust 路径 ✓）。环境门控：`PYAWA_REFCOUNT_CANARY=1`。
+pub(crate) const REFCOUNT_POISON: u32 = 0xDEAD_BEEF;
+
+/// canary 开关（`OnceLock` 缓存 env ✓）。
+pub(crate) fn refcount_canary() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("PYAWA_REFCOUNT_CANARY").is_some())
+}
+
+/// 释放前写毒值（`free_garbage` 调用；只在 canary 模式 ✓）。
+pub(crate) fn poison_refcount(header: NonNull<Header>) {
+    if refcount_canary() {
+        // SAFETY: 调用方保证 header 仍可写（dealloc 之前）。
+        unsafe { header.as_ref() }.set_refcount(REFCOUNT_POISON);
+    }
+}
+
+/// **形参所有权**（round 98 起为**默认模型**）：帧拥有前 `argcount` 个局部槽
+/// （`bind_arguments` 把实参**所有权**填进去 ⇒ 帧释放时归还 ✓）。
+///
+/// 历史：round 43/81/83/84/89-97 反复试验"帧拥有形参"；round 95 做成运行期开关、round 96-97 修掉
+/// 两处"清空操作数"UAF、round 97 实测 `PYAWA_FRAME_OWN=1` 全量套件 **ok 68 持平、无 ok 回退**、
+/// 十项闸门全绿 ⇒ round 98 **翻成默认** ✓。应急回退：`PYAWA_FRAME_OWN=0` 走旧模型（帧跳过形参槽）。
+pub(crate) fn frame_own_params() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        !matches!(
+            std::env::var("PYAWA_FRAME_OWN").ok().as_deref(),
+            Some("0") | Some("false") | Some("no")
+        )
+    })
+}
+
+/// 被跟踪对象的地址集合（round 92；只在 `PYAWA_REF_TRACE` 开启时填充）。
+static REF_TRACKED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+    std::sync::OnceLock::new();
+
 impl Instance {
+    /// **B3 试点**（round 252）：调用边 canary 是否开 —— 与释放路径**同一快照位**
+    /// （`Instance::new` 时从 `PYAWA_REFCOUNT_CANARY` 采；见 `diag::release_diag_bits`）。
+    #[inline]
+    pub(crate) fn release_canary_enabled(&self) -> bool {
+        self.diag_bits.get() & crate::diag::RELEASE_DIAG_CANARY != 0
+    }
+
     /// 归还一份引用（[`Self::retain`] 的配对）。
     ///
     /// 与 `retain` 一样是**安全函数**：契约（"这份引用确实是你持有的"）由调用方保证——
@@ -57,16 +103,112 @@ impl Instance {
         {
             return;
         }
+        // **已回收类型也认**（round 130）：本体仍在（`Box::leak`），裸 `ty` 与残余计数引用都可能回来 ✓。
+        if self.retired_types.borrow().contains(&address) {
+            return;
+        }
         {
-            panic!(
-                "[悬垂] {site} 要碰 {:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓",
-                address
-            );
+            // 诊断增强（round 59）：开了 `PYAWA_ZOMBIE_TRACE=1` 时附上**最早那次释放**的
+            // 类型与现场（"谁把它放掉的" ✓）。
+            let recorded = self
+                .freed_sites
+                .borrow()
+                .get(&address)
+                .cloned();
+            match recorded {
+                Some((name, freed_at)) => panic!(
+                    "[悬垂] {site} 要碰 {address:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓\
+                     （原类型 {name}；释放于 {freed_at}）"
+                ),
+                None => panic!(
+                    "[悬垂] {site} 要碰 {address:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓"
+                ),
+            }
         }
     }
 }
 
 impl Instance {
+    /// **引用事件跟踪**（round 90，诊断；`PYAWA_REF_TRACE=<类型名[,类型名]>`）：给该类型的对象
+    /// 每次 incref／decref 打一行（**现场** = 当前 Python 站点）。`PYAWA_REF_TRACE_CLASS=<类名>`
+    /// （round 99）另按**类型对象自己的名字**跟踪（盯"类对象本身"而不是它的实例 ✓）。
+    /// 默认零输出（`OnceLock` 缓存环境变量 ✓）。
+    pub(crate) fn ref_trace_matches(&self, ptr: *mut Header) -> bool {
+        // **快路**（round 249 性能，A2-4）：两个跟踪开关都没开时，一次原子读直接返回 ✓
+        //（本函数**每次 incref／release 都调**；先前要读两个 `OnceLock` 再判空 ✗）。
+        static ANY_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*ANY_ENABLED.get_or_init(|| {
+            std::env::var_os("PYAWA_REF_TRACE").is_some()
+                || std::env::var_os("PYAWA_REF_TRACE_CLASS").is_some()
+        }) {
+            return false;
+        }
+        static TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+        static CLASS_TARGET: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+        // **按类自己的名字**：目标是注册表里的类型对象 ⇒ 用 `TypeObject::name` ✓。
+        if let Some(class_targets) = CLASS_TARGET.get_or_init(|| {
+            std::env::var("PYAWA_REF_TRACE_CLASS").ok().map(|text| {
+                text.split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+        }) {
+            let is_type = self
+                .types
+                .borrow()
+                .iter()
+                .any(|entry| entry.as_ptr() as usize == ptr as usize);
+            if is_type {
+                // SAFETY: 刚确认 ptr 是注册表里的类型对象（存活）。
+                let type_name = unsafe { &*ptr.cast::<crate::TypeObject>() }.name();
+                if class_targets.iter().any(|target| target == "*" || target == type_name) {
+                    return true;
+                }
+            }
+        }
+        let Some(targets) = TARGET.get_or_init(|| {
+            std::env::var("PYAWA_REF_TRACE")
+                .ok()
+                .map(|text| text.split(',').map(str::trim).filter(|part| !part.is_empty()).map(str::to_owned).collect())
+        }) else {
+            return false;
+        };
+        // SAFETY: 调用方保证 ptr 是存活对象。
+        let ty = unsafe { &*ptr }.ty();
+        // SAFETY: ty 由注册表持有。
+        let name = unsafe { ty.as_ref() }.name();
+        targets.iter().any(|target| target == "*" || target == name)
+    }
+
+    /// **引用事件跟踪（安全版）**：`release_object` 可能在**已释放**指针上调用 ⇒ 不能解引用头部
+    /// （读 `ty` 会段错误 ✓）。这里只查"曾被跟踪器记录过的地址集合"（round 92）。
+    fn ref_trace_tracked(ptr: *mut Header) -> bool {
+        let Some(set) = REF_TRACKED.get() else {
+            return false;
+        };
+        let Ok(set) = set.lock() else {
+            return false;
+        };
+        set.contains(&(ptr as usize))
+    }
+
+    /// 记录被跟踪对象的地址（分配／incref 时调用；只在跟踪开启时有意义）。
+    pub(crate) fn ref_trace_record(ptr: *mut Header) {
+        const _: () = ();
+        if REF_TRACKED.get().is_none()
+            && std::env::var_os("PYAWA_REF_TRACE").is_none()
+            && std::env::var_os("PYAWA_REF_TRACE_CLASS").is_none()
+        {
+            return;
+        }
+        let set = REF_TRACKED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+        if let Ok(mut set) = set.lock() {
+            set.insert(ptr as usize);
+        }
+    }
+
     /// **OM-22**：`sys.getrefcount` 的可见语义——返回值**含参数借用**的那一份。
     pub fn getrefcount<T: PyObject>(&self, object: &T) -> u32 {
         object.header().refcount() + 1
@@ -82,6 +224,40 @@ impl Instance {
         // 先把"它原来是什么类型、现在哪一帧在动它"报出来 ✓ —— 光一句"对已释放对象 incref" ✗
         // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
         self.quarantine_report(ptr, "incref");
+        if refcount_canary() && unsafe { &*ptr }.refcount() == REFCOUNT_POISON {
+            panic!(
+                "[canary] incref 碰到**已释放**对象 {:#x}（refcount=毒值）⇒ 现场={}\n{}",
+                ptr as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+        // **对已释放对象的 incref 是 UAF**（round 94 诊断）：`PYAWA_ZOMBIE_TRACE=1` 时当场报出**现场** ✓
+        // （先于后续 release 崩溃；用来点名"悬垂引用从哪来"）。判据用**释放登记**（`freed_sites`）：
+        // 引导期那些"从不进活表"的单例不会被误报 ✓。
+        if self.zombie_trace.get()
+            && !self.live.borrow().contains(&(ptr as usize))
+            && !self.is_registered_type(unsafe { NonNull::new_unchecked(ptr) })
+            && self.freed_sites.borrow().contains_key(&(ptr as usize))
+        {
+            let site = self.current_site();
+            panic!(
+                "[悬垂-incref] incref 要碰 {:#x}，但它**不在活表里** ✗（已被释放过）⇒ 悬垂引用来自：{site}\n{}",
+                ptr as usize,
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+        if self.ref_trace_matches(ptr) {
+            Self::ref_trace_record(ptr);
+            eprintln!(
+                "[ref] +1 ptr={ptr:p} rc={} 现场={}",
+                unsafe { &*ptr }.refcount() + 1,
+                self.current_site()
+            );
+            if std::env::var_os("PYAWA_REF_TRACE_INCREF_BT").is_some() {
+                eprintln!("{}", std::backtrace::Backtrace::force_capture());
+            }
+        }
         if self.watch.get() == ptr as usize {
             eprintln!(
                 "[watch] incref {ptr:p} → rc={} 现场={}",
@@ -89,8 +265,51 @@ impl Instance {
                 self.current_site()
             );
         }
+        // **盯帧诊断**（round 190）：`PYAWA_WATCH_FRAME=1` ＋ `PYAWA_WATCH_FRAME_CODE=<co_name>`
+        // ⇒ 该 code 的帧被 incref／decref 时打现场＋回溯（用来找"谁给它加了引用却没记成 GC 边"）。
+        static WATCH_FRAME: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if crate::diag::flag_cached("PYAWA_WATCH_FRAME", &WATCH_FRAME) {
+            // SAFETY: ptr 由调用方保证存活。
+            let header = unsafe { &*ptr };
+            let ty = header.ty();
+            // SAFETY: ty 由注册表持有。
+            if unsafe { ty.as_ref() }.name() == "frame" {
+                // SAFETY: ptr 是帧（类型名刚核过）。
+                let frame = unsafe { &*ptr.cast::<crate::Frame>() };
+                let code_name = frame
+                    .code()
+                    .map(|code| unsafe { &*code.as_ptr().cast::<crate::CodeObject>() })
+                    .map(|code| code.name().to_owned())
+                    .unwrap_or_default();
+                let wanted = std::env::var("PYAWA_WATCH_FRAME_CODE").unwrap_or_default();
+                if wanted.is_empty() || wanted == code_name {
+                    eprintln!(
+                        "[watch-frame] +1 {ptr:p} code={code_name} rc={} 现场={}\n{}",
+                        header.refcount() + 1,
+                        self.current_site(),
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+            }
+        }
         // SAFETY: 由调用方保证 ptr 有效。
         unsafe { &*ptr }.incref();
+    }
+
+    /// **释放登记查询**（round 96 诊断）：这个地址是否已被释放过（`PYAWA_ZOMBIE_TRACE` 才记录 ✓）。
+    pub(crate) fn was_freed(&self, ptr: NonNull<Header>) -> bool {
+        self.freed_sites
+            .borrow()
+            .contains_key(&(ptr.as_ptr() as usize))
+    }
+
+    /// **注册表中类型对象**（round 96 诊断）：类型不进活表、由 `types` 注册表持有 ⇒ `incref` 的
+    /// "不在活表"断言对它们要放行（`release_object` 对注册类型的 guard 会提前返回、不真释放 ✓）。
+    pub(crate) fn is_registered_type(&self, ptr: NonNull<Header>) -> bool {
+        self.types
+            .borrow()
+            .iter()
+            .any(|ty| ty.as_ptr() as usize == ptr.as_ptr() as usize)
     }
 
     /// **OM-20** ①：把**正在终结**的对象复活——计数从 0 回到 1。
@@ -108,7 +327,33 @@ impl Instance {
         header.set_refcount(header.refcount() + 1);
     }
 
+    /// **round 82**：待处理栈重放前的活表检查（死地址跳过 ✓）。
+    pub(crate) fn is_live_address(&self, ptr: NonNull<Header>) -> bool {
+        self.live.borrow().contains(&(ptr.as_ptr() as usize))
+    }
+
     pub unsafe fn release_object(&self, ptr: *mut Header) {
+        // **GC 冻结窗口里"计数已 0"的防御**（round 262，内存安全）：`collect` 的 ④ 阶段先把
+        // 不可达对象整批冻结，再逐个 `clear`；环内对象的计数由 clear 的 decref 递减，**正常情况下**
+        // 每个对象的计数恰好在它被清空时归 0 ✓。若某个容器里有一份**没记账**的引用（欠 incref ✗），
+        // 就会先有一个容器把它减到 0、下一个容器再减 ⇒ `decref` 在 0 上 panic（实测
+        // `test_io.test_close_assert` 的局部类 `R` 实例：`list_clear` 先放、`tuple_clear` 再放 ✗）。
+        // 冻结集合里的对象**由 GC 统一释放**（本函数只该减计数 ✓）⇒ 计数已是 0 时再减**忽略**
+        // 是安全的（否则就是双放）；真正欠账的那一处 incref 仍待定位（台账记 ✗）。
+        if unsafe { &*ptr }.refcount() == 0 && !self.gc_frozen.borrow().is_empty() {
+            return;
+        }
+        // **快路**（round 251 性能，A2-6）：没有释放诊断开着时（常见），只做两步：
+        // ① 永生对象直接返回（计数不增减）；② `decref` 非 0 直接返回。
+        // 先前每次释放都要过 5+ 处 `OnceLock` 原子读＋若干分支 ✗（perf：release_object 10–15%）。
+        if self.diag_bits.get() == 0 && self.watch.get() == 0 {
+            // SAFETY: 调用方保证 ptr 有效。
+            if unsafe { &*ptr }.decref() != 0 {
+                return;
+            }
+            self.release_zero(ptr);
+            return;
+        }
         // SAFETY: 由调用方保证 ptr 有效。
         // SAFETY: 调用方保证 ptr 有效；**先查活表** ✓（第 273 轮诊断）。
         if self.watch.get() == ptr as usize {
@@ -118,10 +363,35 @@ impl Instance {
                 self.current_site()
             );
         }
+        // **盯帧诊断**（round 190/191）：释放侧对称打点 ✓。
+        static WATCH_FRAME: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if crate::diag::flag_cached("PYAWA_WATCH_FRAME", &WATCH_FRAME) {
+            // SAFETY: 调用方保证 ptr 存活。
+            let header = unsafe { &*ptr };
+            let ty = header.ty();
+            // SAFETY: ty 由注册表持有。
+            if unsafe { ty.as_ref() }.name() == "frame" {
+                // SAFETY: ptr 是帧（类型名刚核过）。
+                let frame = unsafe { &*ptr.cast::<crate::Frame>() };
+                let code_name = frame
+                    .code()
+                    .map(|code| unsafe { &*code.as_ptr().cast::<crate::CodeObject>() })
+                    .map(|code| code.name().to_owned())
+                    .unwrap_or_default();
+                let wanted = std::env::var("PYAWA_WATCH_FRAME_CODE").unwrap_or_default();
+                if wanted.is_empty() || wanted == code_name {
+                    eprintln!(
+                        "[watch-frame] -1 {ptr:p} code={code_name} rc={} 现场={}",
+                        header.refcount().saturating_sub(0),
+                        self.current_site(),
+                    );
+                }
+            }
+        }
         // **按判据盯**（第 115 轮，`PYAWA_WATCH_DICT=1`）：任何 `dict` **掉到 0** 都报现场 ✓
         // —— 第 114 轮查明"死在 @540 的是**另一个类**的命名空间" ✓ ⇒ 盯一个地址不够 ✓，
         // 要用**判据**（类型＝`dict` ✓）把**第一个被打到 0 的那个**逼出来 ✓。
-        if flag("PYAWA_WATCH_DICT") && unsafe { &*ptr }.refcount() == 1 {
+        if crate::diag::flag_site!("PYAWA_WATCH_DICT") && unsafe { &*ptr }.refcount() == 1 {
             let ty = unsafe { &*ptr }.ty();
             // SAFETY: ty 由注册表持有。
             let name = unsafe { ty.as_ref() }.name();
@@ -133,6 +403,48 @@ impl Instance {
                 );
             }
         }
+        if Self::ref_trace_tracked(ptr) {
+            // **放在 `assert_live` 之前**（round 91）：双放现场要先被看见 ✓；**不解引用**（round 92：
+            // 死指针读头部会段错误 ⇒ 释放行只在 `live=true` 时读计数 ✓）。
+            let live_here = self.live.borrow().contains(&(ptr as usize));
+            if live_here {
+                let remaining = unsafe { &*ptr }.refcount().saturating_sub(1);
+                eprintln!(
+                    "[ref] -1 ptr={ptr:p} rc={remaining} live=true 现场={}",
+                    self.current_site()
+                );
+                // **首次释放的 Rust 路径**（round 93 诊断）：`PYAWA_REF_TRACE_BT=1` 时打回溯；
+                // `PYAWA_REF_TRACE_BT_ALL=1` 时**每次** -1 都打（round 104 诊断）。
+                if (remaining == 0 && std::env::var_os("PYAWA_REF_TRACE_BT").is_some())
+                    || std::env::var_os("PYAWA_REF_TRACE_BT_ALL").is_some()
+                {
+                    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+                }
+            } else {
+                // 类型对象不进活表但**仍存活**（注册表持有）⇒ 能安全读计数，打出来便于对账 ✓。
+                let readable = self.is_registered_type(unsafe { NonNull::new_unchecked(ptr) });
+                if readable {
+                    eprintln!(
+                        "[ref] -1 ptr={ptr:p} rc={} live=false(注册类型) 现场={}",
+                        unsafe { &*ptr }.refcount().saturating_sub(1),
+                        self.current_site()
+                    );
+                } else {
+                    eprintln!("[ref] -1 ptr={ptr:p} live=false 现场={}", self.current_site());
+                    if std::env::var_os("PYAWA_REF_TRACE_DEAD_BT").is_some() {
+                        eprintln!("{}", std::backtrace::Backtrace::force_capture());
+                    }
+                }
+            }
+        }
+        if refcount_canary() && unsafe { &*ptr }.refcount() == REFCOUNT_POISON {
+            panic!(
+                "[canary] release 碰到**已释放**对象 {:#x}（refcount=毒值）⇒ 现场={}\n{}",
+                ptr as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };
         // **OM-24**：M1 的 `IMMORTAL` 位恒为 0；这里只是防御，不承担语义。
@@ -143,43 +455,67 @@ impl Instance {
             return;
         }
 
-        // **注册过的类型对象不在这里释放** ✓（第 284 轮）：类型对象**不记活表** ✓、由 `self.types`
-        // 注册表持有、**销毁实例时统一释放** ✓（见 `Instance` 的销毁段 ✓）。先前没有这一道 ⇒
-        // 一旦某处把**最后一份计数**放掉 ✗（实测：`abc.py` 的类体帧槽就持有 `ABC` 那个类对象 ✓）
-        // ⇒ 通用释放路径**当场把注册表里的类型对象释放掉** ✗ ⇒ 之后谁再碰它谁段错误 ✓
-        // （`PYAWA_DANGLING=1` 下 `import_posixpath` 的 SIGSEGV 就是这个 ✓）。
-        // **如实说** ✗：这一道**挡住的是症状** ✓ —— 真正要查的是"**谁多放了一份**" ✓（欠计数 ✓），
-        // 已记进 `P3-19` 与第 284 轮台账 ✓。
-        if self
-            .types
-            .borrow()
-            .iter()
-            .any(|ty| ty.as_ptr() as usize == ptr as usize)
-        {
+        self.release_zero(ptr);
+    }
+
+    /// **计数归零之后的统一处理**（round 251 从 `release_object` **原样抽出** ✓）：
+    /// 注册类型守卫（不在这里释放）→ GC 冻结窗口 → 入待处理栈 → 重放（`release_one`）。
+    #[inline(never)]
+    fn release_zero(&self, ptr: *mut Header) {
+        // **类型对象不在这里释放**（第 284 轮的守卫）：类型对象由注册表持有、绝不走通用释放 ✗。
+        // round 251 性能（A2-6）：判据从"升序地址表**二分**"改成**对象头位测**（建类型时置
+        // `TYPE_OBJECT` 位 ✓）——先前每次释放都要二分，perf 里 `release_zero` 曾占 ~10% ✗。
+        if unsafe { &*ptr }.has_flag(crate::flags::TYPE_OBJECT) {
+            // **诊断（round 98，`PYAWA_TYPE_REL_TRACE=1`）**：把"注册类型被放到 0"的**首次**现场打出来
+            // （这是欠计数/多放的源头；guard 只挡住症状 ✓）。
+            if crate::diag::flag_site!("PYAWA_TYPE_REL_TRACE") {
+                // SAFETY: ptr 是注册表里的类型对象（存活）。
+                let name = unsafe { &*ptr.cast::<crate::TypeObject>() }.name();
+                eprintln!(
+                    "[type-rel] 注册类型 {name} 被放到 0：现场={}\n{}",
+                    self.current_site(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
             return;
         }
 
         // 回收进行中：不可达对象由本次 `collect` 统一释放，这里只减计数（OM-27 ④）。
-        if !self.gc_frozen.borrow().is_empty() && self.gc_frozen.borrow().contains(&(ptr as usize)) {
-            return;
+        {
+            // **一次借用**（round 249 性能，A2-4）：先前 `is_empty()` 与 `contains()` 各借一次 ✗。
+            let frozen = self.gc_frozen.borrow();
+            if !frozen.is_empty() && frozen.contains(&(ptr as usize)) {
+                return;
+            }
         }
 
         // SAFETY: ptr 非空（调用方保证）。
-        self.pending
-            .borrow_mut()
-            .push(unsafe { NonNull::new_unchecked(ptr) });
+        let object = unsafe { NonNull::new_unchecked(ptr) };
 
         if self.draining.get() {
             // 已经在清空栈里：交给最外层那次调用处理。
+            self.pending.borrow_mut().push(object);
             return;
         }
+        // **非重入的常见路径**（round 251 性能，A2-6）：直接释放本对象，不先 push 再 pop ✗。
         self.draining.set(true);
+        self.release_one(object);
         loop {
             let next = self.pending.borrow_mut().pop();
             let Some(object) = next else { break };
+            // **重复入队的是"终结延迟判定"的对象**（round 82）：它可能已在更早的一轮里被释放
+            // （`FINALIZING` 保持 → 形参释放把计数打到 0 → 正常释放）⇒ 这里跳过死地址 ✓。
+            if !self.is_live_address(object) {
+                continue;
+            }
             self.release_one(object);
         }
         self.draining.set(false);
+        // **补跑被推迟的回收**（round 256）：释放链里的终结器／弱引用回调请求过 `gc.collect()`，
+        // 现在对象已经不在"释放中"状态 ⇒ 安全执行 ✓。
+        if self.gc_deferred.replace(false) {
+            self.collect();
+        }
     }
 
 }

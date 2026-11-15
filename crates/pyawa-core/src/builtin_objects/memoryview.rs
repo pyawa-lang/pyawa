@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -109,8 +110,7 @@ pub unsafe fn memoryview_getattr(
                 "__setitem__" => memoryview_setitem_native,
                 _ => return None,
             };
-            let method_type = instance
-                .type_named("builtin_function_or_method")
+            let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                 .expect("引导期已登记");
             // 名字取**静态**串 ✓（`BuiltinFunctionObject` 要 `&'static str` ✓ —— 与 `bytearray_getattr`
             // 同款：函数名给类型名 ✓，方法名由 `MethodObject` 那边呈现 ✓）。
@@ -123,7 +123,7 @@ pub unsafe fn memoryview_getattr(
             // SAFETY: 方法对象要自己那份 self（`OM-16`）。
             unsafe { instance.incref_object(ptr) };
             let bound = instance.alloc(MethodObject::new(
-                instance.type_named("method").expect("method 已登记"),
+                instance.hot_type(HotId::Method).expect("method 已登记"),
                 native_raw,
                 object,
             ));
@@ -159,14 +159,12 @@ pub fn memoryview_new(
             &format!("memoryview: a bytes-like object is required, not '{name}'"),
         ));
     };
-    let view_type = instance
-        .type_named("memoryview")
+    let view_type = instance.hot_type(HotId::MemoryView)
         .unwrap_or_else(|| instance.new_attribute_type("memoryview"));
     // **惰性装方法** ✓（幂等 ✓，与 `GenericAlias.__mro_entries__` 同款手法 ✓）。
     if let Some(namespace) = instance.type_namespace(view_type.cast()) {
         if instance.dict_get(namespace, "cast").is_none() {
-            let function_type = instance
-                .type_named("builtin_function_or_method")
+            let function_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
                 .expect("builtin_function_or_method 在引导期已登记");
             for (name, function) in [
                 ("cast", memoryview_cast_native as crate::NativeFn),

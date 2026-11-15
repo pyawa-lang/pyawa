@@ -34,7 +34,7 @@ pub(crate) fn parse_value_expression(lexed: &Lexed, cursor: usize) -> Result<(Ex
     if lexed.lexemes.get(next) != Some(&Lexeme::Comma) {
         if matches!(first, Expression::Starred(..)) {
             return Err(CompileError::Syntax(
-                "starred expression must be in a list, tuple or set".to_owned(),
+                "can't use starred expression here".to_owned(),
             ));
         }
         return Ok((first, next));
@@ -274,6 +274,13 @@ pub(crate) fn parse_expression_list(
     //（参照 `dis`：`LOAD a; BUILD_LIST 0; LIST_EXTEND 1; CALL_INTRINSIC_1 6` ✓）。
     let (first, mut cursor) = parse_star_or_expression(lexed, cursor)?;
     if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+        // **单个 `*x`（没有逗号）不是合法表达式** ✓（round 62；参照原文
+        // `can't use starred expression here` —— `x = *a`／`return *a` 都是它 ✓）。
+        if matches!(first, Expression::Starred(..)) {
+            return Err(CompileError::Syntax(
+                "can't use starred expression here".to_owned(),
+            ));
+        }
         return Ok((first, cursor));
     }
     let mut items = vec![first];
@@ -437,6 +444,19 @@ pub(crate) fn parse_power(lexed: &Lexed, cursor: usize) -> Result<(Expression, u
     ))
 }
 
+/// **这个位置的会话头是 `for` 还是 `async for`**（round 243）：`Some(false)`／`Some(true)`。
+pub(crate) fn comprehension_loop_is_async(lexed: &Lexed, cursor: usize) -> Option<bool> {
+    match lexed.lexemes.get(cursor) {
+        Some(Lexeme::For) => Some(false),
+        Some(Lexeme::Name(name))
+            if name == "async" && matches!(lexed.lexemes.get(cursor + 1), Some(Lexeme::For)) =>
+        {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
 /// 解析推导式的**一层或多层生成器**（游标指向第一个 `for`）：
 /// `for <目标> in <可迭代> [if <条件>]*` 重复出现就依次收下，返回停在收尾括号上的游标。
 pub(crate) fn parse_comprehension_generators(
@@ -445,19 +465,8 @@ pub(crate) fn parse_comprehension_generators(
 ) -> Result<(Vec<Generator>, usize), CompileError> {
     let mut generators = Vec::new();
     let mut cursor = cursor;
-    while {
-        // `async for` 在后续生成器里也合法（`[i for i in a async for j in b]`）⇒ 同一口径报未接线 ✓
-        if matches!(
-            lexed.lexemes.get(cursor),
-            Some(Lexeme::Name(name)) if name == "async"
-        ) && matches!(lexed.lexemes.get(cursor + 1), Some(Lexeme::For))
-        {
-            return Err(CompileError::Unsupported(
-                "`async` 推导式尚未接线（GET_AITER／GET_ANEXT 那一套）".to_owned(),
-            ));
-        }
-        matches!(lexed.lexemes.get(cursor), Some(Lexeme::For))
-    } {
+    while let Some(is_async) = comprehension_loop_is_async(lexed, cursor) {
+        cursor += usize::from(is_async);
         let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
         if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
             return Err(CompileError::Syntax(
@@ -476,6 +485,7 @@ pub(crate) fn parse_comprehension_generators(
             target,
             iterable,
             conditions,
+            is_async,
         });
     }
     Ok((generators, cursor))

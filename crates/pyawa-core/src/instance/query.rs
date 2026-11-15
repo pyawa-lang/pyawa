@@ -2,6 +2,7 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
@@ -32,10 +33,15 @@ impl Instance {
         if crate::executor::call::inherited_call_slot(ty).is_some() {
             return true;
         }
-        ty == self.metatype()
-            || Some(ty) == self.type_named("function")
-            || Some(ty) == self.type_named("builtin_function_or_method")
-            || Some(ty) == self.type_named("method")
+        // **类对象恒可调用**（round 116 真 bug 修 ✗）：先前的 `ty == metatype()` 只覆盖"元类恰是
+        // `type`"的情形 ✗ ⇒ 元类是 **用户元类／`ABCMeta`** 的类（`collections.UserList` ✓）被误判为
+        // 不可调用 ✗（`pickle` 的 `save_reduce` 用 `callable()` 校验 `__reduce__` 首项 ⇒
+        // `PicklingError: first item … must be callable, not abc.ABCMeta` ✓）。
+        self.is_type_object(object)
+            || ty == self.metatype()
+            || Some(ty) == self.hot_type(HotId::Function)
+            || Some(ty) == self.hot_type(HotId::BuiltinFunctionOrMethod)
+            || Some(ty) == self.hot_type(HotId::Method)
             // **`__call__`**（第 593 轮 ✓）：实例只要 MRO 里有 `__call__` 就可调用 ✓
             // —— 调用侧已在 `call_callable` 里接上 ✓，这里让 `callable()` 的口径与之一致 ✓
             //（否则 `callable(带 __call__ 的实例)` 报 `False` ✗ 而调用却成功 ✗ ⇒ 口径分叉 ✓）。

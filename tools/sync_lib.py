@@ -287,6 +287,10 @@ SLICE = (
     "cmd.py",
     "code.py",
     "codeop.py",
+    # **task-3（`PLAN-milestones.md` §12.3）**：`_csv` 模块落地后 `Lib/csv.py` 可逐字节同步
+    # （`CX-8`：`Lib/` 与上游零差异，**不手改**）。`csv` 只依赖 `_csv` 与 `io`，导入期即
+    # `register_dialect("excel"/"excel-tab"/"unix")` ⇒ 注册表必须真记账（§5.2.33）。
+    "csv.py",
     "dbm/__init__.py",
     "dbm/dumb.py",
     "dbm/ndbm.py",

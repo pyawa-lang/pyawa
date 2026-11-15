@@ -69,11 +69,19 @@ impl Emitter {
         if self.global_names.iter().any(|item| item == name) {
             let index = self.intern_name(name);
             self.emit_indexed(span, "DELETE_GLOBAL", index);
-        } else if self.kind == ScopeKind::Function
-            && self.unit.varnames.iter().any(|item| item == name)
-        {
-            let slot = self.slot_of(name);
-            self.emit_indexed(span, "DELETE_FAST", slot);
+        } else if self.kind == ScopeKind::Function {
+            if self.unit.varnames.iter().any(|item| item == name) {
+                let slot = self.slot_of(name);
+                self.emit_indexed(span, "DELETE_FAST", slot);
+            } else if let Some(slot) = self.deref_slot(name) {
+                self.emit_indexed(span, "DELETE_DEREF", slot);
+            } else {
+                // **函数里删"全局名"是 `DELETE_GLOBAL`**（round 236 真 bug 修 ✗）：参照只把
+                // `DELETE_NAME` 用在**模块／类体**（要命名空间帧 ✓）；先前函数里落到 `DELETE_NAME` ✗
+                // ⇒ 执行器报"`DELETE_NAME` 需要命名空间帧"✗（`test_exceptions` 里 `del` 一个全局名 ✓）。
+                let index = self.intern_name(name);
+                self.emit_indexed(span, "DELETE_GLOBAL", index);
+            }
         } else {
             let index = self.intern_name(name);
             self.emit_indexed(span, "DELETE_NAME", index);
@@ -101,12 +109,20 @@ impl Emitter {
     /// 只用于"实参就是下标本身"的指令 ✓（`LOAD_GLOBAL`／`LOAD_ATTR` 那种带标志位的另行处理 ✗）。
     pub(crate) fn emit_indexed(&mut self, span: Span, name: &str, index: usize) {
         let opcode = opcode::opcode(name).expect("指令在表里");
-        if index > 255 {
-            self.emit_at(
-                span,
-                opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里"),
-                (index >> 8) as u8,
-            );
+        // **多字节 `EXTENDED_ARG`**（round 72 真 bug 修 ✗）：先前只发**一个** `EXTENDED_ARG` ✗
+        // ⇒ 下标 ≥ 65536（`(index >> 8) as u8` 截断成 0）会指回**第 0 项**：实测
+        // 65536 形参的 lambda 里 `LOAD_FAST` 最后一个形参变成 `_cls`（`b[-1]` 是类对象 ✗，
+        // `test_collections.test_large_size` 的 `b == tuple(...)` 断言）。解码器本来就按
+        // **累加多字节**处理 ✓（`decode.rs` 的 `checked_mul(256)`）。
+        let extended = opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里");
+        let mut high_bytes: Vec<u8> = Vec::new();
+        let mut high = index >> 8;
+        while high > 0 {
+            high_bytes.push((high & 0xFF) as u8);
+            high >>= 8;
+        }
+        for byte in high_bytes.iter().rev() {
+            self.emit_at(span, extended, *byte);
         }
         self.emit_at(span, opcode, (index & 0xFF) as u8);
     }
@@ -136,11 +152,15 @@ impl Emitter {
     /// 同 [`Self::emit_indexed`]，但记**无位点**（合成指令那条路 ✓）。
     pub(crate) fn emit_indexed_none(&mut self, name: &str, index: usize) {
         let opcode = opcode::opcode(name).expect("指令在表里");
-        if index > 255 {
-            self.emit_none(
-                opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里"),
-                (index >> 8) as u8,
-            );
+        let extended = opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里");
+        let mut high_bytes: Vec<u8> = Vec::new();
+        let mut high = index >> 8;
+        while high > 0 {
+            high_bytes.push((high & 0xFF) as u8);
+            high >>= 8;
+        }
+        for byte in high_bytes.iter().rev() {
+            self.emit_none(extended, *byte);
         }
         self.emit_none(opcode, (index & 0xFF) as u8);
     }
@@ -157,7 +177,7 @@ impl Emitter {
 
     /// 发一条**前向跳转**（目标标签先占位、收尾时回填）。
     pub(crate) fn emit_jump(&mut self, position: Span, opcode: u16, label: usize) {
-        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] emit_jump 目标标签={label} code_len={}", self.unit.code.len());
         }
         self.emit_directed_jump(position, opcode, label, false);
@@ -166,7 +186,7 @@ impl Emitter {
     /// 发一条跳转；`backward` 为真时 oparg 是**往回**的距离
     /// （实测 `JUMP_BACKWARD` 的 oparg ＝ `当前码元 + 占用码元数 − 目标码元`，方向是 opcode 本身定的）。
     pub(crate) fn emit_directed_jump(&mut self, position: Span, opcode: u16, label: usize, backward: bool) {
-        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+        if crate::diag::flag_site!("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] emit_directed_jump 目标标签={label} 向后={backward} code_len={}", self.unit.code.len());
         }
         let argument_byte = self.unit.code.len() + 1;
@@ -202,7 +222,7 @@ impl Emitter {
     pub(crate) fn emit_at(&mut self, position: Span, opcode: u16, oparg: u8) {
         // **op87 的"码元 / arg / 位点"** ✓（第 661 轮门控 `PYAWA_EMIT87_DEBUG=1`）：与运行期的
         // **指令偏移**同一把坐标 ✓ ⇒ 两边一对就能钉死"这条融合是谁发的" ✓（前几轮在发射端猜了四处都没中 ✗）。
-        if crate::diag::flag("PYAWA_EMIT87_DEBUG") && opcode == 87 {
+        if crate::diag::flag_site!("PYAWA_EMIT87_DEBUG") && opcode == 87 {
             if opcode == 87 && self.unit.code.len() / 2 == 2561 {
                 eprintln!("[emit87-bt] 命中 2561：\n{}", std::backtrace::Backtrace::force_capture());
             }
@@ -276,11 +296,18 @@ impl Emitter {
     }
 
     pub(crate) fn intern_name(&mut self, name: &str) -> usize {
+        // **缓存**（round 71）：名字表只追加 ✓（千参函数里逐个线性扫是 O(n²) ✗）。
+        if let Some(index) = self.name_indices.borrow().get(name) {
+            return *index;
+        }
         if let Some(index) = self.unit.names.iter().position(|item| item == name) {
+            self.name_indices.borrow_mut().insert(name.to_owned(), index);
             return index;
         }
+        let index = self.unit.names.len();
         self.unit.names.push(name.to_owned());
-        self.unit.names.len() - 1
+        self.name_indices.borrow_mut().insert(name.to_owned(), index);
+        index
     }
 
     /// 局部槽位（没有就按首次出现顺序追加——形参已经在前面）。
@@ -336,7 +363,16 @@ impl Emitter {
         if self.deref_slot(name).is_some() {
             return None;
         }
-        self.unit.varnames.iter().position(|item| item == name)
+        // **缓存**（round 70）：`varnames` 只追加时已有名字的下标稳定 ✓（整体换掉时会
+        // `clear()`，见 `local_slots` 字段注释 ✓）。
+        if let Some(slot) = self.local_slots.borrow().get(name) {
+            return Some(*slot);
+        }
+        let found = self.unit.varnames.iter().position(|item| item == name)?;
+        self.local_slots
+            .borrow_mut()
+            .insert(name.to_owned(), found);
+        Some(found)
     }
 
     pub(crate) fn cell_slot(&self, name: &str) -> Option<usize> {
@@ -369,7 +405,13 @@ impl Emitter {
         if let Some(slot) = self.deref_slot(name) {
             return slot;
         }
+        if let Some(slot) = self.local_slots.borrow().get(name) {
+            return *slot;
+        }
         if let Some(index) = self.unit.varnames.iter().position(|item| item == name) {
+            self.local_slots
+                .borrow_mut()
+                .insert(name.to_owned(), index);
             return index;
         }
         // **cell 名不进 `varnames`**（它在 localsplus 里排在 varnames 之后）⇒ 返回 cell 索引，
@@ -379,9 +421,22 @@ impl Emitter {
             // 有**形参 cell**时会整体多算一格 ✗ ⇒ 与 `cell_slot` 的口径不一致 ✓）。
             return self.unit.varnames.len() + self.appended_cells_before(cell);
         }
+        let slot = self.unit.varnames.len();
         self.unit.varnames.push(name.to_owned());
         self.unit.nlocals = self.unit.varnames.len();
-        self.unit.varnames.len() - 1
+        // **新追加的局部也进缓存**（round 71）：否则"每个名字第一次查"仍要线性扫 ✗。
+        self.local_slots.borrow_mut().insert(name.to_owned(), slot);
+        slot
+    }
+
+    /// **重建局部槽缓存**（round 71）：`varnames` 定稿（含 `analyze_cells` 的过滤）后一次性灌入 ✓
+    /// —— 否则"每个名字第一次查"都线性扫 `varnames`（150k 形参 ⇒ O(n²) ✗）。
+    pub(crate) fn rebuild_local_slot_cache(&self) {
+        let mut cache = self.local_slots.borrow_mut();
+        cache.clear();
+        for (slot, name) in self.unit.varnames.iter().enumerate() {
+            cache.entry(name.clone()).or_insert(slot);
+        }
     }
 
     /// 本作用域里这个名字是不是**局部／cell／自由变量**（外壳的"外层闭包"判据 ✓）。

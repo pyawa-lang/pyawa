@@ -2,18 +2,52 @@
 //!
 //! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
 
+use crate::HotId;
 use super::*;
 
 impl Instance {
     pub fn new() -> Self {
         let this = Self {
             bytes_allocated: Cell::new(0),
+            memory_limit: Cell::new(0),
+            memory_hit: Cell::new(false),
+            memory_ceiling: Cell::new(0),
             current_frame: core::cell::Cell::new(None),
+            object_ops: RefCell::new(crate::fast_hash::FastMap::default()),
             not_implemented_singleton: core::cell::Cell::new(None),
-            live: RefCell::new(HashSet::new()),
+            python_finalized: RefCell::new(crate::fast_hash::FastSet::default()),
+            ast_parser: core::cell::Cell::new(None),
+            text_signatures: RefCell::new(std::collections::HashMap::new()),
+            builtin_function_modules: RefCell::new(std::collections::HashMap::new()),
+            type_text_signatures: RefCell::new(std::collections::HashMap::new()),
+            getattribute_dispatching: Cell::new(false),
+            trace_dispatching: Cell::new(false),
+            raised_ledger: RefCell::new(crate::error_ledger::RaisedLedger::new()),
+            traceback_created: Cell::new(0),
+            traceback_freed: Cell::new(0),
+            global_trace: RefCell::new(None),
+            global_profile: RefCell::new(None),
+            user_types: RefCell::new(Vec::new()),
+            user_type_set: RefCell::new(crate::fast_hash::FastSet::default()),
+            retired_types: RefCell::new(crate::fast_hash::FastSet::default()),
+            types_by_name: RefCell::new(std::collections::HashMap::new()),
+            types_missing: RefCell::new((0, std::collections::HashSet::new())),
+            types_generation: Cell::new(0),
+            hot_type_slots: core::array::from_fn(|_| Cell::new(None)),
+            hot_types_generation: Cell::new(usize::MAX),
+            next_type_id: Cell::new(0),
+            iterable_source_kinds: RefCell::new(crate::fast_hash::FastMap::default()),
+            type_slots: RefCell::new(crate::fast_hash::FastMap::default()),
+            user_instances: RefCell::new(crate::fast_hash::FastMap::default()),
+            mappingproxy_live: RefCell::new(crate::fast_hash::FastMap::default()),
+            mappingproxy_sources: RefCell::new(crate::fast_hash::FastMap::default()),
+            live: RefCell::new(crate::fast_hash::FastSet::default()),
             watch: Cell::new(0),
             freed_sites: RefCell::new(std::collections::HashMap::new()),
             zombie_trace: Cell::new(flag("PYAWA_ZOMBIE_TRACE")),
+            weakrefs: RefCell::new(crate::fast_hash::FastMap::default()),
+            isinstance_cache: RefCell::new(crate::fast_hash::FastMap::default()),
+            pending_weakref_callbacks: RefCell::new(Vec::new()),
             quarantine: RefCell::new(Vec::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
@@ -24,6 +58,8 @@ impl Instance {
             singletons: OnceCell::new(),
             current_globals: Cell::new(None),
             exception_state: RefCell::new(Vec::new()),
+            exception_sites: RefCell::new(std::collections::HashMap::new()),
+            exception_state_sites: RefCell::new(Vec::new()),
             build_class: Cell::new(None),
             pending_exception: Cell::new(None),
             builtins: Cell::new(None),
@@ -31,14 +67,42 @@ impl Instance {
             int_max_str_digits: Cell::new(INT_MAX_STR_DIGITS_DEFAULT),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
+            gc_debug: Cell::new(0),
+            tuple_pool: RefCell::new(Vec::new()),
+            int_pool: RefCell::new(Vec::new()),
+            diag_bits: Cell::new(crate::diag::release_diag_bits()),
+            releasing: Cell::new(0),
+            gc_deferred: Cell::new(false),
+            type_dunders: RefCell::new(crate::fast_hash::FastMap::default()),
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),
             call_depth: Cell::new(0),
-            recursion_limit: Cell::new(crate::instance::MAX_CALL_DEPTH),
+            // **默认深度上限的环境覆盖**（round 112）：本层上限低是因为每层 Python 调用吃不少
+            // **原生栈** ✓ —— 宿主（`pyawa` CLI）可以给执行线程开大栈并用
+            // `PYAWA_RECURSION_LIMIT` 提高上限 ✓（`pprint` 一族正常嵌套就要 30+ 层 ✓）；
+            // 不设该变量时仍是保守的 `MAX_CALL_DEPTH` ✓（cargo 测试的线程栈小，保持原状 ✓）。
+            // **环境覆盖**（round 114）：CLI 在自己的**大栈线程**里把默认上限提到 160 ✓
+            // （`pprint` 的 20 层嵌套在 64 下会 RecursionError ✗；深容器 `repr` 的 200 层守卫仍
+            // 会先于上限触发 ✓ —— `repr_loop_crash_shapes` 钉住 ✓）；`cargo test` 的进程内夹具
+            // 不设这个变量 ⇒ 仍用保守的 `MAX_CALL_DEPTH` ✓。
+            recursion_limit: Cell::new(
+                std::env::var("PYAWA_RECURSION_LIMIT")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .filter(|value| *value >= 1)
+                    .unwrap_or(crate::instance::MAX_CALL_DEPTH),
+            ),
             gc_threshold: Cell::new(DEFAULT_GC_THRESHOLD),
             gc_alloc_count: Cell::new(0),
-            gc_frozen: RefCell::new(HashSet::new()),
+            gc_next_collect: Cell::new(crate::instance::DEFAULT_GC_THRESHOLD.0),
+            gc_collections: Cell::new(0),
+            gc_frozen: RefCell::new(crate::fast_hash::FastSet::default()),
             gc_running: Cell::new(false),
+            gc_explicit: Cell::new(false),
+            gc_skip_reclaim: Cell::new(false),
+            gc_young_mark: Cell::new(core::ptr::null_mut()),
+            gc_auto_ticks: Cell::new(0),
+            gc_force_full: Cell::new(false),
             repr_guard: RefCell::new(Vec::new()),
             interrupted: core::sync::atomic::AtomicBool::new(false),
         };
@@ -63,6 +127,14 @@ impl Instance {
         );
         // SAFETY: metatype 刚分配、尚未交给任何其他代码；写入自指后它才被引用。
         unsafe { metatype.as_ref().header.set_ty(metatype) };
+        // **元类型恒有"实例字典"位**（round 228 真 bug 修 ✗）：类型对象（`type` 及其子类的实例）
+        // 的"实例字典"就是 `TypeObject.dict`（命名空间 ✓，`instance_attributes` 走它 ✓）⇒ 这一位
+        // 必须**一开始就置** ✓。先前没有 ✗，只是靠"某条路径碰巧先调了 `type_namespace`（它顺手置位）"
+        // 才正常；round 227 装 `type.__call__` 时 `set_type_attribute` **先**把 `type` 的命名空间
+        // 惰性建出来（那条路不置位 ✗）⇒ 后续所有"类型对象的实例字典"判断失败 ✗ ⇒ 类属性删除
+        // （dataclass 的 `delattr(cls, field)`）报 `'type' object has no attribute 'x'` ✗
+        // ⇒ `import unittest` 红 ✓（`Callable` 检查也需要 `type.__dict__['__call__']` ✓）。
+        unsafe { metatype.as_ref() }.mark_external_instance_dict();
         this.metatype.set(Some(metatype));
 
         this.bootstrap_builtin_types();
@@ -110,8 +182,7 @@ impl Instance {
         code: &crate::CodeObject,
         qualname: String,
     ) -> NonNull<Header> {
-        let code_type = self
-            .type_named("CodeObject")
+        let code_type = self.hot_type(HotId::CodeObject)
             .expect("CodeObject 在引导期已登记");
         let mut names = Vec::new();
         let mut index = 0usize;
@@ -237,7 +308,10 @@ impl Instance {
         let ellipsis_type = self.alloc_type_raw(
             "ellipsis",
             core::mem::size_of::<NoneObject>(),
-            Slots::new(NoneObject::dealloc),
+            Slots::new(NoneObject::dealloc)
+                // **`repr(...)` ⇒ `Ellipsis`** ✓（round 51；参照 ✓）。
+                .with_repr(crate::builtin_objects::ellipsis_repr)
+                .with_str(crate::builtin_objects::ellipsis_repr),
         );
         assert!(
             self.register_bases(ellipsis_type, vec![object_type]).is_some(),
@@ -249,8 +323,16 @@ impl Instance {
             Slots::new(BoolObject::dealloc)
                 .with_new(crate::builtin_objects::bool_new)
                 .with_repr(crate::builtin_objects::bool_repr)
-                .with_str(crate::builtin_objects::bool_repr),
+                .with_str(crate::builtin_objects::bool_repr)
+                // **`bool` 也走 `int` 的属性面** ✓（round 47）：`.real`／`.imag`／`to_bytes` …
+                // 参照里都是 `int` 那一套描述符 ✓（`test_bool.test_real_and_imag` 钉住 ✓）。
+                // 属性查找只看**实例自己的类型**的 getattr 槽（不走 MRO）⇒ 必须显式挂同一份 ✓。
+                .with_getattr(crate::builtin::int::int_getattr),
         );
+        // **`bool` 不可被继承** ✓（`AB-37` 的 `PA_TYPE_FINAL`；参照 `class C(bool)` ⇒
+        // `TypeError: type 'bool' is not an acceptable base type` ✓，`test_bool.test_subclass` 钉住 ✓）。
+        // SAFETY: 刚由本实例分配、存活。
+        unsafe { _bool_type.as_ref() }.mark_final();
         let _int_type = self.alloc_type_raw(
             "int",
             core::mem::size_of::<IntObject>(),
@@ -285,7 +367,7 @@ impl Instance {
 
     /// 引导第 2 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
     fn bootstrap_containers_iters(&self) {
-        let object_type = self.type_named("object").expect("object 已登记");
+        let object_type = self.hot_type(HotId::Object).expect("object 已登记");
 
         // **`slice`**（`P1-12` 的"索引／切片"；`TS-42` 把它排 M3+，但切片是这一档的判据）
         // **`classmethod`**（第 158 轮）：给 `Lib/abc.py` 的 `class abstractclassmethod(classmethod)` 用 ✓。
@@ -468,7 +550,10 @@ impl Instance {
         let _list_reverseiterator_type = self.alloc_type_raw(
             "list_reverseiterator",
             core::mem::size_of::<IteratorObject>(),
-            IteratorObject::slots(),
+            IteratorObject::slots()
+                // **属性面**（round 111）：`__next__`／`__iter__`／`__reduce__`／`__setstate__` ✓
+                //（pickle 的 `test_reversed_pickle` ✓）。
+                .with_getattr(crate::builtin_objects::iterator_getattr),
         );
 
         // **`reversed`** ✓（第 727 轮）：`reversed(序列)` 的**通用惰性迭代器**（序列协议：
@@ -476,7 +561,8 @@ impl Instance {
         let _reversed_type = self.alloc_type_raw(
             "reversed",
             core::mem::size_of::<IteratorObject>(),
-            IteratorObject::slots(),
+            IteratorObject::slots()
+                .with_getattr(crate::builtin_objects::iterator_getattr),
         );
 
         // **`longrange_iterator`** ✓（第 228 轮）：`range()` 的**大整数上限**那一支；载荷与 `islice` 同构 ✓
@@ -484,7 +570,9 @@ impl Instance {
         let _longrange_iterator_type = self.alloc_type_raw(
             "longrange_iterator",
             core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
-            crate::builtin_objects::ItStateObject::slots(),
+            crate::builtin_objects::ItStateObject::slots()
+                // **属性面**（round 185）：`__next__`／`__iter__`／`__reduce__` ✓（pickle 用例 ✓）。
+                .with_getattr(crate::builtin_objects::range_iterator_getattr),
         );
 
         // **`super`** ✓（第 233 轮）：**零参**形式 ✓ —— 载荷用 `AttributeObject`（存 `__thisclass__`／`__self__` ✓），
@@ -503,11 +591,35 @@ impl Instance {
             crate::builtin_objects::ItStateObject::slots(),
         );
 
+        // **`map`**／**`filter`**（`P3-41` round 41）：**惰性迭代器类型** ✓（参照里它们就是迭代器 ✓）。
+        // 载荷与 `zip` 同构（`ItStateObject`）——`map` 是"zip 取一行再套函数"、`filter` 是单 inner ＋ 谓词 ✓。
+        let _map_type = self.alloc_type_raw(
+            "map",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots(),
+        );
+        let _filter_type = self.alloc_type_raw(
+            "filter",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots(),
+        );
+
         // **`range_iterator`** ✓（第 228 轮）：`range()` 的**常规**那一支 ✓（参照的名字 ✓）。
         let _range_iterator_type = self.alloc_type_raw(
             "range_iterator",
             core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
-            crate::builtin_objects::ItStateObject::slots(),
+            crate::builtin_objects::ItStateObject::slots()
+                // **属性面**（round 185）：`__next__`／`__iter__`／`__reduce__` ✓（`test_iter` 的
+                // `check_pickle` 一族：`pickle.dumps(iter(range(10)))` ✓）。
+                .with_getattr(crate::builtin_objects::range_iterator_getattr),
+        );
+
+        // **`FrameLocalsProxy`**（round 177）：`frame.f_locals` 对函数帧给出的**可写穿**视图
+        // （PEP 667 的 3.13+ 口径 ✓；`test_frame.TestFrameLocals` 一族 ✓）。
+        let _frame_locals_proxy_type = self.alloc_type_raw(
+            "FrameLocalsProxy",
+            core::mem::size_of::<crate::builtin_objects::FrameLocalsProxy>(),
+            crate::builtin_objects::FrameLocalsProxy::slots(),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
@@ -540,6 +652,21 @@ impl Instance {
                 .with_repr(crate::builtin_objects::dict_repr)
                 // **方法面**（第 145 轮）
                 .with_getattr(crate::builtin_objects::dict_getattr),
+        );
+        // **`mappingproxy`**（round 112）：`types.MappingProxyType = type(type.__dict__)` ✓ ——
+        // 载荷／方法面沿用 `dict`（MRO 里把 dict 作基类 ✓），`repr` 换成 `mappingproxy({...})` ✓。
+        let _mappingproxy_type = self.alloc_type_raw(
+            "mappingproxy",
+            core::mem::size_of::<DictObject>(),
+            DictObject::slots()
+                .with_new(crate::instance::constructors::mappingproxy_new)
+                .with_repr(crate::instance::constructors::mappingproxy_repr)
+                // 自己的 `copy`（按来源类型）＋其余委托 dict ✓。
+                .with_getattr(crate::instance::constructors::mappingproxy_getattr),
+        );
+        let _ = self.register_bases(
+            self.hot_type(HotId::MappingProxy).expect("刚建"),
+            vec![self.hot_type(HotId::Dict).expect("dict 已登记")],
         );
         // **`memoryview`** ✓（第 187 轮）：被 `_collections_abc.py:1062` 的 `Sequence.register(memoryview)` 用到 ✓
         // ⇒ 与 `range`／`frozenset` 同款：**名字必须是类型** ✓。
@@ -582,7 +709,7 @@ impl Instance {
         assert!(
             self.register_bases(
                 complex_type,
-                vec![self.type_named("object").expect("object 已登记")],
+                vec![self.hot_type(HotId::Object).expect("object 已登记")],
             )
             .is_some(),
             "OM-13：`complex` 的基类是 `object`"
@@ -625,11 +752,12 @@ impl Instance {
         );
         // **基类只有 `object`** ✓：`deque` 不在探测表（`TS-41` 那份表是"参照里的事实" ✓）
         // ⇒ 不能走 `register_from_table` ✗（它会 panic ✓），直接按 C3 登记一条边 ✓（MRO 仍由核心算 ✓）。
-        let deque_base = self.type_named("object").expect("object 已登记");
+        let deque_base = self.hot_type(HotId::Object).expect("object 已登记");
         assert!(
             self.register_bases(deque_type, vec![deque_base]).is_some(),
             "OM-13：deque 的 MRO 应当可线性化"
         );
+
     }
 
     /// 引导第 4 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
@@ -666,7 +794,7 @@ impl Instance {
             (token_type, "Token"),
             (context_type, "Context"),
         ] {
-            let base = self.type_named("object").expect("object 已登记");
+            let base = self.hot_type(HotId::Object).expect("object 已登记");
             assert!(
                 self.register_bases(extra, vec![base]).is_some(),
                 "OM-13：{label} 的 MRO 应当可线性化"
@@ -684,10 +812,11 @@ impl Instance {
             // 一跑就踩它 ✗（实测 `TypeError: cannot create '_ThreadHandle' instances` ✓）
             // ⇒ 补 `tp_new`（`plain_new` 按登记尺寸分配 ✓，与 `object`／`bool` 同一手法 ✓）。
             crate::builtin_objects::ThreadHandleObject::slots()
-                .with_new(crate::builtin::thread::thread_handle_slot_new),
+                .with_new(crate::builtin::thread::thread_handle_slot_new)
+                .with_getattr(crate::builtin::thread::thread_handle_getattr),
         );
         {
-            let base = self.type_named("object").expect("object 已登记");
+            let base = self.hot_type(HotId::Object).expect("object 已登记");
             assert!(
                 self.register_bases(thread_handle_type, vec![base]).is_some(),
                 "OM-13：ThreadHandle 的 MRO 应当可线性化"
@@ -697,7 +826,7 @@ impl Instance {
 
     /// 引导第 5 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
     fn bootstrap_errors_cells(&self) {
-        let object_type = self.type_named("object").expect("object 已登记");
+        let object_type = self.hot_type(HotId::Object).expect("object 已登记");
 
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
         let function_type = self.alloc_type_raw(
@@ -732,7 +861,10 @@ impl Instance {
             self.alloc_type_raw(
                 name,
                 core::mem::size_of::<IteratorObject>(),
-                IteratorObject::slots(),
+                IteratorObject::slots()
+                    // **属性面**（round 111）：pickle 的 `__reduce__`／`__setstate__`、
+                    // `it.__next__`／`it.__iter__` ✓（`test_iterator_pickle` ✓）。
+                    .with_getattr(crate::builtin_objects::iterator_getattr),
             )
         })
         .collect();
@@ -752,7 +884,11 @@ impl Instance {
             core::mem::size_of::<MethodObject>(),
             MethodObject::slots()
                 .with_repr(crate::builtin_objects::method_repr)
-                .with_getattr(crate::builtin_objects::method_getattr),
+                .with_getattr(crate::builtin_objects::method_getattr)
+                // **`types.MethodType(fn, obj)` 的构造**（round 109）：`Lib/contextlib.py` 的
+                // `MethodType(cm_exit, cm)`（`ExitStack.push` 一族 ✓）与 `unittest.mock` 的清理 ✓
+                // —— 没有 new 槽 ⇒ `TypeError: cannot create 'method' instances` ✗。
+                .with_new(crate::builtin::object::method_type_new),
         );
 
         // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表
@@ -853,7 +989,7 @@ impl Instance {
 
     /// 引导第 6 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
     fn bootstrap_frame_singletons(&self) {
-        let object_type = self.type_named("object").expect("object 已登记");
+        let object_type = self.hot_type(HotId::Object).expect("object 已登记");
 
         // **Pyawa 专有**异常：`TypeBoundaryError`（`TS-12`：**必须**是 `TypeError` 的子类）。
         // 参照实现没有这个类 ⇒ 探测表（`TS-41`）里没有它，故与 `asend` 一样走
@@ -866,8 +1002,7 @@ impl Instance {
                 .with_repr(crate::builtin_objects::exception_repr)
                 .with_str(crate::builtin_objects::exception_str),
         );
-        let type_error = self
-            .type_named("TypeError")
+        let type_error = self.hot_type(HotId::TypeError)
             .expect("TS-41：TypeError 在内建表里");
         assert!(
             self.register_bases(boundary_error_type, vec![type_error]).is_some(),
@@ -910,7 +1045,10 @@ impl Instance {
         let count_type = self.alloc_type_raw(
             "count",
             core::mem::size_of::<crate::builtin_objects::CountIteratorObject>(),
-            crate::builtin_objects::CountIteratorObject::slots(),
+            crate::builtin_objects::CountIteratorObject::slots()
+                // **`__next__`／`__iter__` 属性面**（round 85）：`tokenize` 把
+                // `_itertools.chain(...).__next__` 交给 C tokenizer ✓ ⇒ 内建迭代器都得有 ✓。
+                .with_getattr(crate::builtin_objects::iterator_getattr),
         );
         assert!(
             self.register_bases(count_type, vec![object_type]).is_some(),
@@ -938,7 +1076,9 @@ impl Instance {
             let ty = self.alloc_type_raw(
                 name,
                 core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
-                crate::builtin_objects::ItStateObject::slots(),
+                crate::builtin_objects::ItStateObject::slots()
+                    // **同上**（round 85）：`chain.__next__` 等属性面 ✓。
+                    .with_getattr(crate::builtin_objects::iterator_getattr),
             );
             assert!(
                 self.register_bases(ty, vec![object_type]).is_some(),
@@ -961,35 +1101,61 @@ impl Instance {
         .iter()
         .map(|name| self.type_named(name).expect("迭代器类型已登记"))
         .collect();
-        let object_type = self.type_named("object").expect("object 已登记");
-        let none_type = self.type_named("NoneType").expect("NoneType 已登记");
-        let ellipsis_type = self.type_named("ellipsis").expect("ellipsis 已登记");
-        let bool_type = self.type_named("bool").expect("bool 已登记");
-        let int_type = self.type_named("int").expect("int 已登记");
-        let float_type = self.type_named("float").expect("float 已登记");
-        let str_type = self.type_named("str").expect("str 已登记");
-        let slice_type = self.type_named("slice").expect("slice 已登记");
-        let bytes_type = self.type_named("bytes").expect("bytes 已登记");
-        let bytearray_type = self.type_named("bytearray").expect("bytearray 已登记");
-        let memoryview_type = self.type_named("memoryview").expect("memoryview 已登记");
-        let list_reverseiterator_type = self.type_named("list_reverseiterator").expect("list_reverseiterator 已登记");
-        let reversed_type = self.type_named("reversed").expect("reversed 已登记");
-        let longrange_iterator_type = self.type_named("longrange_iterator").expect("longrange_iterator 已登记");
-        let super_type = self.type_named("super").expect("super 已登记");
-        let zip_type = self.type_named("zip").expect("zip 已登记");
-        let range_iterator_type = self.type_named("range_iterator").expect("range_iterator 已登记");
-        let tuple_type = self.type_named("tuple").expect("tuple 已登记");
-        let list_type = self.type_named("list").expect("list 已登记");
-        let dict_type = self.type_named("dict").expect("dict 已登记");
-        let range_type = self.type_named("range").expect("range 已登记");
-        let frozenset_type = self.type_named("frozenset").expect("frozenset 已登记");
-        let set_type = self.type_named("set").expect("set 已登记");
-        let function_type = self.type_named("function").expect("function 已登记");
-        let builtin_function_type = self.type_named("builtin_function_or_method").expect("builtin_function_or_method 已登记");
-        let method_type = self.type_named("method").expect("method 已登记");
-        let generator_type = self.type_named("generator").expect("generator 已登记");
-        let coroutine_type = self.type_named("coroutine").expect("coroutine 已登记");
-        let async_generator_type = self.type_named("async_generator").expect("async_generator 已登记");
+        let object_type = self.hot_type(HotId::Object).expect("object 已登记");
+        let none_type = self.hot_type(HotId::NoneType).expect("NoneType 已登记");
+        let ellipsis_type = self.hot_type(HotId::Ellipsis).expect("ellipsis 已登记");
+        let bool_type = self.hot_type(HotId::Bool).expect("bool 已登记");
+        let int_type = self.hot_type(HotId::Int).expect("int 已登记");
+        let float_type = self.hot_type(HotId::Float).expect("float 已登记");
+        let str_type = self.hot_type(HotId::Str).expect("str 已登记");
+        let slice_type = self.hot_type(HotId::Slice).expect("slice 已登记");
+        let bytes_type = self.hot_type(HotId::Bytes).expect("bytes 已登记");
+        let bytearray_type = self.hot_type(HotId::ByteArray).expect("bytearray 已登记");
+        let memoryview_type = self.hot_type(HotId::MemoryView).expect("memoryview 已登记");
+        let list_reverseiterator_type = self.hot_type(HotId::ListReverseIterator).expect("list_reverseiterator 已登记");
+        let reversed_type = self.hot_type(HotId::Reversed).expect("reversed 已登记");
+        let longrange_iterator_type = self.hot_type(HotId::LongRangeIterator).expect("longrange_iterator 已登记");
+        let super_type = self.hot_type(HotId::Super).expect("super 已登记");
+        let zip_type = self.hot_type(HotId::Zip).expect("zip 已登记");
+        let range_iterator_type = self.hot_type(HotId::RangeIterator).expect("range_iterator 已登记");
+        let tuple_type = self.hot_type(HotId::Tuple).expect("tuple 已登记");
+        let list_type = self.hot_type(HotId::List).expect("list 已登记");
+        let dict_type = self.hot_type(HotId::Dict).expect("dict 已登记");
+        let range_type = self.hot_type(HotId::Range).expect("range 已登记");
+        let frozenset_type = self.hot_type(HotId::FrozenSet).expect("frozenset 已登记");
+        let set_type = self.hot_type(HotId::Set).expect("set 已登记");
+        let function_type = self.hot_type(HotId::Function).expect("function 已登记");
+        let builtin_function_type = self.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记");
+        let method_type = self.hot_type(HotId::Method).expect("method 已登记");
+        let generator_type = self.hot_type(HotId::Generator).expect("generator 已登记");
+        let coroutine_type = self.hot_type(HotId::Coroutine).expect("coroutine 已登记");
+        let async_generator_type = self.hot_type(HotId::AsyncGenerator).expect("async_generator 已登记");
+
+        // **序列协议迭代器类型**（round 85，参照名 `iterator`）：载荷 `SequenceIteratorObject`，
+        // 内部类型、不进 `TS-41` 表 —— `iter(<只有 __getitem__ 的对象>)` 的**惰性**迭代器 ✓。
+        let sequence_iterator_type = self.alloc_type_raw(
+            "iterator",
+            core::mem::size_of::<crate::builtin_objects::SequenceIteratorObject>(),
+            crate::builtin_objects::SequenceIteratorObject::slots(),
+        );
+        assert!(
+            self.register_bases(sequence_iterator_type, vec![object_type]).is_some(),
+            "OM-13：iterator 的基类也是 object"
+        );
+
+        // **`iter(callable, sentinel)` 的迭代器类型**（round 85，参照名 `callable_iterator`）：
+        // 载荷是 `CallableIteratorObject`，内部类型、不进 `TS-41` 表（与 `frame` 同档 ✓）。
+        let callable_iterator_type = self.alloc_type_raw(
+            "callable_iterator",
+            core::mem::size_of::<crate::builtin_objects::CallableIteratorObject>(),
+            crate::builtin_objects::CallableIteratorObject::slots()
+                // **属性面**（round 185）：`__next__`／`__iter__`／`__reduce__` ✓（pickle 用例 ✓）。
+                .with_getattr(crate::builtin_objects::callable_iterator_getattr),
+        );
+        assert!(
+            self.register_bases(callable_iterator_type, vec![object_type]).is_some(),
+            "OM-13：callable_iterator 的基类也是 object"
+        );
 
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
@@ -1001,6 +1167,11 @@ impl Instance {
             self.register_bases(frame_type, vec![object_type]).is_some(),
             "OM-13：内部 Frame 类型的基类也是 object"
         );
+        // **帧可挂实例字典**（round 179）：`f_trace`／`f_trace_lines`／`f_trace_opcodes` 是**可写**属性
+        // （`sys._getframe(0).f_trace = True` ✓；`test_frame.test_lineno_with_tracing` ✓）——挂载的字典
+        // 由 `Header.dict` 那条通道管，GC 的 `children_of` 已把 `instance_dict()` 算作边 ✓（OM-14）。
+        // SAFETY: frame_type 是刚建好的类型对象，存活 ✓。
+        unsafe { frame_type.as_ref() }.mark_external_instance_dict();
 
         // **内部** code 类型：`compile::instantiate` 与 `Instance::code_with_qualname` 都按
         // "引导期已登记"取它（两处的 `expect` 就是这么写的）⇒ 它必须与 `Frame` 一样在这里登记。
@@ -1125,12 +1296,12 @@ impl Instance {
 
     /// 引导第 8 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
     fn bootstrap_type_natives(&self) {
-        let object_type = self.type_named("object").expect("object 已登记");
-        let int_type = self.type_named("int").expect("int 已登记");
-        let float_type = self.type_named("float").expect("float 已登记");
-        let str_type = self.type_named("str").expect("str 已登记");
-        let bytes_type = self.type_named("bytes").expect("bytes 已登记");
-        let builtin_function_type = self.type_named("builtin_function_or_method").expect("builtin_function_or_method 已登记");
+        let object_type = self.hot_type(HotId::Object).expect("object 已登记");
+        let int_type = self.hot_type(HotId::Int).expect("int 已登记");
+        let float_type = self.hot_type(HotId::Float).expect("float 已登记");
+        let str_type = self.hot_type(HotId::Str).expect("str 已登记");
+        let bytes_type = self.hot_type(HotId::Bytes).expect("bytes 已登记");
+        let builtin_function_type = self.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记");
 
         // `TS-44`：`__format__` **没有槽位** ⇒ 内建类型在**类型字典**里放**原生可调用对象**
         // （`object` 那一层给默认：空规格 ⇒ `str(x)`、非空 ⇒ TypeError，消息实测）
@@ -1155,6 +1326,15 @@ impl Instance {
                 "__format__",
                 crate::builtin_objects::native_format_str as crate::NativeFn,
             ),
+            // **`str.__hash__`**（round 70）：`class Name(str): def __hash__(self):
+            // return str.__hash__(self)`（`test_extcall` 的 doctest ✓，`Lib/` 亦常见）——
+            // 先前 str 类型上没有它 ✗ ⇒ 在**类型对象**上取属性落到 `object.__hash__`（身份）✗
+            // 或报错 ⇒ `Name` 被当成"不可哈希" ✗。与 `hash()` 同值 ✓。
+            (
+                str_type,
+                "__hash__",
+                crate::builtin_objects::str_hash_native as crate::NativeFn,
+            ),
             // **`object.__hash__`**（第 309 轮）：本层先前没有它 ⇒ `C.__hash__`／`ref.__hash__`
             // 这类"在**类型对象**上取 dunder"的属性访问当场报
             // `AttributeError: 'type' object has no attribute '__hash__'`（`Lib/weakref.py:89` 的
@@ -1162,7 +1342,7 @@ impl Instance {
             // 同一对象恒定；与参照各类型的哈希值**不一致**（如实登记 —— 本层字典查键走
             // `values_equal`，不靠这个值）。
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__hash__",
                 crate::builtin::object::object_hash_native as crate::NativeFn,
             ),
@@ -1172,27 +1352,27 @@ impl Instance {
             // 一律转调核心已有的**同一处实现**（`values_equal`／`attribute_read`／
             // `attribute_write`／`object_repr`）；接收者两种形态都认。
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__eq__",
                 crate::builtin::object::object_eq_native as crate::NativeFn,
             ),
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__ne__",
                 crate::builtin::object::object_ne_native as crate::NativeFn,
             ),
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__repr__",
                 crate::builtin::object::object_repr_native as crate::NativeFn,
             ),
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__str__",
                 crate::builtin::object::object_repr_native as crate::NativeFn,
             ),
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__reduce_ex__",
                 crate::builtin::object::object_reduce_ex_native as crate::NativeFn,
             ),
@@ -1200,29 +1380,36 @@ impl Instance {
             // 查找链上取不到它 ✗ ⇒ 于是 `'NoneType' object has no attribute '__str__'` 卡住同一批 118 个模块 ✓
             // ⇒ 直接给 `NoneType` 的命名空间补一份（复用 `object.__str__` 的实现 ✓ = `object_repr_native` ✓）。
             (
-                self.type_named("NoneType").expect("NoneType 已登记"),
+                self.hot_type(HotId::NoneType).expect("NoneType 已登记"),
                 "__str__",
                 crate::builtin::object::object_repr_native as crate::NativeFn,
             ),
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__setattr__",
                 crate::builtin::object::object_setattr_native as crate::NativeFn,
             ),
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__getattribute__",
                 crate::builtin::object::object_getattribute_native as crate::NativeFn,
             ),
+            // **`object.__delattr__`**（round 95）：`super().__delattr__(name)` 的落点 ✓
+            // （`unittest.mock` 的 `NonCallableMock.__delattr__` 非魔法名分支要用 ✓）。
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
+                "__delattr__",
+                crate::builtin::object::object_delattr_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__init__",
                 crate::builtin::object::object_init_native as crate::NativeFn,
             ),
             // **`object.__init_subclass__`** ✓（第 722 轮）：`Lib/random.py:225` 一族在
             // `super().__init_subclass__(**kwargs)` 里要默认实现 ✓（先前 `object` 上没有这个名字 ✗）。
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__init_subclass__",
                 crate::builtin::object::object_init_subclass_native as crate::NativeFn,
             ),
@@ -1230,45 +1417,45 @@ impl Instance {
             // `complex.conjugate(z)`／`complex.__hash__(z)`／`complex.__abs__(z)` 都可用 ✓
             //（实例面是 `getattr` 槽 ✓，这里补类型级入口 ✓；未绑定时接收者＝第一个位置实参 ✓）。
             (
-                self.type_named("complex").expect("complex 已登记"),
+                self.hot_type(HotId::Complex).expect("complex 已登记"),
                 "__complex__",
                 crate::builtin_objects::complex_dunder_native as crate::NativeFn,
             ),
             (
-                self.type_named("complex").expect("complex 已登记"),
+                self.hot_type(HotId::Complex).expect("complex 已登记"),
                 "conjugate",
                 crate::builtin_objects::complex_conjugate_native as crate::NativeFn,
             ),
             (
-                self.type_named("complex").expect("complex 已登记"),
+                self.hot_type(HotId::Complex).expect("complex 已登记"),
                 "__hash__",
                 crate::builtin_objects::complex_hash_native as crate::NativeFn,
             ),
             (
-                self.type_named("complex").expect("complex 已登记"),
+                self.hot_type(HotId::Complex).expect("complex 已登记"),
                 "__abs__",
                 crate::builtin_objects::complex_abs_native as crate::NativeFn,
             ),
             (
-                self.type_named("complex").expect("complex 已登记"),
+                self.hot_type(HotId::Complex).expect("complex 已登记"),
                 "__bool__",
                 crate::builtin_objects::complex_bool_native as crate::NativeFn,
             ),
             // **`tuple.__new__`** ✓（第 728 轮）：属性通道可达 ✓（namedtuple／`CodecInfo`／`dis`／`enum` 的前置 ✓）。
             (
-                self.type_named("tuple").expect("tuple 已登记"),
+                self.hot_type(HotId::Tuple).expect("tuple 已登记"),
                 "__new__",
                 crate::builtin_objects::tuple_new_native as crate::NativeFn,
             ),
             // **`tuple.count`／`tuple.index` 的类型级入口** ✓（task-26 ②；未绑定语义：
             // 接收者＝第一个位置实参 ✓ —— 与 `tuple_new_native` 的"两种形态都认"同款 ✓）。
             (
-                self.type_named("tuple").expect("tuple 已登记"),
+                self.hot_type(HotId::Tuple).expect("tuple 已登记"),
                 "count",
                 crate::builtin_objects::tuple_count_native as crate::NativeFn,
             ),
             (
-                self.type_named("tuple").expect("tuple 已登记"),
+                self.hot_type(HotId::Tuple).expect("tuple 已登记"),
                 "index",
                 crate::builtin_objects::tuple_index_native as crate::NativeFn,
             ),
@@ -1276,7 +1463,7 @@ impl Instance {
             // `__subclasscheck__` ✓（先前缺 ⇒ `isinstance(x, ABC)` 报 AttributeError ⇒
             // **虚拟子类注册整条失效** ✗）。
             (
-                self.type_named("object").expect("object 已登记"),
+                self.hot_type(HotId::Object).expect("object 已登记"),
                 "__subclasshook__",
                 crate::builtin::object::object_subclasshook_native as crate::NativeFn,
             ),
@@ -1285,24 +1472,72 @@ impl Instance {
             // 这走的是类型自己的命名空间（不是实例那条 `dict_getattr` 的路）⇒ 挂在类型字典里 ✓
             // （未绑定 ✓ ⇒ 调用时接收者在第一个实参 ✓，两个原生都认那两种形态 ✓）。
             (
-                self.type_named("dict").expect("dict 已登记"),
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
                 "__getitem__",
                 crate::builtin::dict::dict_getitem_native as crate::NativeFn,
             ),
+            // **内建类型的 `__iter__` 属性面** ✓（round 54；见 `builtin_iter_dunder_native`）：
+            // `d.__iter__()` 一类显式调用要能取到（`test_unpack_ex` 的 `CrazyDict` 依赖它 ✓）。
             (
-                self.type_named("dict").expect("dict 已登记"),
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::List).expect("list 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Tuple).expect("tuple 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Str).expect("str 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Bytes).expect("bytes 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Set).expect("set 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Range).expect("range 已登记"),
+                "__iter__",
+                crate::builtin::object::builtin_iter_dunder_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
                 "__setitem__",
                 crate::builtin::dict::dict_setitem_native as crate::NativeFn,
             ),
             (
-                self.type_named("dict").expect("dict 已登记"),
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
                 "__delitem__",
                 crate::builtin::dict::dict_delitem_native as crate::NativeFn,
             ),
             (
-                self.type_named("dict").expect("dict 已登记"),
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
                 "__eq__",
                 crate::builtin::dict::dict_eq_native as crate::NativeFn,
+            ),
+            // **`dict | dict`（PEP 584）**（round 116）：`test_merge_operator` ✓（`|=` 已有 ✓）。
+            (
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
+                "__or__",
+                crate::builtin::dict::dict_or_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
+                "__ror__",
+                crate::builtin::dict::dict_ror_native as crate::NativeFn,
             ),
             // **`str.maketrans`／`bytes.maketrans`**（第 313 轮）：`'type' object has no attribute
             // 'maketrans'` × **67** 个模块的卡点 ✓。两个都是**静态**用法（在类型对象上取 ⇒ 无接收者 ✓）。
@@ -1320,72 +1555,193 @@ impl Instance {
             //（`'type' object has no attribute 'from_bytes'` 把 `ipaddress` ⇒ `urllib.parse`
             // ⇒ `email.utils` 这一串压在下面 ✓）。类型级静态用法（无接收者 ✓），与 `maketrans` 同路 ✓。
             (
-                self.type_named("int").expect("int 已登记"),
+                self.hot_type(HotId::Int).expect("int 已登记"),
+                "__new__",
+                crate::builtin::int::int_dunder_new_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Int).expect("int 已登记"),
                 "from_bytes",
                 crate::builtin::int::int_from_bytes_native as crate::NativeFn,
+            ),
+            // **`bool.from_bytes`** ✓（round 47）：参照返回 **`bool` 单例**（`int.from_bytes` 的
+            // int 结果再取真值）—— `test_bool.test_from_bytes` 用 `assertIs` 钉住 ✓。
+            (
+                self.hot_type(HotId::Bool).expect("bool 已登记"),
+                "__new__",
+                crate::builtin_objects::bool_dunder_new_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Bool).expect("bool 已登记"),
+                "from_bytes",
+                crate::builtin::int::bool_from_bytes_native as crate::NativeFn,
             ),
             // **`int.bit_length` 描述符**（第 406 轮 ✓）：`_pydecimal.py:5648` 导入期
             // `_nbits = int.bit_length` ✓（描述符语义：接收者是第一个实参 ✓）。
             (
-                self.type_named("int").expect("int 已登记"),
+                self.hot_type(HotId::Int).expect("int 已登记"),
                 "bit_length",
                 crate::builtin::int::int_bit_length_descriptor as crate::NativeFn,
             ),
             // **`float.fromhex`**（第 406 轮 ✓）：`_pylong.py:260` 导入期
             // `float.fromhex('0x1.a934f0979a371p-2')` ✓（类型级静态用法，与 `int.from_bytes` 同路 ✓）。
             (
-                self.type_named("float").expect("float 已登记"),
+                self.hot_type(HotId::Float).expect("float 已登记"),
                 "fromhex",
                 crate::builtin::float::float_fromhex_native as crate::NativeFn,
             ),
             // **`list.append` 的类型级描述符**（task-23 ✓）：`multiprocessing/reduction.py:219` 的
             // `register(type(list.append), …)` 是**导入期**取用 ✓（描述符语义：接收者＝第一个实参 ✓）。
             (
-                self.type_named("list").expect("list 已登记"),
+                self.hot_type(HotId::List).expect("list 已登记"),
                 "append",
                 crate::builtin::list::list_append_descriptor as crate::NativeFn,
             ),
             // **`int.__add__` 的类型级描述符**（task-23 ✓）：同文件 `:220` 的 `type(int.__add__)` ✓。
             (
-                self.type_named("int").expect("int 已登记"),
+                self.hot_type(HotId::Int).expect("int 已登记"),
                 "__add__",
                 crate::executor::arithmetic::int_add_descriptor as crate::NativeFn,
             ),
             // **`float.__getformat__`**（task-23 ✓）：`test/support/__init__.py:522` **导入期**
             // `float.__getformat__('double')` ✓（静态用法，无接收者 ✓；纯函数真实现 ✓）。
             (
-                self.type_named("float").expect("float 已登记"),
+                self.hot_type(HotId::Float).expect("float 已登记"),
                 "__getformat__",
                 misc::float_getformat_native as crate::NativeFn,
             ),
             // **`bytes.ljust`／`rjust`／`center`**（task-46）：类型级入口（`bytes.ljust(b"a", 3, b"x")` ✓）；
             // 实例面由 `bytes_getattr` 走同一批函数 ✓。
             (
-                self.type_named("bytes").expect("bytes 已登记"),
+                self.hot_type(HotId::Bytes).expect("bytes 已登记"),
                 "ljust",
                 crate::builtin::bytes::bytes_ljust_native as crate::NativeFn,
             ),
             (
-                self.type_named("bytes").expect("bytes 已登记"),
+                self.hot_type(HotId::Bytes).expect("bytes 已登记"),
                 "rjust",
                 crate::builtin::bytes::bytes_rjust_native as crate::NativeFn,
             ),
             (
-                self.type_named("bytes").expect("bytes 已登记"),
+                self.hot_type(HotId::Bytes).expect("bytes 已登记"),
                 "center",
                 crate::builtin::bytes::bytes_center_native as crate::NativeFn,
+            ),
+            // **`bytes.fromhex`／`bytearray.fromhex`**（round 189）。
+            (
+                self.hot_type(HotId::Bytes).expect("bytes 已登记"),
+                "fromhex",
+                crate::builtin::bytes::bytes_fromhex_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::ByteArray).expect("bytearray 已登记"),
+                "fromhex",
+                crate::builtin::bytes::bytes_fromhex_native as crate::NativeFn,
             ),
             // **`set.union`**（task-46）：实例面走 `set_getattr`；类型级入口（`set.union({1}, {2})` ✓）
             // 从这里装 —— stdlib `_hashlib_module` 的临时补丁同步移除（一处真相 ✓）。
             (
-                self.type_named("set").expect("set 已登记"),
+                self.hot_type(HotId::Set).expect("set 已登记"),
                 "union",
                 crate::builtin::set::set_union_native as crate::NativeFn,
             ),
             (
-                self.type_named("frozenset").expect("frozenset 已登记"),
+                self.hot_type(HotId::FrozenSet).expect("frozenset 已登记"),
                 "union",
                 crate::builtin::set::set_union_native as crate::NativeFn,
+            ),
+            // **内建容器的 `__contains__` 类型字典入口**（round 212）：`dict` 子类覆写里写
+            // `dict.__contains__(self, k)`（`test_collections` 的 `lowerdict` ✓）要有得取 ✓；
+            // 值走通用 `contains()`（与实例 `getattr` 槽同口径 ✓）。
+            (
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
+                "__contains__",
+                crate::builtin_objects::dict_contains_builtin_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
+                "__getitem__",
+                crate::builtin_objects::dict_getitem_builtin_native as crate::NativeFn,
+            ),
+            // **`tuple`／`list`／`str`／`bytes` 的 `__getitem__` 类型字典项**（round 214）：
+            // `Point.__getitem__ == tuple.__getitem__`（test_factory ✓）；值统一走通用下标读 ✓。
+            (
+                self.hot_type(HotId::Tuple).expect("tuple 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::List).expect("list 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Str).expect("str 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Bytes).expect("bytes 已登记"),
+                "__getitem__",
+                crate::builtin_objects::container_getitem_native as crate::NativeFn,
+            ),
+            // **`__call__` 类型字典入口**（round 215）：`Callable.__subclasshook__` 查 `C.__dict__` ✓。
+            // **只给 function／builtin_function_or_method／method**（`type` 那格会打坏导入期 ✓，见台账）✓。
+            (
+                self.hot_type(HotId::Function).expect("function 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Method).expect("method 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Type).expect("type 已登记"),
+                "__call__",
+                crate::builtin_objects::dunder_call_native as crate::NativeFn,
+            ),
+            // **`type.__call__`**（round 228 真因修后装上 ✓）：round 227 装上后 `import unittest` 红
+            //（`'type' object has no attribute 'argparse'`）—— 真因是 `set_type_attribute` 惰性建
+            // `type` 命名空间时**漏置** `HAS_INSTANCE_DICT` ✗ ⇒ 类属性删除（dataclass 的
+            // `delattr(cls, field)`）失败 ✗；round 228 修好那一位后再装 ✓（`Callable.__subclasshook__`
+            // 查 `type.__dict__` 要有 `__call__` ✓）。：装上后 `import unittest` 立刻红
+            //（`AttributeError: 'type' object has no attribute 'argparse'`，排查确认不是属性读路径的
+            // 普通缺名 ⇒ 另有隐情，见台账）✗。`Callable.__subclasshook__` 查 `type.__dict__` 这条
+            // 差额**如实登记**在台账（`test_Callable` 的 `isinstance(type, Callable)` ✓）。
+            // **集合的四个二元运算符类型字典项**（round 216）：`Counter` 的 multiset 测试直接取
+            // `set.__sub__`／`__or__`／`__and__` 当参照 ✓。
+            (
+                self.hot_type(HotId::Set).expect("set 已登记"),
+                "__sub__",
+                crate::builtin::set::set_sub_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Set).expect("set 已登记"),
+                "__or__",
+                crate::builtin::set::set_or_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Set).expect("set 已登记"),
+                "__and__",
+                crate::builtin::set::set_and_native as crate::NativeFn,
+            ),
+            (
+                self.hot_type(HotId::Set).expect("set 已登记"),
+                "__xor__",
+                crate::builtin::set::set_xor_native as crate::NativeFn,
+            ),
+            // **`dict.__reversed__`**（round 214）：`collections.abc.Reversible` 探测要它 ✓。
+            (
+                self.hot_type(HotId::Dict).expect("dict 已登记"),
+                "__reversed__",
+                crate::builtin_objects::dict_reversed_native as crate::NativeFn,
             ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
@@ -1395,6 +1751,108 @@ impl Instance {
             ));
             self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
         }
+        // **不可哈希容器的 `__hash__ = None`**（round 213）：`collections.abc.Hashable` 的
+        // `_check_methods` 要求 `C.__dict__["__hash__"] **is None**`（不是"有这个名字" ✓）
+        // ⇒ 直接放 **None 单例**作值 ✓（不是 native ✗）。参照里 `list`／`dict`／`set`／`bytearray`
+        // 都是这样 ✓ ⇒ `isinstance(bytearray(), Hashable)` 判 False ✓。
+        for name in ["list", "dict", "set", "bytearray"] {
+            let Some(container_type) = self.type_named(name) else {
+                continue;
+            };
+            let none = self.singletons().none();
+            // SAFETY: 单例由实例持有，字典要自己那份。
+            unsafe { self.incref_object(none.as_ptr()) };
+            self.set_type_attribute(container_type, "__hash__", none.cast::<Header>());
+        }
+        // **迭代器类型的"类属性面"**（round 186）：参照的 `type(iter([]))` 上**有** `__iter__`／`__next__`
+        // （slot wrapper ✓）⇒ `collections.abc.Iterator` 的 `__subclasshook__`（`_check_methods(C,'__iter__')`
+        // 走 `getattr(C, …)`）才能认出它们 ✓。本层这两个名字只在**实例**的 `getattr` 槽上 ⇒ 类型对象上
+        // 取不到 ✗ ⇒ `isinstance(iter(x), collections.abc.Iterator)` 判 False ✗（`test_iter.check_pickle` ✓）。
+        // 值只用于"存在性"（`_check_methods` 判 `getattr(C, name, None) is not None` ✓）；
+        // 正常调用仍走实例 `getattr` 槽 ⇒ 行为不变 ✓。
+        for name in [
+            "iterator",
+            "list_iterator",
+            "tuple_iterator",
+            "str_ascii_iterator",
+            "dict_keyiterator",
+            "set_iterator",
+            "bytes_iterator",
+            "bytearray_iterator",
+            "list_reverseiterator",
+            "reversed",
+            "range_iterator",
+            "longrange_iterator",
+            "callable_iterator",
+        ] {
+            let Some(iterator_type) = self.type_named(name) else {
+                continue;
+            };
+            for attribute in ["__iter__", "__next__"] {
+                let native = self.alloc(BuiltinFunctionObject::new(
+                    builtin_function_type,
+                    attribute,
+                    Cell::new(crate::builtin::object::object_repr_slot_native as crate::NativeFn),
+                ));
+                self.set_type_attribute(iterator_type, attribute, native.into_raw().cast::<Header>());
+            }
+        }
+
+        // **协程／异步生成器的"类属性面"**（round 219）：`collections.abc.Awaitable` 的
+        // `__subclasshook__` 用 `_check_methods(C, '__await__')`、`AsyncGenerator` 用
+        // `_check_methods(C, '__aiter__','__anext__','asend','athrow','aclose')` —— 都查
+        // **`C.__dict__`**（类型字典 ✓）。本层这些方法只在**实例** `getattr` 槽上 ✗ ⇒
+        // `isinstance(<coroutine>, Awaitable)`／`isinstance(<async_generator>, AsyncGenerator)`
+        // 判 False ✗（`test_collections.TestOneTrickPonyABCs` ✓）。值只用于"存在性"（非 None ✓），
+        // 实际调用仍走实例 `getattr` 槽（`generator_getattr` ✓）⇒ 行为不变 ✓。
+        // **`collections.abc.Buffer` 的判据**（round 224）：`Buffer.__subclasshook__` 查
+        // `_check_methods(C, '__buffer__')`（只看 `C.__dict__` 有没有这个名字 ✓）——
+        // `bytes`／`bytearray`／`memoryview` 的 `__buffer__` 本层尚未接线 ✗ ⇒
+        // `isinstance(b'x', Buffer)` 红 ✗（`test_collections.TestCollectionABCs.test_Buffer` ✓）。
+        // 存在性占位（值不参与调用 ✓，与协程那几项同一口径 ✓）。
+        for type_name in ["bytes", "bytearray", "memoryview"] {
+            let Some(target_type) = self.type_named(type_name) else {
+                continue;
+            };
+            let native = self.alloc(BuiltinFunctionObject::new(
+                builtin_function_type,
+                "__buffer__",
+                Cell::new(crate::builtin::object::object_repr_slot_native as crate::NativeFn),
+            ));
+            self.set_type_attribute(target_type, "__buffer__", native.into_raw().cast::<Header>());
+        }
+        for (type_name, attributes) in [
+            ("coroutine", &["__await__"][..]),
+            (
+                "async_generator",
+                &["__aiter__", "__anext__", "asend", "athrow", "aclose"][..],
+            ),
+        ] {
+            let Some(target_type) = self.type_named(type_name) else {
+                continue;
+            };
+            for attribute in attributes {
+                let native = self.alloc(BuiltinFunctionObject::new(
+                    builtin_function_type,
+                    attribute,
+                    Cell::new(crate::builtin::object::object_repr_slot_native as crate::NativeFn),
+                ));
+                self.set_type_attribute(target_type, attribute, native.into_raw().cast::<Header>());
+            }
+        }
+
+        // **dict 的类级方法面**（round 118）：`dict.items(d)` 一类未绑定调用 ✓
+        //（`test_container_iterator` 的 `dict.items(container)` ✓）；适配器把 args[0] 挪成接收者 ✓。
+        if let Some(dict_type) = self.hot_type(HotId::Dict) {
+            for (name, handler) in crate::builtin::dict::CLASS_LEVEL_METHODS {
+                let native = self.alloc(BuiltinFunctionObject::new(
+                    builtin_function_type,
+                    name,
+                    Cell::new(*handler),
+                ));
+                self.set_type_attribute(dict_type, name, native.into_raw().cast::<Header>());
+            }
+        }
 
         // **`type.__annotations__` getset 描述符** ✓（task-20 ✓）：`annotationlib:1141` 读的就是
         // `type.__dict__["__annotations__"].__get__` ✓（类对象与模块对象两条路 ✓）。
@@ -1403,7 +1861,7 @@ impl Instance {
 
     /// 引导第 9 段（同文件原顺序搬入；跨段引用经 `type_named` 重新取）。
     fn bootstrap_build_class(&self) {
-        let builtin_function_type = self.type_named("builtin_function_or_method").expect("builtin_function_or_method 已登记");
+        let builtin_function_type = self.hot_type(HotId::BuiltinFunctionOrMethod).expect("builtin_function_or_method 已登记");
 
         // `LOAD_BUILD_CLASS` 要压的内建（`__build_class__`）：造一个原生可调用对象按实例存
         let build_class = self.alloc(BuiltinFunctionObject::new(
@@ -1421,52 +1879,49 @@ impl Instance {
     /// （与 stdlib 侧 `_tuplegetter` 同一手法 ✓）⇒ 既满足 `type.__dict__["__annotations__"].__get__` ✓，
     /// 也让 `getattr(C, "__annotations__")` 这条路能走描述符协议 ✓。
     pub(crate) fn install_annotations_descriptor(&self) {
-        let Some(type_object) = self.type_named("type") else {
+        let Some(type_object) = self.hot_type(HotId::Type) else {
             return;
         };
-        let descriptor_type = match self.type_named("getset_descriptor") {
-            Some(existing) => existing,
-            None => {
-                let ty = self.new_attribute_type("getset_descriptor");
-                if let Some(namespace) = self.type_namespace(ty.cast()) {
-                    let function_type = self
-                        .type_named("builtin_function_or_method")
-                        .expect("builtin_function_or_method 在引导期已登记");
-                    let function = self.alloc(BuiltinFunctionObject::new(
-                        function_type,
-                        "__get__",
-                        Cell::new(
-                            crate::builtin_objects::getset_descriptor_get as crate::NativeFn,
-                        ),
-                    ));
-                    self.dict_set(namespace, "__get__", function.into_raw().cast::<Header>());
-                }
-                ty
-            }
-        };
-        let annotations_kind = self.new_dict();
-        let kind = self.new_str("annotations");
-        self.dict_set(annotations_kind, "_kind", kind);
-        let descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
-            descriptor_type,
-            core::cell::RefCell::new(Some(annotations_kind)),
-        ));
-        let descriptor = descriptor.into_raw().cast::<Header>();
-        if let Some(namespace) = self.type_namespace(type_object.cast()) {
-            self.dict_set(namespace, "__annotations__", descriptor);
+        // **`getset_descriptor` 类型**（task-8）：`Lib/types.py` 的
+        // `GetSetDescriptorType = type(FunctionType.__code__)` 必须落到它上面；
+        // 它同时也是 `type.__dict__['__dict__']`／`['__annotations__']`／`['__mro__']` 的类型 ✓。
+        let descriptor_type = self.ensure_descriptor_type("getset_descriptor");
+        // **`member_descriptor` 类型**（task-8）：`MemberDescriptorType = type(FunctionType.__globals__)` 的落点。
+        let _member_type = self.ensure_descriptor_type("member_descriptor");
+        // **三个类型级描述符**（内联属性字典带 `_kind` ＋ `__name__` ＋ `__objclass__`）：
+        // `Lib/inspect.py` 的 `_shadowed_dict` 按
+        // `type(class_dict) is types.GetSetDescriptorType and class_dict.__name__ == "__dict__"
+        //  and class_dict.__objclass__ is entry` 判 `type.__dict__['__dict__']` 未被遮蔽 ⇒
+        // 这三项是 `inspect.getattr_static` 之所以能工作的最小面 ✓。
+        let descriptors = [
+            ("annotations", "__annotations__"),
+            ("dict", "__dict__"),
+            ("mro", "__mro__"),
+            // **`type.__dict__` 的类型属性面**（task-13 #d）：参照 3.14.4 里 `__name__`／
+            // `__qualname__`／`__module__`／`__bases__` 都是 `getset_descriptor` 实例
+            // ⇒ 给 `type` 的类型字典补上（`inspect.getattr_static(类, "__name__")` 取到的就是它们）。
+            ("typename", "__name__"),
+            ("qualname", "__qualname__"),
+            ("module", "__module__"),
+            ("bases", "__bases__"),
+        ];
+        let mut instances = Vec::with_capacity(descriptors.len());
+        for (kind, python_name) in descriptors {
+            let instance = self.descriptor_instance(
+                descriptor_type,
+                kind,
+                python_name,
+                Some(type_object),
+                &[],
+            );
+            instances.push((python_name, instance));
         }
-        // **`type.__dict__["__mro__"]`** ✓（task-20 第 2 轮）：`Lib/inspect.py:1673` 的
-        // `_static_getmro = type.__dict__['__mro__'].__get__` 要它 ✓（同一类描述符 ✓）。
-        let dict_kind = self.new_dict();
-        let kind = self.new_str("dict");
-        self.dict_set(dict_kind, "_kind", kind);
-        let dict_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
-            descriptor_type,
-            core::cell::RefCell::new(Some(dict_kind)),
-        ));
-        let dict_descriptor = dict_descriptor.into_raw().cast::<Header>();
         if let Some(namespace) = self.type_namespace(type_object.cast()) {
-            self.dict_set(namespace, "__dict__", dict_descriptor);
+            for (python_name, instance) in instances {
+                self.dict_set(namespace, python_name, instance);
+                // SAFETY: `dict_set` 是**借用**口径（字典自己另存一份）⇒ 这份初始引用由本函数归还。
+                unsafe { self.release_object(instance.as_ptr()) };
+            }
         }
         // **`types.GenericAlias.__mro_entries__`** ✓（task-20 第 2 轮，PEP 560）：类型下标的结果当基类
         // （`class T(Mapping[str, str])` ✓）要靠它换出真正的基类 ✓。
@@ -1474,8 +1929,7 @@ impl Instance {
             if let Some(alias_type) = self.type_named(alias_name) {
                 if let Some(namespace) = self.type_namespace(alias_type.cast()) {
                     if self.dict_get(namespace, "__mro_entries__").is_none() {
-                        let function_type = self
-                            .type_named("builtin_function_or_method")
+                        let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
                             .expect("builtin_function_or_method 在引导期已登记");
                         let function = self.alloc(BuiltinFunctionObject::new(
                             function_type,
@@ -1489,17 +1943,95 @@ impl Instance {
                 }
             }
         }
-        let mro_kind = self.new_dict();
-        let kind = self.new_str("mro");
-        self.dict_set(mro_kind, "_kind", kind);
-        let mro_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
-            descriptor_type,
-            core::cell::RefCell::new(Some(mro_kind)),
-        ));
-        let mro_descriptor = mro_descriptor.into_raw().cast::<Header>();
-        if let Some(namespace) = self.type_namespace(type_object.cast()) {
-            self.dict_set(namespace, "__mro__", mro_descriptor);
+    }
+
+    /// **造／取一个描述符类型的专属类型**（task-8，幂等）：`new_attribute_type` ＋ `__get__`。
+    ///
+    /// `getset_descriptor` 与 `member_descriptor` 共用同一份 `__get__`（按实例的 `_kind` 分派，
+    /// 与 `_tuplegetter` 记 `_index` 同一手法 ✓）⇒ 两种描述符的 `.__get__` 都走
+    /// [`crate::builtin_objects::getset_descriptor_get`] 的**一处真相**。
+    fn ensure_descriptor_type(&self, name: &'static str) -> NonNull<crate::TypeObject> {
+        let hot = if name == "getset_descriptor" {
+            HotId::GetSetDescriptor
+        } else {
+            HotId::MemberDescriptor
+        };
+        match self.hot_type(hot) {
+            Some(existing) => existing,
+            None => {
+                // 自定义 `Slots`（`new_attribute_type` 只有默认 repr）——参照的描述符 repr 是
+                // `<attribute '__name__' of 'type' objects>`／`<member 'g' of 'Dyn' objects>` ✓。
+                let ty = self.new_type(
+                    name,
+                    core::mem::size_of::<crate::builtin_objects::AttributeObject>(),
+                    crate::builtin_objects::AttributeObject::slots()
+                        .with_new(crate::builtin_objects::attribute_new)
+                        .with_repr(crate::builtin_objects::descriptor_repr),
+                );
+                // SAFETY: 刚由本实例分配、存活。
+                unsafe { ty.as_ref() }.mark_has_instance_dict();
+                if let Some(namespace) = self.type_namespace(ty.cast()) {
+                    if self.dict_get(namespace, "__get__").is_none() {
+                        let function_type = self.hot_type(HotId::BuiltinFunctionOrMethod)
+                            .expect("builtin_function_or_method 在引导期已登记");
+                        let function = self.alloc(BuiltinFunctionObject::new(
+                            function_type,
+                            "__get__",
+                            Cell::new(
+                                crate::builtin_objects::getset_descriptor_get as crate::NativeFn,
+                            ),
+                        ));
+                        self.dict_set(namespace, "__get__", function.into_raw().cast::<Header>());
+                    }
+                }
+                ty
+            }
         }
+    }
+
+    /// **造一个描述符实例**（task-8）：`AttributeObject` ＋**内联属性字典**：
+    /// `_kind`（`__get__` 分派用）＋ `__name__`／`__objclass__`（参照 getset／member 描述符的
+    /// 公开属性面；`Lib/inspect.py` 的 `_shadowed_dict` 逐字检查后两项）。
+    ///
+    /// `owner` 是 `__objclass__` 的值（参照里每个类的描述符指向**那个类**）。
+    pub(crate) fn descriptor_instance(
+        &self,
+        descriptor_type: NonNull<crate::TypeObject>,
+        kind: &str,
+        python_name: &str,
+        owner: Option<NonNull<crate::TypeObject>>,
+        extra: &[(&str, NonNull<Header>)],
+    ) -> NonNull<Header> {
+        let attributes = self.new_dict();
+        let kind_text = self.new_str(kind);
+        self.dict_set(attributes, "_kind", kind_text);
+        // SAFETY: `dict_set` 借用口径 ⇒ 这份初始引用由本函数归还。
+        unsafe { self.release_object(kind_text.as_ptr()) };
+        let name_text = self.new_str(python_name);
+        self.dict_set(attributes, "__name__", name_text);
+        // SAFETY: 同上。
+        unsafe { self.release_object(name_text.as_ptr()) };
+        // 参照 getset／member 描述符的 `__doc__` 是 `None`（实测 3.14.4）⇒ 给 none 单例
+        // （`dict_set` 借用 ＋ 自己 retain，单例那份不必还）。
+        let doc = self.singletons().none();
+        self.dict_set(attributes, "__doc__", doc);
+        if let Some(owner) = owner {
+            let owner_value = self.type_value(owner);
+            self.dict_set(attributes, "__objclass__", owner_value);
+            // SAFETY: 同上。
+            unsafe { self.release_object(owner_value.as_ptr()) };
+        }
+        // **附加属性**（task-13：`__slots__` 的 member_descriptor 要 `__qualname__` 等）：
+        // 值是**借用**（字典自己放一份）；调用方留着自己的那份。
+        for (key, value) in extra {
+            self.dict_set(attributes, key, *value);
+        }
+        self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(Some(attributes)),
+        ))
+        .into_raw()
+        .cast::<Header>()
     }
 
 }

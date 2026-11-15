@@ -14,6 +14,7 @@
 //!
 //! **没覆盖的形态一律 `Err`**——`BC-59` 禁止"文档没写就跳过"，所以语料一扩，这里就会红。
 
+use crate::HotId;
 use core::ptr::NonNull;
 
 use crate::builtin_objects::{BoolObject, FloatObject, IntObject, TupleObject};
@@ -64,7 +65,7 @@ fn render_constant(instance: &Instance, raw: NonNull<Header>) -> Option<String> 
         // SAFETY: 同上。
         return Some(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value.to_decimal());
     }
-    if Some(ty) == instance.type_named("float") {
+    if Some(ty) == instance.hot_type(HotId::Float) {
         // SAFETY: 同上。用 `{:?}` 才能得到参照实现的 `1.0` 而不是 `1`
         return Some(format!("{:?}", unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value()));
     }
@@ -85,7 +86,7 @@ fn render_constant(instance: &Instance, raw: NonNull<Header>) -> Option<String> 
         rendered.push('\'');
         return Some(rendered);
     }
-    if Some(ty) == instance.type_named("tuple") {
+    if Some(ty) == instance.hot_type(HotId::Tuple) {
         // SAFETY: 同上。
         let items = unsafe { &*raw.as_ptr().cast::<TupleObject>() };
         let mut rendered = String::from("(");

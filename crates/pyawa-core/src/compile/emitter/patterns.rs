@@ -166,14 +166,12 @@ impl Emitter {
                 "`*` 项只能出现在序列模式里（第 {} 行）",
                 span.line_start
             ))),
-            // **`as` 模式**（task-45 ✓）：照参照实测形状 —— 先 `COPY 1` 一份给子模式测，
-            // 子模式命中后再把**主语**绑到名字（`STORE` 弹掉那份 copy ✓）。
-            Pattern::As(inner, name, span) => {
-                self.emit_named(*span, "COPY", 1);
-                self.emit_pattern_test(inner, next_case, matched)?;
-                self.store_target(*span, name);
-                Ok(())
-            }
+            // **`as` 模式**（task-45；C1 日常面修 ✗）：**绑定交给 `emit_statement_match`**
+            // （与 `Capture` 同口径：命中后 `COPY 1; STORE 名字` ⇒ 守卫看得见名字、主语仍留在栈上 ✓）。
+            // 先前在这里 `COPY 1; <子模式>; store_target` ✗ —— 子模式成功会 `JUMP matched`，
+            // **跳过**后面的 `store_target` ⇒ 名字永远没绑（`case int() as n if n > 10` 实测
+            // `UnboundLocalError` ✗）。
+            Pattern::As(inner, _name, _span) => self.emit_pattern_test(inner, next_case, matched),
             // 捕获与通配**一定命中** ✓（没有判定指令 ✓）
             Pattern::Capture(_, _) | Pattern::Wildcard(_) => Ok(()),
             Pattern::Or(alternatives, span) => {
@@ -239,9 +237,10 @@ impl Emitter {
             none_path,
         );
         self.emit_named(*span, "NOT_TAKEN", 0);
-        if total > 0 {
-            self.emit_indexed(*span, "UNPACK_SEQUENCE", total);
-        }
+        // **总是发**（C1 日常面修 ✗）：`case int() as n` 的参照字节码里就有 `UNPACK_SEQUENCE 0`
+        // （把 `MATCH_CLASS` 的结果元组收掉 ✓）；先前 total==0 跳过 ⇒ 结果元组留栈 ⇒
+        // `as` 绑定拿到的是 `()`、嵌套空类模式也会把残渣留给下一条 case ✗。
+        self.emit_indexed(*span, "UNPACK_SEQUENCE", total);
         // 逐个测：第 k 个子模式失败时，栈上还剩 `total - k - 1` 个已展开值，外加**待测值本身** ✓
         let mut sub_patterns: Vec<&Pattern> = positional.iter().collect();
         sub_patterns.extend(keywords.iter().map(|(_, sub)| sub));
@@ -327,11 +326,14 @@ impl Emitter {
                 self.emit_named(*span, "NOT_TAKEN", 0);
                 Ok(())
             }
-            // **`as` 模式**（task-45 ✓）：栈顶是待测值 ⇒ 先 `COPY 1` 给子模式，命中后
-            // 把原值 `STORE` 绑定 ✓。
+            // **`as` 模式**（task-45；C1 日常面修 ✗）：栈顶是待测值 ⇒ `COPY 1` 给子模式测，
+            // **子模式成功要先落到本地标签**再绑定 ✓ —— 先前直接把 `on_match` 传进去 ✗
+            // ⇒ 内层成功跳 `on_match` 会跳过 `store_target`（顶层 `case ... as n if` 的真 bug 同源）。
             Pattern::As(inner, name, span) => {
                 self.emit_named(*span, "COPY", 1);
-                self.emit_subpattern_test(inner, failure, on_match)?;
+                let bound = self.new_label();
+                self.emit_subpattern_test(inner, failure, bound)?;
+                self.mark_label(bound);
                 self.store_target(*span, name);
                 Ok(())
             }
@@ -729,8 +731,9 @@ impl Emitter {
             self.emit_indexed(span, "UNPACK_SEQUENCE", targets.len());
         } else {
             if starred.len() != 1 {
-                return Err(CompileError::Unsupported(
-                    "`for`／`with` 目标里只允许一个 `*`（如实报未接线 ✓）".to_owned(),
+                // 参照原文（round 62）：多个星号目标 ⇒ SyntaxError ✓。
+                return Err(CompileError::Syntax(
+                    "multiple starred expressions in assignment".to_owned(),
                 ));
             }
             let before = starred[0];
@@ -777,12 +780,20 @@ impl Emitter {
                 self.emit_indexed(target_span, "UNPACK_SEQUENCE", count);
             } else {
                 if starred.len() != 1 {
-                    return Err(CompileError::Unsupported(
-                        "元组解包只允许一个 `*` 目标（如实报未接线 ✓）".to_owned(),
+                    // 参照原文（round 62）：多个星号目标 ⇒ SyntaxError ✓。
+                    return Err(CompileError::Syntax(
+                        "multiple starred expressions in assignment".to_owned(),
                     ));
                 }
                 let before = starred[0];
                 let after = targets.len() - before - 1;
+                // 参照上限（round 63）：星号**前**的表达式数 > 255 ⇒
+                // `SyntaxError: too many expressions in star-unpacking assignment`（test_unpack_ex ✓）。
+                if before > 255 {
+                    return Err(CompileError::Syntax(
+                        "too many expressions in star-unpacking assignment".to_owned(),
+                    ));
+                }
                 let argument = (before | (after << 8)) as u16;
                 if argument > 255 {
                     self.emit_named(target_span, "EXTENDED_ARG", (argument >> 8) as u8);
@@ -901,7 +912,7 @@ impl Emitter {
                     self.emit_indexed(target_span, "STORE_ATTR", index);
                 }
                 // **再一层括号／方括号元组**（第 405 轮）：那一层的 `*` 拆成星标记后递归 ✓
-                Expression::TupleLiteral(items, group_span) | Expression::List(items, group_span) => {
+                Expression::List(items, group_span) => {
                     let inner: Vec<(Expression, bool)> = items
                         .iter()
                         .map(|item| match item {
@@ -910,6 +921,32 @@ impl Emitter {
                         })
                         .collect();
                     self.emit_unpack_assign(&inner, *group_span, true)?;
+                }
+                Expression::TupleLiteral(items, group_span) => {
+                    // **`(*x)` 这种"括号里只有一个星号项"不是合法目标** ✓（round 62；参照原文
+                    // `cannot use starred expression here`）。注意：**方括号那一支不算** ✓
+                    // —— `[*a] = …`／`[*[*a]] = …` 是合法目标（`test_unpack_ex` 实测 ✓）。
+                    // **如实说** ✗：AST 丢了"括号里有没有尾随逗号"的信息 ⇒ `(*a,) = …`（参照合法）
+                    // 这里也会报错；用例集里没有这种形态，随后补（记在台账 ✓）。
+                    if items.len() == 1 && matches!(items[0], Expression::Starred(..)) {
+                        return Err(CompileError::Syntax(
+                            "cannot use starred expression here".to_owned(),
+                        ));
+                    }
+                    let inner: Vec<(Expression, bool)> = items
+                        .iter()
+                        .map(|item| match item {
+                            Expression::Starred(inner, _) => ((**inner).clone(), true),
+                            other => (other.clone(), false),
+                        })
+                        .collect();
+                    self.emit_unpack_assign(&inner, *group_span, true)?;
+                }
+                // **嵌套位置的星号项**（round 62）：参照报 `cannot use starred expression here` ✓。
+                Expression::Starred(..) => {
+                    return Err(CompileError::Syntax(
+                        "cannot use starred expression here".to_owned(),
+                    ))
                 }
                 _ => {
                     return Err(CompileError::Unsupported(

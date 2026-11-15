@@ -79,6 +79,13 @@ impl<T: PyObject> Clone for Owned<'_, T> {
 
 impl<T: PyObject> Drop for Owned<'_, T> {
     fn drop(&mut self) {
+        static OWNED_DROP_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if crate::diag::flag_cached("PYAWA_OWNED_DROP_DEBUG", &OWNED_DROP_DEBUG) {
+            // SAFETY: self.ptr 有效。
+            let ty = unsafe { self.ptr.cast::<Header>().as_ref().ty() };
+            let name = unsafe { ty.as_ref() }.name();
+            eprintln!("[owned-drop] ptr={:p} ty={name}", self.ptr.cast::<Header>().as_ptr());
+        }
         // SAFETY: self.ptr 有效，且本守卫持有的正是一份新引用。
         unsafe {
             self.instance

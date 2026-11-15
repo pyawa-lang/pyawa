@@ -216,12 +216,12 @@ const FUNCTIONS: &[(&str, Arity, NativeFn, Unwired)] = &[
     ("CMSG_SPACE", Arity::DigitExactly(1), cmsg_space_stub, Unwired::Pure),
     ("close", Arity::PrefixExactlyOne, close_stub, Unwired::Capability),
     ("dup", Arity::PrefixExactlyOne, dup_stub, Unwired::Capability),
-    ("getaddrinfo", Arity::Getaddrinfo, getaddrinfo_stub, Unwired::Capability),
+    ("getaddrinfo", Arity::Getaddrinfo, getaddrinfo_native, Unwired::Capability),
     ("getdefaulttimeout", Arity::PrefixNoArgs, getdefaulttimeout_stub, Unwired::Capability),
     ("gethostbyaddr", Arity::DigitExactly(1), gethostbyaddr_stub, Unwired::Capability),
     ("gethostbyname", Arity::DigitExactly(1), gethostbyname_stub, Unwired::Capability),
     ("gethostbyname_ex", Arity::DigitExactly(1), gethostbyname_ex_stub, Unwired::Capability),
-    ("gethostname", Arity::PrefixNoArgs, gethostname_stub, Unwired::Capability),
+    ("gethostname", Arity::PrefixNoArgs, gethostname_native, Unwired::Capability),
     ("getnameinfo", Arity::DigitExactly(2), getnameinfo_stub, Unwired::Capability),
     ("getprotobyname", Arity::DigitExactly(1), getprotobyname_stub, Unwired::Capability),
     ("getservbyname", Arity::DigitBetween(1, 2), getservbyname_stub, Unwired::Capability),
@@ -296,6 +296,16 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.dict_set(namespace, name, function);
         exports.push(name);
     }
+    // **默认超时两口**（`P3-29` 第二片）：`Lib/socket.py` 的 `accept()`／`socketpair()` 会调
+    // `getdefaulttimeout()`；真超时语义未接（收发一律阻塞）⇒ 这里只做**值面**（默认 `None` ✓，
+    // `setdefaulttimeout` 记值、不改行为 —— 台账如实记 ✗）。
+    for (name, handler) in [
+        ("getdefaulttimeout", socket_getdefaulttimeout_native as NativeFn),
+        ("setdefaulttimeout", socket_setdefaulttimeout_native as NativeFn),
+    ] {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(namespace, name, function);
+    }
     // ---- 类与异常面 --------------------------------------------------------------
     if let Ok(socket_class) = build_socket_class(instance) {
         instance.dict_set(namespace, "socket", socket_class);
@@ -333,6 +343,70 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
 ///
 /// 基类 `object`、方法全挂 native（**调用即如实报未接线**）。**可被子类化** ✓ ——
 /// `Lib/socket.py:218` 的 `class socket(_socket.socket)` 靠它。
+/// **`_socket.socket` 的只读数据属性**（`family`／`type`／`proto`）的 getter 工厂。
+///
+/// **为什么不是实例属性** ✗：`Lib/socket.py:524` 的
+/// `@property def family(self): return _intenum_converter(super().family, AddressFamily)`
+/// 读的是 **`super().family`** —— `super` 绕开实例字典，只看**类型 MRO** ⇒ 基类必须有
+/// **类级数据描述符**（参照里是 C 的 getset）✓。这里用 `property`（本层已接描述符协议 ✓）
+/// 包一个 native getter：读的是实例的 `_family`／`_type`／`_proto` ✓。
+fn socket_readonly_property(
+    instance: &Instance,
+    getter: NativeFn,
+) -> Option<NonNull<Header>> {
+    let property_type = instance.type_named("property")?;
+    let callable = make_native(instance, "get", getter);
+    let outcome = pyawa_core::call_value(
+        instance,
+        instance.type_value(property_type).cast::<Header>(),
+        &[callable],
+        &[],
+    );
+    instance.release(callable);
+    outcome.ok()
+}
+
+fn socket_family_getter(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(type_error(instance, "descriptor 'family' needs an argument".to_owned()));
+    };
+    let value = socket_int_attribute(instance, object, "_family")
+        .unwrap_or(i64::from(constant("AF_INET")));
+    Ok(instance.new_int(value))
+}
+
+fn socket_type_getter(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(type_error(instance, "descriptor 'type' needs an argument".to_owned()));
+    };
+    let value = socket_int_attribute(instance, object, "_type")
+        .unwrap_or(i64::from(constant("SOCK_STREAM")));
+    Ok(instance.new_int(value))
+}
+
+fn socket_proto_getter(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(type_error(instance, "descriptor 'proto' needs an argument".to_owned()));
+    };
+    let value = socket_int_attribute(instance, object, "_proto").unwrap_or(0);
+    Ok(instance.new_int(value))
+}
+
 fn build_socket_class(instance: &Instance) -> Result<NonNull<Header>, pyawa_core::ExecError> {
     let base = instance
         .type_named("object")
@@ -353,9 +427,36 @@ fn build_socket_class(instance: &Instance) -> Result<NonNull<Header>, pyawa_core
         ("fileno", socket_fileno_native as NativeFn),
         ("send", socket_send_native as NativeFn),
         ("recv", socket_recv_native as NativeFn),
+        // **`P3-29` 第二片**：TCP 面向（`CP-39` 的 AF_INET 线格式；IPv6／UNIX 族如实
+        // 回 `OSError(EAFNOSUPPORT)` —— 与"本机没有该地址族"的真实机器语义同形 ✓）。
+        ("bind", socket_bind_native as NativeFn),
+        ("connect", socket_connect_native as NativeFn),
+        ("listen", socket_listen_native as NativeFn),
+        ("accept", socket_accept_native as NativeFn),
+        ("getsockname", socket_getsockname_native as NativeFn),
+        ("getpeername", socket_getpeername_native as NativeFn),
+        ("shutdown", socket_shutdown_native as NativeFn),
+        ("setsockopt", socket_setsockopt_native as NativeFn),
+        // **`Lib/socket.py` 的子类样板要的那几个**（`_accept`／超时族／`sendall`／`connect_ex`）。
+        ("_accept", socket_accept_fd_native as NativeFn),
+        ("gettimeout", socket_gettimeout_native as NativeFn),
+        ("settimeout", socket_settimeout_native as NativeFn),
+        ("setblocking", socket_setblocking_native as NativeFn),
+        ("getblocking", socket_getblocking_native as NativeFn),
+        ("sendall", socket_sendall_native as NativeFn),
+        ("connect_ex", socket_connect_ex_native as NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(class_namespace, name, function);
+    }
+    for (name, getter) in [
+        ("family", socket_family_getter as NativeFn),
+        ("type", socket_type_getter as NativeFn),
+        ("proto", socket_proto_getter as NativeFn),
+    ] {
+        if let Some(property) = socket_readonly_property(instance, getter) {
+            instance.dict_set(class_namespace, name, property);
+        }
     }
     build_class_from_parts(
         instance,
@@ -531,6 +632,144 @@ fn check_getaddrinfo(
     Ok(())
 }
 
+
+/// **`_socket.getaddrinfo`（日常面最小面）** ✓：只支持**数字 IPv4** 与 `"localhost"`（→`127.0.0.1`）
+/// —— 这两类走 `AI_NUMERICHOST` 口径的**纯计算**（不查 DNS、不发 socket 系统调用 ⇒ 不碰 `CM-8`
+/// 的"真 I/O 属能力域"边界 ✓）。其它主机名**如实**报 `NotImplementedError`（DNS 仍属能力域缺口 ✗）。
+///
+/// 动因（C1 日常面）：`urllib.request` → `http.client` 的 `create_connection` 一进门就调
+/// `getaddrinfo(host, port, 0, SOCK_STREAM)` ⇒ 先前一律 `NotImplementedError` ✗ ⇒ 连
+/// `http://127.0.0.1:port/` 都打不开 ✗。补齐后本机／局域网数字地址的 HTTP 走通 ✓。
+fn getaddrinfo_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    check_arity(instance, "getaddrinfo", Arity::Getaddrinfo, args, kwargs)?;
+    let mut host_value = args.first().copied();
+    let mut port_value = args.get(1).copied();
+    let mut family: i64 = 0;
+    let mut sock_type: i64 = 0;
+    let mut proto: i64 = 0;
+    let mut flags: i64 = 0;
+    for (index, item) in args.iter().enumerate().skip(2) {
+        let number = instance.int_of(*item).and_then(|value| value.to_i64()).unwrap_or(0);
+        match index {
+            2 => family = number,
+            3 => sock_type = number,
+            4 => proto = number,
+            5 => flags = number,
+            _ => {}
+        }
+    }
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else { continue };
+        let number = instance.int_of(*value).and_then(|number| number.to_i64()).unwrap_or(0);
+        match name {
+            "host" => host_value = Some(*value),
+            "port" => port_value = Some(*value),
+            "family" => family = number,
+            "type" => sock_type = number,
+            "proto" => proto = number,
+            "flags" => flags = number,
+            _ => {}
+        }
+    }
+    let _ = flags;
+    let Some(host_value) = host_value else {
+        return Err(type_error(
+            instance,
+            "getaddrinfo() missing required argument 'host' (pos 1)".to_owned(),
+        ));
+    };
+    // host：str（或 bytes，按 ASCII 文本看）；别的类型照参照报 TypeError。
+    let host = instance
+        .text_of(host_value)
+        .map(str::to_owned)
+        .or_else(|| {
+            instance
+                .bytes_like_value(host_value)
+                .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+        })
+        .ok_or_else(|| {
+            type_error(
+                instance,
+                "getaddrinfo() argument 1 must be string or bytes".to_owned(),
+            )
+        })?;
+    // port：整数；字符串按十进制解析（服务名解析属 DNS 族，未接线 ⇒ 报错）。
+    let port = match port_value {
+        Some(value) => match instance.int_of(value).and_then(|number| number.to_i64()) {
+            Some(number) => number,
+            None => match instance.text_of(value).and_then(|text| text.parse::<i64>().ok()) {
+                Some(number) => number,
+                None => {
+                    return Err(instance.raise_builtin_error(
+                        "NotImplementedError",
+                        "`_socket.getaddrinfo`：服务名（非数字 port）解析未接线；请用数字端口 ✓",
+                    ))
+                }
+            },
+        },
+        None => 0,
+    };
+    // 数字 IPv4／localhost ⇒ 纯计算；其它主机名 ⇒ 如实报 DNS 未接线。
+    let literal = if host == "localhost" {
+        Some("127.0.0.1".to_owned())
+    } else if is_ipv4_literal(&host) {
+        Some(host.clone())
+    } else {
+        None
+    };
+    let Some(ipv4) = literal else {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket.getaddrinfo`：DNS 解析属网络能力域（CM-8）尚未接线；目前只支持数字 IPv4 与 `localhost`（纯计算，不发 socket 系统调用）✗",
+        ));
+    };
+    let af_inet = i64::from(constant("AF_INET"));
+    if family != 0 && family != i64::from(constant("AF_UNSPEC")) && family != af_inet {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket.getaddrinfo`：目前只支持 AF_INET（IPv6／其它族未接线）✗",
+        ));
+    }
+    let candidates = [
+        (i64::from(constant("SOCK_STREAM")), i64::from(constant("IPPROTO_TCP"))),
+        (i64::from(constant("SOCK_DGRAM")), i64::from(constant("IPPROTO_UDP"))),
+    ];
+    let mut entries: Vec<NonNull<Header>> = Vec::new();
+    for (kind, default_proto) in candidates {
+        if sock_type != 0 && sock_type != kind {
+            continue;
+        }
+        if proto != 0 && proto != default_proto {
+            continue;
+        }
+        let sockaddr = instance.new_tuple(vec![instance.new_str(&ipv4), instance.new_int(port)]);
+        let canonical = instance.new_str("");
+        let entry = instance.new_tuple(vec![
+            instance.new_int(af_inet),
+            instance.new_int(kind),
+            instance.new_int(default_proto),
+            canonical,
+            sockaddr,
+        ]);
+        entries.push(entry);
+    }
+    Ok(instance.new_list(entries))
+}
+
+/// 是否**数字 IPv4 字面量**（四段十进制 0..=255 ✓；不做任何名字解析 ✓）。
+fn is_ipv4_literal(host: &str) -> bool {
+    let parts: Vec<&str> = host.split('.').collect();
+    parts.len() == 4
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.parse::<u16>().is_ok_and(|value| value <= 255))
+}
+
 // ---- 未接线的如实报错（**不返回假值、不假装成功** ✓） ---------------------------------
 
 fn not_wired(instance: &Instance, name: &str, unwired: Unwired) -> pyawa_core::ExecError {
@@ -539,6 +778,31 @@ fn not_wired(instance: &Instance, name: &str, unwired: Unwired) -> pyawa_core::E
         Unwired::Pure => "纯数据函数本轮未接线（只落名字/参数形态面；不返回假值，P3-29 后续轮接）",
     };
     instance.raise_builtin_error("NotImplementedError", &format!("`_socket.{name}`：{detail}"))
+}
+
+/// **`_socket.gethostname()`**（round 117 真缺口）：`platform._node()`／`platform.uname()` 一进门就调它 ✓
+/// ⇒ 先前按能力域报 `NotImplementedError` ✗ ⇒ `platform.system()` 都不可用 ✗
+/// （`test_builtin` 的**类体级** `platform.system()` ✓）。
+///
+/// 取法（平台事实，见 `CX-4` 与 `lib.rs` 里 `std::env` 的先例 ✓）：`PYAWA_HOSTNAME` 环境变量 ⇒
+/// `HOSTNAME` ⇒ `/proc/sys/kernel/hostname` ⇒ `localhost`；**只发读操作**，不碰网络 ✓。
+/// **如实登记** ✗：这不是"真实主机名"的完整能力（不查 NSS／DNS）；取值口径固定如上 ✓。
+fn gethostname_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    check_arity(instance, "gethostname", Arity::PrefixNoArgs, args, kwargs)?;
+    // **平台读取在 runtime 侧**（`CX-4`：本 crate 不碰 `std::fs` ✗）——runtime 启动时把
+    // `/proc/sys/kernel/hostname` 注入 `PYAWA_HOSTNAME` ✓；这里只读环境变量 ✓。
+    let name = std::env::var("PYAWA_HOSTNAME")
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| text.trim().to_owned())
+        .unwrap_or_else(|| "localhost".to_owned());
+    Ok(instance.new_str(&name))
 }
 
 macro_rules! socket_stub_fn {
@@ -559,12 +823,10 @@ socket_stub_fn!(cmsg_len_stub, "CMSG_LEN", Arity::DigitExactly(1), Unwired::Pure
 socket_stub_fn!(cmsg_space_stub, "CMSG_SPACE", Arity::DigitExactly(1), Unwired::Pure);
 socket_stub_fn!(close_stub, "close", Arity::PrefixExactlyOne, Unwired::Capability);
 socket_stub_fn!(dup_stub, "dup", Arity::PrefixExactlyOne, Unwired::Capability);
-socket_stub_fn!(getaddrinfo_stub, "getaddrinfo", Arity::Getaddrinfo, Unwired::Capability);
 socket_stub_fn!(getdefaulttimeout_stub, "getdefaulttimeout", Arity::PrefixNoArgs, Unwired::Capability);
 socket_stub_fn!(gethostbyaddr_stub, "gethostbyaddr", Arity::DigitExactly(1), Unwired::Capability);
 socket_stub_fn!(gethostbyname_stub, "gethostbyname", Arity::DigitExactly(1), Unwired::Capability);
 socket_stub_fn!(gethostbyname_ex_stub, "gethostbyname_ex", Arity::DigitExactly(1), Unwired::Capability);
-socket_stub_fn!(gethostname_stub, "gethostname", Arity::PrefixNoArgs, Unwired::Capability);
 socket_stub_fn!(getnameinfo_stub, "getnameinfo", Arity::DigitExactly(2), Unwired::Capability);
 socket_stub_fn!(getprotobyname_stub, "getprotobyname", Arity::DigitExactly(1), Unwired::Capability);
 socket_stub_fn!(getservbyname_stub, "getservbyname", Arity::DigitBetween(1, 2), Unwired::Capability);
@@ -948,6 +1210,598 @@ fn socket_recv_native(
         Ok(received) => Ok(instance.new_bytes(&buffer[..received])),
         Err(error) => Err(net_error(instance, error)),
     }
+}
+
+/// 取本 socket 的地址族（实例属性 `_family`；缺 ⇒ `AF_INET`）。
+fn socket_family(instance: &Instance, this: NonNull<Header>) -> i32 {
+    socket_int_attribute(instance, this, "_family").unwrap_or(i64::from(constant("AF_INET"))) as i32
+}
+
+/// **Python 地址元组 ⇒ `CP-39` 线格式**（v1 只有 `AF_INET`：`(host, port)`）。
+///
+/// `host` 是点分四段字符串（`""`／`None` ＝ `0.0.0.0`，参照的 INADDR_ANY 口径 ✓）；
+/// 其它地址族 ⇒ `OSError(EAFNOSUPPORT)`（provider 的真实机器语义；IPv6 不在 `CP-39` v1 ✓）。
+fn socket_address_wire(
+    instance: &Instance,
+    this: NonNull<Header>,
+    value: NonNull<Header>,
+    function: &str,
+) -> Result<(i32, Vec<u8>), pyawa_core::ExecError> {
+    let family = socket_family(instance, this);
+    if family != constant("AF_INET") {
+        let errno = instance.platform_constant("EAFNOSUPPORT").unwrap_or(97) as i32;
+        return Err(net_error(
+            instance,
+            pyawa_core::CapabilityCallError::Machine(errno),
+        ));
+    }
+    let Some(items) = instance.tuple_items(value) else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(type_error(
+            instance,
+            format!("{function}() AF_INET address must be tuple, not {name}"),
+        ));
+    };
+    if items.len() < 2 {
+        return Err(type_error(
+            instance,
+            format!("{function}() AF_INET address must be a pair"),
+        ));
+    }
+    let mut address = [0u8; 4];
+    match items[0] {
+        host if is_none_value(instance, host) => {}
+        host => {
+            let Some(text) = instance.text_of(host) else {
+                let name = instance.type_name(instance.type_of(host));
+                return Err(type_error(
+                    instance,
+                    format!("{function}() AF_INET address must be a pair, not {name}"),
+                ));
+            };
+            if !text.is_empty() {
+                let mut seen = 0usize;
+                for part in text.split('.') {
+                    let Ok(number) = part.parse::<u8>() else {
+                        return Err(net_error(
+                            instance,
+                            pyawa_core::CapabilityCallError::Machine(
+                                instance.platform_constant("EINVAL").unwrap_or(22) as i32,
+                            ),
+                        ));
+                    };
+                    if seen >= 4 {
+                        return Err(instance.raise_builtin_error("ValueError", "got more than 4 bytes in inet_aton()"));
+                    }
+                    address[seen] = number;
+                    seen += 1;
+                }
+                if seen != 4 {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "invalid IPv4 address",
+                    ));
+                }
+            }
+        }
+    }
+    let port = socket_int(instance, items[1])?;
+    if !(0..=65535).contains(&port) {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            &format!("{function}(): port must be 0-65535."),
+        ));
+    }
+    Ok((
+        family,
+        pyawa_capabilities::net::encode_ipv4(address, port as u16).to_vec(),
+    ))
+}
+
+/// `CP-39` 线格式 ⇒ Python 地址元组 `(dotted, port)` ✓。
+fn socket_address_tuple(
+    instance: &Instance,
+    wire: &[u8],
+) -> NonNull<Header> {
+    let (address, port) = pyawa_capabilities::net::decode_ipv4(wire).unwrap_or(([0u8; 4], 0));
+    let text = instance.new_str(&format!(
+        "{}.{}.{}.{}",
+        address[0], address[1], address[2], address[3]
+    ));
+    let port = instance.new_int(i64::from(port));
+    instance.new_tuple(vec![text, port])
+}
+
+fn socket_receiver<'a>(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &'a [NonNull<Header>],
+    function: &str,
+) -> Result<(NonNull<Header>, &'a [NonNull<Header>]), pyawa_core::ExecError> {
+    match this_of(bound, args) {
+        Some((this, rest)) => Ok((this, rest)),
+        None => Err(type_error(instance, format!("{function} 缺少 self"))),
+    }
+}
+
+/// **`bind(address)`**：`AF_INET` 的 `CP-39` 线格式 ⇒ `net.bind` 槽。
+fn socket_bind_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "bind()")?;
+    let Some(address) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!("bind() takes exactly one argument ({} given)", rest.len()),
+        ));
+    };
+    let (family, wire) = socket_address_wire(instance, this, address, "bind")?;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_bind(fd as u64, family, &wire) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`connect(address)`**。
+fn socket_connect_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "connect()")?;
+    let Some(address) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!("connect() takes exactly one argument ({} given)", rest.len()),
+        ));
+    };
+    let (family, wire) = socket_address_wire(instance, this, address, "connect")?;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_connect(fd as u64, family, &wire) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`listen([backlog])`**（缺省 backlog ＝ 0，照参照签名 ✓）。
+fn socket_listen_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "listen()")?;
+    let backlog = match rest.first().copied() {
+        Some(value) if !is_none_value(instance, value) => socket_int(instance, value)? as i32,
+        _ => 0,
+    };
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_listen(fd as u64, backlog) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// 造一个接管既有 fd 的 `_socket.socket`（`accept` 用；走类的 `fileno=` 属性 ✓）。
+fn socket_from_fd(
+    instance: &Instance,
+    fd: u64,
+    family: i32,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(class) = socket_class_of(instance) else {
+        return Err(instance.raise_builtin_error(
+            "RuntimeError",
+            "`_socket.socket` 未登记（`_socket` 模块的类面缺失）",
+        ));
+    };
+    let fd_value = instance.new_int(fd as i64);
+    let family_value = instance.new_int(i64::from(family));
+    let kwargs = [
+        (instance.new_str("fileno"), fd_value),
+        (instance.new_str("family"), family_value),
+    ];
+    let outcome = pyawa_core::call_value(instance, class, &[], &kwargs);
+    for (key, value) in kwargs {
+        instance.release(key);
+        instance.release(value);
+    }
+    outcome
+}
+
+/// **`accept()`** ⇒ `(conn_socket, address)`。
+fn socket_accept_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, _rest) = socket_receiver(instance, bound, args, "accept()")?;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_accept(fd as u64) {
+        Ok((new_fd, family, wire)) => {
+            let connection = socket_from_fd(instance, new_fd, family)?;
+            let address = socket_address_tuple(instance, &wire);
+            Ok(instance.new_tuple(vec![connection, address]))
+        }
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`getsockname()`**。
+fn socket_getsockname_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, _rest) = socket_receiver(instance, bound, args, "getsockname()")?;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_getsockname(fd as u64) {
+        Ok((_family, wire)) => Ok(socket_address_tuple(instance, &wire)),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`getpeername()`**。
+fn socket_getpeername_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, _rest) = socket_receiver(instance, bound, args, "getpeername()")?;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_getpeername(fd as u64) {
+        Ok((_family, wire)) => Ok(socket_address_tuple(instance, &wire)),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`shutdown(how)`**（`SHUT_RD`／`SHUT_WR`／`SHUT_RDWR`）。
+fn socket_shutdown_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "shutdown()")?;
+    let Some(how) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!("shutdown() takes exactly one argument ({} given)", rest.len()),
+        ));
+    };
+    let how = socket_int(instance, how)? as i32;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_shutdown(fd as u64, how) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`setsockopt(level, optname, value)`**：整数选项按宿主 `int` 的字节形态转发（照 C 语义 ✓），
+/// `bytes` 原样转发。
+fn socket_setsockopt_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "setsockopt()")?;
+    if rest.len() != 3 {
+        return Err(type_error(
+            instance,
+            format!("setsockopt() takes exactly 3 arguments ({} given)", rest.len()),
+        ));
+    }
+    let level = socket_int(instance, rest[0])? as i32;
+    let name = socket_int(instance, rest[1])? as i32;
+    let payload: Vec<u8> = if let Some(number) = instance.int_value(rest[2]) {
+        (number as i32).to_ne_bytes().to_vec()
+    } else if let Some(bytes) = instance.bytes_value(rest[2]) {
+        bytes.to_vec()
+    } else {
+        let kind = instance.type_name(instance.type_of(rest[2]));
+        return Err(type_error(
+            instance,
+            format!("a bytes-like object is required, not '{kind}'"),
+        ));
+    };
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_setsockopt(fd as u64, level, name, &payload) {
+        Ok(()) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// `_timeout` 槽：`None` ＝ 阻塞（参照默认 ✓）。**如实** ✗：真超时（`SO_RCVTIMEO`／`select` 轮询）
+/// 尚未接线 —— 本层收发一律阻塞；`settimeout` 只记值，不改行为（台账已记）。
+fn socket_timeout_attribute(instance: &Instance, this: NonNull<Header>) -> Option<NonNull<Header>> {
+    instance.attribute_optional_of(this, "_timeout").ok().flatten()
+}
+
+/// **`_accept()`**：`Lib/socket.py` 的 `accept()` 覆盖用它 ⇒ `(fd, address)`。
+fn socket_accept_fd_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, _rest) = socket_receiver(instance, bound, args, "accept()")?;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    match instance.net_accept(fd as u64) {
+        Ok((new_fd, _family, wire)) => {
+            let fd_value = instance.new_int(new_fd as i64);
+            let address = socket_address_tuple(instance, &wire);
+            Ok(instance.new_tuple(vec![fd_value, address]))
+        }
+        Err(error) => Err(net_error(instance, error)),
+    }
+}
+
+/// **`gettimeout()`** ⇒ `None`（阻塞）／记录的秒数。
+fn socket_gettimeout_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, _rest) = socket_receiver(instance, bound, args, "gettimeout()")?;
+    Ok(socket_timeout_attribute(instance, this)
+        .map(|value| instance.retain(value))
+        .unwrap_or_else(|| instance.new_none()))
+}
+
+/// **`settimeout(value)`**：记值（`None` ⇒ 阻塞）；**不改真 I/O 行为**（如实 ✗，见上）。
+fn socket_settimeout_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "settimeout()")?;
+    let Some(value) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!(
+                "settimeout() takes exactly one argument ({} given)",
+                rest.len()
+            ),
+        ));
+    };
+    if is_none_value(instance, value) {
+        instance.set_attribute_value(this, "_timeout", value)?;
+        let blocking = instance.new_bool(false);
+        instance.set_attribute_value(this, "_blocking", blocking)?;
+        instance.release(blocking);
+        return Ok(instance.retain(instance.singletons().none()));
+    }
+    // **int 也收**（C1 日常面修 ✗）：先前只认 `float` ⇒ `sock.settimeout(5)`（`http.client`
+    // 传的就是 int ✓）报 `'int' object cannot be interpreted as an integer` ✗ —— 参照里
+    // `settimeout` 收 int／float，值按 `float` 存（`gettimeout()` 回 `5.0` ✓）。
+    let number = match instance.float_value(value) {
+        Some(number) => number,
+        None => match instance.int_of(value).and_then(|number| number.to_i64()) {
+            Some(integer) => integer as f64,
+            None => {
+                let name = instance.type_name(instance.type_of(value));
+                return Err(type_error(
+                    instance,
+                    format!("'{name}' object cannot be interpreted as an integer"),
+                ));
+            }
+        },
+    };
+    if number < 0.0 {
+        return Err(instance.raise_builtin_error("ValueError", "Timeout value out of range"));
+    }
+    let stored = instance.new_float(number);
+    instance.set_attribute_value(this, "_timeout", stored)?;
+    instance.release(stored);
+    let blocking = instance.new_bool(number > 0.0);
+    instance.set_attribute_value(this, "_blocking", blocking)?;
+    instance.release(blocking);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`setblocking(flag)`**：`flag` ⇒ `_timeout = None`；否则 `0.0`。
+fn socket_setblocking_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "setblocking()")?;
+    let Some(flag) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!(
+                "setblocking() takes exactly one argument ({} given)",
+                rest.len()
+            ),
+        ));
+    };
+    let blocking = instance.truth_of(flag);
+    let value = if blocking {
+        instance.new_none()
+    } else {
+        instance.new_float(0.0)
+    };
+    let outcome = instance.set_attribute_value(this, "_timeout", value);
+    instance.release(value);
+    outcome?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`getblocking()`** ⇒ `_timeout is None`。
+fn socket_getblocking_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, _rest) = socket_receiver(instance, bound, args, "getblocking()")?;
+    let blocking = match socket_timeout_attribute(instance, this) {
+        None => true,
+        Some(value) => is_none_value(instance, value),
+    };
+    Ok(instance.new_bool(blocking))
+}
+
+/// **`sendall(data)`**：循环 `send` 直到发完（`Net` 层的 `send` 已处理 `EINTR` ✓）。
+fn socket_sendall_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "sendall()")?;
+    let Some(data_value) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!("sendall() takes exactly one argument ({} given)", rest.len()),
+        ));
+    };
+    let Some(data) = instance.bytes_value(data_value) else {
+        let name = instance.type_name(instance.type_of(data_value));
+        return Err(type_error(
+            instance,
+            format!("a bytes-like object is required, not '{name}'"),
+        ));
+    };
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    let mut offset = 0usize;
+    while offset < data.len() {
+        match instance.net_send(fd as u64, &data[offset..]) {
+            Ok(0) => break,
+            Ok(written) => offset += written,
+            Err(error) => return Err(net_error(instance, error)),
+        }
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`connect_ex(address)`**：成功 `0`，失败回 **errno 整数**（不是抛异常，照参照 ✓）。
+fn socket_connect_ex_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (this, rest) = socket_receiver(instance, bound, args, "connect_ex()")?;
+    let Some(address) = rest.first().copied() else {
+        return Err(type_error(
+            instance,
+            format!(
+                "connect_ex() takes exactly one argument ({} given)",
+                rest.len()
+            ),
+        ));
+    };
+    let (family, wire) = socket_address_wire(instance, this, address, "connect_ex")?;
+    let fd = socket_fd(instance, this);
+    if fd < 0 {
+        return Err(raise_ebadf(instance));
+    }
+    let code = match instance.net_connect(fd as u64, family, &wire) {
+        Ok(()) => 0,
+        Err(pyawa_core::CapabilityCallError::Machine(errno)) => i64::from(errno),
+        Err(_) => instance.platform_constant("EOPNOTSUPP").unwrap_or(95),
+    };
+    Ok(instance.new_int(code))
+}
+
+/// `_socket` 模块命名空间（模块表里那个模块的挂载 dict ✓）。
+fn socket_module_namespace(instance: &Instance) -> Option<NonNull<Header>> {
+    let modules = instance.modules()?;
+    let module = instance.dict_get(modules, NAME)?;
+    pyawa_core::mounted_instance_dict(instance, module)
+}
+
+/// **`_socket.getdefaulttimeout()`** ⇒ 记录的默认超时（初始 `None` ＝ 阻塞 ✓）。
+fn socket_getdefaulttimeout_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !args.is_empty() {
+        return Err(type_error(
+            instance,
+            format!(
+                "_socket.getdefaulttimeout() takes no arguments ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let stored = socket_module_namespace(instance)
+        .and_then(|namespace| instance.dict_get(namespace, "_default_timeout"));
+    Ok(match stored {
+        Some(value) => instance.retain(value),
+        None => instance.new_none(),
+    })
+}
+
+/// **`_socket.setdefaulttimeout(value)`**：记值（`None` ＝ 阻塞）。**不改真 I/O 行为** ✗。
+fn socket_setdefaulttimeout_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(type_error(
+            instance,
+            "_socket.setdefaulttimeout() takes exactly one argument (0 given)".to_owned(),
+        ));
+    };
+    if !is_none_value(instance, value) && instance.float_value(value).is_none() {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(type_error(
+            instance,
+            format!("'{name}' object cannot be interpreted as an integer"),
+        ));
+    }
+    if let Some(namespace) = socket_module_namespace(instance) {
+        let stored = instance.retain(value);
+        instance.dict_set(namespace, "_default_timeout", stored);
+    }
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 /// **`_socket.socketpair(family=AF_UNIX, type=SOCK_STREAM, proto=0)`**（`CP-38`）。

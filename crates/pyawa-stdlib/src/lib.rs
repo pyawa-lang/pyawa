@@ -41,9 +41,11 @@ pub mod ast_module;
 /// **`_socket`**（`P3-29` socket 战役第一轮）：常量/`has_ipv6`/类与异常面为真；
 /// 一切 I/O 函数面如实报 `NotImplementedError`（能力域 `CM-8` 未接）——见模块头。
 pub mod _socket_module;
-/// **`_signal`**（task-13）：`import signal` 的导入闸（asyncio 族 118 的第一道 C 模块闸）。
-/// 导出面**刻意收窄**（常量 ＋ `signal`/`getsignal`）；两个函数调用如实报 `NotImplementedError`
-/// （能力域 `CM-8` 未接）——见模块头。
+/// **`pyexpat`**（`P3-37` 剩余，round 38）：形状面 ＋ 诚实解析桩（整块 expat C 扩展未移植）。
+pub mod pyexpat_module;
+/// **`_signal`**（task-13／§12.2）：`import signal` 的导入闸（asyncio 族的第一道 C 模块闸）。
+/// 导出面收窄（常量 ＋ `signal`／`getsignal`／`default_int_handler`／`set_wakeup_fd`）；
+/// **记账式**（只记录、不投递；§12.2 方案 A）——见模块头与 `docs/SPEC-c-modules.md` §5.2.11。
 pub mod _signal_module;
 /// **`_posixsubprocess`**（task-15）：`import subprocess` 的第一道 C 模块闸（`fork_exec` 只绑定、
 /// 不调用 ✓）；调用如实报 `NotImplementedError`（能力域 `CM-8` 未接）——见模块头。
@@ -108,9 +110,10 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // `from _socket import *` ＋ `class socket(_socket.socket)` 的底座 ✓。
         // 常量/`has_ipv6`/类与异常面为真；I/O 函数面如实报 `NotImplementedError`（能力域未接 ✓）。
         (_socket_module::NAME, _socket_module::build),
-        // **`_signal`**（task-13 ✓）：`Lib/signal.py` 的 `import _signal` ＋
+        // **`_signal`**（task-13 ✓／§12.2 记账式最小面 ✓）：`Lib/signal.py` 的 `import _signal` ＋
         // `@_wraps(_signal.signal/getsignal)` 的底座 ✓；导出面收窄 ⇒ 四个可选包装不定义 ✓。
-        // 常量是参照真值；两个函数调用如实报 `NotImplementedError`（能力域未接 ✓）。
+        // 常量是参照真值；`signal`／`getsignal`／`set_wakeup_fd` **只记账、不投递**（方案 A）⇒
+        // `asyncio.run` 可初始化（`getsignal(2) is default_int_handler` 成立）——见模块头。
         (_signal_module::NAME, _signal_module::build),
         // **`_posixsubprocess`**（task-15 ✓）：`subprocess.py:106` 的
         // `from _posixsubprocess import fork_exec as _fork_exec`（只绑定 ✓）。
@@ -149,6 +152,15 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (_hashlib_module::NAME, _hashlib_module::build),
         // **`_blake2`**（round 20）：上游 `hashlib.py` 对 blake2 只走 builtin 路径 ⇒ 名字占位、真调用如实未实现。
         (_hashlib_module::BLAKE2_NAME, _hashlib_module::build_blake2),
+        // **`pyexpat`**（`P3-37` 剩余，round 38）：`xml.etree`／`minidom`／`docxmlrpc` 在导入期要它；
+        // 形状面 ＋ 诚实解析桩（真 expat 移植属独立评估）。`errors`／`model` 按参照是**子模块** ✓
+        //（`sys.modules['pyexpat.errors']` 也要有键 ✓ ⇒ 三个名字都进模块表）。
+        (pyexpat_module::NAME, pyexpat_module::build),
+        (pyexpat_module::ERRORS_NAME, pyexpat_module::build_errors),
+        (pyexpat_module::MODEL_NAME, pyexpat_module::build_model),
+        // **`_csv`**（task-3 ✓）：`Lib/csv.py` 的 `from _csv import Error, reader, writer,
+        // register_dialect, …` 的底座 ✓；`csv` 模块从此可 `import`（§12.3 的验收①）。
+        (_csv_module::NAME, _csv_module::build),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
@@ -227,12 +239,33 @@ fn build_string_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyaw
 /// 表（`BC-30`／`BC-37`／`BC-38` 的**数值唯一出处** ✓），本层不另造表 ✓。
 /// **如实偏差** ✗：只有 `get_executor`（JIT 执行器）**调用即报未接线** ✓ —— 它在 `dis()` 一族里
 /// 走**运行期**才用 ✓，故 `import opcode`／`import dis` 不受影响 ✓。
+/// **`_opcode.is_valid(op)`**（`P3-42`）：`op` 是不是本指令集里**有效**的编号（bool）✓。
+///
+/// 口径照本机 CPython 3.14.4 实测：`0..=266` 有效，但 **121–127**（预留）与 **212–233**
+/// （do-not-use／instrumented 下界之前的一批）无效；负数／`> 266` 无效。
+/// 指令集基线归 `BC-30`（数值不在这里另立一份名单 ✓）。
+fn is_valid_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    let value = args
+        .first()
+        .and_then(|object| instance.int_of(*object))
+        .and_then(|integer| integer.to_i64())
+        .unwrap_or(-1);
+    let valid =
+        (0..=266).contains(&value) && !(121..=127).contains(&value) && !(212..=233).contains(&value);
+    Ok(instance.new_bool(valid))
+}
+
 fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
     let namespace = instance.new_dict();
     let method_type = instance
         .type_named("builtin_function_or_method")
         .expect("builtin_function_or_method 在引导期已登记");
-    let handlers: [(&str, pyawa_core::NativeFn); 12] = [
+    let handlers: [(&str, pyawa_core::NativeFn); 13] = [
         ("has_arg", has_arg_native as pyawa_core::NativeFn),
         ("has_const", has_const_native as pyawa_core::NativeFn),
         ("has_name", has_name_native as pyawa_core::NativeFn),
@@ -245,6 +278,8 @@ fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<py
         ("get_special_method_names", get_special_method_names_native as pyawa_core::NativeFn),
         ("get_nb_ops", get_nb_ops_native as pyawa_core::NativeFn),
         ("stack_effect", stack_effect_native as pyawa_core::NativeFn),
+        // **`P3-42`**：`_opcode.is_valid(op)`（`test__opcode` 直接调它）✓。
+        ("is_valid", is_valid_native as pyawa_core::NativeFn),
     ];
     for (name, handler) in handlers {
         let object = instance.alloc(pyawa_core::BuiltinFunctionObject::new(
@@ -267,6 +302,7 @@ fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<py
             "has_arg", "has_const", "has_name", "has_jump", "has_free", "has_local",
             "has_exc", "get_intrinsic1_descs", "get_intrinsic2_descs",
             "get_special_method_names", "get_nb_ops", "stack_effect", "get_executor",
+            "is_valid",
         ]
         .iter()
         .map(|name| instance.new_str(name))
@@ -276,6 +312,13 @@ fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<py
     // **`__name__` 必须有** ✗（第 723 轮实测）：`importlib._bootstrap._setup` 会遍历 `sys.modules`、
     // 逐个读内建模块的 `__name__` ✓ ⇒ 缺它当场 `AttributeError` ⇒ **`import importlib` 全挂** ✗
     //（实测：`_opcode` 进 `RUST_MODULES` 后 importlib 一族 7 个 ＋ `profile` 共 **8** 个模块转红 ✗）。
+    // **特化开关**（round 240）：参照的 `_opcode.ENABLE_SPECIALIZATION`／`..._FT` 是编译期常量；
+    // 本层**不做** CPython 式特化（`BC-32`）⇒ 两者都给 `0` ✓ ⇒ `test.support.requires_specialization`
+    // 的那批测试会被**跳过**（而不是 `AttributeError` 让整档导入失败 ✓，`test_dis` 正卡这 ✓）。
+    for flag in ["ENABLE_SPECIALIZATION", "ENABLE_SPECIALIZATION_FT"] {
+        let value = instance.new_int(0);
+        instance.dict_set(namespace, flag, value);
+    }
     instance.dict_set(namespace, "__name__", instance.new_str("_opcode"));
     instance.dict_set(
         namespace,
@@ -435,8 +478,13 @@ pub mod collections_module;
 /// **`_tokenize`** ✓（task-19 ✓）：`Lib/tokenize.py` 的词法底层 ✓。
 pub mod tokenize_module;
 pub mod unicode_tables;
+/// **规范化组合表**（round 107；`tools/gen_unicode_normalization.py` 生成 ✓）。
+pub mod unicode_composition;
 /// **`_hashlib`**（round 20）：纯 Rust md5／sha1／sha256 的最小诚实面（`Lib/hashlib.py` 的底座）。
 pub mod _hashlib_module;
+/// **`_csv`**（task-3，`PLAN-milestones.md` §12.3）：`Lib/csv.py` 的 C 底座 —— 读／写回环、
+/// 方言注册表与 `Dialect` 校验；语义照参照本机 CPython 3.14.4 的 `Modules/_csv.c`。
+pub mod _csv_module;
 /// **`unicodedata`**（round 19）：最小诚实面；数据复用 `unicode_tables`（pdb/doctest 的闸）。
 pub mod unicodedata_module;
 
@@ -494,19 +542,50 @@ fn loader_exec(
     instance: &pyawa_core::Instance,
     _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
     args: &[core::ptr::NonNull<pyawa_core::Header>],
-    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+    kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
 ) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
-    let Some(module) = args.first().copied() else {
+    // **`exec_module(module)` 的实参**：importlib 可能把模块按**位置**交（`exec_module(self, module)` ✓）
+    // 也可能按**关键字** `module=` 交（`_bootstrap` 的 `_load_unlocked` 两种写法都有 ✓）——
+    // 先前只认位置实参 ✗ ⇒ 拿到 `None`/错对象 ⇒ 模块体**静默不执行** ✗（round 102 实测：
+    // fresh 导入的 `xml.etree.ElementTree` 只剩 4 个 importlib 属性、`register_namespace` 全缺 ✓）。
+    let module = args
+        .first()
+        .copied()
+        .or_else(|| {
+            kwargs.iter().find_map(|(key, value)| {
+                instance
+                    .text_of(*key)
+                    .filter(|text| *text == "module")
+                    .map(|_| *value)
+            })
+        });
+    let Some(module) = module else {
         return Ok(instance.retain(instance.singletons().none()));
     };
-    if let Some(namespace) = pyawa_core::mounted_instance_dict(instance, module) {
-        if let Some(name) = instance
-            .dict_get(namespace, "__name__")
-            .and_then(|object| instance.text_of(object))
-            .map(|text| text.to_owned())
-        {
-            pyawa_core::executor::import::exec_module_into_namespace(instance, &name, namespace)?;
-        }
+    let Some(namespace) = pyawa_core::mounted_instance_dict(instance, module) else {
+        return Err(instance.raise_builtin_error(
+            "ImportError",
+            "exec_module：模块对象没有命名空间字典",
+        ));
+    };
+    let Some(name) = instance
+        .dict_get(namespace, "__name__")
+        .and_then(|object| instance.text_of(object))
+        .map(|text| text.to_owned())
+    else {
+        return Err(instance.raise_builtin_error(
+            "ImportError",
+            "exec_module：模块没有 __name__",
+        ));
+    };
+    if std::env::var_os("PYAWA_IMPORT_DEBUG").is_some() {
+        eprintln!("[loader_exec] name={name}");
+    }
+    if !pyawa_core::executor::import::exec_module_into_namespace(instance, &name, namespace)? {
+        return Err(instance.raise_builtin_error(
+            "ImportError",
+            &format!("exec_module：找不到模块 {name} 的源码"),
+        ));
     }
     Ok(instance.retain(instance.singletons().none()))
 }
@@ -524,9 +603,37 @@ fn finder_find_spec(
     else {
         return Ok(none);
     };
-    if !pyawa_core::executor::import::can_locate_through_bridge(instance, &name) {
+    // **`path` 实参（父包的 `__path__`）**（round 102 重新接线）：Python importlib 对**子模块**会把
+    // 父包的 `__path__` 交进来 ✓ —— 有它就在里面找 ✓；没有就回退 `sys.path` 的顶层定位 ✓。
+    //
+    // round 99 曾因语料 `test.typinganndata.partialexecution` 出新差异而撤回 ✗；round 100 定位到
+    // 那是**模块 `__package__` 口径错**（包给了父包名 ✗）造成的 —— 口径已修（`import.rs`）⇒
+    // 本能力重新接线 ✓（并由 conformance 全量对拍复核 ✓）。
+    let search_paths: Option<Vec<String>> = args
+        .get(1)
+        .copied()
+        .and_then(|path| instance.list_items(path))
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|entry| instance.text_of(*entry).map(|text| text.to_owned()))
+                .collect()
+        });
+    let located = match &search_paths {
+        Some(paths) if !paths.is_empty() => {
+            pyawa_core::executor::import::locate_in_paths(instance, &name, paths)
+        }
+        _ => {
+            if pyawa_core::executor::import::can_locate_through_bridge(instance, &name) {
+                Some((false, String::new()))
+            } else {
+                None
+            }
+        }
+    };
+    let Some((is_package, package_directory)) = located else {
         return Ok(none);
-    }
+    };
     let Some(spec) = module_like(instance, "spec") else {
         return Ok(none);
     };
@@ -542,7 +649,13 @@ fn finder_find_spec(
     // 顶层名字没有点分 ⇒ `parent` 是空串。`_uninitialized_submodules` 是
     // `_find_and_load_unlocked` 给**父包**做的循环导入簿记（`:_bootstrap.py:1340`）——顶层用不到，
     // 但补空表更稳 ✓（`_load_unlocked` 会往 spec 上写 `_initializing`，属性可写 ✓）。
-    set_field(instance, spec, "submodule_search_locations", instance.retain(instance.singletons().none()));
+    let locations = if is_package {
+        let entry = instance.new_str(&package_directory);
+        instance.new_list(vec![entry])
+    } else {
+        instance.retain(instance.singletons().none())
+    };
+    set_field(instance, spec, "submodule_search_locations", locations);
     set_field(instance, spec, "parent", instance.new_str(""));
     set_field(instance, spec, "_uninitialized_submodules", instance.new_list(Vec::new()));
     if let Some(loader) = module_like(instance, "loader") {
@@ -584,7 +697,11 @@ pub fn set_module_search_path(instance: &pyawa_core::Instance, directories: &[St
 /// 本函数只做装配，不碰平台 ✓（`CX-4`）。
 pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[String]) {
     let builtins = builtins_module::build(instance);
+    // **原生函数的来源模块**（task-6／缺口2）：`import builtins` 里的函数参照报 `builtins`
+    // （`len.__module__ == "builtins"`）⇒ 在**装模块的集中路径**统一登记 ✓。
+    instance.register_namespace_native_modules(builtins, "builtins");
     let sys = sys_module::build(instance);
+    instance.register_namespace_native_modules(sys, "sys");
     let stdout = instance
         .dict_get(sys, "stdout")
         .expect("`sys.stdout` 由 `sys_module::build` 装好");
@@ -668,6 +785,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     {
         let constants = instance.platform_constants();
         let namespace = errno_module::build(instance, &constants);
+        instance.register_namespace_native_modules(namespace, errno_module::NAME);
         let module = instance
             .alloc(AttributeObject::new(
                 module_type,
@@ -677,6 +795,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
             .cast::<pyawa_core::Header>();
         instance.dict_set(modules, errno_module::NAME, module);
 let namespace = _sre_module::build(instance);
+        instance.register_namespace_native_modules(namespace, _sre_module::NAME);
         let module = instance
             .alloc(AttributeObject::new(
                 module_type,
@@ -702,6 +821,11 @@ let namespace = _sre_module::build(instance);
     for (name, build) in RUST_MODULES {
 
         let namespace = build(instance);
+        // **原生函数的来源模块登记**（task-6／缺口2）——**唯一集中入口**：模块表里的每个模块
+        // 建完名字空间后，把其中的 `builtin_function_or_method`（以及类型字典里的原生方法）
+        // 按模块名登记进每实例旁表 ⇒ `__module__` 如实报告来源（`_csv.reader ⇒ "_csv"`、
+        // `math.sqrt ⇒ "math"`）。未登记（内建命名空间／core 自造）默认仍是 `builtins`。
+        instance.register_namespace_native_modules(namespace, name);
         let module = instance
             .alloc(AttributeObject::new(
                 module_type,
@@ -712,6 +836,9 @@ let namespace = _sre_module::build(instance);
         instance.dict_set(modules, name, module);
     }
     instance.set_modules(Some(modules));
+    // `pyexpat` 的 `errors`／`model` 两个**模块对象**要挂回 `pyexpat` 命名空间
+    //（`xml.parsers.expat` 的重导出用 `sys.modules[...] = model/errors`，必须是模块对象 ✓）。
+    pyexpat_module::install_submodules(instance);
     install_meta_path(instance);
 
 }

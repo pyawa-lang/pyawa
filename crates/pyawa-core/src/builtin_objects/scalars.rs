@@ -3,6 +3,7 @@
 //! 从单文件 `builtin_objects.rs` **原样搬来**（纯移动，逐行一致）；父模块 `pub use` 再导出
 //! ⇒ `crate::builtin_objects::…` 的旧路径不变。外部的 `use` 清单在 `super::prelude`。
 
+use crate::HotId;
 use super::prelude::*;
 use super::*;
 
@@ -226,16 +227,30 @@ pub unsafe fn bytes_new(
             let Some(name) = instance.text_value(*encoding) else {
                 return Err(instance.raise_builtin_error("TypeError", "encoding must be a string"));
             };
-            match name.to_ascii_lowercase().replace('_', "-").as_str() {
-                // 第一刀只接 UTF-8（其余编码如实 LookupError ✓）。
-                "utf-8" | "utf8" | "u8" => {
-                    Ok(build(instance.encode_with_builtin_codec(&text, "utf-8", "strict")?))
-                }
-                other => Err(instance.raise_builtin_error(
-                    "LookupError",
-                    &format!("unknown encoding: {other}"),
-                )),
-            }
+            // **全部编码走一处委派**（round 94 修 ✗）：先前只接 UTF-8 ✗ ⇒
+            // `bytes("ab", "ISO-8859-1")`／`"x".encode("latin-1")` 之后的 `bytes(str, enc)` 形态报
+            // `LookupError: unknown encoding` ✗（官方 `fnmatch._compile_pattern` 对 **bytes 模式**
+            // 正是先 `str(pat,'ISO-8859-1')` 再 `bytes(res_str,'ISO-8859-1')` ⇒ `test_glob` 的
+            // bytes 用例全断 ✗）。`encode_wtf8_with_encoding_and_errors` 内部：内置四档快路 ✓、
+            // 其余经 `_codecs.lookup` 注册表（`Lib/encodings/*` 全族 ✓）。
+            instance.encode_wtf8_with_encoding_and_errors(&text, &name, "strict")
+        }
+        [only, encoding, errors] => {
+            // **三参形态**（`bytes('x', 'ascii', 'ignore')`）：错误处理器照参照 ✓。
+            let Some(text) = instance.wtf8_of(*only).map(<[u8]>::to_vec) else {
+                let name = instance.type_name(instance.type_of(*only));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("cannot convert '{name}' object to bytes"),
+                ));
+            };
+            let Some(name) = instance.text_value(*encoding) else {
+                return Err(instance.raise_builtin_error("TypeError", "encoding must be a string"));
+            };
+            let Some(handler) = instance.text_value(*errors) else {
+                return Err(instance.raise_builtin_error("TypeError", "errors must be a string"));
+            };
+            instance.encode_wtf8_with_encoding_and_errors(&text, &name, &handler)
         }
         _ => Err(crate::ExecError::Unsupported {
             opcode: 0,
@@ -265,15 +280,14 @@ pub unsafe fn bytes_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(method_type, "bytes", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: 方法对象要自己那份 self。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -317,7 +331,43 @@ pub(crate) fn starts_ends_with(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let value = bytes_receiver(instance, bound)?;
     let other = bytes_argument(instance, args, 0)?;
-    let matched = if ends {
+    let matched = if args.len() > 1 {
+        // **`start`／`end` 生效**（`P3-41` round 40 修 ✗）：与 `str` 同一条切片口径 —— 负数先
+        // `+len` 再夹到 `>=0`；`start > len` ⇒ **False**（含空串）；`end` 超界夹到 `len`；
+        // `start > end` ⇒ False ✓。bytes 下标就是**字节**下标 ✓（没有字符映射）。
+        let length = value.len() as i64;
+        let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
+            match args.get(index) {
+                None => Ok(default),
+                Some(value) if *value == instance.singletons().none() => Ok(default),
+                Some(value) => instance.int_value(*value).ok_or_else(|| {
+                    instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("{}: 下标要是整数", if ends { "endswith" } else { "startswith" }),
+                    )
+                }),
+            }
+        };
+        let start = read(1, 0)?;
+        let end = read(2, length)?;
+        let start = if start < 0 { start + length } else { start };
+        if start > length {
+            false
+        } else {
+            let start = start.max(0) as usize;
+            let end = (if end < 0 { end + length } else { end }).clamp(0, length) as usize;
+            if start > end {
+                false
+            } else {
+                let window = &value[start..end];
+                if ends {
+                    window.ends_with(&other)
+                } else {
+                    window.starts_with(&other)
+                }
+            }
+        }
+    } else if ends {
         value.ends_with(&other)
     } else {
         value.starts_with(&other)
@@ -353,7 +403,7 @@ pub fn bytearray_new(
         None => Vec::new(),
         Some(value) => {
             let ty = instance.type_of(value);
-            if Some(ty) == instance.type_named("int") || ty == instance.singletons().bool_type() {
+            if Some(ty) == instance.hot_type(HotId::Int) || ty == instance.singletons().bool_type() {
                 let count = instance.index_value(value)?.unwrap_or(0);
                 let Some(count) = usize::try_from(count).ok().filter(|count| *count <= 1 << 30) else {
                     return Err(instance.raise_builtin_error(
@@ -474,15 +524,14 @@ pub unsafe fn bytearray_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(method_type, "bytearray", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -629,6 +678,32 @@ pub(crate) fn bytearray_extend_native(
         return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 拿到了别的类型" });
     };
     let value = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 要一个实参" })?;
+    // **缓冲协议快路**（round 91，性能修 ✗）：`Lib/_pyio.py` 的 `BufferedWriter.write` 是
+    // `self._write_buf.extend(memoryview(b))` ✓ —— 先前走 `sequence_items` 的**通用迭代**
+    // （逐元素走 Python 协议）⇒ 100 KB 要 0.27 s ✗（`test_bufio` 因此 >200 s、超出调查器超时 ✓）。
+    // 参照语义：`bytearray.extend` 接受任意缓冲协议 ✓；这里对 `bytes`／`bytearray`／`memoryview`
+    // 走**整段拷贝** ✓，其余仍旧走通用迭代 ✓。
+    let fast: Option<Vec<u8>> = if let Some(raw) = instance.bytes_value(value) {
+        Some(raw.to_vec())
+    } else if let Some(other) = bytearray_of(instance, value) {
+        Some(unsafe { other.as_ref() }.value().to_vec())
+    } else if instance.type_name(instance.type_of(value)) == "memoryview" {
+        match crate::builtin_objects::memoryview_fields(instance, value) {
+            Some((source, _format, _itemsize, offset, nbytes)) => {
+                crate::builtin_objects::memoryview_source_bytes(instance, source).map(|bytes| {
+                    let end = (offset + nbytes).min(bytes.len());
+                    bytes[offset.min(end)..end].to_vec()
+                })
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    if let Some(bytes) = fast {
+        unsafe { data.as_ref() }.value().extend(bytes);
+        return Ok(instance.retain(instance.singletons().none()));
+    }
     let items = crate::executor::sequence_items(instance, value, 0)?;
     let mut bytes = Vec::with_capacity(items.len());
     for item in items {
@@ -661,6 +736,9 @@ pub fn str_method_native(name: &str) -> Option<NativeFn> {
         "lower" => bytes_lower_native,
         "strip" => bytes_strip_native,
         "split" => bytes_split_native,
+        // **`partition`／`rpartition`**（round 109）：`Lib/tarfile.py` 的 `nts()` 要它们 ✓。
+        "partition" => bytes_partition_native,
+        "rpartition" => bytes_rpartition_native,
         "join" => bytes_join_native,
         "rfind" => bytes_rfind_native,
         "index" => bytes_index_native,
@@ -690,10 +768,16 @@ pub unsafe fn str_getattr(
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
+        // **`str.__hash__`**（round 70）：`class Name(str): def __hash__(self): return
+        // str.__hash__(self)`（`test_extcall` 的 doctest ✓，也遍及 `Lib/`）—— 先前 str 没有
+        // 这个属性 ✗ ⇒ 用户 `__hash__` 抛 AttributeError ⇒ 字典键判成"不可哈希" ✗。
+        "__hash__" => str_hash_native,
         "upper" => str_upper_native,
         // **`str.format`**（第 722 轮 ✓）：`Lib/base64.py:246` **导入期**就调它 ✗ ⇒
         // 先前 `'str' object has no attribute 'format'` 压住 `base64` ⇒ email 一族 ✓。
         "format" => str_format_native,
+        // `str % x` 的**按名取用**形态（`'abc'.__mod__(x)` ✓；`test_formatting` 的模式 ✓）。
+        "__mod__" => crate::builtin::str::str_mod_native,
         "__contains__" => container_contains_native,
         "lower" => str_lower_native,
         "strip" => str_strip_native,
@@ -750,8 +834,7 @@ pub unsafe fn str_getattr(
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
+    let method_type = instance.hot_type(HotId::BuiltinFunctionOrMethod)
         .expect("引导期已登记");
     let native = instance.alloc(BuiltinFunctionObject::new(
         method_type,
@@ -762,7 +845,7 @@ pub unsafe fn str_getattr(
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
     let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
+        instance.hot_type(HotId::Method).expect("method 已登记"),
         native_raw,
         owner,
     ));
@@ -786,17 +869,25 @@ pub(crate) fn text_argument(
     what: &str,
 ) -> Result<String, crate::ExecError> {
     let Some(value) = args.get(index) else {
+        // 参照口径（本机 3.14.4 实测）：`find expected at least 1 argument, got 0` ✓
+        //（复数：`replace expected at least 2 arguments, got 1` ✓）。
+        let needed = index + 1;
+        let noun = if needed == 1 { "argument" } else { "arguments" };
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("{what}() takes at least {} argument", index + 1),
+            &format!("{what} expected at least {needed} {noun}, got {index}"),
         ));
     };
     match instance.text_of(*value) {
         Some(text) => Ok(text.to_owned()),
-        None => Err(instance.raise_builtin_error(
-            "TypeError",
-            &format!("{what}(): expected str"),
-        )),
+        None => {
+            // 参照口径：`find() argument 1 must be str, not int` ✓。
+            let type_name = instance.type_name(instance.type_of(*value));
+            Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{what}() argument {} must be str, not {type_name}", index + 1),
+            ))
+        }
     }
 }
 
@@ -810,27 +901,46 @@ pub(crate) fn text_prefixes(
     let Some(first) = args.first() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("{name}() takes at least 1 argument"),
+            &format!("{name} expected at least 1 argument, got 0"),
         ));
     };
     let is_tuple = instance.type_name(unsafe { first.as_ref() }.ty()) == "tuple";
     if is_tuple {
-        let Some(items) = instance.iterable_items(*first) else {
-            return Err(instance.raise_builtin_error("TypeError", &format!("{name}(): expected str")));
+        let Some(items) = instance.iterable_items(*first)? else {
+            let type_name = instance.type_name(instance.type_of(*first));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{name} first arg must be str or a tuple of str, not {type_name}"),
+            ));
         };
         let mut out = Vec::with_capacity(items.len());
-        for item in items {
-            let Some(text) = instance.text_of(item) else {
-                return Err(
-                    instance.raise_builtin_error("TypeError", &format!("{name}(): expected str"))
-                );
+        for item in &items {
+            let Some(text) = instance.text_of(*item) else {
+                // 失败前把本函数手上的这批**新引用**归还 ✓（round 58：`iterable_items` 给的是自有引用）。
+                for leftover in &items {
+                    // SAFETY: 这些引用由 `iterable_items` 给出。
+                    unsafe { instance.release_object(leftover.as_ptr()) };
+                }
+                let type_name = instance.type_name(instance.type_of(*item));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("{name} first arg must be str or a tuple of str, not {type_name}"),
+                ));
             };
             out.push(text.to_owned());
+        }
+        for item in &items {
+            // SAFETY: 同上（成功路径：这批引用用完就归还 ✓）。
+            unsafe { instance.release_object(item.as_ptr()) };
         }
         return Ok(out);
     }
     let Some(text) = instance.text_of(*first) else {
-        return Err(instance.raise_builtin_error("TypeError", &format!("{name}(): expected str")));
+        let type_name = instance.type_name(instance.type_of(*first));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name} first arg must be str or a tuple of str, not {type_name}"),
+        ));
     };
     Ok(vec![text.to_owned()])
 }
@@ -930,4 +1040,43 @@ impl StrObject {
         // SAFETY: 由调用方保证（OM-5 保证头部就在对象地址上）。
         unsafe { core::mem::drop(Box::from_raw(ptr.cast::<StrObject>())) }
     }
+}
+
+/// **`str.__hash__()`**（round 70）：与 `hash()` 同值 ✓（同一套 SipHash-1-3 零密钥 ✓）。
+pub(crate) fn str_hash_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **两种派发形态**：绑到实例（`s.__hash__()`）／类型级未绑定（`str.__hash__(s)`，
+    // `test_extcall` 的 `Name.__hash__` 就是后者 ✓）。
+    let owner = match (bound, args.first().copied()) {
+        // `str.__hash__(s)`：属性通道把 `str` **类型对象**当成了 `self` ⇒ 改认第一个实参 ✓。
+        (Some(owner), Some(first)) if instance.is_type_object(owner) => first,
+        (Some(owner), _) => owner,
+        (None, Some(first)) => first,
+        (None, None) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "descriptor '__hash__' of 'str' object needs an argument",
+            ))
+        }
+    };
+    // **`str` 子类也算**（`class Name(str)` 正是 `test_extcall` 的形态 ✓）——`text_of` 只认
+    // **恰好** `str` ✗ ⇒ 走 WTF-8 字节视图 ✓。
+    if !instance.is_str_object(owner) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__hash__' for 'str' objects doesn't apply to a foreign object",
+        ));
+    }
+    let Some(bytes) = instance.str_wtf8_bytes(owner) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__hash__' for 'str' objects doesn't apply to a foreign object",
+        ));
+    };
+    let text = String::from_utf8_lossy(bytes);
+    Ok(instance.new_int(crate::executor::values::hash_text(&text) as i64))
 }

@@ -2,6 +2,7 @@
 //!
 //! 从 `execute` 的分派臂**原样搬来**；由 `executor.rs` 的分派按 opcode 组调用。
 
+use crate::HotId;
 use super::*;
 
 pub(super) fn step_exceptions<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: usize, opcode_number: u8, name: &str) -> Result<Step<'a>, ExecError> {
@@ -53,12 +54,24 @@ fn step_exceptions_pop_except<'a>(instance: &'a Instance, frame: &Owned<'a, Fram
     match name {
             "POP_EXCEPT" => {
                 // 栈顶是 `PUSH_EXC_INFO` 压下的"上一个异常"；把它还原成当前异常
-                if crate::diag::flag("PYAWA_POP_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_POP_DEBUG") {
                     eprintln!("[pop_except] 弹前深={} site={}", frame.get().depth(), instance.current_site());
                 }
                 let previous = frame.get().pop()?;
                 if let Some(current) = instance.pop_exception() {
+                    // **`pending_exception` 槽要一并摘掉**（round 79 真泄漏修 ✗）：`raise()` 会给
+                    // 实例的"最近一次抛出"槽**加一份保活**（宿主诊断用）；异常被 `except` 处理完
+                    // （`POP_EXCEPT`）后那份还留着 ⇒ 异常对象连同它的**回溯链→帧→局部变量**全都
+                    // 永久活着（实测：`def f(): big=[5000 个对象]; raise ValueError`，`try/except`
+                    // 之后这 5000 个对象仍然活着 ✗ ⇒ `test_weakref` 的 7 万条压测帧被留住、
+                    // live 涨到 265 万 ⇒ 超时 ✗）。
+                    let pointer = current.as_ptr() as usize;
                     release(instance, current);
+                    if instance.pending_exception().map(|value| value.as_ptr() as usize)
+                        == Some(pointer)
+                    {
+                        let _previous = instance.replace_pending(None);
+                    }
                 }
                 if unsafe { previous.as_ref() }.ty() == instance.singletons().none_type() {
                     release(instance, previous);
@@ -78,7 +91,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                 // **实测**：它**弹掉类**、压回布尔（净 0）——参照实现原话是
                 // "Pops TOS and pushes the boolean result of the test"。
                 let class_object = frame.get().pop()?;
-                if crate::diag::flag("PYAWA_EXC_MATCH_DEBUG") {
+                if crate::diag::flag_site!("PYAWA_EXC_MATCH_DEBUG") {
                     eprintln!(
                         "[exc_match] 弹掉类之后 栈深={} site={}",
                         frame.get().depth(),
@@ -90,7 +103,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                 let class_type = unsafe { class_object.as_ref() }.ty();
                 // SAFETY: exception 在帧值栈上，存活。
                 let exception_type = unsafe { exception.as_ref() }.ty();
-                let truth = if class_type == builtin_type(instance, "type") {
+                let truth = if class_type == instance.hot_type(HotId::Type).expect("type 已登记") {
                     let class = class_object.cast::<TypeObject>();
                     if !is_exception_type(instance, class) {
                         release(instance, class_object);
@@ -103,7 +116,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                     let matched = instance.is_subtype(exception_type, class);
                     release(instance, class_object);
                     matched
-                } else if Some(class_type) == instance.type_named("tuple") {
+                } else if Some(class_type) == instance.hot_type(HotId::Tuple) {
                     // `except (A, B)`：**任一命中即匹配**（实测）。
                     //
                     // 元组里放**非类**、放**嵌套元组**、或放不是 `BaseException` 子类的类
@@ -116,7 +129,7 @@ fn step_exceptions_check_exc_match<'a>(instance: &'a Instance, frame: &Owned<'a,
                         let item = items.item(index).expect("下标在范围内");
                         // SAFETY: item 由元组持有，存活。
                         let item_type = unsafe { item.as_ref() }.ty();
-                        if item_type != builtin_type(instance, "type") {
+                        if item_type != instance.hot_type(HotId::Type).expect("type 已登记") {
                             release(instance, class_object);
                             return Err(raise_builtin(
                                 instance,
@@ -205,7 +218,13 @@ fn step_exceptions_with_except_start<'a>(instance: &'a Instance, frame: &Owned<'
                 let callable = frame.get().peek_from_top(5)?;
                 let _ = lasti;
                 let exception_type = unsafe { exception.as_ref() }.ty();
-                // `__exit__(type, exc, tb)`：`tb` 本层给 `None`（`__traceback__` 尚无对象，`DIV-6`）
+                // `__exit__(type, exc, tb)`：`tb` 照参照给 `exc.__traceback__` ✓（`BC-60` 的
+                // traceback 面落地后就不是 `None` 了；先前这里写死 `None` 是 `DIV-6` 时期的
+                // 临时口径，已过时 ✗ —— `contextlib`／`unittest` 一类会读第三参）。
+                // 取不到（探测失败）⇒ 仍给 `None`（不因探针把 with 的异常出口弄崩）。
+                let traceback = instance
+                    .attribute_optional_discarding(exception, "__traceback__")
+                    .unwrap_or_else(|| instance.new_none());
                 let mut arguments: Vec<NonNull<Header>> = Vec::with_capacity(3);
                 unsafe {
                     instance.incref_object(exception_type.cast::<Header>().as_ptr());
@@ -213,7 +232,7 @@ fn step_exceptions_with_except_start<'a>(instance: &'a Instance, frame: &Owned<'
                 }
                 arguments.push(exception_type.cast::<Header>());
                 arguments.push(exception);
-                arguments.push(instance.new_none());
+                arguments.push(traceback);
                 let result = call_callable(
                     instance,
                     callable,
@@ -262,7 +281,7 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
 
                         let exception = if is_exception_type(instance, operand_type) {
                             operand // 已经是异常实例
-                        } else if operand_type == builtin_type(instance, "type") {
+                        } else if operand_type == instance.hot_type(HotId::Type).expect("type 已登记") {
                             // 是类型对象：必须是异常类，实例化它（`raise ValueError`）
                             let class = operand.cast::<TypeObject>();
                             if !is_exception_type(instance, class) {
@@ -331,8 +350,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                 }
                                 // 非 `ExceptionObject` 载荷 ⇒ 走**实例字典** ✓（它有 `__dict__` ✓）。
                                 None => {
-                                    let _ = instance.set_attribute_value(
-                                        exception, "__context__", current,
+                                    crate::executor::runtime::discard_exec_result(
+                                        instance,
+                                        instance.set_attribute_value(
+                                            exception, "__context__", current,
+                                        ),
                                     );
                                     release(instance, current);
                                 }
@@ -343,7 +365,7 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                             // SAFETY: cause 是刚出栈的新引用。
                             let cause_type = unsafe { cause.as_ref() }.ty();
                             // 起因可以是**异常实例**，也可以是**异常类**（实测 `raise ValueError from TypeError` 合法）
-                            let cause_is_class = cause_type == builtin_type(instance, "type")
+                            let cause_is_class = cause_type == instance.hot_type(HotId::Type).expect("type 已登记")
                                 && is_exception_type(instance, cause.cast::<TypeObject>());
                             if cause_type == instance.singletons().none_type() {
                                 // `raise X from None`：抑制上下文，但没有 __cause__
@@ -356,8 +378,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                         }
                                     }
                                     None => {
-                                        let _ = instance.set_attribute_value(
-                                            exception, "__cause__", cause,
+                                        crate::executor::runtime::discard_exec_result(
+                                            instance,
+                                            instance.set_attribute_value(
+                                                exception, "__cause__", cause,
+                                            ),
                                         );
                                         release(instance, cause);
                                     }
@@ -383,8 +408,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                         }
                                     }
                                     None => {
-                                        let _ = instance.set_attribute_value(
-                                            exception, "__cause__", created,
+                                        crate::executor::runtime::discard_exec_result(
+                                            instance,
+                                            instance.set_attribute_value(
+                                                exception, "__cause__", created,
+                                            ),
                                         );
                                         release(instance, created);
                                     }
@@ -402,8 +430,11 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                 Some(object) => object.set_suppress_context(true),
                                 None => {
                                     let flag = instance.retain(instance.singletons().boolean(true));
-                                    let _ = instance.set_attribute_value(
-                                        exception, "__suppress_context__", flag,
+                                    crate::executor::runtime::discard_exec_result(
+                                        instance,
+                                        instance.set_attribute_value(
+                                            exception, "__suppress_context__", flag,
+                                        ),
                                     );
                                     release(instance, flag);
                                 }
@@ -413,7 +444,10 @@ fn step_exceptions_raise_varargs<'a>(instance: &'a Instance, frame: &Owned<'a, F
                                                 // **挂 `traceback`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `tb_frame` ＝ 抛出处的帧 ✓。
                         let traceback = instance.new_traceback(frame.as_ptr().cast::<Header>());
                         // **尽力而为** ✓（异常类型若没有实例字典，如实不挂 ✓）。
-                        let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
+                        crate::executor::runtime::discard_exec_result(
+                        instance,
+                        instance.set_attribute_value(exception, "__traceback__", traceback),
+                    );
                         release(instance, traceback);
 Err(raise(instance, exception))
                     }

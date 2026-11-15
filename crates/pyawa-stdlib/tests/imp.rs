@@ -128,7 +128,7 @@ fn is_builtin_rejects_non_strings_with_the_measured_message() {
     match error {
         pyawa_core::ExecError::Raised { exception } => {
             // SAFETY: exception 是存活对象。
-            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            let message = unsafe { &*exception.get().as_ptr().cast::<pyawa_core::ExceptionObject>() }
                 .message_with(&instance)
                 .unwrap_or_default();
             assert_eq!(message, "is_builtin() argument must be str, not int");

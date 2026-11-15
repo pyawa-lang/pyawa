@@ -33,8 +33,10 @@ pub(super) struct WithCleanupPlan {
     pub(super) context_spans: Vec<Span>,
     /// 每一项受保护区间的起点（异常表要）。
     pub(super) region_starts: Vec<usize>,
-    /// 受保护区间的终点。
-    pub(super) region_end: usize,
+    /// **体内 `return` 的死代码洞**（见 `Emitter::with_return_holes`）：受保护区按洞切开 ✓。
+    pub(super) return_holes: Vec<(usize, usize)>,
+    /// body 末尾（`return` 洞之后可能还有代码 ✓）。
+    pub(super) body_end: usize,
     /// 每一层退出调用的标签（`index > 0` 时清理块跳过三连、`JUMP_BACKWARD_NO_INTERRUPT` 跳回它）。
     pub(super) exit_labels: Vec<usize>,
     /// 清理块出口要**重放**的余部（`emit_rest_and_tail`）。
@@ -129,6 +131,14 @@ pub(super) struct Emitter {
     pub(super) pending_cleanups: Vec<PendingCleanup>,
     /// 最近一条 `STORE_FAST_LOAD_FAST` 已经把哪个槽的值压回了栈顶（`None` 表示没有）：
     /// **紧接着的那一次**对该槽的读取不再单独发 `LOAD_FAST_BORROW`（实测的融合选择）。
+    /// **名字 ⇒ 局部槽的缓存**（round 70，性能）：千参函数的发射里每个 `LOAD_FAST` 先前都在
+    /// `varnames` 上**线性扫一遍** ✗ ⇒ `collections.namedtuple` 的 150k 字段生成类 O(n²)。
+    /// **失效规则**：`varnames` 只追加时已有下标稳定 ✓；但 `symbols.rs` 收尾会把 `varnames`
+    /// **整体换掉**（`= kept` ⇒ 下标会移 ✗）⇒ 那里必须 `clear()` ✓（第一版没清 ⇒ 报
+    /// ``lambda` 的形参表里出现 Some(LeftBrace)`：f-string 的 `{arg_list}` 被编成**别的局部槽** ✗）。
+    pub(super) local_slots: std::cell::RefCell<std::collections::HashMap<String, usize>>,
+    /// **名字 ⇒ `co_names` 下标**（round 71，性能）：`intern_name` 先前线性扫 ✗（千参函数 O(n²)）。
+    pub(super) name_indices: std::cell::RefCell<std::collections::HashMap<String, usize>>,
     pub(super) pending_fused_load: Option<usize>,
     /// 处理块段的字节区间 ＋ 有没有 `as 名字`（目标＝清理块／名字清理，收尾时补）。
     pub(super) handler_segments: Vec<(usize, usize, bool)>,
@@ -159,6 +169,12 @@ pub(super) struct Emitter {
     /// **`with` 体内 `return` 的退出调用"起点"**（第 166 轮）：参照把该 `with` 的**受保护区**止于
     /// **正常流末尾**（＝退出调用之前 ✓），本层先前把整段 body（含退出调用尾声）都圈进去 ✗。
     pub(super) with_body_end: Option<usize>,
+    /// **`with` 体内 `return` 的"死代码洞"**（round 109）：每个元素 `(start, end)` 是这次 `return`
+    /// 在体内就地发出的**退出调用＋取值＋`RETURN_VALUE`** 区间 ✓ —— 参照的异常表把受保护区在这个洞
+    /// **两侧切开** ✓（`if 条件: return …` 后面还有语句时，后半段仍归本 `with` 的清理块 ✓）。
+    /// 先前只记一个 `region_end`（洞起点）⇒ 洞后代码落到保护区外 ✗ ⇒ 异常跳过 `__exit__` ✗
+    /// （`shutil.copyfile` 的 `with open(dst,…)` 体正是此形 ✓，官方 `test_shutil` 两条 close-fail 用例 ✓）。
+    pub(super) with_return_holes: Vec<(usize, usize)>,
     /// **`finally` 栈**（第 270 轮）：`try/finally` 体内每个**出口**（`return`）都要先把 finally
     /// 跑一遍。参照的实测形状（`def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n`）：
     /// `NOP; NOP; <finally 体>; LOAD_SMALL_INT 1; RETURN_VALUE` ⇒ **finally 在 return 之前**，
@@ -199,6 +215,21 @@ pub(super) struct Emitter {
     /// 三层都补 ✓，而后面还有 `return` 时**一层都不补** ✓）。
     pub(super) block_tail: bool,
     pub(super) handler_depth: usize,
+    /// **当前处理块体的"出口清理"位置**（`break`／`continue` 逃出处理器时记下其 `POP_EXCEPT`
+    /// 的**字节偏移**；`usize::MAX` ＝ 还没记）。
+    ///
+    /// 用途：处理块异常表区间的右端必须止于这条 `POP_EXCEPT` **之前**。**不能**靠"从体尾往回找
+    /// 最后一条 `POP_EXCEPT`"：`break` 的出口会**就地发一份"循环余部"副本**，副本里可能还有
+    /// 嵌套 `try` 的 `POP_EXCEPT` ⇒ 区间把副本圈进来 ⇒ 副本里再抛的异常被派发到清理块、栈少
+    /// 一格 ⇒ `帧操作失败：StackUnderflow`（2026-11-14 修，最小复现：`while True: try: raise
+    /// StopIteration except StopIteration: break` 后接 `try/except` 与未捕获异常）。
+    pub(super) handler_exit_cleanups: Vec<usize>,
+    /// **待补的 `async for`／异步推导式耗尽异常表条目**（round 241/242）：`(region_start, region_end, depth)`；
+    /// 收尾处发 `END_ASYNC_FOR` 时才知道目标偏移 ⇒ 那时补 `record_exception` ✓（嵌套用栈 ✓）。
+    pub(super) pending_async_for: Vec<(usize, usize, usize)>,
+    /// **`try` 体里**（round 220）：`await` 的合成等待循环在异常表 `depth` 上还算不准 ⇒
+    /// 这层 >0 时 `await` 退回"透明"旧口径（见 `emit_expression_yield` 的注释 ✓）。
+    pub(super) try_depth: usize,
     /// **`with` 体在值栈上留下的格数**（＝ `2 × items.len()`：上下文 ＋ `__exit__`）。
     ///
     /// **为什么与 `handler_depth` 分开**：两者都是异常表 `depth` 要加上的额外格数，但
@@ -254,7 +285,7 @@ impl Emitter {
             Expression::Comprehension { .. } => self.emit_expression_comprehensions(expression),
             Expression::FString { .. } => self.emit_expression_fstrings(expression),
             Expression::NullCoalesce (..) | Expression::SafeChain { .. } | Expression::ChainedCompare { .. } | Expression::Conditional { .. } | Expression::Compare (..) | Expression::BoolOp { .. } | Expression::Not (..) | Expression::Binary (..) | Expression::Unary (..) => self.emit_expression_operators(expression),
-            Expression::Yield (..) | Expression::YieldFrom (..) => self.emit_expression_yield(expression),
+            Expression::Yield (..) | Expression::YieldFrom (..) | Expression::Await (..) => self.emit_expression_yield(expression),
         }
     }
 }
