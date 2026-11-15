@@ -1298,7 +1298,7 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 | C1 | `pa_exec_file` | **✓ 已接线（2026-11-15）**：源经 `fs` 域读入后复用 `pa_exec_string`；电池版 `paL_newstate` 可用；无 provider 的最小产物 ⇒ `PA_ERR_NOTIMPLEMENTED`（机器错误 ⇒ `PA_ERR_RUNTIME`） | `helpers_wiring`／`host_usability_probe` 覆盖；过时注释已修 |
 | C2 | `paL_error` 变参格式化 | **✓ 已接（§12.18 C2）**：`paL_errorf` 为 **C 头 `static inline`**（`vsnprintf` 后转 `paL_error`，不新增导出符号；超长截断） | `examples/reference_host.c` 真编译使用；规格 §15.4 已登记 |
 | C3 | `paL_dostring`／`paL_dofile` | **✓ 已接（§12.18 C3）**：走 `pa_exec_string`／`pa_exec_file` ＋ `paL_execresult`；`int mode`：0＝python／1＝pyawa；文件经 `fs` | `helpers_wiring` 覆盖；`host_usability_probe` 电池版覆盖 |
-| C4 | `paL_where`／`paL_requiref` | **✓ 已接（§12.18 C4）**：`paL_where` 尽力口径（**无对应规格条款**：`SPEC-object-model` 无 traceback 条）；`paL_requiref`：`sys.modules` → `openf` → `import_through_bridge` | `helpers_wiring` 覆盖；残余仅"完整 traceback"如实登记 |
+| C4 | `paL_where`／`paL_requiref` | **✓ 已接（§12.18 C4）**：`paL_where` 尽力口径（**链语义已有 `BC-60`／`T-BC-22`；对象模型数据面缺口见 §12.19**）；`paL_requiref`：`sys.modules` → `openf` → `import_through_bridge` | `helpers_wiring` 覆盖；残余为 §12.19 的 traceback 数据面/`paL_where` 完整链 |
 | C5 | `PA_THANDLE` 头注释 | **✓ 已修（§12.17 A1）**：`AB-70`／`AB-76` 已落地，注释改为读载荷/取身份 | — |
 | C6 | `TS-45` 大整数 ABI 通道 | **✓ 复核关闭（§12.18 C6）**：`AB-62` 的 `pa_tointstring`／`pa_pushintstring` 已覆盖全域；`pa_tointeger` 只做 i64 投影、越界如实 `NOTIMPLEMENTED`；**无新通道缺口**，Spec 行与代码注释已改为指向 `AB-62` | — |
 
@@ -1317,16 +1317,18 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 
 ### 12.19 traceback 规格空白与收尾（2026-11-15）
 
-**问题**：`paL_where` 的"完整调用链"与 `__traceback__` 的可见行为**在规格里没有条款**
-（`SPEC-object-model` 全文无 traceback 条；`__traceback__` 只在 `SPEC-bytecode` 里被顺带提到）。
-此前 `pa.h`／`RELEASE.md`／`PLAN`／`SPEC-c-abi` 把它错引成 `OM-28`（实际是 `gc` 模块语义）。
-按"断言必须查证"（`CX-26`）：**先立规格，再实现**。
+**问题**：`__traceback__` 的**可观察链语义**在 `SPEC-bytecode` 的 **`BC-60`** 已有条款（并由
+`T-BC-22` 对拍 `sys.exc_info()`／`__traceback__`）；缺的是**对象模型的数据面**（traceback 对象的
+最小字段/形状）与 **`paL_where` 的完整链语义**（当前 `SPEC-c-abi` §15.4 只有 `level=0/n` 的
+调用口径，无“完整调用链”的数据定义）。此前 `pa.h`／`RELEASE.md`／`PLAN`／`SPEC-c-abi` 把缺口
+错引成 `OM-28`（实际是 `gc` 模块语义，见 `CORE-MODULES:413`／`SPEC-object-model:218`）。
+按"断言必须查证"（`CX-26`）：**先立规格，再实现**；**禁止**另造与 `BC-60` 冲突的第二套链语义。
 
 | # | 内容 | 验收 |
 |---|---|---|
-| 1 | 补 traceback 规格（按 `CONSTRAINTS` 取号，建议落 `SPEC-object-model`）：`__traceback__` 的最小可见面（`tb_frame`／`tb_lineno`／`tb_next`）、`paL_where(level)` 的语义（`level=0` 当前帧、`n` 沿 `f_back` 链、越界行为）、异常跨宿主边界时的 traceback 形状（延续 `AB-74` 现有口径） | 规格条款编号 ＋ 对应 `T-` 判据 |
-| 2 | 按规格实现：`paL_where` 完整链；`__traceback__` 最小面 | 用例：handled 异常的 tb 链、re-raise、宿主异常映射后的 guest traceback |
-| 3 | 修错引（代码 `pa.h` 与文档三处：`OM-28` → 真实条款） | `grep -i 'OM-28' \| grep traceback` 为空 |
-| 4 | `C6` `TS-45` 复核：`pa_pushintstring`／`pa_tointstring` 已覆盖全域 ⇒ 关闭 | `§12.18 C6` 标 ✓ |
+| 1 | 补 **对象模型数据面**（`SPEC-INDEX.md` §2：在本文件前缀内取**下一个连续号**）；`__traceback__` 的最小可见面（`tb_frame`／`tb_lineno`／`tb_next`）；**链语义引用 `BC-60`／`T-BC-22`，不重述**。`paL_where(level)` 的调用语义仍归 `SPEC-c-abi` §15.4（可在此引用/细化，不另立第二真相） | 新 OM 条款编号 ＋ 对应 `T-OM`；`CX-19`／`T-CX-10` 连续性通过 |
+| 2 | 按规格实现：`paL_where` 完整链；`__traceback__` 最小面 | 用例：handled 异常的 tb 链、re-raise、宿主异常映射后的 guest traceback；`T-BC-22` 不回归 |
+| 3 | 修**剩余错引**（`OM-28` → `BC-60`／真实条款）：`crates/pyawa-abi/include/pa.h:456`、`crates/pyawa-abi/src/helpers.rs:9/378/401/407`、`NEXT.md`（旧边界句） | 可执行命令：`grep -rn 'OM-28' crates/pyawa-abi/include crates/pyawa-abi/src docs/RELEASE.md docs/SPEC-c-abi.md NEXT.md \| grep -i traceback` **为空** |
+| 4 | `C6`（`TS-45`）复核关闭 | 已并入 `§12.18 C6` ✓（不重复列） |
 
 **不在本单**：`traceback` 模块的完整 Python 面（`format_exc` 一族）——按需另立。

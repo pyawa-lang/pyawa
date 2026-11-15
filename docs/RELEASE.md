@@ -40,7 +40,7 @@ tools/cargo.sh build --release -p pyawa-runtime   # 电池版组合根（含 std
 ## 已知限制（本版不承诺）
 
 - `pa_exec_file`／`paL_dofile` **需要 `fs` provider**：电池版 `paL_newstate` 自带；最小 ABI 产物需宿主注册 `fs`，否则如实 `PA_ERR_NOTIMPLEMENTED`。
-- `paL_where` 是**尽力口径**（当前帧/`f_back` 的 `code:line`），**没有完整 traceback**（**无对应规格条款**：`SPEC-object-model` 无 traceback 条）；`paL_errorf` 仅为 C 头内联格式化（不新增导出符号）；`paL_requiref` 依赖模块系统（无模块表的裸实例如实未提供）。
+- `paL_where` 是**尽力口径**（当前帧/`f_back` 的 `code:line`），**没有完整 traceback**（链语义见 `BC-60`／`T-BC-22`；traceback 对象数据面与 `paL_where` 完整链的缺口见 `PLAN §12.19`）；`paL_errorf` 仅为 C 头内联格式化（不新增导出符号）；`paL_requiref` 依赖模块系统（无模块表的裸实例如实未提供）。
 - 能力域：仅 `fs`／`clock`／`net` 三域有 C 布局；其余 6 域调用时"未实现"（`CP-2`／`CP-3`）。
 - buffer 面只到"一次性写回"（`pa_writetobytes`）；无 `memoryview`、无长期可写视图、无多维 buffer。
 - 第二平台未验证；`Lib/test` 通过率未作为本版承诺。

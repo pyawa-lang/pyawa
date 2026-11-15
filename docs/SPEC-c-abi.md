@@ -620,7 +620,7 @@
 | `int paL_unref(pa_state *state, int ref)` | 释放注册表键（幂等） |
 | `int paL_getref(pa_state *state, int ref)` | 把注册表键 `ref` 的值**压栈**（+1，新引用；`AB-73` 的"绑定方法"回调用它压回已持有的可调用值；非法键 ⇒ `PA_ERR_INVALID`） |
 | `int paL_traceback(pa_state *state, const char *msg)` | 附加 traceback |
-| `int paL_where(pa_state *state, int level, const char **out, size_t *len)` | 当前帧（`level=0`）或 `f_back` 链第 `level` 层的 `code:line` 借用视图；无帧/无 code/无行号 ⇒ `PA_ERR_NOTIMPLEMENTED`（**无对应规格条款**：`SPEC-object-model` 无 traceback 条） |
+| `int paL_where(pa_state *state, int level, const char **out, size_t *len)` | 当前帧（`level=0`）或 `f_back` 链第 `level` 层的 `code:line` 借用视图；无帧/无 code/无行号 ⇒ `PA_ERR_NOTIMPLEMENTED`。**链语义见 `BC-60`／`T-BC-22`；traceback 对象的数据面缺口与 `paL_where` 完整链在 `PLAN §12.19`** |
 | `int paL_error(pa_state *state, const char *msg)` | 抛错（只收拼好的消息） |
 | `int paL_errorf(pa_state *state, const char *format, ...)` | 宿主侧格式化（**C 头 `static inline`**，`vsnprintf` 后转 `paL_error`；不新增导出符号；超长截断） |
 | `int paL_execresult(pa_state *state, int status)` | 状态码 → 统一收尾（`PA_OK` ⇒ 压 `True`，`+1`） |
