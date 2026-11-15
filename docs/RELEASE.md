@@ -39,7 +39,7 @@ tools/cargo.sh build --release -p pyawa-runtime   # 电池版组合根（含 std
 
 ## 已知限制（本版不承诺）
 
-- `pa_exec_file` 未提供（等文件 I/O 能力层）。
+- `pa_exec_file` 未提供：**最小 ABI 产物没有能力提供者**（宿主传 `capabilities = NULL`），电池版（`paL_newstate`）具备 `fs` 能力、但该函数尚未在电池版实现。**`IM-15` 本身已落地**（import 的 I/O 已走 `fs` 域，`executor::read_file_through_fs`）。
 - `paL_error` 变参格式化、`paL_dostring`／`paL_dofile`、`paL_where`、`paL_requiref` 部分未提供（如实 `NOTIMPLEMENTED`）。
 - 能力域：仅 `fs`／`clock`／`net` 三域有 C 布局；其余 6 域调用时"未实现"（`CP-2`／`CP-3`）。
 - buffer 面只到"一次性写回"（`pa_writetobytes`）；无 `memoryview`、无长期可写视图、无多维 buffer。

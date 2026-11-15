@@ -20,7 +20,7 @@
   A3 漂移注入（改字段/加未在规格声明）两向红；`selftest.py` 25 项断言通过；`t_ref_host.py` 绿。
 - **下一步（ABI 冻结前 B 组，需授权）**：B1 兼容性策略条款（minor 只追加/major 才破坏）；
   B2 `DESIGN §13-22` 与 `AB-44` 状态同步；B3 tag（如 `abi-1.14`）＋冻结生效日期。
-  之后 C 组如实未提供项（`pa_exec_file` 等 `IM-15`、`paL_*` 补齐、`TS-45` 复核）。
+  之后 C 组如实未提供项（`pa_exec_file`：`IM-15` 已落地、最小产物无能力提供者；`paL_dostring` 薄封装；`TS-45` 复核）。
 - **如实边界**：其余 6 域（`proc`/`random`/`env`/`tty`/`locale`/`ipc`）**本 ABI 不定义布局**，
   宿主只能传 `NULL`（未提供）；能力域 vtable 字段编码钉死后随 ABI 冻结。
 - **口径**：`PA_ABI_VERSION`＝**1.14**、指令集 **2**；两个公开头（`pa.h`＋`pa_capabilities.h`）；
