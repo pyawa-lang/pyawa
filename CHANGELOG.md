@@ -8,6 +8,8 @@
 - 异常：宿主持久异常映射（`AB-74`）；模块对象可上栈（`AB-79`）；字节一次性写回（`AB-80`）。
 - 能力域 vtable 的 C 布局入 `pa_capabilities.h`（`fs`／`clock`／`net` 三域）。
 - 电池版组合根：`paL_newstate`／`paL_openlibs`（含 stdlib/能力域）。
+- C 组接线：`pa_exec_file`（经 `fs`）／`paL_dostring`／`paL_dofile`／`paL_where`（尽力）／
+  `paL_requiref`／`paL_errorf`（C 头内联）。
 
 ### 语言
 - `x = yield`（`SEND` 取值形态）已修；`_signal` 记账式最小面（解锁 `asyncio.run`／`await`／`async for`）；

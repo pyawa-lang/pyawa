@@ -369,7 +369,7 @@ fn tointeger_projection_matches_tointstring() {
     let mut integer = 0i64;
     // SAFETY: idx 在栈上。
     let out_of_range = unsafe { pa_tointeger(state, -1, &mut integer) };
-    // 越 i64 ⇒ **如实失败**（大整数通道未接线：`PA_ERR_NOTIMPLEMENTED`，`TS-45`）。
+    // 越 i64 ⇒ **如实失败**（`PA_ERR_NOTIMPLEMENTED`；任意精度走 `pa_tointstring`，§12.18 C6 已复核关闭）。
     assert_ne!(out_of_range, PA_OK, "越 i64 必须如实失败");
     let mut len = 0usize;
     // SAFETY: idx 在栈上。

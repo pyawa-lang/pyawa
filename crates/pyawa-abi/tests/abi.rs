@@ -1400,11 +1400,11 @@ fn helpers_report_unimplemented_parts_honestly() {
     let mut length = 0usize;
     // SAFETY: state 存活。
     unsafe {
-        // 这几条各自缺一块前置：标准库／编译器／traceback／模块系统
-        assert_eq!(
-            paL_dostring(state, b"1+1\0".as_ptr().cast(), 0),
-            PA_ERR_NOTIMPLEMENTED
-        );
+        // C 组接线后：dostring 真执行（PA_OK 并压 True）；无 fs ⇒ dofile 未提供；
+        // where 在非执行期如实未提供；requiref 在裸实例（无模块表）如实未提供。
+        assert_eq!(paL_dostring(state, b"1+1\0".as_ptr().cast(), 0), PA_OK);
+        assert_eq!(pa_isboolean(state, -1), 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
         assert_eq!(
             paL_dofile(state, b"/tmp/x.py\0".as_ptr().cast(), 0),
             PA_ERR_NOTIMPLEMENTED
@@ -1413,10 +1413,12 @@ fn helpers_report_unimplemented_parts_honestly() {
             paL_where(state, 0, &mut view, &mut length),
             PA_ERR_NOTIMPLEMENTED
         );
+        // 裸实例有模块表，但找不到 `m` 且无 `openf` ⇒ 加载失败（`PA_ERR_RUNTIME`＋消息）。
         assert_eq!(
             paL_requiref(state, b"m\0".as_ptr().cast(), core::ptr::null(), 0),
-            PA_ERR_NOTIMPLEMENTED
+            PA_ERR_RUNTIME
         );
+        assert!(!message_of(state).unwrap_or_default().is_empty());
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);

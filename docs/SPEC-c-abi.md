@@ -528,7 +528,7 @@
 | `pa_destroy(pa_state *)` | — | **释放实例本身**（`AB-57`）；此后全部句柄失效（`AB-18`） |
 | `pa_interrupt(pa_state *)` | — | 请求中断；执行类函数随即返回 `PA_ERR_INTERRUPT` |
 | `pa_exec_string(st, src, len, chunkname, mode, const pa_options *opts)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`／`AB-60`）；`opts` **可传 `NULL`**（＝浅层 ＋ 默认优化级），见 `AB-61` |
-| `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件；I/O 经能力层（`IM-15`）。`mode` 见 `AB-60`；`opts` 见 `AB-61` |
+| `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件：源经 **`fs` 域**读入后复用 `pa_exec_string` 的编译/执行路径（`mode`/`opts` 同 `AB-60`/`AB-61`）；宿主注册了 `fs`（或电池版 `paL_newstate`）⇒ 正常执行；无 provider ⇒ `PA_ERR_NOTIMPLEMENTED`（`AB-22`）；机器错误 ⇒ `PA_ERR_RUNTIME`（§12.18 C1） |
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |
 | `pa_set_program_filename(st, name, len)` | — | 设置后续执行的 `co_filename`（`AB-71`；按实例；未设置 ⇒ 内部占位名；非 UTF-8 ⇒ `PA_ERR_INVALID`） |
 | `pa_set_memory_limit(st, limit)` | — | 每实例内存配额（`AB-65`／`OM-41`）；`0` ＝ 取消。超限 ⇒ 脚本内可捕获的 `MemoryError` |
@@ -620,14 +620,15 @@
 | `int paL_unref(pa_state *state, int ref)` | 释放注册表键（幂等） |
 | `int paL_getref(pa_state *state, int ref)` | 把注册表键 `ref` 的值**压栈**（+1，新引用；`AB-73` 的"绑定方法"回调用它压回已持有的可调用值；非法键 ⇒ `PA_ERR_INVALID`） |
 | `int paL_traceback(pa_state *state, const char *msg)` | 附加 traceback |
-| `int paL_where(pa_state *state, int level, const char **out, size_t *len)` | 当前位置串 |
-| `int paL_error(pa_state *state, const char *msg)` | 抛错（C 变参格式化在稳定 Rust 里做不到 ⇒ 只收拼好的消息） |
+| `int paL_where(pa_state *state, int level, const char **out, size_t *len)` | 当前帧（`level=0`）或 `f_back` 链第 `level` 层的 `code:line` 借用视图；无帧/无 code/无行号 ⇒ `PA_ERR_NOTIMPLEMENTED`（完整 traceback `OM-28` 仍未接） |
+| `int paL_error(pa_state *state, const char *msg)` | 抛错（只收拼好的消息） |
+| `int paL_errorf(pa_state *state, const char *format, ...)` | 宿主侧格式化（**C 头 `static inline`**，`vsnprintf` 后转 `paL_error`；不新增导出符号；超长截断） |
 | `int paL_execresult(pa_state *state, int status)` | 状态码 → 统一收尾（`PA_OK` ⇒ 压 `True`，`+1`） |
-| `int paL_requiref(pa_state *state, const char *name, const void *openf, int glb)` | 取或加载模块 |
+| `int paL_requiref(pa_state *state, const char *name, const void *openf, int glb)` | 取或加载模块：`sys.modules` 命中直接压栈；否则 `openf(pa_state*)`（须压入恰好一个模块）或 `import_through_bridge`；登记 `sys.modules`，`glb != 0` 写全局；失败 ⇒ `PA_ERR_RUNTIME` |
 | `int paL_setfuncs(pa_state *state, const pa_reg *regs, int n)` | 批量注册（`n < 0` ⇒ 以 NULL 名字结尾） |
 | `int paL_openlibs(pa_state *state)` | 打开标准库（**提供方＝组合根**：`pyawa-runtime` 的 C 产物；`pyawa-abi` 的最小产物**不导出**本符号）。实现在组合根：装 builtins／`sys`（幂等）；**不**注册能力域（`fs` 等由宿主按 `AB-33`／`AB-34` 决定）；`state == NULL` ⇒ `PA_ERR_INVALID`（§12.13 #1，已落地） |
-| `int paL_dostring(pa_state *state, const char *s, int mode)` | 执行字符串并统一收尾 |
-| `int paL_dofile(pa_state *state, const char *path, int mode)` | 执行文件并统一收尾 |
+| `int paL_dostring(pa_state *state, const char *s, int mode)` | 执行字符串并统一收尾；`mode`：`0`＝python／`1`＝pyawa（其它 ⇒ `PA_ERR_INVALID`）；成功后压 `True`（+1） |
+| `int paL_dofile(pa_state *state, const char *path, int mode)` | 执行文件并统一收尾（`mode` 同上）；文件经 `fs` 域读：无 provider ⇒ `PA_ERR_NOTIMPLEMENTED`，机器错误 ⇒ `PA_ERR_RUNTIME` |
 | `pa_state *paL_newstate(void)` | **电池版**组合根入口（实现属 `pyawa-runtime`）：`pa_create` ＋ `fs`／`clock`／`net` 真实能力 ＋ builtins／`sys`／stdlib；交回的实例上 `print`／`import` 可用。**单一 C 产物**：`pyawa-runtime` 的 cdylib／staticlib 同时导出全部 `pa_*` 与 `paL_*`；provider／vtable 按实例泄漏到进程末（便捷入口的如实边界） |
 
 > **禁止**靠辅助层绕过任何硬约束——辅助层**不得**引入核心层没有的语义（`AB-4`／`AB-6`）。
@@ -687,7 +688,7 @@
   **状态**：**已实现 ✓（round 271）**；`AB-69` 的 `pa_type_expr` 签名通道已随 round 272–273 落地 ✓（检查期投影见 `d4847368`）。
 - **AB-68** **宿主设置每实例 `sys.path`**：`pa_setpath(st, const char *const *dirs, size_t n)`（`dirs == NULL` 或 `n == 0` ⇒ 清空）。语义**完全**沿用 `SPEC-imports-and-modes` 的 `IM-*`（**禁止**另立一套路径逻辑 ✗，禁令照该规格 ✓）；实现上就是把 `sys.path` 换成本实例的这份列表（**拷贝**宿主缓冲区 ✓，宿主返回后可释放 ✓）。约束：**按实例** ✓；路径访问仍受 **`fs` 能力域**夹根 ✓（`CP-21`／`AB-32`）——`sys.path` 只决定**在哪找** ✓，**能不能读**由能力面决定 ✓；脚本自己改 `sys.path` 的语义不变 ✓（`sys.path` 本就可变 ✓）。
   **实现 ✓（round 270）**：`pa_setpath(st, dirs, n)` 已接线；`pa_create` 的实例带**最小 `sys` 骨架**
-  （`sys.path` 空表 ＋ `sys.modules`；`paL_openlibs` 仍如实"未提供"，P3-14）。验收
+  （`sys.path` 空表 ＋ `sys.modules`；`paL_openlibs` 由组合根产物提供，§12.13 #1）。验收
   `crates/pyawa-abi/tests/host_path.rs`（5 例：两目录可 import／脚本改 `sys.path` 语义不变／
   `fs` 夹根后越根模块 `ImportError`／两实例路径隔离／参数边界与清空）。`pa.h` 已声明；次版本 6→7。
 - **AB-69** **宿主函数的类型签名**（`AB-67` 配套；卖点①「类型检查真正生效」的边界延伸 ✓）：

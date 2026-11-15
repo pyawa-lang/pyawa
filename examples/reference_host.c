@@ -128,7 +128,8 @@ static int host_read(pa_state *state)
     if (name[0] == '\0' || strchr(name, '/') != NULL || strchr(name, '\\') != NULL ||
         strstr(name, "..") != NULL) {
         ctx->message = "sandbox: path escapes the host root";
-        return pa_error(state, ctx->message);
+        /* §12.18 C2：宿主侧格式化（C 头 static inline，不新增导出符号）。 */
+        return paL_errorf(state, "%s (rule: single-segment)", ctx->message);
     }
     char path[1024];
     if ((size_t)snprintf(path, sizeof path, "%s/%s", ctx->root, name) >= sizeof path)

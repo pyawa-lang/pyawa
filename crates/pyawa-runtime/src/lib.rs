@@ -24,42 +24,45 @@ pub mod pyac;
 /// 这里**按实例泄漏**一份（进程生命周期；宿主需要精确回收时改用 `pa_create` ＋ 自己注册能力）。
 /// 这是组合根便捷入口的边界，不是静默泄漏：见 `PLAN §12.13` 的"如实边界"。
 #[allow(unsafe_code)]
-struct MachineBattery {
-    // 字段本身不被读：只负责**保活**（vtable 的 `state` 指回它们；泄漏到进程末）。
-    _fs: fs_posix::PosixFs,
-    _clock: clock_system::SystemClock,
-    _net: net_posix::PosixNet,
-    fs_vtable: pyawa_capabilities::fs::CpFsVtable,
-    clock_vtable: pyawa_capabilities::clock::CpClockVtable,
-    net_vtable: pyawa_capabilities::net::CpNetVtable,
+struct MachineProviders {
+    fs: fs_posix::PosixFs,
+    clock: clock_system::SystemClock,
+    net: net_posix::PosixNet,
+}
+
+/// 泄漏到进程末的 vtable（`state` 指回 [`MachineProviders`] 的稳定地址）。
+struct MachineVtables {
+    fs: pyawa_capabilities::fs::CpFsVtable,
+    clock: pyawa_capabilities::clock::CpClockVtable,
+    net: pyawa_capabilities::net::CpNetVtable,
 }
 
 /// 建电池并注册 `fs`／`clock`／`net` 三个真实机器能力域（每域先声明异步分类，`AB-34`）。
 ///
-/// 成功 `PA_OK`；任一注册失败返回该处的状态码（实例仍可用，只是该域未注册）。
+/// **生命周期**：provider 与 vtable 都**先放进稳定的 Box、再泄漏到进程末**；vtable 的 `state`
+/// 必须指向**不会移动**的 provider（先前把 provider 在栈上建好再 move 进 Box ⇒ `state` 悬垂，
+/// 实测 `pa_exec_file` 的 `fs_open` 段错误）。
 #[allow(unsafe_code)]
 fn install_machine_capabilities(state: *mut pa_state) -> i32 {
-    let mut fs = fs_posix::PosixFs::new();
-    let mut clock = clock_system::SystemClock::new();
-    let mut net = net_posix::PosixNet::new();
-    // vtable 内的 `state` 指回 provider ⇒ provider 必须先稳定（泄漏的 Box）。
-    // SAFETY: 指针指向真实存活对象；`pa_setcapability` 保存该指针。
-    let fs_vtable = unsafe { core::ptr::read(&fs.vtable()) };
-    let clock_vtable = unsafe { core::ptr::read(&clock.vtable()) };
-    let net_vtable = unsafe { core::ptr::read(&net.vtable()) };
-    let battery = Box::into_raw(Box::new(MachineBattery {
-        _fs: core::mem::replace(&mut fs, fs_posix::PosixFs::new()),
-        _clock: core::mem::replace(&mut clock, clock_system::SystemClock::new()),
-        _net: core::mem::replace(&mut net, net_posix::PosixNet::new()),
-        fs_vtable,
-        clock_vtable,
-        net_vtable,
+    let providers = Box::into_raw(Box::new(MachineProviders {
+        fs: fs_posix::PosixFs::new(),
+        clock: clock_system::SystemClock::new(),
+        net: net_posix::PosixNet::new(),
     }));
-    // SAFETY: battery 泄漏到进程末 ⇒ vtable 指针在实例存活期内一直有效。
-    let (battery_ref, state_ptr) = unsafe { (&*battery, state) };
-    let fs_impl = core::ptr::addr_of!(battery_ref.fs_vtable).cast::<c_void>();
-    let clock_impl = core::ptr::addr_of!(battery_ref.clock_vtable).cast::<c_void>();
-    let net_impl = core::ptr::addr_of!(battery_ref.net_vtable).cast::<c_void>();
+    // SAFETY: providers 已固定在堆上（泄漏到进程末）。
+    let (fs_vtable, clock_vtable, net_vtable) = unsafe {
+        ((*providers).fs.vtable(), (*providers).clock.vtable(), (*providers).net.vtable())
+    };
+    let vtables = Box::into_raw(Box::new(MachineVtables {
+        fs: fs_vtable,
+        clock: clock_vtable,
+        net: net_vtable,
+    }));
+    // SAFETY: vtables／providers 都泄漏到进程末 ⇒ 指针在实例存活期内一直有效。
+    let (tables, state_ptr) = unsafe { (&*vtables, state) };
+    let fs_impl = core::ptr::addr_of!(tables.fs).cast::<c_void>();
+    let clock_impl = core::ptr::addr_of!(tables.clock).cast::<c_void>();
+    let net_impl = core::ptr::addr_of!(tables.net).cast::<c_void>();
     // SAFETY: 按 `AB-33`/`AB-34` 的契约传参。
     let checks = unsafe {
         [

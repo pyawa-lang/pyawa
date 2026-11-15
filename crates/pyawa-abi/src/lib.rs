@@ -602,7 +602,7 @@ impl pa_state {
             .into_raw()
             .cast::<Header>();
         // **`AB-68` 的前置**：ABI 宿主即使不装标准库，`import` 也必须有每实例的模块表与
-        // `sys.path`（`IM-*` 的语义就是读这两处 ✓）。`paL_openlibs` 仍如实"未提供"（P3-14）——
+        // `sys.path`（`IM-*` 的语义就是读这两处 ✓）。`paL_openlibs` 由组合根产物提供（§12.13 #1）。
         // 这里只装**最小 sys 骨架**（`sys.path` 空表 ＋ `sys.modules`），不装 builtins／标准库 ✓。
         install_minimal_sys(&instance);
         Self {
@@ -2472,28 +2472,93 @@ pub unsafe extern "C" fn pa_exec_string(
     outcome
 }
 
-/// `pa_exec_file(st, path, mode, options)`：执行文件——**I/O 经能力层**（`IM-15`），能力层尚未
-/// 接线 ⇒ 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"已实现但拒绝"必须区分）。
+/// **`§15.3`** `pa_exec_file(st, path, mode, opts)`：执行文件（源经 **`fs` 域**读入，`IM-15`）。
 ///
-/// **未提供**先于参数校验：本版不区分 `path`／`mode`／`options` 是否合法（等能力层接线时再补，
-/// 那时 `mode` 按 `AB-60` 判、`options` 按 `AB-61` 判、非法 ⇒ `PA_ERR_INVALID`）。
+/// - 宿主注册了 `fs` 域（或使用电池版 `paL_newstate`）⇒ 读文件 → 复用 `pa_exec_string` 的
+///   编译/执行路径（`mode`/`opts` 语义同 `AB-60`/`AB-61`）；
+/// - **没有能力提供者**（最小 ABI 产物，宿主 `capabilities=NULL`）⇒ 如实 `PA_ERR_NOTIMPLEMENTED`
+///   （`AB-22`：这是"该嵌入没提供"而不是文件错误）；
+/// - 机器错误（ENOENT 等）⇒ `PA_ERR_RUNTIME` 并把 `errno` 写进 `pa_errmsg`（`AB-48`）。
 ///
 /// # Safety
 ///
-/// 同 [`pa_exec_string`]。
+/// `state`／`path`／`mode` 按 `AB-57`／`AB-60` 契约；`options` 按 `AB-61`。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_exec_file(
     state: *mut pa_state,
-    _path: *const c_char,
-    _mode: *const c_char,
-    _options: *const pa_options,
+    path: *const c_char,
+    mode: *const c_char,
+    options: *const pa_options,
 ) -> i32 {
+    install_panic_hook();
+    let _ = take_panic_text();
     boundary(|| {
         let state = state_or!(state);
-        state.set_message("pa_exec_file 未提供：文件 I/O 经能力层（`IM-15`），能力层尚未接线");
-        status::PA_ERR_NOTIMPLEMENTED
+        let Some(path_text) = (unsafe { host::read_c_string(path, 4096) }) else {
+            state.set_message("pa_exec_file：path 不是合法 C 字符串");
+            return status::PA_ERR_INVALID;
+        };
+        let source = match read_source_via_fs(state, path_text.as_bytes()) {
+            Ok(source) => source,
+            Err(code) => return code,
+        };
+        // 复用唯一的编译／执行入口（`mode`/`opts` 的校验也由它负责，不在本函数复制第二份）。
+        // SAFETY: state/path/mode/options 都是本函数按契约收到的指针；source 在调用期间存活。
+        unsafe {
+            pa_exec_string(
+                state as *mut pa_state,
+                source.as_ptr().cast(),
+                source.len() as isize,
+                path,
+                mode,
+                options,
+            )
+        }
     })
 }
+
+/// 经 `fs` 域读整个文件（`pa_exec_file` 用）；错误已写 `pa_errmsg`，直接返回状态码。
+fn read_source_via_fs(state: &mut pa_state, path: &[u8]) -> Result<String, i32> {
+    let instance = &state.instance;
+    let handle = match instance.fs_open(path, 0, 0) {
+        Ok(handle) => handle,
+        Err(pyawa_core::CapabilityCallError::NotRegistered)
+        | Err(pyawa_core::CapabilityCallError::NotImplemented) => {
+            state.set_message(
+                "pa_exec_file 未提供：该宿主没有注册 `fs` 域（最小 ABI 产物无能力提供者；电池版 `paL_newstate` 有）",
+            );
+            return Err(status::PA_ERR_NOTIMPLEMENTED);
+        }
+        Err(pyawa_core::CapabilityCallError::Machine(errno)) => {
+            state.set_message(&format!("pa_exec_file：打开文件失败（errno {errno}）"));
+            return Err(status::PA_ERR_RUNTIME);
+        }
+    };
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        match instance.fs_read(handle, &mut buffer) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+            Err(pyawa_core::CapabilityCallError::Machine(errno)) => {
+                let _ = instance.fs_close(handle);
+                state.set_message(&format!("pa_exec_file：读取失败（errno {errno}）"));
+                return Err(status::PA_ERR_RUNTIME);
+            }
+            Err(_) => {
+                let _ = instance.fs_close(handle);
+                state.set_message("pa_exec_file：`fs` 域未提供读取能力");
+                return Err(status::PA_ERR_NOTIMPLEMENTED);
+            }
+        }
+    }
+    let _ = instance.fs_close(handle);
+    String::from_utf8(bytes).map_err(|_| {
+        state.set_message("pa_exec_file：文件不是合法 UTF-8（宿主用法错误）");
+        status::PA_ERR_INVALID
+    })
+}
+
 
 /// **CX-11-EXEMPT 白名单**：无 panic 面——只读 `len` 字节并拷进 `String`（长度上限由宿主给的 `len` 决定；
 /// 不分配实例对象、不执行脚本；非法指针／非 UTF-8 一律回 `PA_ERR_INVALID` ✓）。
@@ -3218,9 +3283,9 @@ pub unsafe extern "C" fn pa_toboolean(state: *mut pa_state, index: i32) -> i32 {
 
 /// `pa_tointeger(st, idx)`：整数转换；失败 `PA_ERR_INVALID`。
 ///
-/// **超出 `i64` 的整数**（`TS-45` 的任意精度）本接口**表达不了** ⇒ 如实返
-/// `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"用法错"分得开）——ABI 侧的大整数通道
-/// （字符串或字节）尚未定，别在这里截断。
+/// **超出 `i64` 的整数**本接口**表达不了** ⇒ 如实返 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"
+/// 与"用法错"分得开）。**任意精度走 `pa_tointstring`／`pa_pushintstring`（`AB-62`）**——§12.18 C6
+/// 复核结论：大整数 ABI 面**无新通道缺口**，本函数只承担 i64 投影；别在这里截断。
 ///
 /// # Safety
 ///
@@ -3242,7 +3307,9 @@ pub unsafe extern "C" fn pa_tointeger(state: *mut pa_state, index: i32, out: *mu
                 match payload.to_i64() {
                     Some(value) => value,
                     None => {
-                        state.set_message("这个整数超出 i64：ABI 的大整数通道尚未接线（`TS-45`）");
+                        state.set_message(
+                            "这个整数超出 i64：任意精度用 `pa_tointstring`（`AB-62`）；本函数只给 i64 投影（§12.18 C6）",
+                        );
                         return status::PA_ERR_NOTIMPLEMENTED;
                     }
                 }

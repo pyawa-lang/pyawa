@@ -3,16 +3,17 @@
  * 权威清单：docs/SPEC-c-abi.md §15。函数总数必须 ≤ 120（AB-1）；
  * 禁止导出清单之外的函数、禁止隐式导出（AB-6）。
  *
- * 本头文件声明**已经接线**的部分，以及三条执行入口：`pa_exec_string` 与
- * `pa_exec_bytecode`（`.pyac` 解码 + `BC-29` 校验）已落地；`pa_exec_file` 的文件 I/O 经能力层
- * （`IM-15`）尚未接线 ⇒ 按 `AB-22` 如实报"**未提供**"（`PA_ERR_NOTIMPLEMENTED`）——
- * 签名在这里固定，宿主不必等实现。
+ * 本头文件声明**已经接线**的部分，以及三条执行入口：`pa_exec_string`／`pa_exec_bytecode`／
+ * `pa_exec_file` 均已接线（后者源经 `fs` 域读入：宿主注册了 `fs` 或使用电池版 `paL_newstate`；
+ * 无能力提供者时按 `AB-22` 如实报 `PA_ERR_NOTIMPLEMENTED`）。
  */
 #ifndef PAWA_PA_H
 #define PAWA_PA_H
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 /* **AB-45（§12.17 A1）**：公开入口头仍是 `pa.h`；能力域 vtable 的 C 布局由**唯一伴随头**
  * `pa_capabilities.h` 承载（自动生成，3 个已实现域）。宿主只需 include 本头即可。 */
@@ -150,8 +151,8 @@ int pa_setpath(pa_state *state, const char *const *dirs, size_t n);
  * `len < 0` ⇒ `source` 按 NUL 结尾算（口径同 `pa_pushstring`）；`chunkname` 为空／NULL ⇒
  * 取 `<string>`（它现在还进不了产物）。
  *
- * 一条**如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）：
- *   - `pa_exec_file`：文件 I/O 经能力层（`IM-15`），能力层尚未接线
+ * `pa_exec_file` **已接线**：源经 `fs` 域读入（无 provider ⇒ `PA_ERR_NOTIMPLEMENTED`，`AB-22`；
+ * 机器错误 ⇒ `PA_ERR_RUNTIME`）；电池版 `paL_newstate` 自带 `fs`，最小产物需宿主注册。
  *
  * `pa_exec_bytecode` **已提供**：按 `.pyac` 容器解码，指令集版本不符 ⇒ `PA_ERR_INVALID`（`BC-29`）；
  * 本条**没有 `mode`、也没有 `pa_options`**（`AB-60`／`AB-61`：模式／优化级／档位三样都随产物
@@ -444,17 +445,17 @@ typedef enum pa_async {
 int pa_setcapability(pa_state *state, int domain, const void *impl);
 int pa_setcapability_async(pa_state *state, int domain, int classification);
 
-/* ---- 辅助层 paL_（§15.4，18 个；不引入核心层没有的语义，AB-4／AB-6）----
+/* ---- 辅助层 paL_（§15.4，18 个导出；另有 C 头内联 paL_errorf；不引入核心层没有的语义，AB-4／AB-6）----
  *
  * §15.4 只给名字与语义、**没有给签名** ⇒ 本层按 AB-19（跨边界函数必须返回状态码）统一取
  * "状态码 ＋ 出参"形态，**本头文件就是那唯一处定义**。返回值一律是 pa_status。
  *
- * 结构性限制（README 里同样写明）：
- *   - paL_error 的 C 变参格式化在稳定版 Rust 里做不到（要 vsnprintf）⇒ 只收拼好的消息；
- *     format 那一路等 AB-44 的版本策略裁定
- *   - paL_openlibs 由**组合根产物**（pyawa-runtime 的 cdylib/staticlib）提供（§12.13 #1）；
- *     pyawa-abi 的最小 cdylib 不导出它；paL_dostring／paL_dofile 缺编译器（P3-12）
- *   - paL_where 缺 traceback（OM-28）、paL_requiref 缺模块系统（IM-）
+ * 接线状态（§12.18 C 组）：
+ *   - paL_dostring／paL_dofile 已接（mode：0=python／1=pyawa；文件经 fs 域读）；
+ *   - paL_requiref 已接（sys.modules → openf → import_through_bridge）；
+ *   - paL_where 为尽力口径（当前帧/`f_back` 的 code:line；完整 traceback `OM-28` 仍未接）；
+ *   - paL_errorf 是 C 头 `static inline`（宿主侧 vsnprintf；不新增导出符号）；
+ *   - paL_openlibs 由**组合根产物**（pyawa-runtime 的 cdylib/staticlib）提供（§12.13 #1）。
  */
 typedef struct pa_reg {
     const char *name;        /* NUL 结尾的 UTF-8 */
@@ -473,15 +474,32 @@ int paL_ref(pa_state *state, int idx, int *out_ref);       /* 注册表键从 1 
 int paL_getref(pa_state *state, int ref);
 int paL_unref(pa_state *state, int ref);                   /* 幂等 */
 int paL_traceback(pa_state *state, const char *msg);
+/* §12.18 C4：当前帧（level=0）或 f_back 链第 level 层的 "code:line"；无帧/无 code/无行号
+ * ⇒ PA_ERR_NOTIMPLEMENTED（尽力口径；完整 traceback 仍未接线）。出参是借用视图（AB-15）。 */
 int paL_where(pa_state *state, int level, const char **out, size_t *len);
 int paL_error(pa_state *state, const char *msg);
 int paL_execresult(pa_state *state, int status);           /* PA_OK ⇒ 压 True（+1） */
+/* §12.18 C4：取或加载模块（sys.modules 查找 → openf(pa_state*) → import_through_bridge）。
+ * 成功 ⇒ 模块压栈（+1）；glb != 0 同时写全局；加载失败 ⇒ PA_ERR_RUNTIME。 */
 int paL_requiref(pa_state *state, const char *name, const void *openf, int glb);
 int paL_setfuncs(pa_state *state, const pa_reg *regs, int n);  /* n < 0 ⇒ 以 NULL 名字结尾 */
 
 int paL_openlibs(pa_state *state);
+/* §12.18 C3：mode：0＝"python"、1＝"pyawa"；成功经 paL_execresult 压 True（+1）。 */
 int paL_dostring(pa_state *state, const char *s, int mode);
+/* §12.18 C3：文件经 fs 域读；无 provider ⇒ PA_ERR_NOTIMPLEMENTED，机器错误 ⇒ PA_ERR_RUNTIME。 */
 int paL_dofile(pa_state *state, const char *path, int mode);
+/* §12.18 C2：宿主侧格式化（C 头内联，不新增导出符号）；失败/超长按 vsnprintf 截断。 */
+static inline int paL_errorf(pa_state *state, const char *format, ...);
+static inline int paL_errorf(pa_state *state, const char *format, ...)
+{
+    char message[1024];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(message, sizeof message, format, args);
+    va_end(args);
+    return paL_error(state, message);
+}
 
 /* paL_newstate()：组合根电池版入口（实现属 pyawa-runtime）——pa_create ＋ fs/clock/net 真实能力
  * ＋ builtins/sys/stdlib 装配；pyawa-runtime 的 C 产物同时导出全部 pa_*（单一库）。

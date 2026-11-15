@@ -858,7 +858,7 @@
 | # | 项 | 收法 | 验收 |
 |---|---|---|---|
 | 1 | `AB-52` 的 `type_expr` **不求值**（只原样保留表达式字符串） | **已落地（M4，2026-11-14）**：落 `TS` 注解解析器（`SPEC-type-system.md` §16 的 `TS-51`…`TS-57`；`pyawa_core::parse_type_expression`／`evaluate_type_expression`）；`pa_register`／`pa_module_addfunction` 注册时求值成 `AB-69` 的 `TyExpr`（**同一账本**：边界运行期＋编译期调用点检查；`Any`/`Platform` 变体；坏字符串/未知名 ⇒ `PA_ERR_INVALID`；`.pyi` 仍原串） | 注解表达式可求值 ✓（`crates/pyawa-abi/tests/annotation_strings.rs` 7 passed）；`.pyi` 导出正确 ✓ |
-| 2 | `pa_exec_file` **未提供**。**`IM-15` 已落地**（import 的 I/O 走 `fs` 域）；未提供的真实原因是**最小 ABI 产物无能力提供者**（宿主传 `capabilities = NULL`），电池版（`paL_newstate`）具备 `fs` 但该函数未实现 | 电池版路径实现后追加；最小产物下如实 `PA_ERR_NOTIMPLEMENTED`（现状合规） | 提供后文件执行可用；未提供时与"已实现但拒绝"可区分（`AB-22`） |
+| 2 | `pa_exec_file` **已接线**（§12.18 C1）：源经 `fs` 域读入后复用 `pa_exec_string`；电池版 `paL_newstate` 直接可用，最小产物无 `fs` provider ⇒ 如实 `PA_ERR_NOTIMPLEMENTED` | 已落地；无 provider 的边界保留 | 电池版文件执行可用；最小产物与"已实现但拒绝"可区分（`AB-22`） |
 | 3 | `pa_call` 的 `nresults != 1` **未定** | **已定**：**精确**结果数（`0`/`N`，多截、少补 `None`）⇒ 落 `AB-72` | 多返回值用例；单返回值不回退 |
 | 4 | **宿主对象句柄不可读回**（复核：`pa_type` **本来就在**如实报 `PA_THANDLE`——审计此句为误记；缺的只有 `pa_tohandle`） | **已实现**：新增 `AB-70` `int pa_tohandle(pa_state*, int idx, void **payload_out)`——栈契约 `—`，仅对宿主对象成功，类型不符 `PA_ERR_INVALID`（`AB-22`）；借用照 `AB-15`／`AB-17` | 脚本把句柄当参数传给宿主函数能取回载荷；经 `list`／`dict` 往返后仍能取回；类型不符如实报错；规格 §15.3 表格同步 |
 | 5 | `§15.4` 辅助层（`paL_*`）**规格无签名** | 按现状（`AB-19` 形态）把签名补进规格 | 规格与 `pa.h` 一致 |
@@ -875,7 +875,7 @@
 - **#6** 已拍板（改规格记法跟随实现）并落地：`setfield` **−1**、`settable`／`rawset` **−2**（`getfield`／`gettable`／`rawget` 维持 ±1）；
 - **#7** 已落地：`pa.h` 顶部总述与执行入口注释都改为"`pa_exec_string`／`pa_exec_bytecode` 已落地；只有 `pa_exec_file` 如实报未提供（**非 `IM-15`**：最小产物无能力提供者）"；
 - **#8** 已拍板（补进头／规格）并落地：`pa_set_program_filename` 进 `pa.h` ＋ **`AB-71`**；`T-CX-19` 的过渡清单已清空（棘轮仍在：将来新增影子导出立即红）；
-- **#1** **已落地（M4，2026-11-14）**：`AB-52` 的 `type_expr` 求值接通（见上表 row 1 与 `SPEC-type-system.md` §16、`PLAN` §12.9）；**#2** 如实未提供（**非 `IM-15`**：`IM-15` 已落地；最小 ABI 产物无能力提供者，见 §12.4 row 2／§12.18 C1）；
+- **#1** **已落地（M4，2026-11-14）**：`AB-52` 的 `type_expr` 求值接通（见上表 row 1 与 `SPEC-type-system.md` §16、`PLAN` §12.9）；**#2** **已落地（2026-11-15，§12.18 C1）**：`pa_exec_file` 经 `fs` 域读入（电池版可用；无 provider 的最小产物如实 `PA_ERR_NOTIMPLEMENTED`）；
 - **ABI 版本**：次版本 **9→10**（`AB-70`／`AB-71` 为**追加式**；`AB-72` 是**未发布前**的语义补齐，旧宿主不存在）。**ABI 仍不发布**（用户 2026-11-13 口径：等钩子族定稿）。
 
 
@@ -1295,12 +1295,12 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 
 | # | 项 | 现状 | 后续 |
 |---|---|---|---|
-| C1 | `pa_exec_file` | 固定返回 `PA_ERR_NOTIMPLEMENTED`。**真实原因是产品边界，不是 `IM-15`**：`IM-15` 已落地（import 的 I/O 走 `fs` 域）；最小 ABI 产物的宿主传 `capabilities = NULL`（无 `fs` provider），而电池版（`paL_newstate`）有 `fs` ⇒ 该函数只是**未在电池版实现** | 电池版路径实现（读文件走 `fs`）后追加；同步修正 `pa.h`／`lib.rs`／`helpers.rs` 的过时注释（"能力层尚未接线"） |
-| C2 | `paL_error` 变参格式化 | 稳定 Rust 无 `vsnprintf` ⇒ 只收拼好的消息 | 可追加 `paL_errorf`（宿主侧格式化） |
-| C3 | `paL_dostring`／`paL_dofile` | 缺编译器路径（`P3-12`） | 待编译期接口开放 |
-| C4 | `paL_where`／`paL_requiref` | 缺 traceback（`OM-28`）／缺模块系统 | 随各自能力面追加 |
-| C5 | `PA_THANDLE` 头注释 | `pa.h:78` 仍写"**尚未接线**"，但 `AB-70`／`AB-76` 已落地 ⇒ **注释过时** | 改注释（纯文档，随 A1 一并做） |
-| C6 | `TS-45` 大整数 ABI 通道 | `AB-62` 的 `pa_tointstring`／`pa_pushintstring` 已覆盖全域；`pa_tointeger` 越 i64 **按规格**如实失败 | **复核一次**是否还有通道缺口，无则关闭 |
+| C1 | `pa_exec_file` | **✓ 已接线（2026-11-15）**：源经 `fs` 域读入后复用 `pa_exec_string`；电池版 `paL_newstate` 可用；无 provider 的最小产物 ⇒ `PA_ERR_NOTIMPLEMENTED`（机器错误 ⇒ `PA_ERR_RUNTIME`） | `helpers_wiring`／`host_usability_probe` 覆盖；过时注释已修 |
+| C2 | `paL_error` 变参格式化 | **✓ 已接（§12.18 C2）**：`paL_errorf` 为 **C 头 `static inline`**（`vsnprintf` 后转 `paL_error`，不新增导出符号；超长截断） | `examples/reference_host.c` 真编译使用；规格 §15.4 已登记 |
+| C3 | `paL_dostring`／`paL_dofile` | **✓ 已接（§12.18 C3）**：走 `pa_exec_string`／`pa_exec_file` ＋ `paL_execresult`；`int mode`：0＝python／1＝pyawa；文件经 `fs` | `helpers_wiring` 覆盖；`host_usability_probe` 电池版覆盖 |
+| C4 | `paL_where`／`paL_requiref` | **✓ 已接（§12.18 C4）**：`paL_where` 尽力口径（当前帧/`f_back` 的 `code:line`；完整 traceback `OM-28` 仍未接）；`paL_requiref`：`sys.modules` → `openf` → `import_through_bridge` | `helpers_wiring` 覆盖；残余仅"完整 traceback"如实登记 |
+| C5 | `PA_THANDLE` 头注释 | **✓ 已修（§12.17 A1）**：`AB-70`／`AB-76` 已落地，注释改为读载荷/取身份 | — |
+| C6 | `TS-45` 大整数 ABI 通道 | **✓ 复核关闭（§12.18 C6）**：`AB-62` 的 `pa_tointstring`／`pa_pushintstring` 已覆盖全域；`pa_tointeger` 只做 i64 投影、越界如实 `NOTIMPLEMENTED`；**无新通道缺口**，Spec 行与代码注释已改为指向 `AB-62` | — |
 
 #### D. 追加候选（不阻塞冻结，出现真实需求再做）
 

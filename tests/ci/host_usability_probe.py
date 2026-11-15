@@ -21,10 +21,12 @@ import argparse
 import ctypes
 import pathlib
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PA_OK = 0
 PA_ERR_INVALID = 6
+PA_ERR_NOTIMPLEMENTED = 5
 PA_ERR_RUNTIME = 1
 
 
@@ -64,6 +66,17 @@ def bind(library: ctypes.CDLL) -> None:
         ctypes.c_void_p,
     ]
     library.pa_exec_string.restype = ctypes.c_int
+    library.pa_exec_file.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+    ]
+    library.pa_exec_file.restype = ctypes.c_int
+    library.paL_dostring.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    library.paL_dostring.restype = ctypes.c_int
+    library.paL_dofile.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    library.paL_dofile.restype = ctypes.c_int
     library.pa_errmsg.argtypes = [ctypes.c_void_p]
     library.pa_errmsg.restype = ctypes.c_char_p
     library.pa_destroy.argtypes = [ctypes.c_void_p]
@@ -106,7 +119,36 @@ def main(argv: list[str]) -> int:
         code = execute(library, state, script)
         if code != PA_OK:
             failures.append(f"电池版执行 builtins/import 失败：状态 {code}／{message(library, state)}")
-        # ② 未捕获异常 ⇒ 状态码＋可诊断消息（`AB-48`）。
+        # ② `pa_exec_file`／`paL_dofile`：电池版有 fs 域 ⇒ 真读文件并执行。
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "probe_exec.py"
+            path.write_text("exec_file_ok = 1\n", encoding="utf-8")
+            code = library.pa_exec_file(
+                state, str(path).encode(), b"python", None
+            )
+            if code != PA_OK:
+                failures.append(f"电池版 pa_exec_file 失败：状态 {code}／{message(library, state)}")
+            else:
+                code = execute(library, state, "assert exec_file_ok == 1\n")
+                if code != PA_OK:
+                    failures.append(f"pa_exec_file 的代码未生效：{code}／{message(library, state)}")
+            path2 = pathlib.Path(directory) / "probe_dofile.py"
+            path2.write_text("dofile_ok = 1\n", encoding="utf-8")
+            code = library.paL_dofile(state, str(path2).encode(), 0)
+            if code != PA_OK:
+                failures.append(f"电池版 paL_dofile 失败：状态 {code}／{message(library, state)}")
+            else:
+                code = execute(library, state, "assert dofile_ok == 1\n")
+                if code != PA_OK:
+                    failures.append(f"paL_dofile 的代码未生效：{code}／{message(library, state)}")
+        code = library.paL_dostring(state, b"dostring_ok = 1", 0)
+        if code != PA_OK:
+            failures.append(f"paL_dostring 失败：状态 {code}／{message(library, state)}")
+        else:
+            code = execute(library, state, "assert dostring_ok == 1\n")
+            if code != PA_OK:
+                failures.append(f"paL_dostring 的代码未生效：{code}／{message(library, state)}")
+        # ③ 未捕获异常 ⇒ 状态码＋可诊断消息（`AB-48`）。
         code = execute(library, state, "raise ValueError('probe')")
         if code != PA_ERR_RUNTIME or not message(library, state):
             failures.append(f"异常路径应带状态码＋消息，实际 {code}／{message(library, state)!r}")
@@ -128,7 +170,18 @@ def main(argv: list[str]) -> int:
             failures.append("裸实例不应有 builtins（print 却成功）")
         elif not message(library, raw_state.value):
             failures.append("裸实例失败必须带 pa_errmsg")
-        # ④ `paL_openlibs`：给已有实例补 builtins／sys（不需要能力域即可跑纯计算）。
+        # ④ `pa_exec_file`：最小 ABI 实例无 fs provider ⇒ 如实 PA_ERR_NOTIMPLEMENTED。
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "minimal_exec.py"
+            path.write_text("not_reached = 1\n", encoding="utf-8")
+            code = library.pa_exec_file(
+                raw_state.value, str(path).encode(), b"python", None
+            )
+            if code != PA_ERR_NOTIMPLEMENTED:
+                failures.append(f"最小实例 pa_exec_file 应 NOTIMPLEMENTED，实际 {code}")
+            elif not message(library, raw_state.value):
+                failures.append("最小实例 pa_exec_file 失败必须带 pa_errmsg")
+        # ⑤ `paL_openlibs`：给已有实例补 builtins／sys（不需要能力域即可跑纯计算）。
         code = library.paL_openlibs(raw_state.value)
         if code != PA_OK:
             failures.append(f"paL_openlibs 失败：{code}／{message(library, raw_state.value)}")
