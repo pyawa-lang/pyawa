@@ -6,7 +6,7 @@
 //! 接线状态（§12.18 C 组）：
 //! - `paL_dostring`／`paL_dofile`：已接（走 `pa_exec_string`／`pa_exec_file` ＋ `paL_execresult`；
 //!   `int mode`：0＝python、1＝pyawa）；
-//! - `paL_where`：尽力口径（当前帧／`f_back` 的 `code:line`；完整 traceback `OM-28` 仍未接）；
+//! - `paL_where`：`code:line` 视图（当前帧／`f_back` 链；数据面 `OM-42`、链语义 `BC-60`）；
 //! - `paL_requiref`：已接（`sys.modules` → 宿主 `openf` → `import_through_bridge`）；
 //! - `paL_errorf`：C 头 `static inline`（宿主侧 `vsnprintf`，不新增导出符号）；
 //! - `paL_openlibs` **由组合根（`pyawa-runtime`）提供**（§12.13 #1；本 crate 不再导出它）。
@@ -375,7 +375,8 @@ pub unsafe extern "C" fn paL_unref(state: *mut pa_state, reference: i32) -> i32 
 
 /// `paL_traceback(st, msg)`：附加上下文信息。
 ///
-/// 本层**尚无 traceback 对象**（`OM-28` 未接线）⇒ 目前只把信息并入 `pa_errmsg`，不伪造结构。
+/// 只把信息并入 `pa_errmsg`；**不修改** `__traceback__`（traceback 数据面见 `OM-42`、链语义
+/// 见 `BC-60`）。
 ///
 /// # Safety
 ///
@@ -398,15 +399,13 @@ pub unsafe extern "C" fn paL_traceback(state: *mut pa_state, msg: *const c_char)
     })
 }
 
-/// `paL_where(st, level, out, len)`：当前位置串——**要 traceback**（`OM-28`）⇒ 未提供。
+/// `paL_where(st, level, out, len)`：**当前帧（或沿 `f_back` 第 `level` 层）的 `code:line` 串**。
 ///
-/// # Safety
-///
-/// `paL_where(st, level, out, len)`：**当前帧（或调用链上 `level` 层）的 `code:line` 串**。
-///
-/// 尽力口径（`OM-28` 的完整 traceback 仍未接线）：`level == 0` 取当前帧；`level > 0` 沿
-/// `f_back` 走 `level` 层；没有帧／code／行号 ⇒ `PA_ERR_NOTIMPLEMENTED`（如实，不编造位置）。
-/// 出参是**借用视图**（下次调用前有效，`AB-15`）；`out == NULL` ⇒ `PA_ERR_INVALID`。
+/// - `level < 0`／`out == NULL` ⇒ `PA_ERR_INVALID`；
+/// - 无帧／无 code／链不足 `level` 层 ⇒ `PA_ERR_NOTIMPLEMENTED`（如实，不编造位置）；
+/// - 行号无法定位 ⇒ 行号 `0`（与 `OM-42` 的 `tb_lineno` 同口径）；
+/// - 出参是**借用视图**（下次调用前有效，`AB-15`）；`len` 可为 `NULL`。
+/// - traceback 数据面见 `OM-42`、链语义见 `BC-60`／`T-BC-22`。
 ///
 /// # Safety
 ///

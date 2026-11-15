@@ -1328,7 +1328,18 @@ buffer 面在冻结前只补**一项**——一次性写回；**不做**长期�
 |---|---|---|
 | 1 | 补 **对象模型数据面**（`SPEC-INDEX.md` §2：在本文件前缀内取**下一个连续号**）；`__traceback__` 的最小可见面（`tb_frame`／`tb_lineno`／`tb_next`）；**链语义引用 `BC-60`／`T-BC-22`，不重述**。`paL_where(level)` 的调用语义仍归 `SPEC-c-abi` §15.4（可在此引用/细化，不另立第二真相） | 新 OM 条款编号 ＋ 对应 `T-OM`；`CX-19`／`T-CX-10` 连续性通过 |
 | 2 | 按规格实现：`paL_where` 完整链；`__traceback__` 最小面 | 用例：handled 异常的 tb 链、re-raise、宿主异常映射后的 guest traceback；`T-BC-22` 不回归 |
-| 3 | 修**剩余错引**（`OM-28` → `BC-60`／真实条款）：`crates/pyawa-abi/include/pa.h:456`、`crates/pyawa-abi/src/helpers.rs:9/378/401/407`、`NEXT.md`（旧边界句） | 可执行命令：`grep -rn 'OM-28' crates/pyawa-abi/include crates/pyawa-abi/src docs/RELEASE.md docs/SPEC-c-abi.md NEXT.md \| grep -i traceback` **为空** |
+| 3 | 修**剩余错引**（`OM-28` → `BC-60`／真实条款）：`crates/pyawa-abi/include/pa.h:456`、`crates/pyawa-abi/src/helpers.rs` 4 处（均 → `OM-42`／`BC-60`） | `grep -rn 'OM-28' crates/pyawa-abi/include crates/pyawa-abi/src \| grep -i traceback` **为空**（`NEXT` 中的命令文本除外） |
 | 4 | `C6`（`TS-45`）复核关闭 | 已并入 `§12.18 C6` ✓（不重复列） |
+
+**状态（2026-11-15，item 1–4 ✓）**：
+- **item 1 ✓**：`SPEC-object-model` 新增 **`OM-42`**（§12.1 traceback 数据面：`tb_frame`／
+  `tb_lineno`／`tb_lasti`／`tb_next`、帧保活、`AB-74` 边界、`SkipTest` 偏差 `DIV-6`）与
+  **`T-OM-11`**；链语义**引用 `BC-60`／`T-BC-22`，不重述**。
+- **item 2 ✓**：实现此前已存在于 core（`new_traceback`／`attach_traceback`）；本轮按 `OM-42`
+  核对并用 `T-OM-11` 钉住（`pyawa-runtime/tests/exception_traceback_frames.rs` 1 passed、
+  `pyawa-core/tests/exceptions.rs` 18 passed）；`paL_where(level)` 链式语义在
+  `SPEC-c-abi` §15.4 精确化，`helpers_wiring.rs` 新增 level=1／链不足用例（5 passed）。
+- **item 3 ✓**：5 处代码错引已修（`pa.h:456`、`helpers.rs` 4 处 → `OM-42`／`BC-60`）。
+- **item 4 ✓**：C6 已并入 `§12.18 C6`。
 
 **不在本单**：`traceback` 模块的完整 Python 面（`format_exc` 一族）——按需另立。

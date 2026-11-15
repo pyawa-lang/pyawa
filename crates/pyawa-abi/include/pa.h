@@ -453,7 +453,7 @@ int pa_setcapability_async(pa_state *state, int domain, int classification);
  * 接线状态（§12.18 C 组）：
  *   - paL_dostring／paL_dofile 已接（mode：0=python／1=pyawa；文件经 fs 域读）；
  *   - paL_requiref 已接（sys.modules → openf → import_through_bridge）；
- *   - paL_where 为尽力口径（当前帧/`f_back` 的 code:line；完整 traceback `OM-28` 仍未接）；
+ *   - paL_where 为 `code:line` 视图（当前帧/`f_back` 链；数据面 `OM-42`、链语义 `BC-60`）；
  *   - paL_errorf 是 C 头 `static inline`（宿主侧 vsnprintf；不新增导出符号）；
  *   - paL_openlibs 由**组合根产物**（pyawa-runtime 的 cdylib/staticlib）提供（§12.13 #1）。
  */
@@ -474,8 +474,8 @@ int paL_ref(pa_state *state, int idx, int *out_ref);       /* 注册表键从 1 
 int paL_getref(pa_state *state, int ref);
 int paL_unref(pa_state *state, int ref);                   /* 幂等 */
 int paL_traceback(pa_state *state, const char *msg);
-/* §12.18 C4：当前帧（level=0）或 f_back 链第 level 层的 "code:line"；无帧/无 code/无行号
- * ⇒ PA_ERR_NOTIMPLEMENTED（尽力口径；完整 traceback 仍未接线）。出参是借用视图（AB-15）。 */
+/* §12.18 C4：当前帧（level=0）或 f_back 链第 level 层的 "code:line"；无帧/无 code/链不足
+ * ⇒ PA_ERR_NOTIMPLEMENTED；行号无法定位 ⇒ 0（与 OM-42 的 tb_lineno 同口径）。出参借用视图。 */
 int paL_where(pa_state *state, int level, const char **out, size_t *len);
 int paL_error(pa_state *state, const char *msg);
 int paL_execresult(pa_state *state, int status);           /* PA_OK ⇒ 压 True（+1） */

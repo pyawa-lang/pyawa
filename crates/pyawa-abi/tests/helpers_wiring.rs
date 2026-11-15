@@ -194,3 +194,101 @@ fn where_reports_current_frame_code_line_inside_host_callback() {
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
+
+#[test]
+fn where_level_walks_f_back_chain() {
+    let state = new_state(false);
+    // 带 level 形参的宿主函数：level=1 应取调用者的上一帧（`outer`）。
+    let mut params = [pyawa_abi::host::pa_param {
+        size: size_of::<pyawa_abi::host::pa_param>(),
+        name: b"level\0".as_ptr().cast(),
+        type_expr: core::ptr::null(),
+        flags: pyawa_abi::host::param_flags::PA_PARAM_POSITIONAL,
+        default_handle: core::ptr::null_mut(),
+    }];
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 1,
+        params: params.as_mut_ptr(),
+    };
+    unsafe extern "C-unwind" fn host_where_level(state: *mut pa_state) -> i32 {
+        let mut level = 0i64;
+        // SAFETY: 参数在 -1。
+        if unsafe { pa_tointeger(state, -1, &mut level) } != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        // SAFETY: 收掉实参。
+        if unsafe { pa_pop(state, 1) } != PA_OK {
+            return PA_ERR_RUNTIME;
+        }
+        let mut out: *const c_char = core::ptr::null();
+        let mut len = 0usize;
+        // SAFETY: 在 guest 回调内，当前帧存在。
+        let code = unsafe { paL_where(state, level as i32, &mut out, &mut len) };
+        if code != PA_OK {
+            // 把 NOTIMPLEMENTED 转成脚本可捕获的 RuntimeError（测试要验证"链不足"的可观察行为）。
+            return PA_ERR_RUNTIME;
+        }
+        // SAFETY: 借用视图；复制后压栈。
+        unsafe { pa_pushstring(state, out, len as isize) }
+    }
+    // SAFETY: 注册 1 形参宿主函数。
+    assert_eq!(
+        unsafe {
+            pa_register(
+                state,
+                b"host_where_level\0".as_ptr().cast(),
+                host_where_level,
+                &signature,
+            )
+        },
+        PA_OK
+    );
+    unsafe extern "C-unwind" fn host_where0(state: *mut pa_state) -> i32 {
+        let mut out: *const c_char = core::ptr::null();
+        let mut len = 0usize;
+        // SAFETY: guest 回调内当前帧存在。
+        let code = unsafe { paL_where(state, 0, &mut out, &mut len) };
+        if code != PA_OK {
+            return code;
+        }
+        // SAFETY: 借用视图；复制后压栈。
+        unsafe { pa_pushstring(state, out, len as isize) }
+    }
+    let sig0 = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    // SAFETY: 注册 0 形参。
+    assert_eq!(
+        unsafe { pa_register(state, b"host_where0\0".as_ptr().cast(), host_where0, &sig0) },
+        PA_OK
+    );
+    let script = br#"
+def outer():
+    return inner()
+
+def inner():
+    return host_where_level(1)
+
+where_outer = outer()
+assert where_outer.startswith("outer:"), where_outer
+
+def inner_too_deep():
+    return host_where_level(99)
+try:
+    inner_too_deep()
+except:
+    too_deep = True
+assert too_deep
+"#;
+    // SAFETY: 执行 guest。
+    assert_eq!(exec(state, script), PA_OK, "{}", message_of(state));
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
