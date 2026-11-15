@@ -18,6 +18,7 @@
 | 4 | **超时由宿主兜**：`host_tick` 检查单调时钟，超预算 `pa_interrupt` ⇒ `PA_ERR_INTERRUPT`（不是 abort） | `AB-5`①／`DESIGN` §7.5-1 |
 | 5 | **每实例内存配额**：`pa_set_memory_limit`；超限在脚本里是**可捕获的** `MemoryError`；`pa_memory_used` 取指标 | `AB-65`／`AB-66`／`OM-41` |
 | 6 | **实例隔离**：两个 `pa_state` 互不可见（B 读不到 A 的全局） | `OM-1`／`AB-64` |
+| 7 | **能力域 vtable**：注册最小 `clock` 域（`pa_capabilities.h` 的 `pa_clock_vtable`），宿主函数 `host_now_ns()` 调其 `now_ns` 槽 | `AB-33`／`AB-34`／`AB-39`／`AB-40`；`CP-30`；§12.17 A2 |
 
 ## 2. 构建与运行（可复制粘贴）
 
@@ -37,6 +38,7 @@ echoed=hello
 sandbox-escape=rejected
 sandbox-inside=hello from host
 quota=caught
+clock=ok
 memory-used=positive
 instances=isolated
 timeout=interrupted
@@ -61,13 +63,13 @@ done
 
 ## 4. 如实边界（✗，不掩盖）
 
-- 本示例的 C 宿主**没有标准库**：`paL_openlibs`／`paL_dostring` 仍如实报"未提供"（`P3-14`），
-  ⇒ 示例脚本只用裸语法与宿主 API，**不用** `open()`／`print()` 等 builtins；因此"C 宿主能开
-  文件面"目前**不是**本示例演示的内容。
-- **沙箱边界**在示例里用**宿主 API 白名单**演示（`host_read` 拒绝越界）；**能力域 vtable** 的完整
-  样例是 CLI 的 Rust provider（`crates/pyawa-runtime` 的 fs／clock 实现）——形状见
-  `SPEC-capabilities.md`，C 侧结构体布局与之逐字段一致。
+- 本示例**链最小 ABI 产物**：它不装 stdlib、也**不导出** `paL_*`（`paL_newstate`／`paL_openlibs`
+  由组合根 `pyawa-runtime` 提供，§12.13 #1）⇒ 示例脚本只用裸语法与宿主 API，**不用**
+  `open()`／`print()` 等 builtins；因此"C 宿主能开文件面"不是本示例演示的内容。
+- **能力域 vtable**：本示例自己演示 **C 侧最小 `clock` 域**（`pa_capabilities.h` 的
+  `pa_clock_vtable`，`host_now_ns()` 调其 `now_ns` 槽）；其余域的形状见 `SPEC-capabilities.md`，
+  C 布局以 `pa_capabilities.h` 为唯一处（`fs`／`clock`／`net` 三域已落地）。
 - 示例用**静态宿主状态**（单宿主进程；多实例共享同一份沙箱配置）。要"每实例不同配置"，
   用宿主对象／句柄机制（`AB-35`）或宿主自建映射。
-- ABI **尚未发布**（用户 2026-11-13 口径：暂不发布）；本示例随 `AB-65`／`AB-66` 等钩子族一起
-  在冻结前可能调整——但它演示的**顺序与责任划分**是稳定的。
+- ABI 处于 **alpha 期、未冻结**（`AB-81`：冻结随首个稳定发行版）；本示例随 alpha 期变更
+  可能调整——但它演示的**调用顺序与责任划分**是稳定的。
