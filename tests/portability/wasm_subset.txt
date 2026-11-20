@@ -1,0 +1,17 @@
+# P1：wasm 库嵌入档可运行的**纯计算**可移植子集（`PLAN §12.26` P1）。
+#
+# wasm 宿主目前**没有文件系统读取** ⇒ `Lib/` 里的纯 Python 模块不可 import（`json`／`re`／
+# `collections` 等如实 `ModuleNotFoundError`）；Rust 侧模块（`itertools`／`math`／`time` 的
+# 单调钟面）可用。`clock` 日历三槽仍是 `None`（`CP-3`）⇒ `time.strftime` 不在子集。
+# fs 的**标准流写**由宿主提供（`print` 可用）——其余 fs／net 如实未提供。
+# 语义/输出必须与 native（Linux）canonical JSON 相同；CI 的 E8 跑本清单。
+itertools_ops.py
+lang_arith.py
+lang_classes.py
+lang_comprehensions.py
+lang_dict_order.py
+lang_exceptions.py
+lang_strings.py
+lang_unpack.py
+math_ops.py
+time_monotonic.py

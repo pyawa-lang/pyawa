@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// **E4 验收：JS 提供 clock 能力域；fs／net 如实"未提供"**（`PLAN §12.21` E4）。
+// **E4 验收：JS 提供 clock 能力域；net 如实"未提供"，fs 仅标准流写（P1 起）**（`PLAN §12.21` E4／§12.26 P1）。
 //
 // 协议（wasm 侧见 `crates/pyawa-runtime/src/wasm_bridge.rs` 的 E4 段）：import 模块 `pyawa_host`
 // 提供 `clock_now_ns()`（挂钟纳秒）、`clock_monotonic_ns()`（单调钟纳秒）、`clock_sleep_ns(ns)`
-// （有界睡眠：VM 侧切片 ≤10 ms）。wasm 侧 provider 把它们注册成 `clock` 能力域；`fs`／`net`
+// （有界睡眠：VM 侧切片 ≤10 ms）。wasm 侧 provider 把它们注册成 `clock` 能力域；`net`
 // **不注册** ⇒ 脚本访问时必须如实报"未实现"，不得伪造成功。
 //
 // 用法：node tests/wasm/e4_js_clock.js [wasm 路径]
@@ -40,6 +40,7 @@ function main() {
         sleepCalls.push(ns);
         monotonic += BigInt(ns);
       },
+      fs_write: () => 0,
     },
   };
 
@@ -140,7 +141,7 @@ function main() {
     fail(`sleep 0.01s 应让 JS 单调钟前进 10 ms，实际 ${monotonic - beforeSleep} ns`);
   }
 
-  // 5) fs 如实"未提供"（浏览器没有文件系统）
+  // 5) fs 的 open 槽如实"未实现"（P1 只提供标准流写；浏览器没有文件系统）
   result = exec(state, 'f = open("/tmp/e4")');
   if (result.rc === PA_OK) fail('没有 fs 域时 open() 竟然成功（禁止伪造能力）');
   const fsMessage = result.message;
@@ -157,7 +158,7 @@ function main() {
   console.log(`E4 PASS: guest time.time() = ${nowSeconds}（同源折秒）`);
   console.log(`E4 PASS: clock.monotonic_ns 由 JS 提供 ⇒ guest 读到 ${monotonicSeen}`);
   console.log(`E4 PASS: time.sleep(0.01) 走 JS clock_sleep_ns（${sleepCalls.length} 次、前进 10 ms）`);
-  console.log(`E4 PASS: fs 未注册 ⇒ open() 如实报错：「${fsMessage}」`);
+  console.log(`E4 PASS: fs.open 槽未实现 ⇒ open() 如实报错：「${fsMessage}」`);
   console.log('E4 PASS: clock 的日历槽未接 ⇒ time.strftime 如实 NotImplementedError');
 }
 

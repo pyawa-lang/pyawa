@@ -33,6 +33,7 @@ function main() {
       clock_now_ns: () => 0n,
       clock_monotonic_ns: () => 0n,
       clock_sleep_ns: () => {},
+      fs_write: () => 0,
     },
   };
   const wasm = new WebAssembly.Instance(module, imports).exports;
