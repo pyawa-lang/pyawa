@@ -1965,9 +1965,19 @@ fn environ_pairs() -> Vec<(Vec<u8>, Vec<u8>)> {
     }
     #[cfg(not(unix))]
     {
-        std::env::vars()
-            .map(|(key, value)| (key.into_bytes(), value.into_bytes()))
-            .collect()
+        // **wasm32 没有进程环境**（rust-src `std::sys::env::unsupported`：`env()`＝panic、`getenv`
+        // 恒 `None`）⇒ 如实给**空表**（`os.environ == {}`）；宿主环境由 JS 侧另行提供
+        // （`PLAN §12.21` E4）。非 wasm 的非 unix（如 Windows）保持原口径：读本进程环境。
+        #[cfg(target_family = "wasm")]
+        {
+            Vec::new()
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            std::env::vars()
+                .map(|(key, value)| (key.into_bytes(), value.into_bytes()))
+                .collect()
+        }
     }
 }
 

@@ -395,7 +395,8 @@ pub(crate) fn bytes_replace_native(
             .len()
             .checked_mul(new.len().saturating_add(1))
             .and_then(|size| size.checked_add(new.len()))
-            .filter(|size| *size <= (1usize << 40))
+            // 上限 2^40：32 位目标（wasm32）上没有 2^40 这个 `usize` ⇒ 视作"无上限"（`checked_shl` 给 `None`）。
+            .filter(|size| 1usize.checked_shl(40).is_none_or(|limit| *size <= limit))
             .unwrap_or(0);
         let mut out: Vec<u8> = Vec::with_capacity(capacity);
         out.extend_from_slice(&new);

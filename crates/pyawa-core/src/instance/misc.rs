@@ -526,7 +526,10 @@ impl Instance {
         }
         self.gc_running.set(true);
         self.gc_collections.set(self.gc_collections.get() + 1);
-        let started = std::time::Instant::now();
+        // **只在开日志时取时钟**（`PYAWA_GC_LOG` 的诊断用）：wasm32 上 `Instant::now()` 运行即 trap
+        // （`PLAN §12.21` E4／E5）⇒ 不能在默认路径上调；开日志时的口径与原先一致（指针在这里取）。
+        let gc_log_started =
+            crate::diag::flag_site!("PYAWA_GC_LOG").then(std::time::Instant::now);
         let live_before = self.live_objects();
         let freed = self.collect_inner();
         if crate::diag::flag_site!("PYAWA_EXC_STATE_DEBUG") {
@@ -618,7 +621,7 @@ impl Instance {
                 live_before,
                 self.live_objects(),
                 freed,
-                started.elapsed().as_millis(),
+                gc_log_started.map_or(0, |started| started.elapsed().as_millis()),
                 self.traceback_created.get(),
                 self.traceback_freed.get()
             );

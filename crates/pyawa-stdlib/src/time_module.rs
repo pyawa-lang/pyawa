@@ -357,14 +357,30 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
 // - `daylight` 恒 0、`altzone == timezone`（无 DST 第二偏移通道；无 DST 时区与参照一致）。
 // --------------------------------------------------------------------------- #
 
-/// 取**当前 Unix 秒**（`clock.now_ns` 折秒；`clock` 域未注册时退回宿主的 `SystemTime`）。
+/// 取**当前 Unix 秒**（`clock.now_ns` 折秒；宿主路径在 `clock` 域未注册时退回宿主 `SystemTime`）。
 fn now_seconds(instance: &Instance) -> Result<i64, ExecError> {
     match instance.clock_now_ns() {
         Ok(nanoseconds) => Ok(nanoseconds.div_euclid(1_000_000_000)),
-        Err(_) => Ok(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs() as i64)
-            .unwrap_or(0)),
+        Err(error) => {
+            // **wasm32（E4）**：没有 `SystemTime`（运行即 trap）⇒ **不伪造时间**，如实报"未提供"
+            // （宿主须提供 `clock` 域）。宿主路径保持原有系统时钟兜底（不回归）。
+            #[cfg(target_family = "wasm")]
+            {
+                let _ = error;
+                Err(instance.raise_builtin_error(
+                    "NotImplementedError",
+                    "time：wasm 上没有 clock 能力域（宿主须提供）",
+                ))
+            }
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let _ = error;
+                Ok(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_secs() as i64)
+                    .unwrap_or(0))
+            }
+        }
     }
 }
 

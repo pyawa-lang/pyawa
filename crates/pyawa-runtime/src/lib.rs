@@ -7,15 +7,29 @@
 #![deny(unsafe_code)]
 
 use core::ffi::{c_void, c_char};
+#[cfg(unix)]
 use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAIN_NET};
-use pyawa_abi::{
-    pa_error, pa_setcapability, pa_setcapability_async, pa_host, pa_state, safe, status,
-};
+#[cfg(unix)]
+use pyawa_abi::{pa_setcapability, pa_setcapability_async};
+use pyawa_abi::{pa_error, pa_host, pa_state, safe, status};
 
+// **平台门控（`PLAN §12.21` E1）**：三个真实机器 provider 只用 POSIX／libc；
+// wasm32（浏览器）没有 OS ⇒ 整域如实"未提供"（`CP-2`；由 JS 宿主在 E4 提供 `clock`），
+// 不在此处伪造成功。非 unix 目标（wasm32-unknown-unknown）不编译这三个模块。
+#[cfg(unix)]
 pub mod clock_system;
+#[cfg(unix)]
 pub mod fs_posix;
+#[cfg(unix)]
 pub mod net_posix;
+// `.pyac` 的落盘路径依赖 `std::fs` 与进程号 ⇒ 宿主侧专用，wasm 目标不编译（产物由宿主决定）。
+#[cfg(not(target_family = "wasm"))]
 pub mod pyac;
+// **Web（WASM）E2**：固定槽位 trampoline ＋ JS 填充协议（`PLAN §12.21` E2）。
+// 只在 wasm32 目标编译；宿主构建零影响。模块内放开 `unsafe_code`（FFI 入口与分配器，逐项有 SAFETY）。
+#[cfg(target_family = "wasm")]
+#[allow(unsafe_code)]
+pub mod wasm_bridge;
 
 /// **组合根电池**（`§12.13 #1`／路线 A）：`paL_newstate` 用的真实机器 provider ＋ 它们的 vtable。
 ///
@@ -23,6 +37,7 @@ pub mod pyac;
 /// provider／vtable 的指针由 `pa_setcapability` **原样保存**、必须在实例存活期内有效 ⇒
 /// 这里**按实例泄漏**一份（进程生命周期；宿主需要精确回收时改用 `pa_create` ＋ 自己注册能力）。
 /// 这是组合根便捷入口的边界，不是静默泄漏：见 `PLAN §12.13` 的"如实边界"。
+#[cfg(unix)]
 #[allow(unsafe_code)]
 struct MachineProviders {
     fs: fs_posix::PosixFs,
@@ -31,6 +46,7 @@ struct MachineProviders {
 }
 
 /// 泄漏到进程末的 vtable（`state` 指回 [`MachineProviders`] 的稳定地址）。
+#[cfg(unix)]
 struct MachineVtables {
     fs: pyawa_capabilities::fs::CpFsVtable,
     clock: pyawa_capabilities::clock::CpClockVtable,
@@ -42,6 +58,7 @@ struct MachineVtables {
 /// **生命周期**：provider 与 vtable 都**先放进稳定的 Box、再泄漏到进程末**；vtable 的 `state`
 /// 必须指向**不会移动**的 provider（先前把 provider 在栈上建好再 move 进 Box ⇒ `state` 悬垂，
 /// 实测 `pa_exec_file` 的 `fs_open` 段错误）。
+#[cfg(unix)]
 #[allow(unsafe_code)]
 fn install_machine_capabilities(state: *mut pa_state) -> i32 {
     let providers = Box::into_raw(Box::new(MachineProviders {
@@ -80,6 +97,22 @@ fn install_machine_capabilities(state: *mut pa_state) -> i32 {
         }
     }
     status::PA_OK
+}
+
+/// **非 unix**：没有 OS。wasm32 上由 **JS 宿主提供 `clock`**（`PLAN §12.21` E4）——
+/// `fs`／`net` **不注册**（浏览器没有 ⇒ 如实"未提供"，`CP-2`）；其它非 unix（Windows）留 W3／W4。
+#[cfg(not(unix))]
+#[allow(unsafe_code)]
+fn install_machine_capabilities(state: *mut pa_state) -> i32 {
+    #[cfg(target_family = "wasm")]
+    {
+        return wasm_bridge::install_js_clock(state);
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let _ = state;
+        status::PA_OK
+    }
 }
 
 /// 组合根装配：内建名字空间＋`sys`＋`Lib/` 搜索路径（`CM-14`／`CM-26`；`P3-14` 的临时代劳）。

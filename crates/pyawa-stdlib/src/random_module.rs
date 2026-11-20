@@ -156,11 +156,20 @@ fn next_f64(state: &mut [u64; 4]) -> f64 {
 pub(crate) fn entropy_seed() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0);
-    nanos ^ COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed)
+    #[cfg(target_family = "wasm")]
+    {
+        // **wasm32（E4）**：没有 `SystemTime`（运行即 trap）⇒ 只用进程内计数器。
+        // **如实**：这不是熵源，只保证同进程多次播种不同（浏览器侧若要真随机，宿主应另出接口）。
+        COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed) ^ 0x5DEECE66D
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0);
+        nanos ^ COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed)
+    }
 }
 
 /// FNV-1a 64：str／bytes 种子用 ✓（确定性 ✓）。
