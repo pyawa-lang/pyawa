@@ -110,7 +110,16 @@ pub enum CapabilityCallError {
 /// 主线程 8 MiB 栈在**触发守卫之前**就已经顶穿 ✗）⇒ 取 64 让守卫来得比栈崩**早** ✓；
 /// 而 `Lib/` 里真实模块的调用深度都在几十层以内 ✓（导入链不是嵌套调用 ✓，不计深度 ✓）。
 /// **如实登记**：参照默认 1000 且可用 `sys.setrecursionlimit` 调 ✗ —— 本层上限更低、且该接口还没接 ✗。
-pub const MAX_CALL_DEPTH: usize = 64;
+pub const MAX_CALL_DEPTH: usize = 1000;
+
+/// **原生递归深度的安全上限**（`PLAN §12.22` S2 后）：脚本→脚本调用已走**显式帧栈**（不增加
+/// 原生栈），只有"原生（内建回调）→ 脚本"这条链仍靠 Rust 递归 ⇒ 单独守卫，超限抛**可捕获**
+/// `RecursionError`（比参照早，但**绝不让原生栈崩**；`DIV-11` 如实收窄）。
+pub const MAX_NATIVE_DEPTH: usize = 64;
+
+/// **`sys.setrecursionlimit` 的安全上限**（`PLAN §12.22` S3 的"可升＋安全上限"）：
+/// 纯脚本递归只吃堆帧 ⇒ 可以升到比默认 1000 更高；超过这个值如实夹住（不编造"无限"）。
+pub const MAX_SAFE_RECURSION_LIMIT: usize = 10_000;
 
 mod host_ops;
 pub use host_ops::{HostObjectGetAttr, HostObjectOps, HostObjectSetAttr};
@@ -324,6 +333,11 @@ pub struct Instance {
     /// `RUST_MIN_STACK=67108864` 就不再崩 ✓）⇒ `import collections` 那种**不算深的**递归也能顶穿 ✗。
     /// **正确做法**是像参照一样在 **Python 层**设限并报 `RecursionError` ✓，而不是让原生栈崩掉 ✗。
     call_depth: Cell<usize>,
+    /// **字节码 CALL 的延迟目标**（`PLAN §12.22` S2；见 `Instance::deferred_call_target`）。
+    deferred_call_target: Cell<Option<NonNull<Header>>>,
+    /// **原生递归深度**（= 嵌套的 `execute` 层数）：脚本调用改显式帧栈后，只有"原生 → 脚本"
+    /// 这条回调路还会吃原生栈 ⇒ 单独守卫（`MAX_NATIVE_DEPTH`），避免回调递归顶穿栈。
+    native_execute_depth: Cell<usize>,
     /// **`sys.getrecursionlimit()` 的口径** ✓（task-20 第 3 轮 ✓）：有效上限就是它 ✓，
     /// 默认 [`MAX_CALL_DEPTH`] ✓；`sys.setrecursionlimit` **只降不升** ✓（理由见 `MAX_CALL_DEPTH`
     /// 那段：本层的 Python 调用吃**原生栈** ✗ ⇒ 调高会顶穿 ✓ —— 比参照小是**如实口径** ✓）。

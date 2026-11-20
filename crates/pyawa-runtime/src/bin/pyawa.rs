@@ -176,15 +176,15 @@ pub fn run() {
     // **大栈执行线程**（round 112）：本层 Python 调用是 Rust 递归 ✓ —— 主线程默认 8 MiB 栈；
     // 给执行线程开 **512 MiB** 栈以留余量 ✓（默认递归上限仍是保守的 `MAX_CALL_DEPTH=64` ✓，
     // 深容器 `repr` 仍按参照报 `RecursionError` ✓ —— 见 `repr_loop_crash_shapes` 的守卫 ✓）。
-    // **默认递归上限提到 160**（round 114）：纯 Python 库（`pprint`）的正常嵌套要几十层 ✓；
-    // 512 MiB 栈足够 160 层 Rust 递归 ✓；深容器 `repr`（200 层）仍会先触发参考口径的
-    // `RecursionError` ✓（`repr_loop_crash_shapes` 守卫 ✓）。`cargo test` 不经过这里 ⇒ 默认 64 ✓。
+    // **默认递归上限 1000**（`PLAN §12.22` S2 后）：脚本→脚本调用走**显式帧栈**（堆上，不再吃
+    // 原生栈）⇒ 可以对齐参照默认 1000；只有"原生（内建回调）→ 脚本"仍受 `MAX_NATIVE_DEPTH`
+    // 单独守卫（见 `pyawa-core` 的 `execute`）。这条 512 MiB 线程栈留给那类回调与深 `repr`。
     // SAFETY: 单线程启动阶段设环境变量。
     unsafe {
-        // **外部可覆盖**（round 138 起）：默认 160；调用方可设 `PYAWA_RECURSION_LIMIT` 提高
-        //（512 MiB 执行线程栈足够更高层数；`test_richcmp` 一类的深递归用例需要 ✓）。
+        // **外部可覆盖**（round 138 起）：默认 1000（S3 的参照口径）；调用方仍可设
+        // `PYAWA_RECURSION_LIMIT`（上限由 `MAX_SAFE_RECURSION_LIMIT` 夹住）。
         if std::env::var_os("PYAWA_RECURSION_LIMIT").is_none() {
-            std::env::set_var("PYAWA_RECURSION_LIMIT", "160");
+            std::env::set_var("PYAWA_RECURSION_LIMIT", "1000");
         }
         // **主机名**（round 117）：`_socket.gethostname()` 的取值来源（stdlib 不碰文件系统 ✓）；
         // 只读 `/proc/sys/kernel/hostname`（Linux；失败就给 `localhost` ✓）。
@@ -363,6 +363,10 @@ fn real_main() {
     // 平台常量（`errno` 一族）**已由 `pa_create` 注入**（task-20 ✓，一处真相：CLI／语料 harness／
     // C 宿主同源）⇒ 这里**不再**手动补（第 134 轮那段手注入已删 ✓）。
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
+    // CLI 是**便利装配路径**（与 `paL_newstate` 同口径）：Windows 上装真实注册表实现
+    // （`PLAN §12.24`；平台 FFI 在 `pyawa-runtime::win32_reg`，本文件不碰 FFI）。
+    #[cfg(windows)]
+    pyawa_runtime::win32_reg::install(instance);
     // **`sys.argv`／`sys.executable`／`sys.orig_argv` 的字节口径**（P3-38 S3b-4）：
     // `install` 那条路收 `&[String]`（组合根既有签名）⇒ 非 UTF-8 参数会被 lossy ✗；
     // 这里按 PEP 383 用 WTF-8 `str` **直接覆盖**（含孤立代理的参数 ⇒ `'\udcff'` 一类）。

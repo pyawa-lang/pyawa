@@ -48,7 +48,7 @@ jobs:
           target/release/pyawa check $(cat /tmp/pyawa-check-corpus.txt)
 
   wasm:
-    name: Web（WASM）冒烟（PLAN §12.21 E1–E5）
+    name: Web（WASM）冒烟（PLAN §12.21 E1–E5 ＋ §12.22 S4）
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -70,6 +70,9 @@ jobs:
         run: node tests/wasm/e4_js_clock.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
       - name: E5 纯计算／协议派发冒烟
         run: node tests/wasm/e5_smoke.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+      # **S4（§12.22）**：显式帧栈下的深递归在 wasm 小栈上同样成立
+      - name: E6 显式帧栈深递归（wasm）
+        run: node tests/wasm/e6_recursion.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
 
   windows:
     name: Windows 最小构建（PLAN §12.20 W1）
