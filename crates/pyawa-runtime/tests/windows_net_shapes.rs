@@ -416,8 +416,8 @@ fn vtable_exposes_every_slot_but_socketpair() {
     assert_eq!(table.version, pyawa_abi::PA_ABI_VERSION, "CP-30／AB-39");
     assert_eq!(table.size as usize, core::mem::size_of::<CpNetVtable>());
     assert!(!table.state.is_null(), "state 必须指回 provider");
-    // `CP-3`／`CP-38`：Windows 没有 socketpair(2) ⇒ 只有该槽位未实现。
-    assert!(table.socketpair.is_none(), "socketpair 在 Windows 上如实为 None");
+    // W4 补齐（2026-11-19）：Windows 的 `socketpair` 用 loopback TCP 对真实现（与 CPython 同法）。
+    assert!(table.socketpair.is_some(), "socketpair");
     assert!(table.socket.is_some(), "socket");
     assert!(table.connect.is_some(), "connect");
     assert!(table.bind.is_some(), "bind");

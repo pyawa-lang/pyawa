@@ -17,8 +17,7 @@ jobs:
   fast:
     name: 快速闸门（check.py ＋ 构建 ＋ 测试）
     runs-on: ubuntu-latest
-    # 2026-11-21：runner 的 apt 安装（valgrind/gcc）偶发 10+ 分钟 ⇒ 20 分钟会误杀（PR #3 实测）；
-    # 正常耗时 3–6 分钟，放宽到 30 只吸收环境抖动，不放宽任何判据。
+    # runner 的 apt 安装偶发 10+ 分钟 ⇒ 20 分钟会误杀（PR #3 实测）；放宽到 30 只吸收环境抖动。
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -137,7 +136,7 @@ jobs:
         run: cargo test -p pyawa-abi --test abi --test annotation_strings --test boundary_guard --test capability_acceptance --test capability_layout --test capability_registration --test header --test helpers_wiring --test host_module --test host_path --test host_signature --test host_usability --test host_visibility --test memory_quota --test object_ops --test protocol_host_dispatch --test protocol_oracle --test type_identity --test write_tobytes
         shell: bash
       - name: Windows provider／os 形状测试（W2 clock／W3 fs／W4 net／W5 os 分支）
-        run: cargo test -p pyawa-runtime --test windows_clock_shapes --test windows_fs_shapes --test windows_net_shapes --test windows_os_shapes --test windows_winstubs_shapes
+        run: cargo test -p pyawa-runtime --test windows_clock_shapes --test windows_fs_shapes --test windows_net_shapes --test windows_os_shapes --test windows_winstubs_shapes --test windows_winreg --test windows_overlapped --test windows_platform_gaps
         shell: bash
       # W6 首批：平台中立的 crate 测试（与 Linux fast 档的 `-p pyawa-abi -p pyawa-core -p pyawa-lsp`
       # 同源；abi 的 conformance 需要 CPython 3.14 Windows 参照，暂列 W6 剩余，见 PLAN §12.20）
