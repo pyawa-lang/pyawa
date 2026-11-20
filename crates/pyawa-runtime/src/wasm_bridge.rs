@@ -24,10 +24,11 @@
 use core::alloc::Layout;
 use core::ffi::c_void;
 
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
 use pyawa_abi::host::{param_flags, pa_param, pa_sig};
 use pyawa_abi::{pa_setcapability, pa_setcapability_async, pa_state, status};
 use pyawa_capabilities::clock::{CapStatus, CpClockVtable};
+use pyawa_capabilities::fs::{CapStatus as FsCapStatus, CpFsVtable, Handle as FsHandle};
 
 /// 固定槽位数（编译期常量；JS 用 [`pyawa_wasm_trampoline_capacity`] 取）。
 pub const TRAMPOLINE_SLOTS: u32 = 64;
@@ -53,6 +54,11 @@ unsafe extern "C" {
     ///
     /// 浏览器里可用 `Atomics.wait`／忙等实现；本调用返回即表示"已睡过"。
     fn clock_sleep_ns(ns: i64);
+
+    /// **可选 fs（P1 库嵌入档）**：把字节写到宿主标准流（`handle` 1＝stdout、2＝stderr；
+    /// `_io_module` 的约定）。返回 0 成功；非 0 由 VM 当机器错误。**其它 fs 槽仍未实现**
+    /// （浏览器没有文件系统；`CP-3` 如实）。
+    fn fs_write(handle: u32, ptr: *const u8, len: usize) -> i32;
 }
 
 /// 生成固定槽位 trampoline，并导出"按槽位取函数指针"的查询入口。
@@ -219,7 +225,59 @@ fn js_clock_vtable() -> CpClockVtable {
     }
 }
 
-/// **E4 入口**：把 JS clock 注册进实例（`fs`／`net` 保持未注册）。
+/// **可选 fs 的 `write` 槽**（P1）：只有标准流写（handle 1／2）；其余槽位保持 `None`（如实未实现）。
+#[allow(unsafe_code)]
+extern "C" fn js_fs_write(
+    _state: *mut c_void,
+    handle: FsHandle,
+    buffer: *const u8,
+    length: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> FsCapStatus {
+    if out_len.is_null() || errno_out.is_null() || (buffer.is_null() && length > 0) {
+        return FsCapStatus::Machine;
+    }
+    // SAFETY: `buffer`/`length` 按 vtable 契约由 VM 给出；import 由 JS 宿主提供。
+    let code = unsafe { fs_write(handle.0 as u32, buffer, length) };
+    if code != 0 {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = code };
+        return FsCapStatus::Machine;
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe { *out_len = length };
+    FsCapStatus::Ok
+}
+
+/// wasm 的 fs vtable：`UNIMPLEMENTED` 为基础，只填 `write`（标准流）＋版本/尺寸。
+fn js_fs_vtable() -> CpFsVtable {
+    let mut table = CpFsVtable::UNIMPLEMENTED;
+    table.version = pyawa_abi::PA_ABI_VERSION;
+    table.size = core::mem::size_of::<CpFsVtable>() as u32;
+    table.write = Some(js_fs_write);
+    table
+}
+
+/// **P1 入口**：注册 wasm 宿主能力（clock ＋ **可选 fs 的标准流写**；net 保持未注册）。
+///
+/// 生命周期与 host 组合根同口径：vtable 泄漏到进程末。
+#[allow(unsafe_code)]
+pub(crate) fn install_js_capabilities(state: *mut pa_state) -> i32 {
+    let fs_table = Box::into_raw(Box::new(js_fs_vtable()));
+    let code = unsafe { pa_setcapability_async(state, PA_DOMAIN_FS, PA_ASYNC_OK) };
+    if code != status::PA_OK {
+        return code;
+    }
+    // SAFETY: `fs_table` 泄漏到进程末，实例存活期内指针有效。
+    let code = unsafe { pa_setcapability(state, PA_DOMAIN_FS, fs_table.cast::<c_void>()) };
+    if code != status::PA_OK {
+        return code;
+    }
+    install_js_clock(state)
+}
+
+/// **E4 入口**：把 JS clock 注册进实例（`net` 保持未注册；fs 由 [`install_js_capabilities`] 提供标准流写）。
 ///
 /// 生命周期与 host 组合根同口径：vtable **泄漏到进程末**（实例存续期内指针有效；宿主需要
 /// 精确回收时改用 `pa_create` ＋ 自己的 provider）。

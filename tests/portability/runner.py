@@ -137,10 +137,40 @@ def main() -> int:
     parser.add_argument("--corpus", default=None, help="语料目录（缺省 tests/portability/corpus）")
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--self-test", action="store_true", help="只跑归一化自检")
+    parser.add_argument("--raw-json", default=None,
+                        help="把别的 runner（如 wasm 的 e8）产出的原始 JSON 归一化成 canonical JSON")
+    parser.add_argument("--platform-label", default=None,
+                        help="--raw-json 模式写入 meta.platform 的标签（缺省 raw 里的 meta）")
     args = parser.parse_args()
 
     if args.self_test:
         self_test()
+        return 0
+
+    if args.raw_json:
+        raw = json.loads(pathlib.Path(args.raw_json).read_text(encoding="utf-8"))
+        results = {}
+        for name, record in sorted(raw.get("results", {}).items()):
+            results[name] = {
+                "exit": record["exit"],
+                "stdout": normalize_text("\n".join(record.get("stdout", []))),
+                "stderr": normalize_text("\n".join(record.get("stderr", []))),
+            }
+        document = {
+            "meta": {
+                "platform": args.platform_label or raw.get("meta", {}).get("platform", "raw"),
+                "os_name": raw.get("meta", {}).get("os_name", "raw"),
+                "corpus": len(results),
+                "binary": raw.get("meta", {}).get("binary", "raw"),
+            },
+            "results": results,
+        }
+        text = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True)
+        if args.out:
+            pathlib.Path(args.out).write_text(text + "\n", encoding="utf-8")
+            print(f"portability runner（raw 模式）OK：{len(results)} 个脚本 → {args.out}")
+        else:
+            print(text)
         return 0
 
     binary = binary_path(args.bin)

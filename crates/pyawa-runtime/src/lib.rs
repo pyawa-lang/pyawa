@@ -133,7 +133,7 @@ fn install_machine_capabilities(state: *mut pa_state) -> i32 {
 fn install_machine_capabilities(state: *mut pa_state) -> i32 {
     #[cfg(target_family = "wasm")]
     {
-        return wasm_bridge::install_js_clock(state);
+        return wasm_bridge::install_js_capabilities(state);
     }
     #[cfg(windows)]
     {

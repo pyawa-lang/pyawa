@@ -40,6 +40,7 @@ function main() {
       clock_now_ns: () => 0n,
       clock_monotonic_ns: () => 0n,
       clock_sleep_ns: () => {},
+      fs_write: () => 0,
       pa_host_slot_call(slot, state) {
         const callback = hostTable[slot];
         if (!callback) return PA_ERR_INVALID; // 未注册的槽位：如实报错，不静默成功
@@ -56,7 +57,7 @@ function main() {
 
   const module = new WebAssembly.Module(fs.readFileSync(wasmPath));
   const moduleImports = WebAssembly.Module.imports(module);
-  const expectedImports = ['pa_host_slot_call', 'clock_now_ns', 'clock_monotonic_ns', 'clock_sleep_ns'];
+  const expectedImports = ['pa_host_slot_call', 'clock_now_ns', 'clock_monotonic_ns', 'clock_sleep_ns', 'fs_write'];
   const actualImports = moduleImports.map((entry) => `${entry.module}.${entry.name}`).sort();
   if (actualImports.join(',') !== expectedImports.map((name) => `pyawa_host.${name}`).sort().join(',')) {
     fail(`import 面不符：${JSON.stringify(moduleImports)}`);
@@ -179,7 +180,7 @@ function main() {
   const globalCount = wasm.pa_gettop(state) | 0;
   wasm.pa_destroy(state);
 
-  console.log('E2 PASS: wasm import 面 = pyawa_host.{pa_host_slot_call, clock_*}（4 条）');
+  console.log('E2 PASS: wasm import 面 = pyawa_host.{pa_host_slot_call, clock_*, fs_write}（5 条）');
   console.log(`E2 PASS: 固定槽位表 capacity=${capacity}；越界槽位返回 0`);
   console.log(`E2 PASS: JS 注册 host_add(slot 0)／host_mul(slot 1)，guest 调用 ${hostCalls} 次`);
   console.log(`E2 PASS: guest x = host_add(1, 2) => ${x}`);

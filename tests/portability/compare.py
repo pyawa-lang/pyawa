@@ -52,6 +52,8 @@ def main() -> int:
     parser.add_argument("left", type=pathlib.Path, help="平台 A 的 canonical JSON")
     parser.add_argument("right", type=pathlib.Path, help="平台 B 的 canonical JSON")
     parser.add_argument("--known-diffs", type=pathlib.Path, default=HERE / "known_diffs.json")
+    parser.add_argument("--subset-file", type=pathlib.Path, default=None,
+                        help="只比对列出的脚本（如 wasm 子集）；两侧都必须有该脚本")
     args = parser.parse_args()
 
     left = load(args.left)
@@ -60,7 +62,14 @@ def main() -> int:
 
     left_results = left.get("results", {})
     right_results = right.get("results", {})
-    names = sorted(set(left_results) | set(right_results))
+    if args.subset_file is not None:
+        names = [
+            line.strip()
+            for line in args.subset_file.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+    else:
+        names = sorted(set(left_results) | set(right_results))
     mismatches = []
     known_hits = []
     for name in names:

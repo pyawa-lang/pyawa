@@ -75,6 +75,18 @@ jobs:
       # **S4（§12.22）**：显式帧栈下的深递归在 wasm 小栈上同样成立
       - name: E6 显式帧栈深递归（wasm）
         run: node tests/wasm/e6_recursion.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+      # **P1 库嵌入档**（PLAN §12.26）：多实例／宿主函数／stdout 经宿主
+      - name: E7 wasm 库嵌入（多实例／宿主函数／stdout）
+        run: node tests/wasm/e7_embedding.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+      - name: E8 wasm 可移植子集（canonical raw）
+        run: node tests/wasm/e8_portability.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm --out portability-wasm-raw.json
+      - name: E8 归一化（复用 tests/portability/runner.py 的一处真相）
+        run: python3 tests/portability/runner.py --raw-json portability-wasm-raw.json --out portability-wasm.json --platform-label wasm32
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portability-wasm
+          path: portability-wasm.json
+          if-no-files-found: error
 
   windows:
     name: Windows 最小构建（PLAN §12.20 W1）
@@ -139,7 +151,7 @@ jobs:
         run: cargo test -p pyawa-abi --test abi --test annotation_strings --test boundary_guard --test capability_acceptance --test capability_layout --test capability_registration --test header --test helpers_wiring --test host_module --test host_path --test host_signature --test host_usability --test host_visibility --test memory_quota --test object_ops --test protocol_host_dispatch --test protocol_oracle --test type_identity --test write_tobytes
         shell: bash
       - name: Windows provider／os 形状测试（W2 clock／W3 fs／W4 net／W5 os 分支）
-        run: cargo test -p pyawa-runtime --test windows_clock_shapes --test windows_fs_shapes --test windows_net_shapes --test windows_os_shapes --test windows_winstubs_shapes --test windows_platform_gaps --test windows_winreg --test windows_overlapped
+        run: cargo test -p pyawa-runtime --test windows_clock_shapes --test windows_fs_shapes --test windows_net_shapes --test windows_os_shapes --test windows_winstubs_shapes --test windows_winreg --test windows_overlapped --test windows_platform_gaps
         shell: bash
       # W6 首批：平台中立的 crate 测试（与 Linux fast 档的 `-p pyawa-abi -p pyawa-core -p pyawa-lsp`
       # 同源；abi 的 conformance 需要 CPython 3.14 Windows 参照，暂列 W6 剩余，见 PLAN §12.20）
@@ -186,7 +198,7 @@ jobs:
 
   portability-compare:
     name: 脚本可移植性（Linux×Windows 比对）
-    needs: portability
+    needs: [portability, wasm]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -195,8 +207,11 @@ jobs:
         with:
           pattern: portability-*
           merge-multiple: true
-      - name: 同脚本跨平台同结果
+      - name: 同脚本跨平台同结果（Linux×Windows）
         run: python3 tests/portability/compare.py portability-ubuntu-latest.json portability-windows-latest.json
+      # P1：wasm 库嵌入档的**可移植子集**（无 fs/Lib ⇒ 纯计算＋Rust 模块；asyncio-on-wasm 未承诺）
+      - name: 同脚本同结果（Linux×WASM 子集）
+        run: python3 tests/portability/compare.py --subset-file tests/portability/wasm_subset.txt portability-ubuntu-latest.json portability-wasm.json
 
   full:
     name: 完整闸门（slowcheck 11 项）
