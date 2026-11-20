@@ -73,3 +73,4 @@
 | 编号 | 差异 | 依据 | 归一规则 | 首次记录 |
 |---|---|---|---|---|
 | `DIV-12` | **guest 路径的对外表现**：`os.getcwd()` 给 `/D:/…`（guest 名）、错误文案是 `[Errno 2] …`；Windows 参照给宿主 `D:\…`／`[WinError 2]` | `SPEC-capabilities.md`（`CP-21` guest 路径空间：宿主盘符映射成 `/D:/…`）；`DESIGN.md` §7 平台集中点 | **仅 Windows 登记**：Linux 参照无此差异（该语料在 Linux 通过）；不归一 | 2026-11-18 |
+| `DIV-13` | **Windows 上 `asyncio` 的默认事件循环**为 selector/引擎后端（运行时选择）；Windows CPython 默认为 Proactor；脚本可见语义以"跨平台一致"为准 | `REQUIREMENTS.md`「脚本可移植性承诺」（跨平台一致 > host 平台默认值）／`DESIGN.md` §14.3 | harness 不比对默认后端类型；固定用例断言「同一 async 脚本 Linux×Windows 同结果」 | P0-3 落地时填写（日期/提交） |
