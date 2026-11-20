@@ -363,10 +363,6 @@ fn real_main() {
     // 平台常量（`errno` 一族）**已由 `pa_create` 注入**（task-20 ✓，一处真相：CLI／语料 harness／
     // C 宿主同源）⇒ 这里**不再**手动补（第 134 轮那段手注入已删 ✓）。
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
-    // CLI 是**便利装配路径**（与 `paL_newstate` 同口径）：Windows 上装真实注册表实现
-    // （`PLAN §12.24`；平台 FFI 在 `pyawa-runtime::win32_reg`，本文件不碰 FFI）。
-    #[cfg(windows)]
-    pyawa_runtime::win32_reg::install(instance);
     // **`sys.argv`／`sys.executable`／`sys.orig_argv` 的字节口径**（P3-38 S3b-4）：
     // `install` 那条路收 `&[String]`（组合根既有签名）⇒ 非 UTF-8 参数会被 lossy ✗；
     // 这里按 PEP 383 用 WTF-8 `str` **直接覆盖**（含孤立代理的参数 ⇒ `'\udcff'` 一类）。
