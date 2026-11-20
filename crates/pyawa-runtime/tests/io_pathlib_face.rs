@@ -1,3 +1,8 @@
+//! **平台专测（Unix 参考面）**：本文件的期望值取自本机 `python3` 3.14.4（Linux）跑同一段探针，
+//! 依赖 POSIX 路径／时区／socket／进程语义；Windows 运行矩阵里按平台 `#![cfg(unix)]` 诚实 gate
+//! （不是隐藏缺陷：Windows 平台面由 W6 的 conformance／windows_* 测试与 CLI 冒烟覆盖）。
+#![cfg(unix)]
+
 //! **`io.open`／`pathlib` 文件面**（PLAN 收口后下一阶段 ③）的参照对拍（round 268）。
 //!
 //! 口径：同一段脚本在本机 **CPython 3.14.4** 与 pyawa 上**逐行一致**（`EXPECTED` 由参照在

@@ -1,3 +1,8 @@
+//! **平台专测（Unix 参考面）**：本文件的期望值取自本机 `python3` 3.14.4（Linux）跑同一段探针，
+//! 依赖 POSIX 路径／时区／socket／进程语义；Windows 运行矩阵里按平台 `#![cfg(unix)]` 诚实 gate
+//! （不是隐藏缺陷：Windows 平台面由 W6 的 conformance／windows_* 测试与 CLI 冒烟覆盖）。
+#![cfg(unix)]
+
 //! **`select.select` 真接线 ＋ `os.dup`／`os.dup2`**（round 11 · `T-CP-3` 的 Python 可见面）
 //! —— 与参照 `python3` **同脚本、两侧逐行一致**。
 //!

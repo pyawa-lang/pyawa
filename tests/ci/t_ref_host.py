@@ -140,6 +140,9 @@ def main(argv: list[str]) -> int:
                 "userenv.lib",
                 "advapi32.lib",
                 "bcrypt.lib",
+                # **Windows 8+ 的 futex 同步 API**（`WaitOnAddress`／`WakeByAddress*`；Rust std 的
+                # Mutex/Condvar 会用到）在 `Synchronization.lib` ⇒ 不补就 LNK2019（实测）。
+                "Synchronization.lib",
                 f"/Fe:{binary}",
             ]
         else:

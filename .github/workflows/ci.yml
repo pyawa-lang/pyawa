@@ -120,6 +120,13 @@ jobs:
           target/debug/pyawa.exe check cli-probe/probe.py
 
       # W2–W5：provider 形状测试 ＋ W5 的 os/nt 端到端（只在 windows 目标编译；不经 CLI）
+      # **runtime 运行矩阵**（计划线①，2026-11-19 triage 完成转必需）：Unix 参考面的 12 个文件已按
+      # 平台 `#![cfg(unix)]` gate（期望值取自 Linux `python3`；Windows 平台面由 W6 的 conformance／
+      # windows_*／CLI 冒烟覆盖），其余全部真跑（295 个测试）。
+      - name: runtime 运行矩阵（Windows）
+        timeout-minutes: 30
+        run: cargo test -p pyawa-runtime --no-fail-fast
+        shell: bash
       # W6：**真跑** `pyawa-abi` 的测试（不只是编译；conformance 已单列为对拍步骤）。
       - name: Windows ABI 测试（W6）
         run: cargo test -p pyawa-abi --test abi --test annotation_strings --test boundary_guard --test capability_acceptance --test capability_layout --test capability_registration --test header --test helpers_wiring --test host_module --test host_path --test host_signature --test host_usability --test host_visibility --test memory_quota --test object_ops --test protocol_host_dispatch --test protocol_oracle --test type_identity --test write_tobytes

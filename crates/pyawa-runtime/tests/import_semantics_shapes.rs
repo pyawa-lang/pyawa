@@ -1,3 +1,8 @@
+//! **平台专测（Unix 参考面）**：本文件的期望值取自本机 `python3` 3.14.4（Linux）跑同一段探针，
+//! 依赖 POSIX 路径／时区／socket／进程语义；Windows 运行矩阵里按平台 `#![cfg(unix)]` 诚实 gate
+//! （不是隐藏缺陷：Windows 平台面由 W6 的 conformance／windows_* 测试与 CLI 冒烟覆盖）。
+#![cfg(unix)]
+
 //! **import 语义两格**（第 408 轮，task-16 ✓）——两侧逐行一致。
 //!
 //! ① **循环相对导入回退**（CPython issue #17636）：`pkg/__init__ → a → b → from . import a`
