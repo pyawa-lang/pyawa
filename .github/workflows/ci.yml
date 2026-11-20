@@ -17,7 +17,9 @@ jobs:
   fast:
     name: 快速闸门（check.py ＋ 构建 ＋ 测试）
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 2026-11-21：runner 的 apt 安装（valgrind/gcc）偶发 10+ 分钟 ⇒ 20 分钟会误杀（PR #3 实测）；
+    # 正常耗时 3–6 分钟，放宽到 30 只吸收环境抖动，不放宽任何判据。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
