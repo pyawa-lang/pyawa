@@ -20,6 +20,11 @@
 
 #![allow(unsafe_code)] // 按项开许可的替代：本文件全是 FFI 入口胶水（调用 `unsafe extern "C"`）
 
+// **平台门控（`PLAN §12.21` E1）**：CLI 是**宿主侧工具**（env／argv／线程／fs），不是 wasm 产物；
+// wasm 目标的宿主入口是 ABI 导出（E3）⇒ 整个 CLI 实现只在非 wasm 目标编译。
+#[cfg(not(target_family = "wasm"))]
+mod host_cli {
+
 use core::ffi::{c_char, c_void};
 use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAIN_NET};
 use pyawa_abi::{
@@ -127,7 +132,7 @@ fn memory_limit_from_env() -> Option<u64> {
     number.trim().parse::<u64>().ok().map(|value| value.saturating_mul(multiplier))
 }
 
-fn main() {
+pub fn run() {
     install_segv_trace();
     // **大栈执行线程**（round 112）：本层 Python 调用是 Rust 递归 ✓ —— 主线程默认 8 MiB 栈；
     // 给执行线程开 **512 MiB** 栈以留余量 ✓（默认递归上限仍是保守的 `MAX_CALL_DEPTH=64` ✓，
@@ -769,4 +774,16 @@ fn usage(reason: &str) {
     eprintln!("用法：pyawa <文件.py|文件.pyawa> [参数…]");
     eprintln!("      pyawa check [--format=json] <文件…>   # 只编译不执行；0=无诊断 1=有诊断 2=用法/内部错误");
     eprintln!("范围：跑单文件／给退出码／报未捕获异常；**本版还不能 `print`**（`CM-26`：`print` 须走 `sys.stdout → _io → fs`）。");
+}
+
+} // mod host_cli
+
+/// **wasm32 的宿主入口是 ABI 导出**（`PLAN §12.21` E3），CLI 不是 wasm 产物；
+/// 这个空 `main` 只为让 workspace 的 `wasm32` 构建通过（E1 平台门控）。
+#[cfg(target_family = "wasm")]
+fn main() {}
+
+#[cfg(not(target_family = "wasm"))]
+fn main() {
+    host_cli::run();
 }

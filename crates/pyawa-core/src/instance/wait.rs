@@ -37,6 +37,9 @@
 //! - `Python` 层的 `KeyboardInterrupt` 投递（见上"如实差异"）。
 
 use super::*;
+// **E4（wasm32）**：`Instant` 在 wasm 上运行即 trap ⇒ 截止时刻改用 JS clock 的 `monotonic_ns`；
+// 宿主目标保持原 `Instant` 实现（零行为变化）。
+#[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, Instant};
 
 /// 时间片上界：**10 ms**。
@@ -82,18 +85,38 @@ impl Instance {
         if total_ns <= 0 {
             return Ok(true);
         }
-        let deadline = Instant::now() + Duration::from_nanos(total_ns as u64);
-        loop {
-            if self.interrupted() {
-                // `CP-28`：片间取消 ⇒ "已取消"；此前的睡眠只是"等待"，没有外部副作用。
-                return Ok(false);
+        // **wasm32（E4）**：没有 `Instant` ⇒ 截止时刻用 `clock.monotonic_ns`（与 host provider
+        // 的 `Instant` 同一口径：单调、不随系统时间调整）。
+        #[cfg(target_family = "wasm")]
+        {
+            let deadline = self.clock_monotonic_ns()?.saturating_add(total_ns);
+            loop {
+                if self.interrupted() {
+                    return Ok(false);
+                }
+                let remaining = deadline.saturating_sub(self.clock_monotonic_ns()?);
+                if remaining <= 0 {
+                    return Ok(true);
+                }
+                let slice = remaining.min(CANCEL_SLICE_NS);
+                self.clock_sleep_slice_ns(slice)?;
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(true);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let deadline = Instant::now() + Duration::from_nanos(total_ns as u64);
+            loop {
+                if self.interrupted() {
+                    // `CP-28`：片间取消 ⇒ "已取消"；此前的睡眠只是"等待"，没有外部副作用。
+                    return Ok(false);
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Ok(true);
+                }
+                let slice = (remaining.as_nanos().min(CANCEL_SLICE_NS as u128)) as i64;
+                self.clock_sleep_slice_ns(slice)?;
             }
-            let slice = (remaining.as_nanos().min(CANCEL_SLICE_NS as u128)) as i64;
-            self.clock_sleep_slice_ns(slice)?;
         }
     }
 
@@ -115,6 +138,14 @@ impl Instance {
             return Ok(Some(probe));
         }
         let has_inputs = !read.is_empty() || !write.is_empty() || !error.is_empty();
+        // **wasm32（E4）**：截止时刻用 `clock.monotonic_ns`（`Instant` 在 wasm 上运行即 trap）。
+        #[cfg(target_family = "wasm")]
+        let deadline = match timeout_ns {
+            None => None,
+            Some(ns) if ns <= 0 => return Ok(Some(probe)),
+            Some(ns) => Some(self.clock_monotonic_ns()?.saturating_add(ns)),
+        };
+        #[cfg(not(target_family = "wasm"))]
         let deadline = match timeout_ns {
             None => None,
             Some(ns) if ns <= 0 => return Ok(Some(probe)),
@@ -124,6 +155,18 @@ impl Instance {
             if self.interrupted() {
                 return Ok(None); // `CP-28`：已取消
             }
+            #[cfg(target_family = "wasm")]
+            let slice = match deadline {
+                None => CANCEL_SLICE_NS,
+                Some(deadline) => {
+                    let remaining = deadline.saturating_sub(self.clock_monotonic_ns()?);
+                    if remaining <= 0 {
+                        return Ok(Some((Vec::new(), Vec::new(), Vec::new()))); // 已完成（超时）
+                    }
+                    remaining.min(CANCEL_SLICE_NS)
+                }
+            };
+            #[cfg(not(target_family = "wasm"))]
             let slice = match deadline {
                 None => CANCEL_SLICE_NS,
                 Some(deadline) => {

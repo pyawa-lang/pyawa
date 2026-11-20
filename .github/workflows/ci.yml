@@ -41,6 +41,30 @@ jobs:
           wc -l /tmp/pyawa-check-corpus.txt
           target/release/pyawa check $(cat /tmp/pyawa-check-corpus.txt)
 
+  wasm:
+    name: Web（WASM）冒烟（PLAN §12.21 E1–E5）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: 安装 wasm32 目标
+        run: rustup target add wasm32-unknown-unknown
+      # E1：平台门控；只构建库（宿主 bin 不是 wasm 产物，E1 起在 wasm 侧留空 main 桩）
+      - name: wasm 构建（E1 平台门控）
+        run: tools/cargo.sh build --workspace --lib --target wasm32-unknown-unknown --release
+      # 产物：pyawa_abi.wasm 无 import；pyawa_runtime.wasm 的 import 面＝E2 宿主调用 ＋ E4 clock 三条。
+      - name: E2 宿主函数（trampoline）
+        run: node tests/wasm/e2_host_function.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+      - name: E3 ABI 面（pa_create／exec／errmsg）
+        run: node tests/wasm/e3_abi_surface.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+      - name: E4 JS clock（fs／net 如实"未提供"）
+        run: node tests/wasm/e4_js_clock.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+      - name: E5 纯计算／协议派发冒烟
+        run: node tests/wasm/e5_smoke.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+
   full:
     name: 完整闸门（slowcheck 11 项）
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
