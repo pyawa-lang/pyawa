@@ -20,8 +20,10 @@
 
 #![allow(unsafe_code)] // 按项开许可的替代：本文件全是 FFI 入口胶水（调用 `unsafe extern "C"`）
 
-// **平台门控（`PLAN §12.21` E1）**：CLI 是**宿主侧工具**（env／argv／线程／fs），不是 wasm 产物；
-// wasm 目标的宿主入口是 ABI 导出（E3）⇒ 整个 CLI 实现只在非 wasm 目标编译。
+// **平台门控（`PLAN §12.23` 选项 A，2026-11-17）**：CLI 依赖真实能力域 provider；用
+// `pyawa_runtime::{PlatformFs, PlatformClock, PlatformNet}` 类型别名做到**一份源码跨平台**
+// （Unix ⇒ POSIX provider；Windows ⇒ Win32 provider）。wasm 不用 CLI（宿主入口是 ABI 导出，
+// `§12.21` E3）⇒ 仍只对 wasm 目标隐藏。
 #[cfg(not(target_family = "wasm"))]
 mod host_cli {
 
@@ -34,9 +36,7 @@ use pyawa_abi::{
     pa_state, status, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
-use pyawa_runtime::clock_system::SystemClock;
-use pyawa_runtime::fs_posix::PosixFs;
-use pyawa_runtime::net_posix::PosixNet;
+use pyawa_runtime::{PlatformClock, PlatformFs, PlatformNet};
 use std::ffi::CString;
 
 /// 用法／宿主侧错误的退出码（与脚本异常的 `1` 分开）。
@@ -54,6 +54,45 @@ fn path_bytes(path: &std::path::Path) -> Vec<u8> {
     #[cfg(not(unix))]
     {
         path.to_string_lossy().as_bytes().to_vec()
+    }
+}
+
+/// **`OsStr` 的原始字节**（Unix 无损；Windows 按 UTF-8 lossy——宿主路径是 UTF-16）。
+fn os_string_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        value.as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        value.to_string_lossy().into_owned().into_bytes()
+    }
+}
+
+/// **guest 名字节**（`CP-21` 的 guest 绝对空间；fs provider 只认这个形态）：
+/// Unix 上宿主绝对路径本就以 `/` 开头、与 guest 同形；Windows 上 `D:\\a\\b` ⇒ `/D:/a/b`
+/// （相对路径先按宿主 cwd 绝对化）。`read_through_fs` 走它（**不**用 `std::fs`，`IM-15`）。
+fn guest_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        path_bytes(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        };
+        let unified = absolute.to_string_lossy().replace('\\', "/");
+        if unified.starts_with('/') {
+            unified.into_bytes()
+        } else {
+            format!("/{unified}").into_bytes()
+        }
     }
 }
 
@@ -186,10 +225,7 @@ fn real_main() {
             usage("-c 缺代码参数");
             std::process::exit(EXIT_HOST);
         };
-        let code_bytes = {
-            use std::os::unix::ffi::OsStrExt;
-            code.as_bytes().to_vec()
-        };
+        let code_bytes = os_string_bytes(&code);
         let text = String::from_utf8_lossy(&code_bytes).into_owned();
         (std::path::PathBuf::from("<string>"), Some(text))
     } else {
@@ -210,15 +246,15 @@ fn real_main() {
     };
 
     // 源文件**经 `fs` 域**读入（与 `print`／`site.py`／import 同一条线 ✓）
-    let provider = PosixFs::new();
+    let provider = PlatformFs::new();
     let vtable = provider.vtable();
     // **`clock` 域**（第 317 轮）：`time` 模块的 `time()`／`monotonic()` 一族经它取 ✓
     //（`SPEC-capabilities.md` §4 表第四项；分类是"可异步化" ✓）。
-    let clock_provider = SystemClock::new();
+    let clock_provider = PlatformClock::new();
     let clock_vtable = clock_provider.vtable();
     // **`net` 域**（`P3-29` 首片）：`_socket` 的 `socketpair` 真 I/O 经它 ✓
     // （`SPEC-capabilities.md` §4 表第二项；`CP-38`；分类"可异步化" ✓）。
-    let net_provider = PosixNet::new();
+    let net_provider = PlatformNet::new();
     let net_vtable = net_provider.vtable();
     let source = match inline_source {
         Some(source) => source,
@@ -547,7 +583,7 @@ fn read_through_fs(
     let (Some(open), Some(read), Some(close)) = (vtable.open, vtable.read, vtable.close) else {
         return Err("`fs` 域的读槽位未提供".to_owned());
     };
-    let name = path_bytes(path);
+    let name = guest_path_bytes(path);
     let mut handle = pyawa_capabilities::fs::Handle(0);
     let mut errno = 0i32;
     let status = open(
@@ -778,11 +814,12 @@ fn usage(reason: &str) {
 
 } // mod host_cli
 
-/// **wasm32 的宿主入口是 ABI 导出**（`PLAN §12.21` E3），CLI 不是 wasm 产物；
-/// 这个空 `main` 只为让 workspace 的 `wasm32` 构建通过（E1 平台门控）。
+/// **wasm 不用 CLI**：宿主入口是 ABI 导出（`PLAN §12.21` E3）；空 `main` 只为让 workspace 的
+/// wasm 构建通过。
 #[cfg(target_family = "wasm")]
 fn main() {}
 
+/// Unix 与 Windows 跑同一份 CLI（provider 由 `Platform*` 别名选平台实现，`PLAN §12.23`）。
 #[cfg(not(target_family = "wasm"))]
 fn main() {
     host_cli::run();

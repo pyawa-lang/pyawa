@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **原生可调用对象的 `__module__` 来源模块**（task-6／缺口2）的端到端验收。
 //!
 //! 口径（期望值全部由本机 `python3` 3.14.4 实跑取得）：

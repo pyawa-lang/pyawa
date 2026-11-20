@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **同进程多实例**：`import re`／`import json`／`re.compile` 的对象不得跨实例串。
 //!
 //! 缺口（task-10）：`_sre` 的五张表曾经是**进程级** `static Mutex`（含 `re.Pattern`／`re.Match`

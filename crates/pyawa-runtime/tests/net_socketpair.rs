@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! `net` 域 provider 级验收（`P3-29` 首片）：`CpNetVtable` 的 `socketpair` 真 I/O。
 //!
 //! 只经 **provider 的 vtable** 调用（不经过 VM／stdlib）⇒ 验的是能力接口那层的形状与语义：

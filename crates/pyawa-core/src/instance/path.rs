@@ -195,9 +195,18 @@ impl Instance {
     }
 }
 
+/// **路径分隔符**：Unix 只有 `/`；Windows 另认 `\`（`PLAN §12.20` W3）。
+///
+/// 必须两边都认，否则 guest 名字里的反斜杠会让 `..` 逃过本模块的**词法夹根**
+/// （`CP-21`：`..` 到根就停）——Windows 上 `C:\a\..\..` 会被 OS 解释成越界路径。
+/// guest 路径空间仍用 `/` 表示层次；'\\' 只在**输入侧**等价归一。
+fn is_path_separator(byte: u8) -> bool {
+    byte == b'/' || (cfg!(windows) && byte == b'\\')
+}
+
 /// 把路径切成**分量**（忽略 `/`；`.` 与 `..` 保留给解析循环处理）。
 fn push_components(queue: &mut std::collections::VecDeque<Vec<u8>>, path: &[u8]) {
-    for component in path.split(|byte| *byte == b'/') {
+    for component in path.split(|byte| is_path_separator(*byte)) {
         queue.push_back(component.to_vec());
     }
 }
@@ -224,7 +233,7 @@ fn join_guest(resolved: &[Vec<u8>], leaf: Option<&[u8]>) -> Vec<u8> {
 /// **纯词法**归一（不碰 provider；给 cwd 初值/设置用）：`.` 丢弃、`..` 弹栈、到 `/` 就停。
 fn normalize_lexically(path: &[u8]) -> Vec<u8> {
     let mut stack: Vec<Vec<u8>> = Vec::new();
-    for component in path.split(|byte| *byte == b'/') {
+    for component in path.split(|byte| is_path_separator(*byte)) {
         match component {
             b"" | b"." => {}
             b".." => {

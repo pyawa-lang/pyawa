@@ -8,12 +8,18 @@ on:
 
 # 与 AGENTS.md「硬线」一致：
 #  - fast：每次 push/PR —— check.py（18 项，秒级）＋ 构建 ＋ ABI/核心测试 ＋ pyawa check 语料
+#  - wasm：每次 push/PR —— Web（WASM）E1–E5 构建与 node 冒烟（PLAN §12.21）
+#  - windows：每次 push/PR —— Windows 最小"能编译"＋ provider／os 形状测试 ＋ core/lsp 测试
+#              ＋ 参考宿主（MSVC）（PLAN §12.20 W1–W6 首批；M3-COVERAGE 显式 SKIP；
+#              Windows 不做 memcheck——口径见 RELEASE）
 #  - full：PR／手动／每周 —— slowcheck 11 项（含基准闸：性能回退 + memcheck 子集）
 jobs:
   fast:
     name: 快速闸门（check.py ＋ 构建 ＋ 测试）
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 2026-11-21：runner 的 apt 安装（valgrind/gcc）偶发 10+ 分钟 ⇒ 20 分钟会误杀（PR #3 实测）；
+    # 正常耗时 3–6 分钟，放宽到 30 只吸收环境抖动，不放宽任何判据。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,6 +70,88 @@ jobs:
         run: node tests/wasm/e4_js_clock.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
       - name: E5 纯计算／协议派发冒烟
         run: node tests/wasm/e5_smoke.js target/wasm32-unknown-unknown/release/pyawa_runtime.wasm
+
+  windows:
+    name: Windows 最小构建（PLAN §12.20 W1）
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          # **必须与仓库 `Lib/` 的同步版本一致**（当前 3.14.4）：参照版本偏高会让
+          # asyncio／encodings 等语料出现"上游补丁差"式假差异（实测 3.14.10 vs 3.14.4：6 条）。
+          python-version: "3.14.4"
+      # W1：libs ＋ bins 都能编译即可；真实能力域 provider（W3–W5）与测试矩阵（W6）不在本步
+      - name: 构建（Windows 目标：libs ＋ bins）
+        run: cargo build --workspace
+        shell: bash
+      # W6 剩余首批：`pyawa-abi` 全 targets 在 Windows 可编译（conformance.rs 的 Unix-only
+      # readlink 助手已按平台 gate；conformance **运行**仍需 CPython 3.14 Windows 参照，见 PLAN）
+      - name: Windows ABI 全 targets 可编译（W6）
+        run: cargo check -p pyawa-abi --all-targets
+        shell: bash
+      # W6：runtime 测试面在 Windows **可编译**（13 个直接依赖 Unix provider／Unix API 的测试
+      # 已按平台 gate；运行矩阵仍待 triage，见 PLAN）
+      - name: Windows runtime 全 targets 可编译（W6）
+        run: cargo check -p pyawa-runtime --all-targets
+        shell: bash
+      # W6 评估（信息性，不参与验收）：conformance 在 Windows 上的**差异基线**。参照解释器由
+      # `PYAWA_REFERENCE_PYTHON` 指定（actions/setup-python 的 `python`）。
+      # W6 收口：conformance 在 Windows 上**是必需步骤**（`MS-10`：新差异即红；平台条件差异已在
+      # `tests/conformance/divergences.md` 的 DIV-12 登记并只在 Windows 生效）。
+      - name: conformance（Windows 对拍）
+        timeout-minutes: 15
+        env:
+          PYAWA_REFERENCE_PYTHON: python
+        run: cargo test -p pyawa-abi --test conformance -- the_corpus_has_no_new_divergences --exact
+        shell: bash
+      # 原生 CLI（`PLAN §12.23` 选项 A）：一份源码跨平台，源码经 fs 能力读取（IM-15）。
+      # 三形态冒烟：`-c`／`<file>`／`check`。
+      - name: Windows 原生 CLI 冒烟（PLAN §12.23 选项 A）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cli-probe
+          printf 'x = 1 + 2\n' > cli-probe/probe.py
+          target/debug/pyawa.exe -c "x = 6 * 7"
+          target/debug/pyawa.exe cli-probe/probe.py
+          target/debug/pyawa.exe check cli-probe/probe.py
+
+      # W2–W5：provider 形状测试 ＋ W5 的 os/nt 端到端（只在 windows 目标编译；不经 CLI）
+      # **runtime 运行矩阵**（计划线①，2026-11-19 triage 完成转必需）：Unix 参考面的 12 个文件已按
+      # 平台 `#![cfg(unix)]` gate（期望值取自 Linux `python3`；Windows 平台面由 W6 的 conformance／
+      # windows_*／CLI 冒烟覆盖），其余全部真跑（295 个测试）。
+      - name: runtime 运行矩阵（Windows）
+        timeout-minutes: 30
+        run: cargo test -p pyawa-runtime --no-fail-fast
+        shell: bash
+      # W6：**真跑** `pyawa-abi` 的测试（不只是编译；conformance 已单列为对拍步骤）。
+      - name: Windows ABI 测试（W6）
+        run: cargo test -p pyawa-abi --test abi --test annotation_strings --test boundary_guard --test capability_acceptance --test capability_layout --test capability_registration --test header --test helpers_wiring --test host_module --test host_path --test host_signature --test host_usability --test host_visibility --test memory_quota --test object_ops --test protocol_host_dispatch --test protocol_oracle --test type_identity --test write_tobytes
+        shell: bash
+      - name: Windows provider／os 形状测试（W2 clock／W3 fs／W4 net／W5 os 分支）
+        run: cargo test -p pyawa-runtime --test windows_clock_shapes --test windows_fs_shapes --test windows_net_shapes --test windows_os_shapes --test windows_winstubs_shapes
+        shell: bash
+      # W6 首批：平台中立的 crate 测试（与 Linux fast 档的 `-p pyawa-abi -p pyawa-core -p pyawa-lsp`
+      # 同源；abi 的 conformance 需要 CPython 3.14 Windows 参照，暂列 W6 剩余，见 PLAN §12.20）
+      - name: Windows 平台中立测试（core ＋ lsp）
+        run: cargo test -p pyawa-core -p pyawa-lsp
+        shell: bash
+      # W6 首批：参考宿主（MSVC `cl`；`ilammy/msvc-dev-cmd` 负责把 cl 放上 PATH）
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: 参考宿主（MSVC）
+        run: python tests/ci/t_ref_host.py --release
+        shell: bash
+      # 无对拍产物（跨平台对拍属 W6）⇒ M3-COVERAGE 显式 SKIP；其余静态项照跑
+      - name: 不变量闸门（静态检查；M3-COVERAGE 显式 SKIP）
+        run: python tests/ci/check.py
+        shell: bash
+        env:
+          PYAWA_CHECK_SKIP_COVERAGE: "1"
 
   full:
     name: 完整闸门（slowcheck 11 项）

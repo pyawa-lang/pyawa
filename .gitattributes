@@ -1,0 +1,9 @@
+# **统一 LF**（`PLAN §12.20` W5；2026-11-17）：
+# Windows 的 git 默认 `core.autocrlf=true` ⇒ checkout 会把文本转成 CRLF；而 Pyawa 的
+# `Lib/` 逐字节同步（`CX-8`）按上游 LF 字节比、lexer 也按 LF 语义解析。
+# ⇒ 显式钉死：文本一律 LF；二进制（git 自动探测）不受影响。
+* text=auto eol=lf
+
+# 上游 `Lib/test/tokenizedata/` 里**故意**是 CRLF 的编码检测夹具：必须保留原字节（否则
+# 夹具语义与 `Lib/` 哈希同步都会坏）。
+Lib/test/tokenizedata/coding20731.py -text

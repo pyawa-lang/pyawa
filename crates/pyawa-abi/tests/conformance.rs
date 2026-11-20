@@ -68,7 +68,7 @@ use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
 use pyawa_capabilities::clock::{CapStatus as ClockStatus, CpClockVtable};
 use std::time::{SystemTime, UNIX_EPOCH};
 use pyawa_abi::status::PA_OK;
-use pyawa_capabilities::fs::{CapStatus, CpFsVtable, Handle};
+use pyawa_capabilities::fs::{CapStatus, CpFsVtable, FileInfo, FileTimes, Handle};
 use pyawa_abi::tag::*;
 use pyawa_abi::*;
 
@@ -312,8 +312,15 @@ fn parse_exception(text: &str) -> Option<(String, String)> {
 // 参照侧（CPython；`MS-16`）
 // --------------------------------------------------------------------------- #
 
+// `W6`：**参照解释器发现**——Linux 上就是 `python3`；Windows 上 host 用
+// `PYAWA_REFERENCE_PYTHON=python`（`actions/setup-python` 提供的是 `python.exe`）。
+// 只在跑 conformance 时需要，不改变 Linux 口径。
+fn reference_python() -> String {
+    std::env::var("PYAWA_REFERENCE_PYTHON").unwrap_or_else(|_| "python3".to_owned())
+}
+
 fn reference_version() -> String {
-    match Command::new("python3").arg("--version").output() {
+    match Command::new(reference_python()).arg("--version").output() {
         Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_owned(),
         Err(error) => panic!("参照实现起不来（`MS-7` 要求两侧各跑一次）：{error}"),
     }
@@ -335,8 +342,11 @@ fn run_cpython(case: &Case, tag: &str) -> Observation {
         let path = directory.join(format!("{}.{}.{}.reference.py", case.name, tag, std::process::id()));
     fs::write(&path, &program).expect("写参照侧程序");
 
-    let mut command = Command::new("python3");
+    let mut command = Command::new(reference_python());
     command.arg(&path);
+    // **参照侧编码**（`W6`）：Windows 上 `python` 默认用 cp1252 控制台编码，语料里的中文
+    // docstring 一 `print` 就 `UnicodeEncodeError`（实测 `type_doc_attribute`）⇒ 强制 UTF-8 模式。
+    command.env("PYTHONUTF8", "1");
     // **参照侧的模块搜索路径**：语料目录（被测侧由 `set_module_search_path` 设同一份 ✓）
     command.env("PYTHONPATH", corpus_directory());
     let Some(output) = output_with_timeout(command, TIMEOUT) else {
@@ -581,6 +591,26 @@ fn unescape(text: &str) -> String {
     out
 }
 
+/// 能真解析就解析成绝对、无 `..` 的规范路径；解析失败原样返回（不伪造）。
+///
+/// **Windows 陷阱（W6 实测）**：`std::fs::canonicalize` 返回 **`\\?\` verbatim 路径**
+/// （`\\?\D:\a\…`）；它转成 guest 名会变成 `//?/D:/…`，VM／fs 都不认 ⇒ `import os` 都
+/// `ModuleNotFoundError`（Errno 123）。这里剥掉 verbatim 前缀（disk 形态；UNC 形态少见，
+/// 原样返回并如实暴露）。
+fn canonical_or_self(path: std::path::PathBuf) -> std::path::PathBuf {
+    let Ok(canonical) = std::fs::canonicalize(&path) else {
+        return path;
+    };
+    #[cfg(windows)]
+    {
+        let text = canonical.to_string_lossy();
+        if let Some(stripped) = text.strip_prefix(r"\\?\") {
+            return std::path::PathBuf::from(stripped);
+        }
+    }
+    canonical
+}
+
 /// 在 Pyawa 实例里执行一段源码（**进程内**；由子进程入口调用）。
 /// 子进程里**经 `fs` 域写出去的 stdout 字节**（`MS-8` 的比对项 ✓）。
 ///
@@ -589,9 +619,48 @@ fn unescape(text: &str) -> String {
 /// 反而排在程序输出**之后** ✓）。
 static STDOUT_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
+/// 一个句柄：普通文件真开 `File`；**目录**只记路径（`W6`：Windows 上 `File::open` 目录会失败，
+/// 而 `listdir` 只要路径；目录句柄在 harness 里是"虚拟的"，`read` 如实报 `EISDIR`）。
+struct OpenEntry {
+    file: Option<std::fs::File>,
+    path: std::path::PathBuf,
+}
+
 /// harness 提供者的句柄表（**读**的一半：加载器要读 `.py` ✓；host 侧用 `std::fs` 合法 ✓）。
-static FILES: std::sync::Mutex<Option<std::collections::HashMap<u64, std::fs::File>>> =
+static FILES: std::sync::Mutex<Option<std::collections::HashMap<u64, OpenEntry>>> =
     std::sync::Mutex::new(None);
+
+/// 元信息：harness 只造 `size`／`mode`／`is_dir`（`dev`／`ino` 如实给 0——它不是真实文件系统层）。
+fn harness_info(meta: &std::fs::Metadata) -> FileInfo {
+    let file_type = meta.file_type();
+    FileInfo {
+        size: meta.len(),
+        mode: if file_type.is_dir() { 0o040755 } else { 0o100644 },
+        is_dir: file_type.is_dir(),
+        dev: 0,
+        ino: 0,
+    }
+}
+
+/// 时间戳：epoch 起纳秒；取不到如实给 0（`CP-5` 不编造）。
+fn harness_times(meta: &std::fs::Metadata) -> FileTimes {
+    fn ns(value: std::io::Result<std::time::SystemTime>) -> i64 {
+        value
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+            .unwrap_or(0)
+    }
+    FileTimes {
+        atime_ns: ns(meta.accessed()),
+        mtime_ns: ns(meta.modified()),
+        ctime_ns: ns(meta.created()),
+    }
+}
+
+fn harness_errno(error: &std::io::Error) -> i32 {
+    error.raw_os_error().unwrap_or(5)
+}
 static NEXT_HANDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// 同上，句柄 `2`（stderr ✓）。
@@ -639,6 +708,33 @@ extern "C" fn harness_write(
     }
 }
 
+/// **guest 名 ⇒ 宿主路径**（`W6`）：VM 交给 fs provider 的是 **guest 绝对名**
+/// （`/D:/a/b` 这种形态）；harness 的 fs 槽是"宿主侧 provider"，必须映射回宿主路径
+/// （Windows `/D:/a/b` ⇒ `D:\a\b`）。Unix 上 guest 与宿主同形（原样字节）。
+#[cfg(unix)]
+fn harness_host_path(raw: &[u8]) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(raw))
+}
+
+/// Windows：见上一条。
+#[cfg(not(unix))]
+fn harness_host_path(raw: &[u8]) -> std::path::PathBuf {
+    // 统一成宿主分隔符（guest 名用 `/`；Windows 的 std::fs 两种都认，但先归一避免歧义）。
+    let unified = String::from_utf8_lossy(raw).replace('/', "\\");
+    // 剥 verbatim 前缀（`canonicalize` 的形态：`\\?\D:\…`）。
+    let unified = match unified.strip_prefix("\\\\?\\") {
+        Some(rest) => rest.to_owned(),
+        None => unified,
+    };
+    // 容错：`\D:\a`（单个前导 `\` ＋ 盘符）⇒ `D:\a`；UNC（`\\server`）保持原样。
+    let bytes = unified.as_bytes();
+    if bytes.len() >= 3 && bytes[0] == b'\\' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':' {
+        return std::path::PathBuf::from(&unified[1..]);
+    }
+    std::path::PathBuf::from(unified)
+}
+
 extern "C" fn harness_open(
     _state: *mut core::ffi::c_void,
     path: *const u8,
@@ -650,17 +746,31 @@ extern "C" fn harness_open(
 ) -> CapStatus {
     // SAFETY: 契约同 `SPEC-capabilities.md` §9.1。
     let raw = unsafe { core::slice::from_raw_parts(path, len) };
-    let name = String::from_utf8_lossy(raw).into_owned();
-    let Ok(file) = std::fs::File::open(&name) else {
-        if !errno_out.is_null() {
-            // SAFETY: 出参由调用方提供。
-            unsafe { *errno_out = 2 };
+    let name = harness_host_path(raw);
+    // 目录：只记路径（见 [`OpenEntry`]）；其余：真开文件。
+    let entry = match std::fs::metadata(&name) {
+        Ok(meta) if meta.is_dir() => OpenEntry { file: None, path: name },
+        Ok(_) => match std::fs::File::open(&name) {
+            Ok(file) => OpenEntry { file: Some(file), path: name },
+            Err(error) => {
+                if !errno_out.is_null() {
+                    // SAFETY: 出参由调用方提供。
+                    unsafe { *errno_out = harness_errno(&error) };
+                }
+                return CapStatus::Machine;
+            }
+        },
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *errno_out = harness_errno(&error) };
+            }
+            return CapStatus::Machine;
         }
-        return CapStatus::Machine;
     };
     let id = NEXT_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut guard = FILES.lock().expect("句柄表未中毒");
-    guard.get_or_insert_with(std::collections::HashMap::new).insert(id, file);
+    guard.get_or_insert_with(std::collections::HashMap::new).insert(id, entry);
     if !handle_out.is_null() {
         // SAFETY: 同上。
         unsafe { *handle_out = Handle(id) };
@@ -679,10 +789,17 @@ extern "C" fn harness_read(
 ) -> CapStatus {
     use std::io::Read;
     let mut guard = FILES.lock().expect("句柄表未中毒");
-    let Some(file) = guard.as_mut().and_then(|files| files.get_mut(&handle.0)) else {
+    let Some(entry) = guard.as_mut().and_then(|files| files.get_mut(&handle.0)) else {
         if !errno_out.is_null() {
             // SAFETY: 出参由调用方提供。
             unsafe { *errno_out = 9 };
+        }
+        return CapStatus::Machine;
+    };
+    let Some(file) = entry.file.as_mut() else {
+        if !errno_out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = 21 }; // EISDIR
         }
         return CapStatus::Machine;
     };
@@ -715,13 +832,25 @@ extern "C" fn harness_readlink(
     out_len: *mut usize,
     errno_out: *mut i32,
 ) -> CapStatus {
-    use std::os::unix::ffi::OsStrExt;
-    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1（名字可读 `len` 字节）。
-    let raw = unsafe { core::slice::from_raw_parts(path, len) };
-    let name = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(raw));
-    match std::fs::read_link(&name) {
-        Ok(target) => {
-            let bytes = target.as_os_str().as_bytes();
+    // `W6`：Windows 上宿主名字是 UTF-16，没法无损往返任意字节串 ⇒ 名字／目标都按 UTF-8 lossy；
+    // Unix 保持原来的无损字节口径（本 harness 的平台分支不影响 Linux 对拍）。
+    #[cfg(unix)]
+    let target = {
+        use std::os::unix::ffi::OsStrExt;
+        // SAFETY: 契约同 `SPEC-capabilities.md` §9.1（名字可读 `len` 字节）。
+        let raw = unsafe { core::slice::from_raw_parts(path, len) };
+        let name = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(raw));
+        std::fs::read_link(&name).map(|target| target.as_os_str().as_bytes().to_vec())
+    };
+    #[cfg(not(unix))]
+    let target = {
+        // SAFETY: 同上。
+        let raw = unsafe { core::slice::from_raw_parts(path, len) };
+        let name = harness_host_path(raw);
+        std::fs::read_link(&name).map(|target| target.to_string_lossy().into_owned().into_bytes())
+    };
+    match target {
+        Ok(bytes) => {
             let written = bytes.len().min(capacity);
             if !out.is_null() && written > 0 {
                 // SAFETY: `out` 由调用方按 `capacity` 给出；源与目标不重叠。
@@ -734,13 +863,180 @@ extern "C" fn harness_readlink(
             CapStatus::Ok
         }
         Err(error) => {
+            // **Windows 的 reparse 语义**（`W6` 实测）：VM 的 `CP-21` 解析对每一段做
+            // `readlink` 探测，并把 `EINVAL` 当"**不是链接**"；Windows 的 `std::fs::read_link`
+            // 对普通文件/目录返回 **4390/4392/4393（NOT_A_REPARSE_POINT 一族）**；原样交给
+            // VM 就成机器错误 ⇒ 连 `import os` 都 `OSError Errno 4390`（210 条差异的最终根因）。
+            #[cfg(not(unix))]
+            let mapped = match error.raw_os_error().unwrap_or(5) {
+                4390 | 4392 | 4393 => 22, // EINVAL：不是符号链接（VM 的分支判据）
+                2 | 3 => 2,               // ENOENT
+                5 | 32 | 33 => 13,        // EACCES
+                other => other,
+            };
+            #[cfg(unix)]
+            let mapped = error.raw_os_error().unwrap_or(5);
             if !errno_out.is_null() {
                 // SAFETY: 同上。
-                unsafe { *errno_out = error.raw_os_error().unwrap_or(5) };
+                unsafe { *errno_out = mapped };
             }
             CapStatus::Machine
         }
     }
+}
+
+
+/// `stat(name)`：harness 的路径槽统一经 [`harness_host_path`]（guest ⇒ 宿主）。
+extern "C" fn harness_stat(
+    _state: *mut core::ffi::c_void,
+    path: *const u8,
+    len: usize,
+    out: *mut FileInfo,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1。
+    let raw = unsafe { core::slice::from_raw_parts(path, len) };
+    let name = harness_host_path(raw);
+    match std::fs::metadata(&name) {
+        Ok(meta) => {
+            if !out.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out = harness_info(&meta) };
+            }
+            CapStatus::Ok
+        }
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = harness_errno(&error) };
+            }
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `fstat(handle)`：文件句柄取 `File::metadata`；虚拟目录句柄取路径 metadata。
+extern "C" fn harness_fstat(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    out: *mut FileInfo,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    let Some(entry) = guard.as_mut().and_then(|files| files.get_mut(&handle.0)) else {
+        if !errno_out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = 9 };
+        }
+        return CapStatus::Machine;
+    };
+    let meta = match entry.file.as_ref() {
+        Some(file) => file.metadata(),
+        None => std::fs::metadata(&entry.path),
+    };
+    match meta {
+        Ok(meta) => {
+            if !out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *out = harness_info(&meta) };
+            }
+            CapStatus::Ok
+        }
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = harness_errno(&error) };
+            }
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `stat_times(name)`：见 [`harness_times`]。
+extern "C" fn harness_stat_times(
+    _state: *mut core::ffi::c_void,
+    path: *const u8,
+    len: usize,
+    out: *mut FileTimes,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 契约同上。
+    let raw = unsafe { core::slice::from_raw_parts(path, len) };
+    let name = harness_host_path(raw);
+    match std::fs::metadata(&name) {
+        Ok(meta) => {
+            if !out.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out = harness_times(&meta) };
+            }
+            CapStatus::Ok
+        }
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = harness_errno(&error) };
+            }
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `listdir(dir)`：名字以 NUL 分隔；两段式出参（`out_len` 回总长）。
+extern "C" fn harness_listdir(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    let Some(entry) = guard.as_mut().and_then(|files| files.get_mut(&handle.0)) else {
+        if !errno_out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = 9 };
+        }
+        return CapStatus::Machine;
+    };
+    let names = match std::fs::read_dir(&entry.path) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|item| {
+                // guest 名是字节串：Unix 取原始字节，Windows 用 UTF-8 lossy（宿主名是 UTF-16）。
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    item.file_name().as_bytes().to_vec()
+                }
+                #[cfg(not(unix))]
+                {
+                    item.file_name().to_string_lossy().into_owned().into_bytes()
+                }
+            })
+            .collect::<Vec<Vec<u8>>>(),
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = harness_errno(&error) };
+            }
+            return CapStatus::Machine;
+        }
+    };
+    let mut blob = Vec::new();
+    for name in &names {
+        blob.extend_from_slice(name);
+        blob.push(0);
+    }
+    let written = blob.len().min(capacity);
+    if !out.is_null() && written > 0 {
+        // SAFETY: `out` 由调用方按 `capacity` 给出；源与目标不重叠。
+        unsafe { core::ptr::copy_nonoverlapping(blob.as_ptr(), out, written) };
+    }
+    if !out_len.is_null() {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *out_len = blob.len() };
+    }
+    CapStatus::Ok
 }
 
 extern "C" fn harness_close(
@@ -775,12 +1071,16 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
         // 先前只给语料目录 ✗ ⇒ 本侧 `import os` 会**找不到 `Lib/os.py`** ✗ ⇒ 报 `ModuleNotFoundError` ✗，
         // 与"我们真的跑不动 os"混为一谈 ✗（实测报告两侧原文：一侧 `path_len=7` ＋ `os_ok` ✓、
         // 另一侧 `path_len=1` ＋ `ModuleNotFoundError` ✗）⇒ 现补上工作区的 `Lib/` ✓（＝本层的标准库 ✓）。
-        let lib_directory = workspace().join("Lib");
+        let lib_directory = canonical_or_self(workspace().join("Lib"));
+        let corpus = canonical_or_self(corpus_directory());
+        // **`W6`**：`sys.path` 放的是 **guest 名**（VM 的 fs 解析按 guest 空间解释）；Linux 上
+        // 宿主绝对路径与之同形，Windows 上 `D:\a\Lib` 不是 guest 绝对名 ⇒ 必须先转
+        // `/D:/a/Lib`（与 `pyawa_stdlib::install` 的四处来源同一条 helper，一处真相）。
         pyawa_stdlib::set_module_search_path(
             (&*state).instance(),
             &[
-                corpus_directory().to_string_lossy().into_owned(),
-                lib_directory.to_string_lossy().into_owned(),
+                pyawa_stdlib::guest_path_for_sys_path(&corpus),
+                pyawa_stdlib::guest_path_for_sys_path(&lib_directory),
             ],
         );
         // **`fs` 域**：harness 自己当提供者 —— 写标准流 ⇒ 父进程捕获得到 ✓
@@ -796,6 +1096,12 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             //（否则被测侧恒「槽未实现」而参照成功 ⇒ 假阳性 ✗）。
             readlink: Some(harness_readlink),
             close: Some(harness_close),
+            // `W6`：Windows 的 `Lib/` 导入探测要 `stat`／`listdir` 一类槽（Linux 语料此前
+            // 恰好没走到 ⇒ 缺它们时只暴露在 Windows）；两种平台同口径补上。
+            stat: Some(harness_stat),
+            fstat: Some(harness_fstat),
+            stat_times: Some(harness_stat_times),
+            listdir: Some(harness_listdir),
             ..CpFsVtable::UNIMPLEMENTED
         };
         assert_eq!(

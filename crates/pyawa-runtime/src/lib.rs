@@ -7,9 +7,9 @@
 #![deny(unsafe_code)]
 
 use core::ffi::{c_void, c_char};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS, PA_DOMAIN_NET};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use pyawa_abi::{pa_setcapability, pa_setcapability_async};
 use pyawa_abi::{pa_error, pa_host, pa_state, safe, status};
 
@@ -25,11 +25,34 @@ pub mod net_posix;
 // `.pyac` 的落盘路径依赖 `std::fs` 与进程号 ⇒ 宿主侧专用，wasm 目标不编译（产物由宿主决定）。
 #[cfg(not(target_family = "wasm"))]
 pub mod pyac;
+// **Windows 平台 provider（`PLAN §12.20` W2／W3）**：真实机器实现，只在 windows 目标编译。
+#[cfg(windows)]
+pub mod clock_windows;
+#[cfg(windows)]
+pub mod fs_windows;
+#[cfg(windows)]
+pub mod net_windows;
 // **Web（WASM）E2**：固定槽位 trampoline ＋ JS 填充协议（`PLAN §12.21` E2）。
 // 只在 wasm32 目标编译；宿主构建零影响。模块内放开 `unsafe_code`（FFI 入口与分配器，逐项有 SAFETY）。
 #[cfg(target_family = "wasm")]
 #[allow(unsafe_code)]
 pub mod wasm_bridge;
+
+// **平台 provider 的类型别名**（`PLAN §12.23` 选项 A）：CLI 只写一份源码——
+// Unix 用 POSIX provider，Windows 用 Win32 provider；三者的 `new()`／`vtable()` 形状相同
+// ⇒ CLI 不需要 `cfg` 分支，也不需要 `std::fs` 直读（`IM-15`）。
+#[cfg(unix)]
+pub type PlatformFs = fs_posix::PosixFs;
+#[cfg(windows)]
+pub type PlatformFs = fs_windows::WindowsFs;
+#[cfg(unix)]
+pub type PlatformClock = clock_system::SystemClock;
+#[cfg(windows)]
+pub type PlatformClock = clock_windows::WindowsClock;
+#[cfg(unix)]
+pub type PlatformNet = net_posix::PosixNet;
+#[cfg(windows)]
+pub type PlatformNet = net_windows::WindowsNet;
 
 /// **组合根电池**（`§12.13 #1`／路线 A）：`paL_newstate` 用的真实机器 provider ＋ 它们的 vtable。
 ///
@@ -108,11 +131,78 @@ fn install_machine_capabilities(state: *mut pa_state) -> i32 {
     {
         return wasm_bridge::install_js_clock(state);
     }
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(windows)]
+    {
+        return install_windows_capabilities(state);
+    }
+    #[cfg(all(not(target_family = "wasm"), not(windows)))]
     {
         let _ = state;
         status::PA_OK
     }
+}
+
+
+// --------------------------------------------------------------------------- //
+// Windows 组合根（`PLAN §12.20` W2／W3）
+// --------------------------------------------------------------------------- //
+
+#[cfg(windows)]
+struct WindowsProviders {
+    fs: fs_windows::WindowsFs,
+    clock: clock_windows::WindowsClock,
+    net: net_windows::WindowsNet,
+}
+
+#[cfg(windows)]
+struct WindowsVtables {
+    fs: pyawa_capabilities::fs::CpFsVtable,
+    clock: pyawa_capabilities::clock::CpClockVtable,
+    net: pyawa_capabilities::net::CpNetVtable,
+}
+
+/// 注册 Windows 的 `fs`／`clock`／`net` 三个真实机器能力域（`PLAN §12.20` W2–W4）。
+///
+/// 生命周期与 unix 组合根同口径：provider／vtable 泄漏到进程末（实例存续期内指针有效）。
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn install_windows_capabilities(state: *mut pa_state) -> i32 {
+    let providers = Box::into_raw(Box::new(WindowsProviders {
+        fs: fs_windows::WindowsFs::new(),
+        clock: clock_windows::WindowsClock::new(),
+        net: net_windows::WindowsNet::new(),
+    }));
+    // SAFETY: providers 已固定在堆上（泄漏到进程末）。
+    let (fs_vtable, clock_vtable, net_vtable) = unsafe {
+        ((*providers).fs.vtable(), (*providers).clock.vtable(), (*providers).net.vtable())
+    };
+    let vtables = Box::into_raw(Box::new(WindowsVtables {
+        fs: fs_vtable,
+        clock: clock_vtable,
+        net: net_vtable,
+    }));
+    // SAFETY: vtables／providers 都泄漏到进程末 ⇒ 指针在实例存活期内一直有效。
+    let (tables, state_ptr) = unsafe { (&*vtables, state) };
+    let fs_impl = core::ptr::addr_of!(tables.fs).cast::<c_void>();
+    let clock_impl = core::ptr::addr_of!(tables.clock).cast::<c_void>();
+    let net_impl = core::ptr::addr_of!(tables.net).cast::<c_void>();
+    // SAFETY: 按 `AB-33`/`AB-34` 的契约传参。
+    let checks = unsafe {
+        [
+            pa_setcapability_async(state_ptr, PA_DOMAIN_FS, PA_ASYNC_OK),
+            pa_setcapability(state_ptr, PA_DOMAIN_FS, fs_impl),
+            pa_setcapability_async(state_ptr, PA_DOMAIN_CLOCK, PA_ASYNC_OK),
+            pa_setcapability(state_ptr, PA_DOMAIN_CLOCK, clock_impl),
+            pa_setcapability_async(state_ptr, PA_DOMAIN_NET, PA_ASYNC_OK),
+            pa_setcapability(state_ptr, PA_DOMAIN_NET, net_impl),
+        ]
+    };
+    for code in checks {
+        if code != status::PA_OK {
+            return code;
+        }
+    }
+    status::PA_OK
 }
 
 /// 组合根装配：内建名字空间＋`sys`＋`Lib/` 搜索路径（`CM-14`／`CM-26`；`P3-14` 的临时代劳）。

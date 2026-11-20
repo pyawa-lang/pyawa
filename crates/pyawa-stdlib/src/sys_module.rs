@@ -129,6 +129,15 @@ pub const fn byteorder() -> &'static str {
     }
 }
 
+/// **`sys.platlibdir`**（`PLAN §12.20` W5）：CPython 在 Windows 上报 `"DLLs"`、其余目标报
+/// `"lib"`（`Lib/sysconfig/__init__.py:581` 读它拼 `stdlib`／`platlib` 路径）。判据用 `cfg!`
+/// （不是平台接口，`CX-4` ✓；同 [`byteorder`] 的既有手法 ✓）；非 Windows 逐字节不变。
+#[cfg(windows)]
+const PLATLIBDIR: &str = "DLLs";
+/// 非 Windows 的 `sys.platlibdir`（参照给 `"lib"`）。
+#[cfg(not(windows))]
+const PLATLIBDIR: &str = "lib";
+
 /// **`sys.implementation._multiarch`** ✓（task-9）：**构建目标（宿主平台）的 Debian/Ubuntu
 /// multiarch 三元组** —— 不是语言版本、也不是本实现自报的版本号。
 ///
@@ -1156,11 +1165,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         let value = instance.new_str(&prefix_text);
         instance.dict_set(namespace, name, value);
     }
-    // **`platlibdir`** ✓（参照给 `lib` ✓）、**`platform`** ✓（本层只在 linux 上跑 ✓）、
+    // **`platlibdir`** ✓（参照 linux 给 `lib`、Windows 给 `DLLs` —— W5 见 [`PLATLIBDIR`]）、
+    // **`platform`** ✓（**一处真相**：`crate::PLATFORM` ⇒ linux／`win32`；W5）、
     // **`executable`** ✓（就是本进程的可执行文件 ✓ —— 与 `prefix` **同一处真相** ✓）。
     for (name, value) in [
-        ("platlibdir", "lib"),
-        ("platform", "linux"),
+        ("platlibdir", PLATLIBDIR),
+        ("platform", crate::PLATFORM),
         ("executable", &prefix_text),
     ] {
         let text = instance.new_str(value);

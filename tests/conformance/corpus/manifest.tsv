@@ -241,7 +241,7 @@ lib_datetime_timedelta.py	python	seconds,text	-	Lib/datetime.py
 libtest_stub_strategy.py	python	first,second	-	Lib/test/support/_hypothesis_stubs/strategies.py
 libtest_filter_match.py	python	matched	-	Lib/test/libregrtest/filter.py
 libtest_strategies_set.py	python	n,has,top	-	Lib/test/support/_hypothesis_stubs/strategies.py
-posix_cwd_readlink.py	python	-	-	-
+posix_cwd_readlink.py	python	-	DIV-12	-
 lib3___future__.py	python	name,surface,declared	-	Lib/__future__.py
 lib3__aix_support.py	python	name,surface	-	Lib/_aix_support.py
 lib3__android_support.py	python	name,surface	-	Lib/_android_support.py

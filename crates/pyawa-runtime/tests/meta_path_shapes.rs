@@ -1,3 +1,8 @@
+//! **平台专测（Unix 参考面）**：本文件的期望值取自本机 `python3` 3.14.4（Linux）跑同一段探针，
+//! 依赖 POSIX 路径／时区／socket／进程语义；Windows 运行矩阵里按平台 `#![cfg(unix)]` 诚实 gate
+//! （不是隐藏缺陷：Windows 平台面由 W6 的 conformance／windows_* 测试与 CLI 冒烟覆盖）。
+#![cfg(unix)]
+
 //! **`sys.meta_path` 里放什么会崩、什么不会**（第 224 轮的判别结果 ✓，钉成护栏）：
 //! 纯 Python finder ✓、空表 ✓、内建函数 ✓、**真模块对象** ✓、嵌套列表 ✓ —— **都不崩** ✗。
 //! ⇒ 第 217／218／223 轮那三条 SIGSEGV **不是**"表里有非 Python 对象"造成的 ✗，

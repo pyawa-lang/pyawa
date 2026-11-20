@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **`exec_module_into_namespace`**（第 235 轮；`IM-31` 的 loader 那半 ✓）：
 //! 把模块源码装进**给定**的名字空间 ✓ —— 与 `can_locate_through_bridge`（只定位 ✓）配成一对，
 //! 正是 finder 的 `find_spec`（找 ✓）＋ `exec_module`（装 ✓）两半 ✓。

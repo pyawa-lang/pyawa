@@ -68,7 +68,64 @@ pub mod faulthandler_module;
 
 /// **`sys.platform` 的值** ✓（第 194 轮）：本 crate 不碰平台（`CX-4` ✓）⇒ 先给常量 ✓，
 /// 真值应由平台集中点（`pyawa-runtime` ✓）注入 ✓ —— 已登记 ✓。
+///
+/// **Windows（`PLAN §12.20` W5）**：CPython 在 Windows 上报 `"win32"` ✓（`Lib/os.py` 与
+/// `Lib/importlib` 一族按它选分支）⇒ 同一判据 `cfg!(windows)`（**不是**平台接口，`CX-4` ✓；
+/// 同 [`sys_module::byteorder`] 的既有手法 ✓）。非 Windows 逐字节不变（仍是 `"linux"`）。
+#[cfg(not(windows))]
 pub const PLATFORM: &str = "linux";
+/// Windows 上 `sys.platform` 是 **`"win32"`**（见上一条）。
+#[cfg(windows)]
+pub const PLATFORM: &str = "win32";
+
+/// **平台模块在模块表里的那一行**（`PLAN §12.20` W5）。
+///
+/// **一处实现、两个名字**：`posix_module::build` 是同一份实现（形状／函数面／`__all__` 全同）；
+/// Windows 上以 **`nt`** 的名字注册 ⇒ `Lib/os.py` 走 `elif 'nt' in _names:` 分支
+/// （`os.name == 'nt'`、`os.path is ntpath`、`sep == '\\'`）；**不注册 `posix`**
+/// （参照 Windows 上也没有 `posix`）。非 Windows **逐字节不变**（仍注册 `posix`）。
+#[cfg(not(windows))]
+const PLATFORM_MODULE: (&str, ModuleBuilder) = (posix_module::NAME, posix_module::build);
+/// Windows 版：模块名 `"nt"`，实现仍是 `posix_module::build`（见上一条与 [`build_nt`]）。
+#[cfg(windows)]
+const PLATFORM_MODULE: (&str, ModuleBuilder) = ("nt", build_nt);
+
+/// **Windows 的 `nt` 模块**（`PLAN §12.20` W5）：`posix_module::build` 的同一份实现，只补
+/// **`environ` 的 str 形状**（以及如实的 `__name__`）。
+///
+/// 为什么需要补 ✗：同一份 `posix_module` 的 `environ` 是 **bytes→bytes**（参照 POSIX 的
+/// `posix.environ` 就是这个形状，见 `posix_module` 的 `_create_environ` 注释）；而 `Lib/os.py`
+/// 的 **nt 分支**（`Lib/os.py:769-781`）对 `environ` 逐项调 `check_str`（`isinstance(value, str)`）
+/// ⇒ 直接挂 bytes 会在 `import os` 时抛 `TypeError: str expected, not bytes`。
+/// 参照 Windows 的 `nt.environ` 因此是 **str→str** ⇒ 这里只做**形状**转换，数据源仍是同一份
+/// （`posix_module` 刚建好的那个 dict），不另读一次进程环境。
+#[cfg(windows)]
+fn build_nt(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
+    let namespace = posix_module::build(instance);
+    let name = instance.new_str("nt");
+    instance.dict_set(namespace, "__name__", name);
+    let source = instance
+        .dict_get(namespace, "environ")
+        .expect("`posix_module::build` 装好了 `environ`");
+    let text_environ = instance.new_dict();
+    if let Some(entries) = instance.dict_entries(source) {
+        for (key, value) in entries {
+            let as_text = |object| {
+                instance
+                    .bytes_value(object)
+                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                    .expect("`environ` 的键值都是 `bytes`")
+            };
+            let key_text = as_text(key);
+            let value_text = as_text(value);
+            let key_object = instance.new_str(&key_text);
+            let value_object = instance.new_str(&value_text);
+            instance.dict_insert_raw(text_environ, key_object, value_object);
+        }
+    }
+    instance.dict_set(namespace, "environ", text_environ);
+    namespace
+}
 
 /// **内建模块表**（`CM-14` 的组合根 ✓、**一处真相** ✓）。
 ///
@@ -85,7 +142,10 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (ast_module::NAME, ast_module::build),
         (io_module::NAME, io_module::build),
         (warnings_module::NAME, warnings_module::build),
-        (posix_module::NAME, posix_module::build),
+        // **平台模块**（`LIB/os.py` 的 `posix`／`nt` 底座）：Linux ⇒ `posix`；Windows ⇒ `nt`
+        // （同一实现，见 [`PLATFORM_MODULE`]）。`sys.builtin_module_names` 由本表派生 ⇒ 自动
+        // 跟着变（`Lib/os.py` 据此选分支 ✓）。
+        PLATFORM_MODULE,
         (weakref_module::NAME, weakref_module::build),
         (thread_module::NAME, thread_module::build),
         (codecs_module::NAME, codecs_module::build),
@@ -168,8 +228,7 @@ pub(crate) type ModuleBuilder = fn(&pyawa_core::Instance) -> core::ptr::NonNull<
 
 /// **`sys.builtin_module_names` 的唯一出处** ✓：模块表里的名字 ＋ 两个特殊项 ✓。
 pub(crate) fn builtin_module_names() -> Vec<&'static str> {
-    RUST_MODULES
-        .iter()
+    module_builders()
         .map(|(name, _)| *name)
         .chain(["builtins", "sys"])
         .collect()
@@ -216,6 +275,283 @@ fn stub_native(
         "NotImplementedError",
         &String::from("该内建的真实现要按 CM-8 走能力域，随后接"),
     ))
+}
+
+/// **Windows-only C 模块的"最小导入面"**（`PLAN §12.24`，2026-11-17）。
+///
+/// 来源：W6 的 conformance Windows 收敛 —— `asyncio`／`concurrent.futures`／`code` 一族的
+/// Windows 分支在导入期就要 `winreg`／`_winapi`／`msvcrt`／`_overlapped`；本层没有这些 C 模块
+/// ⇒ 整条导入链 `ModuleNotFoundError`。**诚实桩**：名字齐、调用如实 `NotImplementedError`
+/// （`CM-8`：不静默给假值）；真实注册表／重叠 I/O 语义另行立项（本单**不在内**）。
+/// 真实现要按能力域接，随后接。
+#[cfg(windows)]
+const WINDOWS_STUB_MODULES: &[(&str, ModuleBuilder)] = &[
+    ("winreg", build_winreg_stub),
+    ("_winapi", build_winapi_stub),
+    ("msvcrt", build_msvcrt_stub),
+    ("_overlapped", build_overlapped_stub),
+    ("_multiprocessing", build_multiprocessing_stub),
+];
+/// 非 Windows：没有这张表（`os`／`importlib` 的行为逐字节不变）。
+#[cfg(not(windows))]
+const WINDOWS_STUB_MODULES: &[(&str, ModuleBuilder)] = &[];
+
+/// **模块表的唯一遍历口**（`CM-14` 一处真相）：Rust 侧模块 ＋ 平台专用桩。
+fn module_builders() -> impl Iterator<Item = &'static (&'static str, ModuleBuilder)> {
+    RUST_MODULES.iter().chain(WINDOWS_STUB_MODULES.iter())
+}
+
+/// `winreg` 的**导入期最小面**（真语义＝注册表 API，另行立项；调用如实报未接线）。
+#[cfg(windows)]
+fn build_winreg_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
+    let namespace = build_stub_module(
+        instance,
+        "winreg",
+        &[
+        "CloseKey",
+        "ConnectRegistry",
+        "CreateKey",
+        "CreateKeyEx",
+        "DeleteKey",
+        "DeleteKeyEx",
+        "DeleteValue",
+        "EnumKey",
+        "EnumValue",
+        "ExpandEnvironmentStrings",
+        "FlushKey",
+        "LoadKey",
+        "OpenKey",
+        "OpenKeyEx",
+        "QueryInfoKey",
+        "QueryValue",
+        "QueryValueEx",
+        "SaveKey",
+        "SetValue",
+        "SetValueEx",
+        ],
+        "Windows 注册表：§12.24 最小导入面",
+    );
+    for (name, value) in [
+        ("HKEY_CLASSES_ROOT", 2147483648i64),
+        ("HKEY_CURRENT_USER", 2147483649i64),
+        ("HKEY_LOCAL_MACHINE", 2147483650i64),
+        ("HKEY_USERS", 2147483651i64),
+        ("HKEY_PERFORMANCE_DATA", 2147483652i64),
+        ("KEY_ALL_ACCESS", 983103i64),
+        ("REG_SZ", 1i64),
+        ("REG_EXPAND_SZ", 2i64),
+        ("REG_DWORD", 4i64),
+    ] {
+        let object = instance.new_int(value);
+        instance.dict_set(namespace, name, object);
+    }
+    namespace
+}
+
+/// `_winapi` 的**导入期最小面**：函数桩 ＋ **导入期被引用的 4 个常量**。
+///
+/// 常量清单来自 `Lib/` 的 AST 扫描（只统计模块级／类体，函数体不算）：
+/// `asyncio/windows_events.py` 用 `NULL`／`INFINITE`；`multiprocessing/connection.py`
+/// 用 `ERROR_BROKEN_PIPE`／`ERROR_NETNAME_DELETED`（Win32 取值，如实不编造）。
+#[cfg(windows)]
+fn build_winapi_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
+    // 名字清单来自 `Lib/` 的 **AST 全量扫描**（含导入期会求值的默认参数等；只列真实用到的）。
+    // 常量取 Win32 公开值；函数一律诚实桩（调用 `NotImplementedError`）。
+    // **故意不提供** `LCMapStringEx` 三件套：给了桩 `ntpath.normcase` 会走 C 路径并每次抛
+    // `NotImplementedError` ⇒ 让 from-import 失败、走 ntpath 自带的纯 Python fallback。
+    let namespace = build_stub_module(
+        instance,
+        "_winapi",
+        &[
+        "BatchedWaitForMultipleObjects",
+        "CloseHandle",
+        "ConnectNamedPipe",
+        "CopyFile2",
+        "CreateFile",
+        "CreateFileMapping",
+        "CreateNamedPipe",
+        "CreatePipe",
+        "CreateProcess",
+        "DuplicateHandle",
+        "GetCurrentProcess",
+        "GetExitCodeProcess",
+        "GetFileType",
+        "GetLastError",
+        "GetModuleFileName",
+        "GetStdHandle",
+        "MapViewOfFile",
+        "NeedCurrentDirectoryForExePath",
+        "OpenFileMapping",
+        "OpenProcess",
+        "PeekNamedPipe",
+        "ReadFile",
+        "SetNamedPipeHandleState",
+        "TerminateProcess",
+        "UnmapViewOfFile",
+        "VirtualQuerySize",
+        "WaitForMultipleObjects",
+        "WaitForSingleObject",
+        "WaitNamedPipe",
+        "WriteFile",
+        "_mimetypes_read_windows_registry",
+        ],
+        "Win32 API：§12.24 最小导入面（未接调用如实 NotImplementedError）",
+    );
+    for (name, value) in [
+        ("NULL", 0i64),
+        ("INFINITE", -1i64),
+        ("INVALID_HANDLE_VALUE", -1i64),
+        ("STILL_ACTIVE", 259i64),
+        ("ERROR_ACCESS_DENIED", 5i64),
+        ("ERROR_ALREADY_EXISTS", 183i64),
+        ("ERROR_BROKEN_PIPE", 109i64),
+        ("ERROR_IO_PENDING", 997i64),
+        ("ERROR_MORE_DATA", 234i64),
+        ("ERROR_NETNAME_DELETED", 64i64),
+        ("ERROR_NO_DATA", 232i64),
+        ("ERROR_OPERATION_ABORTED", 995i64),
+        ("ERROR_PIPE_BUSY", 231i64),
+        ("ERROR_PRIVILEGE_NOT_HELD", 1314i64),
+        ("ERROR_SEM_TIMEOUT", 121i64),
+        ("COPY_FILE_ALLOW_DECRYPTED_DESTINATION", 8i64),
+        ("COPY_FILE_COPY_SYMLINK", 2048i64),
+        ("DUPLICATE_CLOSE_SOURCE", 1i64),
+        ("DUPLICATE_SAME_ACCESS", 2i64),
+        ("FILE_FLAG_FIRST_PIPE_INSTANCE", 524288i64),
+        ("FILE_FLAG_OVERLAPPED", 1073741824i64),
+        ("FILE_GENERIC_READ", 1179785i64),
+        ("FILE_GENERIC_WRITE", 1179926i64),
+        ("FILE_MAP_READ", 4i64),
+        ("FILE_TYPE_CHAR", 2i64),
+        ("GENERIC_READ", 2147483648i64),
+        ("GENERIC_WRITE", 1073741824i64),
+        ("NMPWAIT_WAIT_FOREVER", 4294967295i64),
+        ("OPEN_EXISTING", 3i64),
+        ("PAGE_READWRITE", 4i64),
+        ("PIPE_ACCESS_DUPLEX", 3i64),
+        ("PIPE_ACCESS_INBOUND", 1i64),
+        ("PIPE_READMODE_MESSAGE", 2i64),
+        ("PIPE_TYPE_MESSAGE", 4i64),
+        ("PIPE_UNLIMITED_INSTANCES", 255i64),
+        ("PIPE_WAIT", 0i64),
+        ("PROCESS_DUP_HANDLE", 64i64),
+        ("CREATE_NEW_CONSOLE", 16i64),
+        ("CREATE_NEW_PROCESS_GROUP", 512i64),
+        ("STD_INPUT_HANDLE", -10i64),
+        ("STD_OUTPUT_HANDLE", -11i64),
+        ("STD_ERROR_HANDLE", -12i64),
+        ("SW_HIDE", 0i64),
+        ("STARTF_USESTDHANDLES", 256i64),
+        ("STARTF_USESHOWWINDOW", 1i64),
+        ("STARTF_FORCEONFEEDBACK", 64i64),
+        ("STARTF_FORCEOFFFEEDBACK", 128i64),
+        ("ABOVE_NORMAL_PRIORITY_CLASS", 32768i64),
+        ("BELOW_NORMAL_PRIORITY_CLASS", 16384i64),
+        ("HIGH_PRIORITY_CLASS", 128i64),
+        ("IDLE_PRIORITY_CLASS", 64i64),
+        ("NORMAL_PRIORITY_CLASS", 32i64),
+        ("REALTIME_PRIORITY_CLASS", 256i64),
+        ("CREATE_NO_WINDOW", 134217728i64),
+        ("DETACHED_PROCESS", 8i64),
+        ("CREATE_DEFAULT_ERROR_MODE", 67108864i64),
+        ("CREATE_BREAKAWAY_FROM_JOB", 16777216i64),
+        ("WAIT_OBJECT_0", 0i64),
+        ("WAIT_ABANDONED_0", 128i64),
+        ("WAIT_TIMEOUT", 258i64),
+        ("SYNCHRONIZE", 1048576i64),
+    ] {
+        let object = instance.new_int(value);
+        instance.dict_set(namespace, name, object);
+    }
+    namespace
+}
+
+/// `msvcrt` 的**导入期最小面**（C 运行时控制台／fd 函数；调用如实报未接线）。
+#[cfg(windows)]
+fn build_msvcrt_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
+    let namespace = build_stub_module(
+        instance,
+        "msvcrt",
+        &[
+        "CrtSetReportFile",
+        "CrtSetReportMode",
+        "GetErrorMode",
+        "SetErrorMode",
+        "get_osfhandle",
+        "open_osfhandle",
+        "heapmin",
+        "kbhit",
+        "locking",
+        "setmode",
+        ],
+        "MSVCRT 控制台／fd：§12.24 最小导入面",
+    );
+    for (name, value) in [
+        ("CRTDBG_FILE_STDERR", 3i64),
+        ("CRTDBG_MODE_FILE", 2i64),
+        ("CRT_ASSERT", 2i64),
+        ("CRT_ERROR", 3i64),
+        ("CRT_WARN", 0i64),
+        ("SEM_FAILCRITICALERRORS", 1i64),
+        ("SEM_NOALIGNMENTFAULTEXCEPT", 4i64),
+        ("SEM_NOGPFAULTERRORBOX", 2i64),
+        ("SEM_NOOPENFILEERRORBOX", 32768i64),
+    ] {
+        let object = instance.new_int(value);
+        instance.dict_set(namespace, name, object);
+    }
+    namespace
+}
+
+/// `_overlapped` 的**导入期最小面**（重叠 I/O；调用如实报未接线）。
+#[cfg(windows)]
+fn build_overlapped_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
+    let namespace = build_stub_module(
+        instance,
+        "_overlapped",
+        &[
+        "BindLocal",
+        "ConnectPipe",
+        "CreateEvent",
+        "CreateIoCompletionPort",
+        "GetQueuedCompletionStatus",
+        "Overlapped",
+        "RegisterWaitWithQueue",
+        "SetEvent",
+        "UnregisterWait",
+        "UnregisterWaitEx",
+        "WSAConnect",
+        ],
+        "重叠 I/O：§12.24 最小导入面",
+    );
+    for (name, value) in [
+        ("ERROR_IO_PENDING", 997i64),
+        ("ERROR_NETNAME_DELETED", 64i64),
+        ("ERROR_OPERATION_ABORTED", 995i64),
+        ("ERROR_PIPE_BUSY", 231i64),
+        ("ERROR_PORT_UNREACHABLE", 1234i64),
+        ("INVALID_HANDLE_VALUE", -1i64),
+        ("SO_UPDATE_ACCEPT_CONTEXT", 28683i64),
+        ("SO_UPDATE_CONNECT_CONTEXT", 28688i64),
+    ] {
+        let object = instance.new_int(value);
+        instance.dict_set(namespace, name, object);
+    }
+    namespace
+}
+
+/// `_multiprocessing` 的**导入期最小面**（AST：`SemLock`／`sem_unlink` 的 from-import，
+/// 以及 `closesocket`／`recv`／`send` 的属性访问；真语义＝Windows 上的共享内存／信号量，另行立项）。
+#[cfg(windows)]
+fn build_multiprocessing_stub(
+    instance: &pyawa_core::Instance,
+) -> core::ptr::NonNull<pyawa_core::Header> {
+    build_stub_module(
+        instance,
+        "_multiprocessing",
+        &["SemLock", "sem_unlink", "closesocket", "recv", "send"],
+        "multiprocessing：§12.24 最小导入面",
+    )
 }
 
 /// **`_string` 占位**（第 722 轮 ✓）：`Lib/string/__init__.py` 导入期只 `import _string` ✓，
@@ -690,6 +1026,47 @@ pub fn set_module_search_path(instance: &pyawa_core::Instance, directories: &[St
     sys_module::set_path(instance, namespace, directories);
 }
 
+/// **宿主路径 ⇒ `sys.path` 里的 guest 名**（`PLAN §12.20` W5）。
+///
+/// `sys.path` 放的是 **guest 名**（VM 的 `resolve_path` 按 guest 空间解释它，再由 fs provider
+/// 映射回宿主；见 `pyawa-runtime` 的 `fs_windows` 模块文档）。Linux 上宿主绝对路径本来就以 `/`
+/// 开头 ⇒ **逐字节不变**；Windows 上宿主路径形如 `D:\a\b`（不是 guest 绝对名）⇒ 先转成
+/// `/D:/a/b`（`D:\` ⇒ `/D:/`），否则 import 会拿它当相对名、从 cwd 拼出**不存在**的路径。
+///
+/// 相对路径按**宿主 cwd** 绝对化后再转（安装发生在脚本执行前，guest cwd 初值就取自宿主 cwd，
+/// 两者同源）；宿主 cwd 取不到 ⇒ 原样转（如实：尽力而为，不伪造）。
+#[cfg(not(windows))]
+pub fn guest_path_for_sys_path(host: &std::path::Path) -> String {
+    host.to_string_lossy().into_owned()
+}
+
+/// Windows 版：见上一条（`D:\a\b` ⇒ `/D:/a/b`）。
+#[cfg(windows)]
+pub fn guest_path_for_sys_path(host: &std::path::Path) -> String {
+    // 相对路径先按宿主 cwd 绝对化：`foo` ⇒ `C:\cwd\foo` ⇒ `/C:/cwd/foo`。
+    let absolute;
+    let host = if host.is_absolute() {
+        host
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => {
+                absolute = cwd.join(host);
+                &absolute
+            }
+            Err(_) => host,
+        }
+    };
+    // guest 空间统一 `/`（`fs_windows` 对 `\` 也等价归一；这里先转好，`sys.path` 里是规范形）。
+    let unified = host.to_string_lossy().replace('\\', "/");
+    if unified.starts_with('/') {
+        // 已是 guest 形态（含根相对 `\foo` ⇒ `/foo`）：原样。
+        unified
+    } else {
+        // `D:/a/b` ⇒ `/D:/a/b`；空串 ⇒ `/`（guest 根）。
+        format!("/{unified}")
+    }
+}
+
 /// **组合根装配**（`CM-14`）：把**内建名字空间**与 `sys`（含 `stdout`／`stderr`）装进实例 ✓。
 ///
 /// `print` 的目的地就是这里的那个 `sys.stdout` 对象 ✓ —— `CM-26` 的链路
@@ -710,27 +1087,30 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     instance.dict_set(builtins, "__stdout_handle__", handle);
     instance.set_builtins(Some(builtins));
     // `sys.path`：`site.py`（`IM-24`）还没接 ⇒ 组合根先把**脚本所在目录**放进去 ✓
-    // （与参照实现的 `sys.path[0]` 同义 ✓；没有目录（如占位名）就留空表 ✓）
+    // （与参照实现的 `sys.path[0]` 同义 ✓；没有目录（如占位名）就留空表 ✓）。
+    // **W5**：每一格都经 [`guest_path_for_sys_path`] 转成 guest 名（Linux 上不变；Windows 上
+    // `D:\…` ⇒ `/D:/…`）—— `sys.path` 里必须是 guest 名，import 的 fs 解析才找得到。
     let mut path_entries: Vec<String> = Vec::new();
     if let Some(directory) = std::path::Path::new(program).parent() {
-        let text = directory.to_string_lossy().into_owned();
-        if !text.is_empty() {
-            path_entries.push(text);
+        if !directory.as_os_str().is_empty() {
+            path_entries.push(guest_path_for_sys_path(directory));
         }
     }
     // **`PYTHONPATH`**（`P3-33`）：参照的 `sys.path` 次序是 `[脚本所在目录, PYTHONPATH 各项, Lib]`
     // ——这里插在**脚本目录之后、`Lib/` 之前** ✓。用 `std::env::split_paths` 按平台分隔符拆 ✓；
     // **整体空串 ⇒ 不加项** ✓；**空组件** ⇒ 参照取 **cwd 的绝对路径** ✓（实测：`PYTHONPATH=:x`
     // ⇒ `sys.path[1]` 是 cwd）。`std::env` 不违反 `CX-4`（`posix_module` 有先例 ✓）。
+    // **W5**：三个来源（脚本目录／`PYTHONPATH` 每项（含空组件取 cwd 那条）／`Lib/`）全部经
+    // [`guest_path_for_sys_path`] 转换（Windows 上宿主绝对路径不是 guest 绝对名）。
     if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
         if !pythonpath.is_empty() {
             for component in std::env::split_paths(&pythonpath) {
                 if component.as_os_str().is_empty() {
                     if let Ok(cwd) = std::env::current_dir() {
-                        path_entries.push(cwd.to_string_lossy().into_owned());
+                        path_entries.push(guest_path_for_sys_path(&cwd));
                     }
                 } else {
-                    path_entries.push(component.to_string_lossy().into_owned());
+                    path_entries.push(guest_path_for_sys_path(&component));
                 }
             }
         }
@@ -751,7 +1131,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         cursor = directory.parent();
     }
     if let Some(lib_directory) = lib_directory {
-        path_entries.push(lib_directory.to_string_lossy().into_owned());
+        path_entries.push(guest_path_for_sys_path(&lib_directory));
     }
     sys_module::set_path(instance, sys, &path_entries);
     // `sys.argv` 按**真实入口**改写 ✓（`["<程序名>", <参数>…]`）
@@ -818,7 +1198,9 @@ let namespace = _sre_module::build(instance);
             .cast::<pyawa_core::Header>();
         instance.dict_set(modules, "builtins", module);
     }
-    for (name, build) in RUST_MODULES {
+    for (name, build) in module_builders() {
+        let name = *name;
+        let build = *build;
 
         let namespace = build(instance);
         // **原生函数的来源模块登记**（task-6／缺口2）——**唯一集中入口**：模块表里的每个模块
