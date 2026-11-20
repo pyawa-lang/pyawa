@@ -355,7 +355,8 @@ fn vtable_shape_matches_the_capability_contract() {
     assert!(vtable.stat_times.is_some());
     assert!(vtable.lutime.is_some());
     assert!(vtable.utime_ns.is_some());
-    assert!(vtable.pipe.is_none(), "CP-3：Windows 匿名管道尚未接线");
+    // W3 补齐（2026-11-19）：匿名管道已用 `CreatePipe` 真实现。
+    assert!(vtable.pipe.is_some(), "pipe");
     assert_eq!(provider.open_handle_count(), 0);
 }
 

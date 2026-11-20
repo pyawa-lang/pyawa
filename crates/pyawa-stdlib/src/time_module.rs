@@ -630,8 +630,10 @@ fn tuple_to_tm(
 ///
 /// **如实偏差** ✗：参照返回 `struct_time`（tuple 子类、带 `.tm_year` 等属性）；本层只有 9 元组
 /// （任务钉住的口径，见段首注释）。
-fn tm_to_tuple(instance: &Instance, tm: &pyawa_capabilities::clock::CpTm) -> NonNull<Header> {
-    let fields = [
+/// `tm` ⇒ 参照的**九字段**（`time.struct_time` 的序列前 9 项；`tm_to_tuple`／
+/// `tm_to_struct_time` 共用一处口径）。
+fn tm_fields(tm: &pyawa_capabilities::clock::CpTm) -> [i64; 9] {
+    [
         i64::from(tm.tm_year) + 1900,
         i64::from(tm.tm_mon) + 1,
         i64::from(tm.tm_mday),
@@ -643,7 +645,11 @@ fn tm_to_tuple(instance: &Instance, tm: &pyawa_capabilities::clock::CpTm) -> Non
         // C 的 `tm_yday` 是 0-based、Python 的 9 元组是 1-based。
         i64::from(tm.tm_yday) + 1,
         i64::from(tm.tm_isdst),
-    ];
+    ]
+}
+
+fn tm_to_tuple(instance: &Instance, tm: &pyawa_capabilities::clock::CpTm) -> NonNull<Header> {
+    let fields = tm_fields(tm);
     let values: Vec<NonNull<Header>> = fields
         .iter()
         .map(|field| instance.new_int(*field))
@@ -1325,10 +1331,31 @@ fn build_struct_time(instance: &Instance) -> Option<NonNull<Header>> {
 }
 
 /// `tm` ⇒ `struct_time` 实例（`localtime`／`gmtime` 的返回值 ✓）。
+///
+/// **参照 11 元面**（`tm_zone` 第 10 项 ＋ `tm_gmtoff` 经可选字典）：C 的 `struct tm` 有这两格，
+/// 参照的 `time.struct_time` 一定挂它们 ⇒ 这里按 `struct_time_init` 的既有入口（序列第 10 项＝
+/// `tm_zone`、字典 `{"tm_gmtoff": n}`）如实装载（provider 没给名字时按"UTC"——`gmtime` 就是这种）。
 fn tm_to_struct_time(instance: &Instance, tm: &pyawa_capabilities::clock::CpTm) -> Option<NonNull<Header>> {
-    let tuple = tm_to_tuple(instance, tm);
+    let fields = tm_fields(tm);
+    let zone_length = (tm.tm_zone_len as usize).min(tm.tm_zone.len());
+    let zone_name = if zone_length == 0 {
+        "UTC".to_owned()
+    } else {
+        String::from_utf8_lossy(&tm.tm_zone[..zone_length]).into_owned()
+    };
+    let mut values: Vec<NonNull<Header>> = fields
+        .iter()
+        .map(|field| instance.new_int(*field))
+        .collect();
+    values.push(instance.new_str(&zone_name));
+    let sequence = instance.new_tuple(values);
+    let extras = instance.new_dict();
+    let gmtoff = instance.new_int(tm.tm_gmtoff);
+    instance.dict_set(extras, "tm_gmtoff", gmtoff);
+    instance.release(gmtoff);
     let class = instance.type_named("struct_time")?;
-    let outcome = pyawa_core::call_value(instance, class.cast::<Header>(), &[tuple], &[]);
-    instance.release(tuple);
+    let outcome = pyawa_core::call_value(instance, class.cast::<Header>(), &[sequence, extras], &[]);
+    instance.release(sequence);
+    instance.release(extras);
     outcome.ok()
 }

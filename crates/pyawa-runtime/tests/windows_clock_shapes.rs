@@ -38,10 +38,10 @@ fn vtable_shape_matches_the_capability_contract() {
     assert!(vtable.now_ns.is_some());
     assert!(vtable.monotonic_ns.is_some());
     assert!(vtable.sleep_ns.is_some());
-    // `CP-3`：Windows 的日历／时区三槽未接（stdlib 走纯 UTC 回退）。
-    assert!(vtable.localtime.is_none());
-    assert!(vtable.strftime.is_none());
-    assert!(vtable.mktime.is_none());
+    // W2 补齐（2026-11-19）：日历／时区三槽已是真实现（UCRT；见 clock_windows 模块文档）。
+    assert!(vtable.localtime.is_some());
+    assert!(vtable.strftime.is_some());
+    assert!(vtable.mktime.is_some());
 }
 
 #[test]

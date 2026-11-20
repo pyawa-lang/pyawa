@@ -557,9 +557,8 @@ impl WindowsNet {
             getsockopt: Some(net_getsockopt),
             setsockopt: Some(net_setsockopt),
             poll: Some(net_poll),
-            // **`CP-3`／`CP-38`**：Windows 没有 `socketpair(2)`；loopback 模拟留后续轮次
-            // （`CP-5` 禁止把它编码成某个 errno）。
-            socketpair: None,
+            // **`CP-38`**：Windows 没有 `socketpair(2)` ⇒ loopback TCP 对模拟（与参照实现同法）。
+            socketpair: Some(net_socketpair),
             close: Some(net_close),
         }
     }
@@ -1257,6 +1256,142 @@ extern "C" fn net_poll(
 }
 
 /// `close(handle)`：从表里取走并 `closesocket`；**已关／未知 ⇒ `Machine` ＋ `EBADF`**（`CP-18`）。
+#[allow(unsafe_code)]
+/// **`socketpair`**（`CP-38`；`PLAN §12.20` W4 补齐）：Windows 没有 `socketpair(2)` ⇒
+/// **loopback TCP 对**模拟（与 CPython 在同一平台的做法同法：只支持 `AF_INET` ＋ `SOCK_STREAM`，
+/// 其它族／类型按真实机器语义回 `EAFNOSUPPORT`／`EPROTONOSUPPORT`）。
+///
+/// 做法：监听 `127.0.0.1:0` → 客户端连接 → accept 出另一端 → 关监听。两端都是**真** Winsock
+/// socket（`getsockname`／`select`／`send`／`recv` 全走既有 provider 路径）。
+#[allow(unsafe_code)]
+extern "C" fn net_socketpair(
+    state: *mut c_void,
+    af: i32,
+    kind: i32,
+    protocol: i32,
+    first: *mut SocketHandle,
+    second: *mut SocketHandle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 同其它槽位（provider 状态由 vtable 的 `state` 给出）。
+    let provider = unsafe { &*(state as *const WindowsNet) };
+    if first.is_null() || second.is_null() {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno_named("EFAULT") };
+        return CapStatus::Machine;
+    }
+    if af != family::AF_INET {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno_named("EAFNOSUPPORT") };
+        return CapStatus::Machine;
+    }
+    if kind != socket_type::SOCK_STREAM {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno_named("EPROTONOSUPPORT") };
+        return CapStatus::Machine;
+    }
+    let _ = protocol; // TCP 的 protocol＝0／IPPROTO_TCP；Winsock 接受 0
+    if let Err(errno) = wsa_startup() {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = errno };
+        return CapStatus::Machine;
+    }
+    let mut created: Vec<usize> = Vec::new();
+    let fail = |code: i32, created: &mut Vec<usize>, errno_out: *mut i32| -> CapStatus {
+        for socket in created.drain(..) {
+            // SAFETY: 这些 socket 都是本函数创建、尚未交出。
+            unsafe { sys::closesocket(socket) };
+        }
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = wsa_errno(code) };
+        CapStatus::Machine
+    };
+    // SAFETY: `socket(family=AF_INET, type=SOCK_STREAM, proto=0)`。
+    let listener = unsafe { sys::socket(family::AF_INET, kind, 0) };
+    if listener == INVALID_SOCKET {
+        // SAFETY: 无创建的 socket 可回收。
+        return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
+    }
+    created.push(listener);
+    let mut address = SockaddrIn {
+        family: family::AF_INET as u16,
+        port: port_to_net(0),
+        addr: [127, 0, 0, 1],
+        zero: [0; 8],
+    };
+    // SAFETY: `address` 是 16 字节 `SOCKADDR_IN`；监听失败按机器错误回收。
+    let bound = unsafe {
+        sys::bind(listener, (&raw const address).cast::<u8>(), SOCKADDR_IN_LEN)
+    };
+    if bound != 0 {
+        // SAFETY: 取得本线程最近错误码。
+        return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
+    }
+    // SAFETY: 同上。
+    let listening = unsafe { sys::listen(listener, 1) };
+    if listening != 0 {
+        // SAFETY: 取得本线程最近错误码。
+        return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
+    }
+    // **读回内核分配的端口**（`getsockname`）。
+    let mut length = SOCKADDR_IN_LEN;
+    // SAFETY: `address` 是活局部量、长度如实给出。
+    let named = unsafe {
+        sys::getsockname(listener, (&raw mut address).cast::<u8>(), &mut length)
+    };
+    if named != 0 {
+        // SAFETY: 取得本线程最近错误码。
+        return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
+    }
+    // SAFETY: `socket(family=AF_INET, type=SOCK_STREAM, proto=0)`。
+    let client = unsafe { sys::socket(family::AF_INET, kind, 0) };
+    if client == INVALID_SOCKET {
+        // SAFETY: 取得本线程最近错误码。
+        return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
+    }
+    created.push(client);
+    // SAFETY: `address` 是 16 字节 `SOCKADDR_IN`（刚由 `getsockname` 填好端口）。
+    let connected = unsafe {
+        sys::connect(client, (&raw const address).cast::<u8>(), SOCKADDR_IN_LEN)
+    };
+    if connected != 0 {
+        // SAFETY: 取得本线程最近错误码。
+        return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
+    }
+    let mut peer_length = SOCKADDR_IN_LEN;
+    let mut peer = SockaddrIn {
+        family: family::AF_INET as u16,
+        port: 0,
+        addr: [0; 4],
+        zero: [0; 8],
+    };
+    // SAFETY: 出参是活局部量、长度如实给出。
+    let accepted = unsafe {
+        sys::accept(
+            listener,
+            (&raw mut peer).cast::<u8>(),
+            &mut peer_length,
+        )
+    };
+    if accepted == INVALID_SOCKET {
+        // SAFETY: 取得本线程最近错误码。
+        return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
+    }
+    created.push(accepted);
+    // 监听 socket 不再需要：先关掉（不在句柄表里）。
+    // SAFETY: `listener` 是本函数创建、尚未交出的 socket。
+    unsafe { sys::closesocket(listener) };
+    let _ = created.pop(); // 同上，已手动关闭
+    let first_handle = provider.insert(client);
+    let second_handle = provider.insert(accepted);
+    // SAFETY: 出参由调用方提供。
+    unsafe {
+        *first = first_handle;
+        *second = second_handle;
+    }
+    CapStatus::Ok
+}
+
 #[allow(unsafe_code)]
 extern "C" fn net_close(
     state: *mut c_void,

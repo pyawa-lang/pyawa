@@ -145,8 +145,7 @@ impl WindowsFs {
             close: Some(fs_close),
             // **`CP-30` 的追加槽**：读文件时间戳（`os.stat_result` 的 `st_mtime` 一族）。
             stat_times: Some(fs_stat_times),
-            // **`CP-3`／`CP-5`**：Windows 匿名管道属后续轮次 ⇒ 只有该操作未实现（不是某个 errno）。
-            pipe: None,
+            pipe: Some(fs_pipe),
             // **round 109 追加槽**：不跟随符号链接的 `utime`（`shutil.copy2` 的 symlink 分支）。
             lutime: Some(fs_lutime),
             // **round 109 追加槽**：纳秒级、跟随叶子的 `utime`。
@@ -333,19 +332,63 @@ fn symlink_target(target: *const u8, len: usize) -> Result<PathBuf, i32> {
 // --------------------------------------------------------------------------- //
 
 /// 宿主 `Metadata` ⇒ [`FileInfo`]（`mode` 带类型位，见模块文档第 3 条）。
-fn info_of(meta: &std::fs::Metadata) -> FileInfo {
+/// `dev`／`ino` 的**真实值**（`PLAN §12.20` W3 补齐）：卷序列号作 `st_dev`、64 位文件索引作
+/// `st_ino`（`GetFileInformationByHandle`；与参照实现的 Windows 口径同源）。
+///
+/// 拿不到（权限／管道／旧文件系统）⇒ `(0, 0)`（`CP-23` 的保留面：不编造）。
+#[allow(unsafe_code)]
+fn dev_ino_of_handle(raw: isize) -> (u64, u64) {
+    if raw == 0 || raw == -1 {
+        return (0, 0);
+    }
+    let mut info = kernel32::ByHandleFileInformation::default();
+    // SAFETY: `raw` 是调用方保证有效的文件／目录句柄；出参是活局部量。
+    let ok = unsafe { kernel32::GetFileInformationByHandle(raw, &mut info) };
+    if ok == 0 {
+        return (0, 0);
+    }
+    let ino = (u64::from(info.file_index_high) << 32) | u64::from(info.file_index_low);
+    (u64::from(info.volume_serial), ino)
+}
+
+/// 路径 ⇒ `dev`／`ino`（打不开就 `(0, 0)`；**不**把失败当 `stat` 失败——`metadata` 已成功）。
+#[allow(unsafe_code)]
+fn dev_ino_of_path(path: &Path) -> (u64, u64) {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(core::iter::once(0)).collect();
+    // `GENERIC_READ=0x8000_0000`（目录用 `FILE_FLAG_BACKUP_SEMANTICS` 才能打开）；
+    // `FILE_SHARE_READ|WRITE|DELETE = 7`；`OPEN_EXISTING = 3`。
+    // SAFETY: `wide` 是 NUL 结尾的 UTF-16；其余是常量。
+    let raw = unsafe {
+        kernel32::CreateFileW(
+            wide.as_ptr(),
+            0x8000_0000,
+            7,
+            core::ptr::null_mut(),
+            3,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            0,
+        )
+    };
+    if raw == -1 {
+        return (0, 0);
+    }
+    let result = dev_ino_of_handle(raw);
+    // SAFETY: `raw` 由本函数打开、只关一次。
+    unsafe { kernel32::CloseHandle(raw) };
+    result
+}
+
+fn info_of(meta: &std::fs::Metadata, dev: u64, ino: u64) -> FileInfo {
     let is_dir = meta.is_dir();
     FileInfo {
         size: meta.len(),
         mode: if is_dir { S_IFDIR | DIR_MODE } else { S_IFREG | FILE_MODE },
         is_dir,
-        // **`dev`／`ino` 如实给 0**（`CP-23` 的保留面；不编造）：`volume_serial_number()`／
-        // `file_index()` 在 std 1.98 仍是 **unstable**（`windows_by_handle`，issue #63010）⇒
-        // 稳定版 provider 不能用；等它们稳定（或本 crate 另开 `GetFileInformationByHandle` FFI）
-        // 再填真值。**已知影响**：`os.path.samefile` 在 Windows 上因此不可信（与 `fs_posix` 的
-        // 真 `st_dev`／`st_ino` 不同口径）。
-        dev: 0,
-        ino: 0,
+        // `dev`／`ino` 用 `GetFileInformationByHandle` 的真值（卷序列号／64 位文件索引）；
+        // 拿不到 ⇒ `(0, 0)`（`CP-23` 的保留面：不编造）。
+        dev,
+        ino,
     }
 }
 
@@ -497,8 +540,9 @@ extern "C" fn fs_stat(
     };
     match std::fs::metadata(&path) {
         Ok(meta) => {
+            let (dev, ino) = dev_ino_of_path(&path);
             // SAFETY: 出参由调用方提供。
-            unsafe { *out = info_of(&meta) };
+            unsafe { *out = info_of(&meta, dev, ino) };
             CapStatus::Ok
         }
         Err(error) => {
@@ -527,8 +571,10 @@ extern "C" fn fs_fstat(
     };
     match file.metadata() {
         Ok(meta) => {
+            use std::os::windows::io::AsRawHandle;
+            let (dev, ino) = dev_ino_of_handle(file.as_raw_handle() as isize);
             // SAFETY: 出参由调用方提供。
-            unsafe { *out = info_of(&meta) };
+            unsafe { *out = info_of(&meta, dev, ino) };
             CapStatus::Ok
         }
         Err(error) => {
@@ -1193,6 +1239,105 @@ extern "C" fn fs_fsync(
             unsafe { *errno_out = errno_of(&error) };
             CapStatus::Machine
         }
+    }
+}
+
+/// **`pipe()`**（`PLAN §12.20` W3 补齐）：`CreatePipe` 造匿名管道，两端作为**不透明句柄**交出
+/// （读端先、写端后）。句柄用 `std::fs::File::from_raw_handle` 接管 ⇒ 既有的 `fs_read`／
+/// `fs_write`／`fs_close` 直接可用（读／写／释放语义与普通文件同一张表）。
+#[allow(unsafe_code)]
+extern "C" fn fs_pipe(
+    state: *mut c_void,
+    read_out: *mut Handle,
+    write_out: *mut Handle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::windows::io::FromRawHandle;
+    if read_out.is_null() || write_out.is_null() {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = fallback_errno("EFAULT") };
+        return CapStatus::Machine;
+    }
+    // SAFETY: 同 `fs_read`（只读地取 provider 状态）。
+    let provider = unsafe { &*(state as *const WindowsFs) };
+    let mut read_handle: isize = 0;
+    let mut write_handle: isize = 0;
+    // SAFETY: 两个出参都是活局部量；不继承、不给安全属性、默认 0 缓冲。
+    let created = unsafe {
+        kernel32::CreatePipe(&mut read_handle, &mut write_handle, core::ptr::null_mut(), 0)
+    };
+    if created == 0 {
+        // SAFETY: 出参由调用方提供。
+        unsafe { *errno_out = win32_errno(kernel32::GetLastError() as i32) };
+        return CapStatus::Machine;
+    }
+    // SAFETY: `CreatePipe` 交出两份**新**句柄所有权，交给 `File` 接管（失败路径不会到这里）。
+    let read_file = unsafe {
+        std::fs::File::from_raw_handle(read_handle as std::os::windows::io::RawHandle)
+    };
+    // SAFETY: 同上。
+    let write_file = unsafe {
+        std::fs::File::from_raw_handle(write_handle as std::os::windows::io::RawHandle)
+    };
+    let read_id = provider.next.fetch_add(1, Ordering::Relaxed);
+    let write_id = provider.next.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut files = provider.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        files.insert(read_id, read_file);
+        files.insert(write_id, write_file);
+    }
+    // SAFETY: 出参由调用方提供。
+    unsafe {
+        *read_out = Handle(read_id);
+        *write_out = Handle(write_id);
+    }
+    CapStatus::Ok
+}
+
+/// `kernel32` 的 C 符号（`CreatePipe`；本 crate 是平台集中点）。
+#[allow(unsafe_code)]
+mod kernel32 {
+    use core::ffi::c_void;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        /// 匿名管道：成功写两个**新**句柄并返回非 0。
+        pub fn CreatePipe(read: *mut isize, write: *mut isize, attrs: *mut c_void, size: u32) -> i32;
+        /// 本线程最近一次 Win32 错误码。
+        pub fn GetLastError() -> u32;
+        /// 打开文件／目录（拿 `BY_HANDLE_FILE_INFORMATION`；`dev`／`ino` 用）。
+        pub fn CreateFileW(
+            name: *const u16,
+            desired_access: u32,
+            share_mode: u32,
+            attrs: *mut c_void,
+            creation_disposition: u32,
+            flags_and_attributes: u32,
+            template: isize,
+        ) -> isize;
+        /// 句柄 ⇒ 卷序列号／文件索引（`BY_HANDLE_FILE_INFORMATION`）。
+        pub fn GetFileInformationByHandle(handle: isize, info: *mut ByHandleFileInformation) -> i32;
+        /// 关句柄。
+        pub fn CloseHandle(handle: isize) -> i32;
+    }
+
+    /// `BY_HANDLE_FILE_INFORMATION`（`fileapi.h`；52 字节）。
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct ByHandleFileInformation {
+        pub attributes: u32,
+        pub creation_low: u32,
+        pub creation_high: u32,
+        pub access_low: u32,
+        pub access_high: u32,
+        pub write_low: u32,
+        pub write_high: u32,
+        pub volume_serial: u32,
+        pub file_size_high: u32,
+        pub file_size_low: u32,
+        pub number_of_links: u32,
+        pub file_index_high: u32,
+        pub file_index_low: u32,
     }
 }
 
