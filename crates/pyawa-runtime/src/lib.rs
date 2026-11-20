@@ -32,6 +32,10 @@ pub mod clock_windows;
 pub mod fs_windows;
 #[cfg(windows)]
 pub mod net_windows;
+#[cfg(windows)]
+pub mod win32_reg;
+#[cfg(windows)]
+pub mod win32_overlapped;
 // **Web（WASM）E2**：固定槽位 trampoline ＋ JS 填充协议（`PLAN §12.21` E2）。
 // 只在 wasm32 目标编译；宿主构建零影响。模块内放开 `unsafe_code`（FFI 入口与分配器，逐项有 SAFETY）。
 #[cfg(target_family = "wasm")]
@@ -211,6 +215,14 @@ fn install_library(state: *mut pa_state, program: &str) -> i32 {
     // SAFETY: state 由调用方保证存活。
     let instance = unsafe { &*state }.instance();
     pyawa_stdlib::install(instance, program, &[]);
+    // **`PLAN §12.24` 的真实语义首批**：平台 FFI 留在本 crate（`CX-4`）⇒ 便利装配路径把
+    // stdlib 的 `winreg` 诚实桩替换成真实 Win32 注册表实现（裸 ABI 宿主不注入，仍如实 NotImplemented）。
+    #[cfg(windows)]
+    win32_reg::install(instance);
+    // **§12.24 真实语义第二批**：`_winapi`／`_overlapped` 的最小真实语义（事件／IOCP 生命周期；
+    // 重叠 I/O 数据面如实 NotImplemented）。
+    #[cfg(windows)]
+    win32_overlapped::install(instance);
     status::PA_OK
 }
 

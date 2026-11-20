@@ -4,7 +4,8 @@
 //! `code` 一族的 Windows 分支在导入期就要 `winreg`／`_winapi`／`msvcrt`／`_overlapped`
 //! ⇒ `ModuleNotFoundError` 挡住整条导入链。本层给的是**诚实桩**：
 //! 1. **导入成功**且 `sys.builtin_module_names` 里有它们（模块表＝一处真相）；
-//! 2. 未接调用**如实** `NotImplementedError`（`CM-8`：不静默给假值）；
+//! 2. 未接调用**如实** `NotImplementedError`（`CM-8`：不静默给假值）；`winreg` 在
+//!    `paL_newstate` 便利路径上已是**真实实现**（§12.24），这里改钉"缺键 → FileNotFoundError"；
 //! 3. `_winapi` 的**导入期常量**（AST 扫描出的 4 个）是真整数值，不是函数对象。
 #![cfg(windows)]
 #![allow(unused_unsafe)]
@@ -71,14 +72,16 @@ constants_ok = 1 if (
     and _winapi.ERROR_BROKEN_PIPE == 109
     and _winapi.ERROR_NETNAME_DELETED == 64
 ) else 0
+# `paL_newstate` 是**便利装配路径** ⇒ `winreg` 已是真实 Win32 实现（§12.24 首批）：
+# 缺键应报 `FileNotFoundError`，而不是桩的 `NotImplementedError`。
 try:
-    winreg.OpenKey(0, 'probe')
-except NotImplementedError:
-    winreg_raises = 1
+    winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Software\\PyawaW32RegTestMissingZZZ')
+except FileNotFoundError:
+    winreg_real = 1
 except BaseException:
-    winreg_raises = 0
+    winreg_real = 0
 else:
-    winreg_raises = 0
+    winreg_real = 0
 try:
     msvcrt.get_osfhandle(0)
 except NotImplementedError:
@@ -116,7 +119,7 @@ multiprocessing_ok = 1 if hasattr(_multiprocessing, 'SemLock') else 0
     for name in [
         "builtin_ok",
         "constants_ok",
-        "winreg_raises",
+        "winreg_real",
         "msvcrt_raises",
         "names_ok",
         "from_constants_ok",
