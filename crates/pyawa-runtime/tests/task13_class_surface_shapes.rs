@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **类/类型对象面三件**（task-13 #b/#c/#d）的端到端对拍验收与回归。
 //!
 //! 探针与**本机 `python3` 3.14.4** 跑同一段脚本、逐行一致（期望串逐字节钉住）：

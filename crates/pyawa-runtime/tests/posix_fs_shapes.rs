@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **`os.getcwd`／`os.getcwdb`／`os.readlink`**（task-10 ✓；立据＝`sysconfig` 一族的 import 闸
 //! —— `Lib/posixpath.py` 的 `realpath` 对**绝对路径**也调 `os.getcwd()`／`os.readlink()`，
 //! `sysconfig/__init__.py:219` 的 `_safe_realpath(sys.executable)` 经它 ✓；另 `test.support` 链的

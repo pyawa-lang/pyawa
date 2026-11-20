@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **`inspect.getattr_static`／`getset_descriptor` 面**（task-8／缺口4）的端到端验收。
 //!
 //! 缺口链（修前实测）：`Lib/types.py` 的 `GetSetDescriptorType = type(FunctionType.__code__)`

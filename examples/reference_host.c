@@ -24,6 +24,9 @@
  *   cargo build -p pyawa-abi
  *   cc examples/reference_host.c -I crates/pyawa-abi/include target/debug/libpyawa_abi.a \
  *      -lpthread -ldl -lm -o /tmp/reference_host && /tmp/reference_host
+ *   （Windows/MSVC（`PLAN §12.20` W6）：`cl /nologo /I crates\pyawa-abi\include
+ *      examples\reference_host.c target\debug\pyawa_abi.lib /Fe:reference_host.exe`；
+ *      CI 由 `tests/ci/t_ref_host.py --release` 真编译真运行）
  *
  * 头文件 `pa.h` 是**唯一**的 ABI 依赖；本文件之外不需要任何 pyawa 内部头（AB-6）。
  * 宿主 API 的参数都按 `pa_sig` 内联声明（AB-51）；注解表达式留 NULL（宿主可不声明类型）。
@@ -33,7 +36,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h> /* `PLAN §12.20` W6：Windows 上 clock／临时目录用 Win32（无 POSIX） */
+#define PY_PATH_SEP "\\"
+#else
 #include <unistd.h>
+#define PY_PATH_SEP "/"
+#endif
 
 /* ---- 宿主自己的状态（provider 状态、配额、超时预算都在宿主侧 ✓） ------------------ */
 typedef struct {
@@ -46,9 +55,14 @@ typedef struct {
 
 static long long now_ms(void)
 {
+#ifdef _WIN32
+    /* 单调毫秒；参考宿主只需要"协作式超时"的量级（与 POSIX 分支同口径）。 */
+    return (long long)GetTickCount64();
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
 }
 
 /* 从一个 NULL 结尾的字符串参数取「可比较的借用」（pa_to* 的视图只在下一次调用前有效 ✓）。 */
@@ -78,9 +92,20 @@ static int push_ok_string(pa_state *state, const char *text)
 static pa_cap_status host_clock_now_ns(void *state, int64_t *out_ns)
 {
     (void)state; /* provider 状态：本示例无 */
+#ifdef _WIN32
+    /* FILETIME：1601-01-01 起的 100ns；与 Unix 纪元差 11644473600 s。 */
+    FILETIME file_time;
+    ULARGE_INTEGER value;
+    GetSystemTimeAsFileTime(&file_time);
+    value.LowPart = file_time.dwLowDateTime;
+    value.HighPart = file_time.dwHighDateTime;
+    if (value.QuadPart < 116444736000000000ULL) return PA_CAP_MACHINE;
+    *out_ns = (int64_t)(value.QuadPart - 116444736000000000ULL) * 100LL;
+#else
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return PA_CAP_MACHINE;
     *out_ns = (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+#endif
     return PA_CAP_OK;
 }
 
@@ -132,7 +157,7 @@ static int host_read(pa_state *state)
         return paL_errorf(state, "%s (rule: single-segment)", ctx->message);
     }
     char path[1024];
-    if ((size_t)snprintf(path, sizeof path, "%s/%s", ctx->root, name) >= sizeof path)
+    if ((size_t)snprintf(path, sizeof path, "%s" PY_PATH_SEP "%s", ctx->root, name) >= sizeof path)
         return pa_error(state, "sandbox: path too long");
     FILE *file = fopen(path, "rb");
     if (file == NULL) return pa_error(state, "sandbox: file not in root");
@@ -209,15 +234,37 @@ static int run_python(pa_state *state, const char *source, const char *chunk)
     return pa_exec_string(state, source, -1, chunk, "python", NULL);
 }
 
+#ifdef _WIN32
+/* Windows 没有 `mkdtemp(3)`：在 `%TEMP%` 下用"时间戳＋序号"建唯一目录（沙箱根）。 */
+static int make_temp_dir(char *out, size_t capacity)
+{
+    char base[MAX_PATH];
+    DWORD written = GetTempPathA((DWORD)sizeof base, base);
+    if (written == 0 || written >= (DWORD)sizeof base) return -1;
+    unsigned long long stamp = (unsigned long long)GetTickCount64();
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        int length = snprintf(out, capacity, "%spyawa-reference-host-%llu-%d", base, stamp, attempt);
+        if (length < 0 || (size_t)length >= capacity) return -1;
+        if (CreateDirectoryA(out, NULL) != 0) return 0;
+        if (GetLastError() != ERROR_ALREADY_EXISTS) return -1;
+    }
+    return -1;
+}
+#endif
+
 int main(void)
 {
     memset(&g_ctx, 0, sizeof g_ctx);
+#ifdef _WIN32
+    if (make_temp_dir(g_ctx.root, sizeof g_ctx.root) != 0) return 1;
+#else
     snprintf(g_ctx.root, sizeof g_ctx.root, "/tmp/pyawa-reference-host-XXXXXX");
     if (mkdtemp(g_ctx.root) == NULL) return 1; /* 沙箱根（临时目录，不是业务假设） */
+#endif
     g_ctx.deadline_ms = 50;
 
     char hello_path[1024];
-    snprintf(hello_path, sizeof hello_path, "%s/hello.txt", g_ctx.root);
+    snprintf(hello_path, sizeof hello_path, "%s" PY_PATH_SEP "hello.txt", g_ctx.root);
     FILE *hello = fopen(hello_path, "wb");
     if (hello == NULL) return 1;
     fputs("hello from host", hello);
@@ -311,8 +358,13 @@ int main(void)
     /* ⑦ 销毁（AB-57）；即便还有存活实例，宿主负责顺序与时机。 */
     pa_destroy(other);
     pa_destroy(state);
+#ifdef _WIN32
+    DeleteFileA(hello_path);
+    RemoveDirectoryA(g_ctx.root);
+#else
     unlink(hello_path);
     rmdir(g_ctx.root);
+#endif
     printf("done\n");
     return 0;
 }

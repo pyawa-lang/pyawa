@@ -59,6 +59,24 @@ impl Provider {
     }
 }
 
+/// **guest 名 ⇒ 宿主路径**（`W6`）：VM 交给 `fs` provider 的是 guest 绝对名（`/D:/a/b`）；
+/// 本测试的 provider 是"宿主侧实现"，Windows 上必须映射回宿主路径（Unix 上两者同形）。
+fn provider_host_path(text: &str) -> PathBuf {
+    if !cfg!(windows) {
+        return PathBuf::from(text);
+    }
+    let unified = text.replace('/', "\\");
+    let unified = match unified.strip_prefix("\\\\?\\") {
+        Some(rest) => rest.to_owned(),
+        None => unified,
+    };
+    let bytes = unified.as_bytes();
+    if bytes.len() >= 3 && bytes[0] == b'\\' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':' {
+        return PathBuf::from(&unified[1..]);
+    }
+    PathBuf::from(unified)
+}
+
 extern "C" fn provider_open(
     state: *mut c_void,
     name: *const u8,
@@ -77,7 +95,8 @@ extern "C" fn provider_open(
         unsafe { *errno_out = 2 };
         return CapStatus::Machine;
     };
-    let path = Path::new(text);
+    let path_buf = provider_host_path(text);
+    let path = path_buf.as_path();
     // **根夹紧**：虚拟机解析后的名字必须是本 provider 根下的路径（`..` 已被解析，不做二次拼接）。
     if !path.starts_with(&provider.root) || text.contains("..") {
         // SAFETY: 出参由调用方提供。
@@ -268,6 +287,20 @@ impl Drop for Sandbox {
     }
 }
 
+/// `pa_setpath` 的**可见结果**在 Windows 上应是 guest 名（`/D:/…`），Linux 上与宿主同形。
+fn sys_path_entry(directory: &Path) -> String {
+    let host = directory.to_string_lossy();
+    if !cfg!(windows) {
+        return host.into_owned();
+    }
+    let unified = host.replace('\\', "/");
+    if unified.starts_with('/') {
+        unified
+    } else {
+        format!("/{unified}")
+    }
+}
+
 /// 把 `dirs` 设成实例的 `sys.path`（`AB-68`）。
 ///
 /// # Safety
@@ -321,7 +354,7 @@ fn two_host_directories_are_importable() {
         error_message(state)
     );
     assert_eq!(global_int(state, "path_len"), 2);
-    assert_eq!(global_text(state, "first_entry"), first.to_string_lossy());
+    assert_eq!(global_text(state, "first_entry"), sys_path_entry(&first));
     // SAFETY: state 由 pa_create 交回、尚未销毁。
     unsafe { pa_destroy(state) };
 }
@@ -347,7 +380,7 @@ fn script_can_extend_sys_path_with_the_same_semantics() {
     }
     let script = format!(
         "import sys\nsys.path.append({second:?})\nimport mod_b\ngot = mod_b.VALUE\n",
-        second = second.to_string_lossy()
+        second = sys_path_entry(&second)
     );
     assert_eq!(
         run(state, &script),

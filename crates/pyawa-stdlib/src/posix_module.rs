@@ -2496,7 +2496,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "WNOHANG", instance.new_int(WNOHANG));
     // **`__all__` 跟着函数面走** ✓：`os.py:55` 的 `from posix import *` 读的就是它 ✓
     //（之前是**空表** ✗ —— 如实记了"函数面未落地" ✓ ⇒ 现在有一条就列一条 ✓）。
-    let exports = instance.new_list(vec![
+    let mut exports_items: Vec<core::ptr::NonNull<Header>> = vec![
         instance.new_str("stat"),
         instance.new_str("lstat"),
         instance.new_str("stat_result"),
@@ -2561,7 +2561,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("WIFSTOPPED"),
         instance.new_str("WSTOPSIG"),
         instance.new_str("WNOHANG"),
-    ]);
+    ];
+    // **Windows 面**（`W6`）：CPython 的 `nt` 没有 `sysconf`（`os.sysconf` 是 Unix-only）⇒
+    // 从导出表摘掉；`Lib/asyncio/selector_events.py` 的 `hasattr` 分支才与参照一致（Linux 不动）。
+    if cfg!(windows) {
+        exports_items.retain(|item| instance.text_of(*item) != Some("sysconf"));
+    }
+    let exports = instance.new_list(exports_items);
     // **`os.DirEntry`／`os.ScandirIterator` 类型对象**（round 95）：`Lib/filecmp.py` 用
     // `isinstance(entry, os.DirEntry)`（`os.DirEntry` 必须是**模块属性** ✓）；参照的 `os.__all__`
     // 也含这两个名字 ✓。类型在首次 `scandir` 时建（这里先建好并导出 ✓）。
@@ -2599,12 +2605,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let cpu_count =
         crate::builtins_module::make_native(instance, "cpu_count", cpu_count_native as pyawa_core::NativeFn);
     instance.dict_set(namespace, "cpu_count", cpu_count);
-    let sysconf = crate::builtins_module::make_native(
-        instance,
-        "sysconf",
-        sysconf_native as pyawa_core::NativeFn,
-    );
-    instance.dict_set(namespace, "sysconf", sysconf);
+    if !cfg!(windows) {
+        let sysconf = crate::builtins_module::make_native(
+            instance,
+            "sysconf",
+            sysconf_native as pyawa_core::NativeFn,
+        );
+        instance.dict_set(namespace, "sysconf", sysconf);
+    }
     let create_environ = crate::builtins_module::make_native(
         instance,
         "_create_environ",

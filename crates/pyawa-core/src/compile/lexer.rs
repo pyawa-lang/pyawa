@@ -428,6 +428,17 @@ fn is_identifier_continue(character: char) -> bool {
 }
 
 pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
+    // **universal newlines**（`MS-19`：合法 Python 不得被拒）：CPython 的词法器把 `\r\n`／
+    // 单个 `\r` 都当**换行**；不归一时，CRLF 源码里"块内空行"会先看到 `\r`（而不是 `\n`）⇒
+    // 被当成非空行 ⇒ 触发**假 Dedent**（实测 `Lib/os.py` 转 CRLF 后 411:8「缩进对不齐」）。
+    // 归一后行号不变、列号在行尾最多差 1（与参照的"源行已翻译"口径一致）。
+    let normalized;
+    let source = if source.contains('\r') {
+        normalized = source.replace("\r\n", "\n").replace('\r', "\n");
+        normalized.as_str()
+    } else {
+        source
+    };
     let characters: Vec<char> = source.chars().collect();
     let mut index = 0usize;
     let mut lexemes = Vec::new();

@@ -14,6 +14,7 @@
 """
 
 from __future__ import annotations
+import os
 import subprocess
 
 import argparse
@@ -1126,7 +1127,8 @@ def check_next_head_line() -> list[str]:
     if not match:
         return ["NEXT.md 的 HEAD 行不是短哈希（CX-24）：应写 `git rev-parse --short HEAD` 的输出，禁止写指针"]
     proc = subprocess.run(["git", "cat-file", "-e", f"{match.group(1)}^{{commit}}"],
-                          cwd=path.parent, capture_output=True, text=True)
+                          cwd=path.parent, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         return [f"NEXT.md HEAD 行写 {match.group(1)}，但仓库里解析不到（CX-24）"]
     return []
@@ -1343,6 +1345,13 @@ def build_checks() -> list[Check]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # **Windows 控制台默认 cp1252**（GitHub `windows-latest` 实测）：中文输出会
+    # `UnicodeEncodeError` ⇒ 本闸门在 Windows 上必须显式切到 UTF-8（子进程读取同样显式）。
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="tests/ci 的静态检查")
     parser.add_argument("--list", action="store_true", help="只列出检查项，不执行")
     args = parser.parse_args(argv)
@@ -1369,6 +1378,9 @@ def main(argv: list[str] | None = None) -> int:
         [sys.executable, str(pathlib.Path(__file__).resolve().parents[2] / "tools" / "check_p3_numbers.py")],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     print(f"[{'PASS' if guard.returncode == 0 else 'FAIL'}] P3-NUMBERS (CX-19) P*- 队列编号唯一（墓碑算定义）")
     if guard.returncode != 0:
@@ -1379,18 +1391,29 @@ def main(argv: list[str] | None = None) -> int:
     # `tools/corpus_coverage.py`，这里只调用（与 `P3-NUMBERS` 同一外挂先例 ✓）。
     # 先决：**对拍报告要新鲜** —— `tools/slowcheck.sh` 里本步之前是 `cargo test --workspace`
     # （会重写 `target/conformance/report.md`／`self-check.md`）⇒ ④⑤ 读到的是本轮结果 ✓。
-    coverage = subprocess.run(
-        [sys.executable, str(pathlib.Path(__file__).resolve().parents[2] / "tools" / "corpus_coverage.py")],
-        capture_output=True,
-        text=True,
-    )
-    print(
-        f"[{'PASS' if coverage.returncode == 0 else 'FAIL'}] M3-COVERAGE (M3-②) "
-        "判据② 覆盖率（语料／Lib 模块／Lib.test／对拍口径／MS-14）"
-    )
-    if coverage.returncode != 0:
-        print(coverage.stdout.strip())
-    failed += bool(coverage.returncode)
+    # **例外（`PLAN §12.20` W1）**：无对拍产物的平台 job（Windows 最小构建；跨平台对拍属 W6）
+    # 用**显式**环境变量把这项标 `SKIP`（不是 PASS）——Linux 的 fast／full 不设它 ⇒ 仍强制 ✓。
+    if os.environ.get("PYAWA_CHECK_SKIP_COVERAGE") == "1":
+        print(
+            "[SKIP] M3-COVERAGE (M3-②) 判据② 覆盖率（`PYAWA_CHECK_SKIP_COVERAGE=1`："
+            "本平台 job 不产对拍报告，如 Windows W1；Linux CI 不设此变量 ⇒ 仍强制）"
+        )
+    else:
+        coverage = subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).resolve().parents[2] / "tools" / "corpus_coverage.py")],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        print(
+            f"[{'PASS' if coverage.returncode == 0 else 'FAIL'}] M3-COVERAGE (M3-②) "
+            "判据② 覆盖率（语料／Lib 模块／Lib.test／对拍口径／MS-14）"
+        )
+        if coverage.returncode != 0:
+            print(coverage.stdout.strip())
+        failed += bool(coverage.returncode)
 
     # 计数含**两个外挂守卫**（P3-NUMBERS ＋ M3-COVERAGE）：`build_checks()` 只装 `T-CX-*`，
     # 它们在外挂；先前汇总只报 `len(checks)` ⊆ 与逐项 `[PASS]` 行数对不上。

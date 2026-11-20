@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **`CP-21`／`CP-32` 的 VM 侧路径解析**：`NaiveFs` 反证（安全**完全**来自 VM）。
 //!
 //! # 强验收形态

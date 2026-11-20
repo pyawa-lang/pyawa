@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **`AB-54`**：宿主函数的 `__text_signature__` 是注册信息（`pa_sig`）的**运行期投影**。
 //!
 //! 口径：

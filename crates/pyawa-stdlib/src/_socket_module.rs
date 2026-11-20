@@ -60,6 +60,17 @@ pub const NAME: &str = "_socket";
 pub const DOC: &str = "Implementation module for socket operations.\n\nSee the socket module for documentation.";
 
 /// 整型常量（**值照参照实测** ✓：本机 CPython 3.14.4／Linux）。
+/// **Windows 面**（`W6`）：CPython 的 Windows 构建没有这些名字——`AF_UNIX` 是 Unix-only、
+/// `sendmsg`／`recvmsg` 一族也是 Unix-only ⇒ `_socket` 在 Windows 上**不登记**它们，
+/// `Lib/asyncio` 的 `hasattr` 分支（`streams.__all__`、`selector_events.SC_IOV_MAX`）才与参照一致。
+fn hidden_on_windows(name: &str) -> bool {
+    cfg!(windows)
+        && matches!(
+            name,
+            "AF_UNIX" | "sendmsg" | "sendmsg_afalg" | "recvmsg" | "recvmsg_into"
+        )
+}
+
 const INT_CONSTANTS: &[(&str, i64)] = &[
     ("AF_ALG", 38), ("AF_APPLETALK", 5), ("AF_ASH", 18), ("AF_ATMPVC", 8),
     ("AF_ATMSVC", 20), ("AF_AX25", 3), ("AF_BLUETOOTH", 31), ("AF_BRIDGE", 7),
@@ -281,6 +292,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     let mut exports: Vec<&'static str> = Vec::with_capacity(INT_CONSTANTS.len() + 8);
     for (name, value) in INT_CONSTANTS {
+        if hidden_on_windows(name) {
+            continue;
+        }
         instance.dict_set(namespace, name, instance.new_int(*value));
         exports.push(name);
     }
@@ -415,6 +429,9 @@ fn build_socket_class(instance: &Instance) -> Result<NonNull<Header>, pyawa_core
     let class_namespace = instance.new_dict();
     // **其余方法面**先按"如实未接线"登记（`P3-29` 首片只接 `socketpair` 一族 ✓）。
     for name in SOCKET_METHODS {
+        if hidden_on_windows(name) {
+            continue;
+        }
         let function = make_native(instance, name, socket_method_stub);
         instance.dict_set(class_namespace, name, function);
     }

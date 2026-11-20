@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **只定位、不执行**（第 222 轮；`IM-31`：finder 的 `find_spec` 只能"找" ✗ 不许"装" ✓）：
 //! `can_locate_through_bridge` 报告"找得到吗" ✓ —— 而**绝不能**顺手把模块装掉 ✗
 //! （把"装"放进 `find_spec` 正是第 217／218 轮那条 SIGSEGV 的来源 ✓：嵌套导入会**重入**导入机制 ✗）。

@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **`IM-15` 的可执行判据**（第 212 轮）：模块 I/O **经能力层** ✓。
 //!
 //! 两边的**装配完全相同** ✓（都装 stdlib），只在**注册不注册 `fs` 域**上不同：

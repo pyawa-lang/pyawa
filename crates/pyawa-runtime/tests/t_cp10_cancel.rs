@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **`T-CP-10` 的可执行验收**（round 12）：可异步化调用**挂起时中断实例** ⇒ 调用以"已取消"返回、
 //! 无后续副作用、脚本不悬挂（`SPEC-capabilities.md` §11；`CP-19`／`CP-27`／`CP-28`）。
 //!

@@ -779,10 +779,32 @@ fn set_search_path(instance: &Instance, entries: &[String]) -> bool {
     let Some(namespace) = pyawa_core::mounted_instance_dict(instance, sys_module) else {
         return false;
     };
-    let items: Vec<NonNull<Header>> = entries.iter().map(|entry| instance.new_str(entry)).collect();
+    let items: Vec<NonNull<Header>> = entries
+        .iter()
+        .map(|entry| instance.new_str(&guest_path_entry(entry)))
+        .collect();
     let path = instance.new_list(items);
     instance.dict_set(namespace, "path", path);
     true
+}
+
+/// **宿主路径 ⇒ guest 名**（`AB-68`，`W6`）：`sys.path` 存的是 guest 名（VM 的 `resolve_path`
+/// 按 guest 空间解释，再由 `fs` provider 映射回宿主）。Linux 上宿主绝对路径本来就以 `/` 开头、
+/// 与 guest 同形 ⇒ **逐字节不变**；Windows 上 `D:\a\b` ⇒ `/D:/a/b`（盘符路径），相对路径**原样**
+/// （VM 用 guest cwd 解析，而 guest cwd 初值取自宿主 cwd ⇒ 语义一致）。
+fn guest_path_entry(entry: &str) -> String {
+    if !cfg!(windows) {
+        return entry.to_owned();
+    }
+    let unified = entry.replace('\\', "/");
+    if unified.starts_with('/') {
+        return unified; // 已是 guest 形（含 UNC）
+    }
+    let bytes = unified.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return format!("/{unified}");
+    }
+    entry.to_owned()
 }
 
 /// `pa_setpath(pa_state *state, const char *const *dirs, size_t n)`：**每实例 `sys.path`**（`AB-68`）。

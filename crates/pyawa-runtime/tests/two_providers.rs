@@ -1,3 +1,5 @@
+#![cfg(unix)] // 平台专测：直接依赖 Unix provider（POSIX fs/net/clock）或 Unix API。
+
 //! **M5 判据②** 的可执行验收：**同一脚本、两种 provider、写法不变**
 //! （`SPEC-capabilities.md` §11 的 `T-CP-11`；也覆盖 `T-CP-4`／`T-CP-5`／`T-CP-12` 的真实现面、
 //! `T-CP-7` 后半的销毁兜底释放、`T-CP-3` 的 Python 面 `select`／`os.dup`／`os.dup2`）。
