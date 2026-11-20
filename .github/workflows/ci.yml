@@ -37,6 +37,9 @@ jobs:
         run: tools/cargo.sh test --release -p pyawa-abi -p pyawa-core -p pyawa-lsp
       - name: 文档/规格/编号闸门（18 项）
         run: python3 tests/ci/check.py
+      # P0-2（PLAN §12.26）：归一化白名单自身的自检（规则坏了要立刻红，而不是等两平台比对）
+      - name: portability 归一化自检
+        run: python3 tests/portability/runner.py --self-test
       # PLAN §11.1 ④：check.py 之后对 407 语料（.py）跑 pyawa check——只编译不执行，
       # 期望 0 诊断、退出码 0（LSP 线①的语料回归闸）。
       - name: pyawa check 语料（407 个 .py ⇒ 0 诊断）
@@ -154,6 +157,46 @@ jobs:
         shell: bash
         env:
           PYAWA_CHECK_SKIP_COVERAGE: "1"
+
+  portability:
+    name: 脚本可移植性（P0-2：${{ matrix.os }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: python3
+          - os: windows-latest
+            python: python
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      # 本 job 只需任意 Python 3（runner 仅用标准库）；**不**装 3.14.4——Ubuntu 26.04 镜像
+      # 没有该版本的 setup-python 构建（首跑实测红），而参照版本只在 conformance 需要。
+      - name: 构建 pyawa（debug）
+        run: cargo build -p pyawa-runtime --bin pyawa
+      - name: 跑可移植语料（canonical JSON）
+        run: ${{ matrix.python }} tests/portability/runner.py --out portability-${{ matrix.os }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portability-${{ matrix.os }}
+          path: portability-${{ matrix.os }}.json
+          if-no-files-found: error
+
+  portability-compare:
+    name: 脚本可移植性（Linux×Windows 比对）
+    needs: portability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: portability-*
+          merge-multiple: true
+      - name: 同脚本跨平台同结果
+        run: python3 tests/portability/compare.py portability-ubuntu-latest.json portability-windows-latest.json
 
   full:
     name: 完整闸门（slowcheck 11 项）
