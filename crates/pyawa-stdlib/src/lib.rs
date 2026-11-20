@@ -338,9 +338,21 @@ fn build_winreg_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyaw
         ("HKEY_USERS", 2147483651i64),
         ("HKEY_PERFORMANCE_DATA", 2147483652i64),
         ("KEY_ALL_ACCESS", 983103i64),
+        // 值类型（Win32 公开取值；`§12.24` 真实语义首批写读这些类型）。
+        ("REG_NONE", 0i64),
         ("REG_SZ", 1i64),
         ("REG_EXPAND_SZ", 2i64),
+        ("REG_BINARY", 3i64),
         ("REG_DWORD", 4i64),
+        ("REG_DWORD_LITTLE_ENDIAN", 4i64),
+        ("REG_DWORD_BIG_ENDIAN", 5i64),
+        ("REG_LINK", 6i64),
+        ("REG_MULTI_SZ", 7i64),
+        ("REG_RESOURCE_LIST", 8i64),
+        ("REG_FULL_RESOURCE_DESCRIPTOR", 9i64),
+        ("REG_RESOURCE_REQUIREMENTS_LIST", 10i64),
+        ("REG_QWORD", 11i64),
+        ("REG_QWORD_LITTLE_ENDIAN", 11i64),
     ] {
         let object = instance.new_int(value);
         instance.dict_set(namespace, name, object);
