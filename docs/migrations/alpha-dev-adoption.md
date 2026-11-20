@@ -1,6 +1,6 @@
 # alpha 后 dev 提交采用台账（选择性采用）
 
-本台账是 `dev`（`fe23ed78`）相对 `main`（alpha）的 **88 个提交**的逐条裁决记录。`dev` 作为临时来源存在，**不建 `archive/alpha-dev`**；采用完成且本台账无悬空后删除 `dev`。
+本台账是 `dev`（`fe23ed78`）相对 `main`（alpha）的 **88 个提交**的逐条裁决记录。**已全部裁决**：6 组已采用进 `main`；asyncio/JSPI/wasm-async 仅报告、不采用代码。`dev` 作为临时来源已在 2026-11-21 删除；**不建 `archive/alpha-dev`**。
 
 - 前置：`docs/migrations/history-map.md`（pre-alpha dev 已在 `main` 历史中）。
 - 来源：`git log --reverse main..dev`（88 条；`main` = `a907cf…` alpha）。
@@ -12,14 +12,14 @@
 
 | 组 | 提交数 | 裁决 | 目标 |
 |---|---:|---|---|
-| `docs-other` | 3 | 选择性采用（随对应功能） | 随功能 PR |
-| `portability` | 5 | 采用 | feat/portability |
-| `frame-stack` | 5 | 采用 | feat/frame-stack |
-| `wasm-embedding` | 8 | 采用（ADR 确认定位后） | feat/wasm-embedding |
-| `windows-platform` | 40 | 采用 | feat/windows-platform |
+| `docs-other` | 3 | 随迁移收口文档采用 |
+| `portability` | 5 | 已采用 → main `7d1b0f0e` |
+| `frame-stack` | 5 | 已采用 → main `09800d64` |
+| `wasm-embedding` | 8 | 已采用 → main `4f9490cc`（E1–E5）＋ `a8d6ad8a`（P1） |
+| `windows-platform` | 40 | 已采用 → main `4b034ffa`（W1–W6）＋ `09b5c10a`（平台面补齐） |
 | `win32-real-semantics` | 19 | 采用 | feat/win32-real-semantics |
-| `asyncio-windows` | 3 | 待 ADR（改造采用或仅报告） | （待 ADR） |
-| `wasm-async-spike` | 5 | 仅报告（不采用代码） | spike/wasm-async（报告） |
+| `asyncio-windows` | 3 | 不采用代码（仅报告；ADR-002） |
+| `wasm-async-spike` | 5 | 仅报告（不采用；ADR-002） |
 
 ## 逐条清单
 
