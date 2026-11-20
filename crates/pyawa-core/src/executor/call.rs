@@ -249,6 +249,25 @@ fn reject_abstract_instantiation(
     Err(raise_builtin(instance, "TypeError", &message))
 }
 
+/// **字节码 `CALL` 的入口**（`PLAN §12.22` S2）：在调用 `call_callable` 前把"延迟目标"置为
+/// **本次被调对象**；`call_callable` 若真的到"要跑脚本函数体"那一步，就把准备好的帧交回
+/// [`crate::execute`] 的驱动循环（脚本调用不吃原生栈）。
+///
+/// 嵌套调用（类实例化里的 `__init__` 等）的目标不匹配 ⇒ 照旧递归执行（行为不变）。
+pub(crate) fn call_from_bytecode(
+    instance: &Instance,
+    callable: NonNull<Header>,
+    bound_self: Option<NonNull<Header>>,
+    args: Vec<NonNull<Header>>,
+    kwargs: Vec<(NonNull<Header>, NonNull<Header>)>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    instance.set_deferred_call_target(Some(callable));
+    let result = call_callable(instance, callable, bound_self, args, kwargs, opcode);
+    instance.set_deferred_call_target(None);
+    result
+}
+
 pub(crate) fn call_callable(
     instance: &Instance,
     callable: NonNull<Header>,
@@ -944,6 +963,15 @@ pub(crate) fn call_callable(
             "RecursionError",
             "maximum recursion depth exceeded",
         ));
+    }
+    // **S2：把帧延迟交回驱动**（只有"字节码 CALL 的**最外层**目标"才匹配——见
+    // [`call_from_bytecode`]；嵌套 `__init__` 等目标不匹配 ⇒ 递归路径照旧）。
+    if instance.deferred_call_target() == Some(callable) {
+        instance.set_deferred_call_target(None);
+        let raw = frame.as_ptr().cast::<Header>();
+        // **转移**这份帧引用给驱动（`Owned` 的 Drop 会释放；这里刻意不让它跑）。
+        core::mem::forget(frame);
+        return Err(ExecError::DeferredScriptCall { frame: raw });
     }
     static FRAME_DROP_DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let frame_debug = crate::diag::flag_cached("PYAWA_FRAME_DROP_DEBUG", &FRAME_DROP_DEBUG);

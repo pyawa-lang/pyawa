@@ -34,7 +34,7 @@
 | `DIV-2` | `format(x, 'n')` 的输出与参照实现不同（Pyawa 把 `'n'` 当 `'d'`，不做 locale 分组） | `CM-25`（locale 类差异进差异清单） | harness 把语料里 `'n'` 规格的**期望值**替换为同一对象 `'d'` 规格的结果再比对 | `425f1a7` · 3.14.4 |
 | `DIV-8` | `code.co_stacksize` 的**值**与参照实现不同（本层给**保守上界**，参照给精确值） | 规格只说「值栈深度以它为上界、越界必须报错」（`BC-43`）；`SPEC-bytecode.md` §2.4 把它列为**元信息**，**未规定**具体值 | harness 不比对 `co_stacksize` 的值，只比对「被遵守」（`T-BC-14` 的越界报错） | `2395bad` · 3.14.4 |
 | `DIV-10` | `signal.signal()` 注册的 handler **永不触发**（记账式、不投递）；`_signal.getsignal` 初值取**记账表**（`SIGINT`→`default_int_handler`、32／33→`None`、其余 `SIG_DFL`），不反映宿主进程继承的信号处置 | `docs/REQUIREMENTS.md`「信号面（2026-11-14）」行（方案 A：不做真实信号投递）／`docs/PLAN-milestones.md` §12.2 | harness 对「注册 handler 后是否被触发」的探针**归一为固定值「不触发」**；对依赖宿主继承处置的 `getsignal`／`signal` 前值探针（如 `SIGPIPE`／`SIGXFSZ` 初值）归一为记账表值（`SIG_DFL`＝0）；其余 `getsignal`／`signal` 返回值照参照比对、不归一 | `9af71464` · 3.14.4 |
-| `DIV-11` | 递归上限与参照不同：本层默认 **64**（参照 1000），且 `sys.setrecursionlimit` **只降不升** | `PLAN §12.22`（可见语义的规格条款**待补**；本层为如实登记的临时偏差） | harness **不比对**深度阈值；以固定用例断言「无限递归抛 `RecursionError` 且不崩」；「深度 1000 的合法递归」在收口前**列为已知不通过** | 待补（收口提交时填） |
+| `DIV-11` | **仅剩原生回调路径的深度上限**：默认递归上限已对齐参照 **1000**、`setrecursionlimit` **可升**（安全上限 **10000**；参照无此夹）；但内建→脚本回调链仍受 `MAX_NATIVE_DEPTH=64` 守卫（参照 1000） | `PLAN §12.22` S2／S3（脚本调用改显式帧栈后收窄；原生回调路径的帧栈化留后续） | harness **不比对**深度阈值；固定用例断言「深递归 900 通过、无限递归抛可捕获 `RecursionError`、`map` 自递归被原生守卫拦住且不崩」；超 `MAX_SAFE_RECURSION_LIMIT` 如实夹住 | 2026-11-19（S2/S3/S4 收口） |
 
 ### 已修 / 已移出（留墓碑，`CX-19`：墓碑算定义）
 

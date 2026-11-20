@@ -77,6 +77,8 @@ impl Instance {
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),
             call_depth: Cell::new(0),
+            deferred_call_target: Cell::new(None),
+            native_execute_depth: Cell::new(0),
             // **默认深度上限的环境覆盖**（round 112）：本层上限低是因为每层 Python 调用吃不少
             // **原生栈** ✓ —— 宿主（`pyawa` CLI）可以给执行线程开大栈并用
             // `PYAWA_RECURSION_LIMIT` 提高上限 ✓（`pprint` 一族正常嵌套就要 30+ 层 ✓）；

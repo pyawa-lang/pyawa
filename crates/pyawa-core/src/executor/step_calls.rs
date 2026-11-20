@@ -399,7 +399,7 @@ fn step_calls_call_function_ex<'a>(instance: &'a Instance, frame: &Owned<'a, Fra
                 release(instance, keyword_source);
 
                 let result =
-                    call_callable(instance, callable, bound_self, args, kwargs, opcode_number);
+                    call_from_bytecode(instance, callable, bound_self, args, kwargs, opcode_number);
                 // **`bound_self` 是借用**（`call_callable` 契约）：本函数持有它那一份 ⇒ 调用完要还 ✓
                 // （`P3-41` round 43：先前漏还 ⇒ `f(*args)`／装饰器形态每次漏一份 receiver ✓）。
                 if let Some(self_object) = bound_self {
@@ -1121,7 +1121,7 @@ fn step_calls_call<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>, oparg: 
                         bound_self = None;
                     }
                 }
-                let result = call_callable(
+                let result = call_from_bytecode(
                     instance,
                     callable,
                     bound_self,

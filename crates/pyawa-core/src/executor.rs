@@ -95,6 +95,12 @@ pub enum ExecError {
     Raised { exception: crate::raise_guard::RaiseRef },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
+    /// **显式帧栈（`PLAN §12.22` S2）**：字节码 `CALL` 的目标是脚本函数 ⇒ `call_callable`
+    /// 已把帧**准备完毕**（参数绑定／`f_back`／`enter_call` 都记过）却没跑函数体；这个错误
+    /// 把帧交回 [`execute`] 的驱动循环去压栈（脚本调用因此**不吃原生栈**）。
+    ///
+    /// **只在 `execute` 里被消费**：其它任何地方看到它都说明代码路径错了（不该被当作机器错误）。
+    DeferredScriptCall { frame: NonNull<Header> },
 }
 
 impl From<DecodeError> for ExecError {
@@ -2123,51 +2129,85 @@ fn instruction_term(opcode_number: u8) -> Option<(OpGroup, &'static str)> {
 }
 
 
-pub fn execute<'a>(
-    instance: &'a Instance,
-    frame: &Owned<'a, Frame>,
-) -> Result<ExecOutcome<'a>, ExecError> {
-    let code_header = frame.get().code().expect("BC-42：帧必须持有 code object");
-    // SAFETY: 帧持有一份对 code object 的引用（BC-42），因此它在帧存活期间有效；
-    // 帧由本函数的调用方持有。
-    let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
+/// **显式帧栈的"一帧全部运行时状态"**（`PLAN §12.22` S2 的第一步）。
+///
+/// 把原先 `execute` 里的"装守卫 → 解码 → 跑循环"拆成可复用的一份：单帧运行仍与旧实现
+/// **逐条等价**（守卫顺序／异常派发／生成器挂起都在同一位置），但状态现在能放进栈里——
+/// 下一阶段"压帧＋回主循环"（脚本调用不吃原生栈）就以此为底座。
+struct FrameSlot<'a> {
+    /// 本帧的全局映射守卫（`globals()`；`Drop` 恢复调用者那份）。
+    _globals_guard: CurrentGlobalsGuard<'a>,
+    /// 当前帧守卫（`sys._getframe()`；`Drop` 恢复）。
+    _frame_guard: CurrentFrameGuard<'a>,
+    /// 异常状态守卫（`Drop` 截回入口深度）。
+    _exception_guard: ExceptionStateGuard<'a>,
+    /// 帧自身（本槽持有一份引用）。
+    frame: Owned<'a, Frame>,
+    /// 本帧的解码器（位置跨"让出／恢复"保留）。
+    ///
+    /// **SAFETY 依据**：`Decoder` 借用的 `co_code` 字节由 `frame` 持有的 code object 保活
+    /// （`BC-42`），而 `FrameSlot` 的存活期不超过 `frame` 的引用期 ⇒ 借用合法。
+    decoder: Decoder<'a>,
+    /// 恢复点上的"待抛异常"（`throw`／`close`）。
+    forced_raise: Option<NonNull<Header>>,
+    /// 本帧**最近一条指令的字节偏移**（S2 的 CALL 展开要在调用者这一偏移上派发异常）。
+    call_offset: usize,
+}
 
-    // **把本帧的全局映射挂到实例上**（第 156 轮）：内建 `globals()` 取它 ✓；守卫 `Drop` 时恢复 ✓。
-    // **模块帧的 `globals` 那格本来就是 `None`** ✗（`BC-57`：模块体没有单独的一层，此时就是它的
-    // **命名空间** ✓）⇒ 取 `globals`，没有就用 `namespace` ✓ —— 函数帧两格都有 ✓。
-    let _globals_guard = CurrentGlobalsGuard::install(
-        instance,
-        frame.get().globals().or_else(|| frame.get().namespace()),
-    );
-    // **公布当前帧** ✓（第 230 轮）：`sys._getframe()` 与 `frame.f_locals` 都取它 ✓。
-    // SAFETY: 帧由调用方持有，本函数运行期间存活 ✓。
-    let frame_header: NonNull<Header> = frame.as_ptr().cast::<Header>();
-    let _frame_guard = CurrentFrameGuard::install(instance, Some(frame_header));
-    // **异常状态是每帧保存／恢复的**（round 62）：本层只有实例级一张栈 ⇒ 帧退出时（含异常
-    // 逃逸／生成器挂起）截回入口深度 ✓。否则某个处理块压入的 `PUSH_EXC_INFO` 会活过帧，
-    // `sys.exc_info()` 在后续代码里看到**上一个函数**的残留异常（`import enum` 的
-    // `KeyError('keep')`、`import unittest` 的 `KeyError(512)` 就是这个 ✓）。
-    let _exception_guard = ExceptionStateGuard::install(instance);
-
-    // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑——值栈与 ip 都在恢复点里。
-    // 新帧的 ip 是 0，所以"一律按帧的 ip 起步"这一条对两种情况都成立。
-    if frame.get().is_suspended() {
-        frame.get().resume()?;
+impl<'a> FrameSlot<'a> {
+    fn new(instance: &'a Instance, frame: Owned<'a, Frame>) -> Result<Self, ExecError> {
+        let code_header = frame.get().code().expect("BC-42：帧必须持有 code object");
+        // SAFETY: 帧持有一份对 code object 的引用（BC-42），且本槽的 `frame` 字段活到槽结束。
+        let code: &'a CodeObject = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
+        // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑。
+        if frame.get().is_suspended() {
+            frame.get().resume()?;
+        }
+        let forced_raise = frame.get().take_pending_raise();
+        let globals_guard = CurrentGlobalsGuard::install(
+            instance,
+            frame.get().globals().or_else(|| frame.get().namespace()),
+        );
+        let frame_header: NonNull<Header> = frame.as_ptr().cast::<Header>();
+        let frame_guard = CurrentFrameGuard::install(instance, Some(frame_header));
+        let exception_guard = ExceptionStateGuard::install(instance);
+        let mut decoder = Decoder::new(code.code());
+        decoder.set_position(frame.get().instruction_pointer());
+        Ok(Self {
+            _globals_guard: globals_guard,
+            _frame_guard: frame_guard,
+            _exception_guard: exception_guard,
+            frame,
+            decoder,
+            forced_raise,
+            call_offset: 0,
+        })
     }
-    // **`throw`／`close`**：恢复点上有"待抛异常"就先按本帧的异常表派发它
-    // （所以生成器体里的 `try/except` 能接住，与参照实现"抛在挂起点"一致）。
-    let mut forced_raise = frame.get().take_pending_raise();
+}
+
+/// 单帧跑一次"直到返回／让出／异常"（异常直接以 `Err(Raised)` 交回调用者）。
+enum FrameEvent<'a> {
+    Return(Value<'a>),
+    Yield(NonNull<Header>),
+}
+
+fn run_frame<'a>(
+    instance: &'a Instance,
+    slot: &mut FrameSlot<'a>,
+) -> Result<FrameEvent<'a>, ExecError> {
+    let code_header = slot.frame.get().code().expect("BC-42：帧必须持有 code object");
+    // SAFETY: 帧存活，code object 由其持有。
+    let code: &'a CodeObject = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
+    let frame = &slot.frame;
     let slot_trace = slot_trace_enabled();
     // **每实例内存配额**（`OM-3` 扩，沙箱硬需求）：配额为 0（默认宿主）时只多读一次 `Cell`
     // （在循环外读一次本地量 ⇒ 每条指令只剩一个分支 ✓）；命中位由分配器置、这里**取走**并抛
     // 可捕获的 `MemoryError`（不 abort ✗）。处理块／`finally` 照常能跑 ✓。
     let memory_limit = instance.memory_limit();
-    let mut decoder = Decoder::new(code.code());
-    decoder.set_position(frame.get().instruction_pointer());
-    while let Some(instruction) = decoder.next_instruction()? {
+    while let Some(instruction) = slot.decoder.next_instruction()? {
         // **`throw`／`close` 的待抛异常**（恢复点上有就按本帧异常表派发 ✓；先前被本轮配额
         // 改动误删，此处恢复 ✓）。
-        if let Some(exception) = forced_raise.take() {
+        if let Some(exception) = slot.forced_raise.take() {
             // `take_pending_raise` 交回的是**一份裸引用**（帧的待抛槽）⇒ 交给 RAII 守卫接管。
             dispatch_raise(
                 instance,
@@ -2175,7 +2215,7 @@ pub fn execute<'a>(
                 code.exceptiontable(),
                 frame.get().instruction_pointer() * 2,
                 crate::raise_guard::RaiseRef::from_owned(instance, exception),
-                &mut decoder,
+                &mut slot.decoder,
             )?;
             continue;
         }
@@ -2192,7 +2232,7 @@ pub fn execute<'a>(
                         code.exceptiontable(),
                         instruction.offset * 2,
                         exception,
-                        &mut decoder,
+                        &mut slot.decoder,
                     )?;
                     continue;
                 }
@@ -2205,6 +2245,7 @@ pub fn execute<'a>(
         }
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
+        slot.call_offset = instruction.offset;
         // **本地追踪的 `'line'` 事件**（round 181）：只有 `f_trace` 被设成可调用值时
         // `trace_active` 才为真 ⇒ 未启用时只多读一个 `Cell<bool>` ✓（实测开销在噪声内）。
         if frame.get().trace_active() {
@@ -2229,9 +2270,9 @@ pub fn execute<'a>(
             OpGroup::Names => return step_names::step_names(instance, frame, code, oparg, opcode_number, name),
             OpGroup::Locals => return step_locals::step_locals(instance, frame, code, oparg, opcode_number, name, slot_trace),
             OpGroup::Operators => return step_operators::step_operators(instance, frame, oparg, opcode_number, name),
-            OpGroup::Jumps => return step_jumps::step_jumps(instance, frame, &mut decoder, &instruction, opcode_number, name),
+            OpGroup::Jumps => return step_jumps::step_jumps(instance, frame, &mut slot.decoder, &instruction, opcode_number, name),
             OpGroup::Containers => return step_containers::step_containers(instance, frame, code, oparg, opcode_number, name),
-            OpGroup::Iterators => return step_iterators::step_iterators(instance, frame, &mut decoder, &instruction, opcode_number, name),
+            OpGroup::Iterators => return step_iterators::step_iterators(instance, frame, &mut slot.decoder, &instruction, opcode_number, name),
             OpGroup::Match => return step_match::step_match(instance, frame, oparg, opcode_number, name),
             OpGroup::Format => return step_format::step_format(instance, frame, oparg, opcode_number, name),
             OpGroup::Exceptions => return step_exceptions::step_exceptions(instance, frame, oparg, opcode_number, name),
@@ -2242,7 +2283,7 @@ pub fn execute<'a>(
         })();
 
         match outcome {
-            Ok(Step::Return(value)) => return Ok(ExecOutcome::Returned(value)),
+            Ok(Step::Return(value)) => return Ok(FrameEvent::Return(value)),
             Ok(Step::Yield(value)) => {
                 // **生成器挂起 ⇒ 断开 `f_back`**（round 119 真 leak 修）：参照里挂起期间
                 // `gi_frame.f_back is None` ✓；本层先前保留 f_back 的**强引用** ⇒ 生成器帧把
@@ -2253,19 +2294,21 @@ pub fn execute<'a>(
                     // SAFETY: f_back 那份由本帧持有，这里交还。
                     unsafe { instance.release_object(parent.as_ptr()) };
                 }
-                return Ok(ExecOutcome::Yielded(value));
+                return Ok(FrameEvent::Yield(value));
             }
             Ok(Step::Continue) => {}
             Err(ExecError::Raised { exception }) => {
                 // BC-60 ①：按异常表回退值栈到 `depth`、按 `lasti` 压最后一条指令偏移、
                 // 压异常实例、跳到处理块入口（实测：入口就是 `PUSH_EXC_INFO` 那条指令）。
+                // **显式帧栈（S2）**：本帧处理不了 ⇒ 原样把异常交回驱动（由它弹帧并在调用者
+                // 的 `CALL` 偏移上重新派发；与递归版的 `Err(Raised)` 上抛同义）。
                 dispatch_raise(
                     instance,
                     frame.get(),
                     code.exceptiontable(),
                     instruction.offset * 2,
                     exception,
-                    &mut decoder,
+                    &mut slot.decoder,
                 )?;
             }
             Err(other) => {
@@ -2309,6 +2352,130 @@ pub fn execute<'a>(
     }
     Err(ExecError::FellOffEnd)
 }
+
+pub fn execute<'a>(
+    instance: &'a Instance,
+    frame: &Owned<'a, Frame>,
+) -> Result<ExecOutcome<'a>, ExecError> {
+    // **原生递归守卫**（`PLAN §12.22` S2）：嵌套的 `execute` 只来自"原生（内建回调）→ 脚本"
+    // 这条链；脚本→脚本调用走下面的**显式帧栈**（不吃原生栈）⇒ 这里防的是回调递归把栈顶穿。
+    if !instance.enter_native_execute() {
+        return Err(instance.raise_builtin_error(
+            "RecursionError",
+            "maximum recursion depth exceeded",
+        ));
+    }
+    let result = execute_stack(instance, frame);
+    instance.leave_native_execute();
+    result
+}
+
+/// **显式帧栈驱动**（`PLAN §12.22` S2）：单次 `execute` 里脚本→脚本调用不再递归——
+/// `call_callable` 把**准备完毕的帧**以 [`ExecError::DeferredScriptCall`] 交回，这里压栈继续
+/// 跑；`RETURN` 时弹帧、把返回值压回父帧值栈；异常时逐帧弹、在**调用者的 `CALL` 偏移**上走
+/// 它自己的异常表（与递归版的 `Err(Raised)` 上抛逐层同义，含逐帧 `traceback` 补链）。
+fn execute_stack<'a>(
+    instance: &'a Instance,
+    frame: &Owned<'a, Frame>,
+) -> Result<ExecOutcome<'a>, ExecError> {
+    let mut stack: Vec<FrameSlot<'a>> = Vec::new();
+    stack.push(FrameSlot::new(instance, frame.clone())?);
+    let mut pending_raise: Option<crate::raise_guard::RaiseRef> = None;
+    loop {
+        // **异常展开**：把"刚抛出的帧"弹出（守卫恢复到调用者），补一条 traceback，然后交给
+        // 调用者自己的异常表；处理不了就把异常记回 `pending_raise` 继续往上一层弹。
+        if let Some(exception) = pending_raise.take() {
+            let is_base = stack.len() == 1;
+            let child = stack.pop().expect("栈里至少有一帧");
+            if !is_base {
+                // 只有**延迟帧**在 `call_callable` 里记过 `enter_call`（底帧由它的调用方记）。
+                instance.leave_call();
+            }
+            drop(child);
+            if stack.is_empty() {
+                // 底帧没接住 ⇒ 交回 `call_callable`（它会按"调用者上下文"补链并上抛）。
+                return Err(ExecError::Raised { exception });
+            }
+            let parent = stack.last_mut().expect("上一行已判空");
+            let parent_code_header = parent.frame.get().code().expect("BC-42：帧必须持有 code object");
+            // SAFETY: 父帧持有 code object 的引用，帧在本槽存活期间有效。
+            let parent_code: &CodeObject =
+                unsafe { &*parent_code_header.as_ptr().cast::<CodeObject>() };
+            let offset = parent.call_offset;
+            runtime::attach_traceback(instance, exception.get());
+            match dispatch_raise(
+                instance,
+                parent.frame.get(),
+                parent_code.exceptiontable(),
+                offset * 2,
+                exception,
+                &mut parent.decoder,
+            ) {
+                Ok(()) => continue,
+                Err(ExecError::Raised { exception }) => {
+                    pending_raise = Some(exception);
+                    continue;
+                }
+                Err(other) => return Err(other),
+            }
+        }
+
+        let event = {
+            let slot = stack.last_mut().expect("栈非空");
+            run_frame(instance, slot)
+        };
+        match event {
+            Ok(FrameEvent::Return(value)) => {
+                if stack.len() == 1 {
+                    return Ok(ExecOutcome::Returned(value));
+                }
+                // 先取成**新引用**（`value` 借用子帧值栈），再弹帧释放那一份。
+                let raw = runtime::value_into_raw(instance, value);
+                let child = stack.pop().expect("上面已判非底");
+                instance.leave_call();
+                drop(child);
+                let parent = stack.last_mut().expect("父帧存在");
+                // **接管语义**（与 `CALL` 指令同款）：`raw` 是 `value_into_raw` 交出的**新引用**，
+                // `Frame::push` 直接接手；不能用借用语义的 `runtime::push`（那会再加一份 ⇒ 每次
+                // 脚本调用漏一个返回值引用——`bad_exit_does_not_leak` 实测抓到的就是这个）。
+                parent.frame.get().push(raw)?;
+                continue;
+            }
+            Ok(FrameEvent::Yield(value)) => {
+                if stack.len() == 1 {
+                    return Ok(ExecOutcome::Yielded(value));
+                }
+                return Err(ExecError::Unsupported {
+                    opcode: 0,
+                    what: "显式帧栈里的内层帧让出（生成器函数在 call_callable 里已提前交出对象，不该发生）",
+                });
+            }
+            Err(ExecError::DeferredScriptCall { frame: child_frame }) => {
+                // SAFETY: `call_callable` 用 `mem::forget` **转移**了这份引用（新引用契约）。
+                // SAFETY: `child_frame` 是 `call_callable` 用 `mem::forget` 转移过来的**新引用**。
+                let child: Owned<'a, Frame> = Owned::new(child_frame.cast::<Frame>(), instance);
+                let slot = FrameSlot::new(instance, child)?;
+                stack.push(slot);
+                continue;
+            }
+            Err(ExecError::Raised { exception }) => {
+                pending_raise = Some(exception);
+                continue;
+            }
+            Err(other) => {
+                // 机器级错误：不再逐帧派发；按 LIFO 收掉延迟帧的 `enter_call` 记账后原样上抛。
+                while stack.len() > 1 {
+                    let child = stack.pop().expect("非空");
+                    instance.leave_call();
+                    drop(child);
+                }
+                return Err(other);
+            }
+        }
+    }
+}
+
+
 pub mod subscript;
 pub mod call;
 pub mod arithmetic;

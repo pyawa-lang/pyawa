@@ -454,6 +454,36 @@ impl Instance {
         self.call_depth.get()
     }
 
+    /// **下一次"字节码 CALL"的延迟目标**（`PLAN §12.22` S2）：由 `call_from_bytecode` 在调用
+    /// `call_callable` 前置位；`call_callable` 在**准备帧之后**发现目标匹配时把帧延迟交回驱动。
+    ///
+    /// 只在一步之内有效（调用返回前清空）；嵌套的 `call_callable`（类实例化里的 `__init__` 等）
+    /// 目标不匹配 ⇒ 照旧递归执行。
+    pub fn deferred_call_target(&self) -> Option<NonNull<Header>> {
+        self.deferred_call_target.get()
+    }
+
+    /// 设置延迟目标（`Some`／`None`）。
+    pub fn set_deferred_call_target(&self, target: Option<NonNull<Header>>) {
+        self.deferred_call_target.set(target);
+    }
+
+    /// **进入一层 `execute`**（原生递归记账；超 [`MAX_NATIVE_DEPTH`] ⇒ `false`）。
+    pub fn enter_native_execute(&self) -> bool {
+        let depth = self.native_execute_depth.get();
+        if depth >= MAX_NATIVE_DEPTH {
+            return false;
+        }
+        self.native_execute_depth.set(depth + 1);
+        true
+    }
+
+    /// 退出一层 `execute`（与 `enter_native_execute` 配对）。
+    pub fn leave_native_execute(&self) {
+        let depth = self.native_execute_depth.get();
+        self.native_execute_depth.set(depth.saturating_sub(1));
+    }
+
     /// **OM-25**…**OM-30**：跑一次标记-清除，返回本次释放的对象数。
     ///
     /// 顺序按 **OM-27** 固定：① 求不可达集合 → ② 先清弱引用 → ③ 调终结器 → ④ 释放。

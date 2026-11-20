@@ -81,7 +81,14 @@ impl Instance {
         if guard.contains(&address) {
             return ReprEntry::Cycle;
         }
-        if guard.len() >= self.recursion_limit.get() {
+        // **原生递归**（`repr` 是 Rust 递归）单独用保守上限：脚本递归已改显式帧栈（默认 1000），
+        // 但原生路径还不能跟着放到 1000（8 MiB 栈会先崩）⇒ 取
+        // `min(recursion_limit, MAX_NATIVE_DEPTH)`（`PLAN §12.22` S2／S3 的边界）。
+        let native_limit = self
+            .recursion_limit
+            .get()
+            .min(crate::instance::MAX_NATIVE_DEPTH);
+        if guard.len() >= native_limit {
             return ReprEntry::TooDeep;
         }
         guard.push(address);
@@ -134,7 +141,10 @@ impl Instance {
     /// **`sys.setrecursionlimit(n)`** ✓：**只降不升** ✓（本层的 Python 调用吃原生栈 ✗ ——
     /// 见 [`MAX_CALL_DEPTH`] 那段 ✓；调高会顶穿 ⇒ 如实夹住 ✓）。
     pub fn set_recursion_limit(&self, value: usize) -> usize {
-        let clamped = value.min(crate::instance::MAX_CALL_DEPTH).max(1);
+        // **S3 口径**：可升（纯脚本递归只吃堆帧），但夹到**安全上限**（超限如实夹住，不编造无限）。
+        let clamped = value
+            .min(crate::instance::MAX_SAFE_RECURSION_LIMIT)
+            .max(1);
         self.recursion_limit.set(clamped);
         clamped
     }
