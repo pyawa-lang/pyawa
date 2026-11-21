@@ -132,7 +132,7 @@ pub struct Instance {
     /// **`AB-75`**：宿主对象协议钩子（键＝对象地址；类型/实例/模块同一张表，每对象一份）。
     object_ops: RefCell<crate::fast_hash::FastMap<usize, crate::instance::HostObjectOps>>,
     /// **`AB-88`**：宿主 await 的挂起状态（对象地址 → (token, 是否已 yield token)）。
-    host_awaiting: RefCell<crate::fast_hash::FastMap<usize, (u64, bool)>>,
+    host_awaiting: RefCell<crate::fast_hash::FastMap<usize, (usize, u64, bool)>>,
     /// **Python 级终结器旁表**（round 82，照 `OM-20` 的参照语义 ＝ at-most-once）：
     /// 地址 → 已跑过 `__del__` ✓。`header` 的 bit 4–7 是**禁止占用**的保留位（`OM-7`）⇒ 不能加标志
     /// ⇒ 用旁表 ✓；对象释放时同步摘除（地址复用不会串味 ✓）。

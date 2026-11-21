@@ -192,61 +192,84 @@ impl Instance {
         }
     }
 
-    /// 记录“某对象正处于宿主 await 中”（token 由宿主解释；VM 只用于 SEND 派发）。
-    pub(crate) fn begin_host_await(&self, object: NonNull<Header>, token: u64) {
-        self.host_awaiting
-            .borrow_mut()
-            .insert(object.as_ptr() as usize, (token, false));
+    /// 记录“某**帧**正处于宿主 await 中”（key 是帧地址；token 由宿主解释，VM 只用于 SEND 派发）。
+    pub(crate) fn begin_host_await(
+        &self,
+        frame: NonNull<Header>,
+        object: NonNull<Header>,
+        token: u64,
+    ) {
+        self.host_awaiting.borrow_mut().insert(
+            frame.as_ptr() as usize,
+            (object.as_ptr() as usize, token, false),
+        );
     }
 
-    /// 取某对象的 await 状态：`(token, 是否已经 yield 过 token)`。
-    pub(crate) fn host_await_state(&self, object: NonNull<Header>) -> Option<(u64, bool)> {
+    /// 取某帧的 await 状态：`(宿主对象地址, token, 是否已经 yield 过 token)`。
+    pub(crate) fn host_await_state(&self, frame: NonNull<Header>) -> Option<(usize, u64, bool)> {
         self.host_awaiting
             .borrow()
-            .get(&(object.as_ptr() as usize))
+            .get(&(frame.as_ptr() as usize))
             .copied()
     }
 
-    pub(crate) fn mark_host_await_yielded(&self, object: NonNull<Header>) {
+    pub(crate) fn mark_host_await_yielded(&self, frame: NonNull<Header>) {
         if let Some(state) = self
             .host_awaiting
             .borrow_mut()
-            .get_mut(&(object.as_ptr() as usize))
+            .get_mut(&(frame.as_ptr() as usize))
         {
-            state.1 = true;
+            state.2 = true;
         }
     }
 
-    pub(crate) fn finish_host_await(&self, object: NonNull<Header>) {
+    pub(crate) fn finish_host_await(&self, frame: NonNull<Header>) {
         self.host_awaiting
             .borrow_mut()
-            .remove(&(object.as_ptr() as usize));
+            .remove(&(frame.as_ptr() as usize));
     }
 
+    /// 宿主对象释放（帧被 GC/丢弃等）⇒ 先按 DESTROY 通知，再清掉该对象对应的条目。
     pub(crate) fn forget_host_await(&self, object: NonNull<Header>) {
-        self.host_awaiting
-            .borrow_mut()
-            .remove(&(object.as_ptr() as usize));
-    }
-
-    /// **`AB-89` 派发**：取消/销毁/throw 时通知所有挂起的宿主 awaitable，并清空状态。
-    /// 用 `reason`：0=INTERRUPT／1=DESTROY／2=THROW（`pa.h` 的 `PA_AWAIT_CANCEL_*`）。
-    #[allow(dead_code)]
-    pub fn cancel_host_awaits(&self, reason: i32) {
+        let object_key = object.as_ptr() as usize;
         let keys: Vec<usize> = self
             .host_awaiting
             .borrow()
-            .keys()
-            .copied()
+            .iter()
+            .filter(|(_, state)| state.0 == object_key)
+            .map(|(frame, _)| *frame)
             .collect();
-        for key in keys {
-            if let Some(object) = NonNull::new(key as *mut Header) {
-                if let Err(error) = self.host_object_await_cancel(object, reason) {
-                    // 取消派发失败不改变清理：异常按既有 discard 口径归还（状态仍要清空）。
-                    crate::executor::discard_error(self, &error);
-                }
+        for frame_key in keys {
+            if let Some(frame) = NonNull::new(frame_key as *mut Header) {
+                self.cancel_host_await_for_frame(frame, 1); // DESTROY
             }
         }
-        self.host_awaiting.borrow_mut().clear();
+    }
+
+    /// **按帧取消**（`AB-89`）：只影响当前协程的 await，不波及其他协程。
+    pub fn cancel_host_await_for_frame(&self, frame: NonNull<Header>, reason: i32) {
+        let state = self
+            .host_awaiting
+            .borrow_mut()
+            .remove(&(frame.as_ptr() as usize));
+        let Some((object_key, _token, _yielded)) = state else {
+            return;
+        };
+        if let Some(object) = NonNull::new(object_key as *mut Header) {
+            if let Err(error) = self.host_object_await_cancel(object, reason) {
+                // 取消派发失败不改变清理：异常按既有 discard 口径归还（状态已清空）。
+                crate::executor::discard_error(self, &error);
+            }
+        }
+    }
+
+    /// **`AB-89` 全实例派发**：只在 `pa_destroy`（实例销毁）时使用。
+    pub fn cancel_host_awaits(&self, reason: i32) {
+        let keys: Vec<usize> = self.host_awaiting.borrow().keys().copied().collect();
+        for key in keys {
+            if let Some(frame) = NonNull::new(key as *mut Header) {
+                self.cancel_host_await_for_frame(frame, reason);
+            }
+        }
     }
 }

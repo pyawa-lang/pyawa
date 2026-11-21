@@ -418,22 +418,25 @@
 - **AB-88** **`await_fn` 槽**（追加到 `pa_type_ops`／`pa_object_ops` 尾部；旧宿主按 `size`
   有界读，未声明 ⇒ `None`）：VM 执行 `await <宿主对象>` 且该对象类型装了 `await_fn` 时调用；
   签名 `int (*)(pa_state *state, void *payload, void *context, uint64_t *token_out)`。
-  - 成功返回 `PA_OK` 且写 `token_out`（宿主自有、不透明）；VM 挂起协程并以 `PA_YIELDED`
-    返回该 token（出栈结果＝整数 token；宿主按自己的 map 找到事件）；
+  - 成功返回 `PA_OK` 且写 `token_out`（宿主自有、不透明 **u64**）；VM 挂起协程并以
+    `PA_YIELDED` 返回该 token（出栈结果＝**任意精度整数**，不会按 i64 截断；宿主可用
+    `pa_tointstring` 读回 u64 全量）；
   - 其它状态码 ⇒ VM 按宿主错误路径抛脚本可捕获异常（不静默回退）；
   - 回调**禁止**保存 `payload`／`context`／`state` 供返回后使用（`AB-17`）；token 的生命周期
     归宿主，VM 不解释。
-- **AB-89** **`await_cancel_fn` 槽**（可选，追加在 `await_fn` 之后；VM 在取消/销毁/throw 时派发）：VM 在协程被取消、
+- **AB-89** **`await_cancel_fn` 槽**（可选，追加在 `await_fn` 之后；VM **按目标协程/帧**在取消/销毁/throw 时派发；`pa_destroy` 取消该实例全部挂起项）：VM 在协程被取消、
   销毁或 `pa_throw` 注入异常而当前挂起在宿主 awaitable 上时调用；
   签名 `void (*)(pa_state *state, void *payload, void *context, int reason)`；
   `reason`：`PA_AWAIT_CANCEL_INTERRUPT=0`／`PA_AWAIT_CANCEL_DESTROY=1`／
   `PA_AWAIT_CANCEL_THROW=2`（宏定义随追加版本加入 `pa.h`）。宿主**必须**在此释放 token 资源；
   之后该 token 不得再被 `pa_resume` 使用。
-- **AB-90** **恢复、异常与生命周期**：
+- **AB-90** **恢复、异常与生命周期**（状态按**协程/帧**隔离，同一宿主对象可被多个协程
+  await）：
   - 协程挂起在宿主 awaitable 上时，`pa_resume` 送值 ⇒ 该值成为 `await` 表达式结果；
   - `pa_throw` ⇒ 异常在 `await` 处抛出；VM 先调 `await_cancel_fn(THROW)`；
-  - `pa_interrupt` 在恢复边界 ⇒ 取消（`PA_ERR_INTERRUPT`），先调 `await_cancel_fn(INTERRUPT)`；
-    取消后协程**不可再 resume**（`PA_ERR_INVALID`），可安全 `pa_destroy`；
+  - `pa_interrupt` 在恢复边界 ⇒ 取消（`PA_ERR_INTERRUPT`），先调**该协程**的
+    `await_cancel_fn(INTERRUPT)`；取消后协程**不可再 resume**（`PA_ERR_INVALID`），可安全
+    `pa_destroy`；取消只作用于目标协程，不波及其他协程；
   - `pa_destroy` 时若仍有挂起 awaitable ⇒ 调 `await_cancel_fn(DESTROY)`，然后释放协程根。
 - **AB-91** **版本与追加**：`await_fn`／`await_cancel_fn` 只**追加**到 `pa_type_ops` 尾部
   （`size` 有界读，`AB-43`），随实现升 `PA_ABI_MINOR`；旧宿主/旧类型未装槽 ⇒ 行为同 S1；
@@ -562,7 +565,7 @@
 - **AB-83** **`PA_COMPLETED`（11）**：协程正常结束；栈上恰好 1 个结果（返回值；无显式返回 ⇒
   `None`）。完成后对同一协程再 `pa_resume` ⇒ `PA_ERR_INVALID`。
 
-### 15.3 核心层 `pa_`（81 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
+### 15.3 核心层 `pa_`（83 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`；`pa_resume`/`pa_throw` 见 §15.6）
 
 | 函数 | 栈契约 | 说明 |
 |---|---|---|
@@ -796,13 +799,13 @@
     扩展模式的静态检查、不改发射）＋ ABI 侧签名投影。
   - 验收：`crates/pyawa-abi/tests/host_signature.rs`（10 例：上述全部 ＋ 编译期／运行期两档分工）。
 
-### 15.6 S1 协程驱动（`ADR-005`；`pa_resume`/`pa_throw` 已实现，awaitable op 待实现）
+### 15.6 S1 协程驱动（`ADR-005`；`pa_resume`/`pa_throw` 已实现，S1.1 awaitable op 见 §11.1）
 
 > `pa_resume`/`pa_throw` 与 `PA_YIELDED`/`PA_COMPLETED` 已随 **`PA_ABI_MINOR` 15 追加式**
 > 落地（`crates/pyawa-abi/tests/coroutine_resume.rs`）；S1.1 的 host awaitable op
 > （`AB-88`…`AB-91`）仍未实现。`event` 域形状引 `SPEC-capabilities.md` §9.10。
 
-| 计划函数 | 栈契约 | 说明 |
+| 函数 | 栈契约 | 说明 |
 |---|---|---|
 | `pa_resume(pa_state *, int nargs, int nresults)` | `−(nargs+1)+1` | 栈顶为参数值，其下为生成器/协程对象；恢复执行；`nresults` 必须为 1 |
 | `pa_throw(pa_state *, int nargs, int nresults)` | `−(nargs+1)+1` | 栈顶为异常对象，其下为生成器/协程；把异常送回协程 |
@@ -828,7 +831,7 @@
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
 **S1 已实现（`PA_ABI_MINOR` 15）**：`AB-82`…`AB-85`（`pa_resume`/`pa_throw` 与状态码；
-`crates/pyawa-abi/tests/coroutine_resume.rs`）。**S1.1 已实现（`PA_ABI_MINOR` 17）**：
+`crates/pyawa-abi/tests/coroutine_resume.rs`）。**S1.1 已实现（`PA_ABI_MINOR` 17；状态按帧隔离，u64 token 走任意精度整数）**：
 `AB-88`（`await_fn`，VM GET_AWAITABLE/SEND 两阶段）、`AB-90` 的 resume/完成路径
 （`crates/pyawa-abi/tests/host_awaitable.rs`）与 `AB-89` 取消/销毁/throw 派发
 （`crates/pyawa-abi/tests/host_awaitable_cancel.rs`）。

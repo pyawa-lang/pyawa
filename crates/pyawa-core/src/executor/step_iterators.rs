@@ -369,7 +369,15 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         // 后把对象本身作为 awaitable 留在帧上；SEND 第一次让出 token，第二次收值完成。
                         match instance.host_object_await(value) {
                             Ok(Some(token)) => {
-                                instance.begin_host_await(value, token);
+                                let Some(current) = instance.current_frame() else {
+                                    release(instance, value);
+                                    return Err(raise_builtin(
+                                        instance,
+                                        "RuntimeError",
+                                        "宿主 await 缺少当前帧（S1.1）",
+                                    ));
+                                };
+                                instance.begin_host_await(current, value, token);
                                 push(instance, frame.get(), value)?;
                                 release(instance, value);
                                 return Ok(Step::Continue);
@@ -415,19 +423,33 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         opcode: opcode_number,
                         what: "BC-55：SEND 没有跳转目标",
                     })?;
-                    // **S1.1（`AB-88`/`AB-90`）**：宿主 awaitable 的 SEND 两阶段。
-                    if let Some((token, yielded)) = instance.host_await_state(receiver) {
-                        if !yielded {
-                            instance.mark_host_await_yielded(receiver);
-                            release(instance, sent);
-                            let token_value = instance.new_int(token as i64);
-                            frame.get().push(token_value)?;
+                    // **S1.1（`AB-88`/`AB-90`）**：宿主 awaitable 的 SEND 两阶段；
+                    // 状态按**当前帧**索引 ⇒ 同一宿主对象被多个协程 await 也不串态。
+                    if let Some(current) = instance.current_frame() {
+                        if let Some((object_key, token, yielded)) = instance.host_await_state(current) {
+                            if object_key != receiver.as_ptr() as usize {
+                                return Err(raise_builtin(
+                                    instance,
+                                    "RuntimeError",
+                                    "宿主 await 状态与接收者不一致（S1.1）",
+                                ));
+                            }
+                            if !yielded {
+                                instance.mark_host_await_yielded(current);
+                                release(instance, sent);
+                                // token 是 u64：用十进制整数对象承载，避免 `as i64` 截断。
+                                let token_text = token.to_string();
+                                let token_value = instance
+                                    .new_int_from_decimal(&token_text)
+                                    .expect("u64 token 的十进制串一定可解析");
+                                frame.get().push(token_value)?;
+                                return Ok(Step::Continue);
+                            }
+                            instance.finish_host_await(current);
+                            frame.get().push(sent)?;
+                            decoder.set_position(target);
                             return Ok(Step::Continue);
                         }
-                        instance.finish_host_await(receiver);
-                        frame.get().push(sent)?;
-                        decoder.set_position(target);
-                        return Ok(Step::Continue);
                     }
                     // SAFETY: receiver 在帧值栈上，存活。
                     let receiver_type = unsafe { receiver.as_ref() }.ty();

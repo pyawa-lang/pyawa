@@ -13,6 +13,7 @@ ref-async: yield2=3
 ref-async: done=7
 ref-async: event=1
 ref-async: await-token=77
+ref-async: event-token=1
 ref-async: await-done=42
 ref-async: OK"""
 
