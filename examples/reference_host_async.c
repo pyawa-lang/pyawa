@@ -16,7 +16,9 @@ static const char *SRC =
     "    a = yield 1\n"
     "    b = yield a + 2\n"
     "    return b + 3\n"
-    "g = gen()\n";
+    "g = gen()\n"
+    "async def f(x):\n"
+    "    return (await x) + 1\n";
 
 static pa_cap_status mock_wait(void *state, const pa_cap_event_entry *entries, size_t count,
                                int64_t timeout_ns, pa_cap_event_entry *out, size_t capacity,
@@ -34,6 +36,24 @@ static pa_cap_status mock_wait(void *state, const pa_cap_event_entry *entries, s
         }
     }
     return PA_CAP_OK;
+}
+
+static int host_await(pa_state *state, void *payload, void *context, uint64_t *token_out)
+{
+    (void)state; (void)payload; (void)context;
+    *token_out = 77;
+    return PA_OK;
+}
+
+static void host_await_cancel(pa_state *state, void *payload, void *context, int reason)
+{
+    (void)state; (void)payload; (void)context; (void)reason;
+}
+
+static void host_dealloc(void *payload) { (void)payload; }
+static void host_traverse(void *payload, void *context, pa_host_visit visit)
+{
+    (void)payload; (void)context; (void)visit;
 }
 
 static int fail(pa_state *st, const char *what, int rc)
@@ -86,6 +106,35 @@ int main(void)
     if (mock_wait(NULL, &in, 1, 0, &out, 1, &out_len, NULL) != PA_CAP_OK || out_len != 1)
         return fail(st, "event wait", -1);
     printf("ref-async: event=%llu\n", (unsigned long long)out_len);
+
+    /* `await` 宿主对象：注册 HostAwait 类型 + await_fn，脚本 f(x) 让出 token 77，恢复 41 ⇒ 42。 */
+    pa_sig sig = {0};
+    sig.size = sizeof(sig);
+    if (pa_newtype(st, "HostAwait", 0, 0, host_dealloc, host_traverse, &sig) != PA_OK)
+        return fail(st, "newtype", -1);
+    pa_type_ops ops = {0};
+    ops.size = sizeof(ops);
+    ops.await_fn = host_await;
+    ops.await_cancel_fn = host_await_cancel;
+    if (pa_set_type_ops(st, -1, &ops) != PA_OK) return fail(st, "type-ops", -1);
+    void *payload = NULL;
+    if (pa_newhandle(st, -1, &payload) != PA_OK) return fail(st, "newhandle", -1);
+    if (pa_setglobal(st, "x") != PA_OK) return fail(st, "setglobal x", -1);
+    if (pa_getglobal(st, "f") != PA_OK) return fail(st, "getglobal f", -1);
+    if (pa_getglobal(st, "x") != PA_OK) return fail(st, "getglobal x", -1);
+    if (pa_call(st, 1, 1) != PA_OK) return fail(st, "call f", -1);
+    if (pa_setglobal(st, "c") != PA_OK) return fail(st, "setglobal c", -1);
+    pa_settop(st, 0);
+    if (pa_getglobal(st, "c") != PA_OK) return fail(st, "getglobal c", -1);
+    if (pa_resume(st, 0, 1) != PA_YIELDED) return fail(st, "await resume", -1);
+    if (pa_tointeger(st, -1, &value) != PA_OK || value != 77) return fail(st, "await token", -1);
+    printf("ref-async: await-token=%lld\n", (long long)value);
+    pa_settop(st, 0);
+    if (pa_getglobal(st, "c") != PA_OK) return fail(st, "getglobal c2", -1);
+    if (pa_pushinteger(st, 41) != PA_OK) return fail(st, "push 41", -1);
+    if (pa_resume(st, 1, 1) != PA_COMPLETED) return fail(st, "await done", -1);
+    if (pa_tointeger(st, -1, &value) != PA_OK || value != 42) return fail(st, "await value", -1);
+    printf("ref-async: await-done=%lld\n", (long long)value);
 
     pa_destroy(st);
     printf("ref-async: OK\n");
