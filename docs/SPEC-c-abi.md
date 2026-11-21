@@ -457,7 +457,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.14**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **14**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
+> **当前版本：1.15**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **15**；`AB-84`/`AB-85`（`pa_resume`/`pa_throw`）与状态码 `AB-82`/`AB-83` 为**追加式**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -506,9 +506,9 @@
 | `T-AB-18` | 宿主可用性：组合根产物（`pyawa-runtime` cdylib／静态库）交出的 `paL_newstate`／`paL_openlibs` 实例上 builtins／`import` 可用；`pyawa-abi` 裸实例保持"语言骨架"且失败带 `pa_errmsg`；**仓库内有不含 numpy 的最小探针**可复跑（§12.13 #1） |
 | `T-AB-19` | **协议唯一入口 oracle**：记录式 `getattr_fn` 对 `pyawa_core::PROTOCOL_CASES` **全清单**（含异步协议）跑用例，断言每个协议的 dunder 都被问过（缺席即旁路）；清单↔片段双向一致（禁止只覆盖已实现协议）；另测宿主 dunder 行为生效＋内建/用户类快路等价（`protocol_oracle.rs`／`protocol_host_dispatch.rs`，**无 numpy**，进 CI） |
 | `T-AB-20` | **一次性写回**（`AB-80`）：恰好 `bytearray` 写入成功且 guest 读到新内容、栈不变；`offset+len` 越界／**usize 溢出**⇒ `PA_ERR_INVALID` 且不部分写；`bytes`／`memoryview`／**`bytearray` 子类**／非字节类型／非法 `idx` ⇒ `PA_ERR_INVALID`；`p == NULL` 且 `len > 0` 拒绝；合法 `bytearray` 上 `len == 0`（`offset <= len`）为 `PA_OK` no-op；失败 `pa_errmsg` 非空；valgrind 0 错误 |
-| `T-AB-21` | **S1 计划（实现后）**：`pa_resume`／`pa_throw` 的栈契约、`PA_YIELDED`／`PA_COMPLETED`／异常／取消四态可区分；旧宿主不调用新函数时行为不变（`AB-82`…`AB-85`） |
-| `T-AB-22` | **S1 计划（实现后）**：对已完成协程再 resume ⇒ `PA_ERR_INVALID`；非协程目标 ⇒ `PA_ERR_INVALID` 且不改栈（`AB-84`） |
-| `T-AB-23` | **S1 计划（实现后）**：`AB-86` 的边界——S1 不产生“宿主 awaitable”语义断言；Spike C 之前不得把 yield 值当 awaitable 解释 |
+| `T-AB-21` | **S1 已实现（1.15）**：`pa_resume`／`pa_throw` 的栈契约、`PA_YIELDED`／`PA_COMPLETED`／异常／取消四态可区分；旧宿主不调用新函数时行为不变（`AB-82`…`AB-85`） |
+| `T-AB-22` | **S1 已实现（1.15）**：对已完成协程再 resume ⇒ `PA_ERR_INVALID`；非协程目标 ⇒ `PA_ERR_INVALID` 且不改栈（`AB-84`） |
+| `T-AB-23` | **S1 边界（已随文档定）**：`AB-86` 的边界——S1 不产生“宿主 awaitable”语义断言；Spike C 之前不得把 yield 值当 awaitable 解释 |
 | `T-AB-24` | **S1.1 计划（实现后）**：宿主对象装 `await_fn` 后，脚本 `await` 它 ⇒ `PA_YIELDED` 返回 token；`pa_resume(value)` 后该值成为 await 表达式结果（`AB-88`／`AB-90`） |
 | `T-AB-25` | **S1.1 计划（实现后）**：`await` 期间 `pa_interrupt`／`pa_throw`／`pa_destroy` 分别调用 `await_cancel_fn` 的 INTERRUPT／THROW／DESTROY；取消后 resume ⇒ `PA_ERR_INVALID`（`AB-89`／`AB-90`） |
 | `T-AB-26` | **S1.1 计划（实现后）**：未装 `await_fn` 的旧宿主类型行为同 S1；`size` 有界读 + 追加字段不影响旧宿主（`AB-91`） |
@@ -796,10 +796,11 @@
     扩展模式的静态检查、不改发射）＋ ABI 侧签名投影。
   - 验收：`crates/pyawa-abi/tests/host_signature.rs`（10 例：上述全部 ＋ 编译期／运行期两档分工）。
 
-### 15.6 S1 计划：协程驱动（`ADR-005`；**未实现，不计入 §15.3 的 81 个**）
+### 15.6 S1 协程驱动（`ADR-005`；`pa_resume`/`pa_throw` 已实现，awaitable op 待实现）
 
-> 本节是 S1 规格草案（2026-11-21）。函数、状态码与栈契约先定；实现随 S3 以**追加式**
-> 进入下一 ABI 次版本，现有宿主不受影响。`event` 域形状引 `SPEC-capabilities.md` §9.10。
+> `pa_resume`/`pa_throw` 与 `PA_YIELDED`/`PA_COMPLETED` 已随 **`PA_ABI_MINOR` 15 追加式**
+> 落地（`crates/pyawa-abi/tests/coroutine_resume.rs`）；S1.1 的 host awaitable op
+> （`AB-88`…`AB-91`）仍未实现。`event` 域形状引 `SPEC-capabilities.md` §9.10。
 
 | 计划函数 | 栈契约 | 说明 |
 |---|---|---|
@@ -826,8 +827,9 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**S1/S1.1 计划条款（未实现）**：`AB-82`…`AB-91`。S1 只到生成器/协程 resume/throw
-（`AB-86`）；S1.1 已在 §11.1 写出 host awaitable 对象协议（`AB-88`…`AB-91`），实现随 S3。
+**S1 已实现（`PA_ABI_MINOR` 15）**：`AB-82`…`AB-85`（`pa_resume`/`pa_throw` 与状态码；
+`crates/pyawa-abi/tests/coroutine_resume.rs`）。**S1.1 计划（未实现）**：`AB-88`…`AB-91`
+（host awaitable 对象协议，§11.1）；实现前不得声称可用。
 
 **本规格除上述 S1 计划条款外，无未实现的 `AB-` 条款**：
 `AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**

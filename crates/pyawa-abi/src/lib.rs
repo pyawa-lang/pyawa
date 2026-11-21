@@ -76,6 +76,10 @@ pub mod status {
     pub const PA_ERR_NOTFOUND: i32 = 8;
     /// 预留区起点（`AB-20`：新增状态码**必须**落在 `9..=31`）。
     pub const PA_ERR_RESERVED_FIRST: i32 = 9;
+    /// 协程让出（`AB-82`）。
+    pub const PA_YIELDED: i32 = 10;
+    /// 协程完成（`AB-83`）。
+    pub const PA_COMPLETED: i32 = 11;
     /// 预留区终点。
     pub const PA_ERR_RESERVED_LAST: i32 = 31;
 }
@@ -96,7 +100,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 14;
+pub const PA_ABI_MINOR: u32 = 15;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -3867,6 +3871,128 @@ pub unsafe extern "C" fn pa_call(state: *mut pa_state, nargs: i32, nresults: i32
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_pcall(state: *mut pa_state, nargs: i32, nresults: i32) -> i32 {
     boundary(|| unsafe { call_inner(state, nargs, nresults, true) })
+}
+
+/// `pa_resume(st, nargs, nresults)`：恢复生成器/协程（`AB-84`，`PA_ABI_MINOR` 15）。
+///
+/// 栈：`[..., coroutine, arg?]`；`nargs` 只接受 `0`（send `None`）或 `1`（send 值）；
+/// `nresults` 必须为 `1`。成功返回 `PA_YIELDED` 或 `PA_COMPLETED`；脚本异常 ⇒ `PA_ERR_RUNTIME`；
+/// 中断 ⇒ `PA_ERR_INTERRUPT`；非生成器/协程或已完成的协程 ⇒ `PA_ERR_INVALID`（不改栈）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_resume(state: *mut pa_state, nargs: i32, nresults: i32) -> i32 {
+    boundary(|| unsafe { resume_inner(state, nargs, nresults, false) })
+}
+
+/// `pa_throw(st, nargs, nresults)`：把异常送回生成器/协程（`AB-85`，`PA_ABI_MINOR` 15）。
+///
+/// 栈：`[..., coroutine, exception]`；`nargs` 必须为 `1`；其余同 [`pa_resume`]。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_throw(state: *mut pa_state, nargs: i32, nresults: i32) -> i32 {
+    boundary(|| unsafe { resume_inner(state, nargs, nresults, true) })
+}
+
+/// 判断对象是否是**已跑完**的生成器/协程（只读类型身份＋生成器载荷）。
+fn generator_finished(instance: &Instance, object: NonNull<Header>) -> bool {
+    let name = instance.type_name(instance.type_of(object));
+    if name != "generator" && name != "coroutine" {
+        return false;
+    }
+    // SAFETY: 类型身份已确认；coroutine/generator 共用这一载荷（见 `builtin/generator.rs`）。
+    unsafe { (&*object.as_ptr().cast::<pyawa_core::GeneratorObject>()).finished() }
+}
+
+fn generator_started(instance: &Instance, object: NonNull<Header>) -> bool {
+    let name = instance.type_name(instance.type_of(object));
+    if name != "generator" && name != "coroutine" {
+        return false;
+    }
+    // SAFETY: 类型身份已确认。
+    unsafe { (&*object.as_ptr().cast::<pyawa_core::GeneratorObject>()).started() }
+}
+
+unsafe fn resume_inner(
+    state: *mut pa_state,
+    nargs: i32,
+    nresults: i32,
+    throw: bool,
+) -> i32 {
+    let state = state_or!(state);
+    if nresults != 1 || nargs < 0 || (throw && nargs != 1) || (!throw && nargs > 1) {
+        return status::PA_ERR_INVALID;
+    }
+    let nargs = nargs as usize;
+    if state.stack.len() < nargs + 1 {
+        return status::PA_ERR_INVALID;
+    }
+    let target = match state.stack.get(-((nargs + 1) as i32)) {
+        Some(slot) => slot.object,
+        None => return status::PA_ERR_INVALID,
+    };
+    if generator_finished(&state.instance, target) {
+        return status::PA_ERR_INVALID;
+    }
+    if !throw && nargs == 1 && !generator_started(&state.instance, target) {
+        return status::PA_ERR_INVALID;
+    }
+    let method_name = if throw { "throw" } else { "send" };
+    let method = match pyawa_core::attribute_read(&state.instance, target, method_name) {
+        Ok(value) => value,
+        Err(_) => return status::PA_ERR_INVALID,
+    };
+    // 参数：send(None) 或 send(值)；throw 必须带异常对象。
+    let mut args: Vec<NonNull<Header>> = Vec::with_capacity(1);
+    if nargs == 0 {
+        args.push(state.instance.singletons().none());
+    } else {
+        match state.stack.get(-1) {
+            Some(slot) => args.push(slot.object),
+            None => {
+                // SAFETY: method 是 attribute_read 交回的新引用。
+                unsafe { state.instance.release_object(method.as_ptr()) };
+                return status::PA_ERR_INVALID;
+            }
+        }
+    }
+    let outcome = pyawa_core::call_value(&state.instance, method, &args, &[]);
+    // SAFETY: method 由 attribute_read 新引用，call_value 只借用。
+    unsafe { state.instance.release_object(method.as_ptr()) };
+    // 无论成败，先收掉"协程 + 实参"这段栈。
+    let keep = state.stack.len() - nargs - 1;
+    drain_stack(state, keep);
+    match outcome {
+        Ok(result) => {
+            state.stack.push_owned(result);
+            status::PA_YIELDED
+        }
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            let exception_type = state.instance.type_of(exception.get());
+            let stop = state.instance.type_named("StopIteration");
+            if let Some(stop) = stop {
+                if state.instance.is_subtype(exception_type, stop) {
+                    let value = pyawa_core::attribute_read(&state.instance, exception.get(), "value");
+                    let value = match value {
+                        Ok(value) => value,
+                        Err(_) => state.instance.retain(state.instance.singletons().none()),
+                    };
+                    state.stack.push_owned(value);
+                    return status::PA_COMPLETED;
+                }
+            }
+            let message = exception_message(&state.instance, exception.get());
+            state.message = std::ffi::CString::new(message).ok();
+            status::PA_ERR_RUNTIME
+        }
+        Err(pyawa_core::ExecError::Interrupted) => status::PA_ERR_INTERRUPT,
+        Err(_) => status::PA_ERR_RUNTIME,
+    }
 }
 
 /// `pa_call`／`pa_pcall` 的公共实现（`catch_unwind` 由两个入口各自加，`CX-11`）。
