@@ -38,7 +38,7 @@
  * ⇒ `PA_ERR_INVALID`；`pa_newtype` 的 NULL `dealloc`/`traverse` ⇒ 当场拒绝）。
  * 次版本 14：`AB-80` `pa_writetobytes`（追加式；一次性写回恰好 `bytearray` 的数据区）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 14u
+#define PA_ABI_MINOR 15u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -63,6 +63,8 @@ typedef enum pa_status {
     PA_ERR_ABI = 7,
     PA_ERR_NOTFOUND = 8,   /* AB-73：属性派发回调“未处理”（VM 内部回退，不暴露给 guest） */
     PA_ERR_RESERVED_FIRST = 9,
+    PA_YIELDED = 10,       /* AB-82：协程让出（栈上 1 个结果） */
+    PA_COMPLETED = 11,     /* AB-83：协程完成（栈上 1 个结果） */
     PA_ERR_RESERVED_LAST = 31
 } pa_status;
 
@@ -369,6 +371,12 @@ int pa_func_set_signature(pa_state *state, pa_host_fn function,
  * nargs < 0 或 nresults < 0 ⇒ PA_ERR_INVALID。 */
 int pa_call(pa_state *state, int nargs, int nresults);
 int pa_pcall(pa_state *state, int nargs, int nresults);
+/* AB-84／AB-85（PA_ABI_MINOR 15）：恢复生成器/协程；栈 [coroutine, arg?]；
+ * nargs 0/1（send None/值）或 throw 必须 1；nresults 必须 1；
+ * 返回 PA_YIELDED（让出）/PA_COMPLETED（完成）/PA_ERR_RUNTIME（脚本异常）/
+ * PA_ERR_INTERRUPT/PA_ERR_INVALID（非协程/已完成）。 */
+int pa_resume(pa_state *state, int nargs, int nresults);
+int pa_throw(pa_state *state, int nargs, int nresults);
 int pa_error(pa_state *state, const char *msg);
 
 /* ---- 宿主类型注册（AB-35…AB-38、AB-58）----
