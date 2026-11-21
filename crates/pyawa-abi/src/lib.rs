@@ -4047,6 +4047,9 @@ unsafe fn resume_inner(
     if !throw && nargs == 1 && !generator_started(&state.instance, target) {
         return status::PA_ERR_INVALID;
     }
+    // 在调用/出栈前捕获目标帧：`drain_stack` 可能释放协程的最后一份引用，
+    // 之后再解引用 `target` 就是 use-after-free（评审修复）。
+    let target_frame = generator_frame(&state.instance, target);
     let method_name = if throw { "throw" } else { "send" };
     let method = match pyawa_core::attribute_read(&state.instance, target, method_name) {
         Ok(value) => value,
@@ -4092,7 +4095,7 @@ unsafe fn resume_inner(
                 }
             }
             if throw {
-                if let Some(frame) = generator_frame(&state.instance, target) {
+                if let Some(frame) = target_frame {
                     state.instance.cancel_host_await_for_frame(frame, 2); // THROW
                 }
             }
@@ -4101,7 +4104,7 @@ unsafe fn resume_inner(
             status::PA_ERR_RUNTIME
         }
         Err(pyawa_core::ExecError::Interrupted) => {
-            if let Some(frame) = generator_frame(&state.instance, target) {
+            if let Some(frame) = target_frame {
                 state.instance.cancel_host_await_for_frame(frame, 0); // INTERRUPT
             }
             status::PA_ERR_INTERRUPT

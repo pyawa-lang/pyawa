@@ -429,7 +429,8 @@
   签名 `void (*)(pa_state *state, void *payload, void *context, int reason)`；
   `reason`：`PA_AWAIT_CANCEL_INTERRUPT=0`／`PA_AWAIT_CANCEL_DESTROY=1`／
   `PA_AWAIT_CANCEL_THROW=2`（宏定义随追加版本加入 `pa.h`）。宿主**必须**在此释放 token 资源；
-  之后该 token 不得再被 `pa_resume` 使用。
+  之后该 token 不得再被 `pa_resume` 使用。**该回调只可释放资源，不得再调用 pa_* ABI**
+  （可能在 `pa_destroy` 的收尾路径上被调用，重入不安全）。
 - **AB-90** **恢复、异常与生命周期**（状态按**协程/帧**隔离，同一宿主对象可被多个协程
   await）：
   - 协程挂起在宿主 awaitable 上时，`pa_resume` 送值 ⇒ 该值成为 `await` 表达式结果；
