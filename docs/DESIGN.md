@@ -960,5 +960,7 @@ M5 收口时实测全部在阈值内（复跑区间见上）。
 Pyawa 提供 VM/协程；现有 `Lib/asyncio`（Pyawa 循环模式）保留为可选 CPython 语义 facade；
 **L3（宿主 loop 上完整 asyncio）不承诺**。L1 的 `event` 域是其底座。完整设计、状态机、
 风险与分阶段见 [`DESIGN-event-source.md`](DESIGN-event-source.md)；实现跟踪见 `PLAN §12.27`。
-**accepted 只表示目标架构**：S1 规格／S2 Spike C 通过后才写产品 ABI。
+**实现状态（2026-11-21，S 系列 ✓）**：`pa_resume`/`pa_throw`（1.15）、`event` 域（1.16）、
+host awaitable `await_fn`/`await_cancel_fn`＋VM await 派发（1.17）、参考 C 宿主与测试已落地；
+旧 ABI 宿主零回归。CLI asyncio 仍为**模式 B**（Pyawa 循环、Linux 可用）；L3 不承诺。
 

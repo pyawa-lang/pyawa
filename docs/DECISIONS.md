@@ -47,3 +47,5 @@
   - 模式 B（Pyawa 循环）：现有 `Lib/asyncio` 作为可选 CPython 语义 facade，Linux 桌面可用。
 - 详情、状态机、风险与分阶段见 `docs/DESIGN-event-source.md`；实现跟踪见 `PLAN §12.27`。
 - **accepted 只表示目标架构**：S1 规格/S2 Spike C 通过后才写产品 ABI；不得跳过 spike 直接实现。
+- **实现状态（2026-11-21）**：S1/S1.1 规格、S2 Spike C、S3 实现（1.15/1.16/1.17）、S4 收口
+  均已完成；见 `PLAN §12.27`、`docs/DESIGN-event-source.md`。

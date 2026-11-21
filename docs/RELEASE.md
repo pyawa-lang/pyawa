@@ -55,8 +55,8 @@ cargo build --workspace
 | 项 | 状态 |
 |---|---|
 | 平台 | **Linux x86_64（已验证）**；**Web／浏览器（`wasm32-unknown-unknown`，实验性）**：E1–E8 库嵌入档已进 main（`4f9490cc`／`a8d6ad8a`），E8 子集同结果；**Windows x86_64：W1–W6＋原生 CLI（§12.23）＋runtime 运行矩阵（必需）＋§12.24 真实语义＋平台面补齐**——CI `windows` job **全绿**；**脚本可移植性（Linux×Windows）**：24/24 一致（main `7d1b0f0e`）。内存口径＝Windows 不做 memcheck |
-| 宿主语言 | C／C++（`pa.h`）；CPython 经 ctypes（已验证）；**JS（WASM，实验性）** |
-| ABI | 1.14，**alpha 期未冻结** |
+| 宿主语言 | C／C++（`pa.h`，含异步宿主驱动：`pa_resume`／`event`／host awaitable）；CPython 经 ctypes（已验证）；**JS（WASM，实验性）** |
+| ABI | **1.17**，**alpha 期未冻结**（1.15 `pa_resume`/`pa_throw`；1.16 `event` 域；1.17 host awaitable） |
 | 指令集 | 2 |
 
 ## 已知限制（本版不承诺）
@@ -86,6 +86,9 @@ cargo build --workspace
 - **脚本可移植性（生死线）**：可移植子集内脚本无修改、可观测行为一致；平台查询如实回答；后端
   选型不属于脚本契约。承诺目标含 Linux/Windows（运行档）、wasm/Android/iOS（库嵌入，分阶段
   验收）；验收门与阶段见 `PLAN §12.26`；偏离一律登记 `DIV-`。
+- **宿主事件循环（ADR-005，S 系列）**：宿主可用 `event` 能力域＋`pa_resume`/`pa_throw`＋
+  host awaitable 驱动脚本协程；参考 C 宿主 `examples/reference_host_async.c`。**不承诺** L3
+  （宿主 loop 上完整 asyncio）；CLI asyncio 仍走 Pyawa 循环（模式 B）。
 
 ## 验证证据
 

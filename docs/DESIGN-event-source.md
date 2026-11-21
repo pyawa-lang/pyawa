@@ -1,6 +1,6 @@
 # 宿主事件循环与协程驱动（ADR-005，accepted）
 
-**状态**：`accepted`（2026-11-21，用户拍板：采用 **L2＝宿主拥有事件循环** 为长期架构目标；
+**状态**：`accepted`＋**S 系列已实现**（2026-11-21，用户拍板：采用 **L2＝宿主拥有事件循环** 为长期架构目标；
 L1 是其底座，L3 不承诺）。本文件是目标设计；实现须按 `PLAN §12.27` 分阶段走，spike 通过前
 不写产品 ABI。
 
@@ -62,6 +62,13 @@ L1 是其底座，L3 不承诺）。本文件是目标设计；实现须按 `PLA
 - **错误映射**：完成/异常/取消三态不可混用 `PA_ERR_RUNTIME`；需新增状态码；
 - **平台**：先 Linux 参考宿主打通，再 Windows/wasm adapter；不提前承诺；
 - **ABI**：只增不破（次版本追加）；asyncio 的实现架构不进入内核（ADR-002）。
+
+## 实现状态（2026-11-21）
+
+S1 规格、S1.1 规格、S2 Spike C、S3 实现、S4 文档/承诺均已收口：
+`pa_resume`/`pa_throw`（1.15）、`event` 域（1.16）、host awaitable `await_fn`/`await_cancel_fn`
+＋VM await 派发（1.17）；参考 C 宿主（`examples/reference_host_async.c`）覆盖 resume/event/await；
+旧 ABI 宿主零回归。**CLI asyncio 仍为模式 B**（Pyawa 循环、Linux 可用）；**L3 不承诺**。
 
 ## 分阶段（PLAN §12.27）
 
