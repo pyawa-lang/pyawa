@@ -29,7 +29,7 @@ L1 是其底座，L3 不承诺）。本文件是目标设计；实现须按 `PLA
 
 两模式可同时存在于一个宿主进程的不同实例；同一实例不并发进入（`AB-64`）。
 
-## `event` 能力域（L1 底座）
+## `event` 能力域（L1 底座）——S1 规格见 `SPEC-capabilities.md` §9.10（`CP-40`…`CP-46`）
 
 新增独立能力域（与 `fs`/`net`/`clock` 并列；表尾追加，`AB-41`）：
 
@@ -41,7 +41,7 @@ L1 是其底座，L3 不承诺）。本文件是目标设计；实现须按 `PLA
 - JS（JSPI/Asyncify/回调）、native（epoll/kqueue/WSAPoll/IOCP）、RTOS 都是 provider adapter；
   **内核不认识 OS 原语**。
 
-## `pa_resume` 族（additive ABI，待规格定稿）
+## `pa_resume` 族（additive ABI，S1 规格见 `SPEC-c-abi.md` §15.6／`AB-82`…`AB-87`）
 
 - `pa_spawn(state, ...)`：在宿主侧创建可驱动协程（或由脚本返回协程对象，宿主经对象协议持有）；
 - `pa_resume(state, nargs, nresults)`：恢复协程；结构化成因：
