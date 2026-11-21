@@ -129,6 +129,16 @@ int main(void)
     if (pa_resume(st, 0, 1) != PA_YIELDED) return fail(st, "await resume", -1);
     if (pa_tointeger(st, -1, &value) != PA_OK || value != 77) return fail(st, "await token", -1);
     printf("ref-async: await-token=%lld\n", (long long)value);
+    /* 宿主 loop 用 event provider 等待该 token（mock 立即就绪）⇒ 再 resume。 */
+    pa_cap_event_entry token_entry = {0}, token_ready = {0};
+    token_entry.key = 77;
+    token_entry.events = 0x1;
+    size_t token_len = 0;
+    if (mock_wait(NULL, &token_entry, 1, 0, &token_ready, 1, &token_len, NULL) != PA_CAP_OK ||
+        token_len != 1) {
+        return fail(st, "event await token", -1);
+    }
+    printf("ref-async: event-token=%llu\n", (unsigned long long)token_len);
     pa_settop(st, 0);
     if (pa_getglobal(st, "c") != PA_OK) return fail(st, "getglobal c2", -1);
     if (pa_pushinteger(st, 41) != PA_OK) return fail(st, "push 41", -1);

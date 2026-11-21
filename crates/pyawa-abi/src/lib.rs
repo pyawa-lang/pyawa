@@ -4013,6 +4013,16 @@ fn generator_started(instance: &Instance, object: NonNull<Header>) -> bool {
     unsafe { (&*object.as_ptr().cast::<pyawa_core::GeneratorObject>()).started() }
 }
 
+/// 取生成器/协程的目标帧（用于按协程取消 host await）。
+fn generator_frame(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+    let name = instance.type_name(instance.type_of(object));
+    if name != "generator" && name != "coroutine" {
+        return None;
+    }
+    // SAFETY: 类型身份已确认。
+    Some(unsafe { (&*object.as_ptr().cast::<pyawa_core::GeneratorObject>()).frame() })
+}
+
 unsafe fn resume_inner(
     state: *mut pa_state,
     nargs: i32,
@@ -4082,14 +4092,18 @@ unsafe fn resume_inner(
                 }
             }
             if throw {
-                state.instance.cancel_host_awaits(2); // PA_AWAIT_CANCEL_THROW
+                if let Some(frame) = generator_frame(&state.instance, target) {
+                    state.instance.cancel_host_await_for_frame(frame, 2); // THROW
+                }
             }
             let message = exception_message(&state.instance, exception.get());
             state.message = std::ffi::CString::new(message).ok();
             status::PA_ERR_RUNTIME
         }
         Err(pyawa_core::ExecError::Interrupted) => {
-            state.instance.cancel_host_awaits(0); // PA_AWAIT_CANCEL_INTERRUPT
+            if let Some(frame) = generator_frame(&state.instance, target) {
+                state.instance.cancel_host_await_for_frame(frame, 0); // INTERRUPT
+            }
             status::PA_ERR_INTERRUPT
         }
         Err(_) => status::PA_ERR_RUNTIME,
