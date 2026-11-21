@@ -410,6 +410,37 @@
 
 ---
 
+### 11.1 S1.1 宿主 awaitable 对象协议（`ADR-005`；**未实现**）
+
+> S1 只到生成器/协程 resume/throw（`AB-84`/`AB-85`）；S1.1 定义“脚本 `await` 宿主对象”
+> 的 object op，使宿主 loop 能接管真正的宿主 awaitable（Spike C 未验证的部分）。
+
+- **AB-88** **`await_fn` 槽**（追加到 `pa_type_ops`／`pa_object_ops` 尾部；旧宿主按 `size`
+  有界读，未声明 ⇒ `None`）：VM 执行 `await <宿主对象>` 且该对象类型装了 `await_fn` 时调用；
+  签名 `int (*)(pa_state *state, void *payload, void *context, uint64_t *token_out)`。
+  - 成功返回 `PA_OK` 且写 `token_out`（宿主自有、不透明）；VM 挂起协程并以 `PA_YIELDED`
+    返回该 token（出栈结果＝整数 token；宿主按自己的 map 找到事件）；
+  - 其它状态码 ⇒ VM 按宿主错误路径抛脚本可捕获异常（不静默回退）；
+  - 回调**禁止**保存 `payload`／`context`／`state` 供返回后使用（`AB-17`）；token 的生命周期
+    归宿主，VM 不解释。
+- **AB-89** **`await_cancel_fn` 槽**（可选，追加在 `await_fn` 之后）：VM 在协程被取消、
+  销毁或 `pa_throw` 注入异常而当前挂起在宿主 awaitable 上时调用；
+  签名 `void (*)(pa_state *state, void *payload, void *context, int reason)`；
+  `reason`：`PA_AWAIT_CANCEL_INTERRUPT=0`／`PA_AWAIT_CANCEL_DESTROY=1`／
+  `PA_AWAIT_CANCEL_THROW=2`（宏定义随追加版本加入 `pa.h`）。宿主**必须**在此释放 token 资源；
+  之后该 token 不得再被 `pa_resume` 使用。
+- **AB-90** **恢复、异常与生命周期**：
+  - 协程挂起在宿主 awaitable 上时，`pa_resume` 送值 ⇒ 该值成为 `await` 表达式结果；
+  - `pa_throw` ⇒ 异常在 `await` 处抛出；VM 先调 `await_cancel_fn(THROW)`；
+  - `pa_interrupt` 在恢复边界 ⇒ 取消（`PA_ERR_INTERRUPT`），先调 `await_cancel_fn(INTERRUPT)`；
+    取消后协程**不可再 resume**（`PA_ERR_INVALID`），可安全 `pa_destroy`；
+  - `pa_destroy` 时若仍有挂起 awaitable ⇒ 调 `await_cancel_fn(DESTROY)`，然后释放协程根。
+- **AB-91** **版本与追加**：`await_fn`／`await_cancel_fn` 只**追加**到 `pa_type_ops` 尾部
+  （`size` 有界读，`AB-43`），随实现升 `PA_ABI_MINOR`；旧宿主/旧类型未装槽 ⇒ 行为同 S1；
+  新宿主不得假设旧 VM 认识新字段。
+
+---
+
 ## 12. 版本策略（机制：尺寸 ＋ 追加式函数表）
 
 - **AB-39** 三份契约——**嵌入 API ＋ 能力接口 ＋ 宿主对象契约**——**共用一个版本号**；
@@ -478,6 +509,9 @@
 | `T-AB-21` | **S1 计划（实现后）**：`pa_resume`／`pa_throw` 的栈契约、`PA_YIELDED`／`PA_COMPLETED`／异常／取消四态可区分；旧宿主不调用新函数时行为不变（`AB-82`…`AB-85`） |
 | `T-AB-22` | **S1 计划（实现后）**：对已完成协程再 resume ⇒ `PA_ERR_INVALID`；非协程目标 ⇒ `PA_ERR_INVALID` 且不改栈（`AB-84`） |
 | `T-AB-23` | **S1 计划（实现后）**：`AB-86` 的边界——S1 不产生“宿主 awaitable”语义断言；Spike C 之前不得把 yield 值当 awaitable 解释 |
+| `T-AB-24` | **S1.1 计划（实现后）**：宿主对象装 `await_fn` 后，脚本 `await` 它 ⇒ `PA_YIELDED` 返回 token；`pa_resume(value)` 后该值成为 await 表达式结果（`AB-88`／`AB-90`） |
+| `T-AB-25` | **S1.1 计划（实现后）**：`await` 期间 `pa_interrupt`／`pa_throw`／`pa_destroy` 分别调用 `await_cancel_fn` 的 INTERRUPT／THROW／DESTROY；取消后 resume ⇒ `PA_ERR_INVALID`（`AB-89`／`AB-90`） |
+| `T-AB-26` | **S1.1 计划（实现后）**：未装 `await_fn` 的旧宿主类型行为同 S1；`size` 有界读 + 追加字段不影响旧宿主（`AB-91`） |
 
 ---
 
@@ -792,8 +826,8 @@
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**S1 计划条款（未实现）**：`AB-82`…`AB-87`。其中 **宿主 awaitable 对象协议尚未写出**
-（`AB-86`：S1 只到生成器/协程 resume/throw；awaitable 形状待 S2 Spike C 后以 S1.1 补）。
+**S1/S1.1 计划条款（未实现）**：`AB-82`…`AB-91`。S1 只到生成器/协程 resume/throw
+（`AB-86`）；S1.1 已在 §11.1 写出 host awaitable 对象协议（`AB-88`…`AB-91`），实现随 S3。
 
 **本规格除上述 S1 计划条款外，无未实现的 `AB-` 条款**：
 `AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**

@@ -48,8 +48,10 @@ L1 是其底座，L3 不承诺）。本文件是目标设计；实现须按 `PLA
   - `PA_YIELDED`（带 yield 值），`PA_COMPLETED`（带返回值），`PA_RAISED`（异常经
     `pa_errmsg`/异常对象通道）；错误码与 `PA_OK/PA_YIELDED/PA_COMPLETED` 的最终取值在规格里定；
 - `pa_throw(state, exc)`：把宿主异常送回协程（对应 `throw`）；
-- host awaitable：宿主可提供 `await` 对象；VM `await` 到时返回 `PA_YIELDED` 并带
-  host awaitable 句柄，宿主事件就绪后 `pa_resume` 送回值/异常；
+- host awaitable（S1.1，`SPEC-c-abi.md` §11.1／`AB-88`…`AB-91`）：宿主类型可装
+  `await_fn`（返回 token）与可选 `await_cancel_fn`（INTERRUPT／THROW／DESTROY）；
+  脚本 `await` 时 VM 返回 `PA_YIELDED`＋token，宿主事件就绪后 `pa_resume` 送值、
+  `pa_throw` 送异常；取消后协程不可再 resume；未装槽 ⇒ 行为同 S1；
 - 取消：`pa_interrupt` 在 resume 边界生效，语义与现有执行入口一致；
 - 兼容：现有对象协议（`pa_call` + `getfield("send")`）保留为兼容路径；**不删旧面**。
 
@@ -65,7 +67,8 @@ L1 是其底座，L3 不承诺）。本文件是目标设计；实现须按 `PLA
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| **S1 规格** | `event` vtable ＋ `pa_resume`/`pa_throw`/host awaitable 的 ABI 规格（错误码、栈契约、取消、GC） | 文档评审通过；不写代码 |
+| **S1 规格 ✓ 草案（2026-11-21）** | `event` vtable ＋ `pa_resume`/`pa_throw`（状态码、栈契约、取消、GC）；host awaitable 不在 S1 | `SPEC-capabilities.md` §9.10（`CP-40`…`CP-46`）＋`SPEC-c-abi.md` §15.6（`AB-82`…`AB-87`） |
+| **S1.1 规格 ✓ 草案（2026-11-21）** | host awaitable 对象协议：`await_fn`/`await_cancel_fn`、token/恢复/异常/取消生命周期、追加式 ABI | `SPEC-c-abi.md` §11.1（`AB-88`…`AB-91`）；T-AB-24…26 |
 | **S2 Spike C ✓（2026-11-21）** | 宿主 loop 驱动含 `await` 的脚本协程；yield/恢复/完成/异常/取消五态；参考 C 宿主 | 报告：`docs/rounds/spikes/2026-11-21-host-awaitable-loop.md`；**真正 host awaitable 对象协议未验证**（S1.1） |
 | **S3 实现** | `event` 域＋`pa_resume` 族（additive）、参考宿主、旧 ABI 宿主不受影响 | `check.py` 20/20；slowcheck 12/12；CI 全绿 |
 | **S4 文档/承诺** | 更新 DESIGN/PLAN/RELEASE/宿主指南；asyncio 仍为可选 facade | 文档一致；不承诺 L3 |
