@@ -37,12 +37,13 @@
 - 以后按发布需要增量引入 `develop`／`release/*`／`hotfix/*`（见 `docs/WORKFLOW.md`）；
 - 不引入完整 Git Flow 的仪式，但保留其发布纪律的扩展点。
 
-## ADR-005 宿主事件源与协程驱动（proposed）
+## ADR-005 宿主事件循环与协程驱动（accepted，2026-11-21）
 
-- 新增独立的 `event` 能力域（宿主事件源 provider）与 `pa_resume` 族（additive ABI），
-  让宿主拥有事件循环并可驱动脚本协程；不改变普通 `pa_exec_*` 的阻塞语义。
-- 详细设计、约束、非目标与 spike 计划见 `docs/DESIGN-event-source.md`。
-- **状态 proposed**：Spike A（现有对象协议驱动协程）与 Spike B（`event` provider 形状原型）
-  **已于 2026-11-21 完成**：报告见 `docs/rounds/spikes/2026-11-21-host-coroutine-driver.md` 与
-  `...-event-source-prototype.md`。下一步据两份证据定最终 `pa_resume` 状态/错误码与 `event`
-  vtable 规格，再转 accepted；接受前不实现产品代码。
+- **用户拍板：长期架构目标＝ L2“宿主拥有事件循环”**（Lua 式）；L1 `event` 能力域是其底座；
+  L3（宿主 loop 上完整 asyncio）**不承诺**。
+- 双模式并存：
+  - 模式 A（宿主驱动）：宿主循环 + `event` provider + `pa_resume` 族（additive ABI），
+    Pyawa 提供 VM/协程；普通 `pa_exec_*` 阻塞语义不变；
+  - 模式 B（Pyawa 循环）：现有 `Lib/asyncio` 作为可选 CPython 语义 facade，Linux 桌面可用。
+- 详情、状态机、风险与分阶段见 `docs/DESIGN-event-source.md`；实现跟踪见 `PLAN §12.27`。
+- **accepted 只表示目标架构**：S1 规格/S2 Spike C 通过后才写产品 ABI；不得跳过 spike 直接实现。
