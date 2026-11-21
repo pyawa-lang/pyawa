@@ -42,5 +42,7 @@
 - 新增独立的 `event` 能力域（宿主事件源 provider）与 `pa_resume` 族（additive ABI），
   让宿主拥有事件循环并可驱动脚本协程；不改变普通 `pa_exec_*` 的阻塞语义。
 - 详细设计、约束、非目标与 spike 计划见 `docs/DESIGN-event-source.md`。
-- **状态 proposed**：先做 Spike A（现有对象协议驱动协程）与 Spike B（`event` provider 原型），
-  再定最终 ABI 形状并转 accepted；本 ADR 接受前不实现产品代码。
+- **状态 proposed**：Spike A（现有对象协议驱动协程）与 Spike B（`event` provider 形状原型）
+  **已于 2026-11-21 完成**：报告见 `docs/rounds/spikes/2026-11-21-host-coroutine-driver.md` 与
+  `...-event-source-prototype.md`。下一步据两份证据定最终 `pa_resume` 状态/错误码与 `event`
+  vtable 规格，再转 accepted；接受前不实现产品代码。
