@@ -708,7 +708,7 @@ fast／wasm／windows 全绿；同一处 3 轮不过则停手升级。**开发�
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| **S1 规格** | `event` vtable＋`pa_resume`/`pa_throw`/host awaitable 的 ABI 规格（状态码、栈契约、取消、GC 根） | 文档评审；不写代码 |
+| **S1 规格 ✓ 草案（2026-11-21）** | `event` vtable＋`pa_resume`/`pa_throw` 的 ABI 规格（状态码、栈契约、取消、GC 根）；host awaitable 明确不在 S1（`AB-86`） | `SPEC-capabilities.md` §9.10（`CP-40`…`CP-46`）＋`SPEC-c-abi.md` §15.6（`AB-82`…`AB-87`）；待 S2 Spike C 后定稿 |
 | **S2 Spike C** | 宿主 loop 驱动 `await` host awaitable 的脚本协程；完成/异常/取消三态；参考 C 宿主 | spike 报告＋证据；不改产品 ABI |
 | **S3 实现** | `event` 域＋`pa_resume` 族（additive）；旧 ABI 宿主不受影响 | check.py 20/20；slowcheck 12/12；CI 全绿 |
 | **S4 文档/承诺** | 更新 DESIGN/PLAN/RELEASE/宿主指南；asyncio 仍为可选 facade | 文档一致；不承诺 L3 |

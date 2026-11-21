@@ -475,6 +475,9 @@
 | `T-AB-18` | 宿主可用性：组合根产物（`pyawa-runtime` cdylib／静态库）交出的 `paL_newstate`／`paL_openlibs` 实例上 builtins／`import` 可用；`pyawa-abi` 裸实例保持"语言骨架"且失败带 `pa_errmsg`；**仓库内有不含 numpy 的最小探针**可复跑（§12.13 #1） |
 | `T-AB-19` | **协议唯一入口 oracle**：记录式 `getattr_fn` 对 `pyawa_core::PROTOCOL_CASES` **全清单**（含异步协议）跑用例，断言每个协议的 dunder 都被问过（缺席即旁路）；清单↔片段双向一致（禁止只覆盖已实现协议）；另测宿主 dunder 行为生效＋内建/用户类快路等价（`protocol_oracle.rs`／`protocol_host_dispatch.rs`，**无 numpy**，进 CI） |
 | `T-AB-20` | **一次性写回**（`AB-80`）：恰好 `bytearray` 写入成功且 guest 读到新内容、栈不变；`offset+len` 越界／**usize 溢出**⇒ `PA_ERR_INVALID` 且不部分写；`bytes`／`memoryview`／**`bytearray` 子类**／非字节类型／非法 `idx` ⇒ `PA_ERR_INVALID`；`p == NULL` 且 `len > 0` 拒绝；合法 `bytearray` 上 `len == 0`（`offset <= len`）为 `PA_OK` no-op；失败 `pa_errmsg` 非空；valgrind 0 错误 |
+| `T-AB-21` | **S1 计划（实现后）**：`pa_resume`／`pa_throw` 的栈契约、`PA_YIELDED`／`PA_COMPLETED`／异常／取消四态可区分；旧宿主不调用新函数时行为不变（`AB-82`…`AB-85`） |
+| `T-AB-22` | **S1 计划（实现后）**：对已完成协程再 resume ⇒ `PA_ERR_INVALID`；非协程目标 ⇒ `PA_ERR_INVALID` 且不改栈（`AB-84`） |
+| `T-AB-23` | **S1 计划（实现后）**：`AB-86` 的边界——S1 不产生“宿主 awaitable”语义断言；Spike C 之前不得把 yield 值当 awaitable 解释 |
 
 ---
 
@@ -515,7 +518,15 @@
 | 6 | `PA_ERR_INVALID` | 宿主用法错误（栈越界、类型不符、句柄失效、`.pyac` 版本不符等） |
 | 7 | `PA_ERR_ABI` | ABI 版本或尺寸不兼容（`AB-40`） |
 | 8 | `PA_ERR_NOTFOUND` | 属性/方法派发回调的"**未处理**"（`AB-73`）；VM 在**内部回退**，不直接暴露给 guest |
-| 9–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
+| 10 | `PA_YIELDED` | 协程**让出**（`AB-82`）；栈上 1 个结果（yield 值或宿主 awaitable 句柄） |
+| 11 | `PA_COMPLETED` | 协程**完成**（`AB-83`）；栈上 1 个结果（返回值，无返回值为 `None`） |
+| 12–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
+
+- **AB-82** **`PA_YIELDED`（10）**：`pa_resume`／`pa_throw` 的“协程让出”状态；与
+  `PA_ERR_RUNTIME`（异常）、`PA_ERR_INTERRUPT`（取消）**必须**可区分。成功但未完成时返回；
+  栈上恰好 1 个结果（yield 值；S1 不解释宿主 awaitable，见 `AB-86`）。
+- **AB-83** **`PA_COMPLETED`（11）**：协程正常结束；栈上恰好 1 个结果（返回值；无显式返回 ⇒
+  `None`）。完成后对同一协程再 `pa_resume` ⇒ `PA_ERR_INVALID`。
 
 ### 15.3 核心层 `pa_`（81 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`）
 
@@ -751,11 +762,41 @@
     扩展模式的静态检查、不改发射）＋ ABI 侧签名投影。
   - 验收：`crates/pyawa-abi/tests/host_signature.rs`（10 例：上述全部 ＋ 编译期／运行期两档分工）。
 
+### 15.6 S1 计划：协程驱动（`ADR-005`；**未实现，不计入 §15.3 的 81 个**）
+
+> 本节是 S1 规格草案（2026-11-21）。函数、状态码与栈契约先定；实现随 S3 以**追加式**
+> 进入下一 ABI 次版本，现有宿主不受影响。`event` 域形状引 `SPEC-capabilities.md` §9.10。
+
+| 计划函数 | 栈契约 | 说明 |
+|---|---|---|
+| `pa_resume(pa_state *, int nargs, int nresults)` | `−(nargs+1)+1` | 栈顶为参数值，其下为生成器/协程对象；恢复执行；`nresults` 必须为 1 |
+| `pa_throw(pa_state *, int nargs, int nresults)` | `−(nargs+1)+1` | 栈顶为异常对象，其下为生成器/协程；把异常送回协程 |
+
+- **AB-84** **`pa_resume`**：`nargs` 只能是 `0` 或 `1`；`0` ⇒ 向协程发送 `None`（首次恢复必须
+  用 `0`）；`1` ⇒ 发送栈顶值。目标必须是生成器/协程对象（否则 `PA_ERR_INVALID`，不消耗栈）。
+  返回 `PA_YIELDED` 或 `PA_COMPLETED`；脚本抛异常 ⇒ `PA_ERR_RUNTIME`（信息经 `pa_errmsg`）；
+  `pa_interrupt` 在恢复边界 ⇒ `PA_ERR_INTERRUPT`。`nresults` 只接受 `1`；`<0` ⇒ `PA_ERR_INVALID`。
+- **AB-85** **`pa_throw`**：`nargs` 必须为 `1`，栈顶为异常对象/异常类；语义对应生成器
+  `throw`；返回 `PA_YIELDED`／`PA_COMPLETED` 或 `PA_ERR_RUNTIME`；栈契约同 `AB-84`。
+- **AB-86** **S1 的宿主 awaitable 边界**：S1 **只**定义生成器/协程的 resume/throw；
+  “脚本 `await` 宿主 awaitable 并在宿主 loop 上恢复”的对象协议**不在本版**（待 S2 Spike C
+  定形后，以 AB-86 的后续条款或新条款定义）。因此 S1 的 `PA_YIELDED` 结果值不得假设能被
+  VM 解释为 awaitable。
+- **AB-87** **版本与兼容**：上述函数/状态码在 S3 实现时**只追加**（`AB-20` 的预留区、
+  `AB-41` 的表尾追加、`PA_ABI_MINOR` +1）；旧宿主不注册新域、不调用新函数 ⇒ 行为不变；
+  `event` 域未注册 ⇒ `CP-2` 的“整域未实现”，不得创建期拒绝实例。
+
+---
+
 ## 16. 尚未写出（本规格自己缺的节）
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-**本规格无未实现的 `AB-` 条款**：`AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**
+**S1 计划条款（未实现）**：`AB-82`…`AB-87`。其中 **宿主 awaitable 对象协议尚未写出**
+（`AB-86`：S1 只到生成器/协程 resume/throw；awaitable 形状待 S2 Spike C 后以 S1.1 补）。
+
+**本规格除上述 S1 计划条款外，无未实现的 `AB-` 条款**：
+`AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**
 落地（`crates/pyawa-abi/tests/write_tobytes.rs` 的 `T-AB-20`；valgrind 0 错误）。此前已落地：
 `AB-79`（`pa_pushmodule`）与 §12.13 的 #2（`AB-36` NULL hooks
 当场拒绝）、#3（`pa_getglobal` 缺失名 `PA_ERR_INVALID`）、#4（模块句柄上栈）已随 **1.13** 落地

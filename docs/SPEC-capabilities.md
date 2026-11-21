@@ -70,8 +70,10 @@
 | `tty` | `CpTtyVtable` | `termios`、`readline`、`_curses` | 可异步化 |
 | `locale` | `CpLocaleVtable` | `_locale`、`_codecs*`、`unicodedata` | 可异步化 |
 | `ipc` | `CpIpcVtable` | `_thread`、`mmap`、`_posixshmem` | **不可异步化**（`_thread` 触碰 VM 对象；按 `CP-37` **禁止**域内混合——若将来 `mmap`／`_posixshmem` 需要异步，**拆域**成 `shm`，而不是引入槽位级分类） |
+| `event` | `CpEventVtable` | **S1 计划域（未实现）**：宿主事件源（宿主循环的 readiness/定时/取消） | 可异步化（宿主侧等待；`CP-44`） |
 
-- **CP-1** 域集合**必须**与 `DESIGN.md` §7.3 一一对应。新增域**必须**同时升接口版本（CP-30）。
+- **CP-1** 域集合**必须**与 `DESIGN.md` §7.3 一一对应；`event` 是 **S1 计划域**（`CP-40`），
+  在实现前**不占** ABI 的 `PA_DOMAIN_*` 编号。新增域**必须**同时升接口版本（CP-30）。
 - **CP-2** 某域 vtable 指针为 null ⇒ 该域**整域未实现**：调用报"未实现"（CP-5），**禁止**在创建实例时拒绝。
 - **CP-3** 域内单个槽位为 null ⇒ 只有该操作未实现，同域其余槽位不受影响；**禁止**用"创建期扫描并拒绝"替代调用时判定。
 
@@ -271,6 +273,40 @@
 
 ---
 
+### 9.10 `event` —— 宿主事件源（宿主事件循环；`ADR-005` S1 计划域）
+
+> **状态**：S1 规格草案（2026-11-21）；未实现、未占 ABI 域编号、不改变现有宿主行为。
+
+| 槽位 | 语义 | 可异步化 |
+|---|---|---|
+| `wait(entries, timeout_ns)` | 等待就绪/完成事件；条目含 opaque `key` ＋ `events`；两段式出参 | 是（宿主侧阻塞/回调由 provider 决定） |
+| `notify(key, events)` | **可选**：宿主侧唤醒某 key | 是 |
+| `cancel(key)` | **可选**：取消某 key 上的等待；`timeout` 与 `cancel` **必须**可区分 | 是 |
+
+- **CP-40** **`event` 是可选域**：未注册时不得影响既有九域；注册失败**禁止**让实例创建失败
+  （`CP-2`）。`CpEventVtable` 的公共头沿用 `CP-30`（`version`／`size`／`state`）。
+- **CP-41** **`CpEventVtable` 形状**（表尾追加；字段顺序即线格式）：
+  `version:u32`、`size:u32`、`state:*mut c_void`、
+  `wait: Option<fn(*mut c_void, *const CpEventEntry, usize, i64, *mut CpEventEntry, usize, *mut usize, *mut i32) -> CapStatus>`、
+  `notify: Option<fn(*mut c_void, u64, i32, *mut i32) -> CapStatus>`、
+  `cancel: Option<fn(*mut c_void, u64, *mut i32) -> CapStatus>`；
+  `CpEventEntry { key:u64, events:i32, revents:i32 }`（`repr(C)`，与 `pollfd` 同形）。
+- **CP-42** **`wait` 语义**：`timeout_ns < 0` ⇒ 无限等待；`= 0` ⇒ 非阻塞探测；`> 0` ⇒ 有界等待。
+  出参两段式：`out_len` 回**总就绪数**，provider 只写 `min(总长, 容量)`；容量不足由调用方扩容重试。
+  无就绪且超时 ⇒ `PA_OK` 且 `out_len = 0`；**禁止**伪造事件。
+- **CP-43** **事件位**：`events`／`revents` 采用 POSIX `poll(2)` 规范值（`CP-10` 的 `POLLIN` 一族）；
+  provider 不认识的位**必须**忽略而不是报错；`revents` 只反映本次就绪的位。
+- **CP-44** **取消与超时的区分**：`pa_interrupt` 必须在**有限时间内**让 `wait` 返回；
+  取消走 `PA_ERR_INTERRUPT` 口径（`CP-27`／`CP-28`），**不得**伪装成超时（`out_len = 0` 且 `PA_OK`）；
+  provider 不可取消时**必须**如实返回未实现（`CP-3`），不得声称可取消。
+- **CP-45** **`notify`／`cancel` 是可选槽**：`None` ⇒ 该操作未实现（`CP-3`）；宿主**禁止**假设它们存在。
+  即使没有 `notify`，provider 也可通过自己的事件源唤醒 `wait`。
+- **CP-46** **事件源适配器边界**：JS（JSPI/Asyncify/回调）、native（epoll/kqueue/WSAPoll/IOCP）、
+  RTOS 都是 `event` 的 provider adapter；**内核不得**出现 OS 原语。`event` 不替代 `fs`／`net`，
+  只提供“何时可继续”的契约；asyncio 的 facade 映射属 `ADR-002`，不在本域内定义。
+
+---
+
 ## 10. VM 侧 POSIX 适配层
 
 - **CP-31** **实例能力表**：`fd` 的分配／释放／复制（含 `dup2`）**必须**在本层完成，`fd` 就是表下标（CP-14）。
@@ -299,6 +335,9 @@
 | T-CP-11 | 同一脚本在真实机器 provider 与受限 provider 下**写法不变**（`DESIGN.md` §12 M5；判据见 `PLAN-milestones.md` §6 的 M5） |
 | T-CP-12 | 关闭后再操作返回机器错误，且 `close` 幂等（CP-17／CP-18） |
 | T-CP-13 | 能力接口 crate 内不存在真实机器实现（`CX-5`；`CP-12`） |
+| T-CP-14 | `event` 未注册 ⇒ 实例可创建、调用"未实现"；注册后 `wait` 的就绪/超时两段式语义符合 CP-42（S3 实现后） |
+| T-CP-15 | `event.wait` 的取消与超时**可区分**：`pa_interrupt` ⇒ 取消口径，超时 ⇒ 空集合 `PA_OK`（CP-44） |
+| T-CP-16 | `notify`／`cancel` 为 `None` 时调用返回"未实现"，不假装成功（CP-45） |
 
 ---
 
