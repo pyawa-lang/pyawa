@@ -2,7 +2,7 @@
  *
  * **自动生成，勿手改**：`tools/gen_pa_capabilities.py` 从 `crates/pyawa-capabilities/src/`
  * 的 `#[repr(C)]` 形状生成；`--check` 漂移即红（PLAN §12.17 A1/A3）。
- * **只含已有 Rust 布局的 3 域**（fs/clock/net）；其余 6 域本 ABI 不定义布局（只能传 NULL）。
+ * **只含已有 Rust 布局的 4 域**（fs/clock/net/event）；其余 6 域本 ABI 不定义布局（只能传 NULL）。
  */
 #ifndef PAWA_PA_CAPABILITIES_H
 #define PAWA_PA_CAPABILITIES_H
@@ -128,6 +128,21 @@ typedef struct pa_net_vtable {
     pa_cap_status (*socketpair)(void *, int32_t, int32_t, int32_t, pa_cap_socket_handle *, pa_cap_socket_handle *, int32_t *);
     pa_cap_status (*close)(void *, pa_cap_socket_handle, int32_t *);
 } pa_net_vtable;
+
+typedef struct pa_cap_event_entry {
+    uint64_t key;
+    int32_t events;
+    int32_t revents;
+} pa_cap_event_entry;
+
+typedef struct pa_event_vtable {
+    uint32_t version;
+    uint32_t size;
+    void * state;
+    pa_cap_status (*wait)(void *, const pa_cap_event_entry *, size_t, int64_t, pa_cap_event_entry *, size_t, size_t *, int32_t *);
+    pa_cap_status (*notify)(void *, uint64_t, int32_t, int32_t *);
+    pa_cap_status (*cancel)(void *, uint64_t, int32_t *);
+} pa_event_vtable;
 
 #ifdef __cplusplus
 }

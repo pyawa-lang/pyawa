@@ -319,7 +319,7 @@ os.read(fd, n)   →  VM 查实例能力表  →  能力对象.read(n)
 | 终端 | `termios`、`readline`、`_curses` |
 | 区域与编码 | `_locale`、`_codecs*`、`unicodedata` |
 | 进程内共享 | `_thread`、`mmap`、`_posixshmem` |
-| 事件源（宿主循环） | **S1 计划域（未实现）**：无 C 模块；宿主 provider（`ADR-005`／`CP-40`…`CP-46`） |
+| 事件源（宿主循环） | **S3 已落地**：无 C 模块；宿主 provider（`ADR-005`／`CP-40`…`CP-46`） |
 
 ### 7.4 ⚠ 根能力的边界情形（受限 provider 的安全核心）
 

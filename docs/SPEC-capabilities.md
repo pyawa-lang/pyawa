@@ -70,10 +70,10 @@
 | `tty` | `CpTtyVtable` | `termios`、`readline`、`_curses` | 可异步化 |
 | `locale` | `CpLocaleVtable` | `_locale`、`_codecs*`、`unicodedata` | 可异步化 |
 | `ipc` | `CpIpcVtable` | `_thread`、`mmap`、`_posixshmem` | **不可异步化**（`_thread` 触碰 VM 对象；按 `CP-37` **禁止**域内混合——若将来 `mmap`／`_posixshmem` 需要异步，**拆域**成 `shm`，而不是引入槽位级分类） |
-| `event` | `CpEventVtable` | **S1 计划域（未实现）**：宿主事件源（宿主循环的 readiness/定时/取消） | 可异步化（宿主侧等待；`CP-44`） |
+| `event` | `CpEventVtable` | **S3 已落地（`PA_ABI_MINOR` 16）**：宿主事件源（宿主循环的 readiness/定时/取消） | 可异步化（宿主侧等待；`CP-44`） |
 
-- **CP-1** 域集合**必须**与 `DESIGN.md` §7.3 一一对应；`event` 是 **S1 计划域**（`CP-40`），
-  在实现前**不占** ABI 的 `PA_DOMAIN_*` 编号。新增域**必须**同时升接口版本（CP-30）。
+- **CP-1** 域集合**必须**与 `DESIGN.md` §7.3 一一对应；`event` 为 S3 追加域（`PA_DOMAIN_EVENT`=9，
+  `CP-40`），随 `PA_ABI_MINOR` 16 落地。新增域**必须**同时升接口版本（CP-30）。
 - **CP-2** 某域 vtable 指针为 null ⇒ 该域**整域未实现**：调用报"未实现"（CP-5），**禁止**在创建实例时拒绝。
 - **CP-3** 域内单个槽位为 null ⇒ 只有该操作未实现，同域其余槽位不受影响；**禁止**用"创建期扫描并拒绝"替代调用时判定。
 
@@ -275,7 +275,7 @@
 
 ### 9.10 `event` —— 宿主事件源（宿主事件循环；`ADR-005` S1 计划域）
 
-> **状态**：S1 规格草案（2026-11-21）；未实现、未占 ABI 域编号、不改变现有宿主行为。
+> **状态**：S3 已落地（2026-11-21，`PA_ABI_MINOR` 16）；`PA_DOMAIN_EVENT`=9；未注册时行为同旧宿主。
 
 | 槽位 | 语义 | 可异步化 |
 |---|---|---|
