@@ -202,6 +202,8 @@ fn host_getattr_dunders_take_effect() {
         context: core::ptr::null_mut(),
         getattr_fn: Some(dispatch_getattr),
         setattr_fn: None,
+        await_fn: None,
+        await_cancel_fn: None,
     };
     register_probe(state, Some(ops));
     for (line, what) in [

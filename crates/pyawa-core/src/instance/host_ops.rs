@@ -30,6 +30,14 @@ pub type HostObjectGetAttr =
 pub type HostObjectSetAttr =
     unsafe fn(*mut Header, &str, Option<NonNull<Header>>, &Instance, usize) -> Result<bool, ExecError>;
 
+/// 宿主对象 **await 开始** 回调（`AB-88`）：返回 provider token；`Ok(None)` 表示未处理。
+pub type HostObjectAwait =
+    unsafe fn(*mut Header, &Instance, usize) -> Result<Option<u64>, ExecError>;
+
+/// 宿主对象 **await 取消** 回调（`AB-89`）：reason 0=INTERRUPT／1=DESTROY／2=THROW。
+pub type HostObjectAwaitCancel =
+    unsafe fn(*mut Header, &Instance, usize, i32) -> Result<(), ExecError>;
+
 /// 一个对象的宿主协议钩子（**拷贝**语义；记录本身由 ABI 层持有）。
 #[derive(Clone, Copy)]
 pub struct HostObjectOps {
@@ -37,6 +45,10 @@ pub struct HostObjectOps {
     pub getattr: Option<HostObjectGetAttr>,
     /// 属性回退写（`None` ⇒ 不派发）。
     pub setattr: Option<HostObjectSetAttr>,
+    /// 宿主 await 开始（`AB-88`；`None` ⇒ 不派发）。
+    pub await_fn: Option<HostObjectAwait>,
+    /// 宿主 await 取消（`AB-89`；可选）。
+    pub await_cancel: Option<HostObjectAwaitCancel>,
     /// 透传给回调的不透明字（ABI 侧记录指针；core 只存/传）。
     pub token: usize,
 }
@@ -141,5 +153,80 @@ impl Instance {
         args: &[NonNull<Header>],
     ) -> Result<Option<NonNull<Header>>, ExecError> {
         crate::executor::protocol::call_protocol_method(self, object, name, args)
+    }
+}
+
+/// **`AB-88`**：宿主 await 开始的 core 入口；`Ok(None)` ⇒ 不是宿主 awaitable。
+impl Instance {
+    pub(crate) fn host_object_await(
+        &self,
+        object: NonNull<Header>,
+    ) -> Result<Option<u64>, ExecError> {
+        let ops = self
+            .object_ops(object)
+            .or_else(|| self.type_object_ops(object));
+        match ops.and_then(|ops| ops.await_fn.map(|f| (f, ops.token))) {
+            Some((await_fn, token)) => {
+                // SAFETY: 闭包由 ABI 层注册，契约见 `HostObjectAwait`。
+                unsafe { await_fn(object.as_ptr(), self, token) }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// **`AB-89`**：通知宿主 await 被取消/销毁/注入异常。
+    #[allow(dead_code)] // S3.1：取消/销毁/throw 的派发路径；接口先落地。
+    pub(crate) fn host_object_await_cancel(
+        &self,
+        object: NonNull<Header>,
+        reason: i32,
+    ) -> Result<(), ExecError> {
+        let ops = self
+            .object_ops(object)
+            .or_else(|| self.type_object_ops(object));
+        match ops.and_then(|ops| ops.await_cancel.map(|f| (f, ops.token))) {
+            Some((cancel, token)) => {
+                // SAFETY: 同上。
+                unsafe { cancel(object.as_ptr(), self, token, reason) }
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// 记录“某对象正处于宿主 await 中”（token 由宿主解释；VM 只用于 SEND 派发）。
+    pub(crate) fn begin_host_await(&self, object: NonNull<Header>, token: u64) {
+        self.host_awaiting
+            .borrow_mut()
+            .insert(object.as_ptr() as usize, (token, false));
+    }
+
+    /// 取某对象的 await 状态：`(token, 是否已经 yield 过 token)`。
+    pub(crate) fn host_await_state(&self, object: NonNull<Header>) -> Option<(u64, bool)> {
+        self.host_awaiting
+            .borrow()
+            .get(&(object.as_ptr() as usize))
+            .copied()
+    }
+
+    pub(crate) fn mark_host_await_yielded(&self, object: NonNull<Header>) {
+        if let Some(state) = self
+            .host_awaiting
+            .borrow_mut()
+            .get_mut(&(object.as_ptr() as usize))
+        {
+            state.1 = true;
+        }
+    }
+
+    pub(crate) fn finish_host_await(&self, object: NonNull<Header>) {
+        self.host_awaiting
+            .borrow_mut()
+            .remove(&(object.as_ptr() as usize));
+    }
+
+    pub(crate) fn forget_host_await(&self, object: NonNull<Header>) {
+        self.host_awaiting
+            .borrow_mut()
+            .remove(&(object.as_ptr() as usize));
     }
 }

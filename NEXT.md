@@ -15,7 +15,8 @@
      §15.6（`AB-82`…`AB-87`）；host awaitable 不在 S1（`AB-86`）；
   2. S1.1 规格 ✓ 草案：host awaitable 对象协议（`AB-88`…`AB-91`）；
      S2 Spike C ✓：宿主 loop 驱动含 `await` 的协程五态可行（报告已进 main）；
-     下一步 S3 实现：`pa_resume`/`pa_throw` ✓、`event` 域 ✓；awaitable op＋参考宿主待做；
+     下一步 S3：`pa_resume`/`pa_throw` ✓、`event` 域 ✓、`await_fn`/VM await ✓（1.17）；
+     `await_cancel_fn` 派发＋参考宿主 await 场景待做；
   3. S3 实现：additive ABI＋参考宿主；asyncio 仍为可选 facade；
   4. 发布面：alpha.2/beta tag 与 ABI 冻结评估（§12.18 B3 仍范围外）。
 - **硬线**：代码 PR 须 `check.py` 20/20＋`slowcheck` 十二项全绿；CI 必需检查见 WORKFLOW。

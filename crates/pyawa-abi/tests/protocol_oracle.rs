@@ -298,6 +298,8 @@ fn every_protocol_case_queries_host_getattr() {
         context: core::ptr::null_mut(),
         getattr_fn: Some(recording_getattr),
         setattr_fn: None,
+        await_fn: None,
+        await_cancel_fn: None,
     };
     assert_eq!(
         unsafe { pa_set_type_ops(state, -1, &ops) },

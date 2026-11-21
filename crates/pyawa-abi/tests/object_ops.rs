@@ -97,6 +97,8 @@ fn answer_ops() -> pa_type_ops {
         context: core::ptr::null_mut(),
         getattr_fn: Some(answer_getattr),
         setattr_fn: None,
+        await_fn: None,
+        await_cancel_fn: None,
     }
 }
 

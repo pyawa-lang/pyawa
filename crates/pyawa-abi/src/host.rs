@@ -68,6 +68,22 @@ pub type PaTypeSetAttr = unsafe extern "C" fn(
     context: *mut c_void,
 ) -> i32;
 
+/// **`AB-88`**：宿主 await 开始回调（返回 token；`PA_OK` 表示已处理）。
+pub type PaTypeAwait = unsafe extern "C" fn(
+    state: *mut crate::pa_state,
+    payload: *mut c_void,
+    context: *mut c_void,
+    token_out: *mut u64,
+) -> i32;
+
+/// **`AB-89`**：宿主 await 取消回调（reason：0=INTERRUPT／1=DESTROY／2=THROW）。
+pub type PaTypeAwaitCancel = unsafe extern "C" fn(
+    state: *mut crate::pa_state,
+    payload: *mut c_void,
+    context: *mut c_void,
+    reason: i32,
+);
+
 /// **`AB-73`**：`pa_type_ops`（**自带尺寸**；字段顺序与 `pa.h` 一致）。
 #[repr(C)]
 pub struct pa_type_ops {
@@ -79,6 +95,10 @@ pub struct pa_type_ops {
     pub getattr_fn: Option<PaTypeGetAttr>,
     /// 属性写；`NULL` ⇒ 不派发。
     pub setattr_fn: Option<PaTypeSetAttr>,
+    /// **`AB-88`** 宿主 await 开始；`NULL` ⇒ 不派发。
+    pub await_fn: Option<PaTypeAwait>,
+    /// **`AB-89`** 宿主 await 取消；`NULL` ⇒ 不派发。
+    pub await_cancel_fn: Option<PaTypeAwaitCancel>,
 }
 
 /// `pa_type_ops` 的**运行期副本**（按自带尺寸读出来；缺字段按"未提供"处理）。
@@ -90,6 +110,10 @@ pub struct TypeOps {
     pub getattr_fn: Option<PaTypeGetAttr>,
     /// 属性写。
     pub setattr_fn: Option<PaTypeSetAttr>,
+    /// 宿主 await 开始（`AB-88`）。
+    pub await_fn: Option<PaTypeAwait>,
+    /// 宿主 await 取消（`AB-89`）。
+    pub await_cancel_fn: Option<PaTypeAwaitCancel>,
 }
 
 /// 按 `AB-43` 的**自带尺寸**读 `pa_type_ops`；`pointer == NULL` ⇒ `Ok(None)`（未提供）。
@@ -106,6 +130,8 @@ pub unsafe fn read_type_ops(pointer: *const pa_type_ops) -> Result<Option<TypeOp
     let context_offset = core::mem::offset_of!(pa_type_ops, context);
     let getattr_offset = core::mem::offset_of!(pa_type_ops, getattr_fn);
     let setattr_offset = core::mem::offset_of!(pa_type_ops, setattr_fn);
+    let await_offset = core::mem::offset_of!(pa_type_ops, await_fn);
+    let await_cancel_offset = core::mem::offset_of!(pa_type_ops, await_cancel_fn);
     if limit < size_offset + core::mem::size_of::<usize>() {
         return Err(());
     }
@@ -113,6 +139,8 @@ pub unsafe fn read_type_ops(pointer: *const pa_type_ops) -> Result<Option<TypeOp
         context: core::ptr::null_mut(),
         getattr_fn: None,
         setattr_fn: None,
+        await_fn: None,
+        await_cancel_fn: None,
     };
     if limit >= context_offset + core::mem::size_of::<*mut c_void>() {
         // SAFETY: 落在宿主声明的尺寸内。
@@ -127,6 +155,16 @@ pub unsafe fn read_type_ops(pointer: *const pa_type_ops) -> Result<Option<TypeOp
         // SAFETY: 同上。
         ops.setattr_fn =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*pointer).setattr_fn)) };
+    }
+    if limit >= await_offset + core::mem::size_of::<Option<PaTypeAwait>>() {
+        // SAFETY: 同上。
+        ops.await_fn =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*pointer).await_fn)) };
+    }
+    if limit >= await_cancel_offset + core::mem::size_of::<Option<PaTypeAwaitCancel>>() {
+        // SAFETY: 同上。
+        ops.await_cancel_fn =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*pointer).await_cancel_fn)) };
     }
     Ok(Some(ops))
 }

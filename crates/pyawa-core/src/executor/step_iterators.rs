@@ -365,6 +365,21 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         push(instance, frame.get(), value)?;
                         release(instance, value);
                     } else {
+                        // **S1.1（`AB-88`）**：宿主 awaitable —— 先问宿主 `await_fn`，拿到 token
+                        // 后把对象本身作为 awaitable 留在帧上；SEND 第一次让出 token，第二次收值完成。
+                        match instance.host_object_await(value) {
+                            Ok(Some(token)) => {
+                                instance.begin_host_await(value, token);
+                                push(instance, frame.get(), value)?;
+                                release(instance, value);
+                                return Ok(Step::Continue);
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                release(instance, value);
+                                return Err(error);
+                            }
+                        }
                         // SAFETY: value 是存活对象。
                         let name = unsafe { ty.as_ref() }.name();
                         match attribute_lookup(instance, value, "__await__") {
@@ -400,6 +415,20 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         opcode: opcode_number,
                         what: "BC-55：SEND 没有跳转目标",
                     })?;
+                    // **S1.1（`AB-88`/`AB-90`）**：宿主 awaitable 的 SEND 两阶段。
+                    if let Some((token, yielded)) = instance.host_await_state(receiver) {
+                        if !yielded {
+                            instance.mark_host_await_yielded(receiver);
+                            release(instance, sent);
+                            let token_value = instance.new_int(token as i64);
+                            frame.get().push(token_value)?;
+                            return Ok(Step::Continue);
+                        }
+                        instance.finish_host_await(receiver);
+                        frame.get().push(sent)?;
+                        decoder.set_position(target);
+                        return Ok(Step::Continue);
+                    }
                     // SAFETY: receiver 在帧值栈上，存活。
                     let receiver_type = unsafe { receiver.as_ref() }.ty();
                     // 生成器与协程走**同一条**恢复路径（载荷同形）；协程的 `throw`／`close` 也一样
