@@ -175,7 +175,6 @@ impl Instance {
     }
 
     /// **`AB-89`**：通知宿主 await 被取消/销毁/注入异常。
-    #[allow(dead_code)] // S3.1：取消/销毁/throw 的派发路径；接口先落地。
     pub(crate) fn host_object_await_cancel(
         &self,
         object: NonNull<Header>,
@@ -228,5 +227,26 @@ impl Instance {
         self.host_awaiting
             .borrow_mut()
             .remove(&(object.as_ptr() as usize));
+    }
+
+    /// **`AB-89` 派发**：取消/销毁/throw 时通知所有挂起的宿主 awaitable，并清空状态。
+    /// 用 `reason`：0=INTERRUPT／1=DESTROY／2=THROW（`pa.h` 的 `PA_AWAIT_CANCEL_*`）。
+    #[allow(dead_code)]
+    pub fn cancel_host_awaits(&self, reason: i32) {
+        let keys: Vec<usize> = self
+            .host_awaiting
+            .borrow()
+            .keys()
+            .copied()
+            .collect();
+        for key in keys {
+            if let Some(object) = NonNull::new(key as *mut Header) {
+                if let Err(error) = self.host_object_await_cancel(object, reason) {
+                    // 取消派发失败不改变清理：异常按既有 discard 口径归还（状态仍要清空）。
+                    crate::executor::discard_error(self, &error);
+                }
+            }
+        }
+        self.host_awaiting.borrow_mut().clear();
     }
 }

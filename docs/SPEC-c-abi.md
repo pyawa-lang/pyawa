@@ -410,7 +410,7 @@
 
 ---
 
-### 11.1 S1.1 宿主 awaitable 对象协议（`ADR-005`；**已实现 await 开始/恢复；取消派发待 S3.1**）
+### 11.1 S1.1 宿主 awaitable 对象协议（`ADR-005`；**已实现 await 开始/恢复/取消派发**）
 
 > S1 只到生成器/协程 resume/throw（`AB-84`/`AB-85`）；S1.1 定义“脚本 `await` 宿主对象”
 > 的 object op，使宿主 loop 能接管真正的宿主 awaitable（Spike C 未验证的部分）。
@@ -423,7 +423,7 @@
   - 其它状态码 ⇒ VM 按宿主错误路径抛脚本可捕获异常（不静默回退）；
   - 回调**禁止**保存 `payload`／`context`／`state` 供返回后使用（`AB-17`）；token 的生命周期
     归宿主，VM 不解释。
-- **AB-89** **`await_cancel_fn` 槽**（可选，追加在 `await_fn` 之后；**槽已落地，VM 取消/销毁派发待 S3.1**）：VM 在协程被取消、
+- **AB-89** **`await_cancel_fn` 槽**（可选，追加在 `await_fn` 之后；VM 在取消/销毁/throw 时派发）：VM 在协程被取消、
   销毁或 `pa_throw` 注入异常而当前挂起在宿主 awaitable 上时调用；
   签名 `void (*)(pa_state *state, void *payload, void *context, int reason)`；
   `reason`：`PA_AWAIT_CANCEL_INTERRUPT=0`／`PA_AWAIT_CANCEL_DESTROY=1`／
@@ -510,7 +510,7 @@
 | `T-AB-22` | **S1 已实现（1.15）**：对已完成协程再 resume ⇒ `PA_ERR_INVALID`；非协程目标 ⇒ `PA_ERR_INVALID` 且不改栈（`AB-84`） |
 | `T-AB-23` | **S1 边界（已随文档定）**：`AB-86` 的边界——S1 不产生“宿主 awaitable”语义断言；Spike C 之前不得把 yield 值当 awaitable 解释 |
 | `T-AB-24` | **S1.1 计划（实现后）**：宿主对象装 `await_fn` 后，脚本 `await` 它 ⇒ `PA_YIELDED` 返回 token；`pa_resume(value)` 后该值成为 await 表达式结果（`AB-88`／`AB-90`） |
-| `T-AB-25` | **S1.1 计划（实现后）**：`await` 期间 `pa_interrupt`／`pa_throw`／`pa_destroy` 分别调用 `await_cancel_fn` 的 INTERRUPT／THROW／DESTROY；取消后 resume ⇒ `PA_ERR_INVALID`（`AB-89`／`AB-90`） |
+| `T-AB-25` | **S1.1 已实现（1.17）**：`await` 期间 `pa_interrupt`／`pa_throw`／`pa_destroy` 分别调用 `await_cancel_fn` 的 INTERRUPT／THROW／DESTROY；取消后 resume ⇒ `PA_ERR_INVALID`（`AB-89`／`AB-90`） |
 | `T-AB-26` | **S1.1 计划（实现后）**：未装 `await_fn` 的旧宿主类型行为同 S1；`size` 有界读 + 追加字段不影响旧宿主（`AB-91`） |
 
 ---
@@ -829,9 +829,9 @@
 
 **S1 已实现（`PA_ABI_MINOR` 15）**：`AB-82`…`AB-85`（`pa_resume`/`pa_throw` 与状态码；
 `crates/pyawa-abi/tests/coroutine_resume.rs`）。**S1.1 已实现（`PA_ABI_MINOR` 17）**：
-`AB-88`（`await_fn`，VM GET_AWAITABLE/SEND 两阶段）与 `AB-90` 的 resume/完成路径
-（`crates/pyawa-abi/tests/host_awaitable.rs`）；**`AB-89` 的取消/销毁/throw 派发仍待 S3.1**
-（槽已追加，VM 尚未调用）。
+`AB-88`（`await_fn`，VM GET_AWAITABLE/SEND 两阶段）、`AB-90` 的 resume/完成路径
+（`crates/pyawa-abi/tests/host_awaitable.rs`）与 `AB-89` 取消/销毁/throw 派发
+（`crates/pyawa-abi/tests/host_awaitable_cancel.rs`）。
 
 **本规格除上述 S1 计划条款外，无未实现的 `AB-` 条款**：
 `AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**

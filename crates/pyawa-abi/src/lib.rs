@@ -2235,6 +2235,8 @@ pub unsafe extern "C" fn pa_destroy(state: *mut pa_state) -> i32 {
         }
         // SAFETY: 由调用方保证这是 pa_create 交回且尚未销毁的指针。
         let state = unsafe { &mut *state };
+        // **AB-89**：销毁仍有挂起宿主 awaitable ⇒ 通知 DESTROY（然后释放实例）。
+        state.instance.cancel_host_awaits(1); // PA_AWAIT_CANCEL_DESTROY
         if let Some(exception) = state.host_exception.take() {
             // SAFETY: 记录持有那份引用。
             unsafe { state.instance.release_object(exception.as_ptr()) };
@@ -4079,11 +4081,17 @@ unsafe fn resume_inner(
                     return status::PA_COMPLETED;
                 }
             }
+            if throw {
+                state.instance.cancel_host_awaits(2); // PA_AWAIT_CANCEL_THROW
+            }
             let message = exception_message(&state.instance, exception.get());
             state.message = std::ffi::CString::new(message).ok();
             status::PA_ERR_RUNTIME
         }
-        Err(pyawa_core::ExecError::Interrupted) => status::PA_ERR_INTERRUPT,
+        Err(pyawa_core::ExecError::Interrupted) => {
+            state.instance.cancel_host_awaits(0); // PA_AWAIT_CANCEL_INTERRUPT
+            status::PA_ERR_INTERRUPT
+        }
         Err(_) => status::PA_ERR_RUNTIME,
     }
 }
