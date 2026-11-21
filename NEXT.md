@@ -13,7 +13,8 @@
 - **下一步（按序）**：
   1. S1 规格 ✓ 草案：`SPEC-capabilities.md` §9.10（`CP-40`…`CP-46`）＋`SPEC-c-abi.md`
      §15.6（`AB-82`…`AB-87`）；host awaitable 不在 S1（`AB-86`）；
-  2. S2 Spike C：宿主 loop 驱动 `await` host awaitable 的协程（不改产品 ABI）；
+  2. S2 Spike C ✓：宿主 loop 驱动含 `await` 的协程五态可行（报告已进 main）；
+     真正 host awaitable 对象协议未验证 ⇒ 下一步 S1.1 规格；
   3. S3 实现：additive ABI＋参考宿主；asyncio 仍为可选 facade；
   4. 发布面：alpha.2/beta tag 与 ABI 冻结评估（§12.18 B3 仍范围外）。
 - **硬线**：代码 PR 须 `check.py` 20/20＋`slowcheck` 十二项全绿；CI 必需检查见 WORKFLOW。

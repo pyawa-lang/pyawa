@@ -66,7 +66,7 @@ L1 是其底座，L3 不承诺）。本文件是目标设计；实现须按 `PLA
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **S1 规格** | `event` vtable ＋ `pa_resume`/`pa_throw`/host awaitable 的 ABI 规格（错误码、栈契约、取消、GC） | 文档评审通过；不写代码 |
-| **S2 Spike C** | 宿主 loop 驱动一个 `await` host awaitable 的脚本协程；异常/取消/完成三态；参考 C 宿主 | spike 报告＋证据（不改产品 ABI） |
+| **S2 Spike C ✓（2026-11-21）** | 宿主 loop 驱动含 `await` 的脚本协程；yield/恢复/完成/异常/取消五态；参考 C 宿主 | 报告：`docs/rounds/spikes/2026-11-21-host-awaitable-loop.md`；**真正 host awaitable 对象协议未验证**（S1.1） |
 | **S3 实现** | `event` 域＋`pa_resume` 族（additive）、参考宿主、旧 ABI 宿主不受影响 | `check.py` 20/20；slowcheck 12/12；CI 全绿 |
 | **S4 文档/承诺** | 更新 DESIGN/PLAN/RELEASE/宿主指南；asyncio 仍为可选 facade | 文档一致；不承诺 L3 |
 
