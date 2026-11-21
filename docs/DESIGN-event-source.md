@@ -68,6 +68,22 @@ provider 的**适配器实现**，不进入内核。
    原型（不注册进产品、不进 CI）；验证宿主可唤醒等待、取消与超时语义。
 3. 依据两份 spike 写 ADR-005 的最终 ABI 形状、错误码与版本策略；`accepted` 后才实现。
 
+## Spike 结果（2026-11-21，已完成）
+
+**Spike A（宿主驱动生成器，不改 ABI）**：`spike_host_coroutine.c` 用现有
+`pa_getglobal`→`pa_getfield("send")`→`pa_call` 驱动纯生成器；yield 值、完成值、`StopIteration`
+三态实测可达。**发现**：完成值只能从 `pa_errmsg`（`StopIteration: 12`）解析或写全局变量；
+完成与业务异常共用 `PA_ERR_RUNTIME`；async coroutine 与生成器不同。⇒ `pa_resume` 必须给
+**结构化状态**（yielded／completed／raised）与返回值/异常通道。
+
+**Spike B（`event` provider 形状）**：`spike_event_source.c` 的 mock provider＋host loop 验证
+了就绪集合、timeout、cancel、两段式出参（容量不足时返回总长）与循环骨架。**发现**：
+timeout 与 cancel 必须是不同状态；`notify`／`cancel` 应为可选槽（如实 `None`）；事件位沿用
+POSIX `POLLIN` 一族；宿主循环（wait→dispatch→resume）属于 adapter，不写进内核。
+
+**下一步**：据 A/B 证据写 `event` vtable 规格与 `pa_resume` 状态/错误码，提交 ADR-005
+review；**仍为 proposed**，不实现产品代码。
+
 ## 验收（ADR 接受判据）
 
 - spike A 证明“宿主驱动协程”的值/异常/完成三态契约可实现且无卡死；
