@@ -66,6 +66,8 @@ fn ops_with(getattr_fn: Option<pyawa_abi::host::PaTypeGetAttr>) -> pa_type_ops {
         context: core::ptr::null_mut(),
         getattr_fn,
         setattr_fn: None,
+        await_fn: None,
+        await_cancel_fn: None,
     }
 }
 
@@ -430,6 +432,8 @@ fn setattr_and_method_binding_and_protocols() {
         context: context as *mut MethodRefs as *mut c_void,
         getattr_fn: Some(type_getattr_with_methods),
         setattr_fn: Some(type_setattr),
+        await_fn: None,
+        await_cancel_fn: None,
     };
     // SAFETY: 类型在栈顶（-1），ops 有效。
     assert_eq!(unsafe { pa_set_type_ops(state, -1, &ops) }, PA_OK, "{}", message_of(state));
@@ -807,6 +811,8 @@ fn visibility_exercise_guest_uses_only_object_syntax() {
         context: refs as *mut BoxRefs as *mut c_void,
         getattr_fn: Some(box_getattr),
         setattr_fn: Some(box_setattr),
+        await_fn: None,
+        await_cancel_fn: None,
     };
 
     // 三个宿主对象：列表式 / 字典式 / 自定义式（guest 只按对象语法使用）。

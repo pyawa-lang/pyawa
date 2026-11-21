@@ -183,6 +183,8 @@ fn pushmodule_exposes_module_object_to_c_hosts() {
         context: core::ptr::null_mut(),
         getattr_fn: Some(answer_getattr),
         setattr_fn: None,
+        await_fn: None,
+        await_cancel_fn: None,
     };
     // SAFETY: 模块对象在栈顶（-1，不消耗）。
     assert_eq!(

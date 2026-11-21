@@ -38,7 +38,7 @@
  * ⇒ `PA_ERR_INVALID`；`pa_newtype` 的 NULL `dealloc`/`traverse` ⇒ 当场拒绝）。
  * 次版本 14：`AB-80` `pa_writetobytes`（追加式；一次性写回恰好 `bytearray` 的数据区）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 16u
+#define PA_ABI_MINOR 17u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -249,12 +249,20 @@ typedef int (*pa_type_getattr)(pa_state *state, void *payload,
                                const char *name, size_t len, void *context);
 typedef int (*pa_type_setattr)(pa_state *state, void *payload,
                                const char *name, size_t len, int value_index, void *context);
+/* AB-88／AB-89（PA_ABI_MINOR 17）：宿主 await 开始/取消（追加在 pa_type_ops 尾部）。 */
+typedef int (*pa_type_await)(pa_state *state, void *payload, void *context, uint64_t *token_out);
+typedef void (*pa_type_await_cancel)(pa_state *state, void *payload, void *context, int reason);
+#define PA_AWAIT_CANCEL_INTERRUPT 0
+#define PA_AWAIT_CANCEL_DESTROY 1
+#define PA_AWAIT_CANCEL_THROW 2
 
 typedef struct pa_type_ops {
     size_t size;                 /* 本结构体字节数（自带尺寸，AB-43 界读） */
     void *context;               /* 透传给回调；禁止保存 */
     pa_type_getattr getattr_fn;  /* 可为 NULL */
     pa_type_setattr setattr_fn;  /* 可为 NULL */
+    pa_type_await await_fn;      /* AB-88：可为 NULL（不派发） */
+    pa_type_await_cancel await_cancel_fn; /* AB-89：可为 NULL */
 } pa_type_ops;
 
 /* AB-75：统一的宿主对象协议钩子。回调字段与 pa_type_ops 相同（AB-78 的等价投影）。 */

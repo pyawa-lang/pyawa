@@ -100,7 +100,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 16;
+pub const PA_ABI_MINOR: u32 = 17;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -1740,12 +1740,105 @@ unsafe fn set_object_ops_impl(
                 setattr: ops
                     .setattr_fn
                     .map(|_| host_object_setattr as pyawa_core::HostObjectSetAttr),
+                await_fn: ops
+                    .await_fn
+                    .map(|_| host_object_await as pyawa_core::HostObjectAwait),
+                await_cancel: ops
+                    .await_cancel_fn
+                    .map(|_| host_object_await_cancel as pyawa_core::HostObjectAwaitCancel),
                 token,
             };
             state.instance.set_object_ops(slot.object, Some(host_ops));
         }
     }
     status::PA_OK
+}
+
+/// **`AB-88`** 的 `await` 槽实现：取宿主 token；`PA_OK` 且写 token ⇒ `Some`。
+unsafe fn host_object_await(
+    pointer: *mut Header,
+    instance: &Instance,
+    token: usize,
+) -> Result<Option<u64>, pyawa_core::ExecError> {
+    // SAFETY: 调用方保证 pointer 是存活对象。
+    let object = unsafe { NonNull::new_unchecked(pointer) };
+    // SAFETY: 对象存活 ⇒ 类型对象由注册表持有。
+    let ty = unsafe { object.as_ref() }.ty();
+    let info = unsafe { ty.as_ref() };
+    // SAFETY: token 只由本模块写入，记录由 `pa_state.object_ops` 持有到实例销毁。
+    let record = unsafe { &*(token as *const ObjectOpsRecord) };
+    let Some(await_fn) = record.ops.await_fn else {
+        return Ok(None);
+    };
+    let Some(state) = NonNull::new(record.state) else {
+        return Ok(None);
+    };
+    let payload = if info.payload_size() == 0 {
+        core::ptr::null_mut()
+    } else {
+        // SAFETY: 宿主载荷由 VM 分配（`AB-58`），偏移由类型给出。
+        unsafe {
+            pointer
+                .cast::<u8>()
+                .add(info.payload_offset())
+                .cast::<core::ffi::c_void>()
+        }
+    };
+    let mut token_out: u64 = 0;
+    // SAFETY: state 由记录持有、实例存活；回调契约见 `pa.h`。
+    let code = unsafe {
+        await_fn(
+            state.as_ptr(),
+            payload,
+            record.ops.context,
+            &mut token_out,
+        )
+    };
+    match code {
+        status::PA_OK => Ok(Some(token_out)),
+        status::PA_ERR_NOTFOUND => Ok(None),
+        _ => Err(raise_runtime(
+            instance,
+            "宿主 await 回调返回非 PA_OK（`AB-88`）",
+        )),
+    }
+}
+
+/// **`AB-89`** 的取消槽实现。
+unsafe fn host_object_await_cancel(
+    pointer: *mut Header,
+    instance: &Instance,
+    token: usize,
+    reason: i32,
+) -> Result<(), pyawa_core::ExecError> {
+    // SAFETY: 调用方保证 pointer 是存活对象。
+    let object = unsafe { NonNull::new_unchecked(pointer) };
+    // SAFETY: 对象存活 ⇒ 类型对象由注册表持有。
+    let ty = unsafe { object.as_ref() }.ty();
+    let info = unsafe { ty.as_ref() };
+    // SAFETY: token 只由本模块写入，记录由 `pa_state.object_ops` 持有到实例销毁。
+    let record = unsafe { &*(token as *const ObjectOpsRecord) };
+    let Some(cancel) = record.ops.await_cancel_fn else {
+        return Ok(());
+    };
+    let Some(state) = NonNull::new(record.state) else {
+        return Ok(());
+    };
+    let payload = if info.payload_size() == 0 {
+        core::ptr::null_mut()
+    } else {
+        // SAFETY: 同上。
+        unsafe {
+            pointer
+                .cast::<u8>()
+                .add(info.payload_offset())
+                .cast::<core::ffi::c_void>()
+        }
+    };
+    // SAFETY: 同上。
+    unsafe { cancel(state.as_ptr(), payload, record.ops.context, reason) };
+    instance.retain(instance.singletons().none());
+    Ok(())
 }
 
 /// **`AB-73`** 的 `getattr` 回退槽实现：把宿主回调接到 VM 的属性通道上。

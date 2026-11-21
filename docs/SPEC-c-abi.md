@@ -410,7 +410,7 @@
 
 ---
 
-### 11.1 S1.1 宿主 awaitable 对象协议（`ADR-005`；**未实现**）
+### 11.1 S1.1 宿主 awaitable 对象协议（`ADR-005`；**已实现 await 开始/恢复；取消派发待 S3.1**）
 
 > S1 只到生成器/协程 resume/throw（`AB-84`/`AB-85`）；S1.1 定义“脚本 `await` 宿主对象”
 > 的 object op，使宿主 loop 能接管真正的宿主 awaitable（Spike C 未验证的部分）。
@@ -423,7 +423,7 @@
   - 其它状态码 ⇒ VM 按宿主错误路径抛脚本可捕获异常（不静默回退）；
   - 回调**禁止**保存 `payload`／`context`／`state` 供返回后使用（`AB-17`）；token 的生命周期
     归宿主，VM 不解释。
-- **AB-89** **`await_cancel_fn` 槽**（可选，追加在 `await_fn` 之后）：VM 在协程被取消、
+- **AB-89** **`await_cancel_fn` 槽**（可选，追加在 `await_fn` 之后；**槽已落地，VM 取消/销毁派发待 S3.1**）：VM 在协程被取消、
   销毁或 `pa_throw` 注入异常而当前挂起在宿主 awaitable 上时调用；
   签名 `void (*)(pa_state *state, void *payload, void *context, int reason)`；
   `reason`：`PA_AWAIT_CANCEL_INTERRUPT=0`／`PA_AWAIT_CANCEL_DESTROY=1`／
@@ -457,7 +457,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.16**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **16**；`PA_DOMAIN_EVENT`（`ADR-005`）与 `AB-84`/`AB-85`（`pa_resume`/`pa_throw`）、状态码 `AB-82`/`AB-83` 为**追加式**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
+> **当前版本：1.17**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **17**；`AB-88`/`AB-89` 的 `await_fn`/`await_cancel_fn` 追加到 `pa_type_ops`，`PA_DOMAIN_EVENT`（`ADR-005`）与 `AB-84`/`AB-85`（`pa_resume`/`pa_throw`）、状态码 `AB-82`/`AB-83` 同为**追加式**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -828,8 +828,10 @@
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
 **S1 已实现（`PA_ABI_MINOR` 15）**：`AB-82`…`AB-85`（`pa_resume`/`pa_throw` 与状态码；
-`crates/pyawa-abi/tests/coroutine_resume.rs`）。**S1.1 计划（未实现）**：`AB-88`…`AB-91`
-（host awaitable 对象协议，§11.1）；实现前不得声称可用。
+`crates/pyawa-abi/tests/coroutine_resume.rs`）。**S1.1 已实现（`PA_ABI_MINOR` 17）**：
+`AB-88`（`await_fn`，VM GET_AWAITABLE/SEND 两阶段）与 `AB-90` 的 resume/完成路径
+（`crates/pyawa-abi/tests/host_awaitable.rs`）；**`AB-89` 的取消/销毁/throw 派发仍待 S3.1**
+（槽已追加，VM 尚未调用）。
 
 **本规格除上述 S1 计划条款外，无未实现的 `AB-` 条款**：
 `AB-80`（`pa_writetobytes`）已随 `PA_ABI_MINOR` **14**
