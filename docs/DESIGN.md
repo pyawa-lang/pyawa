@@ -904,3 +904,59 @@ M5 收口时实测全部在阈值内（复跑区间见上）。
   子类实例**必须**能携带**实例字典**、C3 要容纳宿主类型、类创建钩子（`__init_subclass__`／
   `__set_name__`）要照常工作；`AB-37` 另留 `PA_TYPE_FINAL` 位供宿主**反向**选择 final
   （`SPEC-object-model.md` 的 `OM-13`／`OM-14`、`SPEC-c-abi.md` 的 `AB-37`）
+
+## 14. 脚本可移植性与异步后端（2026-11-20 用户拍板为生死线）
+
+### 14.1 分层
+
+脚本层（用户代码）
+ └─ 兼容外壳：`Lib/asyncio` 原样（不改 `Lib/`，`CX-8`）＋ `selectors`／`select`／`_socket`／
+    `socketpair`／`os.pipe`／Windows 的 `_overlapped`·`_winapi` 兼容面
+     └─ 异步引擎：调度核心（任务/等待/定时/取消，平台无关）＋ **事件源 provider**
+        └─ 平台适配器：epoll／kqueue／WSAPoll／IOCP／JS 回调／RTOS 定时器
+
+**原则**：糟粕（平台 ABI、后端选型、CPython 的平台默认值）只允许出现在"兼容外壳"与
+"适配器"里；引擎不认识 OS 原语；**禁止**把平台 ABI 漏进脚本可见面。
+
+### 14.2 三类平台差异（处置口径）
+
+| 类别 | 例子 | 处置 |
+|---|---|---|
+| **语义基线** | 语言、内建、异常、asyncio 的可移植语义 | 以 CPython 3.14.4 为准，跨平台一致 |
+| **平台事实** | `sys.platform`、`os.name`、路径、盘符、errno 数值 | 按宿主；**显式查询如实回答**；harness 归一化仅用于对比 |
+| **实现选型** | 默认事件循环、`selectors` 类型、`socketpair` 模拟方式 | 运行时决定；不构成脚本契约；登记 `DIV-` |
+
+> 基线是 **CPython 3.14.4 的语义**，不是"Windows 上的 CPython"；平台默认值不是兼容目标。
+
+### 14.3 asyncio 的定位（ADR-002）
+
+- `Lib/asyncio` **不改**（`CX-8`），但它是**可选的 CPython 语义 facade**：在宿主提供
+  `fs`／`net`／`clock`／事件源能力时投影 CPython 可观察语义；不承诺全平台同语义。
+- **不**把 asyncio 的实现架构（selector/proactor、self-pipe、导入后钩子、JSPI/Asyncify）
+  写进内核或平台承诺；`Windows asyncio 默认后端`、`asyncio-on-wasm` 等探索只作
+  `docs/rounds/spikes/` 报告，**代码不采用**。
+- 事件源与协程驱动的后续设计见 §14.6（`ADR-005`，proposed）。
+
+### 14.4 wasm 与移动端（重要目标，分阶段）
+
+- **移动端（Android/iOS）**：OS 提供 epoll/kqueue 与 BSD socket ⇒ selector 后端可直接复用；
+  以库形态嵌入（C ABI，staticlib/cdylib）；**无 fork/信号投递/子进程**，按统一失败形状暴露；
+  验收先"构建档"（交叉编译＋ABI 冒烟），设备/模拟器运行档后续接入。
+- **wasm（浏览器宿主）**：以 wasm 模块＋JS 宿主 imports 嵌入；**E1–E8 库嵌入档已进 main**
+  （E2–E7 PASS、E8 子集同结果；`4f9490cc`／`a8d6ad8a`）。事件源由宿主提供；
+  **asyncio-on-wasm 仅报告、不采用**（`ADR-002`）；栈切换（JSPI/Asyncify）是宿主 adapter 选型，
+  不是内核承诺。
+- 拒绝的做法：为这些目标伪造 POSIX 行为导致脚本可见差异，或要求脚本写平台分支。
+
+### 14.5 反目标
+
+不把后端选型做成用户 API；不要求脚本写平台分支；不在核心 crate 引入平台依赖（`CX-4` 保持）；
+不以"复刻 host CPython 的平台默认"为理由破坏跨平台一致。
+
+### 14.6 宿主事件源与协程驱动（ADR-005，proposed）
+
+可嵌入内核需要让**宿主拥有事件循环**：新增 `event` 能力域（事件源 provider）与 `pa_resume`
+族（additive ABI），宿主可在自己的循环里恢复脚本协程；普通 `pa_exec_*` 的阻塞语义不变。
+完整设计、约束、非目标与 spike 计划见 [`DESIGN-event-source.md`](DESIGN-event-source.md)；
+**ADR-005 仍为 proposed**，spike 通过前不实现产品代码。
+

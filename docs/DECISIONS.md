@@ -36,3 +36,11 @@
 - 采用 `main` + `feat/*` + `spike/*` 的最小模型；PR 门禁 + squash-only + tag 发布；
 - 以后按发布需要增量引入 `develop`／`release/*`／`hotfix/*`（见 `docs/WORKFLOW.md`）；
 - 不引入完整 Git Flow 的仪式，但保留其发布纪律的扩展点。
+
+## ADR-005 宿主事件源与协程驱动（proposed）
+
+- 新增独立的 `event` 能力域（宿主事件源 provider）与 `pa_resume` 族（additive ABI），
+  让宿主拥有事件循环并可驱动脚本协程；不改变普通 `pa_exec_*` 的阻塞语义。
+- 详细设计、约束、非目标与 spike 计划见 `docs/DESIGN-event-source.md`。
+- **状态 proposed**：先做 Spike A（现有对象协议驱动协程）与 Spike B（`event` provider 原型），
+  再定最终 ABI 形状并转 accepted；本 ADR 接受前不实现产品代码。
