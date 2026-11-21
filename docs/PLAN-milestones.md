@@ -123,7 +123,7 @@
   ② `Lib/` 与 `Lib/test/` 中**以纯 Python 模式可编译**的部分。
   语料**必须**标明模式；扩展模式**没有参照实现** ⇒ 扩展语料**可以**为空，**也可以**放——
   用自己的**对照物**验收（每个特性的对照物写在它自己的条款里）。
-  **裁定（第 270 轮，用户）** ✓：**下限**就按 ① 的**自建用例**定 ✓ —— 总数 **≥ 112** ✓ （现 **407** ✓），且 **M2 内容面各设下限**：类 **≥ 15** ✓（现 16 ✓）／异常 **≥ 11** ✓（现 13 ✓）／import **≥ 14** ✓（现 15 ✓）／生成器 **≥ 4** ✓／描述符 **≥ 3** ✓（现 4 ✓）／元类 **≥ 2** ✓（现测值即下限 ✓ ⇒ 只许涨、不许落 ✓）。② 的 `Lib/` 语料**仍暂空** ✓（依赖 M3 ✓）⇒ 已登记 ✓。
+  **裁定（第 270 轮，用户）** ✓：**下限**就按 ① 的**自建用例**定 ✓ —— 总数 **≥ 112** ✓ （现 **408** ✓），且 **M2 内容面各设下限**：类 **≥ 15** ✓（现 16 ✓）／异常 **≥ 11** ✓（现 13 ✓）／import **≥ 14** ✓（现 15 ✓）／生成器 **≥ 4** ✓／描述符 **≥ 3** ✓（现 4 ✓）／元类 **≥ 2** ✓（现测值即下限 ✓ ⇒ 只许涨、不许落 ✓）。② 的 `Lib/` 语料**仍暂空** ✓（依赖 M3 ✓）⇒ 已登记 ✓。
 **`MS-13` 的边界规则（2026-10-18）** ✓：② 的"**可编译**"边界**不得**用来排除**合法 Python 被拒**的情形 ✗ ——
 凡是**合法 `.py`**（词法／语法／核心方法）在 Pyawa 下**被拒或报错**，一律按 `MS-10` 的**新差异**处理、
 **必须修** ✓；**不属于**"未实现"豁免（`CM-6` 只管**未提供模块／未接线的扩展面** ✓）。
@@ -163,7 +163,7 @@
 
 > **M6 的要求**（判据在上表、唯一出处；本节只记**落地口径**与**如实缺口**）：
 > - **判据（`MS-14`）**：报告可发布——`cargo test -p pyawa-abi --test conformance`（`target/conformance/report.md`，参照 Python 3.14.4）
->   实测 **407/407 通过、已知差异 0、新差异 0**，四要素齐；语料 **407** 条与在册差异 **3** 条（`DIV-1`／`DIV-2`／`DIV-8`）未变；
+>   实测 **408/408 通过、已知差异 0、新差异 0**，四要素齐；语料 **408** 条与在册差异 **3** 条（`DIV-1`／`DIV-2`／`DIV-8`）未变；
 >   机检硬门 `check.py` 的 `M3-COVERAGE` 同步绿；`PYAWA_DANGLING=1` 双档均绿。
 > - **`MS-19` 补充（合法 Python 被拒必须修）**：`P3-38` surrogate epic 收口后，`Lib/test` 体检 **语法错 0／可编译 397/397＝100%**；
 >   `support/os_helper.py`（PEP 383 面）`import test.support.os_helper` 通过、`multibytecodec_support.py` 同步且可导入；
@@ -222,12 +222,12 @@
 >   语法错 **0** ✓；未实现 **96** ✗／运行期错 **271** ✗（其中 **~89 为断言失败＝真语义差异** ✗）／超时 **12** ✗
 >   （`test_dict`／`test_set`／`test_sort` 等基础测试超时 ⇒ **疑似 hang**，待单独钉 ✗）。
 > - **保证层（语义零差异）**：**单线程** ＋ 纯 Python 源 ＋ 只用**已声明的 C 模块面** ⇒ 以 `MS-13` 的语料为准
->   （现 **407** 例，含 `Lib/` 165＋`Lib/test/` 50；来源列格式 A 见 `tests/conformance/corpus/manifest.tsv`）＋ `MS-19` 的在册差异（现 **3** 条：`DIV-1`／`DIV-2`／`DIV-8`）。
+>   （现 **408** 例，含 `Lib/` 215（其中 `Lib/test/` 50）＋自建 193；来源列格式 A 见 `tests/conformance/corpus/manifest.tsv`）＋ `MS-19` 的在册差异（现 **3** 条：`DIV-1`／`DIV-2`／`DIV-8`）。
 > - **已兼容面（当前实况）**：`Lib/` **逐字节同步 739** 个文件（`--check` 全一致 ✓；判据① 的分母仍是上游顶层 **628**）；
 >   可 import 比例 **477/628（76.0%）** ⇒ **判据① 已达标** ✓（阈值 421／67%；复核用
 >   `tools/lib_import_ratio.py`——该仪器**单次读数有 ±1 噪声**，判涨跌要多跑取众数 ✓）；C ABI `AB-1`…`AB-64` 可用；C 模块面按 `CM-14` 的 fan-in 增长，
 >   未提供的走 `CM-6`（`ImportError`，如实）。**能力层**已正式化（M5）：`T-CP-*` 13/13、两 provider 写法不变、体量阻塞阈值已拍板
->   （`DESIGN.md` §9 的 M5 小节）。**兼容性验收**已达成（M6）：`MS-14` 报告 407/407、新差异 0；`MS-19` 补充（合法 Python 被拒）已消除
+>   （`DESIGN.md` §9 的 M5 小节）。**兼容性验收**已达成（M6）：`MS-14` 报告 408/408、新差异 0；`MS-19` 补充（合法 Python 被拒）已消除
 >   （`Lib/test` 语法错 0／可编译 100%，surrogate epic `P3-38` 收口）。
 > - **未兼容面（明确不承诺）**：**多线程程序的语义**（含 GIL 原子性／线程调度；`threading` **允许跑**）·
 >   **C 扩展加载** · free-threading · `.pyc`／`.pyac` 跨实现（自有格式）· `_interpreters` ·
@@ -253,7 +253,9 @@
 > - **修订**：`dev` @ `faf685a`（2026-10-31）—— **M6 阶段边界**（tag `m6`）：兼容性验收达成——`MS-14` 报告 **407/407 通过、已知差异 0、新差异 0**；
 >   `MS-19` 判据补充随 `P3-38` surrogate epic 收口（S1…S3e 全落地；`Lib/test` 语法错 **0**／可编译 **397/397＝100%**、
 >   `support.os_helper` 可导入、PEP 383 codecs/fs/argv/readlink/输出边界落地）；判据① **477/628（76.0%）**；`Lib/` 同步 **739** 文件（`--check` 全一致）；
->   语料 **407** 条与在册差异 **3** 条未变；如实缺口见 §6 的「M6 的要求」。
+>   语料 **408** 条与在册差异 **3** 条未变；如实缺口见 §6 的「M6 的要求」。
+> - **修订**：`dev` @ `0369d101`（2026-11-15）—— 语料 **407 → 408**（`MS-14` 报告 **408/408**、已知/新差异 0；
+>   组成＝自建 **193** ＋ `Lib/` **215**（含 `Lib/test/` **50**））；其余数字未变。
 
 ---
 
@@ -366,7 +368,7 @@
   （`BC-60` 的 traceback 面落地时）、`~~DIV-7~~` 空元组单例（**已修**：`OM-23` ＋ `tests/singletons.rs`）。
 | ~~**P3-28**~~ **已完成（round 10；数字见 `DESIGN.md` §9）** | **实例体量的三档实测**（回答"有多像 Lua"：能不能开多个实例）：① 裸实例 ② 导入 `site` ＋ 常用模块的实例 ③ **N 个实例并行**（每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/footprint_*`（现只有裸档） | `DESIGN.md` §9 的实测基线 ＋ `M5` 的体量阻塞项 | 无（**现在可开工** ✓ —— 它是 **`M5` 判据③（体量升为阻塞项）的阻塞前置** ✓） |
 | **P3-26** | **判据① 的驱动量＝C 模块缺口，不是批量搬运**（**改口径**：整包批量同步实测 **0 个可搬** ✗ ——`find_syncable` 判的是"逐字节拷进来后能否 import"，而包的导入链要**整套 C 模块**就位）。可导入面由 `CM-14` 的 fan-in 顺序决定（`DESIGN.md` §9 的曲线：前 5 个 ⇒ 67%、20 个 ⇒ 80%）；**同步是解锁的结果，不得当手段**。当前靶子＝把前 5 个（`sys`／`itertools`／`time`／`errno`／`builtins`）的面补到能支撑 `Lib/` 导入，并继续按 `next_work.py` 的报错签名队列取活 | `CM-14`／`CM-15`、`DESIGN.md` §9 | 无 |
-| **P3-27** | **`Lib/test` 语料化**（**主体已落，转回归扩张**）（**判据② 的前提**）：三批共落 **407 条**（自建 192 ＋ `Lib/` 165 ＋ `Lib/test/` 50；覆盖 **150** 个不同可 import 模块），来源列格式 A（manifest 第 5 列）＋出处守卫；**机检仪器** `tools/corpus_coverage.py`（五项：总量≥400／Lib 覆盖≥150／Lib.test≥40／对拍 0 新差异·自检绿／MS-14 四要素）已接进 `tests/ci/check.py` 成 **M3-COVERAGE 硬门** ⇒ **判据② 已裁定达成** ✓。此后按回归需要继续扩覆盖（不阻塞判据） | `MS-13` ②、`MS-14` | 无（机检仪器已就位 ✓） |
+| **P3-27** | **`Lib/test` 语料化**（**主体已落，转回归扩张**）（**判据② 的前提**）：三批共落 **408 条**（自建 193 ＋ `Lib/` 215（含 `Lib/test/` 50）；覆盖 **150** 个不同可 import 模块），来源列格式 A（manifest 第 5 列）＋出处守卫；**机检仪器** `tools/corpus_coverage.py`（五项：总量≥400／Lib 覆盖≥150／Lib.test≥40／对拍 0 新差异·自检绿／MS-14 四要素）已接进 `tests/ci/check.py` 成 **M3-COVERAGE 硬门** ⇒ **判据② 已裁定达成** ✓。此后按回归需要继续扩覆盖（不阻塞判据） | `MS-13` ②、`MS-14` | 无（机检仪器已就位 ✓） |
 | ~~**P3-29**~~ **已落地（round 10 首片 `socketpair` ＋ round 37 主体：AF_INET TCP 面向全链）** | **`socket` 支**（**用户已拍板立项**，会话 05）：`_socket`/`socket` 的最小面——`http.client`／`urllib.request`／`socketserver`／`asyncio` 的共同前置。**round 37 落地**：`net` 能力域 vtable 的 8 个空槽补真 syscall（`bind`／`connect`／`listen`／`accept`／`getsockname`／`getpeername`／`shutdown`／`setsockopt`；`CP-39` v1 的 AF_INET 线格式、两段式出参、`EINTR` 重试）＋ `Instance::net_*` 包装 ＋ `_socket.socket` 方法面（`_accept`／`sendall`／`connect_ex`／超时值面／`family·type·proto` 只读属性）＋ 模块级 `get/setdefaulttimeout`；**连带修** `super()` 的属性查找补描述符协议。**验收**：TCP 回环对拍与 python3 3.14.4 逐字节 0 diff；官方套件 20⇒**21/397**（`test_xml_dom_xmlbuilder` 转 ok）、socket I/O 签名 18⇒**0**。**如实未接** ✗：IPv6／AF_UNIX 地址线、真超时语义、`_socket.poll`／`select` 分流、`sendto`／`recvfrom`／`getsockopt`、`getaddrinfo` 一族（A2 推迟）。 | `CM-14`、`DESIGN.md` §9 | 无（工作量大，单独立项 ✓） |
 | **P3-30** | **`random.Random(<seed>)` 的序列与参照不一致**（会话 05 语料侦察实测：`Random(42).random()` ⇒ 0.0838… vs 参照 0.6394…，参照文档保证同种子同序列 ⇒ **真差异**）：生成算法/种子混合口径要对齐 CPython 的 MT19937 init_by_array | `MS-19`、`MS-10` | 无 |
 | ~~**P3-31**~~ **已解除（round 3）** | **解析器缺口批**：**10 格全落**（嵌套元组目标／`.05` 前导点浮点／行内 if 分号表＋次行 else／`*` 后置关键字实参／`with … as (a,b)`／推导式模式目标／元组里的 `*`／带注解赋值非名字目标／制表符缩进／调用基底下标赋值）⇒ `difflib`／`gettext`／`xml.etree.ElementTree`／`tomllib`／`argparse` 等 11 个模块同步 ⇒ 判据① 341→358 ✓。剩余同族缺口（PEP 604 union 注解 dataclass 字段的 `__builtins__` 面）挂账后续。清单全文＝台账卷 `03-m3-progress-05.md` 的 task-7 表 ✓（一处真相，不重述） | `BC-14`、`CM-14` | 无 |
@@ -390,354 +392,9 @@
 **已全部落定**；剩余 6 项规格缺口（`BC` 超出 §10 的指令、`CM` 逐模块合约表、`MS` 四项）
 **全部等实现**——按 `SPEC-INDEX.md` §5.1 对 `v0` 的定义，文档侧已成立。
 
-### 9.4 下一阶段的开工指示（**非规范**）
+### 9.4 下一阶段的开工指示（**非规范**；正文已归档）
 
-> **取活口径（2026-11-12 用户，覆盖此前「磨套件」口径）** ✓：**主目标＝内存安全 ＋ 执行效率**——**解释器必须满足的** ✓；**其余全能慢慢补** ✗。
-> ① **内存硬门** ✓：`python3 tools/memdangle_survey.py`（`PYAWA_DANGLING=1` 全量套件）**计数归零** ✓ ＋ 全库**无 abort／segfault／堆损坏** ✓（`AB-29`／不变量 3）。
-> ② **执行效率** ✓（姿态见 `REQUIREMENTS` 的「解释器硬要求」行 ✓）：判据**三轴**——(a) **纯计算/调度**：`tools/bench_hot.py` **基线入库** ＋ **CI 禁回退**（>10% 红 ✓）；与 CPython 的**比值必须报告** ✓，目标 **≤5×** ✗（**当前 135–226×** ✗ 属病态，先把病态成本找出来）；(b) **能力路径**：同一工作负载下**不得慢于「CPython ＋ Python 层代理」** ✓（这是卖点 ✓）；(c) **启动/常驻**：保持 `DESIGN` §9 基线的优势 ✓。**禁止超线性**热点 ✓。**与 CPython 的比值必须报告** ✓（目标比值待用户拍 ✗）；**禁止超线性**热点（单用例耗时上限 ✓）。
-> ③ **其余排后** ✗：日常库缺口（`json.load(f)`／`defaultdict`／`match` 同行 suite／`urllib.request`）· 冷门语义（`asyncgen`／`dis`／`traceback`／`unicode_identifiers`／PEP 646·695）· **官方套件百分比** —— **都不是判据** ✗，有空再补 ✓。
-
-> **A→B→C 次序（2026-11-12 用户批准 ✓）**：
-> **A 效率（主线 ✓）**：A1 热点定位（**已做 ✓**：`type_named` 按名字查类型 ≈20% ✗ ＋ libc `getenv` 2.18% ✗）→ A2 最小改动（**一次一处** ✓，每处一笔提交）→ A3 每轮复测 `bench_hot` 倍数 → A4 立回退闸（基线入库 ＋ 回退 >10% 红 ✓）→ A5 把 GC 保活（`test_weakref` 169 s ✗）并入 A 线。
-> **B 内存（守成 ✓）**：B1 `tools/memcheck.sh` 子集进每轮闸门 ✓ · B2 全量 valgrind ＋ 全量套件 memdangle 做「阶段边界 ＋ 棘轮（不得更差）」✓ · B3 形参所有权限时 **3 轮**探针 ✓（成→估得出；败→升级记档）。
-> **C 其余（明确不做 ✗）**：日常库四项／冷门语义（`asyncgen`／`dis`／PEP 646·695）／官方套件百分比／ABI 发布（用户决定 ✗）。
-> **估时口径**：只报**可测单位**（倍数／errors 数／ok/day ✓），**不报「几周」** ✗（人月神话 ✓）。
-
-> **完整工单（2026-11-12 一次性下达 ✓；此后逐轮自走，不再逐步请示 ✓）**——总口径：硬要求＝内存安全＋执行效率（**效率 214× → 22× ✓，已由 slowcheck 第 11 项防回退 ✓ ⇒ 效率线关闭** ✗，只剩「结构特化」大工程，不做 ✗）；其余（C 线）慢慢补 ✗。
-> 1. **B3-2 诊断**：`PYAWA_REFCOUNT_CANARY=1` 跑 memdangle／套件 ⇒ 产出「借用计数下降／上升」站点清单，修掉其中便宜的 ≤3 处；清单入台账。
-> 2. **B3-3 收口**：`dunder_call_native` 的双重释放族（round 224／227 同类）逐项归还 ＋ 异常路径整改。
-> 3. **形参所有权老账（13 处）**：只修**有最小复现**的；无复现记档 ✗（不做无靶子重构）。
-> 4. **`test_weakref` 的 GC 保活**（169 s ✗ → <120 s）：根因＝traceback 帧把被测局部保活 ✓。
-> 5. **C1 日常面四连**：`json.load(open(f))` ✗／`defaultdict` ✗／`match` 同行 suite ✗／`urllib.request` ✗。**（2026-11-13 已全部转绿 ✓）**
-> 5b. **真实脚本冒烟抓到的 3 个库缺口**（2026-11-13，10 个真实脚本 7/10 ✗）：① `pathlib.Path.write_text/read_text` ✗（走 `io.open`，`_io` 真文件面未接线）；② `csv` 模块缺 ✗（`CM-` 尾）；③ `subprocess` 的真执行 ✗（`_posixsubprocess.fork_exec` 未接线、`capture_output` 的 fd 处理报 `open: path should be string`）。
->   —— 语言面已无问题 ✓（`match`／`except*`／`\N{…}`／socketpair／argparse／re 全过 ✓）；**这些是库面长尾** ✗，按 `CM-14` fan-in 取。
->   **三者的定位要分开 ✗（2026-11-13，按 `DESIGN` §1 的定位对齐）**：① `io.open`／`pathlib` 文件面 = **脚本相关，必修** ✓（脚本读写文件走宿主授予的 `fs` 能力 ✓）；② `csv` = **低优先**（宿主可提供／脚本可手写 ✓）；③ `subprocess` = **非目标，不修** ✗（沙箱禁 fork ✓；`proc` 域须宿主显式授予，`DESIGN` §1 已列为非目标 ✓ —— **不是缺陷** ✓）。
->   ⇒ **「用真实脚本 7/10」是 CPython 替代品的尺子** ✗；本项目**没有**「必须能替代 CPython」这个尺子 ✓（`DESIGN` §1 非目标 ✓）。**但也不能反向把项目定成「脚本运行时」** ✗ —— **业务用途是用户当下的用途** ✓，不是项目的排他定位 ✗（项目定位的唯一出处＝`DESIGN` §1）。
-
-
-> 6. **C2 冷门语义**：`\N{…}`／`except*`／async 推导式／PEP 695／`import *`／下标删除 —— 按 `MS-19` 判据补充**必须修** ✗。
-> 7. **全量内存棘轮**（阶段边界做一次）：全量 valgrind（分批）＋ 全量套件 memdangle ⇒ 记基线 ＋ 「不得更差」。
-> 8. **ABI 发布** ＝ **用户决定** ✗（到点先报，不自行发布）。
-> **测量纪律（2026-11-13）** ✓：**bench／profile／slowcheck／全量 survey 只在机器空载时跑** ✓；观察 `cat /proc/loadavg`，负载 > 核数×0.7 一律**跳过并明说** ✗（并发测量无效，硬判会误红 ✗；`bench_gate.py` 已内置该守门 ✓）。
-> **每轮固定动作**：仪器（`profile_hot`／`memcheck --limit 20`／`bench_gate`）＋ 闸门（`check.py` 16 项 ＋ `slowcheck --release` **12 项**）＋ 同笔提交（代码＋台账＋`NEXT`，`NEXT` ≤40 行）＋ 报告三行（做了什么／可测单位前→后／未修与下一步）。
-> **只需请示四种** ✗：设计决策（ABI 发布、immortal 之类）／突破安全边界／需要用户权限或工具／同一处 3 轮不成。**其余一律自走** ✓（选题顺序、实现方案、拆几笔提交，只要满足「一轮一落地」）。
-> **停止条件**：同墙 3 轮停手升级 ✗；每 2–3 轮重跑 survey／bench／memcheck 并报三数 ✓。
-
-> **工单收口后的下一阶段（2026-11-13；用户确认 8 项全部完成 ✓ —— 全量 valgrind 410 例 0 error ✓、memdangle 基线 2（既有、A/B 证）✓、bench 空载复测 +0.8~5.6% 在容差内 ✓）**：
-> ① **每实例内存配额** ✓（**round 266 落地**：`OM-41`／`AB-65`／`AB-66`；超限抛**可捕获的** `MemoryError`；宿主占用上界 ≈ `limit+slack`；CLI `PYAWA_MEMORY_LIMIT` 示例接缝；验收 `crates/pyawa-core/tests/memory_quota.rs` 5 例 ＋ `crates/pyawa-runtime/tests/memory_quota.rs` 5 例 ＋ `crates/pyawa-abi/tests/memory_quota.rs` 4 例 ✓）—— 沙箱**硬需求** ✓；**注意**：配额是**宿主侧的 ABI 钩子** ⇒ 属 ABI-adjacent ✓，应与 ⑤ 的钩子**一起定** ✓（ABI 仍暂不发布 ✓）。
-> ② **威胁模型与宿主责任** ✓（**round 267 落地**：`DESIGN` §7.5 —— 四目标（不逃逸／不越界／不拖垮宿主／不串实例）、VM 已保证（无 FFI 出口＋静态 `T-CX-*`、内省只碰 VM 对象、能力面依赖倒置、栈溢出干净异常、内存安全基线＋配额）、宿主必须承担 7 条（壁钟超时／配额／同实例串行／provider 根夹紧／资源策略／有界输入／实例隔离）、残余风险 6 条如实记 ✗）；
-> ③ **`io.open`／`pathlib` 文件面** ✓（**round 268 落地**：`_io.text_encoding` 真接线、`FileIO.__del__` 落盘、`symlink` 三参、errno 文案扩充、`with (expr).attr` 解析修复（`MS-19`）；验收 `crates/pyawa-runtime/tests/io_pathlib_face.rs`（与 CPython 27 行逐行一致）＋`crates/pyawa-core/tests/with_parenthesized.rs` 4 例 ✓；如实缺口：`open_code` 占位、绝对路径输出不进对拍）；
-> ④ **通用参考宿主** ✓（**round 269 落地**：`examples/reference_host.c` ＋ `docs/REFERENCE-HOST.md` ＋ 可执行验收 `tests/ci/t_ref_host.py`（真编译真运行、stdout 逐行对拍、`pa.h` 的 `AB-65/66` 同步检查）。演示：宿主定义脚本 API → 脚本调回宿主 → 沙箱拒绝越界 → 协作式超时 → 每实例配额／指标 → 实例隔离 → 销毁；**与宿主身份无关**（无业务逻辑、无命名假设）✓；如实边界：C 宿主暂无标准库（`paL_openlibs` 未接线，P3-14），沙箱用宿主 API 白名单演示，能力域 vtable 样例见 CLI provider）；
-**钩子族清单（一处真相＝`SPEC-c-abi`）**：`AB-69` 宿主函数签名（含生命周期：setup 阶段注入 ✓）／：`AB-67` 宿主模块注入 **✓ round 271 落地**（`pa_add_host_module`／`pa_module_addfunction`／`pa_module_setconst`／`pa_module_addsubmodule`；保留名／隔离／回调守卫／不透明句柄；验收 `crates/pyawa-abi/tests/host_module.rs` 8 例）／`AB-68` 宿主设每实例 `sys.path` **✓ round 270 落地**（`pa_setpath`；最小 `sys` 骨架；验收 `crates/pyawa-abi/tests/host_path.rs` 5 例）—— `AB-69` **✓ round 273 收口**（round 272：`pa_type_expr` 数据模型＋`pa_func_set_signature`＋边界运行期检查；round 273：**检查期调用点检查**（`compile_with_host_functions`＋`TS-47` 第二插入点）✓；验收 `crates/pyawa-abi/tests/host_signature.rs` 10 例）—— 钩子族三项全部落地 ✓。
-> **钩子族实现需求（给开发；2026-11-13 用户批准 ✓）**——语义细节以 `SPEC-c-abi` 的 `AB-67`／`AB-68`／`AB-69` 为**一处真相** ✓；> 此处只给**顺序／验收／禁区** ✓。**顺序**：`AB-68`（最小，热身）→ `AB-67`（核心）→ `AB-69`（依赖 67 的 host_fn）；一次一件 ✓。
-> **`AB-68` 验收**：① 宿主设两个目录 ⇒ 脚本能 import 两处模块 ✓；② `sys.path` 语义与 `IM-*` 完全一致（不得另立一套 ✗）；③ 读文件仍被 `fs` 能力夹根（`../..` 拒 ✓）；④ 脚本自己改 `sys.path` 语义不变 ✓；⑤ 两实例互不影响 ✓。
-> **`AB-67` 验收**：① `import myapp`／`from myapp.api import f`／`myapp.api.f()` 三形态一致 ✓；② 宿主函数／常量／子模块都能装 ✓；③ 两实例拿到的模块互不相同（`AB-64`）✓；④ guest 拿不到任何 `pa_*` ✓；⑤ 保留名（`sys`／`builtins`／`io`…）注入 ⇒ `PA_ERR_INVALID` ✓；⑥ 宿主返回对象在脚本里只能是**不透明句柄**（`CP-10`，不得内省 ✗）；⑦ 宿主函数抛错 ⇒ 脚本侧可捕获异常、panic 不穿 FFI（`AB-29`）✓；⑧ **回调内调 `pa_add_host_module` ⇒ 返回错误码而非 UB** ✓（实现加 in-callback 守卫 ✓）；⑨ 生命周期：setup 注入 ✓、两次调用间可加 ✓。
-> **`AB-69` 验收**：① 声明签名后，有标注插件调用点**检查期**抓错 ✓；② 无标注插件在**边界运行期**抓错并归责插件 ✓；③ 不声明 ⇒ 与今天完全一致（不检查）✓；④ 签名含宿主不透明类型时仍不暴露内部 ✓；⑤ 可选／变参 flags 至少各一个用例 ✓；⑥ **宿主类型可进签名**（`pa_type_expr_named` 同一性＝类型对象 ✓、不暴露内部 ✓、子类型按注册声明 ✓）；⑦ **泛型擦除口径**（身份擦 `TS-35` ✓／检查留 `TS-47` ✓，`isinstance(x, list[int])` 同 CPython 报 `TypeError` ✓）。
-> **禁区** ✗：不做通用 import 钩子（`sys.meta_path` 式，无需求）；不冻结 ABI（用户口径）；不实现宿主库语义（宿主的事）；不做 `importlib.reload` 语义（宿主模块以重新注入代替）。
-> **硬约束**：无第三方依赖（`CX-`）✓；`unsafe` 最小化＋`SAFETY` ✓；`T-CX-3/4/5` 不得违反 ✓；`bench_gate` 不回退 >10% ✓；`memcheck --limit 20` 0 errors ✓；conformance 全绿 ✓；每笔提交按本节「每轮固定动作」✓。
-> ⑤ `ABI 发布` ＝ **暂不发布** ✗（2026-11-13 用户：**可能还要加几个钩子** ✓）⇒ 等钩子稳定再发 ✓；且 ①（配额）与钩子族同属 ABI-adjacent ⇒ **应在冻结前** ✓。
-
-
-
-
-
-> **已拍板 ✓（2026-10-18，A1–A4 按建议）**：`P3-29` socket 的四个拍板点 —— **A1** 新增 `CP-38`（`socketpair` 槽 ✓；
-> vtable 加槽，ABI 未发布 ⇒ 现在最便宜 ✓）· **A2** `getaddrinfo` **推迟** ✓ · **A3** 地址线 v1＝
-> **IPv4 4B ＋ 端口 2B 大端**，v1 只 **`AF_INET`／`AF_UNIX`** ✓（`CP-39`）· **A4** `fd` 沿用 `fs` 先例（`CP-31`）✓。
-> 决策记录的唯一出处：`REQUIREMENTS.md` 的「socket 首片」行 ✓ —— **可以开工** ✓（`SPEC-capabilities` 的槽位表与
-> `CP-38`／`CP-39` 已补 ✓）。
-
-> 规则**不在这里复述**——每条都给出处，避免第二个真相源。本节只给**顺序、边界与复核清单**。
-
-> **surrogate epic（`P3-38`）开工指示（2026-10-25，**用户已拍板** ✓）**：`str` 表示层由"仅合法 UTF-8"
-> 迁到 **WTF-8**（`str` 可持**合法孤立代理**）。**顺序固定**：S1 `wtf8.rs`（编解码基础，零风险）→
-> S2 `StrObject` 存储 ＋ `text_of` 语义 → S3 API 面**逐片**迁移（按审计报告分片，**禁止**一次性大改）→
-> S4 lexer 转义 ＋ `surrogateescape`／`surrogatepass` → S5 `Lib/test` 重试同步 ＋ survey 回归。
-> **每阶段都是可提交的独立切片**；S2 之后每片必须保持既有 `text_of` 调用点全绿再进下一片。
-> **开工前先出 API 审计报告**（S3 片单的来源：`text_of`／`repr`／`print`／`encode`／`decode`／比较／
-> 哈希／切片／格式化／属性名／字典键／fs 路径／正则／`unicodedata` 的调用点清单）；它**不单独成一轮**。
-> 阶段细节与逐阶段验收**只在 §9.2 的 `P3-38` 行**（一处真相，本处不重述）；本条完成是 **M6 收口 gate
-> 的一部分** ✓（见该行的 gate 注）。
-
-> **取活优先级（M5 期，2026-10-18）** ✓：**M5 判据③ 的体量（`P3-28`）→ 判据①②（`T-CP-*` 核对 ＋
-> 两 provider 写法不变）→ 并行线（B 批 `BC-62`／`BC-63`＋`TS-49` · 类型级描述符专项 · C 面）→
-> socket 首片（**已拍板 ✓**：`socketpair`，按 `CP-38`／`CP-39`）**；同一处 bug 按 `round-rule.md` §4 的
-> 三轮上限**停手升级**；**弃支不烧轮次**。
-> （M3 期的"C 模块缺口 ＋ `next_work` 队列"**已完成使命** ✓ —— 判据① 已达标 ✓、判据② 已裁定 ✓）
-
-> **提交**：逐轮记录、台账与进度注记**必须随当轮的实质改动一起提交**，**禁止**纯台账轮次
-> （`agents-rules/commit-rule.md` §1）✓
-
-**M5 开局顺序（2026-10-18；已于 round 10–13 全部完成 ✓ 归档，仅供追溯 ✗）** ✓
-
-> **真实脚本冒烟清单（每轮抽一个真跑）** ✓：日志分析（`re`＋`json`＋`Counter`＋`with open` ✓）· BFS（`pop(i)` ✓）·
-> JSON 数据处理（`dataclasses.asdict` ✓）· 命令行小工具（`sys.exit` ✓）· 目录遍历（`deque`／`pathlib` ✓）。
-> **红字即记一条缺口** ✓（并按 `MS-19` 的新增补充：**合法 .py 被拒 ⇒ 必须修** ✗）。
-> 当前已知必用面缺口（2026-10-31 复测 ✓）：**`json.load(f)`** ✗ · **`deque` 迭代** ✗ · **`defaultdict`** ✗ ·
-> **异常 `errno` 属性** ✗ · **`match` 的同行 suite**（`case [1,*r]:` ⇒ "冒号后面要换行"）✗ ——
-> 其余旧缺口（`sys.exit`／`list.pop(i)`／同行 `try:`／`dataclasses.asdict`／`complex`／下标删除）**已修** ✓。
-
-1. **`P3-28` 实例体量三档实测**：① 裸实例 ② 导入 `site` ＋常用模块的实例 ③ **N 个实例并行**
-   （每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/measure_footprint.py`。**已完成（round 10）** ✓：
-   三档数字见 `DESIGN.md` §9 的 M5 小节（一处真相，本处不重述）。
-   ⚠ M1 的 48 µs／1.05 ms／3.4 MB 是"**无 site／无导入系统**"时量的（`DESIGN.md` §9 的注 ✓）⇒ **已重量** ✓。
-2. **判据①**：`SPEC-capabilities` §11 的 **`T-CP-*` 逐条核对**。**round 10 进度：10 绿／3 红**
-   （红＝`T-CP-3` 的 `os.dup2`＋`select` 面、`T-CP-7` 后半的实例销毁关句柄、`T-CP-10` 取消令牌/worker；
-   另有 `CP-21`／`CP-32` 的 VM 侧路径解析机制债）⇒ **round 11 收 T-CP-3／7（12 绿／1 红）**；
-   **round 12：`T-CP-10` 收口 ⇒ 13 绿／0 红 ✓**（证据：`capability_acceptance.rs` 11 passed／
-   `two_providers.rs` 7 passed／`select_dup2_shapes.rs` 1 passed／`t_cp10_cancel.rs` 4 passed／
-   `capability_acceptance.rs` 的 T-CP-10 可取消等待测试；`CP-21`／`CP-32` 机制债 round 12 另落，见台账）。
-3. **判据②**：写"**同一脚本、两种 provider**"的**可执行验收**（真实 provider vs 受限 provider ⇒ **写法不变** ✓；
-   受限档按 `T-CP-4`／`T-CP-5`／`T-CP-7` 的形状造 ✓）。**已落地（round 10）** ✓：
-   `crates/pyawa-runtime/tests/two_providers.rs`（同一脚本逐字节相同、归一后观察完全一致）。
-4. **并行线**（不同写域 ✓）：**B 批** ✓（`BC-62` 多语句 `lambda` · `BC-63`＋`TS-49` 空安全操作符——round 10 落地）·
-   **类型级描述符专项** ✓（`functools.wraps.__name__` 正路 ＋ `P3-17` 同族——round 10 主体落地）·
-   **C 面**（CJK `_codecs_*`——round 10 落 `_codecs_jp` 一族；`unittest.mock`／`multiprocessing.heap`／`xmlrpc` 未做）。
-5. **socket 首片（已拍板 ✓）**：`socketpair`，按 **`CP-38`**（槽）／**`CP-39`**（地址线 v1）；`CpNetVtable` 填槽 ＋
-   接口版本随 `CP-30` 升（`PA_ABI_VERSION` 1.0 ⇒ 1.1 ✓）。**首片已落地（round 10）** ✓：`socket.socketpair()`
-   端到端真 I/O；`getaddrinfo`／DNS **仍在首片外** ✗（A2 推迟 ✓）；`connect`／`bind`／`poll` 一族如实未接线。
-
-> **round 10 状态小结（2026-10-18）** ✓：1 ✓ · 2 **部分**（10/13 绿）· 3 ✓ · 4 ✓（B 批／描述符主体／C 面 jp 族）·
-> 5 ✓（socketpair 首片）。⇒ **M5 判据①②③ 尚未全绿**（③ 的阈值仍待用户拍板）；细节与未修清单见
-> `NEXT.md` 与 `docs/rounds/03-m3-progress-05.md` 的 round 10 节。
->
-> **round 11 状态小结（2026-10-18）** ✓：**`CP-31` 实例能力表落地** ⇒ `T-CP-3`／`T-CP-7` 收口
-> （矩阵 **12 绿／1 红**，仅剩 `T-CP-10`）；C 面 core 编码委派＋`_codecs_cn` ⇒ 判据① 461/628＝73.4%。
-> ⇒ M5 判据① 还差 `T-CP-10`（取消令牌/worker）＋`CP-21`／`CP-32` 机制债；细节见台账 round 11 节。
->
-> **round 12 状态小结（2026-10-18）** ✓：**`T-CP-10` 收口 ⇒ `T-CP-*` 矩阵 13 绿／0 红 ✓**（M5 判据① 达成）；
-> `CP-21`／`CP-32` 的 VM 侧路径解析落地（`instance/path.rs`＋NaiveFs 反证；`RestrictedFs` 夹根逻辑删除）；
-> `CP-30` 注册时版本校验＋fs/clock/net vtable `version` 对齐 `PA_ABI_VERSION`（1.1）；
-> C 面 `_codecs_tw`／`_codecs_kr` ⇒ 判据①（Lib import ratio）466/628＝74.2%。
-> ⇒ **M5 判据② 早已 ✓；判据③ 的阈值仍待用户拍板**（基线数字见 `DESIGN.md` §9）；细节见台账 round 12 节。
->
-> **round 13 状态小结（2026-10-18）** ✓ —— **M5 收口**：判据③ 的阻塞阈值经**用户拍板**（三档阈值表＝
-> `DESIGN.md` §9 的 M5 小节末节）；判据①② 已有可执行证据（见 §6 的「M5 的要求」）⇒ **M5 成立**；
-> 本笔更新 `README`／`PLAN`／`NEXT` 状态，`dev` 以 `--no-ff` 收录 `main` ＋ **tag `m5`**（合并提交见 `git log --merges -1`）。
-> 如实缺口与后续队列见 `NEXT.md` 与台账 round 12–13 节（不阻塞 M5 判据）。
-
-> **M1–M4 期（历史，仅供追溯）**：下面的 1–9 保留原样，**不再作为取活依据** ✗。
-
-**顺序**（队列里所有待做的"卡在哪"都是"无"）
-
-> **逐轮日志已移到 `docs/ROUNDS.md`（索引）与 `docs/rounds/` 各卷** ✓（本节只留指示：顺序／复核清单／每族两件事／上报／提交）
-
-> 前提：`main`／`m1` ＝ `14b2764`（**M1 阶段边界，已打标签**）；工作继续在 `dev`。
-> **已完成项见 §9.1／§9.2 的台账，本节不重复。**
-
-1. ~~**M1 ② 的足迹报告**（启动延迟 ＋ 常驻内存）~~ **已完成**（`tools/footprint_host.c` ＋
-   `tools/measure_footprint.py`；数值与口径见 `DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"——
-   release：VM 引导 48 µs、宿主整程 1.05 ms、峰值 RSS 3.4 MB）。`§13-19` 与 M5 需要的那个**基线**有了
-2. ~~**`P1-13`（`pa_options` 过界）**：`pa.h` 定**尺寸标记**结构（`size` ＋ 检查档位 ＋ 优化级）；
-   `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（**可 `NULL`**）；档位／优化级进
-   `IM-19`／`IM-21`~~ **已完成**——收尾标志达成：`SPEC-c-abi.md` §15.3 的注已改为"**已满足**"
-   （`AB-7`）；档位真的改发射（深层 ⇒ 边界检查），优化级进了 `compile` 的显式输入集
-   （本层没有优化器 ⇒ 暂不改发射）。
-3. ~~**M2 harness 的"减配首版"**（**杠杆最大的一件**）：今天**没有 CLI**（无 `[[bin]]`），但
-   `pa_exec_string` 已能跑源码 ⇒ 驱动**不必等 CLI**。首版比对 **退出码 ＋ 指定全局的值 ＋
-   未捕获异常的类型／消息**；**stdout/stderr 做不到**（`MS-8` 要求它们，而 `print` 要
-   `sys.stdout` → `_io` → **`fs` 域**，`CM-26`）⇒ **如实标为减配版**。
-   收益：此后每一步语义进展都有"**通过／已知差异／新差异**"的数字（M2 判据的形态）~~
-   **已完成**：`crates/pyawa-abi/tests/conformance.rs`（`cargo test -p pyawa-abi --test conformance`；
-   语料 `tests/conformance/corpus/`）——首轮 **9/9 通过 · 0 已知差异 · 0 新差异**，自检（`MS-12`）
-   全绿。它当轮就抓到三处**可观察缺口**：`__name__` 未绑（**已修**：`pa_exec_string` 补
-   `__main__`）、下标表达式未解析、类对象属性读未接线（后两条**第 276 轮核实均已接线** ✓：下标一族 46 条夹具全绿、`C.v` 见 §9.2 的 `P1-6` 行）。
-4. **基础设施第一批**（**紧接着上面三项**；开发实测：今天跑程序的入口**藏在测试二进制里**——全仓无 `fn main`）：
-   ① **最小 CLI（≈1 轮）**：跑单文件／传参／给退出码／报未捕获异常。
-      **如实范围**：**还不能 `print`**（要 `sys.stdout` → `_io` → **`fs` 域**，`CM-26` **禁止** sink）
-      ⇒ **禁止**为"手感"临时绕开 `CM-26`。**它是 `MS-8` 合规版的前置**——退出码／stdout／stderr
-      本质上都是**进程级**比对。
-   ② **闭包运行期（1–2 轮）**：闭合"**编译面领先运行面**"——编译器已产 `co_cellvars`／`co_freevars`／
-      `MAKE_CELL` 一类，运行期**必须**能跑（实测信号：`COPY_FREE_VARS` 在执行器里看不出对应处理）。
-   ③ **`fs` 域的真实实现 ＋ `print`**：**CLI 与 `fs` 域是同一工作流**（`DESIGN.md` §7：`pyawa-runtime`
-      ＝真实机器实现）；它同时是**三处共用的前置**：`print`（`CM-26`）· `site.py` 建 `sys.path`
-      （`IM-24`）· import 的 I/O（`IM-15`）。
-5. **主线（大件，按依赖）**：`P1-11`（任意精度整数，**已授权"现在就做"**；注意 `int`↔`str` 的
-   **4300 位上限**与 `hash` 两处**易漏的可观察连带**）→ `P1-12`（`bytes`）→ ~~`marshal`（`CM-27`）~~
-   **已完成**（第 209 轮：`crates/pyawa-stdlib/src/marshal_module.rs`，自有格式版本 1、
-   `loads(dumps(x))` 往返、循环引用支持、`dump`／`load` 如实报未实现；夹具
-   `tools/gen_marshal_fixture.py`）→
-   **`sys`／`_io` ＋ `fs` 域的真实机器实现** ⇒ **`print`** → 合规 harness（stdout/stderr 齐备）→
-   **`P3-12`（import 系统）** → **M3（引入 `Lib/`）**。链条不可跳的依据：
-   `Lib/importlib/_bootstrap_external.py` 第 30 行就是 `import marshal`。
-6. **允许并行做 stdlib 的头部**：`CM-14` 顺序里**不依赖能力域**的模块
-   （`errno`、`builtins` 的纯计算面如 `len`／`abs`／`min`／`max`／`sorted`、`__build_class__`）**可以**
-   与上面并行。条件三条：① 按 `CM-14` 的 fan-in 顺序取；② 每做一个模块**就补它那段逐模块合约**
-   （`CM-4`；这也是 `SPEC-c-modules.md` §12 缺口的**分批补法**）；③ **不得**降低
-   `CM-5`／`CM-6` 的契约。**依赖能力域**的（`posix`／`_io`／`time` 一类）仍等 `P3-14`；
-   ⚠ **`print` 不在"纯计算面"里**：它要 `sys.stdout`（`_io` ⇒ **`fs` 域**），排在其后（`CM-26`）。
-   **下一份逐模块合约写 `sys`**（`CM-14` 的 fan-in 第 1）；先写**不依赖能力域**的部分
-   （`argv`／`path`／`modules`／`version_info` 一类），`stdout`／`stderr` 归 `_io` 之后再补——
-   `sys` 就位正是 `print`（`CM-26`）被解锁的前半步。
-7. ~~**台账纪律**：`§9.2` 里已完成的项按既有惯例**就地加删除线**（`P1-9` 就是这样）。…~~
-   **第 276 轮已办** ✓：`P1-6` 标收口（最后一项 `C.v` 已接线）；`P1-7`／`P1-8`／`P1-9`／`P1-13` 早已划线；
-   `P1-10` 的"未接线"清单按**逐条复验**改到只剩 `set`／`dict`／`bytearray` 的就地运算；
-   `P1-11`／`P1-12` 的"进行中"注据实更新（`AB-62` 已落地、切片写已接线、`float('<串>')` 与
-   `bytes.__hash__` 仍缺）⇒ 口径见 §9.2 各自行 ✓。
-8. **再往后**：表达式面按"**`Lib/` 需要**"的顺序补——**逻辑运算符（`and`／`or`／`not`）＋增强赋值
-   （`+=` 一族）先做**（两者是 M2 语料最常见的缺口；`and`／`or` **返回操作数**且短路；
-   增强赋值对**不可变**目标退化为 `a = a + b`、**目标只求值一次**，对**可变**目标
-   （`set`／`dict`／`bytearray`）要走 `__i*__` **就地**语义——**未接线前如实报未接线**，
-   **禁止**静默退化成重新绑定）。接着：**`break`／`continue`／`elif` ＋ `a[0].b`（下标后接属性）**
-   （都小、能立刻扩语料）→ **`try`**（`Lib/` 用得极多）→ `with` → `import`（`P3-12`）→
-   `lambda` → 推导式 → f-string。`**` 与 `@`（矩阵乘）都只是 `BINARY_OP` 的一个下标
-   （`BC-39` 的 27 项）⇒ **补运算符时顺手带上**，不必单列。再往后 `P3-12`（`.pyac` 与 import）→
-   `P3-13`（类型检查与边界的剩余：`TS-32`…`TS-39`）→`P3-14`（stdlib 分批）／
-   `P3-15`（Unicode 数据表的剩余面）。**WASM 目标**（`§13-11` 已决：**需要**）——**待定三件**：
-   ① 能力层的 **provider 形态**（`SPEC-capabilities`）② ABI 面（同一 `pa_*` 面在 wasm 上怎么落）
-   ③ 构建目标；**时机**排在主线（第 5 项）与 M3 之后 ✓
-9. **扩展特性的实现**（**A 批已落地（M4）**、B 批未做——入口见 `DESIGN.md` §2.1 的扩展特性索引）。
-   排期：A 批已随 **M4** 落地 ✓；**B 批可随时开**（不阻塞 M5 ✗）。分两批——
-   - **A 批（类型链）**：`TS-46`（`T?`）→ `TS-47`＋`TS-48`（变量标注即静态类型／平台类型）→
-     `TS-50`（收束）。与 `P3-13`（类型检查器与边界检查）**同一处地基**，一起做省一遍。
-     **已落地（M4，round 4–6）**：编译期静态检查器（`compile/typecheck.rs`）＋运行期 `CHECK_ASSIGNMENT`
-     （`BC-65`）＋union 标签（`BC-24`）；验收 `tests/m4_acceptance.rs`／`tests/gradual_guarantee.rs`／
-     `tests/type_check.rs`／`tests/assignment_emission.rs`／`tests/type_nullable.rs`；落地口径与如实缺口见
-     §6 的「M4 的要求」。
-   - **B 批（表达式／词法链）**：`BC-62`（多语句 `lambda`）· `BC-63`＋`TS-49`（空安全操作符）。
-     —— **已落地（round 10）** ✓（规格已定 ✓；词法／发射器／类型检查一起改；未覆盖形态见台账 round 10）。
-   - **验收**（各特性的条款里各自写了）：`BC-62` 对拍 `def` 版 · `TS-46` 对拍 `T | None` ·
-     `BC-63` 对拍它条款里的等价写法表 · `TS-47`／`TS-50` 走"**编译期尽力 ＋ 运行期兜住**"。
-   - **并列的两项**（同样"规格已定、实现未做"，第 276 轮补记）：
-     - **`IM-35`（`sys.modules` 四条语义）**（`SPEC-imports-and-modes.md` §…；验收 `T-IM-10`）：
-       **第 276 轮实测**——① **命中不重执行** ✓（`sys.modules` 里是**同一个**模块对象）、
-       ③ **失败移除** ✓（导入失败后表里不留名字）⇒ **④ 删除后重导 ✗ 未成立**（`del sys.modules["errno"]`
-       之后 `import errno` ⇒ `ModuleNotFoundError`；原生模块只注册一次）· ② **执行前入表**未逐条复验
-       ⇒ 与 `P3-12` 的 finder 一起收口最省。
-     - **`BC-61`（语法的唯一对照物）**：**必须**把 `Grammar/python.gram` **纳入同步范围**
-       （`SPEC-bytecode.md:152-153` 已如此要求 ✓）——仓库现在**没有** `Grammar/` ✗ ⇒ 待办：把该文件
-       **逐字同步**进来并在同步清单／pin（§2.1 第 2 步那三处）里登记。**与 `C1` 不冲突** ✓：
-       `C1` 记的是"词法/语法**手写**、暂不切换 `python.gram`"，而 `BC-61` 约束的是**对照物**、
-       **不约束实现手段**（`SPEC-bytecode.md` 同处写明）✓。
-
-> **编译面与运行面不得脱节**：编译器**已经产出**的构造，运行期**必须**能跑；否则编译面的覆盖面是
-> **虚的**——这与"运行期已实现、源码层写不出来"是同一件事的**正反两面**。夹具里出现"能编译、
-> 跑不了"的用例时，**按缺口处理**（`MS-19` 的"尚未实现"），**不得**记成"已支持"。
-
-> **到 `import` 能为标准库所用**的前置链（**不是新里程碑，是 M3 的前置清单**）：
-> CLI／宿主 ⇒ **`fs` 域** ⇒ `print` ⇒ **`builtins` 映射** ⇒ `bytes` ⇒ `marshal` ⇒ `importlib` 能在
-> VM 里跑 ⇒ `site.py` ⇒ **`P3-12`** ⇒ 引入 `Lib/`。**规格侧已齐**（`IM-11`…`IM-35`；§11／§12 无未写小节
-> 与无关项）⇒ **缺的全是实现**。
-
-> **M2 的门**：语料下限（`MS-13`）与规范化容差（`MS-9`）**已于第 270 轮裁定** ✓（见各自条目 ✓），**它们决定
-> "M2 何时能声称通过"**（现在 9 条语料绿**不等于** M2）。两者**都建议等表达式面推进到一定程度
-> 再定**——语料下限与"语言面能写什么"强相关，现在定会定出一个很快过期的数字。
-
-> **编译器覆盖面的准确表述**（免得被引用错，也免得像我那样误撤一次）：`def` 的**完整签名**（含 `/`、
-> `*args`、`**kw`、默认值）／**注解**／**类体两档**／**文档串**已进编译器，且与参照**逐字节一致**。
-> **第 212 轮起，算术与位运算的表达式面也进了**：`+ - * / // % **`、`& | ^ << >>`、一元 `+ - ~`
-> （优先级、`**` 右结合、常量折叠都逐字节对拍）；**第 213 轮再补括号（分组）、元组字面量、
-> 下标读与下标写**⇒ `x = a[1] + a[2]`、`a[1] = 9`、`t = (4, 5)` 这些**都写得出来了**。
-> **第 276 轮更新**：这一段原先列的"仍**发不出**"（`break`／`continue`、`try`／`except`、`with`、`import`、
-> `lambda`、推导式、f-string、`a[0].b`）**已全部进齐** ✓（逐条复验见 §9.2 的 `P1-10` 行）；
-> **当前已知仍发不出／未接线的**只有 `set`／`dict`／`bytearray` 的**就地**运算（`|=` 一族）——其余以 §9.2 各行为准。
->
-> **`MS-17` 的现状（第 228 轮实测）**：夹具 **244** 条里 **行号可比 244 条（100%）**、**位置可比 221 条**。
-> 行号缺口 **0**；列跨度缺口 **20** 条，逐条在 `tools/compile-positions-census.tsv`：
-> 11 条是「参照给合成指令（类体 `MAKE_CELL` 等）的位置是 `None`，本层的位点表表达不了『缺失』」、
-> 4 条布尔嵌套（`(a and b) or (c and d)` 一族）、2 条 `not not`、2 条链式目标（`a[0].b = v`）、
-> 1 条嵌套注解子项跨度（`list[int]` 的 `list` 与 `int` 各取自己的跨度）。
->
-> 列跨度属观测面（`MS-17` 允许"未覆盖但必须写明理由"）；第 226～228 轮共修 **十三条**传播规则，
-> 其中**四条**（`LOAD_ATTR` 取对象、`RETURN_VALUE` 取值、赋值"复合右值取整段"、增强赋值存入取整条语句）
-> 是**错位测量**留下来的错规则——详见各轮小结。度"，其余是逐族
-> 列跨度传播细节（观测面，`MS-17` 允许未覆盖但必须写明理由）。
->
-> ⚠️ 第 220／225 轮那批"粘性 loc 让 `if` 体沿用条件的行"的结论是**错位测量**的产物，已在第 225／226 轮更正。ONST slice(…)`）、两段非常量走
-> `BINARY_SLICE`、三段走 `BUILD_SLICE 3`；`list` 的切片写一并接线。
->
-> **位置表的一处已知边界**（第 212 轮）：单个运算符与"一元套简单操作数"的位置已与参照一致；
-> **嵌套复合表达式**（如 `a * b + c`、`-a ** b`、`a[1][2]`）的后继加载与收尾跨度取**内层**那段，
-> 属参照**内部传播细节**——**未推规则**，夹具里按惯例标 `positions_covered = false`（那条用例的
-> **指令流与常量池仍逐字节比**）。
->
-> **第 211 轮补注（两处容易看错的地方）**：
-> ① **运行期不等于编译器**：`BINARY_OP` 一族（`+`／`-`／`*`／`//`／`%`／`**`／位运算／一元）**已经**
->    走任意精度公开入口（`P1-11`），所以"源码写不出 `a * b`"是**编译器**的缺口，不是语义缺口。
->    此前执行器里还残留 i64／单例假设（结果不在单例区间就报 `IntOutOfRange`）——已由新对拍语料
->    `big_int_add.py` 抓出并作废。
-> ② **常量折叠差异**：常量池的整数只有 `Constant::Int(i64)` ⇒ `i64::MAX + 1` 这类字面量加法
->    **不折**（参照会折成大整数常量）——**语义等价、指令流不同**；若把这类源码放进
->    `gen_compile_fixture.py` 的用例集，会因指令流不同而红，故**不放进**，在此登记。
->
-> **AB-62 已落地**（第 211 轮）：`pa_tointstring`（任意整数 → 十进制借用视图）＋
-> `pa_pushintstring`（十进制 → 整数压栈）；`bytes` 按裁定用**既有** `pa_pushbytes`／`pa_tobytes`
-> （从桩改为真实现，不新增函数）。对拍 harness 的整数渲染改走桥，语料扩到 **11 条**
-> （新增 `big_int_add.py`／`bytes_concat.py`），**11/11 通过 · 0 已知差异 · 0 新差异**。
-> **待裁**：`pa_type` 对 `bytes` 目前报 `PA_THANDLE`（`pa_tag` 里没有 bytes）——要不要加
-> `PA_TBYTES`：**已决** —— `pa_type` 的标签取值域由 **`AB-63`** 定，`bytes` 取 **`PA_TBYTES = 8`**
-> （**末尾追加**，`AB-44`）；并明确"判类型用 `pa_type`／`pa_is*`、取值用 `pa_to*`"。
-
-> **`m1` 之后的 ABI 注意**：`m1` 是**里程碑标记**，**不是 ABI 冻结声明**（标签说明里写明了）
-> ⇒ `P1-13` 改执行签名**不需要**走 `AB-44` 的版本矩阵。将来要"对外声明 ABI 可依赖"时，那才是
-> `AB-44` 的起点；**建议在 `P1-13` 落地之后**立那个标志。**进 `main` ≠ ABI 冻结**。
-
-**复核清单**（依据在右列）
-
-| **P3-22** | **`dict` 子类实例不被当字典**（第 298 轮量出）：本层判"是不是字典"用的是**类型恰好相等**，不是 `is_subtype` ⇒ `dict` 子类的实例既不能下标赋值、也不能当类命名空间（最小复现：`class D(dict): pass; D()["x"] = 1` ⇒ "下标赋值只接线了 list／dict"）。**这是 `enum` 要的那一格**：`EnumDict` 是 `dict` 子类且**重写了 `__setitem__`**（成员名就那样收的）⇒ 修法不能只放宽判据，还要走槽位／重写 | `OM-11`、`AB-37`、`AB-58` | 第 299 轮查清：根因是本层的「宿主布局继承」只对 **host 类型**生效，**VM 内部**内建类型（`dict`／`list`／`frozenset`）不在那条路上 ⇒ 子类拿到的是普通对象布局；修法＝内建类型的**布局继承** ＋ 内建方法**进类型字典**（放宽类型判据只会引入 UB）|
-| **P3-23** | **t-string**（PEP 750，3.14 新语法）：`t"…"` 现在被拆成名字 `t` ＋ 字符串 ⇒ `Lib/annotationlib.py:327` 的 `type(t"")` 报「实参表里出现 `Some(Str("")`」；要连**新内建类型** `Template`／`Interpolation` 一起做（不是小缺口）。挡着 `annotationlib` ⇒ `test.support` 那一族 26 个模块 | `BC-14`、`TS-*` | 无 |
-| ~~**P3-24**~~ **已解除（第 302 轮）** | **方法的默认值元组装的是类名** —— 根因是 `compile_class_scope` 收尾只调 `flush_jumps`，漏了模块／函数那四样冲刷 ⇒ `deferred` 的默认值元组既没入常量池、占位字节也没回填（`Q.__init__.__defaults__` 成了 `('Q',)`）。已修 ＋ 语料 `method_defaults.py` | `BC-4`、`OM-14` | 无 |
-| **P3-25**（一半已解除，第 303 轮） | **在类型对象上取属性不做描述符绑定** —— **已修**：`staticmethod`／`classmethod` 的取用（`Q.s` 不再拿到包装对象本身；`classmethod` 绑到那个类；第 298 轮 `__prepare__` 的绕行已撤）＋ **容器的 `__contains__` 属性**（通用实现，与 `in` 同一处；`bytes` 也换过来）。**还剩**：其余**内建方法**作为属性仍未普遍接线（`[].append` 一类走的是逐类型方法表；`list.__len__` 等仍报 `AttributeError`）| `OM-11`、`AB-37` | 逐张方法表补（`keyword` 已验证可同步 ✓）|
-| ~~**P3-21**~~ **已解除（第 297 轮）** | **`iter_value` 拿到已释放对象 ⇒ `SIGSEGV`** —— 根因是 `dict.setdefault` 插入那条路把**借来的实参**当返回值交出 ⇒ 字典里那一份被放掉 ⇒ use-after-free（实测链条：`Lib/enum.py` 的 `classdict.setdefault('_ignore_', []).append(...)`）。已修（返回值那一份自己 retain）＋ 语料 `dict_setdefault_reference.py` ＋ `PYAWA_QUARANTINE=1` 闸门守住 | `OM-11`、`OM-16` | 无 |
-| 不要做 | 依据 |
-|---|---|
-| 手写内建类型表 | `TS-41`（必须探测导出） |
-| 手写绑定错误消息 | `BC-56`（消息以探测为准） |
-| 把容器载荷布局写进文档 | `TS-43`（实现自选） |
-| 在文档里复述逐指令动作 | `SPEC-bytecode.md` §10 的注 |
-| 为内建类型旁路属性通道 | 同上（必须走 `getattr` 槽，`OM-11`） |
-| 用"自己跟自己对"的夹具 | 夹具必须是参照实现的真产物——否则 `MS-12` 的自检无意义 |
-| 只对拍 `BC-57`／`BC-58` 名单里的指令 | `BC-59`：编码对拍**必须完备**（语料里出现的每条指令都对 `dis`） |
-| 把临时内部错误类型／消息当成**可登记的差异** | 异常类型与消息是**可观察语义**（`MS-8`／`MS-10`／`MS-17`）⇒ 接线后**必须**换成真异常，**不得**进差异清单 |
-| 因为"本层没实现"而在解码时对 `NOT_TAKEN` 一类返回 `Err` | `SPEC-bytecode.md` §10 的三分类②：**参照实现会发射** ⇒ VM **必须容受**（我们的编译器可以不发） |
-| 为"表里有、编译器不发"的指令做 parity | 同上③（`BINARY_SLICE`／`STORE_SLICE`／`RESERVED`／编号 ≥ 256 的伪指令） |
-| 给**无 oparg** 的指令编出含义 | `BC-58`：`_opcode.has_arg` 是唯一权威（`STORE_SUBSCR`／`MAKE_FUNCTION`／`NOT_TAKEN`… 的 oparg 必须为 0，`BC-33`） |
-| 把异常状态放成**进程级全局** | `BC-60`：必须按**实例**存放（`OM-1`／`CX-3`）；将来按实例 × 线程 |
-| 让**宿主自己分配**载荷、只把指针交进来 | `AB-58`：载荷由 **VM 分配**（否则 `OM-3` 记不了账、`AB-18` 管不到） |
-| 为输出新增能力域或注入 output sink | `CM-26`：`print` 归 `fs` 域（`sys.stdout` → `_io`），sink 会绕过实例能力表 |
-| 只看某一轮的测试总数 | `MS-25`：连跑 ≥3 次总数必须一致；抖动按崩溃／内存损坏排查 |
-| 留下未解释的**编号缺号** | `CX-19`：同前缀编号必须连续（墓碑算定义） |
-| 让**夹具探针有副作用**（先跑会改被测物的赋值，再取 `value`） | 探针**必须先取 `value`、再跑任何有副作用的探测**；夹具生成后**逐条读**，不能只看条数——否则期望值失真，且 `MS-12` 的自检也照不出来 |
-| 让 stdlib 的**安全入口**把容器布局漏成公共 API | `OM-6`：载荷表示**不进 ABI** ⇒ `pyawa-stdlib` 为 `forbid(unsafe_code)` 新增的安全入口**不得**暴露布局细节 |
-| 把 `m1` 当成"ABI 已冻结／已发布" | 标签说明 ＋ `README.md`：**里程碑标记 ≠ ABI 发布标志**；`AB-44` 的起点另立（建议在 `P1-13` 之后） |
-| 让 harness 首版去比 stdout/stderr | `print` 未落地（`CM-26`：`sys.stdout` → `_io` → `fs` 域）⇒ 必须**如实标成减配版** |
-| 在 harness 里"缺前置就跳过" | 与 `T-AB-1` 同一原则：**缺即红、不降级** |
-| 改 `Lib/` | `CX-8`（例外清单为空） |
-
-**第 215 轮复核记录**（本节复核清单的落地情况；方法写在括号里，便于下轮复跑）
-
-| 复核项 | 做法 | 结果 |
-|---|---|---|
-| 夹具探针不得有副作用 | 扫 `tools/gen_*.py` 全部 22 个生成器：先按"就地改"特征（`__setitem__`／`del`／`sort`／`append`／`update`／`= ` 等）机扫，再**逐个读**主体可变的那几个（切片／集合／迭代器／模式匹配）的探针顺序 | **一处违规**：`gen_slice_fixture.py` 的 `__setitem__` 探针排在取 `value` 之前（第 213 轮已修，源码里留了原因注释）；其余生成器的主体**每个用例都重建**（如 `gen_match_fixture.py` 的 `build(description)` 在循环内），迭代器类（`gen_itertools_fixture.py`）每条探针各建一个 ⇒ 无跨探针状态 |
-| stdlib 安全入口不得漏布局（`OM-6`） | ① 列 `Instance` 的全部 `pub fn` 签名，找除 `NonNull<Header>` 之外还带布局类型的；② 扫 `crates/pyawa-stdlib/src/` 是否出现布局类型名、`refcount` 字段、`.items.borrow`；③ 查有无 `-> &mut` 别名返回与容量暴露 | **合规**：安全入口只交**不透明句柄**（`NonNull<Header>`）与拷贝（`Vec<NonNull<Header>>`）、标量；stdlib 只直接构造 core 公开的 `BuiltinFunctionObject`／`AttributeObject`（原生函数与属性机制，**不是**容器布局），不碰任何容器载荷字段；无 `&mut` 别名返回、无容量 API |
-
-> 附一条**不是违规**但值得记住的事实：`pyawa-abi`（C 层 crate）**内部**直接用 `DictObject`／`ListObject`／`StrObject`／`IntObject`／`FloatObject` 等核心布局类型——`OM-6` 禁的是"头部出现在 **C ABI 签名**里"，而 `pa.h` 只有不透明句柄与标量，故合规；但若将来要求 C 层也布局无关，需再补核心访问器。
-
-**每族的两件事**：① 夹具对拍参照实现的**真产物**（真字节 ＋ 真 `dis` 输出）；
-② 发射器产出**必须**过 `validate`（`BC-32`…`BC-36`）。
-**① 的完备性**：语料里出现的**每一条**指令都要与 `dis` 对拍，**不是**只测 `BC-57`／`BC-58`
-名单里的那几条（`BC-59`／`T-BC-21`）——`dis` 是完备 oracle，靠它兜住"文档还没追到的编码"。
-
-**撞上"没规格"时**：停下来问，并带上 ① 要决定什么；② **实测到的参照行为**；
-③ 倾向哪种口径（含代价）。
-
-**提交**：纪律见 `agents-rules/commit-rule.md`。本轮相关的两条——
-**生成脚本与夹具一起入库**（否则数据不可复现）；**新增约束必须领新号**
-（下一个空号 ＝ `CONSTRAINTS.md` §3 表尾编号 ＋ 1——**这里不写具体数字**，写了就会过期）。
-
----
-
-#### 暂时违约清单（**非规范**；逐条带「回填条件」，防日后淡忘）
-
-> 本节是**工作台账**，不是规范：规格本身（`IM-`／`CM-`／`CX-`）未改一字。任何一条回填后，请就地划掉并注明轮次。
-
-**A. 对硬约束的暂时违约**（必须回填；违反的编号逐条写明）
-
-| # | 违约（vs 谁） | 现在的做法 | 为什么暂时这样 | 回填条件 |
-|---|---|---|---|---|
-| A1 | `IM-30`／`IM-31` ＋ 本文件「不能用 Rust 私写顶替」 | `pyawa-core` 的 `load_module` 在 **Rust** 里做目录扫描＋编译＋执行＋登记 | 它是**过渡桥**：让 `import` 今天能跑，并**守住** `IM-15`（I/O 全经 `fs` 域） | `Lib/` 引入（M3）后，Python 层 finder（**继承** `_bootstrap_external.FileFinder`）顶替 |
-| A2 | `IM-24`／`IM-26`（`sys.path` 归 `site.py`，且不得跳过它） | `sys.path` 由**组合根**播种：CLI 放脚本目录、语料 harness 放语料目录 | `site.py` 还跑不起来 | `site.py` 能在 VM 里跑 |
-| A3 | `IM-31` 的"loader 的编译与 `.pyac` 读写落 Rust 且经能力层" | 编译在 Rust ✓ 经能力层 ✓，但**没有产物容器**：每次 import 现编现跑、不写缓存 | `P3-12` 的 `.pyac` 未落地；`IM-16`（只读根 ⇒ 不写缓存、不报错）**现在恰好满足** ✓ | `.pyac` 容器与陈旧判定（`IM-18`…`IM-21`）落地 |
+> 正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §9.4 归档」。本文件只留指针（非规范内容不进 `PLAN`）。
 
 ## 10. 尚未写出（本规格自己缺的节）
 
@@ -746,7 +403,7 @@
 | 缺的节 | 内容 | 为什么现在没有 |
 |---|---|---|
 | **对拍 harness 的实现** | `MS-6`…`MS-14` 的可执行实现 | **已落地**：runner ＝ `crates/pyawa-abi/tests/conformance.rs`，语料 ＝ `tests/conformance/corpus/`，报告 ＝ `target/conformance/report.md`（`MS-14`）——口径与边界逐条见 `tests/conformance/README.md`。<br>~~**未落地**：`MS-8` 的 **stdout／stderr** 比对（等 `print`，`CM-26`）~~ **已完成**（第 93–95 轮）．**仍欠**：`MS-13` ②（`Lib/` 语料，等 M3）；`MS-9` 已按 `§13-10` 的裁定归一（行尾／末尾换行 ＋ `0x` 地址 ＋ 路径前缀） |
-| **基线语料清单** | `MS-13` ①（自建最小语义用例）与②（`Lib/` 中可编译部分）的具体清单、及其**模式标注** | ① **已有首版**（纯 Python 模式；清单与边界见 `tests/conformance/README.md`）；**但 `MS-13` 的"范围下限"已裁定**（`§13-10`）：总数 ≥ 112 ＋ 各内容面下限，判据 `tools/check_corpus_floor.py` ✓ —— **M2 已按它成立** ✓。<br>② **已裁定达成** ✓（2026-10-18：语料 **407** 条＝自建 192＋`Lib/` 165＋`Lib/test/` 50，覆盖 **150** 个可 import 模块；机检仪器 `tools/corpus_coverage.py` 五项全 PASS 并已接进 `tests/ci/check.py` 成 **M3-COVERAGE 硬门**）；扩展模式语料**没有参照**，用**自身对照**验收（见各特性条款） |
+| **基线语料清单** | `MS-13` ①（自建最小语义用例）与②（`Lib/` 中可编译部分）的具体清单、及其**模式标注** | ① **已有首版**（纯 Python 模式；清单与边界见 `tests/conformance/README.md`）；**但 `MS-13` 的"范围下限"已裁定**（`§13-10`）：总数 ≥ 112 ＋ 各内容面下限，判据 `tools/check_corpus_floor.py` ✓ —— **M2 已按它成立** ✓。<br>② **已裁定达成** ✓（2026-10-18 裁定；当前语料 **408** 条＝自建 193＋`Lib/` 215（含 `Lib/test/` 50），覆盖 **150** 个可 import 模块；机检仪器 `tools/corpus_coverage.py` 五项全 PASS 并已接进 `tests/ci/check.py` 成 **M3-COVERAGE 硬门**）；扩展模式语料**没有参照**，用**自身对照**验收（见各特性条款） |
 | ~~**差异清单的初始内容**~~ | ~~`MS-19` 要求的逐项「依据 ＋ 归一规则」~~ | **已关闭**：`tests/conformance/divergences.md` 已建立并录入条目（`69592b4`）。<br>⚠ `MS-19` 新加的**适用范围**要求的**重新分诊已完成**：主表只留两类合法差异， `DIV-3` **已修**（编译器产出 `co_qualname` ＋ `repr` 改用它 ＋ 类创建钩子补写 `C.m`），`DIV-4`…`DIV-7` 已移入 §9.2（`DIV-7` 已修） |
 | **M2…M6 的可执行判据** | 各里程碑判据的脚本化（M0 已由 `tests/ci/check.py` 承担） | **部分已落地**：M0 ＝ `tests/ci/check.py`、M1 ＝ `tests/ci/t_ab_1.py`、M2 ＝ `cargo test -p pyawa-abi --test conformance`（`MS-10` 的三分类）；**M3…M6 待各自实现就位**——`MS-1` 要求可执行，故余下部分仍是本规格的欠账。<br>**M3 判据① 的仪器**：`tools/lib_import_ratio.py` **按判据口径**量 —— 分母＝**上游 `Lib/**/*.py` 全量（628）**，**两侧都跑**（Pyawa 侧同对拍那条 ABI 路径；参照侧 `python3 -S -c "import <模块>"`，`-S` 与本层"不跑 `site.py`"对齐），分三类（通过／**参照口径**——参照自己也 import 不了 ⇒ 不计我们失败／失败）。**基线（第 279 轮）**：**27 ÷ 628 ⇒ 4.3%** ✗（通过 10 ＋ 参照口径 17）。**另有一个上限诊断**（第 281 轮加 ✓，**不作判据** ✓）：`--ceiling` 把上游 `Lib/**/*.py` **全量**复制到 scratch 并放进 `sys.path` 再逐个 import ⇒ 量的是「若把 `Lib/` 全同步进来、现在能 import 多少个」，并把**卡住的族**按首个异常归并 ✓（它把「还没同步」与「同步了也跑不动」分开 ✓）。基线 **145/628 ＝ 23.1%** ✓（第 282 轮）| |
 
@@ -769,7 +426,7 @@
 退出码 **0＝无诊断／1＝有诊断／2＝内部错误** ✓。
 
 **验收** ✓：
-① 407 语料（`.py`）跑 `check` **0 诊断** ✓；
+① 408 语料（`.py`）跑 `check` **0 诊断** ✓；
 ② 一个故意写错的 `.pyawa` 能**一次报出 ≥2 条**类型诊断 ✓（证批量）；
 ③ `--format=json` 含 `file`／`line`／`col`／`code`／`severity`／`message` ✓；
 ④ CI `fast` 档在 `check.py` 之后加一步对语料跑 `pyawa check` ✓；
@@ -781,7 +438,7 @@
 
 **状态** ✓：① `pyawa check` **已落地 ✓（round 275）**——`pyawa check [--format=json] <文件…>`：只编译不执行、批量诊断（不遇首错即止）、`.py` 只语法类（`MS-19`）／`.pyawa` 语法＋类型、`--format=json`（`file`/`line`/`col`/`code`/`severity`/`message`）、退出码 0／1／2；验收 `crates/pyawa-runtime/tests/check_command.rs` 6 例（含 **407 语料 0 诊断**、JSON 字段、执行 vs check 语法诊断一致、退出码）；CI fast 在 `check.py` 后已加语料步骤（PLAN §10.1 ④）。② LSP MVP **已落地 ✓（round 276）**——`crates/pyawa-lsp`（**零第三方依赖**的手写 JSON-RPC／LSP 帧）：`initialize`／`initialized`／全量 `didOpen·didChange·didClose`／`publishDiagnostics`（与 `check_source` 同一处真相）／`hover`（已标注名字的声明类型）；集成验收 `crates/pyawa-lsp/tests/lsp_stdio.rs` 3 例（真起子进程走 Content-Length 帧）；CI fast 已加 `-p pyawa-lsp` 测试。③ **按需梯的最小项 已落地 ✓（round 277）**——`textDocument/completion`（文档内符号）／`textDocument/definition`（注解/def/class/顶层赋值首个定义处）／`textDocument/rename`（**单文件整词** `WorkspaceEdit`）；验收 `crates/pyawa-lsp/tests/lsp_stdio.rs` 第 4 例。**如实边界**：不做类型推断／成员补全／标准库符号／跨文件跳转／作用域分析（PLAN 原文即"按需"，这些留待需求出现 ✗）。**位置口径收口 ✓（round 279）**：LSP `character` 已严格按 **UTF-16 code unit** 换算（入参/出参、非 BMP 字符；验收 `lsp_stdio.rs` 第 5 例）；其余已知边界在 `crates/pyawa-lsp/README.md` 的「范围外」逐条写明理由 ✗。
 
-## 12. 需求单：语言与库缺口（2026-11-13）
+## 12. 需求单（只放**未完成**项；已收口正文归档到 `docs/rounds/`）
 
 三项均由文档侧实测定位（非推测），证据与验收如下。语义仍以各 `SPEC-*` 为**一处真相**，此处只给范围与判据。
 
@@ -789,557 +446,258 @@
 
 ### 12.1 `x = yield`（`SEND` 取值形态）—— 语言语义缺口
 
-**证据**：
-- `SPEC-bytecode.md:533` 把 `RETURN_GENERATOR`／`YIELD_VALUE`／`SEND`／`GET_AWAITABLE`／`GET_YIELD_FROM_ITER` 列入「生成器与协程」族。
-- 实测（release）：
-  - `def g(): yield 1` ⇒ 正常；`def g():\n while True: yield` 的 `send()` ⇒ 正常。
-  - **`def g():\n v = yield\n print(v)`** ⇒ `未捕获（状态 5）：指令 52 的这个形态尚未接线：非生成器函数不该让出（码元被改坏了？）`。
-- 即：**yield 不接值时可用，接值（`x = yield`）即崩**。
-
-**范围**：让 `x = yield`（`SEND` 后取值）按 `YIELD_VALUE`／`SEND` 的规格工作；`send(v)` 的 `v` 必须成为该表达式的值；`throw`／`close` 的既有行为不得回退。
-**验收**：
-① `v = yield` ＋ `gi.send(7)` ⇒ 生成器内 `v == 7`；
-② `try/except GeneratorExit` 包住的 `x = yield` 形态在 `close()` 时不泄漏、不崩；
-③ `yield from`／`await` 现有用例（含 `pyawa-lsp` 之外的核心测试）全绿；
-④ 语料新增一条该形态（`tests/conformance/corpus/`），对拍参照一致；
-⑤ `check.py` 全绿 ＋ `slowcheck` 十一项全绿。
-**禁区**：不改 `YIELD_VALUE` 的既有语义；不为"看起来能跑"在解释器层特判（须按码元路径修）。
-
-**状态 ✓（2026-11-14 落地）**：修因在**编译器符号分析**（按码元路径，无解释器特判）：`statement_has_yield` 覆盖全部语句变体（赋值族／`assert`／`for` 可迭代／`while` 条件／`with` 项与目标／`match` 主语与守卫／`raise`／`delete`／`def` 装饰器与形参默认值／`class` 基类·关键字·装饰器），`expression_has_yield` 全面下探同作用域表达式（`lambda` 形参默认值、推导式**最外层可迭代**等作用域边界逐条实测；`lambda`／`def`／`class` 的**体**不下探）。独立复核：72 例判定矩阵 66/72 一致（6 例外全部是"参照 SyntaxError、本层接受"的**既有** parser 缺口，非本笔引入）；参照判为生成器的 55 例**全部**一致；`compile` 夹具逐指令与 conformance **408/408** 证明既有产物未变。验收：①`send(7)` ⇒ `v == 7` ✓ ②`GeneratorExit`＋`close()` 不崩、`PYAWA_DANGLING=1` 干净 ✓ ③`compile`／`generators`／`coroutines`／`generator_and_range_shapes` 全绿 ✓ ④语料 `yield_expression_assignment.py`（manifest **408** 条）对拍一致 ✓ ⑤`check.py`＋`slowcheck` 全绿 ✓（收口轮）。**顺带收口**：同族两处漏标（`except (yield):` 的类型表达式；`yield (yield from …)` 的操作数）已一并修并加回归测试（`tests/yield_expression_shapes.rs` 6 例）。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.2 `_signal` 最小面 —— 一次解锁 `asyncio`
 
-**证据**：
-- 实测：`import signal` 成功，常量与 `Handlers` 可见；但 `signal.getsignal(2)` ⇒ `NotImplementedError: _signal.getsignal：真实信号注册／查询是能力域（CM-8）问题，本轮未接线`。
-- 实测：`asyncio.run(m())` ⇒ **同一条 `_signal.getsignal` 报错**（即 `asyncio` 在事件循环初始化阶段就依赖它）。
-
-**范围**：在**不启用真实信号**的前提下，提供 `_signal` 的最小面，使 `asyncio` 的事件循环可初始化并跑完一个协程：
-`getsignal`／`signal`（**注册为 no-op 或仅记账**，不真正投递）／`set_wakeup_fd`（返回前值或 `-1`）／`SIGCHLD` 等常量的存在性。
-**已定（2026-11-14，用户选 A）**：**不做真实信号投递**，只做**记账式（只记录、不投递）**。
-- 理由：POSIX 信号处置是**进程级**状态，与 `CP-13`／`OM-1` 的每实例隔离直接冲突；放开真实信号等于把沙箱边界
-  开在宿主进程上（脚本可改写宿主退出路径）。而 asyncio 真正吃信号的场景（子进程 `SIGCHLD`、Ctrl-C 处理）
-  在本层本就非目标（`subprocess`／`fork` 不提供）。
-- **代价（必须如实记录）**：`signal.signal` 注册的 handler **永不触发** ⇒ 实现时**必须**在
-  `tests/conformance/divergences.md` 增一条 `DIV-`（注册不投递），并在 `_signal` 合约里写明"记账式"边界；
-  无法记账的形态一律如实报未实现（`CM-6`／`AB-22`），**禁止假成功**。
-- **留待**：真实信号属 `proc` 域（`SPEC-capabilities.md` §9.3），等该域真正开工时另行设计。
-**验收**：
-① `asyncio.run(coro())` 返回正确结果；② `await asyncio.sleep(0)` ＋ `async for` ＋ 异步推导式可用；
-③ `signal.getsignal` 不再抛 `NotImplementedError`，返回记账号；
-④ 若走方案 B：未授予该能力域时**如实报未实现**（`CM-6`），不得假装成功；
-⑤ 不引入宿主不可控的信号处理；`check.py` ＋ `slowcheck` 全绿。
-**禁区**：不得在 VM 内部直接调用宿主信号设施绕过能力面（`CP-` 口径）。
-
-**状态 ✓（2026-11-14 落地）**：**方案 A 记账式**已落地——每实例记账表存在 `_signal` 模块命名空间的隐藏键（`__pyawa_signal_handlers__`／`__pyawa_signal_wakeup_fd__`；无全局可变状态、不调用宿主信号设施）。`getsignal`／`signal` 记账并返回前值（`SIGINT` 初值即 `default_int_handler`、32／33 → `None`、其余 `SIG_DFL`）；`default_int_handler` 导出且调用抛 `KeyboardInterrupt`；`set_wakeup_fd` 只接受 `-1`（其余如实 `NotImplementedError`）。独立复核：asyncio 面（`run` 返回值／`await sleep(0)`／`async for`／异步推导式／SIGINT 记账→恢复）与 signal 面（45 常量／初值／读回／前值／参数校验文案／不可捕获号）与参照逐行一致；`PYAWA_DANGLING=1` 下 7 个脚本零崩溃、零 stderr。验收①-⑤全过。差异与可观察偏差登记为 `DIV-10`，契约改写见 `SPEC-c-modules.md` §5.2.11。**范围外发现（非本项引入，另记）**：`asyncio.gather`／`wait_for` 红在 `pyawa-core` 缺**类体私有名改写**（`__x` → `_C__x`）；`OSError` 的 `.args`／`.errno` 与 `KeyboardInterrupt.args` 保真度属 core 既有口径（`str` 一致）。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.3 `_csv` ＋ `Lib/csv.py` —— 标准库 C 底座缺口
 
-**证据**：
-- 实测：`import csv` ⇒ `ModuleNotFoundError: No module named 'csv'`。
-- `Lib/csv.py` **不在仓库**（`Lib/` 同步面尚未覆盖它）；`crates/pyawa-stdlib/src` 内**无 `_csv`**。
-- 排期口径见 `P3-14`（逐模块合约与 stdlib 实现）与 `P3-26`（判据① 的驱动量＝C 模块缺口）。
-
-**范围**：用 Rust 实现 `_csv` 的最小面（`reader`／`writer`／`field_size_limit`／`Error` 及 `Dialect` 的必要方法），并同步 `Lib/csv.py`，使 `csv` 可 `import` 并完成读写回环。
-**验收**：
-① `csv.reader(io.StringIO(...))`／`csv.writer(...)` 对拍参照一致（含引号、转义、换行处理）；
-② `csv.DictReader`／`DictWriter` 可用；
-③ 上游 `Lib/test/test_csv.py` 的通过项数较接入前**上升**（记录前后数字）；
-④ `CM-14` 的逐模块合约补段（`SPEC-c-modules.md` §5.x），含"未接面如实"；
-⑤ `check.py` ＋ `slowcheck` 全绿。
-**禁区**：不引入 C 扩展加载（C 底座用 Rust 重写）；不合规方言静默降级（要么支持、要么如实报未实现）。
-
-**状态 ✓（2026-11-14 落地）**：`_csv` 以 Rust 逐条转写参照 `Modules/_csv.c` 状态机实现（`Error`／`Dialect`／`Reader`／`Writer`／`reader`／`writer`／`field_size_limit`／方言注册四函数／6 个 `QUOTE_*`／`_dialects`；读侧 `parse_process_char`、写侧 `join_append_data`、方言校验次序与文案逐字一致）；`Lib/csv.py` 已由 `tools/sync_lib.py --sync` **逐字节同步**（`SLICE` 只增 `csv.py`；`--check` 零差异）。验收：①`csv.reader`／`csv.writer` 全档对拍一致（120 行双侧逐行）✓ ②`DictReader`／`DictWriter` 可用（上游 `-k Dict` 25 例全过）✓ ③上游 `test_csv.py`：接入前 `ModuleNotFoundError`（**0 通过**）⇒ 接入后 **127 例：117 通过／0 失败／4 错误／6 跳过** ✓ ④`SPEC-c-modules.md` §5.2.33（工单写 §5.2.30，已被占号 ⇒ 取下一空号；含未接面如实）✓ ⑤`check.py`＋`slowcheck` 全绿 ✓。**上游 test_csv 剩余 4 条如实归因（均在 `_csv` 语义之外）**：4 错误＝`array.array` 元素存储未接线（§5.2.14 既有缺口）；先前的 1 失败（`__module__`）与 2 错误（`_io` **孤立 `\r`** 断行）已于 2026-11-14 的两个缺口工单修掉（见 §12.5）。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.4 ABI 收口（2026-11-14 审计，8 项）
 
-审计口径：规格定义 `AB-*` **68** 条（编号 1–69 无缺号）；`pa.h` 声明函数 **73**；cdylib 实际导出 **74**。
-以下 8 项排期全部收掉（#3／#6／#8 已于 2026-11-14 由用户拍板；见本节末状态注）。
-
-| # | 项 | 收法 | 验收 |
-|---|---|---|---|
-| 1 | `AB-52` 的 `type_expr` **不求值**（只原样保留表达式字符串） | **已落地（M4，2026-11-14）**：落 `TS` 注解解析器（`SPEC-type-system.md` §16 的 `TS-51`…`TS-57`；`pyawa_core::parse_type_expression`／`evaluate_type_expression`）；`pa_register`／`pa_module_addfunction` 注册时求值成 `AB-69` 的 `TyExpr`（**同一账本**：边界运行期＋编译期调用点检查；`Any`/`Platform` 变体；坏字符串/未知名 ⇒ `PA_ERR_INVALID`；`.pyi` 仍原串） | 注解表达式可求值 ✓（`crates/pyawa-abi/tests/annotation_strings.rs` 7 passed）；`.pyi` 导出正确 ✓ |
-| 2 | `pa_exec_file` **已接线**（§12.18 C1）：源经 `fs` 域读入后复用 `pa_exec_string`；电池版 `paL_newstate` 直接可用，最小产物无 `fs` provider ⇒ 如实 `PA_ERR_NOTIMPLEMENTED` | 已落地；无 provider 的边界保留 | 电池版文件执行可用；最小产物与"已实现但拒绝"可区分（`AB-22`） |
-| 3 | `pa_call` 的 `nresults != 1` **未定** | **已定**：**精确**结果数（`0`/`N`，多截、少补 `None`）⇒ 落 `AB-72` | 多返回值用例；单返回值不回退 |
-| 4 | **宿主对象句柄不可读回**（复核：`pa_type` **本来就在**如实报 `PA_THANDLE`——审计此句为误记；缺的只有 `pa_tohandle`） | **已实现**：新增 `AB-70` `int pa_tohandle(pa_state*, int idx, void **payload_out)`——栈契约 `—`，仅对宿主对象成功，类型不符 `PA_ERR_INVALID`（`AB-22`）；借用照 `AB-15`／`AB-17` | 脚本把句柄当参数传给宿主函数能取回载荷；经 `list`／`dict` 往返后仍能取回；类型不符如实报错；规格 §15.3 表格同步 |
-| 5 | `§15.4` 辅助层（`paL_*`）**规格无签名** | 按现状（`AB-19` 形态）把签名补进规格 | 规格与 `pa.h` 一致 |
-| 6 | `getfield`／`setfield`／`gettable`／`settable` 栈契约：规格 `±1` vs 实现 `−1`／`−2` | **已决**：改规格记法跟随实现（`setfield` −1；`settable`／`rawset` −2） | 规格与实现一致；`T-AB` 用例覆盖 |
-| 7 | `pa.h:140` 注释**过时**（`pa_exec_bytecode` 已落地，真的 decode 并按 `BC-29` 校验） | 改注释 | 注释与实现一致 |
-| 8 | `pa_set_program_filename` **影子导出**（不在 `pa.h`、不在规格） | **已选**：补进 `pa.h` ＋ 规格（`AB-71`）；`T-CX-19` 过渡清单清空 | 导出 ⊆ 头文件 ⊆ 规格 |
-
-**防 #8 复发**：**已落地 ✓（2026-11-14）**——机检 **`T-CX-19`**（约束 **`CX-29`**，定义见 `CONSTRAINTS.md` §3）：「`#[no_mangle] extern "C"` 导出符号集合 ⊆ `pa.h` 声明集合 ⊆ `SPEC-c-abi` 提及集合」，且导出与声明的总数都 **≤ `AB-1` 的 120**。只比对符号名（源码级扫描，不构建 cdylib），纯客观、不涉及判断。**过渡**：#8 的待裁项 `pa_set_program_filename` 显式列在检查的过渡清单里（棘轮：新增影子导出立即红；#8 修好后不删清单同样红）。
-
-**状态 ✓（2026-11-14，ABI 收口完成）**：
-- **#3** 已拍板（形状 A：`nresults` **精确**结果数，`0`/`N`，多截、少补 `None`）并落地为 **`AB-72`**；
-- **#4** **已实现**：新 **`AB-70`** `int pa_tohandle(pa_state*, int idx, void **payload_out)`（栈契约 `—`、仅宿主对象成功、类型不符 ⇒ `PA_ERR_INVALID`、借用照 `AB-15`／`AB-17`）。**复核更正**：`pa_type` **本来就在**如实报 `PA_THANDLE`（`tag_of` 兜底 ＋ `host_module.rs` 已钉住；审计表原句"不报"是误记）——缺的只有读回；
-- **#5** 已落地：`SPEC-c-abi` §15.4 的 18 个 `paL_*` 已补签名列（与 `pa.h` 一致）；
-- **#6** 已拍板（改规格记法跟随实现）并落地：`setfield` **−1**、`settable`／`rawset` **−2**（`getfield`／`gettable`／`rawget` 维持 ±1）；
-- **#7** 已落地：`pa.h` 顶部总述与执行入口注释都改为"`pa_exec_string`／`pa_exec_bytecode` 已落地；只有 `pa_exec_file` 如实报未提供（**非 `IM-15`**：最小产物无能力提供者）"；
-- **#8** 已拍板（补进头／规格）并落地：`pa_set_program_filename` 进 `pa.h` ＋ **`AB-71`**；`T-CX-19` 的过渡清单已清空（棘轮仍在：将来新增影子导出立即红）；
-- **#1** **已落地（M4，2026-11-14）**：`AB-52` 的 `type_expr` 求值接通（见上表 row 1 与 `SPEC-type-system.md` §16、`PLAN` §12.9）；**#2** **已落地（2026-11-15，§12.18 C1）**：`pa_exec_file` 经 `fs` 域读入（电池版可用；无 provider 的最小产物如实 `PA_ERR_NOTIMPLEMENTED`）；
-- **ABI 版本**：次版本 **9→10**（`AB-70`／`AB-71` 为**追加式**；`AB-72` 是**未发布前**的语义补齐，旧宿主不存在）。**ABI 仍不发布**（用户 2026-11-13 口径：等钩子族定稿）。
-
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.5 解释器与模块缺口收口（2026-11-14）
 
-§12.4 收口时记下的"既有缺口"五项已逐项修完（各有回归测试或可复跑探针；**ABI 面不动**）：
-
-| # | 缺口 | 状态 | 证据 |
-|---|---|---|---|
-| 1 | `asyncio.gather` 红（`pyawa-core` 缺**类体私有名改写**） | ✓ 已修 | `BC-66`；`compile/mangle.rs`（AST 一次性改写）；`private_name_mangling.rs` 矩阵与 3.14.4 逐字节；`asyncio_smoke` gather 用例（`[2,4,6]`） |
-| 2 | 原生函数 `__module__` 恒 `"builtins"` | ✓ 已修 | 每实例旁表＋`Instance::register_namespace_native_modules`（由 `pyawa-stdlib::install` 集中登记）；`_csv.*` ⇒ `"_csv"`；上游 `test_csv` **0 失败** |
-| 3 | `_io` 的 `newline=''` 不在孤立 `\r` 断行 | ✓ 已修（**读**面） | `NewlineMode` 五档；`io_newline_shapes.rs` 6 探针与 3.14.4 逐字节；上游两 roundtrip **转 PASS** |
-| 4 | `inspect.getattr_static` 对类查找恒 `MISSING` | ✓ 已修 | `getset_descriptor`／`member_descriptor` **真描述符实例**（`types` 别名链成立）＋ `_shadowed_dict` 三条件；`inspect_static_shapes.rs`；`inspect.signature` 不回退/改善 |
-| 5 | `StopIteration` 回收崩溃（`帧操作失败：StackUnderflow`） | ✓ 已修 | 处理块异常表区间止于**出口清理的 `POP_EXCEPT`**（`Emitter::handler_exit_cleanups`）；`exceptions.rs` 回归例；408 条对拍回绿 |
-
-**边界（如实，均记 `NEXT.md`）**：① 嵌套类/函数内类的 `__qualname__` 运行期仍用 `__name__` 拼
-（**既有**偏差）；② `nonlocal` 无外层绑定的编译期 `SyntaxError` 仍报运行期 `UnboundLocalError`
-（既有）；③ `__static_attributes__` 里**显式预改写名** `self._S__p` 会被还原成 `'__p'`（歧义，极罕见）；
-④ `__slots__` 字符串槽名不改写（既有）；⑤ `newline=` 的**写**翻译、`.newlines`、`StringIO(newline=…)`
-仍未接；⑥ 文本 `tell`/`seek` 仍原文字符下标（非参照 cookie）；⑦ 类型对象自身的 `__name__` 等不在
-`type.__dict__` ⇒ `inspect.getattr_static(用户类, "__name__")` 仍 `AttributeError`（类型属性面）。
-
-**本轮新发现（先于本轮存在，未修 — 单开工单）**：`crates/pyawa-stdlib/src/_sre_module.rs` 的
-**进程级** `static Mutex` 表（`PATTERNS`／`MATCHES`／`CLASSES`／`TEMPLATES`／`REGISTRY`）会跨 `Instance`
-串对象对象地址 ⇒ 同进程**第二个**实例再 `import re`／`json`（首次编译正则）会拿到第一个实例的类型
-⇒ `call_callable` 无限递归/栈溢出（`posix_module.rs:529-541` 有 round 727 修过的**同款**先例：改为
-在本实例注册表里查）。CLI/survey 单实例不受影响；多实例的 cargo 测试会被误伤（诊断记在
-`target/probe/`，`inspect_static_shapes.rs` 因此只放一个 `#[test]`）。
-
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.6 优先队列收口（2026-11-14，第二轮）
 
-「建议优先」三项已全部落地（逐项证据见各笔提交；**ABI 面未动**）：
-
-| # | 项 | 状态 | 证据 |
-|---|---|---|---|
-| ① | `_sre` 进程级静态表跨实例串对象（同进程第二实例 `import re`/`json` 栈溢出） | ✓ 已修 | 五张表改**每实例**（本实例类型查找＋实例字典隐藏纯值键）；仅留纯值有界 `ENGINE_CACHE`；`sre_multinstance`（修前 stack overflow ⇒ 1 passed） |
-| ② | 性能回退复核 | ✓ 已修（A/B **转快**） | `attribute_lookup` 的 `__text_signature__`／`__module__` 两条投影下沉到类型 `getattr` 槽（新增 `host_function_getattr`）；A/B `-3.9%～-10.7%`；`bench_gate` 四档 ✓（`-1.9%/-5.0%/-2.5%/+0.4%`） |
-| ③a | `nonlocal` 无外层绑定 → 编译期 `SyntaxError` | ✓ | 两趟 symtable 口径（`compile/symbols.rs`）；61 case 探针 **55 行逐字节**；`nonlocal_diagnostics`（23 文案＋14 合法） |
-| ③b | `__slots__` 字符串槽名私有名改写 | ✓ | 类创建时按 `BC-66` 改写＋`member_descriptor`；slots 三形态对拍 diff 空 |
-| ③c | 嵌套类/函数内类 `__qualname__` | ✓ | `N2.D`／`outer.<locals>.K`／方法内类/装饰器全矩阵对拍 diff 空；`BC-67` |
-| ③d | `inspect.getattr_static(用户类, "__name__")` | ✓ | `type.__dict__` 的 `__name__/__qualname__/__module__/__bases__` 为真 getset；`task13_class_surface_shapes` |
-| ③e | `newline=` **写**翻译／`.newlines`／`StringIO(newline=)` | ✓ | 9 探针逐字节 `SAME`；`io_newline_write_shapes`（3 passed）；`test_with`/`test_csv` 无回退 |
-| ③f | `iter_value`／Err 分支引用泄漏（round 171 撤回项） | ✓ | GC 收支：`tb` 净漏 20002⇒2、`live_after` 207295⇒7348；`ref_leak_err_branches`（5 passed）；`test_dict` 10/10 |
-| ③g | traceback 帧保活（实为 `with` 的 `__exit__` 缺 `tb`） | ✓ | 帧保活已成立并固化成对拍；`test_with` **12F/7E⇒6F/7E**；`exception_traceback_frames` |
-
-**边界（如实）**：① `_sre` 的 `compile_raw`/`match_raw` 由 `id:int` 改 `key:str`（自有扩展，仅
-`_sre_shapes.rs` 用）；`vars(pattern/match)` 多隐藏键（同 `_signal` 口径）。② 描述符暂无
-`__set__`/`__delete__`（`inspect.isdatadescriptor` False；需写域外的类型/函数存储字段）；
-`C.__dict__` 含私有键 `__pyawa_qualname__`（公开面与参照一致）；`__slots__` 的 `__dict__`/`__weakref__`
-槽类型仍是 member_descriptor。③ `nonlocal` 的 pass-1 顺序文案族未扩（3 例，类型/时机一致）；
-既有 emit bug `def g(a=(w := 1))` ＋ 内层 `nonlocal w` 进程 panic（未修）。④ `_io` 的 `.newlines`
-为整块追踪、文本 `tell` 仍字符下标。⑤ **同族泄漏（已量化、未修，建议单开工单）**：
-`builtin/int.rs:31`（`int(Plain())` 每次漏 2 颗 AttributeError+tb）、`builtin/set.rs::set_new`
-（每次漏 1 个 set）、`instance/convert.rs` 排序比较探针、`instance/accessors.rs` 惰性注解、
-`builtin_objects/callables.rs` 终结器（每颗新错误漏上一颗）；判据 `PYAWA_GC_LOG` 收支。⑥ 既有
-symbols 缺口：annotation-only 外层绑定运行期缺 cell（`NameError`）；类 `__annotations__` 读取报
-`AttributeError: '__annotations__' 只接类型对象与模块对象`。
-
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.7 引用泄漏结构性收口（2026-11-14，第三轮）
 
-用户口径：「A（RAII）也要」＋「全部按阶段做（B+C+D → 6 处 → A）」。本轮把"`Err(Raised)` 那份
-异常引用被静默丢掉"从**纪律**变成**类型上不可能**（不是逐分支打补丁）：
-
-**阶段 0（诊断与防线）**
-- **B 引用账本**：`crates/pyawa-core/src/error_ledger.rs`（每实例、无全局态；开关 `PYAWA_GC_LOG=4`，
-  默认零成本）。`#[track_caller]` 把生成点记到真正的创建处；计数 `generated/pending/discarded/
-  transferred/implicit/leaked/suspects/overwritten/untracked_consumed`；恒等式
-  `generated == pending`、`generated == discarded + transferred + implicit + leaked + suspects + overwritten`；
-  未消费项连打**生成点＋示例 Rust 栈**。测试 `crates/pyawa-runtime/tests/error_ledger_shapes.rs`（4 passed）。
-- **D 失败路径探针集**：`tests/ci/failure_path_leaks.py`（11 探针，`tb_created−tb_freed` ＋
-  N=10000/20000 缩放 `|Δlive|≤512`）＋ `crates/pyawa-runtime/tests/failure_path_leaks.rs`（10 passed）。
-  修前基线 **6/11 RED**。
-- **C 静态规则**：`CX-30`／`T-CX-20`（`tests/ci/check.py`）——core 四模块禁止裸丢弃 `Result`
-  （`Err(_) =>`／`if let Err(_)`／`.is_ok()` 当语句／`let _ = <Result 调用>`），合法丢弃必须走
-  `discard_error`／`discard_exec_result`／`discard_capability_result`；白名单逐条锚点＋**棘轮**
-  （修好不删也红、只许缩）。**注意**：阶段 2/A 之后 RAII 让"裸丢弃"不再泄漏引用，本规则保留为
-  **可审计风格规则**（防复制旧的"交回裸指针"模式），不再是内存正确性的必需。
-- 顺带修好 `tests/ci/selftest.py` 的既有基线不干净（副本缺 `NEXT.md`／`Cargo.toml`／`.git`／
-  conformance 报告 ⇒ 5 项假红）。
-
-**阶段 1（6 处已知泄漏 + 同族扫描）**：`CX-30` 白名单 **55 → 18**（A 类 33 处全清为显式
-`discard_exec_result`，B 类 4 处能力错误显式化；C 类 18 处无引用载荷保留），并修掉：
-`builtin/int.rs` 的 `__int__/__index__` 探针、`builtin/set.rs::set_new`（set/frozenset）、
-`instance/convert.rs` 排序比较探针、`instance/accessors.rs` 惰性注解、`builtin_objects/callables.rs`
-终结器（旧 pending 未还）、`executor/iter.rs` 的 `truthiness` 绑定方法泄漏，以及 4 处风险 `.ok()`
-（`attach_traceback`／`object_repr`／`str.translate`／`namespace`）。**D 探针 6/11 RED → 11/11 PASS**
-（`f(*Plain())` N=20000：tb 净漏 20002⇒2、live 207295⇒7348）。
-
-**阶段 2 / A（RAII `RaiseRef`／`PendingRef`）**
-- `crates/pyawa-core/src/raise_guard.rs`：`RaiseRef`（持 `Err` 那份 owned 引用；**Drop 只还 `Err`
-  那份、不动 `pending` 槽**；`discard()`＝旧 `discard_raised`；`into_pending()` 移交槽；
-  `release_keeping_pending()` 供 `SystemExit` 等"宿主后读槽"路径；全部幂等）；`PendingRef`
-  （`replace_pending` 交回的旧 pending，Drop 自动释放）。
-- `ExecError::Raised { exception: RaiseRef }`（**删除 `Clone`**：裸克隆复制所有权；`PartialEq`
-  按异常指针）；迁移 **83 构造点／45 解构点**；`Instance::set_pending_exception`（返回裸指针、
-  旧值由调用方释放）→ `replace_pending`（返回自动释放的 `PendingRef`），迁移 13 调用点。
-- 结构性收益：任何"忘记处理 `Err(Raised)`"的路径在 Drop 时自动还引用（不再靠 `discard_error`
-  纪律）；终结器/旧 pending 一类同型泄漏在类型上消失。新增 `crates/pyawa-core/tests/raise_guard.rs`
-  （4 passed：Drop 保留槽、`discard` 清槽、`into_pending` 移交、`PendingRef` Drop 释放旧值）。
-
-**验收**：`PYAWA_DANGLING=1` 下 `cargo test --workspace --release` 全绿；conformance **408×2**
-（普通＋悬垂）绿；`check.py` 20/20；`selftest.py` 24 项断言全绿；`cargo check --workspace
---all-targets` 0 警告；`bench_gate` 四档 ✓；`slowcheck --release` 十二项全绿。
-
-**边界（如实）**：账本是诊断近似（"对象存活＋连续两次 flush"判未消费；ptr 复用留 `overwritten` 账）；
-`RaiseRef` 存 `*const Instance`（不变量：错误只在本实例执行栈内传播/消费，与改动前"裸指针＋实例
-存活"同契约）；副作用上 A 不动 ABI（`pa_*` 边界仍按状态码映射，`AB-21` 不变）。
-
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.8 失败路径 GC 探针接闸（2026-11-14）
 
-`tests/ci/failure_path_leaks.py`（阶段 0 的 D 探针集，11 条失败路径 × N=10000/20000 缩放判据）
-**接进 `tools/slowcheck.sh` 作为第 12 项**：步骤内先 `cargo build` CLI（release 档是 no-op），再跑
-`--binary target/<profile>/pyawa`；任何 RED ⇒ 闸门红。`tools/gate_chunk.sh small` 同步纳入（分块
-命令也能跑到）。计数口径从「十一项」更新为「十二项」（`AGENTS.md` 硬线、`agents-rules/round-rule.md`、
-`docs/REQUIREMENTS.md`、`tests/ci/README.md`、`NEXT.md`）。验收：`slowcheck --release` **十二项全绿**
-（第 12 项实跑 11/11 绿）；`check.py` 全绿。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.9 全口径 TS 注解解析器（2026-11-14 起，分里程碑）
 
-用户口径：「全口径（分多轮）」——把 `AB-52` 的"由 Pyawa 自己的注解解析器求值"与 `TS` 的注解
-表达式语义收口（`SPEC-type-system.md` §16 的 `TS-51`…`TS-57`；一轮一笔提交）。
-
-| 里程碑 | 内容 | 状态 |
-|---|---|---|
-| **M1 规格与模型** | `TS-51`…`TS-57`（语法范围/两阶段/`BC-24` 映射/失败语义/可逆投影/`AB-52`↔`AB-69` 同一性/验收）；`AB-52` 文本补解析器两阶段与 §16 引用 | ✓（2026-11-14） |
-| **M2 语法层** | `pyawa_core::type_expr::TypeExpr` 语法树＋`compile::parse_type_expression(&str)`（复用 `compile/parser/types.rs` 的 `parse_type_at`；`?` 降级/联合摊平/单实参下标摊平/可逆投影）；`crates/pyawa-core/tests/type_expression.rs`（`T-TS-12`：语法矩阵/往返/错误） | ✓（2026-11-14） |
-| **M3 求值层** | 名称解析（模块 globals→builtins→宿主注册类型、点号属性链、前向引用延迟）＋`typing` 构造（`Callable`/`Optional`/`Union`/`Annotated`/`List`/`Dict`/`Set`/`Tuple`）→ `SemanticType`／`BC-24` 静态标签（`to_static_label`，与 `AB-69` 同口径）；`Deferred`/`Unknown`/`Invalid` 如实分类；`crates/pyawa-core/tests/type_expression_resolve.rs`（7 passed） | ✓（2026-11-14） |
-| **M4 ABI 接入** | `AB-52` `type_expr` 在 `pa_register`/`pa_module_addfunction` 注册时求值成 `AB-69` 的 `TyExpr`（新增 `Any`/`Platform` 变体），登记进 `host_typed_signatures` ⇒ 边界运行期＋编译期调用点检查对字符串通道生效；同一函数已有句柄签名不覆盖；坏字符串/未知名 ⇒ `PA_ERR_INVALID`，显式前向引用 ⇒ 平台类型；`.pyi` 仍原串；`crates/pyawa-abi/tests/annotation_strings.rs`（6 passed，含字符串↔句柄同行为、`.pyi` 原串） | ✓（2026-11-14） |
-| **M5 编译期扩展** | **已落地**：①`TS-23`/`TS-24`/`TS-25`/`TS-39` 的**标注覆盖率与档位报告**（`compile::annotation_coverage`＋`AnnotationCoverage::to_report`；分列位置/仅关键字/`*args`/`**kwargs`/返回/变量，`x: T = v` 只算一格；`crates/pyawa-core/tests/annotation_coverage.rs` 4 passed）②`pa_newtype` 的 `sig` 字符串注册时**校验**（坏表达式 ⇒ `PA_ERR_INVALID`；`annotation_strings.rs` 7 passed）。**边界如实登记（未做，理由）**：③`BC-25`① 需**全程序信息**——`BC-23` 在**被调用方序言**发射，而"两侧都已标注 ⇒ 禁止发射"要求知道全部调用点（跨模块），单个编译单元不可判定；当前按"带标注保守发射"（`P3-13` 已登记）④`TS-37` 批量诊断：**已落地**（既有 `compile::check_source`＋`typecheck::check_diagnostics`，PLAN §10.1；执行路径 `compile` 仍首错即止属"不能继续执行"的合理口径）⑤`TS-38` 产物内嵌/`TS-39` 独立文件导出：需改 `IM-18`/`IM-19` 产物要素与黄金字节（另一窗口；运行期仍不读 fs） | 部分 ✓（2026-11-14），余项按上述边界登记 |
-| **M6 收口** | `PLAN` §12.4 #1 状态更新（`type_expr` 求值不再"待"：已落地 M4）、`AB-52`/`§12.4` 交叉引用清理、`NEXT`/文档/机检同步；M1…M5 边界清单复核 | ✓（2026-11-14） |
-
-**边界**：M2 只做**语法层**（不做实例相关判断/名称解析/求值）；`AB-52` 的字符串求值在 M4 才接；
-`.pyi` 导出始终是**原字符串**（`AB-53`/`AB-54`，不得成为第二签名源）。
-
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.10 TS 注解解析器收口（2026-11-14）
 
-用户口径「全口径（分多轮）」；**M1…M6 全部收口**（`SPEC-type-system.md` §16 的 `TS-51`…`TS-57`
-是规格；`AB-52` 的"由 Pyawa 自己的注解解析器求值"已成可执行义务）：
-
-| 里程碑 | 交付 | 验收 |
-|---|---|---|
-| M1 规格与模型 | `TS-51`…`TS-57`；`AB-52` 文本 | `check.py`（`T-CX-1` 编号/`T-CX-10` 连续） |
-| M2 语法层 | `TypeExpr`＋`parse_type_expression` | `tests/type_expression.rs` 3 passed |
-| M3 求值层 | `SemanticType`＋名称解析/typing 构造/标签投影 | `tests/type_expression_resolve.rs` 7 passed |
-| M4 ABI 接入 | `AB-52` 注册时求值 ＝ `AB-69` 同一账本 | `tests/annotation_strings.rs` 7 passed（两通道同行为/`.pyi` 原串） |
-| M5 编译期扩展 | 标注覆盖率/档位报告（`TS-23`/`24`/`25`/`39`）；`pa_newtype` sig 校验 | `tests/annotation_coverage.rs` 4 passed |
-| M6 收口 | `§12.4 #1` 状态清零、交叉引用/`NEXT` 同步 | 本文档＋`git log` |
-
-**未收进本工程的项（范围外＋诊断证据，均不影响"注解解析器"本身）**：
-- `BC-25`①（"两侧都已标注 ⇒ 禁止发射"）：需**全程序**调用点信息（`BC-23` 在**被调用方序言**
-  发射），单编译单元不可判定；现维持"带标注保守发射"（`P3-13` 已登记）——不是"默认关闭"。
-- `TS-38`／`TS-39` 的**产物内嵌/独立文件导出**：需改 `IM-18`／`IM-19` 的 `.pyac` 产物要素与
-  黄金字节（跨格式变更窗口）；运行期仍**不读**伴随文件（`TS-38` 的运行时约束保持），报告由
-  `compile::annotation_coverage` 给出。
-- `TS-34` 诊断缓存：`check_source` 是纯函数（`TS-33` 成立），缓存属 LSP/工具链步骤（未落）。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.11 ABI 边界不可感知（2026-11-14 用户定向）
 
-**目标**：ABI 边界**客观存在**，但使用者**不可感知**。规格已落两条（`docs/SPEC-c-abi.md`）：
-`AB-73`（宿主类型属性/方法派发）、`AB-74`（宿主异常类型映射）。
-
-**三条判据**：
-1. 可感知的痕迹只应剩两处：跨界性能、身份语义（`is`／`id`）；
-2. guest 侧只用对象语法（`obj.attr`／`obj.method()`／`len(obj)`／`for x in obj`），代码里不出现"宿主/handle"字样；
-3. 透明**不得**以"假成功"为代价 —— `AB-22` 的"未实现／拒绝／未找到"三态在这些路径上仍必须成立。
-
-**验收演练**：Python 宿主把 `list`／`dict`／一个自定义类包成宿主对象注入 guest，
-guest 侧在**不出现任何宿主函数名**的前提下完成增删改查与迭代。
-
-**实施分解（2026-11-14 用户授权"先做补丁，然后实现规格"）**：
-- **A 规格补丁（docs，已落）**：`AB-73` 重写（`pa_type_ops` 自带尺寸结构／回调带
-  `pa_state *state`／派发与 `PA_ERR_NOTFOUND` 回退／错误映射／getattr 返回宿主函数自动包成
-  绑定方法且 `pa_sig` 含 `self`／协议复用引实现位置）；`AB-74` 重写（完整签名/栈契约/类型
-  要求/返回 `PA_ERR_RUNTIME`/非法 `PA_ERR_INVALID`）；`§15.2` 新增 `PA_ERR_NOTFOUND=8`；
-  `§15.3` 函数清单 75→76（`pa_newtype` 加 `ops` 末参、`pa_raise_host_exception`）；
-  `§15.4` 辅助层 18→19（`paL_getref`）；`§13` 新增 `T-AB-8`／`T-AB-9`／`T-AB-10`；
-  `PA_ABI_VERSION` 1.10→1.11（未发布窗口内的签名改写，发布后只许追加）。
-- **B 实现**：`crates/pyawa-abi/src/host.rs`（`pa_type_ops`/回调类型/`HostTypeInfo` 存 ops 与
-  `*mut pa_state` 桥接）＋`lib.rs`（`pa_newtype` 收 ops 并装 `getattr`/`setattr` 槽、getattr 结果
-  若为宿主函数 ⇒ `MethodObject` 绑定、`pa_raise_host_exception`、`paL_getref`、`PA_ERR_NOTFOUND`）
-  ＋`crates/pyawa-abi/include/pa.h`（结构/原型/状态码/版本）＋`PA_ABI_MINOR=11`。
-
-  **B1（2026-11-14 已落）**：`PA_ERR_NOTFOUND=8`（预留改 9–31）＋`PA_ABI_MINOR=11`；`host.rs`
-  的 `pa_type_ops`/回调类型/自带尺寸界读；core `Slots.host_getattr`（**有错误通道**）＋
-  `TypeObject` 不透明 `host_data`；`pa_set_type_ops`（追加式，`NULL` ⇒ 清空）＋
-  `host_type_getattr_slot`（`PA_OK` 恰好一个值／`PA_ERR_NOTFOUND` 回退／其它 ⇒ `RuntimeError`）＋
-  `paL_getref`；`pa.h` 结构/原型/状态码；**测试** `crates/pyawa-abi/tests/host_visibility.rs`
-  （属性派发/回退/错误三态/零回归，2 passed）。
-  **B2a（2026-11-14 已落，`AB-73` 收口）**：core `Slots.host_setattr`（有错误通道）＋
-  `instance_attribute_set` 回退钩子（数据描述符之后、默认实例字典写之前；`Ok(false)` ⇒ 默认，
-  `Err` ⇒ 上抛）；ABI `host_type_setattr_slot`（值以**借用**槽压栈、`value_index=-1`、回调不得
-  消耗/压弹栈）；**绑定方法**用 ABI 内部对象 `HostBoundMethod`（函数 ＋ 接收者；call 槽前插
-  接收者后走宿主函数调用路径，`pa_sig` 含 `self`），不用 core `MethodObject`（其调用路径假设
-  内层是 Python 函数载荷）；`len`/`for`/`+` 协议经属性通道生效（`for` 的探测位补
-  `host_getattr`；`+` 的宿主 dunder 走 `attribute_lookup`）。测试扩到 **3 passed**：
-  `setattr`/`getattr` 往返、`obj.method(5)` 绑定、`len`、`for`、`+`、宿主错误三态。
-  **B2b（2026-11-14 已落，`AB-74` 收口）**：`pa_raise_host_exception`（`type_idx` 栈索引指向
-  `BaseException` 子类；`msg` 借用、`len=-1` 允许；VM 用 `call_value` 按普通构造语义实例化，
-  构造异常也记录；宿主函数返回边界经 `raise_object_public` 重抛，guest 可 `except`）；
-  **`§12.11` 验收演练**：三个宿主对象（列表式/字典式/自定义式）注入 guest，guest 只用对象语法
-  完成增删改查与迭代，源码断言**不含** `host`／`handle`／`pa_` 字样；`host_visibility` 测试
-  **5 passed**；`SPEC-c-abi` §16 未实现条目清零。**`§12.11` 三条判据全部成立**：
-  ① 可感知痕迹只剩跨界性能与 `is`/`id`（演练里对象身份即宿主对象身份；无额外包装可见）；
-  ② guest 源码对象语法（机检断言）；③ 三态（成功/未处理/出错）可区分（`T-AB-8` ⑤/`T-AB-9` ④）。
-- **C 验收演练与收口**：`crates/pyawa-abi/tests/` 下新增 `host_visibility` 测试（派发→回退→协议→零回归；
-  异常映射；§12.11 演练：宿主把 `list`/`dict`/自定义类包成宿主对象注入 guest，guest 源码
-  **不含** "host"/"handle" 字样或宿主函数名，完成增删改查与迭代；`is`/`id` 口径登记）；
-  `SPEC-c-abi` §16 未实现条目清零、`PLAN` 台账、`NEXT` 同步；`check.py`＋`slowcheck` 十二项。
-- **判据映射**：判据 1 ⇒ `T-AB-10` 的 `is`/`id`/性能登记；判据 2 ⇒ `T-AB-10` 的源码扫描断言；
-  判据 3 ⇒ `T-AB-8` ⑤/`T-AB-9` ④；`T-AB-8`/`T-AB-9` 覆盖两条规格的验收细则。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.12 协议派发唯一化与 ABI 收敛（2026-11-14）
 
-**依据**：`SPEC-c-abi.md` §17 的设计原则（语义唯一／表示可多但须可证等价／对外表面唯一）与 `AB-75`…`AB-78`。
-
-**目标**：让「宿主对象在 guest 里零差异」成为**推论**，而不是逐条打补丁。
-
-| 步 | 内容 | 验收／测试落点 |
-|---|---|---|
-| 1 | **新增 `pa_typeid`**（`AB-76`）返回真实类型身份；**`pa_type` 保留 `AB-63` 的值类别**（不破既有枚举/测试），`PA_THANDLE` 只作值类别、不再用于猜宿主对象 | `T-AB-11`；`crates/pyawa-abi/tests/host_visibility.rs` 扩（宿主对象/模块/实例/内建值）；既有 `abi.rs` 的 `PA_THANDLE` 断言**不改语义**、只补身份查询 |
-| 2 | VM 内协议收敛：**新增 `resolve_dunder`**（统一解析 dunder）＋ 复用并收敛 `call_special_method`（统一调用；保留现有函数名作为实现入口）；删除 `type_has_own_dunder`／`overrides_compare`／`has_custom_eq`／`call_compare_dunder` 各自的判定 | 全部协议入口只经这两个原语；`crates/pyawa-core/tests/` 下新增协议一致性测试 ＋ 既有行为测试**零回归** |
-| 3 | `pa_set_object_ops`（`AB-75`）：类型／实例／模块统一挂钩子（每对象一份、互不外溢）；模块注入函数降级为投影 | `T-AB-12`；`crates/pyawa-abi/tests/object_ops.rs` 5 passed（类型/实例/模块三形态、隔离、NULL、模块注入属性投影） |
-| 4 | `pa_newtype` 支持 `base_idx`（`AB-77`）：负值 ⇒ `object`；非类型/终态基类 ⇒ `PA_ERR_INVALID`；真实 MRO | `T-AB-13`；`crates/pyawa-abi/tests/type_identity.rs`（继承 `ValueError` ⇒ `issubclass`/`isinstance` 命中） |
-| 5 | 投影等价测试（`AB-78`） | `T-AB-14`；`crates/pyawa-abi/tests/object_ops.rs`：`pa_set_type_ops`↔`pa_set_object_ops(type)`、模块注入↔属性写、`pa_tointeger`↔`pa_tointstring`（i64 内）、`pa_raise_host_exception`↔构造+记录 |
-
-**依赖与版本**：步 2 与 1/3/4 可并行；步 5 在 1/3/4 之后。`PA_ABI_VERSION` 次版本已升
-**11 → 12**（`pa_typeid` 追加式；`pa_newtype` 的 `base_index` 为未发布窗口内签名改写；
-`pa_set_object_ops` 落地时同属 1.12 窗口）。**进度（2026-11-14）**：**步 1 ✓**（`pa_typeid`；`type_identity.rs` 的 T-AB-11）、**步 2 ✓**
-（`resolve_dunder` 统一解析＋`call_special_method` 唯一调用入口；`type_has_own_dunder`／
-`overrides_compare`／`has_custom_eq`／`call_compare_dunder` 收敛为薄委托；`protocol_unified.rs`
-5 passed、core 601 passed 零回归）、**步 3 ✓**（core 侧每对象 ops 表 `Instance::object_ops`
-（类型/实例/模块同表、对象释放摘除）＋ABI `pa_set_object_ops`；`pa_set_type_ops` 为同路径投影；
-模块注入四函数改为"向模块对象写属性"）、**步 4 ✓**（`pa_newtype` 的 `base_index` 真实 MRO；
-**布局边界**：基类只影响 MRO/身份，不自动适配宿主载荷方法）、**步 5 ✓**（`object_ops.rs`
-5 passed：三形态/NULL/隔离、`pa_set_type_ops`↔`pa_set_object_ops(type)`、模块注入↔属性写、
-`pa_tointeger`↔`pa_tointstring`、`pa_raise_host_exception`↔构造+记录）。
-
-**不变量（机检法；2026-11-14 已落地 = `T-AB-19`）**：给宿主对象挂一个**记录所有被查名字的
-`getattr_fn`**，对 `pyawa_core::PROTOCOL_CASES`（唯一协议清单，`crates/pyawa-core/src/protocols.rs`）
-的**每条**协议跑用例，断言对应 dunder 出现在记录里——缺席即证明存在绕过属性通道的协议解析路径。
-oracle 在 `crates/pyawa-abi/tests/protocol_oracle.rs`（清单↔片段双向一致，**禁止**只覆盖已实现协议）；
-行为生效与快路等价在 `protocol_host_dispatch.rs`；两者随 workspace 测试与 slowcheck 步骤 5 进 CI。
-**落地时抓到并修掉的旁路**：`str`／`repr`（`override_text` 的类型 MRO 预判）、`format`（空 spec
-短路＋f-string `FORMAT_SIMPLE`）、`hash`（stdlib 先命中 `object.__hash__`）、`==`/`!=`（比较快路与
-`__ne__` 默认）、`contains`、`abs`、全部原位算术 dunder（见下方 §12.14）。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.13 宿主可用性与诊断缺口（2026-11-14，真 numpy 压测所出）
 
-**背景**：用 CPython（ctypes 桥）＋ 真 numpy 2.5.4 做宿主侧压测。**机制已通**——`a.sum()`／`__len__`／
-`a[1]`／`a + a` 全部经 ABI 正确往返（宿主侧临时 ctypes 桥；桥脚本不入库）。
-但撞出 4 个阻塞/缺陷，全部要修。**规格层已定**（2026-11-14，`SPEC-c-abi`：`AB-36`／`§15.3`／
-`AB-79`／`T-AB-15…18`；`PA_ABI_MINOR` 1.12→**1.13** 窗口）；本表补编号/优先级/依赖/落点。
-
-| # | 项 | 规格/验收 | 优先级 | 状态 | 依赖／测试落点 |
-|---|---|---|---|---|---|
-| 1 | ABI 实例无 builtins／stdlib；`paL_openlibs` 失败无消息；`paL_newstate` 未从 cdylib 导出 | `§15.4`：`paL_openlibs` 的**提供方＝组合根**（`pyawa-runtime` 产物）；`pyawa-abi` 裸实例保持语言骨架，失败须写 `pa_errmsg`（`AB-48`）；`T-AB-18` | **P1（架构）** | **✓（2026-11-14，路线 A）**：`pyawa-runtime` cdylib/staticlib 为**单一库**（实测导出 80 个 `pa_*`＋`paL_newstate`／`paL_openlibs`）；`paL_newstate` 装 fs/clock/net＋stdlib；`pa_abi` 最小产物不再导出 `paL_openlibs` | `tests/ci/host_usability_probe.py`（无 numpy，slowcheck 步骤 5）；**如实边界**：provider/vtable 按实例泄漏到进程末、`Lib/` 定位仍用 `env!(CARGO_MANIFEST_DIR)`（部署需带 `Lib/`） |
-| 2 | `pa_newtype` 缺 dealloc/traverse ⇒ 非 host layout，`pa_newhandle` 空消息 `PA_ERR_INVALID` | `AB-36`：**NULL 当场拒绝**＋`pa_errmsg`（`AB-22`/`AB-48`）；`T-AB-17` | P2 | **✓（2026-11-14）** | `pa_newtype` 的 `Option<fn>` 校验；`crates/pyawa-abi/tests/host_usability.rs` 3 passed；`pa_newhandle` 空消息同步修正 |
-| 3 | `pa_getglobal` 缺失名 `PA_OK`＋nil | `§15.3`：**缺失 ⇒ `PA_ERR_INVALID`（不压栈）**（压 nil 作废）；`T-AB-16` | P2 | **✓（2026-11-14）** | `lib.rs` 的 `pa_getglobal`；`host_usability.rs` 用例（缺失不压栈＋消息）；既有测试零回归 |
-| 4 | 模块对象无法从 C 宿主上栈 ⇒ `AB-75` 模块态不可达 | 新增 **`AB-79`** `pa_pushmodule(st, module)`（+1；非法句柄 `PA_ERR_INVALID`）；`T-AB-15` | P2 | **✓（2026-11-14，1.13）** | `pa.h` 原型＋`lib.rs`；`host_usability.rs` 的 `pushmodule_exposes_module_object_to_c_hosts`（C 宿主 `pa_pushmodule`→`pa_set_object_ops`→`import` 未枚举名） |
-
-**执行顺序**：#2／#3（小修）→ #4（新 AB，1.13）→ #1（路线 A）——**四项全部 ✓（2026-11-14）**。
-**复跑**：修复后必须能在**仓库内**以不含 numpy 的最小编译探针复跑（真 numpy 桥只作宿主侧压测、
-不入库）；#2/#3/#4 各自有 `T-AB-15…17` 的可执行用例。
-
-**内存验证（2026-11-14，文档侧独立复核）**：把 `AB-73`…`AB-79` 的新路径放进 valgrind（3.26，`--error-exitcode=99`，只看非法访问）：
-
-| 目标 | 结果 |
-|---|---|
-| `host_visibility`／`object_ops`／`protocol_oracle`／`protocol_host_dispatch`／`host_usability`／`host_module`（6 个 ABI 测试二进制） | **0 errors**（`ERROR SUMMARY: 0 errors from 0 contexts`） |
-| **真 numpy 端到端**（CPython ＋ ctypes 桥：建 state→建类型→建句柄→模块注入→派发→销毁） | **0 errors，rc=0** |
-| `PYAWA_DANGLING=1 cargo test --release -p pyawa-abi` | **0 failed** |
-
-**未覆盖（如实）**：① 407 语料的 memcheck 子集（`slowcheck` 第 1 项）仍是旧基线，本轮未重跑；
-② `memdangle` 全量 survey 未重跑（已知基线 2 条：`test_difflib`／`test_gc`）；
-③ **宿主内存不占 VM 配额**（`OM-41` 管不到宿主侧 numpy 数组）属策略缺口，不是内存安全问题。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.14 `getattr_fn` 必须是对象语义的单一来源（2026-11-14）
 
-**问题**：`AB-73`／`AB-75` 只保证了**一部分**协议经属性查找。实测：宿主对象交给 `print()`／`str()`／`repr()`
-时，VM **从未**向 `getattr_fn` 询问 `__str__`／`__repr__`（记录式 getter 全无这两个名字），输出退化成默认的
-`<ndarray object at 0x…>`。凡走旁路的协议，宿主对象就"漏出边界"一次 —— 这正是 `SPEC-c-abi.md` §17
-「语义唯一」不成立的地方。
-
-**目标（一条不变量）**：**对象语义的唯一入口是属性查找。** VM 支持的**每一种**协议都必须经同一条解析
-（`resolve_dunder`／`call_special_method` 或等价），宿主对象**只需实现 `getattr_fn`** 即自动获得全部协议；
-不允许为宿主对象另开专用分支。
-
-**做法**
-1. 先建**协议清单**（可枚举的客观事实）：把 VM 支持的每个协议映射到它该查的 dunder 名（`__str__`／`__repr__`／
-   `__hash__`／`__bool__`／`__contains__`／`__call__`／`__eq__`／`__lt__`／`__iter__`／`__next__`／`__len__`／
-   `__getitem__`／`__setitem__`／`__enter__`／`__exit__`／`__format__`／各运算符……）。清单落在实现旁的常量表里。
-2. 逐条把绕过属性查找的路径改回统一解析；**已实测的 `str()`／`repr()` 为首个必修项**（验收见下）。
-3. 新增 **oracle 机检**（纯 ABI 测试，不依赖 numpy）：给宿主类型挂一个**记录所有被查名字**的 `getattr_fn`，
-   对清单里的每个协议各跑一个用例；断言对应 dunder 出现在记录里。**未出现即旁路**，测试红。
-4. 允许表示层快路（缓存／特化），但必须与语义路径**可证等价**（§17）。
-
-**验收**
-① `print(宿主对象)`／`str(x)`／`repr(x)` 打印的内容经 `getattr_fn`（记录里出现 `__str__` 或 `__repr__`）；
-② 协议清单里**每一条**都有"宿主对象"用例，且 getter 记录包含对应 dunder；
-③ oracle 测试进 `pyawa-abi` 测试集（不含 numpy，CI 可跑）；
-④ 未注册 `pa_type_ops` 的宿主类型行为不变（零回归，`type_without_ops_is_unchanged` 继续绿）；
-⑤ 若保留快路，快路与语义路径的等价性各有测试。
-
-**禁区**：不得为"宿主对象"在 VM 里加专用协议分支（那就是第二来源）；不得靠类型特判绕过统一解析；
-不得用"测试里只覆盖已实现协议"来让 oracle 变绿（清单必须是**VM 支持的全集**）。
-
-**关联**：`AB-73`／`AB-75`／`AB-79`；`SPEC-c-abi.md` §17；`PLAN §12.12` 的不变量机检并入本单第 3 步（不再单列）。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.15 宿主协议唯一入口：实现与验收（2026-11-14）
 
-**对应需求**：§12.14（对象语义的唯一入口是**属性查找**；VM 支持的每种协议都走同一条解析，宿主对象只需实现
-`getattr_fn` 就自动获得全部协议（不得为宿主加专用分支／类型特判）。§12.12 末尾的机检并入本单）。
-
-**清单（一处真相）**：`crates/pyawa-core/src/protocols.rs` 的 `PROTOCOL_CASES`（协议 → dunder →
-oracle 用例；**含同步＋异步**：`__await__`／`__aiter__`／`__anext__`／`__aenter__`／`__aexit__`）；
-属性钩子（`__getattr__` 等）与描述符不在表内（前者就是属性通道本身，后两者是类属性机制），边界
-写在模块注释里。
-
-**步骤与状态（2026-11-14，全部 ✓）**：
-1. **清洗旁路**：`str`／`repr`／`format`（含 f-string）首个必修；`hash`／比较（`==`/`!=` 快路与
-   `__ne__` 默认）／`contains`／`abs`／原位算术统一经"宿主优先 → 类型/实例属性通道"
-   （`Instance::call_protocol_method`）。**快路保留**（内建标量按 `object_str`/原生路径），
-   `protocol_host_dispatch.rs::builtin_and_user_fast_paths_unchanged` 钉等价。
-2. **oracle**：`protocol_oracle.rs` 记录式 `getattr_fn`（一律 `NOTFOUND`，`with` 的 `__exit__`
-   除外以走到 `__enter__`）逐条断言"被问过"；清单↔片段双向一致；**无 numpy**。
-3. **CI**：workspace 测试自动跑；`slowcheck` 步骤 5 与 `gate_chunk small` 显式再跑两份测试。
-**边界如实**：oracle 证明"问了"，行为生效由 `protocol_host_dispatch.rs` 的固定返回值用例覆盖；
-属性/描述符协议不在本清单；若未来新增协议必须先加清单条目＋片段（oracle 会红）。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.16 `pa_writetobytes`（冻结前唯一要补的 buffer 面，2026-11-14）
 
-**背景**：`SPEC-c-abi` §17「语义唯一」＋ ABI/SDK 分层：ABI 只给原语，SDK 负责惯用面。
-buffer 面在冻结前只补**一项**——一次性写回；**不做**长期可写视图（`pa_tobytes_mut`／pin），因为那会把
-"宿主可写 VM 内存"与"对象不可搬家"两类风险请进来，且真正的共享内存需求应作为能力域单独设计。
-
-**规格**：`AB-80`（见 `SPEC-c-abi`）。要点：
-- 只对 `bytearray` 成功；`bytes` 不可写 ⇒ `PA_ERR_INVALID`；
-- 只写**数据区**，参数边界校验（`offset + len ≤ 当前长度`），禁止扩容；
-- **不借出任何 VM 内存** ⇒ 无 UAF 面、不限制 GC 设计、不新增类型标签。
-
-**验收**（`T-AB-20`）：
-① `bytearray` 写入成功，guest 随后读到新内容；
-② `offset + len` 越界 ⇒ `PA_ERR_INVALID`（不截断、不扩展）；
-③ 对 `bytes`（不可变）⇒ `PA_ERR_INVALID`；
-④ 对非字节类型 ⇒ `PA_ERR_INVALID`；
-⑤ `p == NULL` 且 `len > 0` ⇒ `PA_ERR_INVALID`；`len == 0` ⇒ 无操作 `PA_OK`；
-⑥ valgrind 下 0 错误（含"写后 guest 立即读"与"写后触发 GC"两种顺序）。
-
-**状态（2026-11-14）**：**✓ 已落地**（`SPEC-c-abi` 1.14；`crates/pyawa-abi/tests/write_tobytes.rs`
-4 passed；valgrind 3.26（`--error-exitcode=99`）**ERROR SUMMARY: 0 errors**）。
-**落地位置**：`crates/pyawa-abi`（新函数）＋ `pa.h`（原型，次版本 14 窗口）＋ `tests/write_tobytes.rs`；
-`PLAN §12.13` 的内存验证方法沿用。
-
-**不在本单**：`pa_tobytes_mut`／pin 语义、`memoryview` 类型、多维/格式 buffer 协议 —— 需真实场景再评估。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.17 能力域 vtable 的 C 布局（冻结前唯一必补项，2026-11-14）
 
-**问题**：能力域（`fs`／`net`／`proc`／`clock`／`random`／`env`／`tty`／`locale`／`ipc`，共 9 个）的
-**vtable C 布局三份文档互相踢皮球**：`pa.h` 推给 `SPEC-capabilities`；`CP-30` 又推给 `SPEC-c-abi`；
-`SPEC-c-abi` 再推回 `CP-`。结果**谁都没写**，且全仓**没有任何示例构造 vtable**（`examples/reference_host.c`
-只演示宿主函数，`pa_setcapability` 一次都没被调用）。⇒ **任何 C 宿主今天都实现不了能力域**。
-
-**为什么是冻结前必补**：补齐是**追加式**（新增头文件）；冻结后宿主已按"无布局"编译，再补就是破坏性。
-
-| 步 | 内容 | 验收 |
-|---|---|---|
-| 1 | 新增 `pa_capabilities.h`：**只承载已实现且已有 Rust `repr(C)` 布局的 3 个域**（`fs`／`clock`／`net`），每个带 `version: u32`＋`size: u32` 公共头（`CP-30`），字段与 Rust **逐字段一致**；`pa.h` include 它。其余 6 域（`proc`／`random`／`env`／`tty`／`locale`／`ipc`）**保持"未提供"**（`CP-2`／`CP-3`），其布局设计**不在本单**（追加式，后续单独领号） | C 宿主能 `#include` 并构造 3 域 vtable；`static_assert` 校验尺寸；6 域只能传 `NULL`（本 ABI 不定义其布局；非 `NULL` 注册不在冻结面） |
-| 2 | `examples/reference_host.c` 增加**最小 `clock` 域**实现（`now_ns`／`monotonic_ns` 两槽够用）并 `pa_setcapability(PA_DOMAIN_CLOCK, …)`。**取舍（已定）**：该示例**不换产物**（继续链接最小 ABI 静态库、保持"最小 ABI 示例"定位），因此**不依赖 guest `import time`**；新增宿主函数 `host_now_ns()`（内部调 clock vtable 的 `now_ns`），guest 调它取回时间；顺带改掉头注释里过时的"C 宿主没有标准库（`paL_openlibs` 未接线）"表述 | 示例真编译真运行；`host_now_ns()` 返回非负时间值且被 guest 断言；`tests/ci/t_ref_host.py` 的 `EXPECTED` 增加该行 |
-| 3 | **机检扩面**：① 布局一致性检查（C 头 ↔ Rust `repr(C)`，字段名/顺序/尺寸/偏移任一漂移即红）；② `T-CX-19` 扫描面扩到**两个头**，且**只扫文件作用域（先剥 struct 体）的 `pa_*` 函数原型**（结构体成员与函数指针字段不得被函数正则误判），结构体**不计入** `AB-1` 的 ≤120 函数预算；③ 加**注入自检**："声明了但规格未提及"必须红；④ `pa_cap_status` 用 `typedef enum`（`0`＝Ok／`1`＝Machine／`2`＝Unimplemented，与 Rust `CapStatus` 同值）；⑤ 头文件可独立 include（guard／`extern "C"`／`<stdint.h>`／`<stddef.h>`） | 故意改字段/加未在规格的声明 ⇒ 机检红；还原 ⇒ 绿；枚举值与 Rust 一致；C 探针/Rust 测试布局逐行一致 |
-| 4 | 文档交叉引用修正（本次已改）：`CP-30` 不再循环引用、不再引"§13-2 未定"（已决 `AB-39/40/41`） | `grep` 无循环引用 |
-
-**状态（2026-11-14，A1–A3 ✓ 已落地）**：
-- **A1 ✓**：新增 `crates/pyawa-abi/include/pa_capabilities.h`（3 域 vtable＋`pa_cap_status`，
-  由 `tools/gen_pa_capabilities.py` 从 Rust `repr(C)` **生成**；`pa.h` include 它；C5
-  `PA_THANDLE` 注释同笔修正）。
-- **A2 ✓**：`examples/reference_host.c` 增加最小 `clock` 域（`now_ns`/`monotonic_ns`）＋
-  `pa_setcapability(PA_DOMAIN_CLOCK, …)`＋宿主函数 `host_now_ns()`；`t_ref_host.py` 的
-  `EXPECTED` 增 `clock=ok`（不换产物、不依赖 guest `import time`）。
-- **A3 ✓**：`tests/ci/check_capability_layout.py`（需 cc）：`tools/gen_pa_capabilities.py --check`
-  ＋ C 探针 ↔ Rust 测试逐行对照（56 行：3 域全部字段的 offset/size/结构尺寸）＋ C/C++ 独立
-  include；`T-CX-19` 扫描面扩到两个头（先剥 struct 体，只扫文件作用域 `pa_*` 原型；结构体
-  不入 `AB-1` 预算）；`tests/ci/selftest.py` 新增"第二头注入未提及声明 ⇒ 红"用例；
-  `slowcheck` 步骤 5／`gate_chunk small` 均跑 A3。
-
-**不在本单**：新增能力域、异步能力分类（`PA_ASYNC_*` 已有面）。
-
-**如实边界**：`CP-30` 只规定了"公共头有版本/尺寸"；**字段具体编码**由本单第 1 步钉死，钉死后随 ABI 一起冻结。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.18 ABI 剩余收口清单（2026-11-14；非 ABI 项暂缓）
 
-范围：**只列 ABI 相关**未完成项。非 ABI（SDK 交付、插件仓、性能主线、第二平台等）按用户口径暂缓，不在本单。
-
-#### A. 冻结前必做（唯一破坏性风险）
-
-> **状态（2026-11-14）**：A1–A3 **✓ 已落地**（见 §12.17 的状态段；`check_capability_layout.py`
-> 与 `t_ref_host` 已接入 slowcheck 步骤 5／gate_chunk small）。
-
-| # | 项 | 归属 | 依赖 | 验收 |
-|---|---|---|---|---|
-| A1 | **`§12.17` 能力域 vtable C 布局**：新增 `pa_capabilities.h`（9 域结构体，`version+size` 公共头，与 Rust `repr(C)` 逐字段一致；`pa.h` include） | 开发 | — | C 宿主可 include 并构造；`static_assert` 校验尺寸 |
-| A2 | reference host 补**最小 `clock` 域**实现并 `pa_setcapability` | 开发 | A1 | 示例真编译真跑；guest 拿到宿主时间 |
-| A3 | **布局一致性机检**（头文件 ↔ Rust `repr(C)`） | 开发 | A1 | 故意改一字段 ⇒ 机检红；还原 ⇒ 绿 |
-
-#### B. 冻结动作（文档，我写）
-
-| # | 项 | 验收 |
-|---|---|---|
-| B1 | 兼容性策略条款：minor **只追加**（不改变既有签名/语义）、major 才允许破坏、旧宿主在 minor 内可用（扩 `AB-41` 改动矩阵为冻结承诺） | 规格中可检索、可机检引用 | **✓ 已落 `AB-81`（2026-11-14）**：冻结随稳定发行版、alpha 不是冻结点、冻结后仅追加、破坏必升 major |
-| B2 | `DESIGN §13-22`（ABI 发布时机）**未决 → 已冻结**；`AB-44` 状态同步 | 两处一致、`grep` 无"未决" | **✓（2026-11-15 清尾）**：`DESIGN §13` 的 22 正文/计数改为已决 0 未决；`AB-44` 语义未变（函数表追加规则） |
-| B3 | 发布标记：tag（如 `abi-1.14`）＋ 冻结生效日期写进规格 | tag 存在、日期可查 | **待做**：`docs/RELEASE.md` 仍写"打 tag 前可改"；待首个稳定发行版时打 tag＋写日期 |
-
-#### C. 已知"如实未提供"（追加式，不阻塞冻结）
-
-| # | 项 | 现状 | 后续 |
-|---|---|---|---|
-| C1 | `pa_exec_file` | **✓ 已接线（2026-11-15）**：源经 `fs` 域读入后复用 `pa_exec_string`；电池版 `paL_newstate` 可用；无 provider 的最小产物 ⇒ `PA_ERR_NOTIMPLEMENTED`（机器错误 ⇒ `PA_ERR_RUNTIME`） | `helpers_wiring`／`host_usability_probe` 覆盖；过时注释已修 |
-| C2 | `paL_error` 变参格式化 | **✓ 已接（§12.18 C2）**：`paL_errorf` 为 **C 头 `static inline`**（`vsnprintf` 后转 `paL_error`，不新增导出符号；超长截断） | `examples/reference_host.c` 真编译使用；规格 §15.4 已登记 |
-| C3 | `paL_dostring`／`paL_dofile` | **✓ 已接（§12.18 C3）**：走 `pa_exec_string`／`pa_exec_file` ＋ `paL_execresult`；`int mode`：0＝python／1＝pyawa；文件经 `fs` | `helpers_wiring` 覆盖；`host_usability_probe` 电池版覆盖 |
-| C4 | `paL_where`／`paL_requiref` | **✓ 已接（§12.18 C4）**：`paL_where` 尽力口径（**链语义已有 `BC-60`／`T-BC-22`；对象模型数据面缺口见 §12.19**）；`paL_requiref`：`sys.modules` → `openf` → `import_through_bridge` | `helpers_wiring` 覆盖；残余为 §12.19 的 traceback 数据面/`paL_where` 完整链 |
-| C5 | `PA_THANDLE` 头注释 | **✓ 已修（§12.17 A1）**：`AB-70`／`AB-76` 已落地，注释改为读载荷/取身份 | — |
-| C6 | `TS-45` 大整数 ABI 通道 | **✓ 复核关闭（§12.18 C6）**：`AB-62` 的 `pa_tointstring`／`pa_pushintstring` 已覆盖全域；`pa_tointeger` 只做 i64 投影、越界如实 `NOTIMPLEMENTED`；**无新通道缺口**，Spec 行与代码注释已改为指向 `AB-62` | — |
-
-#### D. 追加候选（不阻塞冻结，出现真实需求再做）
-
-`pa_call` 多返回值实现扩大 · 分配器归宿主（`pa_host` 尾部追加 ＋ `pa_create_ex`） ·
-`pa_tobytes_mut`／pin 语义 · `memoryview` 类型标签 · 新增能力域。
-
-#### E. 已完成的 ABI 验证（不在待办）
-
-内存：`AB-73…AB-80` 新路径 valgrind **0 错误**（6 个测试二进制 ＋ 真 numpy 端到端）；
-符号一致性：`T-CX-19`；协议唯一入口：`T-AB-19` oracle；
-未重跑项（属慢闸日常，非新 ABI 面）：407 语料 memcheck 子集、`memdangle` survey。
-
-**建议顺序**：A1→A2→A3 →（B1/B2/B3 我同步写）→ C5 顺带 → C6 复核 → 冻结。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
 ### 12.19 traceback 规格空白与收尾（2026-11-15）
 
-**问题**：`__traceback__` 的**可观察链语义**在 `SPEC-bytecode` 的 **`BC-60`** 已有条款（并由
-`T-BC-22` 对拍 `sys.exc_info()`／`__traceback__`）；缺的是**对象模型的数据面**（traceback 对象的
-最小字段/形状）与 **`paL_where` 的完整链语义**（当前 `SPEC-c-abi` §15.4 只有 `level=0/n` 的
-调用口径，无“完整调用链”的数据定义）。此前 `pa.h`／`RELEASE.md`／`PLAN`／`SPEC-c-abi` 把缺口
-错引成 `OM-28`（实际是 `gc` 模块语义，见 `CORE-MODULES:413`／`SPEC-object-model:218`）。
-按"断言必须查证"（`CX-26`）：**先立规格，再实现**；**禁止**另造与 `BC-60` 冲突的第二套链语义。
+> **✓ 已收口**；正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」。
 
-| # | 内容 | 验收 |
+### 12.20 平台矩阵：Windows（稳定版承诺，2026-11-15 用户拍板 B）
+
+**背景**：现状只有 Linux（CI 3 个 job 全 `ubuntu-latest`；平台 provider 仅 `fs_posix`／`net_posix`／`clock_system`；
+stdlib 仅 `posix_module`；规格无 Windows 提及）。用户决定**稳定版承诺 Linux x86_64 ＋ Windows x86_64**。
+ABI 不受影响（`CP-4` 已把平台代码隔离在 runtime／stdlib）。
+
+**规模参照（如实）**：`posix_module.rs` 2625 行、`fs_posix.rs` 1534 行、另有 `net_posix.rs`；
+Windows 侧要写对应 provider 与 `nt` 模块 —— 这是**里程碑级**工作线，不是小项。
+
+| 阶段 | 内容 | 验收 |
 |---|---|---|
-| 1 | 补 **对象模型数据面**（`SPEC-INDEX.md` §2：在本文件前缀内取**下一个连续号**）；`__traceback__` 的最小可见面（`tb_frame`／`tb_lineno`／`tb_next`）；**链语义引用 `BC-60`／`T-BC-22`，不重述**。`paL_where(level)` 的调用语义仍归 `SPEC-c-abi` §15.4（可在此引用/细化，不另立第二真相） | 新 OM 条款编号 ＋ 对应 `T-OM`；`CX-19`／`T-CX-10` 连续性通过 |
-| 2 | 按规格实现：`paL_where` 完整链；`__traceback__` 最小面 | 用例：handled 异常的 tb 链、re-raise、宿主异常映射后的 guest traceback；`T-BC-22` 不回归 |
-| 3 | 修**剩余错引**（`OM-28` → `BC-60`／真实条款）：`crates/pyawa-abi/include/pa.h:456`、`crates/pyawa-abi/src/helpers.rs` 4 处（均 → `OM-42`／`BC-60`） | `grep -rn 'OM-28' crates/pyawa-abi/include crates/pyawa-abi/src \| grep -i traceback` **为空**（`NEXT` 中的命令文本除外） |
-| 4 | `C6`（`TS-45`）复核关闭 | 已并入 `§12.18 C6` ✓（不重复列） |
+| **W1 可移植性清理** | 把通用代码里的 POSIX 假设收进 provider；CI 新增 `windows-latest` 的**最小"能编译"** job（build ＋ `check.py`） | Windows job 能编译通过；`check.py` 在 Windows 上绿 |
+| **W2 `clock` 域** | Windows 时钟 provider（QPC） | 时钟测试跨平台同结果 |
+| **W3 `fs` 域** | Win32 文件 provider（路径语义／只读根／错误码映射） | `fs` 形状测试跨平台；`CP-21` 越界拒绝保持 |
+| **W4 `net` 域** | Winsock provider | socket 形状测试跨平台；能力域拒绝语义不变 |
+| **W5 `nt` 模块 ＋ `os` 分支** | stdlib 的 `nt` 模块（`os` 在 Windows 走它）；`sys.platform`／平台字段 | `import os` 平台分支正确；`ntpath` 随 `Lib/` 同步生效 |
+| **W6 测试矩阵** | Windows 上跑 `pyawa-abi` 测试 ＋ conformance ＋ 参考宿主（MSVC／clang）；**内存工具替代**（Windows 无 valgrind：用 Dr. Memory 或 ASan，或明确"Windows 上不做 memcheck"并记录） | CI 矩阵绿；内存工具口径写进 `RELEASE.md` |
 
-**状态（2026-11-15，item 1–4 ✓）**：
-- **item 1 ✓**：`SPEC-object-model` 新增 **`OM-42`**（§12.1 traceback 数据面：`tb_frame`／
-  `tb_lineno`／`tb_lasti`／`tb_next`、帧保活、`AB-74` 边界、`SkipTest` 偏差 `DIV-6`）与
-  **`T-OM-11`**；链语义**引用 `BC-60`／`T-BC-22`，不重述**。
-- **item 2 ✓**：实现此前已存在于 core（`new_traceback`／`attach_traceback`）；本轮按 `OM-42`
-  核对并用 `T-OM-11` 钉住（`pyawa-runtime/tests/exception_traceback_frames.rs` 1 passed、
-  `pyawa-core/tests/exceptions.rs` 18 passed）；`paL_where(level)` 链式语义在
-  `SPEC-c-abi` §15.4 精确化，`helpers_wiring.rs` 新增 level=1／链不足用例（5 passed）。
-- **item 3 ✓**：5 处代码错引已修（`pa.h:456`、`helpers.rs` 4 处 → `OM-42`／`BC-60`）。
-- **item 4 ✓**：C6 已并入 `§12.18 C6`。
+**W1 状态（2026-11-15）✓（只到「能编译」；运行期属 W2–W6）**：
+- **本机交叉验证（如实：只 type-check，不链接、不运行）**：装入 `rust-std` 的 `x86_64-pc-windows-msvc`
+  组件后，`cargo check --workspace --target x86_64-pc-windows-msvc` **通过**（libs ＋ bins 全绿）
+  ⇒ 核心／能力接口／stdlib／abi 的 POSIX 假设**确已收在 provider 内**。
+- **代码收口**：CLI（`crates/pyawa-runtime/src/bin/pyawa.rs`）依赖真实能力域 provider（`fs`／`clock`／
+  `net` 的 Unix 实现）⇒ CLI 实现只在 `unix` 编译；非 unix（Windows）留**显式「未接」入口**
+  （打印指向 W3–W5、退出码 2），**不伪造**半可用路径。libs／bins 在 Windows 目标零改动即可编译。
+- **CI**：`.github/workflows/ci.yml` 新增 **`windows` job**（`windows-latest`）：`cargo build --workspace`
+  ＋ `python tests/ci/check.py`。无对拍产物（跨平台对拍属 W6）⇒ 该 job 以
+  `PYAWA_CHECK_SKIP_COVERAGE=1` 把 `M3-COVERAGE` **显式标 SKIP**（不是 PASS）；Linux 的 fast／full
+  不设此变量 ⇒ 仍强制。
+- **CI 实跑（两次，如实）**：首跑 **run `43732891950`**——`fast`／`wasm` 绿、`windows` 红：
+  Windows 控制台默认 cp1252，`check.py` 一 `print` 中文就 `UnicodeEncodeError` ⇒ 修复为
+  stdout／stderr ＋ 两个子进程**显式 UTF-8**（`PYTHONIOENCODING=utf-8`）；复跑 **run `43734289101`**——
+  **`fast`／`wasm`／`windows` 三 job 全绿**（`windows` 1m6s：`cargo build --workspace` ＋ `check.py`，
+  `M3-COVERAGE` SKIP）。
+- **如实边界（不阻塞 W1）**：本机无法运行 Windows 二进制（只交叉 type-check；实跑结果见上）；
+  `cargo check --all-targets` 在 Windows 上仍红（`crates/pyawa-runtime/tests/path_resolution.rs`／
+  `t_cp10_cancel.rs` 是 Unix 专用测试）⇒ **测试矩阵属 W6**，不在 W1 范围。
 
-**不在本单**：`traceback` 模块的完整 Python 面（`format_exc` 一族）——按需另立。
+**W2 状态（2026-11-16 / 补齐 2026-11-19）✓**：Windows `clock` provider 落地（QPC 口径）；**日历三槽已补齐**（UCRT `_localtime64_s`／`strftime`／`_mktime64` ＋ `tm_gmtoff`／`tm_zone`；`struct_time` 11 元面）；
+正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」的 12.20-W2／W3 节
+（Windows runner 实跑 ✓ run `43846653765`：clock **4/4**）。
+
+**W3 状态（2026-11-16 / 补齐 2026-11-19）✓**：Windows `fs` provider 落地（全槽位；**`pipe` 已补齐** `CreatePipe`；**`dev`／`ino` 真值** = 卷序列号／64 位文件索引）；`CP-21` 判定仍在 VM；
+正文归档：同上（12.20-W2／W3 节；Windows runner 实跑 ✓ run `43846653765`：fs **8/8**）。
+
+**W4 状态（2026-11-17 / 补齐 2026-11-19）✓**：Windows `net` provider 落地（ws2_32 FFI；**`socketpair` 已补齐** = loopback TCP 对模拟）；
+正文归档：`docs/rounds/04-post-m6-01.md`「附录：PLAN §12 已收口工作单归档」的 12.20-W4／W5 节
+（Windows runner 实跑 ✓ run `43911783517`：net **6/6**）。
+
+**W5 状态（2026-11-17）✓**：Windows `nt` 模块（同一实现换名）＋`sys.platform="win32"`＋`sys.path`
+guest 化；`import os` 走 nt 分支；正文归档：同上（Windows runner 实跑 ✓ run `43911783517`：
+os **1/1**；首跑暴露的 CRLF 问题已由 `ee2c809e` 的 universal-newlines 修复并回归）。
+
+**W6 状态（2026-11-18）✓ 收口**：`windows` job 全绿（run `44290668045`）——构建、abi／runtime
+`--all-targets` 可编译、**conformance（必需，0 新差异＋DIV-12 Windows-only 已知差异）**、
+**`pyawa-abi` 19 个测试目标真跑**、provider／os 19/19、core＋lsp、参考宿主（MSVC）、CLI 三形态冒烟、
+`check.py`（M3-COVERAGE SKIP）；内存口径＝Windows 不做 memcheck（`RELEASE.md`）。
+正文归档：`docs/rounds/04-post-m6-01.md`「附录」的 12.20-W6／12.20-W6-conformance-Windows／
+12.20-W6 ✓ 收口 三节。
+
+**平台面补齐第一批（2026-11-19）✓**：W2/W3/W4 的"如实未接"缺口清零——`clock` 日历三槽、
+`fs.pipe`、`net.socketpair`、`fs` 的 `dev`／`ino` 全部真实现；新增 `windows_platform_gaps` ABI
+端到端测试并进 CI windows job（run `44515100434` 全绿）。**仍如实未接**：`errno` 表仍 Linux 生成、
+`nt` 的 `splitroot`／`normpath` 盘符语义差异、`symlink` 需特权、**Windows 不做 memcheck**、
+`_overlapped` 数据面（Proactor 不能真跑）。正文归档：rounds 的 12.20-W2W3W4-平台面补齐 节。
+
+**平台差异如实登记**：路径分隔符／驱动器号／符号链接权限／大小写敏感性等差异进 `tests/conformance/divergences.md`（`DIV-` 条目），不在代码里"假装一致"。
+
+**不在本单**：macOS（待定）、ARM64、其它架构。
+
+### 12.21 Web（WASM）适配（2026-11-15 用户提出；2026-11-16 压缩）
+
+**目标**：pyawa 在浏览器里跑（宿主＝JS）。核心难点：**wasm 无运行时函数指针** ⇒ `pa_register` 需
+**wasm 侧 trampoline 表**（固定槽位 wrapper，JS 按槽位填 import）；无 OS／无线程 ⇒ `fs`／`net` 门控、
+`clock` 由 JS 提供；跨 JS 边界一律当次复制（借用规则天然满足 `AB-15`／`AB-17`）。
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| **E1** | 平台门控：`wasm32-unknown-unknown` 可编译（fs／net 门控；线程与时钟禁用或由 JS 提供） | wasm 产物可编译、无 panic |
+| **E2** | **trampoline 层**：wasm 侧固定槽位 wrapper ＋ JS 填充协议 | JS 注册函数、guest 可调用 |
+| **E3** | ABI 导出：`pa_create`／`pa_exec_string`／`pa_*` 对 JS 可见，错误消息可取 | JS 建实例并执行脚本 |
+| **E4** | 能力域：`clock` 由 JS 提供；`fs`／`net` 如实"未提供" | 取时间走 JS 时钟；文件操作如实报未实现 |
+| **E5** | 测试与 CI：node／headless 跑纯计算冒烟；CI 增 wasm job | wasm job 绿；跑不了的部分如实登记 |
+| **E6** | 文档：`RELEASE.md` 增 Web 行与限制 | 文档与实现一致 |
+| **E7 ✓（2026-11-21 进 main）** | 库嵌入档：多实例隔离／宿主函数／stdout 经宿主 `fs_write` | `tests/wasm/e7_embedding.js` PASS（main `a8d6ad8a`） |
+| **E8 ✓（2026-11-21 进 main）** | 可移植子集：10 个纯计算/Rust 模块脚本，node 运行＋canonical raw JSON；`compare.py --subset-file` 做 Linux×WASM 同结果 | E8 子集 10/10 一致（CI `portability-compare`；main `a8d6ad8a`） |
+
+**不在本单**：`wasm32-wasi` 宿主、Web Worker 多线程、浏览器文件系统（OPFS）。
+
+### 12.22 调用栈：脚本函数调用不吃原生栈（2026-11-19 ✓ 收口）
+
+**状态 ✓**：S1–S4 全部达成——① 回调深度守卫（统一 `call_depth` 覆盖内建→脚本路径＋专项测试）；
+② **显式帧栈**（`execute` 驱动循环压帧／弹帧，脚本调用不吃原生栈；深递归 900 在 CLI／ABI／wasm
+三处通过）；③ 深度语义对齐参照（默认 **1000**、`setrecursionlimit` **可升**、安全上限 **10000**、
+超限可捕获 `RecursionError`）；④ wasm 小栈验证（`tests/wasm/e6_recursion.js` 进 CI）。`DIV-11`
+收窄为"原生回调路径 64 层守卫＋安全上限"；可见语义已补进 `SPEC-c-modules.md` §5.2.3。
+正文归档：`docs/rounds/04-post-m6-01.md` 的 12.22-调用栈收口 节。
+
+### 12.23 Windows 原生 CLI：**已落地（2026-11-17，选项 A）**
+
+**现状**：`crates/pyawa-runtime/src/bin/pyawa.rs` 依赖**真实能力域 provider**（`fs`／`clock`／`net` 的
+Unix 实现）——读源码、`.pyac` 缓存、能力注册——因此 CLI 实现整体 `#[cfg(unix)]`；非 unix（Windows／
+wasm）只留**显式「未接」入口**（退出码 2，`PLAN §12.20` W1）。W2–W5 已把三个 provider＋`nt`／
+`sys.platform` 落地，端到端经 ABI（`paL_newstate`）在 Windows 通过 CI 19/19。
+
+**阻塞点（按成本排序）**：
+1. **CLI 直接依赖 `fs_posix::PosixFs`／`clock_system`／`net_posix`**：需改成平台中立入口（见选项 A）；
+2. **源码读取必须走能力层**（`IM-15`：禁止 `std::fs` 直读）⇒ Windows CLI 必须先注册 `fs` 再经
+   `fs` 读取；最小改动是把"组合根装配＋读源码＋执行"下沉成 `pyawa-runtime` 的公共函数；
+3. **`.pyac` 缓存路径**与 CLI 的 fs 读取耦合（缓存读写、陈旧判定都在 CLI 里）；
+4. `sys.platform` 已是 `win32`（W5），但 `os` 的 Windows 分支只验证到 `import os` 面；
+5. 非 unix 的 `main` 现在是"未接"桩，启用后要按平台选择 provider（Unix／Windows）。
+
+**选项与代价**：
+- **A（推荐）**：在 `pyawa-runtime` 增平台中立 `install_default_capabilities(state)` ＋
+  `read_source_through_fs(...)`／`eval_file` 一类公共入口；CLI 只调这些入口、不再直接 import provider。
+  **估**：200–400 行重构 ＋ Windows 端到端 CLI 测试（`<file>`／`-c`／`check` 三形态、退出码、
+  错误消息）；**风险中**（触 CLI 主路径，Linux 侧需逐字节不变）。
+- **B**：保留 Unix CLI，另建 `pyawa-cli-windows` 薄 crate；**不推荐**（两套 CLI 行为会漂）。
+- **C**：Windows CLI 用 `std::fs` 直读源码：违反 `IM-15` ⇒ **不做**。
+
+**建议**：选 **A**，排在 W6 剩余项之后；验收＝Windows 上 `pyawa <file>`／`-c`／`<file>` 的
+`check` 三形态与 Linux 同 stdout／退出码，且仍经能力层读源码（可用"不注册 fs ⇒ 如实失败"反证）。
+
+**落地（2026-11-17）**：`pyawa-runtime` 的 `PlatformFs`／`PlatformClock`／`PlatformNet` 别名 ＋
+`host_cli` 的 `not(target_family = "wasm")` 门控 ⇒ 一份 CLI 源码跨平台；`read_through_fs` 经
+`guest_path_bytes`（Windows `D:\…` ⇒ `/D:/…`）仍走能力层；CI `windows` job 三形态冒烟
+（`-c`／`<file>`／`check`）**首跑 run `44064955063` 即绿**。详见 rounds 的 12.23-Windows-CLI 节。
+
+### 12.24 Windows-only C 模块的最小导入面（2026-11-18 **首批已落地**）
+
+**状态**：`winreg`／`_winapi`／`msvcrt`／`_overlapped`／`_multiprocessing` 五个诚实桩（名字齐、
+未接调用如实 `NotImplementedError`；非 Windows 零注册）＋ `windows_winstubs_shapes`；配合
+`socket`／`os` 的 Windows 表面过滤与 `pa_setpath` 的 guest 转换，conformance Windows 从 198/408
+收敛到 **0 新差异（必需步骤绿）**。正文归档：rounds 的 12.24-Windows-C-模块最小导入面 与
+12.20-W6 ✓ 收口 节。
+
+**状态（2026-11-19）✓ 首批收口**：① `winreg` **真实 Win32 语义**（`pyawa-runtime::win32_reg`，
+便利装配路径替换 stdlib 桩；`windows_winreg` ABI 测试）；② `_winapi`／`_overlapped` **最小真实
+语义**（真事件／IOCP／句柄生命周期，`pyawa-runtime::win32_overlapped`；`windows_overlapped` ABI
+测试）——两者均进 CI `windows` job 且全绿。
+**仍不在本单（如实）**：重叠 I/O **数据面**（`ReadFile`／`WSARecv` 真实投递 ⇒ Windows Proactor
+事件循环）、注册表安全描述符与 `OSError.winerror` 属性面、长尾值类型。正文归档：rounds 的
+12.24-real-winreg 与 12.24-real-overlapped 节。
+
+### 12.25 runtime 运行矩阵（2026-11-18 **已落地**）
+
+**状态**：`windows` job 的 `cargo test -p pyawa-runtime --no-fail-fast` 已是**必需步骤且绿**
+（290 通过／0 失败）；12 个 Unix 参考面测试文件按平台 `#![cfg(unix)]` 诚实 gate；`asyncio_smoke`
+依赖真实 Windows Proactor（随 §12.24 真实语义落地后解锁）。正文归档：rounds 的
+12.25-runtime 运行矩阵 节。
+
+### 12.26 脚本可移植门与异步后端（契约；asyncio 按 ADR-002 仅报告）
+
+**判据唯一出处（本节）**：可移植子集内脚本在声明的**运行档**平台上**同脚本同结果**；CI 必需
+job。异步/`asyncio` 的定位见 `ADR-002`：它是**可选的 CPython 语义 facade**，其实现架构不驱动
+内核与平台承诺；相关探索只作 spike 报告。契约定义见 `REQUIREMENTS.md`「脚本可移植性承诺」与
+`DESIGN.md` §14。
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| **P0-1 文档** | 本单 ＋ REQUIREMENTS／DESIGN §14／RELEASE／`DIV-13`（用户批准后写入） | docs-only 提交，`check.py` 20/20 |
+| **P0-2 portability 门（OS 档）✓（2026-11-21 已进 main）** | `tests/portability/`（24 语料）＋归一化执行器＋CI **必需** Linux×Windows 矩阵 job＋比对 job；白名单与 known-diffs 机制 | **24/24 一致**（main `7d1b0f0e`；run `44788992583` 比对 0 差异） |
+| **P0-3 asyncio Windows 默认后端——不采用（仅报告）** | dev 上的 selector/引擎后端实验（导入后钩子）**不进 main** | 报告：`docs/rounds/spikes/2026-11-21-asyncio-windows.md`；依据 `ADR-002` |
+| **P1 wasm 库嵌入档 ✓（2026-11-21 已进 main）** | `wasm32` 构建产物＋JS 宿主（clock/可选 fs stdout）＋E7 库嵌入＋E8 可移植子集；**asyncio-on-wasm 单列为评估** | main `4f9490cc`（E1–E5）＋`a8d6ad8a`（P1）；E2–E7 PASS、子集 10/10；CI wasm job 绿 |
+| **P2 wasm async（asyncio-on-wasm）——仅报告，不采用** | JSPI/Asyncify 探索与 E9 原型 | 报告：`docs/rounds/spikes/2026-11-20-jspi.md`、`2026-11-20-asyncio-wasm.md`；依据 `ADR-002` |
+| **P2 移动端库嵌入档** | `aarch64-linux-android`／`aarch64-apple-ios` 的 `cargo check`＋staticlib/cdylib 产物＋ABI 冒烟 | 构建档绿；运行档另行接入；`DIV` 如实登记 |
+| **P3 平台事实** | `nt.splitroot`／`normpath`、`errno` 表等：能补则补，不能补进 harness 白名单 | portability job 绿 |
+
+**portability 门状态 ✓（2026-11-21 进 main `7d1b0f0e`）**：`tests/portability/` 落地（24 个脚本：语言／异常／`os.path`／文件／
+`os.stat`／errno／`socketpair`／TCP 回环／`time` UTC／json／collections／itertools／re／math／
+dataclasses／enum／import 面）；`runner.py` 单平台执行＋**只在 harness 内**归一化平台事实（运行时
+仍如实回答），`compare.py` 做 Linux×Windows 同结果比对；CI 新增 `portability` 矩阵（ubuntu／
+windows 各跑 runner 上传产物）＋ `portability-compare`（必需，未登记差异即红）。**首跑修掉两个
+harness 问题**：Ubuntu 26.04 无 setup-python 3.14.4 构建（改用系统 Python）＋ Windows 控制台
+cp1252 打印中文失败（runner 输出固定 UTF-8）。**实测：24/24 一致、0 已知差异**（run `44788992583`）。正文归档：rounds 的 12.26-P0-2-portability 门 节。
+
+**硬线**：每步 commit；动代码必 `check.py` 20/20 ＋ `slowcheck` 十二项全绿；最终 CI
+fast／wasm／windows 全绿；同一处 3 轮不过则停手升级。**开发以本节＋REQUIREMENTS 契约为准**
+（冲突时 REQUIREMENTS 是决策源）。
+
