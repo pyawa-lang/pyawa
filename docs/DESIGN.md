@@ -953,10 +953,11 @@ M5 收口时实测全部在阈值内（复跑区间见上）。
 不把后端选型做成用户 API；不要求脚本写平台分支；不在核心 crate 引入平台依赖（`CX-4` 保持）；
 不以"复刻 host CPython 的平台默认"为理由破坏跨平台一致。
 
-### 14.6 宿主事件源与协程驱动（ADR-005，proposed）
+### 14.6 宿主事件循环与协程驱动（ADR-005，**accepted**）
 
-可嵌入内核需要让**宿主拥有事件循环**：新增 `event` 能力域（事件源 provider）与 `pa_resume`
-族（additive ABI），宿主可在自己的循环里恢复脚本协程；普通 `pa_exec_*` 的阻塞语义不变。
-完整设计、约束、非目标与 spike 计划见 [`DESIGN-event-source.md`](DESIGN-event-source.md)；
-**ADR-005 仍为 proposed**，spike 通过前不实现产品代码。
+长期目标＝**L2“宿主拥有事件循环”**（Lua 式）：宿主循环 + `event` 能力域 + `pa_resume` 族，
+Pyawa 提供 VM/协程；现有 `Lib/asyncio`（Pyawa 循环模式）保留为可选 CPython 语义 facade；
+**L3（宿主 loop 上完整 asyncio）不承诺**。L1 的 `event` 域是其底座。完整设计、状态机、
+风险与分阶段见 [`DESIGN-event-source.md`](DESIGN-event-source.md)；实现跟踪见 `PLAN §12.27`。
+**accepted 只表示目标架构**：S1 规格／S2 Spike C 通过后才写产品 ABI。
 

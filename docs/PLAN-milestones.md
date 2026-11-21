@@ -701,3 +701,16 @@ cp1252 打印中文失败（runner 输出固定 UTF-8）。**实测：24/24 一�
 fast／wasm／windows 全绿；同一处 3 轮不过则停手升级。**开发以本节＋REQUIREMENTS 契约为准**
 （冲突时 REQUIREMENTS 是决策源）。
 
+### 12.27 宿主事件循环与协程驱动（ADR-005，accepted 目标架构）
+
+**判据唯一出处**：`DESIGN-event-source.md`；用户 2026-11-21 拍板长期目标＝L2（宿主拥有事件
+循环），L1 为底座，L3 不承诺。**accepted 只表示目标架构**，实现前须走完 S1/S2。
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| **S1 规格** | `event` vtable＋`pa_resume`/`pa_throw`/host awaitable 的 ABI 规格（状态码、栈契约、取消、GC 根） | 文档评审；不写代码 |
+| **S2 Spike C** | 宿主 loop 驱动 `await` host awaitable 的脚本协程；完成/异常/取消三态；参考 C 宿主 | spike 报告＋证据；不改产品 ABI |
+| **S3 实现** | `event` 域＋`pa_resume` 族（additive）；旧 ABI 宿主不受影响 | check.py 20/20；slowcheck 12/12；CI 全绿 |
+| **S4 文档/承诺** | 更新 DESIGN/PLAN/RELEASE/宿主指南；asyncio 仍为可选 facade | 文档一致；不承诺 L3 |
+
+

@@ -8,8 +8,11 @@
 - **已采用**：portability／frame-stack／windows-platform＋平台补齐／win32-real-semantics／
   wasm E1–E8（见 `docs/migrations/STATUS.md`）
 - **仅报告不采用**：JSPI／asyncio-on-wasm／Windows asyncio 后端（`docs/rounds/spikes/`）
-- **下一步（待用户定）**：
-  1. 文档同步：按 ADR-001/002 回填 PLAN/DESIGN/REQUIREMENTS/RELEASE（需授权）；
-  2. 架构面：宿主事件源 provider／协程驱动 ABI（ADR-002 的后续设计）；
-  3. 发布面：alpha.2/beta tag 与 ABI 冻结评估（§12.18 B3 仍范围外）。
+- **架构决定（2026-11-21）**：ADR-005 accepted；长期目标＝L2 宿主拥有事件循环，
+  L1 event 域为底座，L3 不承诺；详见 `docs/DESIGN-event-source.md`、`PLAN §12.27`。
+- **下一步（按序）**：
+  1. S1 规格：`event` vtable＋`pa_resume` 状态机/错误码（文档级，需授权）；
+  2. S2 Spike C：宿主 loop 驱动 `await` host awaitable 的协程（不改产品 ABI）；
+  3. S3 实现：additive ABI＋参考宿主；asyncio 仍为可选 facade；
+  4. 发布面：alpha.2/beta tag 与 ABI 冻结评估（§12.18 B3 仍范围外）。
 - **硬线**：代码 PR 须 `check.py` 20/20＋`slowcheck` 十二项全绿；CI 必需检查见 WORKFLOW。
