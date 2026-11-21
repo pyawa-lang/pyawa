@@ -5,14 +5,15 @@
 #![forbid(unsafe_code)]
 
 pub mod clock;
+pub mod event;
 pub mod fs;
 pub mod net;
 
-/// **能力域个数**（`CP-1`：与 `DESIGN.md` §7.3 的九域一一对应；顺序照 `SPEC-capabilities.md` §4 的表）。
+/// **能力域个数**（`CP-1`：与 `DESIGN.md` §7.3 的十域一一对应；顺序照 `SPEC-capabilities.md` §4 的表）。
 ///
 /// 一处真相：域编号表在**本 crate**（形状层）；`pyawa-abi` 侧那份 `capability::*` 是同一张表的
 /// 注册接口投影（`AB-33`），两边**顺序必须一致** ✓。
-pub const DOMAIN_COUNT: usize = 9;
+pub const DOMAIN_COUNT: usize = 10;
 
 /// `fs` 域的编号（`SPEC-capabilities.md` §4 表里排第一 ✓）。
 pub const DOMAIN_FS: usize = 0;
@@ -24,3 +25,6 @@ pub const DOMAIN_CLOCK: usize = 3;
 ///
 /// 与 `pyawa-abi::capability::PA_DOMAIN_NET`（`= 1`）**必须一致**（同一张表的注册投影，`AB-33`）。
 pub const DOMAIN_NET: usize = 1;
+
+/// `event` 域的编号（`SPEC-capabilities.md` §4 表里第十个 ⇒ 下标 9；`ADR-005`）。
+pub const DOMAIN_EVENT: usize = 9;

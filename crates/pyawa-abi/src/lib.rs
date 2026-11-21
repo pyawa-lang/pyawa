@@ -100,7 +100,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 15;
+pub const PA_ABI_MINOR: u32 = 16;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -535,7 +535,7 @@ pub struct pa_state {
     host_exception: Option<NonNull<Header>>,
     /// 本实例注册过的宿主类型（`AB-35`；`kind` → 类型）。
     host_types: Vec<host::RegisteredType>,
-    /// **`AB-32`／`AB-33`**：九个能力域的注册状态（域索引见 [`capability`]）。
+    /// **`AB-32`／`AB-33`**：十个能力域的注册状态（域索引见 [`capability`]）。
     capabilities: [CapabilitySlot; capability::DOMAIN_COUNT],
     /// `paL_ref` 的注册表（每实例一份；**持有**引用，`AB-15`）。
     registry: Vec<Option<NonNull<Header>>>,
@@ -5022,8 +5022,8 @@ fn replace_top(stack: &mut VirtualStack, instance: &Instance, value: NonNull<Hea
 
 /// 能力域的切片与异步分类（形状引 `docs/SPEC-capabilities.md` 的 `CP-`）。
 pub mod capability {
-    /// 域个数（`CP-1`：与 `DESIGN.md` §7.3 的九域一一对应）。
-    pub const DOMAIN_COUNT: usize = 9;
+    /// 域个数（`CP-1`：与 `DESIGN.md` §7.3 的十域一一对应）。
+    pub const DOMAIN_COUNT: usize = 10;
 
     /// 域编号（取值由实现定，写进 `pa.h`；顺序照 `SPEC-capabilities.md` §4 的表）。
     pub const PA_DOMAIN_FS: i32 = 0;
@@ -5043,10 +5043,12 @@ pub mod capability {
     pub const PA_DOMAIN_LOCALE: i32 = 7;
     /// `ipc`。
     pub const PA_DOMAIN_IPC: i32 = 8;
+    /// `event`（`ADR-005`；S3 追加）。
+    pub const PA_DOMAIN_EVENT: i32 = 9;
 
     /// 域名字（诊断用）。
     pub const NAMES: [&str; DOMAIN_COUNT] = [
-        "fs", "net", "proc", "clock", "random", "env", "tty", "locale", "ipc",
+        "fs", "net", "proc", "clock", "random", "env", "tty", "locale", "ipc", "event",
     ];
 
     /// **`CP-25`／`CP-37`**：异步分类只有二值——可异步化。

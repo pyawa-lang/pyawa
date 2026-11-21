@@ -38,7 +38,7 @@
  * ⇒ `PA_ERR_INVALID`；`pa_newtype` 的 NULL `dealloc`/`traverse` ⇒ 当场拒绝）。
  * 次版本 14：`AB-80` `pa_writetobytes`（追加式；一次性写回恰好 `bytearray` 的数据区）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 15u
+#define PA_ABI_MINOR 16u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -440,10 +440,11 @@ typedef enum pa_domain {
     PA_DOMAIN_ENV = 5,
     PA_DOMAIN_TTY = 6,
     PA_DOMAIN_LOCALE = 7,
-    PA_DOMAIN_IPC = 8
+    PA_DOMAIN_IPC = 8,
+    PA_DOMAIN_EVENT = 9   /* ADR-005：宿主事件源（S3 追加） */
 } pa_domain;
 
-#define PA_DOMAIN_COUNT 9
+#define PA_DOMAIN_COUNT 10
 
 typedef enum pa_async {
     PA_ASYNC_OK = 0,   /* 可异步化 */

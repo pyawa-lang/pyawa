@@ -457,7 +457,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.15**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **15**；`AB-84`/`AB-85`（`pa_resume`/`pa_throw`）与状态码 `AB-82`/`AB-83` 为**追加式**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
+> **当前版本：1.16**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **16**；`PA_DOMAIN_EVENT`（`ADR-005`）与 `AB-84`/`AB-85`（`pa_resume`/`pa_throw`）、状态码 `AB-82`/`AB-83` 为**追加式**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、

@@ -34,8 +34,10 @@ STRUCTS = [
     ("fs", "CpFsVtable", "pa_fs_vtable"),
     ("clock", "CpClockVtable", "pa_clock_vtable"),
     ("net", "CpNetVtable", "pa_net_vtable"),
+    ("event", "CpEventEntry", "pa_cap_event_entry"),
+    ("event", "CpEventVtable", "pa_event_vtable"),
 ]
-SOURCE_LABEL = {"fs": "fs", "clock": "clock", "net": "net"}
+SOURCE_LABEL = {"fs": "fs", "clock": "clock", "net": "net", "event": "event"}
 BASE_TYPES = {
     "u8": "uint8_t",
     "u16": "uint16_t",
@@ -55,6 +57,7 @@ NAMED = {
     "CpTm": "pa_cap_tm",
     "PollFd": "pa_cap_poll_fd",
     "CapStatus": "pa_cap_status",
+    "CpEventEntry": "pa_cap_event_entry",
 }
 
 
@@ -203,7 +206,7 @@ def render_header(structs, status) -> str:
         " *",
         " * **自动生成，勿手改**：`tools/gen_pa_capabilities.py` 从 `crates/pyawa-capabilities/src/`",
         " * 的 `#[repr(C)]` 形状生成；`--check` 漂移即红（PLAN §12.17 A1/A3）。",
-        " * **只含已有 Rust 布局的 3 域**（fs/clock/net）；其余 6 域本 ABI 不定义布局（只能传 NULL）。",
+        " * **只含已有 Rust 布局的 4 域**（fs/clock/net/event）；其余 6 域本 ABI 不定义布局（只能传 NULL）。",
         " */",
         "#ifndef PAWA_PA_CAPABILITIES_H",
         "#define PAWA_PA_CAPABILITIES_H",
