@@ -42,6 +42,9 @@ jobs:
         run: python3 tests/portability/runner.py --self-test
       # PLAN §11.1 ④：check.py 之后对 407 语料（.py）跑 pyawa check——只编译不执行，
       # 期望 0 诊断、退出码 0（LSP 线①的语料回归闸）。
+      # S3 参考宿主（异步）：宿主 loop 用 pa_resume 驱动生成器＋event 域注册。
+      - name: S3 参考宿主（异步，Linux）
+        run: python3 tests/ci/t_ref_host_async.py
       - name: pyawa check 语料（407 个 .py ⇒ 0 诊断）
         run: |
           awk -F'\t' 'NF>=2 && $1 !~ /^#/ {print "tests/conformance/corpus/" $1}' \
