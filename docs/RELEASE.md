@@ -56,7 +56,7 @@ cargo build --workspace
 |---|---|
 | 平台 | **Linux x86_64（已验证）**；**Web／浏览器（`wasm32-unknown-unknown`，实验性）**：E1–E8 库嵌入档已进 main（`4f9490cc`／`a8d6ad8a`），E8 子集同结果；**Windows x86_64：W1–W6＋原生 CLI（§12.23）＋runtime 运行矩阵（必需）＋§12.24 真实语义＋平台面补齐**——CI `windows` job **全绿**；**脚本可移植性（Linux×Windows）**：24/24 一致（main `7d1b0f0e`）。内存口径＝Windows 不做 memcheck |
 | 宿主语言 | C／C++（`pa.h`，含异步宿主驱动：`pa_resume`／`event`／host awaitable）；CPython 经 ctypes（已验证）；**JS（WASM，实验性）** |
-| ABI | **1.17**，**alpha 期未冻结**（1.15 `pa_resume`/`pa_throw`；1.16 `event` 域；1.17 host awaitable） |
+| ABI | **1.18**，**alpha 期未冻结**（1.15 `pa_resume`/`pa_throw`；1.16 `event` 域；1.17 host awaitable；1.18 `pa_clear_interrupt`） |
 | 指令集 | 2 |
 
 ## 已知限制（本版不承诺）

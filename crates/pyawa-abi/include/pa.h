@@ -16,7 +16,7 @@
 #include <stdio.h>
 
 /* **AB-45（§12.17 A1）**：公开入口头仍是 `pa.h`；能力域 vtable 的 C 布局由**唯一伴随头**
- * `pa_capabilities.h` 承载（自动生成，3 个已实现域）。宿主只需 include 本头即可。 */
+ * `pa_capabilities.h` 承载（自动生成，4 个已实现域：fs/clock/net/event）。宿主只需 include 本头即可。 */
 #include "pa_capabilities.h"
 
 /* AB-45：版本宏。编码：主版本在高 16 位（见 crates/pyawa-abi/src/lib.rs）。
@@ -36,9 +36,13 @@
  * 签名改写；旧签名不留）。
  * 次版本 13：`AB-79` `pa_pushmodule`（追加式）＋ §12.13 的语义修正（`pa_getglobal` 缺失名
  * ⇒ `PA_ERR_INVALID`；`pa_newtype` 的 NULL `dealloc`/`traverse` ⇒ 当场拒绝）。
- * 次版本 14：`AB-80` `pa_writetobytes`（追加式；一次性写回恰好 `bytearray` 的数据区）。 */
+ * 次版本 14：`AB-80` `pa_writetobytes`（追加式；一次性写回恰好 `bytearray` 的数据区）。
+ * 次版本 15：`AB-84`／`AB-85` `pa_resume`／`pa_throw`＋状态码 `AB-82`／`AB-83`（追加式）。
+ * 次版本 16：`AB-90` 的 `event` 能力域（`PA_DOMAIN_EVENT`；追加域，旧宿主不注册即“未提供”）。
+ * 次版本 17：`AB-88`／`AB-89` 的 `pa_type_ops.await_fn`／`await_cancel_fn`（追加式）。
+ * 次版本 18：`AB-92` `pa_clear_interrupt`（追加式；任务中断后清实例级中断）。 */
 #define PA_ABI_MAJOR 1u
-#define PA_ABI_MINOR 17u
+#define PA_ABI_MINOR 18u
 #define PA_ABI_VERSION ((PA_ABI_MAJOR << 16) | PA_ABI_MINOR)
 
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
@@ -113,6 +117,8 @@ size_t pa_abi_size(void);
 int pa_create(const pa_host *host, pa_state **out);
 int pa_destroy(pa_state *state);
 int pa_interrupt(pa_state *state);
+/* AB-92（PA_ABI_MINOR 18）：清掉实例级中断请求；一个任务被中断后，宿主清它才能继续其他任务。 */
+int pa_clear_interrupt(pa_state *state);
 const char *pa_errmsg(pa_state *state);
 
 /* ---- 每实例内存配额（AB-65／AB-66；`OM-41`；ABI-adjacent、发布前定）----

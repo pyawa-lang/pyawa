@@ -442,6 +442,11 @@
 - **AB-91** **版本与追加**：`await_fn`／`await_cancel_fn` 只**追加**到 `pa_type_ops` 尾部
   （`size` 有界读，`AB-43`），随实现升 `PA_ABI_MINOR`；旧宿主/旧类型未装槽 ⇒ 行为同 S1；
   新宿主不得假设旧 VM 认识新字段。
+- **AB-92** **任务中断清理**：`pa_clear_interrupt(state)` 清掉实例级中断请求（`AB-5`①）。
+  `pa_interrupt` 按**实例**存，一个任务返回 `PA_ERR_INTERRUPT` 后，宿主必须先调
+  `pa_clear_interrupt`，才能继续驱动同实例的其他协程；否则后者也会立即得到 `PA_ERR_INTERRUPT`。
+  这不是“按协程取消”——挂起任务的取消仍用 `pa_throw`（注入目标异常）；运行中任务由
+  `pa_interrupt` 打断，宿主按本 API 清理后继续其他任务。
 
 ---
 
@@ -461,7 +466,7 @@
   函数表字节数。运行时**必须**以 `min(宿主 size, 自身 size)` 为界读取，**禁止**越界读。
 - **AB-44** 函数**只能追加在表尾**；**禁止**改动既有槽位语义，**禁止**改变既有函数的参数或返回值形状。
 
-> **当前版本：1.17**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **17**；`AB-88`/`AB-89` 的 `await_fn`/`await_cancel_fn` 追加到 `pa_type_ops`，`PA_DOMAIN_EVENT`（`ADR-005`）与 `AB-84`/`AB-85`（`pa_resume`/`pa_throw`）、状态码 `AB-82`/`AB-83` 同为**追加式**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
+> **当前版本：1.18**（`PA_ABI_MAJOR` 仍 **1**／`PA_ABI_MINOR` **18**；`AB-92` 的 `pa_clear_interrupt` 为追加函数；`AB-88`/`AB-89` 的 `await_fn`/`await_cancel_fn` 追加到 `pa_type_ops`，`PA_DOMAIN_EVENT`（`ADR-005`）与 `AB-84`/`AB-85`（`pa_resume`/`pa_throw`）、状态码 `AB-82`/`AB-83` 同为**追加式**；`AB-80` 的 `pa_writetobytes` 为**追加式**；`AB-76` 的 `pa_typeid`、`AB-79` 的 `pa_pushmodule` 为**追加式**；`AB-77` 的 `pa_newtype` `base_index` 为未发布窗口内签名改写；`AB-75` 的 `pa_set_object_ops` 同属该窗口；§12.13 的 `pa_getglobal` 缺失名语义（`PA_ERR_INVALID`）与 `AB-36` 的 NULL hooks 当场拒绝已随本版落地；`AB-80` 已随本版 **13→14** 落地）——`AB-41` 的追加式改动
 > 只升次版本、**旧宿主仍可用**（`AB-43` 的界读：读不到新函数／新槽 ⇒ "未实现"，`CP-3`）。
 > 逐版追加历史见 `pa.h` 头注释的版本历史（**一处真相** ✓；含 `fs` 的 `stat_times`／`pipe`、
 > `clock` 的 `localtime` 一族、`AB-63` 类型标签、`AB-64` 并发契约、`AB-65`／`AB-66` 配额、
@@ -515,6 +520,7 @@
 | `T-AB-23` | **S1 边界（已随文档定）**：`AB-86` 的边界——S1 不产生“宿主 awaitable”语义断言；Spike C 之前不得把 yield 值当 awaitable 解释 |
 | `T-AB-24` | **S1.1 计划（实现后）**：宿主对象装 `await_fn` 后，脚本 `await` 它 ⇒ `PA_YIELDED` 返回 token；`pa_resume(value)` 后该值成为 await 表达式结果（`AB-88`／`AB-90`） |
 | `T-AB-25` | **S1.1 已实现（1.17）**：`await` 期间 `pa_interrupt`／`pa_throw`／`pa_destroy` 分别调用 `await_cancel_fn` 的 INTERRUPT／THROW／DESTROY；取消后 resume ⇒ `PA_ERR_INVALID`（`AB-89`／`AB-90`） |
+| `T-AB-27` | **AB-92（1.18）**：`pa_interrupt` 使一个任务返回 `PA_ERR_INTERRUPT` 后，`pa_clear_interrupt` 清实例中断，同实例其他任务可继续驱动（`clear_interrupt.rs`） |
 | `T-AB-26` | **S1.1 计划（实现后）**：未装 `await_fn` 的旧宿主类型行为同 S1；`size` 有界读 + 追加字段不影响旧宿主（`AB-91`） |
 
 ---
@@ -566,7 +572,7 @@
 - **AB-83** **`PA_COMPLETED`（11）**：协程正常结束；栈上恰好 1 个结果（返回值；无显式返回 ⇒
   `None`）。完成后对同一协程再 `pa_resume` ⇒ `PA_ERR_INVALID`。
 
-### 15.3 核心层 `pa_`（83 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`；`pa_resume`/`pa_throw` 见 §15.6）
+### 15.3 核心层 `pa_`（84 个；其中 9 个 `pa_type_expr_*` 构造的签名见 `AB-69`；`pa_resume`/`pa_throw` 见 §15.6）
 
 | 函数 | 栈契约 | 说明 |
 |---|---|---|
@@ -576,6 +582,7 @@
 | `pa_create(const pa_host *host, pa_state **out)` | — | 创建实例，经**出参**交回（`AB-55`）。`pa_host` 含**能力接口实现**（`AB-8`）与 `(abi_size, abi_version)`（`AB-43`）；**ABI 不匹配**时返回 `PA_ERR_ABI` 并交出**诊断实例**（`AB-56`） |
 | `pa_destroy(pa_state *)` | — | **释放实例本身**（`AB-57`）；此后全部句柄失效（`AB-18`） |
 | `pa_interrupt(pa_state *)` | — | 请求中断；执行类函数随即返回 `PA_ERR_INTERRUPT` |
+| `pa_clear_interrupt(pa_state *)` | — | 清掉实例级中断请求（`AB-92`）；一个任务被中断后，宿主清它才能继续同实例其他任务 |
 | `pa_exec_string(st, src, len, chunkname, mode, const pa_options *opts)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`／`AB-60`）；`opts` **可传 `NULL`**（＝浅层 ＋ 默认优化级），见 `AB-61` |
 | `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件：源经 **`fs` 域**读入后复用 `pa_exec_string` 的编译/执行路径（`mode`/`opts` 同 `AB-60`/`AB-61`）；宿主注册了 `fs`（或电池版 `paL_newstate`）⇒ 正常执行；无 provider ⇒ `PA_ERR_NOTIMPLEMENTED`（`AB-22`）；机器错误 ⇒ `PA_ERR_RUNTIME`（§12.18 C1） |
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |

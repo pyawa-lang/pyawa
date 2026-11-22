@@ -100,7 +100,7 @@ pub const PA_ABI_MAJOR: u32 = 1;
 /// **3**（round 16，2026-10-24）：`clock` 域 vtable **表尾追加** `localtime`／`strftime`／`mktime`
 /// 三槽（`CP-30`；供 `time.strftime`／`asctime`／`ctime`／`mktime` 与真实时区）。同属"末尾追加"
 /// ⇒ 旧宿主（1.2）少了这三格，消费方按 `CP-3` 当未实现（`time` 侧有纯 UTC 回退）。
-pub const PA_ABI_MINOR: u32 = 17;
+pub const PA_ABI_MINOR: u32 = 18;
 /// `AB-45` 的宏 `PA_ABI_VERSION` 的取值：**主版本在高 16 位**（编码由本实现定，写进头文件）。
 pub const PA_ABI_VERSION: u32 = (PA_ABI_MAJOR << 16) | PA_ABI_MINOR;
 
@@ -2263,6 +2263,28 @@ pub unsafe extern "C" fn pa_interrupt(state: *mut pa_state) -> i32 {
             return status::PA_ERR_ABI;
         }
         state.instance.request_interrupt();
+        status::PA_OK
+    })
+}
+
+/// `pa_clear_interrupt(pa_state *state)`：清掉本实例的中断请求（`AB-92`）。
+///
+/// 配套 `pa_interrupt`：宿主在一个任务返回 `PA_ERR_INTERRUPT` 后，清掉实例级中断，
+/// 才能继续驱动同实例的其他协程（中断状态按实例存，不清会波及其他任务）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_clear_interrupt(state: *mut pa_state) -> i32 {
+    boundary(|| {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        state.instance.clear_interrupt();
         status::PA_OK
     })
 }
