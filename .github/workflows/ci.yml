@@ -166,7 +166,11 @@ jobs:
               asyncio.windows_events._WindowsProactorEventLoopPolicy())
           async def coro():
               return 42
-          print("proactor", asyncio.run(coro()))
+          import traceback
+          try:
+              print("proactor", asyncio.run(coro()))
+          except BaseException:
+              traceback.print_exc()
           PY
           timeout 20 target/debug/pyawa.exe cli-probe/proactor_probe.py
 
