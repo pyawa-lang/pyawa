@@ -1157,6 +1157,10 @@ pub fn install(instance: &Instance) {
             let function = make_native(instance, name, handler);
             instance.dict_set(namespace, name, function);
         }
+        // `_winapi.INFINITE` 必须是 Win32 的 0xFFFFFFFF（stdlib 占位桩给了 -1；
+        // Proactor 的 `math.ceil(timeout*1e3) >= INFINITE` 会因此误报 timeout too big）。
+        let infinite = instance.new_int(i64::from(u32::MAX));
+        instance.dict_set(namespace, "INFINITE", infinite);
     }
     if let Some(namespace) = module_namespace(instance, "_overlapped") {
         for (name, handler) in [
