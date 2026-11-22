@@ -1,6 +1,10 @@
-# 评估：Windows asyncio（2026-11-22，只读评估，无代码落地）
+# Windows asyncio：评估＋CLI selector shim 落地（2026-11-22）
 
-**结论**：Windows CLI 的 asyncio **仍不是承诺**。当前 main 的 asyncio 冒烟测试在
+**结论（更新）**：Windows CLI 的 asyncio 走 **selector 路线**已落地第一版：
+CLI 启动时（仅 Windows、仅便利路径）把 asyncio 默认策略切到
+`_WindowsSelectorEventLoopPolicy`，Windows CI 的 `asyncio.run` 冒烟已通过。
+**Proactor 仍不支持**（`_overlapped` 数据面未接）；嵌入 API（`pa_create`/`paL_newstate`）不自动设策略，
+宿主需自己设。`asyncio_smoke.rs` 仍是 `#![cfg(unix)]`，Windows 由 CI 外部冒烟覆盖。当前 main 的 asyncio 冒烟测试在
 `#![cfg(unix)]` 下（`crates/pyawa-runtime/tests/asyncio_smoke.rs:4`），Windows CI 覆盖的是
 最小构建/平台面，不是 asyncio 运行；此前 Windows asyncio spike（dev 分支）2/2 通过，但**代码
 未进 main**（`docs/rounds/spikes/2026-11-21-asyncio-windows.md`；ADR-002 未接受导入后钩子方案）。
@@ -30,6 +34,10 @@
 2. 若目标只是 **嵌入/宿主循环**：优先 C（Windows `event` provider），不要把它冒充 asyncio 承诺。
 3. 在真正落地前：Windows asyncio smoke 必须进入 Windows CI，否则不发布“Windows asyncio 可用”。
 
-## 未做
+## 已落地（2026-11-22，selector 路线）
 
-- 未改任何代码/CI/承诺；本报告只是评估，`asyncio_smoke` 仍是 Unix-only。
+- `crates/pyawa-runtime/src/bin/pyawa.rs`：Windows CLI 启动 shim，用
+  `asyncio.events._set_event_loop_policy(_WindowsSelectorEventLoopPolicy())`（不触发弃用警告）；
+- `.github/workflows/ci.yml` Windows job：`asyncio.run` 冒烟（`await asyncio.sleep(0)`＋协程返回 42）；
+- 已知边界：Proactor／`_overlapped` 数据面未接；`subprocess`、pipe transport、部分 `add_reader`
+  不承诺；嵌入 API 不自动设策略（CLI shim 只在 CLI）。
