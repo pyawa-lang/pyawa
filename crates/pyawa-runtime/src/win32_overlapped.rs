@@ -1118,6 +1118,24 @@ fn module_namespace(instance: &Instance, name: &str) -> Option<NonNull<Header>> 
     pyawa_core::mounted_instance_dict(instance, module)
 }
 
+/// Windows Proactor 的 `_signal.set_wakeup_fd` 兼容：selft-pipe fd 是 provider 句柄，
+/// `_signal` 的记账层无法校验“宿主 fd 有效且非阻塞”；这里只接受并返回前值占位（-1），
+/// 让 Proactor 的自唤醒设置不被记账层挡住。selector 模式不走这条。
+#[allow(unsafe_code)]
+fn signal_set_wakeup_fd(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_signal.set_wakeup_fd", kwargs)?;
+    let fd = int_arg(instance, "_signal.set_wakeup_fd", args, 0)?;
+    if fd < -1 {
+        return Err(instance.raise_builtin_error("ValueError", "invalid fd"));
+    }
+    Ok(instance.new_int(-1))
+}
+
 /// **安装真实面**（只由便利装配路径调用；裸 ABI 宿主仍拿到 stdlib 的诚实桩）。
 pub fn install(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_winapi") {
@@ -1151,6 +1169,10 @@ pub fn install(instance: &Instance) {
         if let Some(class) = build_overlapped_class(instance) {
             instance.dict_set(namespace, "Overlapped", class);
         }
+    }
+    if let Some(namespace) = module_namespace(instance, "_signal") {
+        let function = make_native(instance, "set_wakeup_fd", signal_set_wakeup_fd as pyawa_core::NativeFn);
+        instance.dict_set(namespace, "set_wakeup_fd", function);
     }
 }
 
