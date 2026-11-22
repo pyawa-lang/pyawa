@@ -68,7 +68,7 @@ builtin_ok = 1 if all(
 ) else 0
 constants_ok = 1 if (
     _winapi.NULL == 0
-    and _winapi.INFINITE == -1
+    and _winapi.INFINITE == 0xFFFFFFFF
     and _winapi.ERROR_BROKEN_PIPE == 109
     and _winapi.ERROR_NETNAME_DELETED == 64
 ) else 0
@@ -98,7 +98,7 @@ from_constants_ok = 1 if (
     CREATE_NEW_CONSOLE == 0x10
     and CREATE_NO_WINDOW == 0x08000000
     and WAIT_TIMEOUT == 258
-    and INFINITE == -1
+    and INFINITE == 0xFFFFFFFF
 ) else 0
 # `Lib/test` 的 `from winreg import (...)` 面
 from winreg import HKEY_CURRENT_USER, REG_SZ, KEY_ALL_ACCESS

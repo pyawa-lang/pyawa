@@ -204,6 +204,7 @@ mod sys {
             security: *mut c_void,
         ) -> HandleRaw;
         pub fn ConnectNamedPipe(pipe: HandleRaw, overlapped: *mut OverlappedInner) -> i32;
+        pub fn CancelIoEx(file: HandleRaw, overlapped: *mut OverlappedInner) -> i32;
     }
 }
 
@@ -642,7 +643,18 @@ fn overlapped_module_get_queued(
         if code == 258 {
             return Ok(instance.new_none());
         }
-        return Err(raise_win(instance, code));
+        // IOCP 失败但仍带 overlapped（典型 ERROR_OPERATION_ABORTED=995）：
+        // 按 CPython `_overlapped.GetQueuedCompletionStatus` 返回四元组，让回调自己
+        // 走 `getresult()` 的异常路径；这里不能直接抛。
+        if overlapped.is_null() {
+            return Err(raise_win(instance, code));
+        }
+        return Ok(instance.new_tuple(vec![
+            instance.new_int(i64::from(code)),
+            instance.new_int(i64::from(transferred)),
+            instance.new_int(key as i64),
+            instance.new_int(overlapped as usize as i64),
+        ]));
     }
     Ok(instance.new_tuple(vec![
         instance.new_int(0),
@@ -1086,6 +1098,33 @@ fn overlapped_get_overlapped_result(
     overlapped_get_result_common(instance, this, wait, false)
 }
 
+#[allow(unsafe_code)]
+fn overlapped_cancel(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.cancel", kwargs)?;
+    let (this, _rest) = split_self(instance, bound, args)?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close；handle 为 0 时没有在途操作。
+    let memory = unsafe { &mut *memory };
+    if memory.handle != 0 {
+        let ok = unsafe { sys::CancelIoEx(memory.handle, &mut memory.raw) };
+        if ok == 0 {
+            let code = last_error();
+            // ERROR_NOT_FOUND=1168：没有待取消的 I/O，按幂等处理。
+            if code != 1168 && code != 995 {
+                return Err(raise_win(instance, code));
+            }
+        }
+        memory.handle = 0;
+    }
+    set_bool_attr(instance, this, "pending", false);
+    Ok(instance.new_none())
+}
+
 /// 数据面未接线的方法：**如实** `NotImplementedError`（不假装成功）。
 #[allow(unsafe_code)]
 fn overlapped_unwired(
@@ -1118,6 +1157,24 @@ fn module_namespace(instance: &Instance, name: &str) -> Option<NonNull<Header>> 
     pyawa_core::mounted_instance_dict(instance, module)
 }
 
+/// Windows Proactor 的 `_signal.set_wakeup_fd` 兼容：selft-pipe fd 是 provider 句柄，
+/// `_signal` 的记账层无法校验“宿主 fd 有效且非阻塞”；这里只接受并返回前值占位（-1），
+/// 让 Proactor 的自唤醒设置不被记账层挡住。selector 模式不走这条。
+#[allow(unsafe_code)]
+fn signal_set_wakeup_fd(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_signal.set_wakeup_fd", kwargs)?;
+    let fd = int_arg(instance, "_signal.set_wakeup_fd", args, 0)?;
+    if fd < -1 {
+        return Err(instance.raise_builtin_error("ValueError", "invalid fd"));
+    }
+    Ok(instance.new_int(-1))
+}
+
 /// **安装真实面**（只由便利装配路径调用；裸 ABI 宿主仍拿到 stdlib 的诚实桩）。
 pub fn install(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_winapi") {
@@ -1139,6 +1196,10 @@ pub fn install(instance: &Instance) {
             let function = make_native(instance, name, handler);
             instance.dict_set(namespace, name, function);
         }
+        // `_winapi.INFINITE` 必须是 Win32 的 0xFFFFFFFF（stdlib 占位桩给了 -1；
+        // Proactor 的 `math.ceil(timeout*1e3) >= INFINITE` 会因此误报 timeout too big）。
+        let infinite = instance.new_int(i64::from(u32::MAX));
+        instance.dict_set(namespace, "INFINITE", infinite);
     }
     if let Some(namespace) = module_namespace(instance, "_overlapped") {
         for (name, handler) in [
@@ -1154,6 +1215,15 @@ pub fn install(instance: &Instance) {
     }
 }
 
+/// **Proactor 专用**的 `_signal.set_wakeup_fd` 兼容安装（仅 CLI 便利路径调用）。
+/// 不放进通用 `install`：裸 `paL_newstate` 的 `_signal` 记账语义测试仍保持诚实桩。
+pub fn install_proactor_signal_compat(instance: &Instance) {
+    if let Some(namespace) = module_namespace(instance, "_signal") {
+        let function = make_native(instance, "set_wakeup_fd", signal_set_wakeup_fd as pyawa_core::NativeFn);
+        instance.dict_set(namespace, "set_wakeup_fd", function);
+    }
+}
+
 fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
     let base = instance
         .type_named("object")
@@ -1163,6 +1233,7 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
     for (name, handler) in [
         ("__init__", overlapped_init as pyawa_core::NativeFn),
         ("Close", overlapped_close as pyawa_core::NativeFn),
+        ("cancel", overlapped_cancel as pyawa_core::NativeFn),
         // `GetOverlappedResult` 也属于"数据面"（没有真实投递过的 OVERLAPPED ⇒ 如实未接线，
         // 不用事件句柄硬调出假语义）。
         ("GetOverlappedResult", overlapped_get_overlapped_result as pyawa_core::NativeFn),
