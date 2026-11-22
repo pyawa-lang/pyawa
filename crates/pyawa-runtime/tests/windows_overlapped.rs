@@ -162,7 +162,7 @@ fn overlapped_named_pipe_read_write_through_the_abi() {
 import _winapi
 import _overlapped
 
-srv = _winapi.CreateNamedPipe({pipe_name:?}, 3, 0, 1, 4096, 4096, 0, None)
+srv = _winapi.CreateNamedPipe({pipe_name:?}, 3 | 0x40000000, 0, 1, 4096, 4096, 0, None)
 ovc = _overlapped.Overlapped()
 connected_immediately = ovc.ConnectNamedPipe(srv)
 cli = _winapi.CreateFile({pipe_name:?}, 0xC0000000, 0, None, 3, 0x40000000, None)
