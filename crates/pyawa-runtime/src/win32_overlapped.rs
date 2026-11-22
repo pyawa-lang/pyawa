@@ -204,6 +204,7 @@ mod sys {
             security: *mut c_void,
         ) -> HandleRaw;
         pub fn ConnectNamedPipe(pipe: HandleRaw, overlapped: *mut OverlappedInner) -> i32;
+        pub fn CancelIoEx(file: HandleRaw, overlapped: *mut OverlappedInner) -> i32;
     }
 }
 
@@ -1086,6 +1087,33 @@ fn overlapped_get_overlapped_result(
     overlapped_get_result_common(instance, this, wait, false)
 }
 
+#[allow(unsafe_code)]
+fn overlapped_cancel(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.cancel", kwargs)?;
+    let (this, _rest) = split_self(instance, bound, args)?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close；handle 为 0 时没有在途操作。
+    let memory = unsafe { &mut *memory };
+    if memory.handle != 0 {
+        let ok = unsafe { sys::CancelIoEx(memory.handle, &mut memory.raw) };
+        if ok == 0 {
+            let code = last_error();
+            // ERROR_NOT_FOUND=1168：没有待取消的 I/O，按幂等处理。
+            if code != 1168 {
+                return Err(raise_win(instance, code));
+            }
+        }
+        memory.handle = 0;
+    }
+    set_bool_attr(instance, this, "pending", false);
+    Ok(instance.new_none())
+}
+
 /// 数据面未接线的方法：**如实** `NotImplementedError`（不假装成功）。
 #[allow(unsafe_code)]
 fn overlapped_unwired(
@@ -1189,6 +1217,7 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
     for (name, handler) in [
         ("__init__", overlapped_init as pyawa_core::NativeFn),
         ("Close", overlapped_close as pyawa_core::NativeFn),
+        ("cancel", overlapped_cancel as pyawa_core::NativeFn),
         // `GetOverlappedResult` 也属于"数据面"（没有真实投递过的 OVERLAPPED ⇒ 如实未接线，
         // 不用事件句柄硬调出假语义）。
         ("GetOverlappedResult", overlapped_get_overlapped_result as pyawa_core::NativeFn),
