@@ -83,12 +83,6 @@ object_ok = 1 if (
     and isinstance(overlapped_object.address, int)
     and overlapped_object.address != 0
 ) else 0
-try:
-    overlapped_object.WSARecv(_winapi.INVALID_HANDLE_VALUE, 1, 0)
-except NotImplementedError:
-    unwired_ok = 1
-else:
-    unwired_ok = 0
 overlapped_object.Close()
 closed_ok = 1
 try:
@@ -109,7 +103,6 @@ ids_ok = 1 if (pid > 0 and tid > 0) else 0
         "waits_ok",
         "queue_ok",
         "object_ok",
-        "unwired_ok",
         "closed_ok",
         "double_close_ok",
         "ids_ok",
@@ -191,7 +184,7 @@ fn overlapped_socket_recv_send_through_the_abi() {
 import _socket
 import _overlapped
 
-a, b = _socket.socketpair()
+a, b = _socket.socketpair(2)
 ovr = _overlapped.Overlapped()
 ovr.WSARecv(a.fileno(), 5, 0)
 ovw = _overlapped.Overlapped()
