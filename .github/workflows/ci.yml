@@ -13,6 +13,11 @@ on:
 #              ＋ 参考宿主（MSVC）（PLAN §12.20 W1–W6 首批；M3-COVERAGE 显式 SKIP；
 #              Windows 不做 memcheck——口径见 RELEASE）
 #  - full：PR／手动／每周 —— slowcheck 11 项（含基准闸：性能回退 + memcheck 子集）
+# 同一 PR 的新 push 取消旧 run（文档/提交迭代时尤其省时间；不取消 main 的独立 run）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fast:
     name: 快速闸门（check.py ＋ 构建 ＋ 测试）
@@ -24,6 +29,10 @@ jobs:
         with:
           # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
           fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存 cargo registry 与 target；Windows/完整档最受益。
+          workspaces: "."
       - name: 环境
         run: |
           sudo apt-get update -qq
@@ -61,6 +70,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存 cargo registry 与 target；Windows/完整档最受益。
+          workspaces: "."
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -103,6 +116,10 @@ jobs:
         with:
           # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史
           fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存 cargo registry 与 target；Windows/完整档最受益。
+          workspaces: "."
       - uses: actions/setup-python@v5
         with:
           # **必须与仓库 `Lib/` 的同步版本一致**（当前 3.14.4）：参照版本偏高会让
@@ -218,6 +235,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存 cargo registry 与 target；Windows/完整档最受益。
+          workspaces: "."
       # 本 job 只需任意 Python 3（runner 仅用标准库）；**不**装 3.14.4——Ubuntu 26.04 镜像
       # 没有该版本的 setup-python 构建（首跑实测红），而参照版本只在 conformance 需要。
       - name: 构建 pyawa（debug）
@@ -257,6 +278,10 @@ jobs:
         with:
           # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
           fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存 cargo registry 与 target；Windows/完整档最受益。
+          workspaces: "."
       - name: 环境
         run: |
           sudo apt-get update -qq
@@ -289,6 +314,10 @@ jobs:
         with:
           # T-CX-15 要用 git cat-file 解析 NEXT 里的旧短哈希 ⇒ 需要完整历史（默认浅克隆会红）
           fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存 cargo registry 与 target；Windows/完整档最受益。
+          workspaces: "."
       - name: 环境
         run: |
           sudo apt-get update -qq
