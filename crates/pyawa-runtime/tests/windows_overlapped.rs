@@ -406,3 +406,26 @@ attr_ok = 1 if (b"hi" in data and code == 0 and pid > 0) else 0
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
 }
+
+
+#[test]
+fn winapi_connect_named_pipe_returns_overlapped_object() {
+    let pipe_name = format!(r"\\.\pipe\pyawa-winapi-connect-{}", std::process::id());
+    let script = format!(r#"
+import _winapi
+
+h = _winapi.CreateNamedPipe({pipe_name:?}, 3 | 0x40000000, 0, 1, 4096, 4096, 0, None)
+ov = _winapi.ConnectNamedPipe(h, overlapped=True)
+client = _winapi.CreateFile({pipe_name:?}, 0xC0000000, 0, None, 3, 0x40000000, None)
+ov.GetOverlappedResult(True)
+_winapi.CloseHandle(client)
+_winapi.CloseHandle(h)
+connect_ok = 1 if (ov is not None and ov.address != 0) else 0
+"#, pipe_name = pipe_name);
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, &script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "connect_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}
