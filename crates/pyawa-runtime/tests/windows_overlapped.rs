@@ -268,3 +268,34 @@ handle_ok = 1 if (kind != 0 and kind2 == kind) else 0
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
 }
+
+
+#[test]
+fn winapi_create_process_through_the_abi() {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    let cmd = format!("{system_root}\\System32\\cmd.exe");
+    let script = format!(r#"
+import _winapi
+
+class SI:
+    dwFlags = 0
+    hStdInput = 0
+    hStdOutput = 0
+    hStdError = 0
+    wShowWindow = 0
+
+si = SI()
+hp, ht, pid, tid = _winapi.CreateProcess({cmd:?}, "cmd.exe /c exit 0", None, None, 0, 0, None, None, si)
+wait = _winapi.WaitForSingleObject(hp, 5000)
+code = _winapi.GetExitCodeProcess(hp)
+_winapi.CloseHandle(ht)
+_winapi.CloseHandle(hp)
+process_ok = 1 if (wait == _winapi.WAIT_OBJECT_0 and code == 0 and pid > 0 and tid > 0) else 0
+"#, cmd = cmd);
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, &script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "process_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}
