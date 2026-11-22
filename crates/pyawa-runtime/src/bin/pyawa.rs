@@ -171,6 +171,29 @@ fn memory_limit_from_env() -> Option<u64> {
     number.trim().parse::<u64>().ok().map(|value| value.saturating_mul(multiplier))
 }
 
+/// **Windows CLI asyncio 兼容 shim**（2026-11-22）：默认 selector 而不是 Proactor。
+///
+/// CPython Windows 默认策略是 Proactor，但本层的 `_overlapped` 数据面未接
+/// （`win32_overlapped.rs` 的如实边界）⇒ 直接用默认策略会在 `asyncio.run` 失败。
+/// 这里在 CLI 启动时（仅 Windows、仅便利路径）把策略切到 `WindowsSelectorEventLoopPolicy`；
+/// **不改 `Lib/`**，也不给核心加导入钩子（与 ADR-002 的核心边界一致）。失败时静默回退，
+/// 后续 `import asyncio` 仍会如实报错。
+#[cfg(windows)]
+fn install_windows_asyncio_selector(state: *mut pa_state) {
+    const SRC: &[u8] = b"__pa_asyncio = __import__('asyncio')\ntry:\n    import warnings as __pa_warnings\n    with __pa_warnings.catch_warnings():\n        __pa_warnings.simplefilter('ignore')\n        __pa_asyncio.set_event_loop_policy(__pa_asyncio.WindowsSelectorEventLoopPolicy())\nfinally:\n    del __pa_asyncio\n    try:\n        del __pa_warnings\n    except NameError:\n        pass\n";
+    // SAFETY: state 刚由 pa_create 交回、仍存活；入口按 AB-59 契约传 C 串。
+    let _ = unsafe {
+        pa_exec_string(
+            state,
+            SRC.as_ptr().cast(),
+            SRC.len() as isize,
+            c"<pyawa-asyncio-shim>".as_ptr(),
+            c"python".as_ptr(),
+            core::ptr::null(),
+        )
+    };
+}
+
 pub fn run() {
     install_segv_trace();
     // **大栈执行线程**（round 112）：本层 Python 调用是 Rust 递归 ✓ —— 主线程默认 8 MiB 栈；
@@ -363,6 +386,9 @@ fn real_main() {
     // 平台常量（`errno` 一族）**已由 `pa_create` 注入**（task-20 ✓，一处真相：CLI／语料 harness／
     // C 宿主同源）⇒ 这里**不再**手动补（第 134 轮那段手注入已删 ✓）。
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
+    // Windows CLI：asyncio 默认 selector（Proactor 数据面未接；见函数注释）。
+    #[cfg(windows)]
+    install_windows_asyncio_selector(state);
     // CLI 是**便利装配路径**（与 `paL_newstate` 同口径）：Windows 上装真实注册表实现
     // （`PLAN §12.24`；平台 FFI 在 `pyawa-runtime::win32_reg`，本文件不碰 FFI）。
     #[cfg(windows)]
