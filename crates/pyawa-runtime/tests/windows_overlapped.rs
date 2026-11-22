@@ -202,3 +202,30 @@ socket_io_ok = 1 if (data == b"hello" and n == 5) else 0
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
 }
+
+
+#[test]
+fn overlapped_socket_recv_into_through_the_abi() {
+    let script = r#"
+import _socket
+import _overlapped
+
+a, b = _socket.socketpair(2)
+buf = bytearray(5)
+ovr = _overlapped.Overlapped()
+ovr.WSARecvInto(a.fileno(), buf, 0)
+ovw = _overlapped.Overlapped()
+ovw.WSASend(b.fileno(), b"hello", 0)
+n = ovr.getresult()
+m = ovw.getresult()
+a.close()
+b.close()
+recv_into_ok = 1 if (n == 5 and m == 5 and bytes(buf) == b"hello") else 0
+"#;
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "recv_into_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}

@@ -51,8 +51,10 @@ struct OverlappedMemory {
     buffer: Vec<u8>,
     /// 发起 I/O 的原始 Win32 句柄（`GetOverlappedResult` 用）。
     handle: HandleRaw,
-    /// 操作种类：0=无、1=读、2=写。
+    /// 操作种类：0=无、1=读、2=写、3=socket recv、4=socket send、5=recv_into。
     kind: u8,
+    /// `WSARecvInto` 的目标 bytearray（持有引用；`getresult` 写入后释放）。
+    target: Option<NonNull<Header>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -666,6 +668,7 @@ fn overlapped_init(
         buffer: Vec::new(),
         handle: 0,
         kind: 0,
+        target: None,
     });
     let address = Box::into_raw(memory) as usize;
     set_int_attr(instance, this, "_ptr", address as i64);
@@ -688,6 +691,10 @@ fn overlapped_close(
     let pointer = overlapped_ptr(instance, this)?;
     // SAFETY: pointer 来自 `Box::into_raw`，且 `_ptr` 清零保证只释放一次。
     let memory = unsafe { Box::from_raw(pointer) };
+    if let Some(target) = memory.target {
+        // 引用由本对象持有。
+        instance.release(target);
+    }
     if memory.raw.event != 0 {
         // 自己建的事件由自己关；外部给的事件不关（CPython 口径：调用方负责）。
         let owned = instance
@@ -832,6 +839,55 @@ fn overlapped_wsa_recv(
 }
 
 #[allow(unsafe_code)]
+fn overlapped_wsa_recv_into(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.WSARecvInto", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let handle = int_arg(instance, "Overlapped.WSARecvInto", rest, 0)?;
+    let target = arg(instance, "Overlapped.WSARecvInto", rest, 1)?;
+    let flags = optional_int(instance, "Overlapped.WSARecvInto", rest, 2, 0)? as u32;
+    let size = instance.bytes_like_value(target).map(|bytes| bytes.len());
+    let size = size.ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "WSARecvInto 需要可写 bytes-like 对象")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let mut buffer = vec![0u8; size];
+    let mut wsa = WsaBuf { len: size as u32, buf: buffer.as_mut_ptr() };
+    let mut transferred = 0u32;
+    let mut recv_flags = flags;
+    let ok = unsafe {
+        winsock::WSARecv(
+            resolve_socket(handle),
+            &mut wsa,
+            1,
+            &mut transferred,
+            &mut recv_flags,
+            &mut memory.raw,
+            core::ptr::null_mut(),
+        )
+    };
+    if ok != 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        if code != 997 && code != 10035 {
+            return Err(raise_win(instance, code as u32));
+        }
+    }
+    // 目标 buffer 由本 Overlapped 持有到 getresult/Close；新增一份引用。
+    unsafe { instance.incref_object(target.as_ptr()) };
+    memory.buffer = buffer;
+    memory.handle = resolve_socket(handle);
+    memory.kind = 5;
+    memory.target = Some(target);
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
 fn overlapped_wsa_send(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -894,6 +950,15 @@ fn overlapped_get_result_common(
     if bytes_for_read && (memory.kind == 1 || memory.kind == 3) {
         let end = (transferred as usize).min(memory.buffer.len());
         Ok(instance.new_bytes(&memory.buffer[..end]))
+    } else if memory.kind == 5 {
+        let end = (transferred as usize).min(memory.buffer.len());
+        if let Some(target) = memory.target.take() {
+            // 把内核读到的字节写进目标 bytearray，再归还本对象持有的引用。
+            let _ = instance.write_bytearray_at(target, 0, &memory.buffer[..end]);
+            // 引用由本对象持有（上面 take 出来）。
+            instance.release(target);
+        }
+        Ok(instance.new_int(i64::from(transferred)))
     } else {
         Ok(instance.new_int(i64::from(transferred)))
     }
@@ -1032,6 +1097,7 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("ReadFile", overlapped_read_file as pyawa_core::NativeFn),
         ("WriteFile", overlapped_write_file as pyawa_core::NativeFn),
         ("WSARecv", overlapped_wsa_recv as pyawa_core::NativeFn),
+        ("WSARecvInto", overlapped_wsa_recv_into as pyawa_core::NativeFn),
         ("WSASend", overlapped_wsa_send as pyawa_core::NativeFn),
         ("ConnectNamedPipe", overlapped_connect_named_pipe as pyawa_core::NativeFn),
         ("DisconnectNamedPipe", overlapped_unwired as pyawa_core::NativeFn),
