@@ -420,7 +420,8 @@
   签名 `int (*)(pa_state *state, void *payload, void *context, uint64_t *token_out)`。
   - 成功返回 `PA_OK` 且写 `token_out`（宿主自有、不透明 **u64**）；VM 挂起协程并以
     `PA_YIELDED` 返回该 token（出栈结果＝**任意精度整数**，不会按 i64 截断；宿主可用
-    `pa_tointstring` 读回 u64 全量）；
+    `pa_tointstring` 读回 u64 全量）；**async generator／`asend` 内部的 host await
+    token 也会冒泡到最外层驱动者**（`host_await_asyncgen.rs`），不能当普通中间 await 吞掉；
   - 其它状态码 ⇒ VM 按宿主错误路径抛脚本可捕获异常（不静默回退）；
   - 回调**禁止**保存 `payload`／`context`／`state` 供返回后使用（`AB-17`）；token 的生命周期
     归宿主，VM 不解释。
