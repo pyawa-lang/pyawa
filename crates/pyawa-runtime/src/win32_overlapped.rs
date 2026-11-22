@@ -725,7 +725,7 @@ fn create_process(
     let application = optional_text(instance, "CreateProcess", args, 0)?;
     let command_line = optional_text(instance, "CreateProcess", args, 1)?
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "CreateProcess 需要命令行"))?;
-    let inherit = optional_int(instance, "CreateProcess", args, 4, 0)? as i32;
+    let mut inherit = optional_int(instance, "CreateProcess", args, 4, 0)? as i32;
     let mut flags = optional_int(instance, "CreateProcess", args, 5, 0)? as u32;
     // 环境块：dict ⇒ 排序后的 `KEY=VALUE\0…\0` UTF-16；None ⇒ NULL（继承）。
     let env = args.get(6).copied();
@@ -803,6 +803,10 @@ fn create_process(
     }
     let mut attribute_storage: Vec<u8> = Vec::new();
     let mut startup_ex = StartupInfoExW::default();
+    if !handle_list.is_empty() {
+        // Windows 的 PROC_THREAD_ATTRIBUTE_HANDLE_LIST 仍要求 bInheritHandles=TRUE。
+        inherit = 1;
+    }
     let startup_pointer: *const StartupInfoW;
     if handle_list.is_empty() {
         startup_pointer = &startup_info;
