@@ -246,3 +246,25 @@ pipe_ok = 1 if (n == 5 and data == b"hello") else 0
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
 }
+
+
+#[test]
+fn winapi_standard_handle_and_duplicate_through_the_abi() {
+    let script = r#"
+import _winapi
+
+stdout = _winapi.GetStdHandle(_winapi.STD_OUTPUT_HANDLE)
+kind = _winapi.GetFileType(stdout)
+process = _winapi.GetCurrentProcess()
+dup = _winapi.DuplicateHandle(process, stdout, process, 0, 0, _winapi.DUPLICATE_SAME_ACCESS)
+kind2 = _winapi.GetFileType(dup)
+_winapi.CloseHandle(dup)
+handle_ok = 1 if (kind != 0 and kind2 == kind) else 0
+"#;
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "handle_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}
