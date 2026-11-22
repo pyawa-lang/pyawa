@@ -1665,6 +1665,28 @@ fn signal_set_wakeup_fd(
     Ok(instance.new_int(-1))
 }
 
+#[allow(unsafe_code)]
+fn winapi_connect_named_pipe(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let handle = int_arg(instance, "_winapi.ConnectNamedPipe", args, 0)?;
+    let Some(namespace) = module_namespace(instance, "_overlapped") else {
+        return Err(instance.raise_builtin_error("RuntimeError", "_overlapped 不可用"));
+    };
+    let Some(class) = instance.dict_get(namespace, "Overlapped") else {
+        return Err(instance.raise_builtin_error("RuntimeError", "_overlapped.Overlapped 不可用"));
+    };
+    // 用类型调用走正常的构造/分配路径（不能手工猜 instance_size）。
+    let object = pyawa_core::call_value(instance, class, &[], &[])?;
+    let handle_object = instance.new_int(handle);
+    let result = overlapped_connect_named_pipe(instance, Some(object), &[handle_object], &[])?;
+    instance.release(result);
+    Ok(object)
+}
+
 /// **安装真实面**（只由便利装配路径调用；裸 ABI 宿主仍拿到 stdlib 的诚实桩）。
 pub fn install(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_winapi") {
@@ -1681,6 +1703,7 @@ pub fn install(instance: &Instance) {
             ("ReadFile", sync_read_file as pyawa_core::NativeFn),
             ("WriteFile", sync_write_file as pyawa_core::NativeFn),
             ("CreateNamedPipe", create_named_pipe as pyawa_core::NativeFn),
+            ("ConnectNamedPipe", winapi_connect_named_pipe as pyawa_core::NativeFn),
             ("CreateEvent", create_event as pyawa_core::NativeFn),
             ("SetEvent", set_event as pyawa_core::NativeFn),
             ("ResetEvent", reset_event as pyawa_core::NativeFn),
