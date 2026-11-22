@@ -401,6 +401,8 @@ fn real_main() {
     pyawa_runtime::win32_reg::install(instance);
     #[cfg(windows)]
     pyawa_runtime::win32_overlapped::install(instance);
+    #[cfg(windows)]
+    pyawa_runtime::win32_overlapped::install_proactor_signal_compat(instance);
     // Windows CLI：asyncio 默认 selector（**在平台模块覆盖之后**设，避免 asyncio 导入期
     // 抓到 `_signal.set_wakeup_fd` 的旧桩）。
     #[cfg(windows)]

@@ -1213,6 +1213,11 @@ pub fn install(instance: &Instance) {
             instance.dict_set(namespace, "Overlapped", class);
         }
     }
+}
+
+/// **Proactor 专用**的 `_signal.set_wakeup_fd` 兼容安装（仅 CLI 便利路径调用）。
+/// 不放进通用 `install`：裸 `paL_newstate` 的 `_signal` 记账语义测试仍保持诚实桩。
+pub fn install_proactor_signal_compat(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_signal") {
         let function = make_native(instance, "set_wakeup_fd", signal_set_wakeup_fd as pyawa_core::NativeFn);
         instance.dict_set(namespace, "set_wakeup_fd", function);
