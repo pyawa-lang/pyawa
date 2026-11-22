@@ -191,6 +191,17 @@ mod sys {
             transferred: *mut u32,
             wait: i32,
         ) -> i32;
+        pub fn CreateNamedPipeW(
+            name: *const u16,
+            open_mode: u32,
+            pipe_mode: u32,
+            max_instances: u32,
+            out_buffer_size: u32,
+            in_buffer_size: u32,
+            default_timeout: u32,
+            security: *mut c_void,
+        ) -> HandleRaw;
+        pub fn ConnectNamedPipe(pipe: HandleRaw, overlapped: *mut OverlappedInner) -> i32;
     }
 }
 
@@ -298,6 +309,42 @@ fn create_file(
             disposition,
             flags,
             0,
+        )
+    };
+    if handle == -1isize {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(handle as i64))
+}
+
+#[allow(unsafe_code)]
+fn create_named_pipe(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "CreateNamedPipe", kwargs)?;
+    let name = optional_text(instance, "CreateNamedPipe", args, 0)?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "CreateNamedPipe 需要名字"))?;
+    let open_mode = optional_int(instance, "CreateNamedPipe", args, 1, 3)? as u32; // PIPE_ACCESS_DUPLEX
+    let pipe_mode = optional_int(instance, "CreateNamedPipe", args, 2, 0)? as u32;
+    let max_instances = optional_int(instance, "CreateNamedPipe", args, 3, 1)? as u32;
+    let out_size = optional_int(instance, "CreateNamedPipe", args, 4, 4096)? as u32;
+    let in_size = optional_int(instance, "CreateNamedPipe", args, 5, 4096)? as u32;
+    let timeout = optional_int(instance, "CreateNamedPipe", args, 6, 0)? as u32;
+    let wide = wide_opt(Some(&name)).expect("名字非 None");
+    // SAFETY: wide 是 NUL 结尾 UTF-16；security 传 NULL。
+    let handle = unsafe {
+        sys::CreateNamedPipeW(
+            wide.as_ptr(),
+            open_mode,
+            pipe_mode,
+            max_instances,
+            out_size,
+            in_size,
+            timeout,
+            core::ptr::null_mut(),
         )
     };
     if handle == -1isize {
@@ -726,6 +773,37 @@ fn overlapped_get_result_common(
 }
 
 #[allow(unsafe_code)]
+fn overlapped_connect_named_pipe(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.ConnectNamedPipe", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let pipe = int_arg(instance, "Overlapped.ConnectNamedPipe", rest, 0)? as HandleRaw;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let ok = unsafe { sys::ConnectNamedPipe(pipe, &mut memory.raw) };
+    if ok == 0 {
+        let code = last_error();
+        if code == 535 {
+            // ERROR_PIPE_CONNECTED：客户端已在等待，连接立即完成，不需要等完成包。
+            memory.handle = pipe;
+            memory.kind = 0;
+            return Ok(instance.new_int(1));
+        }
+        if code != 997 {
+            return Err(raise_win(instance, code));
+        }
+    }
+    memory.handle = pipe;
+    memory.kind = 0;
+    Ok(instance.new_int(0))
+}
+
+#[allow(unsafe_code)]
 fn overlapped_getresult(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -787,6 +865,7 @@ pub fn install(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_winapi") {
         for (name, handler) in [
             ("CreateFile", create_file as pyawa_core::NativeFn),
+            ("CreateNamedPipe", create_named_pipe as pyawa_core::NativeFn),
             ("CreateEvent", create_event as pyawa_core::NativeFn),
             ("SetEvent", set_event as pyawa_core::NativeFn),
             ("ResetEvent", reset_event as pyawa_core::NativeFn),
@@ -827,7 +906,7 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("WriteFile", overlapped_write_file as pyawa_core::NativeFn),
         ("WSARecv", overlapped_unwired as pyawa_core::NativeFn),
         ("WSASend", overlapped_unwired as pyawa_core::NativeFn),
-        ("ConnectNamedPipe", overlapped_unwired as pyawa_core::NativeFn),
+        ("ConnectNamedPipe", overlapped_connect_named_pipe as pyawa_core::NativeFn),
         ("DisconnectNamedPipe", overlapped_unwired as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
