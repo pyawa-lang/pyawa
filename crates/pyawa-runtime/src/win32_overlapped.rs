@@ -211,6 +211,20 @@ mod sys {
             security: *mut c_void,
             size: u32,
         ) -> i32;
+        pub fn GetStdHandle(which: u32) -> HandleRaw;
+        pub fn GetCurrentProcess() -> HandleRaw;
+        pub fn DuplicateHandle(
+            source_process: HandleRaw,
+            source_handle: HandleRaw,
+            target_process: HandleRaw,
+            target_handle: *mut HandleRaw,
+            desired_access: u32,
+            inherit: i32,
+            options: u32,
+        ) -> i32;
+        pub fn GetFileType(handle: HandleRaw) -> u32;
+        pub fn GetExitCodeProcess(handle: HandleRaw, code: *mut u32) -> i32;
+        pub fn TerminateProcess(handle: HandleRaw, code: u32) -> i32;
     }
 }
 
@@ -486,6 +500,122 @@ fn sync_write_file(
         return Err(raise_win(instance, last_error()));
     }
     Ok(instance.new_int(i64::from(transferred)))
+}
+
+#[allow(unsafe_code)]
+fn get_std_handle(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "GetStdHandle", kwargs)?;
+    let which = int_arg(instance, "GetStdHandle", args, 0)? as u32;
+    // SAFETY: 无参句柄查询。
+    let handle = unsafe { sys::GetStdHandle(which) };
+    if handle == 0 || handle == -1isize {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(handle as i64))
+}
+
+#[allow(unsafe_code)]
+fn get_current_process(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "GetCurrentProcess", kwargs)?;
+    // SAFETY: 无参。
+    Ok(instance.new_int(unsafe { sys::GetCurrentProcess() } as i64))
+}
+
+#[allow(unsafe_code)]
+fn duplicate_handle(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "DuplicateHandle", kwargs)?;
+    let source_process = int_arg(instance, "DuplicateHandle", args, 0)? as HandleRaw;
+    let source_handle = int_arg(instance, "DuplicateHandle", args, 1)? as HandleRaw;
+    let target_process = int_arg(instance, "DuplicateHandle", args, 2)? as HandleRaw;
+    let desired_access = optional_int(instance, "DuplicateHandle", args, 4, 0)? as u32;
+    let inherit = optional_int(instance, "DuplicateHandle", args, 5, 0)? as i32;
+    let options = optional_int(instance, "DuplicateHandle", args, 6, 0)? as u32;
+    let mut target: HandleRaw = 0;
+    // SAFETY: target 是活局部量。
+    let ok = unsafe {
+        sys::DuplicateHandle(
+            source_process,
+            source_handle,
+            target_process,
+            &mut target,
+            desired_access,
+            inherit,
+            options,
+        )
+    };
+    if ok == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(target as i64))
+}
+
+#[allow(unsafe_code)]
+fn get_file_type(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "GetFileType", kwargs)?;
+    let handle = int_arg(instance, "GetFileType", args, 0)? as HandleRaw;
+    // SAFETY: 句柄由宿主给。
+    let kind = unsafe { sys::GetFileType(handle) };
+    if kind == 0 {
+        let code = last_error();
+        if code != 0 {
+            return Err(raise_win(instance, code));
+        }
+    }
+    Ok(instance.new_int(i64::from(kind)))
+}
+
+#[allow(unsafe_code)]
+fn get_exit_code_process(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "GetExitCodeProcess", kwargs)?;
+    let handle = int_arg(instance, "GetExitCodeProcess", args, 0)? as HandleRaw;
+    let mut code = 0u32;
+    // SAFETY: code 是活局部量。
+    if unsafe { sys::GetExitCodeProcess(handle, &mut code) } == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(i64::from(code)))
+}
+
+#[allow(unsafe_code)]
+fn terminate_process(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "TerminateProcess", kwargs)?;
+    let handle = int_arg(instance, "TerminateProcess", args, 0)? as HandleRaw;
+    let code = optional_int(instance, "TerminateProcess", args, 1, 1)? as u32;
+    // SAFETY: 句柄由宿主给。
+    if unsafe { sys::TerminateProcess(handle, code) } == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_none())
 }
 
 #[allow(unsafe_code)]
@@ -1274,6 +1404,12 @@ pub fn install(instance: &Instance) {
         for (name, handler) in [
             ("CreateFile", create_file as pyawa_core::NativeFn),
             ("CreatePipe", create_pipe as pyawa_core::NativeFn),
+            ("GetStdHandle", get_std_handle as pyawa_core::NativeFn),
+            ("GetCurrentProcess", get_current_process as pyawa_core::NativeFn),
+            ("DuplicateHandle", duplicate_handle as pyawa_core::NativeFn),
+            ("GetFileType", get_file_type as pyawa_core::NativeFn),
+            ("GetExitCodeProcess", get_exit_code_process as pyawa_core::NativeFn),
+            ("TerminateProcess", terminate_process as pyawa_core::NativeFn),
             ("ReadFile", sync_read_file as pyawa_core::NativeFn),
             ("WriteFile", sync_write_file as pyawa_core::NativeFn),
             ("CreateNamedPipe", create_named_pipe as pyawa_core::NativeFn),
