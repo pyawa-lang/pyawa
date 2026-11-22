@@ -182,7 +182,7 @@ fn memory_limit_from_env() -> Option<u64> {
 fn install_windows_asyncio_selector(state: *mut pa_state) {
     const SRC: &[u8] = b"try:\n    __pa_events = __import__('asyncio.events', fromlist=['*'])\n    __pa_windows = __import__('asyncio.windows_events', fromlist=['*'])\n    __pa_events._set_event_loop_policy(__pa_windows._WindowsSelectorEventLoopPolicy())\nfinally:\n    try:\n        del __pa_events\n    except NameError:\n        pass\n    try:\n        del __pa_windows\n    except NameError:\n        pass\n";
     // SAFETY: state 刚由 pa_create 交回、仍存活；入口按 AB-59 契约传 C 串。
-    let _ = unsafe {
+    let rc = unsafe {
         pa_exec_string(
             state,
             SRC.as_ptr().cast(),
@@ -192,6 +192,15 @@ fn install_windows_asyncio_selector(state: *mut pa_state) {
             core::ptr::null(),
         )
     };
+    if rc != status::PA_OK && std::env::var_os("PYAWA_ASYNCIO_SHIM_DEBUG").is_some() {
+        let pointer = unsafe { pa_errmsg(state) };
+        let message = if pointer.is_null() {
+            String::new()
+        } else {
+            unsafe { core::ffi::CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
+        };
+        eprintln!("pyawa: asyncio shim rc={rc}: {message}");
+    }
 }
 
 pub fn run() {
@@ -556,6 +565,9 @@ fn real_main() {
             )
         }
     };
+    // Windows：在真正执行用户脚本前再确认一次策略（stdlib 装载可能触发模块初始化）。
+    #[cfg(windows)]
+    install_windows_asyncio_selector(state);
     let executed = match product {
         Some(bytes) => {
             let first = run_bytecode(&bytes);
