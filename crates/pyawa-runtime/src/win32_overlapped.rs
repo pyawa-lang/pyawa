@@ -685,7 +685,36 @@ fn create_process(
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "CreateProcess 需要命令行"))?;
     let inherit = optional_int(instance, "CreateProcess", args, 4, 0)? as i32;
     let flags = optional_int(instance, "CreateProcess", args, 5, 0)? as u32;
-    let _env = args.get(6).copied();
+    // 环境块：dict ⇒ 排序后的 `KEY=VALUE\0…\0` UTF-16；None ⇒ NULL（继承）。
+    let env = args.get(6).copied();
+    let env_block: Option<Vec<u16>> = match env {
+        Some(object) if object != instance.singletons().none() => {
+            let entries = instance.dict_entries(object).ok_or_else(|| {
+                instance.raise_builtin_error("TypeError", "CreateProcess 的 env 必须是 dict")
+            })?;
+            let mut pairs: Vec<(String, String)> = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let key = instance.text_of(key).ok_or_else(|| {
+                    instance.raise_builtin_error("TypeError", "环境变量名必须是 str")
+                })?;
+                let value = instance.text_of(value).ok_or_else(|| {
+                    instance.raise_builtin_error("TypeError", "环境变量值必须是 str")
+                })?;
+                pairs.push((key.to_owned(), value.to_owned()));
+            }
+            pairs.sort_by(|a, b| a.0.to_uppercase().cmp(&b.0.to_uppercase()));
+            let mut block = Vec::new();
+            for (key, value) in pairs {
+                block.extend(key.encode_utf16());
+                block.push(b'=' as u16);
+                block.extend(value.encode_utf16());
+                block.push(0);
+            }
+            block.push(0);
+            Some(block)
+        }
+        _ => None,
+    };
     let cwd = optional_text(instance, "CreateProcess", args, 7)?;
     let startup = args.get(8).copied();
 
@@ -724,7 +753,9 @@ fn create_process(
             core::ptr::null_mut(),
             inherit,
             flags,
-            core::ptr::null_mut(),
+            env_block
+                .as_ref()
+                .map_or(core::ptr::null_mut(), |block| block.as_ptr().cast_mut().cast::<c_void>()),
             cwd_wide
                 .as_ref()
                 .map_or(core::ptr::null(), |text| text.as_ptr()),
