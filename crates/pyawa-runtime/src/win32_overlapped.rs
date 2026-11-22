@@ -205,6 +205,12 @@ mod sys {
         ) -> HandleRaw;
         pub fn ConnectNamedPipe(pipe: HandleRaw, overlapped: *mut OverlappedInner) -> i32;
         pub fn CancelIoEx(file: HandleRaw, overlapped: *mut OverlappedInner) -> i32;
+        pub fn CreatePipe(
+            read_pipe: *mut HandleRaw,
+            write_pipe: *mut HandleRaw,
+            security: *mut c_void,
+            size: u32,
+        ) -> i32;
     }
 }
 
@@ -393,6 +399,93 @@ fn create_named_pipe(
         return Err(raise_win(instance, last_error()));
     }
     Ok(instance.new_int(handle as i64))
+}
+
+#[allow(unsafe_code)]
+fn create_pipe(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "CreatePipe", kwargs)?;
+    let size = optional_int(instance, "CreatePipe", args, 1, 0)?;
+    if size < 0 || size > u32::MAX as i64 {
+        return Err(instance.raise_builtin_error("OverflowError", "CreatePipe 的 size 越界"));
+    }
+    let mut read: HandleRaw = 0;
+    let mut write: HandleRaw = 0;
+    // SAFETY: 出参都是活局部量；security 传 NULL（首批）。
+    let ok = unsafe { sys::CreatePipe(&mut read, &mut write, core::ptr::null_mut(), size as u32) };
+    if ok == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_tuple(vec![
+        instance.new_int(read as i64),
+        instance.new_int(write as i64),
+    ]))
+}
+
+#[allow(unsafe_code)]
+fn sync_read_file(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_winapi.ReadFile", kwargs)?;
+    let handle = int_arg(instance, "_winapi.ReadFile", args, 0)? as HandleRaw;
+    let size = int_arg(instance, "_winapi.ReadFile", args, 1)?;
+    if size < 0 || size > u32::MAX as i64 {
+        return Err(instance.raise_builtin_error("OverflowError", "ReadFile 的 size 越界"));
+    }
+    let mut buffer = vec![0u8; size as usize];
+    let mut transferred = 0u32;
+    // SAFETY: 同步读；buffer 长度与 size 一致；overlapped=NULL。
+    let ok = unsafe {
+        sys::ReadFile(
+            handle,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            size as u32,
+            &mut transferred,
+            core::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    buffer.truncate(transferred as usize);
+    Ok(instance.new_bytes(&buffer))
+}
+
+#[allow(unsafe_code)]
+fn sync_write_file(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_winapi.WriteFile", kwargs)?;
+    let handle = int_arg(instance, "_winapi.WriteFile", args, 0)? as HandleRaw;
+    let data = arg(instance, "_winapi.WriteFile", args, 1)?;
+    let bytes = instance
+        .bytes_like_value(data)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "WriteFile 需要 bytes-like 对象"))?;
+    let mut transferred = 0u32;
+    // SAFETY: 同步写；bytes 在调用期间存活；overlapped=NULL。
+    let ok = unsafe {
+        sys::WriteFile(
+            handle,
+            bytes.as_ptr().cast::<c_void>(),
+            bytes.len() as u32,
+            &mut transferred,
+            core::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(i64::from(transferred)))
 }
 
 #[allow(unsafe_code)]
@@ -1180,6 +1273,9 @@ pub fn install(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_winapi") {
         for (name, handler) in [
             ("CreateFile", create_file as pyawa_core::NativeFn),
+            ("CreatePipe", create_pipe as pyawa_core::NativeFn),
+            ("ReadFile", sync_read_file as pyawa_core::NativeFn),
+            ("WriteFile", sync_write_file as pyawa_core::NativeFn),
             ("CreateNamedPipe", create_named_pipe as pyawa_core::NativeFn),
             ("CreateEvent", create_event as pyawa_core::NativeFn),
             ("SetEvent", set_event as pyawa_core::NativeFn),
