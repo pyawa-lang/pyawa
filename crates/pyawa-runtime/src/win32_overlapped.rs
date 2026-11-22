@@ -128,7 +128,7 @@ fn wide_opt(text: Option<&str>) -> Option<Vec<u16>> {
 
 #[allow(unsafe_code)]
 mod sys {
-    use super::{c_void, HandleRaw, OverlappedInner};
+    use super::{c_void, HandleRaw, OverlappedInner, ProcessInformation, StartupInfoW};
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -225,7 +225,51 @@ mod sys {
         pub fn GetFileType(handle: HandleRaw) -> u32;
         pub fn GetExitCodeProcess(handle: HandleRaw, code: *mut u32) -> i32;
         pub fn TerminateProcess(handle: HandleRaw, code: u32) -> i32;
+        pub fn CreateProcessW(
+            application_name: *const u16,
+            command_line: *mut u16,
+            process_attributes: *mut c_void,
+            thread_attributes: *mut c_void,
+            inherit_handles: i32,
+            creation_flags: u32,
+            environment: *mut c_void,
+            current_directory: *const u16,
+            startup_info: *const StartupInfoW,
+            process_information: *mut ProcessInformation,
+        ) -> i32;
     }
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct StartupInfoW {
+    cb: u32,
+    reserved: *mut u16,
+    desktop: *mut u16,
+    title: *mut u16,
+    x: u32,
+    y: u32,
+    x_size: u32,
+    y_size: u32,
+    x_count_chars: u32,
+    y_count_chars: u32,
+    fill_attribute: u32,
+    flags: u32,
+    show_window: u16,
+    reserved2_size: u16,
+    reserved2: *mut u8,
+    std_input: HandleRaw,
+    std_output: HandleRaw,
+    std_error: HandleRaw,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct ProcessInformation {
+    process: HandleRaw,
+    thread: HandleRaw,
+    process_id: u32,
+    thread_id: u32,
 }
 
 #[repr(C)]
@@ -616,6 +660,77 @@ fn terminate_process(
         return Err(raise_win(instance, last_error()));
     }
     Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn create_process(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "CreateProcess", kwargs)?;
+    let application = optional_text(instance, "CreateProcess", args, 0)?;
+    let command_line = optional_text(instance, "CreateProcess", args, 1)?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "CreateProcess 需要命令行"))?;
+    let inherit = optional_int(instance, "CreateProcess", args, 4, 0)? as i32;
+    let flags = optional_int(instance, "CreateProcess", args, 5, 0)? as u32;
+    let _env = args.get(6).copied();
+    let cwd = optional_text(instance, "CreateProcess", args, 7)?;
+    let startup = args.get(8).copied();
+
+    let mut startup_info = StartupInfoW {
+        cb: core::mem::size_of::<StartupInfoW>() as u32,
+        ..StartupInfoW::default()
+    };
+    if let Some(startup) = startup {
+        let read = |name: &str| -> i64 {
+            instance
+                .attribute_optional_of(startup, name)
+                .ok()
+                .flatten()
+                .and_then(|object| instance.int_value(object))
+                .unwrap_or(0)
+        };
+        startup_info.flags = read("dwFlags") as u32;
+        startup_info.show_window = read("wShowWindow") as u16;
+        startup_info.std_input = read("hStdInput") as HandleRaw;
+        startup_info.std_output = read("hStdOutput") as HandleRaw;
+        startup_info.std_error = read("hStdError") as HandleRaw;
+    }
+
+    let application_wide = application.as_deref().and_then(|text| wide_opt(Some(text)));
+    let mut command_wide = wide_opt(Some(&command_line)).expect("命令行非 None");
+    let cwd_wide = cwd.as_deref().and_then(|text| wide_opt(Some(text)));
+    let mut process_info = ProcessInformation::default();
+    // SAFETY: 宽字符串／STARTUPINFO／PROCESS_INFORMATION 都是活局部量。
+    let ok = unsafe {
+        sys::CreateProcessW(
+            application_wide
+                .as_ref()
+                .map_or(core::ptr::null(), |text| text.as_ptr()),
+            command_wide.as_mut_ptr(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            inherit,
+            flags,
+            core::ptr::null_mut(),
+            cwd_wide
+                .as_ref()
+                .map_or(core::ptr::null(), |text| text.as_ptr()),
+            &startup_info,
+            &mut process_info,
+        )
+    };
+    if ok == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_tuple(vec![
+        instance.new_int(process_info.process as i64),
+        instance.new_int(process_info.thread as i64),
+        instance.new_int(i64::from(process_info.process_id)),
+        instance.new_int(i64::from(process_info.thread_id)),
+    ]))
 }
 
 #[allow(unsafe_code)]
@@ -1410,6 +1525,7 @@ pub fn install(instance: &Instance) {
             ("GetFileType", get_file_type as pyawa_core::NativeFn),
             ("GetExitCodeProcess", get_exit_code_process as pyawa_core::NativeFn),
             ("TerminateProcess", terminate_process as pyawa_core::NativeFn),
+            ("CreateProcess", create_process as pyawa_core::NativeFn),
             ("ReadFile", sync_read_file as pyawa_core::NativeFn),
             ("WriteFile", sync_write_file as pyawa_core::NativeFn),
             ("CreateNamedPipe", create_named_pipe as pyawa_core::NativeFn),
