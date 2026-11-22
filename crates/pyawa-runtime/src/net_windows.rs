@@ -512,11 +512,26 @@ fn wsa_socket_option(level: i32, name: i32) -> Option<(i32, i32)> {
 /// `net` 域的 Windows provider 状态：句柄表（`CP-17`：`close` 即释放）。
 ///
 /// 句柄号段从 **3** 起（同 `fs`／`net_posix` 的标准流约定：`0` 无效、`1`／`2` 留标准流）。
+/// **Proactor 桥（P2）**：不透明句柄 ⇒ 原生 WinSock `SOCKET`。
+///
+/// `_socket.fileno()` 给的是 provider 句柄；`_overlapped.WSARecv` 需要原生 SOCKET。
+/// 句柄号用**进程级**计数器保证跨实例唯一，桥表只为这一层服务，不改变脚本可见的 fd 语义。
+static NEXT_SOCKET_HANDLE: AtomicU64 = AtomicU64::new(3);
+static RAW_SOCKETS: Mutex<Option<HashMap<u64, usize>>> = Mutex::new(None);
+
+fn raw_sockets() -> std::sync::MutexGuard<'static, Option<HashMap<u64, usize>>> {
+    RAW_SOCKETS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 把 `_socket.fileno()` 的 provider 句柄解析成原生 SOCKET（读 `_overlapped.WSARecv` 用）。
+pub fn raw_socket_for_handle(handle: i64) -> Option<usize> {
+    let handle = u64::try_from(handle).ok()?;
+    raw_sockets().as_ref().and_then(|map| map.get(&handle).copied())
+}
+
 pub struct WindowsNet {
     /// 不透明句柄 ⇒ WinSock `SOCKET`。
     sockets: Mutex<HashMap<u64, usize>>,
-    /// 下一个句柄号。
-    next: AtomicU64,
 }
 
 impl WindowsNet {
@@ -524,7 +539,6 @@ impl WindowsNet {
     pub fn new() -> Self {
         Self {
             sockets: Mutex::new(HashMap::new()),
-            next: AtomicU64::new(3),
         }
     }
 
@@ -574,10 +588,13 @@ impl WindowsNet {
 
     /// 收下一枚新 `SOCKET`，返回不透明句柄（`CP-31` 的句柄号段见模块文档）。
     fn insert(&self, socket: usize) -> SocketHandle {
-        let handle = self.next.fetch_add(1, Ordering::Relaxed);
+        let handle = NEXT_SOCKET_HANDLE.fetch_add(1, Ordering::Relaxed);
         self.sockets
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(handle, socket);
+        raw_sockets()
+            .get_or_insert_with(HashMap::new)
             .insert(handle, socket);
         SocketHandle(handle)
     }
@@ -1411,6 +1428,9 @@ extern "C" fn net_close(
         write_errno(errno_out, errno_named("EBADF"));
         return CapStatus::Machine;
     };
+    if let Some(map) = raw_sockets().as_mut() {
+        map.remove(&socket.0);
+    }
     // SAFETY: `raw` 由句柄表独占持有，取出后立即关闭（不会二次 close）。
     let result = unsafe { sys::closesocket(raw) };
     if result != 0 {

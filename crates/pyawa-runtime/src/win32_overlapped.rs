@@ -205,6 +205,45 @@ mod sys {
     }
 }
 
+#[repr(C)]
+struct WsaBuf {
+    len: u32,
+    buf: *mut u8,
+}
+
+#[allow(unsafe_code)]
+mod winsock {
+    use super::{c_void, HandleRaw, OverlappedInner, WsaBuf};
+
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        pub fn WSARecv(
+            socket: HandleRaw,
+            buffers: *mut WsaBuf,
+            count: u32,
+            transferred: *mut u32,
+            flags: *mut u32,
+            overlapped: *mut OverlappedInner,
+            completion: *mut c_void,
+        ) -> i32;
+        pub fn WSASend(
+            socket: HandleRaw,
+            buffers: *const WsaBuf,
+            count: u32,
+            transferred: *mut u32,
+            flags: u32,
+            overlapped: *mut OverlappedInner,
+            completion: *mut c_void,
+        ) -> i32;
+        pub fn WSAGetLastError() -> i32;
+    }
+}
+
+/// provider 句柄 ⇒ 原生 SOCKET；非 net 句柄按原值当 raw（`_winapi` 直建 socket 的路径）。
+fn resolve_socket(handle: i64) -> HandleRaw {
+    crate::net_windows::raw_socket_for_handle(handle).map(|socket| socket as HandleRaw).unwrap_or(handle as HandleRaw)
+}
+
 // --------------------------------------------------------------------------- //
 // 参数工具（与 winreg 同口径：整数/字符串/None；不支持 kwargs）
 // --------------------------------------------------------------------------- //
@@ -748,6 +787,94 @@ fn overlapped_write_file(
 }
 
 #[allow(unsafe_code)]
+fn overlapped_wsa_recv(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.WSARecv", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let handle = int_arg(instance, "Overlapped.WSARecv", rest, 0)?;
+    let size = int_arg(instance, "Overlapped.WSARecv", rest, 1)?;
+    let flags = optional_int(instance, "Overlapped.WSARecv", rest, 2, 0)? as u32;
+    if size < 0 || size > u32::MAX as i64 {
+        return Err(instance.raise_builtin_error("OverflowError", "WSARecv 的 size 越界"));
+    }
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let mut buffer = vec![0u8; size as usize];
+    let mut wsa = WsaBuf { len: size as u32, buf: buffer.as_mut_ptr() };
+    let mut transferred = 0u32;
+    let mut recv_flags = flags;
+    let ok = unsafe {
+        winsock::WSARecv(
+            resolve_socket(handle),
+            &mut wsa,
+            1,
+            &mut transferred,
+            &mut recv_flags,
+            &mut memory.raw,
+            core::ptr::null_mut(),
+        )
+    };
+    if ok != 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        if code != 997 && code != 10035 {
+            return Err(raise_win(instance, code as u32));
+        }
+    }
+    memory.buffer = buffer;
+    memory.handle = resolve_socket(handle);
+    memory.kind = 3;
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn overlapped_wsa_send(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.WSASend", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let handle = int_arg(instance, "Overlapped.WSASend", rest, 0)?;
+    let data = arg(instance, "Overlapped.WSASend", rest, 1)?;
+    let flags = optional_int(instance, "Overlapped.WSASend", rest, 2, 0)? as u32;
+    let bytes = instance.bytes_like_value(data).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "WSASend 需要 bytes-like 对象")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: 同上。
+    let memory = unsafe { &mut *memory };
+    let wsa = WsaBuf { len: bytes.len() as u32, buf: bytes.as_ptr() as *mut u8 };
+    let mut transferred = 0u32;
+    let ok = unsafe {
+        winsock::WSASend(
+            resolve_socket(handle),
+            &wsa,
+            1,
+            &mut transferred,
+            flags,
+            &mut memory.raw,
+            core::ptr::null_mut(),
+        )
+    };
+    if ok != 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        if code != 997 && code != 10035 {
+            return Err(raise_win(instance, code as u32));
+        }
+    }
+    memory.buffer = bytes;
+    memory.handle = resolve_socket(handle);
+    memory.kind = 4;
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
 fn overlapped_get_result_common(
     instance: &Instance,
     this: NonNull<Header>,
@@ -764,7 +891,7 @@ fn overlapped_get_result_common(
     if ok == 0 {
         return Err(raise_win(instance, last_error()));
     }
-    if bytes_for_read && memory.kind == 1 {
+    if bytes_for_read && (memory.kind == 1 || memory.kind == 3) {
         let end = (transferred as usize).min(memory.buffer.len());
         Ok(instance.new_bytes(&memory.buffer[..end]))
     } else {
@@ -904,8 +1031,8 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("getresult", overlapped_getresult as pyawa_core::NativeFn),
         ("ReadFile", overlapped_read_file as pyawa_core::NativeFn),
         ("WriteFile", overlapped_write_file as pyawa_core::NativeFn),
-        ("WSARecv", overlapped_unwired as pyawa_core::NativeFn),
-        ("WSASend", overlapped_unwired as pyawa_core::NativeFn),
+        ("WSARecv", overlapped_wsa_recv as pyawa_core::NativeFn),
+        ("WSASend", overlapped_wsa_send as pyawa_core::NativeFn),
         ("ConnectNamedPipe", overlapped_connect_named_pipe as pyawa_core::NativeFn),
         ("DisconnectNamedPipe", overlapped_unwired as pyawa_core::NativeFn),
     ] {
