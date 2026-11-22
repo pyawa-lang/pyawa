@@ -147,6 +147,20 @@ fn throw_calls_await_cancel_with_throw() {
 }
 
 #[test]
+fn gc_drop_calls_await_cancel_with_destroy() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let state = setup();
+    // 清掉协程与宿主对象的全局根，再 gc.collect：帧/对象释放应触发 DESTROY 取消回调。
+    assert_eq!(unsafe { pa_pushnil(state) }, PA_OK);
+    assert_eq!(unsafe { pa_setglobal(state, c"c".as_ptr()) }, PA_OK);
+    assert_eq!(unsafe { pa_pushnil(state) }, PA_OK);
+    assert_eq!(unsafe { pa_setglobal(state, c"x".as_ptr()) }, PA_OK);
+    assert_eq!(exec(state, "import gc\ngc.collect()\n"), PA_OK);
+    assert_eq!(LAST_REASON.load(Ordering::SeqCst), 1);
+    unsafe { pa_destroy(state) };
+}
+
+#[test]
 fn destroy_calls_await_cancel_with_destroy() {
     let _guard = TEST_LOCK.lock().unwrap();
     let state = setup();

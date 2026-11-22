@@ -714,6 +714,7 @@ fast／wasm／windows 全绿；同一处 3 轮不过则停手升级。**开发�
 | **S3 实现 ✓（2026-11-21）** | `pa_resume`/`pa_throw`（1.15）、`event` 域（1.16）、`await_fn`＋VM await＋`await_cancel_fn` 派发（1.17）；参考 C 宿主（resume/event/await，event provider 参与 token 等待）＋测试；旧 ABI 宿主零回归；多协程同对象/按帧取消/u64 token 测试 | `crates/pyawa-abi/tests/`（coroutine_resume／event_domain／host_awaitable／host_awaitable_cancel／legacy_host_ops）；`tests/ci/t_ref_host_async.py`；check.py 20/20；slowcheck 12/12；CI 全绿 |
 | **宿主 loop 参考适配器 ✓（2026-11-22）** | native `poll(2)` event provider、任务表、超时＋取消示例（`pa_throw`/`await_cancel_fn`）；`examples/reference_host_loop.c`＋`t_ref_host_loop.py` | 真编译真运行；CI fast |
 | **asyncgen/嵌套 await ✓（2026-11-22）** | `asend` 内 host await token 冒泡＋外层送值路由；`host_await_asyncgen.rs` | 测试全绿 |
+| **Windows asyncio 评估 ✓（2026-11-22）** | 只读评估：仍不承诺；三条路线（selector facade／Proactor 数据面／宿主 loop）见 `docs/rounds/spikes/2026-11-22-windows-asyncio-assessment.md` | 无代码落地 |
 | **S4 文档/承诺 ✓（2026-11-21）** | DESIGN/PLAN/RELEASE/NEXT 收口；CLI asyncio 模式 B 不变，L3 不承诺 | 文档一致；本行即收口记录 |
 
 
