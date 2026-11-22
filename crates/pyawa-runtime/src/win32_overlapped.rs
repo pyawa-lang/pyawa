@@ -684,7 +684,7 @@ fn create_process(
     let command_line = optional_text(instance, "CreateProcess", args, 1)?
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "CreateProcess 需要命令行"))?;
     let inherit = optional_int(instance, "CreateProcess", args, 4, 0)? as i32;
-    let flags = optional_int(instance, "CreateProcess", args, 5, 0)? as u32;
+    let mut flags = optional_int(instance, "CreateProcess", args, 5, 0)? as u32;
     // 环境块：dict ⇒ 排序后的 `KEY=VALUE\0…\0` UTF-16；None ⇒ NULL（继承）。
     let env = args.get(6).copied();
     let env_block: Option<Vec<u16>> = match env {
@@ -715,6 +715,10 @@ fn create_process(
         }
         _ => None,
     };
+    if env_block.is_some() {
+        // CREATE_UNICODE_ENVIRONMENT：UTF-16 环境块必须带这个标志。
+        flags |= 0x0000_0400;
+    }
     let cwd = optional_text(instance, "CreateProcess", args, 7)?;
     let startup = args.get(8).copied();
 
