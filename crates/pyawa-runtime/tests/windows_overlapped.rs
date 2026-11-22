@@ -225,3 +225,24 @@ iocp_surface_ok = 1 if timed_out is None else 0
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
 }
+
+
+#[test]
+fn winapi_pipe_read_write_through_the_abi() {
+    let script = r#"
+import _winapi
+
+r, w = _winapi.CreatePipe(None, 0)
+n = _winapi.WriteFile(w, b"hello")
+data = _winapi.ReadFile(r, 5)
+_winapi.CloseHandle(r)
+_winapi.CloseHandle(w)
+pipe_ok = 1 if (n == 5 and data == b"hello") else 0
+"#;
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "pipe_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}
