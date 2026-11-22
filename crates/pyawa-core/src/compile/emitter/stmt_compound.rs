@@ -95,6 +95,8 @@ impl Emitter {
                 //   末尾 `COPY 3; POP_EXCEPT; RERAISE 1`
                 // 异常表：各项受保护区 → 自己的清理块（`depth` ＝ 2×该层项数、`lasti` 打开）；
                 //         各清理块 → 末尾（`depth` ＋2）。
+                // 退出调用/体内 return 的复制件要按 `async with` 决定是否 await `__aexit__`。
+                self.with_async_stack.push(*is_async);
                 let context_spans: Vec<Span> =
                     items.iter().map(|(context, _)| context.span()).collect();
                 let mut region_starts: Vec<usize> = Vec::with_capacity(items.len());
@@ -269,6 +271,7 @@ impl Emitter {
                 // 本轮是**纯重构**：内容与顺序都不变，只是把"攒计划"与"发射"分开，
                 // 好让下一步把发射时机挪到作用域正常路径之后（参照的冷块外提）。
                 let plan = WithCleanupPlan {
+                    is_async: *is_async,
                     context_spans: context_spans.clone(),
                     region_starts: region_starts.clone(),
                     return_holes: body_return_holes.clone(),
@@ -284,6 +287,7 @@ impl Emitter {
                 terminated &= self.emit_with_cleanups(&plan)?;
                 self.epilogue_span = context_spans[0];
                 self.epilogue_needed = !terminated;
+                self.with_async_stack.pop();
                 Ok(())
             }
             _ => unreachable!("emit_statement_with 只接收 Statement::With"),
