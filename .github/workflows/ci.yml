@@ -203,7 +203,7 @@ jobs:
         run: cargo test -p pyawa-abi --test abi --test annotation_strings --test boundary_guard --test capability_acceptance --test capability_layout --test capability_registration --test header --test helpers_wiring --test host_module --test host_path --test host_signature --test host_usability --test host_visibility --test memory_quota --test object_ops --test protocol_host_dispatch --test protocol_oracle --test type_identity --test write_tobytes
         shell: bash
       - name: Windows provider／os 形状测试
-        run: cargo test -p pyawa-runtime --test windows_clock_shapes --test windows_fs_shapes --test windows_net_shapes --test windows_os_shapes --test windows_winstubs_shapes --test windows_winreg --test windows_overlapped --test windows_platform_gaps
+        run: cargo test -p pyawa-runtime --test windows_clock_shapes --test windows_fs_shapes --test windows_net_shapes --test windows_os_shapes --test windows_winstubs_shapes --test windows_winreg --test windows_overlapped --test windows_platform_gaps -- --test-threads=1
         shell: bash
       - name: Windows 平台中立测试（core ＋ lsp）
         run: cargo test -p pyawa-core -p pyawa-lsp
