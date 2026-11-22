@@ -19,8 +19,8 @@
 //!
 //! # 如实边界（`DIV-` 口径）
 //!
-//! **P1 文件**已接；**pipe/socket** 的 `ReadFileInto`／`WSARecv`／`WSASend`／
-//! `ConnectNamedPipe` 仍如实 `NotImplementedError`（不假装成功）。因此 Windows Proactor
+//! **P1 文件＋命名 pipe**已接；**socket** 的 `WSARecv`／`WSASend`／`AcceptEx` 与
+//! `ReadFileInto` 仍如实 `NotImplementedError`（不假装成功）。因此 Windows Proactor
 //! 事件循环仍**不能**完整跑 subprocess/pipe；剩余见
 //! `docs/rounds/spikes/2026-11-22-proactor-dataplane-plan.md`。
 

@@ -24,7 +24,7 @@
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| **P1 文件/pipe 重叠 I/O（进行中）** | **文件部分 ✓**：`CreateFile`＋`ReadFile`／`WriteFile`／`GetOverlappedResult`／`getresult`（Windows 测试 `windows_overlapped.rs`）；**pipe 部分待做**：`CreatePipe`／`ConnectNamedPipe` | 文件读写 ✓；pipe/cancel/GC 待补 |
+| **P1 文件/pipe 重叠 I/O ✓（2026-11-22）** | 文件：`CreateFile`＋`ReadFile`／`WriteFile`／`GetOverlappedResult`／`getresult`；命名 pipe：`CreateNamedPipe`／`ConnectNamedPipe`＋重叠读写；Windows 测试 `windows_overlapped.rs` | 文件＋pipe 读写 ✓；cancel/GC 待补（后续） |
 | **P2 socket 重叠 I/O** | `WSARecv`／`WSASend`（含 Into 变体）、`WSARecvFrom`／`WSASendTo` | 本机 loopback 连接读写；与 selector 结果对拍 |
 | **P3 subprocess/pipe transports** | `asyncio.create_subprocess_exec` 的 stdin/stdout/stderr pipes | `asyncio.run` 跑子进程 echo；取消与超时 |
 | **P4 默认策略** | 若 P1–P3 全绿，才评估把 Windows 默认从 selector 切回 Proactor；否则保持 selector | 文档更新 + Windows CI 全绿 |
