@@ -6,7 +6,7 @@
 //! ② `CreateIoCompletionPort` ＋ `PostQueuedCompletionStatus` ＋ `GetQueuedCompletionStatus`
 //!    真投递／真取回 `(bytes, key, overlapped=None)`；
 //! ③ `_overlapped.Overlapped()` 是**真对象**（真事件句柄＋地址），`Close()` 幂等性如实报错；
-//! ④ 重叠 I/O 数据面（`ReadFile` 等）**如实** `NotImplementedError`（不假装成功）。
+//! ④ P1：`CreateFile`＋`Overlapped` 的文件重叠读写已真跑（pipe/socket 仍未接线）。
 #![cfg(windows)]
 #![allow(unused_unsafe)]
 
@@ -84,17 +84,11 @@ object_ok = 1 if (
     and overlapped_object.address != 0
 ) else 0
 try:
-    overlapped_object.ReadFile(_winapi.INVALID_HANDLE_VALUE, b'x')
+    overlapped_object.WSARecv(_winapi.INVALID_HANDLE_VALUE, 1, 0)
 except NotImplementedError:
     unwired_ok = 1
 else:
     unwired_ok = 0
-try:
-    overlapped_object.GetOverlappedResult(0)
-except NotImplementedError:
-    get_result_unwired = 1
-else:
-    get_result_unwired = 0
 overlapped_object.Close()
 closed_ok = 1
 try:
@@ -116,7 +110,6 @@ ids_ok = 1 if (pid > 0 and tid > 0) else 0
         "queue_ok",
         "object_ok",
         "unwired_ok",
-        "get_result_unwired",
         "closed_ok",
         "double_close_ok",
         "ids_ok",
@@ -130,4 +123,33 @@ ids_ok = 1 if (pid > 0 and tid > 0) else 0
     }
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
+}
+
+
+#[test]
+fn overlapped_file_read_write_through_the_abi() {
+    let path = std::env::temp_dir().join(format!("pyawa-overlapped-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let path_text = path.to_string_lossy().replace('\\', "/");
+    let script = format!(r#"
+import _winapi
+import _overlapped
+
+h = _winapi.CreateFile({path:?}, 0x80000000 | 0x40000000, 0, None, 2, 0x40000000, None)
+ovw = _overlapped.Overlapped()
+ovw.WriteFile(h, b"hello")
+written = ovw.GetOverlappedResult(1)
+ovr = _overlapped.Overlapped()
+ovr.ReadFile(h, 5)
+data = ovr.getresult()
+_winapi.CloseHandle(h)
+file_io_ok = 1 if (written == 5 and data == b"hello") else 0
+"#, path = path_text);
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, &script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "file_io_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+    let _ = std::fs::remove_file(&path);
 }
