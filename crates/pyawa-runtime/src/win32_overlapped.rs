@@ -643,7 +643,18 @@ fn overlapped_module_get_queued(
         if code == 258 {
             return Ok(instance.new_none());
         }
-        return Err(raise_win(instance, code));
+        // IOCP 失败但仍带 overlapped（典型 ERROR_OPERATION_ABORTED=995）：
+        // 按 CPython `_overlapped.GetQueuedCompletionStatus` 返回四元组，让回调自己
+        // 走 `getresult()` 的异常路径；这里不能直接抛。
+        if overlapped.is_null() {
+            return Err(raise_win(instance, code));
+        }
+        return Ok(instance.new_tuple(vec![
+            instance.new_int(i64::from(code)),
+            instance.new_int(i64::from(transferred)),
+            instance.new_int(key as i64),
+            instance.new_int(overlapped as usize as i64),
+        ]));
     }
     Ok(instance.new_tuple(vec![
         instance.new_int(0),
