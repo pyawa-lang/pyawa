@@ -332,3 +332,39 @@ env_ok = 1 if (code == 42 and pid > 0 and tid > 0) else 0
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
 }
+
+
+#[test]
+fn winapi_create_process_inherits_stdout_pipe_through_the_abi() {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    let cmd = format!("{system_root}\\System32\\cmd.exe");
+    let script = format!(r#"
+import _winapi
+
+class SI:
+    dwFlags = 0x100  # STARTF_USESTDHANDLES
+    hStdInput = 0
+    wShowWindow = 0
+
+r, w = _winapi.CreatePipe(None, 0)
+si = SI()
+si.hStdOutput = w
+si.hStdError = w
+hp, ht, pid, tid = _winapi.CreateProcess(
+    {cmd:?}, "cmd.exe /d /c echo hi", None, None, 1, 0, None, None, si)
+_winapi.CloseHandle(w)
+data = _winapi.ReadFile(r, 1024)
+_winapi.WaitForSingleObject(hp, 5000)
+code = _winapi.GetExitCodeProcess(hp)
+_winapi.CloseHandle(ht)
+_winapi.CloseHandle(hp)
+_winapi.CloseHandle(r)
+inherit_ok = 1 if (b"hi" in data and code == 0 and pid > 0) else 0
+"#, cmd = cmd);
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, &script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "inherit_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}

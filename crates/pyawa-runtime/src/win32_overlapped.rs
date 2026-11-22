@@ -251,6 +251,13 @@ mod sys {
 }
 
 #[repr(C)]
+struct SecurityAttributes {
+    length: u32,
+    descriptor: *mut c_void,
+    inherit: i32,
+}
+
+#[repr(C)]
 #[derive(Default)]
 struct StartupInfoW {
     cb: u32,
@@ -483,8 +490,21 @@ fn create_pipe(
     }
     let mut read: HandleRaw = 0;
     let mut write: HandleRaw = 0;
-    // SAFETY: 出参都是活局部量；security 传 NULL（首批）。
-    let ok = unsafe { sys::CreatePipe(&mut read, &mut write, core::ptr::null_mut(), size as u32) };
+    // 子进程要继承管道句柄（subprocess 的 stdio 链）。
+    let mut security = SecurityAttributes {
+        length: core::mem::size_of::<SecurityAttributes>() as u32,
+        descriptor: core::ptr::null_mut(),
+        inherit: 1,
+    };
+    // SAFETY: 出参都是活局部量；security 是活局部量且 bInheritHandle=TRUE。
+    let ok = unsafe {
+        sys::CreatePipe(
+            &mut read,
+            &mut write,
+            (&mut security as *mut SecurityAttributes).cast::<c_void>(),
+            size as u32,
+        )
+    };
     if ok == 0 {
         return Err(raise_win(instance, last_error()));
     }
