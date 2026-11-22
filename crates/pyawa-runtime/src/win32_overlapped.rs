@@ -597,6 +597,61 @@ fn current_thread_id(
     Ok(instance.new_int(i64::from(unsafe { sys::GetCurrentThreadId() })))
 }
 
+#[allow(unsafe_code)]
+fn overlapped_module_create_iocp(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_overlapped.CreateIoCompletionPort", kwargs)?;
+    let file = int_arg(instance, "_overlapped.CreateIoCompletionPort", args, 0)? as HandleRaw;
+    let existing = optional_int(instance, "_overlapped.CreateIoCompletionPort", args, 1, 0)? as HandleRaw;
+    let key = optional_int(instance, "_overlapped.CreateIoCompletionPort", args, 2, 0)? as usize;
+    let threads = optional_int(instance, "_overlapped.CreateIoCompletionPort", args, 3, 0)? as u32;
+    // provider 句柄（socket）要换成原生 SOCKET 才能注册到 IOCP。
+    let file = if file == -1 { file } else { crate::net_windows::raw_socket_for_handle(file as i64).map(|raw| raw as HandleRaw).unwrap_or(file) };
+    // SAFETY: 句柄按 Win32 契约；existing 为 0 或原生 IOCP。
+    let handle = unsafe { sys::CreateIoCompletionPort(file, existing, key, threads) };
+    if handle == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(handle as i64))
+}
+
+#[allow(unsafe_code)]
+fn overlapped_module_get_queued(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_overlapped.GetQueuedCompletionStatus", kwargs)?;
+    let iocp = int_arg(instance, "_overlapped.GetQueuedCompletionStatus", args, 0)? as HandleRaw;
+    let timeout = u32::try_from(optional_int(instance, "_overlapped.GetQueuedCompletionStatus", args, 1, u32::MAX as i64)?)
+        .map_err(|_| instance.raise_builtin_error("OverflowError", "超时超出 32 位"))?;
+    let mut transferred: u32 = 0;
+    let mut key: usize = 0;
+    let mut overlapped: *mut OverlappedInner = core::ptr::null_mut();
+    // SAFETY: 出参都是活局部量。
+    let status = unsafe {
+        sys::GetQueuedCompletionStatus(iocp, &mut transferred, &mut key, &mut overlapped, timeout)
+    };
+    if status == 0 {
+        let code = last_error();
+        if code == 258 {
+            return Ok(instance.new_none());
+        }
+        return Err(raise_win(instance, code));
+    }
+    Ok(instance.new_tuple(vec![
+        instance.new_int(0),
+        instance.new_int(i64::from(transferred)),
+        instance.new_int(key as i64),
+        instance.new_int(overlapped as usize as i64),
+    ]))
+}
+
 // --------------------------------------------------------------------------- //
 // `_overlapped.Overlapped` 类
 // --------------------------------------------------------------------------- //
@@ -616,6 +671,10 @@ fn overlapped_ptr(instance: &Instance, this: NonNull<Header>) -> Result<*mut Ove
         return Err(instance.raise_builtin_error("OSError", "Overlapped 对象已关闭"));
     }
     Ok(address as *mut OverlappedMemory)
+}
+
+fn set_bool_attr(instance: &Instance, this: NonNull<Header>, name: &str, value: bool) {
+    set_int_attr(instance, this, name, i64::from(value));
 }
 
 fn set_int_attr(instance: &Instance, this: NonNull<Header>, name: &str, value: i64) {
@@ -676,6 +735,7 @@ fn overlapped_init(
     set_int_attr(instance, this, "address", address as i64);
     set_int_attr(instance, this, "event", handle as i64);
     set_int_attr(instance, this, "_owned_event", owned);
+    set_int_attr(instance, this, "pending", 0);
     Ok(instance.new_none())
 }
 
@@ -751,6 +811,7 @@ fn overlapped_read_file(
     memory.buffer = buffer;
     memory.handle = handle;
     memory.kind = 1;
+    set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
 
@@ -790,6 +851,7 @@ fn overlapped_write_file(
     memory.buffer = bytes;
     memory.handle = handle;
     memory.kind = 2;
+    set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
 
@@ -835,6 +897,7 @@ fn overlapped_wsa_recv(
     memory.buffer = buffer;
     memory.handle = resolve_socket(handle);
     memory.kind = 3;
+    set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
 
@@ -883,6 +946,7 @@ fn overlapped_wsa_recv_into(
     memory.buffer = buffer;
     memory.handle = resolve_socket(handle);
     memory.kind = 5;
+    set_bool_attr(instance, this, "pending", true);
     memory.target = Some(target);
     Ok(instance.new_none())
 }
@@ -927,6 +991,7 @@ fn overlapped_wsa_send(
     memory.buffer = bytes;
     memory.handle = resolve_socket(handle);
     memory.kind = 4;
+    set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
 
@@ -947,6 +1012,7 @@ fn overlapped_get_result_common(
     if ok == 0 {
         return Err(raise_win(instance, last_error()));
     }
+    set_bool_attr(instance, this, "pending", false);
     if bytes_for_read && (memory.kind == 1 || memory.kind == 3) {
         let end = (transferred as usize).min(memory.buffer.len());
         Ok(instance.new_bytes(&memory.buffer[..end]))
@@ -1075,6 +1141,13 @@ pub fn install(instance: &Instance) {
         }
     }
     if let Some(namespace) = module_namespace(instance, "_overlapped") {
+        for (name, handler) in [
+            ("CreateIoCompletionPort", overlapped_module_create_iocp as pyawa_core::NativeFn),
+            ("GetQueuedCompletionStatus", overlapped_module_get_queued as pyawa_core::NativeFn),
+        ] {
+            let function = make_native(instance, name, handler);
+            instance.dict_set(namespace, name, function);
+        }
         if let Some(class) = build_overlapped_class(instance) {
             instance.dict_set(namespace, "Overlapped", class);
         }
