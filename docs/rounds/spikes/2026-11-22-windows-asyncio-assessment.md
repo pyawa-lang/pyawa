@@ -38,6 +38,20 @@ CLI 启动时（仅 Windows、仅便利路径）把 asyncio 默认策略切到
 
 - `crates/pyawa-runtime/src/bin/pyawa.rs`：Windows CLI 启动 shim，用
   `asyncio.events._set_event_loop_policy(_WindowsSelectorEventLoopPolicy())`（不触发弃用警告）；
-- `.github/workflows/ci.yml` Windows job：`asyncio.run` 冒烟（`await asyncio.sleep(0)`＋协程返回 42）；
+- `.github/workflows/ci.yml` Windows job：`asyncio.run` 冒烟，覆盖
+  `await asyncio.sleep(0)`、`async for`、`asyncio.gather`；
+- 运行矩阵（Windows selector，2026-11-22 CI 实测）：
+
+  | 能力 | 状态 |
+  |---|---|
+  | `asyncio.run` / 协程 / `sleep(0)` | ✓ |
+  | `async for` / 异步生成器 | ✓ |
+  | `asyncio.gather` | ✓ |
+  | `asyncio.TaskGroup` | **未支持**（实测 `InvalidStateError: Result is not ready.`） |
+  | `asyncio.sleep(>0)` / 真实定时 | **未支持**（实测 10ms 定时 `InvalidStateError: Result is not ready.`） |
+  | `asyncio.open_connection` / streams | 未承诺（net provider 同步面） |
+  | `asyncio.create_subprocess_*` | **不承诺**（Proactor/管道数据面未接） |
+  | `asyncio.add_reader` on pipe | 未承诺（Windows selector 不支持 pipe） |
+
 - 已知边界：Proactor／`_overlapped` 数据面未接；`subprocess`、pipe transport、部分 `add_reader`
   不承诺；嵌入 API 不自动设策略（CLI shim 只在 CLI）。
