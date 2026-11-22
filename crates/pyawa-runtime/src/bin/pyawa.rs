@@ -180,7 +180,7 @@ fn memory_limit_from_env() -> Option<u64> {
 /// 后续 `import asyncio` 仍会如实报错。
 #[cfg(windows)]
 fn install_windows_asyncio_selector(state: *mut pa_state) {
-    const SRC: &[u8] = b"try:\n    __pa_events = __import__('asyncio.events', fromlist=['*'])\n    __pa_windows = __import__('asyncio.windows_events', fromlist=['*'])\n    __pa_events._set_event_loop_policy(__pa_windows._WindowsSelectorEventLoopPolicy())\nfinally:\n    try:\n        del __pa_events\n    except NameError:\n        pass\n    try:\n        del __pa_windows\n    except NameError:\n        pass\n";
+    const SRC: &[u8] = b"try:\n    __pa_events = __import__('asyncio.events', fromlist=['*'])\n    __pa_windows = __import__('asyncio.windows_events', fromlist=['*'])\n    __pa_events._set_event_loop_policy(__pa_windows._WindowsSelectorEventLoopPolicy())\n    __pa_shim_policy = type(__pa_events._get_event_loop_policy()).__name__\nfinally:\n    try:\n        del __pa_events\n    except NameError:\n        pass\n    try:\n        del __pa_windows\n    except NameError:\n        pass\n";
     // SAFETY: state 刚由 pa_create 交回、仍存活；入口按 AB-59 契约传 C 串。
     let rc = unsafe {
         pa_exec_string(

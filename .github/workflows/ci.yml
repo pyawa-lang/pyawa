@@ -135,6 +135,8 @@ jobs:
       # TEMP：Windows asyncio 多探针（定位未实现 builtin）。
       - name: Windows asyncio 冒烟（temp probes）
         shell: bash
+        env:
+          PYAWA_ASYNCIO_SHIM_DEBUG: "1"
         run: |
           set -euo pipefail
           mkdir -p cli-probe
@@ -147,6 +149,7 @@ jobs:
           async def main_sleep():
               await asyncio.sleep(0)
               return await coro()
+          print("shim_policy", globals().get("__pa_shim_policy"))
           for name, fn in (("nosleep", main_nosleep), ("sleep", main_sleep)):
               try:
                   print(name, asyncio.run(fn()))
