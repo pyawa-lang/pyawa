@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use pyawa_core::{AttributeObject, BuiltinFunctionObject, ExecError, Header, Instance};
+use pyawa_core::{BuiltinFunctionObject, ExecError, Header, Instance};
 
 /// `_winapi` 的句柄（Win32 `HANDLE`）。
 type HandleRaw = isize;
@@ -1679,14 +1679,8 @@ fn winapi_connect_named_pipe(
     let Some(class) = instance.dict_get(namespace, "Overlapped") else {
         return Err(instance.raise_builtin_error("RuntimeError", "_overlapped.Overlapped 不可用"));
     };
-    let class_ty = unsafe { class.as_ref() }.ty();
-    let object = instance
-        .alloc(AttributeObject::new(class_ty, core::cell::RefCell::new(None)))
-        .into_raw()
-        .cast::<Header>();
-    // 初始化 Overlapped（创建事件句柄等）。
-    let none = overlapped_init(instance, Some(object), &[], &[])?;
-    instance.release(none);
+    // 用类型调用走正常的构造/分配路径（不能手工猜 instance_size）。
+    let object = pyawa_core::call_value(instance, class, &[], &[])?;
     let handle_object = instance.new_int(handle);
     let result = overlapped_connect_named_pipe(instance, Some(object), &[handle_object], &[])?;
     instance.release(result);
