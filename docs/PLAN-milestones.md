@@ -712,6 +712,7 @@ fast／wasm／windows 全绿；同一处 3 轮不过则停手升级。**开发�
 | **S1.1 规格 ✓（2026-11-21）** | host awaitable 对象协议：`await_fn`/`await_cancel_fn`、token/恢复/异常/取消生命周期、追加式 ABI | `SPEC-c-abi.md` §11.1（`AB-88`…`AB-91`）；T-AB-24…26 |
 | **S2 Spike C ✓（2026-11-21）** | 宿主 loop 驱动含 `await` 的脚本协程；yield/恢复/完成/异常/取消五态；参考 C 宿主 | 报告：`docs/rounds/spikes/2026-11-21-host-awaitable-loop.md` |
 | **S3 实现 ✓（2026-11-21）** | `pa_resume`/`pa_throw`（1.15）、`event` 域（1.16）、`await_fn`＋VM await＋`await_cancel_fn` 派发（1.17）；参考 C 宿主（resume/event/await，event provider 参与 token 等待）＋测试；旧 ABI 宿主零回归；多协程同对象/按帧取消/u64 token 测试 | `crates/pyawa-abi/tests/`（coroutine_resume／event_domain／host_awaitable／host_awaitable_cancel／legacy_host_ops）；`tests/ci/t_ref_host_async.py`；check.py 20/20；slowcheck 12/12；CI 全绿 |
+| **asyncgen/嵌套 await ✓（2026-11-22）** | `asend` 内 host await token 冒泡＋外层送值路由；`host_await_asyncgen.rs` | 测试全绿 |
 | **S4 文档/承诺 ✓（2026-11-21）** | DESIGN/PLAN/RELEASE/NEXT 收口；CLI asyncio 模式 B 不变，L3 不承诺 | 文档一致；本行即收口记录 |
 
 

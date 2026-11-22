@@ -538,10 +538,31 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         // 才是"`await asend` 完成"的那一刻 ✓（`test_asyncgen` 的
                         // `test_async_gen_iteration_01`：`await awaitable()` 让出的 `('result',)`
                         // 先前被当成值交出去 ⇒ 列表里混进 `('result',)` ✗）。
-                        let mut carried_value = carried;
+                        // 异步生成器内部若正挂起在**宿主 await** 上：内层让出的 token
+                        // 必须交给外层宿主 loop（不能当普通中间 await 吞掉）；外层下一次
+                        // SEND 送进来的值要传给内层，而不是被 asend 忽略。
+                        let inner_frame = unsafe {
+                            (&*inner.as_ptr().cast::<GeneratorObject>()).frame()
+                        };
+                        let inner_host_wait = instance.host_await_state(inner_frame).is_some();
+                        let mut carried_value = if inner_host_wait {
+                            Some(sent)
+                        } else {
+                            release(instance, sent);
+                            carried
+                        };
                         loop {
                             match resume_generator(instance, inner, carried_value)? {
                                 GeneratorOutcome::Yielded(value) => {
+                                    let inner_frame_now = unsafe {
+                                        (&*inner.as_ptr().cast::<GeneratorObject>()).frame()
+                                    };
+                                    if instance.host_await_state(inner_frame_now).is_some() {
+                                        // 宿主 await 的 token：作为真正让出冒泡给最外层驱动者
+                                        // （不能跳到 END_SEND 把它当成 asend 的结果）。
+                                        frame.get().push(value)?;
+                                        break;
+                                    }
                                     if generator_suspended_inside_await(inner) {
                                         // 中间让出：丢掉让出值（外层的驱动者会看到 `None` 以外的
                                         // 值后再送 `None` —— 本层的 `async for`／`run_until_complete`
