@@ -29,6 +29,8 @@ mod expr_operators;
 mod expr_yield;
 
 pub(super) struct WithCleanupPlan {
+    /// 本语句是否 `async with`（退出调用/异常路径要 await `__aexit__`，P0-2）。
+    pub(super) is_async: bool,
     /// 每一项的上下文跨度（清理块按**逆序**发）。
     pub(super) context_spans: Vec<Span>,
     /// 每一项受保护区间的起点（异常表要）。
@@ -166,6 +168,8 @@ pub(super) struct Emitter {
     /// 当前正处于其**体**内的各层 `with`（每层记各 item 的上下文跨度）。`return` 要**逐层**跑退出调用
     /// （内层先、每层内再按 item 逆序）——实测 `with cm as y: with y: return 1` 的退出次序就是如此。
     pub(super) with_exit_stack: Vec<Vec<Span>>,
+    /// 当前 `with` 是否 `async with`（退出调用/`return` 复制件要 await `__aexit__`）。
+    pub(super) with_async_stack: Vec<bool>,
     /// **`with` 体内 `return` 的退出调用"起点"**（第 166 轮）：参照把该 `with` 的**受保护区**止于
     /// **正常流末尾**（＝退出调用之前 ✓），本层先前把整段 body（含退出调用尾声）都圈进去 ✗。
     pub(super) with_body_end: Option<usize>,

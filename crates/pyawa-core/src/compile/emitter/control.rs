@@ -10,7 +10,39 @@ impl Emitter {
             self.emit_indexed(span, "LOAD_CONST", none_index);
         }
         self.emit_at(span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
+        // `async with`：`__aexit__` 返回 awaitable，必须 await；否则协程被丢弃（TaskGroup 等
+        // 依赖 `__aexit__` 的 await）。同步 with 仍只 POP_TOP。
+        if self.with_async_stack.last().copied().unwrap_or(false) {
+            self.emit_await_tos(span);
+        }
         self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+    }
+
+    /// 对**栈顶 awaitable** 发 CPython 的等待循环；结束后结果在栈顶。
+    fn emit_await_tos(&mut self, span: Span) {
+        self.emit_at(span, opcode::opcode("GET_AWAITABLE").expect("GET_AWAITABLE 在表里"), 1);
+        let none_index = self.intern_constant(Constant::None);
+        self.emit_indexed(span, "LOAD_CONST", none_index);
+        let await_loop = self.new_label();
+        let await_done = self.new_label();
+        self.mark_label(await_loop);
+        self.emit_directed_jump(
+            span,
+            opcode::opcode("SEND").expect("SEND 在表里"),
+            await_done,
+            false,
+        );
+        self.emit_at(span, opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"), 1);
+        self.emit_at(span, opcode::opcode("RESUME").expect("RESUME 在表里"), 3);
+        self.emit_directed_jump(
+            span,
+            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+            await_loop,
+            true,
+        );
+        self.mark_label(await_done);
+        self.emit_at(span, opcode::opcode("END_SEND").expect("END_SEND 在表里"), 0);
     }
 
     /// 按作用域存一个名字：模块／类体走 `STORE_NAME`，函数里走 `STORE_FAST <槽>`。
@@ -34,6 +66,11 @@ impl Emitter {
                 opcode::opcode("WITH_EXCEPT_START").expect("WITH_EXCEPT_START 在表里"),
                 0,
             );
+            if plan.is_async {
+                // `async with` 的异常路径：`WITH_EXCEPT_START` 给的是 `__aexit__()` 的
+                // awaitable，先 await 再 TO_BOOL（否则把 coroutine 当 bool）。
+                self.emit_await_tos(context_span);
+            }
             self.emit_at(context_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
             let handled = self.new_label();
             self.emit_jump(
