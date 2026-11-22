@@ -26,7 +26,10 @@ static const char *SRC =
     "async def f(x):\n"
     "    return (await x) + 1\n"
     "async def g(x):\n"
-    "    return (await x) + 2\n";
+    "    return (await x) + 2\n"
+    "async def h(x):\n"
+    "    return (await x) + 3\n"
+    "exc = RuntimeError('cancelled')\n";
 
 /* event provider：把 key 当 fd，用 poll(2) 真等。 */
 static pa_cap_status native_wait(void *state, const pa_cap_event_entry *entries, size_t count,
@@ -95,9 +98,11 @@ static int host_await(pa_state *state, void *payload, void *context, uint64_t *t
     *token_out = (uint64_t)((AwaitPayload *)payload)->fd;
     return PA_OK;
 }
+static int cancel_calls = 0;
 static void host_await_cancel(pa_state *state, void *payload, void *context, int reason)
 {
     (void)state; (void)payload; (void)context; (void)reason;
+    cancel_calls++;
 }
 
 static int fail(pa_state *st, const char *what, int rc)
@@ -217,6 +222,23 @@ int main(void)
     if (ev.wait(NULL, &t_in, 1, 10 * 1000000LL, &t_out, 1, &out_len, NULL) != PA_CAP_OK || out_len != 0)
         return fail(st, "timeout wait", -1);
     printf("ref-loop: timeout=0\n");
+
+    /* 取消示例：启动第三个任务，让出 token 后用 pa_throw 注入异常取消。 */
+    if (pa_getglobal(st, "h") != PA_OK) return fail(st, "getglobal h", -1);
+    if (pa_getglobal(st, "x3") != PA_OK) return fail(st, "getglobal x3", -1);
+    if (pa_call(st, 1, 1) != PA_OK) return fail(st, "call h", -1);
+    if (pa_setglobal(st, "c3") != PA_OK) return fail(st, "setglobal c3", -1);
+    pa_settop(st, 0);
+    if (pa_getglobal(st, "c3") != PA_OK) return fail(st, "getglobal c3", -1);
+    if (pa_resume(st, 0, 1) != PA_YIELDED) return fail(st, "c3 token", -1);
+    pa_settop(st, 0);
+    if (pa_getglobal(st, "c3") != PA_OK) return fail(st, "getglobal c3b", -1);
+    if (pa_getglobal(st, "exc") != PA_OK) return fail(st, "getglobal exc", -1);
+    int cancelled = pa_throw(st, 1, 1);
+    if (cancelled == PA_OK) return fail(st, "pa_throw returned OK", -1);
+    printf("ref-loop: cancel-status=%d\n", cancelled);
+    printf("ref-loop: cancel-callback=%d\n", cancel_calls);
+    pa_settop(st, 0);
 
     pa_destroy(st);
     printf("ref-loop: OK\n");

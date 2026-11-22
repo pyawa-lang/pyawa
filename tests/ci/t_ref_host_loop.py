@@ -13,6 +13,8 @@ ref-loop: ready=2
 ref-loop: f=42
 ref-loop: g=44
 ref-loop: timeout=0
+ref-loop: cancel-status=1
+ref-loop: cancel-callback=1
 ref-loop: OK"""
 
 def main() -> int:
