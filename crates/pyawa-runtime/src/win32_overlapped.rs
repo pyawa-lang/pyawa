@@ -1104,7 +1104,7 @@ fn overlapped_cancel(
         if ok == 0 {
             let code = last_error();
             // ERROR_NOT_FOUND=1168：没有待取消的 I/O，按幂等处理。
-            if code != 1168 {
+            if code != 1168 && code != 995 {
                 return Err(raise_win(instance, code));
             }
         }
