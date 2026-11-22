@@ -235,6 +235,21 @@ mod sys {
         pub fn GetFileType(handle: HandleRaw) -> u32;
         pub fn GetExitCodeProcess(handle: HandleRaw, code: *mut u32) -> i32;
         pub fn TerminateProcess(handle: HandleRaw, code: u32) -> i32;
+        pub fn InitializeProcThreadAttributeList(
+            list: *mut c_void,
+            count: u32,
+            flags: u32,
+            size: *mut usize,
+        ) -> i32;
+        pub fn UpdateProcThreadAttribute(
+            list: *mut c_void,
+            flags: u32,
+            attribute: usize,
+            value: *mut c_void,
+            size: usize,
+            previous: *mut c_void,
+            return_size: *mut usize,
+        ) -> i32;
         pub fn CreateProcessW(
             application_name: *const u16,
             command_line: *mut u16,
@@ -278,6 +293,13 @@ struct StartupInfoW {
     std_input: HandleRaw,
     std_output: HandleRaw,
     std_error: HandleRaw,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct StartupInfoExW {
+    info: StartupInfoW,
+    attribute_list: *mut c_void,
 }
 
 #[repr(C)]
@@ -703,7 +725,7 @@ fn create_process(
     let application = optional_text(instance, "CreateProcess", args, 0)?;
     let command_line = optional_text(instance, "CreateProcess", args, 1)?
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "CreateProcess 需要命令行"))?;
-    let inherit = optional_int(instance, "CreateProcess", args, 4, 0)? as i32;
+    let mut inherit = optional_int(instance, "CreateProcess", args, 4, 0)? as i32;
     let mut flags = optional_int(instance, "CreateProcess", args, 5, 0)? as u32;
     // 环境块：dict ⇒ 排序后的 `KEY=VALUE\0…\0` UTF-16；None ⇒ NULL（继承）。
     let env = args.get(6).copied();
@@ -746,6 +768,7 @@ fn create_process(
         cb: core::mem::size_of::<StartupInfoW>() as u32,
         ..StartupInfoW::default()
     };
+    let mut handle_list: Vec<HandleRaw> = Vec::new();
     if let Some(startup) = startup {
         let read = |name: &str| -> i64 {
             instance
@@ -760,6 +783,70 @@ fn create_process(
         startup_info.std_input = read("hStdInput") as HandleRaw;
         startup_info.std_output = read("hStdOutput") as HandleRaw;
         startup_info.std_error = read("hStdError") as HandleRaw;
+        if let Ok(Some(attributes)) = instance.attribute_optional_of(startup, "lpAttributeList") {
+            if let Some(entries) = instance.dict_entries(attributes) {
+                for (key, value) in entries {
+                    if instance.text_of(key) == Some("handle_list") {
+                        if let Some(items) = instance.list_items(value) {
+                            for item in items {
+                                if let Some(raw) = instance.int_value(item) {
+                                    if raw > 0 {
+                                        handle_list.push(raw as HandleRaw);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut attribute_storage: Vec<u8> = Vec::new();
+    let mut startup_ex = StartupInfoExW::default();
+    if !handle_list.is_empty() {
+        // Windows 的 PROC_THREAD_ATTRIBUTE_HANDLE_LIST 仍要求 bInheritHandles=TRUE。
+        inherit = 1;
+    }
+    let startup_pointer: *const StartupInfoW;
+    if handle_list.is_empty() {
+        startup_pointer = &startup_info;
+    } else {
+        let mut size = 0usize;
+        // SAFETY: 第一次调用只取所需字节数。
+        unsafe { sys::InitializeProcThreadAttributeList(core::ptr::null_mut(), 1, 0, &mut size) };
+        attribute_storage.resize(size, 0);
+        // SAFETY: storage 长度 >= size；list 指针有效。
+        let ok = unsafe {
+            sys::InitializeProcThreadAttributeList(
+                attribute_storage.as_mut_ptr().cast::<c_void>(),
+                1,
+                0,
+                &mut size,
+            )
+        };
+        if ok == 0 {
+            return Err(raise_win(instance, last_error()));
+        }
+        // SAFETY: 句柄数组在调用期间存活；attribute 0x00020002 = HANDLE_LIST。
+        let update = unsafe {
+            sys::UpdateProcThreadAttribute(
+                attribute_storage.as_mut_ptr().cast::<c_void>(),
+                0,
+                0x0002_0002,
+                handle_list.as_mut_ptr().cast::<c_void>(),
+                handle_list.len() * core::mem::size_of::<HandleRaw>(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            )
+        };
+        if update == 0 {
+            return Err(raise_win(instance, last_error()));
+        }
+        startup_ex.info = startup_info;
+        startup_ex.info.cb = core::mem::size_of::<StartupInfoExW>() as u32;
+        startup_ex.attribute_list = attribute_storage.as_mut_ptr().cast::<c_void>();
+        flags |= 0x0008_0000; // EXTENDED_STARTUPINFO_PRESENT
+        startup_pointer = &startup_ex.info;
     }
 
     let application_wide = application.as_deref().and_then(|text| wide_opt(Some(text)));
@@ -783,7 +870,7 @@ fn create_process(
             cwd_wide
                 .as_ref()
                 .map_or(core::ptr::null(), |text| text.as_ptr()),
-            &startup_info,
+            startup_pointer,
             &mut process_info,
         )
     };
