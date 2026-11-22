@@ -45,6 +45,9 @@ jobs:
       # S3 参考宿主（异步）：宿主 loop 用 pa_resume 驱动生成器＋event 域注册。
       - name: S3 参考宿主（异步，Linux）
         run: python3 tests/ci/t_ref_host_async.py
+      # P0-3 宿主 loop 参考适配器：native poll(2) event provider＋任务表＋超时。
+      - name: 宿主 loop 参考适配器（native event provider，Linux）
+        run: python3 tests/ci/t_ref_host_loop.py
       - name: pyawa check 语料（407 个 .py ⇒ 0 诊断）
         run: |
           awk -F'\t' 'NF>=2 && $1 !~ /^#/ {print "tests/conformance/corpus/" $1}' \
