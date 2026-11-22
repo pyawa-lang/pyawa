@@ -13,13 +13,16 @@
 //!   —— 都是**真 Win32 调用**；句柄走本模块的旁表（`int` 编号，`CP-31` provider 自管号段手法）。
 //! - `_overlapped.Overlapped`：**真**对象（一个 `OVERLAPPED` 内存 ＋ 真事件句柄），
 //!   `Close()`／`event`／`address`／`GetOverlappedResult()` 是真语义。
+//! - **P1 文件重叠 I/O（2026-11-22）**：`_winapi.CreateFile`＋`Overlapped.ReadFile`／
+//!   `WriteFile`／`GetOverlappedResult`／`getresult` 已接真实 Win32；Windows 测试见
+//!   `crates/pyawa-runtime/tests/windows_overlapped.rs`。
 //!
 //! # 如实边界（`DIV-` 口径）
 //!
-//! 重叠 I/O 的**数据面**（`ReadFile`／`WriteFile`／`WSARecv`／`WSASend`／`ConnectNamedPipe`
-//! 的真实投递）**没接** ⇒ 这些方法如实抛 `NotImplementedError`（不假装成功）。因此 Windows
-//! 的 Proactor 事件循环（`asyncio.windows_events`）仍**不能**真跑——它需要上述数据面；
-//! 本批只给出**可验证的最小真实语义**（事件／IOCP／对象生命周期），数据面留 `§12.24` 剩余。
+//! **P1 文件**已接；**pipe/socket** 的 `ReadFileInto`／`WSARecv`／`WSASend`／
+//! `ConnectNamedPipe` 仍如实 `NotImplementedError`（不假装成功）。因此 Windows Proactor
+//! 事件循环仍**不能**完整跑 subprocess/pipe；剩余见
+//! `docs/rounds/spikes/2026-11-22-proactor-dataplane-plan.md`。
 
 use core::ffi::c_void;
 use core::ptr::NonNull;

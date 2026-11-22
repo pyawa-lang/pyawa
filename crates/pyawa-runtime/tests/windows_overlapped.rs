@@ -6,7 +6,7 @@
 //! ② `CreateIoCompletionPort` ＋ `PostQueuedCompletionStatus` ＋ `GetQueuedCompletionStatus`
 //!    真投递／真取回 `(bytes, key, overlapped=None)`；
 //! ③ `_overlapped.Overlapped()` 是**真对象**（真事件句柄＋地址），`Close()` 幂等性如实报错；
-//! ④ 重叠 I/O 数据面（`ReadFile` 等）**如实** `NotImplementedError`（不假装成功）。
+//! ④ P1：`CreateFile`＋`Overlapped` 的文件重叠读写已真跑（pipe/socket 仍未接线）。
 #![cfg(windows)]
 #![allow(unused_unsafe)]
 
