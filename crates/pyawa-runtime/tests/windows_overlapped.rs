@@ -153,3 +153,33 @@ file_io_ok = 1 if (written == 5 and data == b"hello") else 0
     unsafe { pyawa_abi::pa_destroy(state) };
     let _ = std::fs::remove_file(&path);
 }
+
+
+#[test]
+fn overlapped_named_pipe_read_write_through_the_abi() {
+    let pipe_name = format!(r"\\.\pipe\pyawa-pipe-{}", std::process::id());
+    let script = format!(r#"
+import _winapi
+import _overlapped
+
+srv = _winapi.CreateNamedPipe({pipe_name:?}, 3 | 0x40000000, 0, 1, 4096, 4096, 0, None)
+ovc = _overlapped.Overlapped()
+connected_immediately = ovc.ConnectNamedPipe(srv)
+cli = _winapi.CreateFile({pipe_name:?}, 0xC0000000, 0, None, 3, 0x40000000, None)
+ovr = _overlapped.Overlapped()
+ovr.ReadFile(srv, 5)
+ovw = _overlapped.Overlapped()
+ovw.WriteFile(cli, b"hello")
+data = ovr.getresult()
+n = ovw.getresult()
+_winapi.CloseHandle(cli)
+_winapi.CloseHandle(srv)
+pipe_io_ok = 1 if (data == b"hello" and n == 5) else 0
+"#, pipe_name = pipe_name);
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, &script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "pipe_io_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}
