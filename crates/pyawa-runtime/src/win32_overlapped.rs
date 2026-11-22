@@ -94,6 +94,16 @@ fn entry_of(instance: &Instance, value: i64) -> Result<(u64, HandleRaw, HandleKi
     }
 }
 
+fn raw_handle(instance: &Instance, value: i64) -> Result<HandleRaw, ExecError> {
+    if let Ok((_, raw, _)) = entry_of(instance, value) {
+        return Ok(raw);
+    }
+    if value > 0 {
+        return Ok(value as HandleRaw);
+    }
+    Err(instance.raise_builtin_error("OSError", "[WinError 6] 无效的 Win32 句柄"))
+}
+
 fn release_handle(instance: &Instance, value: i64) -> Result<HandleRaw, ExecError> {
     if let Ok((id, raw, _)) = entry_of(instance, value) {
         if table().as_mut().and_then(|map| map.remove(&id)).is_some() {
@@ -636,7 +646,7 @@ fn get_exit_code_process(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "GetExitCodeProcess", kwargs)?;
-    let handle = int_arg(instance, "GetExitCodeProcess", args, 0)? as HandleRaw;
+    let handle = raw_handle(instance, int_arg(instance, "GetExitCodeProcess", args, 0)?)?;
     let mut code = 0u32;
     // SAFETY: code 是活局部量。
     if unsafe { sys::GetExitCodeProcess(handle, &mut code) } == 0 {
@@ -653,7 +663,7 @@ fn terminate_process(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "TerminateProcess", kwargs)?;
-    let handle = int_arg(instance, "TerminateProcess", args, 0)? as HandleRaw;
+    let handle = raw_handle(instance, int_arg(instance, "TerminateProcess", args, 0)?)?;
     let code = optional_int(instance, "TerminateProcess", args, 1, 1)? as u32;
     // SAFETY: 句柄由宿主给。
     if unsafe { sys::TerminateProcess(handle, code) } == 0 {
@@ -795,7 +805,7 @@ fn wait_for_single_object(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "WaitForSingleObject", kwargs)?;
-    let (_, raw, _) = entry_of(instance, int_arg(instance, "WaitForSingleObject", args, 0)?)?;
+    let raw = raw_handle(instance, int_arg(instance, "WaitForSingleObject", args, 0)?)?;
     let timeout = u32::try_from(int_arg(instance, "WaitForSingleObject", args, 1)?).map_err(|_| {
         instance.raise_builtin_error("OverflowError", "WaitForSingleObject 的超时超出 32 位")
     })?;
