@@ -29,6 +29,7 @@ fn run(name: &str, script: &str) -> String {
     let path = root.join("probe.py");
     std::fs::write(&path, script).expect("写脚本");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_pyawa"))
+        .env("PYAWA_NO_PROACTOR_SIGNAL_COMPAT", "1")
         .arg(&path)
         .output()
         .expect("跑 CLI");
