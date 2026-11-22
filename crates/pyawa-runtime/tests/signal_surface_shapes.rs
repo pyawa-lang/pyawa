@@ -341,10 +341,5 @@ fn signal_face_matches_reference() {
 
 #[test]
 fn signal_accounting_surface_is_honest() {
-    let expected = if cfg!(windows) {
-        ACCOUNTING_EXPECTED_WINDOWS
-    } else {
-        ACCOUNTING_EXPECTED
-    };
-    assert_eq!(run("accounting", ACCOUNTING_SCRIPT), expected);
+    assert_eq!(run("accounting", ACCOUNTING_SCRIPT), ACCOUNTING_EXPECTED);
 }
