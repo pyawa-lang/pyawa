@@ -164,15 +164,21 @@ jobs:
           import asyncio.windows_events
           asyncio.events._set_event_loop_policy(
               asyncio.windows_events._WindowsProactorEventLoopPolicy())
-          async def coro():
-              return 42
+          async def coro(n):
+              return n * 2
+          async def main():
+              await asyncio.sleep(0.01)
+              got = await asyncio.gather(coro(1), coro(2))
+              async with asyncio.TaskGroup() as tg:
+                  task = tg.create_task(coro(3))
+              return got, task.result()
           import traceback
           try:
-              print("proactor", asyncio.run(coro()))
+              print("proactor", asyncio.run(main()))
           except BaseException:
               traceback.print_exc()
           PY
-          timeout 20 target/debug/pyawa.exe cli-probe/proactor_probe.py
+          timeout 30 target/debug/pyawa.exe cli-probe/proactor_probe.py
 
       - name: Windows 原生 CLI 冒烟（PLAN §12.23 选项 A）
         shell: bash
