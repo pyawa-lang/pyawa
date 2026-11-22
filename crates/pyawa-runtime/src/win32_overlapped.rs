@@ -44,6 +44,12 @@ struct OverlappedInner {
 
 struct OverlappedMemory {
     raw: OverlappedInner,
+    /// 重叠 I/O 的缓冲区（必须活到完成包归还）。
+    buffer: Vec<u8>,
+    /// 发起 I/O 的原始 Win32 句柄（`GetOverlappedResult` 用）。
+    handle: HandleRaw,
+    /// 操作种类：0=无、1=读、2=写。
+    kind: u8,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,11 +90,16 @@ fn entry_of(instance: &Instance, value: i64) -> Result<(u64, HandleRaw, HandleKi
 }
 
 fn release_handle(instance: &Instance, value: i64) -> Result<HandleRaw, ExecError> {
-    let (id, raw, _) = entry_of(instance, value)?;
-    if table().as_mut().and_then(|map| map.remove(&id)).is_none() {
-        return Err(instance.raise_builtin_error("OSError", "[WinError 6] 无效的 Win32 句柄"));
+    if let Ok((id, raw, _)) = entry_of(instance, value) {
+        if table().as_mut().and_then(|map| map.remove(&id)).is_some() {
+            return Ok(raw);
+        }
     }
-    Ok(raw)
+    // `CreateFile` 交回的是**裸 Win32 句柄**（CPython `_winapi` 口径），不在旁表里。
+    if value > 0 {
+        return Ok(value as HandleRaw);
+    }
+    Err(instance.raise_builtin_error("OSError", "[WinError 6] 无效的 Win32 句柄"))
 }
 
 fn raise_win(instance: &Instance, code: u32) -> ExecError {
@@ -148,6 +159,35 @@ mod sys {
         ) -> i32;
         pub fn GetCurrentProcessId() -> u32;
         pub fn GetCurrentThreadId() -> u32;
+        pub fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            security: *mut c_void,
+            disposition: u32,
+            flags: u32,
+            template: HandleRaw,
+        ) -> HandleRaw;
+        pub fn ReadFile(
+            file: HandleRaw,
+            buffer: *mut c_void,
+            bytes: u32,
+            transferred: *mut u32,
+            overlapped: *mut OverlappedInner,
+        ) -> i32;
+        pub fn WriteFile(
+            file: HandleRaw,
+            buffer: *const c_void,
+            bytes: u32,
+            transferred: *mut u32,
+            overlapped: *mut OverlappedInner,
+        ) -> i32;
+        pub fn GetOverlappedResult(
+            file: HandleRaw,
+            overlapped: *mut OverlappedInner,
+            transferred: *mut u32,
+            wait: i32,
+        ) -> i32;
     }
 }
 
@@ -226,6 +266,41 @@ fn create_event(
         return Err(raise_win(instance, last_error()));
     }
     Ok(instance.new_int(store(handle, HandleKind::Event)))
+}
+
+#[allow(unsafe_code)]
+fn create_file(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "CreateFile", kwargs)?;
+    let path = optional_text(instance, "CreateFile", args, 0)?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "CreateFile 需要路径"))?;
+    // 常用默认：GENERIC_READ|GENERIC_WRITE；其余参数按 CPython 调用点给。
+    let access = optional_int(instance, "CreateFile", args, 1, 0x8000_0000 | 0x4000_0000)? as u32;
+    let share = optional_int(instance, "CreateFile", args, 2, 0)? as u32;
+    let _security = args.get(3).copied();
+    let disposition = optional_int(instance, "CreateFile", args, 4, 3)? as u32; // OPEN_EXISTING
+    let flags = optional_int(instance, "CreateFile", args, 5, 0)? as u32;
+    let wide = wide_opt(Some(&path)).expect("路径非 None");
+    // SAFETY: wide 是 NUL 结尾 UTF-16；security/template 传 NULL/0。
+    let handle = unsafe {
+        sys::CreateFileW(
+            wide.as_ptr(),
+            access,
+            share,
+            core::ptr::null_mut(),
+            disposition,
+            flags,
+            0,
+        )
+    };
+    if handle == -1isize {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(handle as i64))
 }
 
 #[allow(unsafe_code)]
@@ -499,6 +574,9 @@ fn overlapped_init(
     };
     let memory = Box::new(OverlappedMemory {
         raw: OverlappedInner { event: handle, ..OverlappedInner::default() },
+        buffer: Vec::new(),
+        handle: 0,
+        kind: 0,
     });
     let address = Box::into_raw(memory) as usize;
     set_int_attr(instance, this, "_ptr", address as i64);
@@ -538,6 +616,137 @@ fn overlapped_close(
     Ok(instance.new_none())
 }
 
+
+#[allow(unsafe_code)]
+fn overlapped_read_file(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.ReadFile", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let handle = int_arg(instance, "Overlapped.ReadFile", rest, 0)? as HandleRaw;
+    let size = int_arg(instance, "Overlapped.ReadFile", rest, 1)?;
+    if size < 0 || size > u32::MAX as i64 {
+        return Err(instance.raise_builtin_error("OverflowError", "ReadFile 的 size 越界"));
+    }
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box；本对象在 Close 前一直持有。
+    let memory = unsafe { &mut *memory };
+    let mut buffer = vec![0u8; size as usize];
+    let mut transferred = 0u32;
+    let ok = unsafe {
+        sys::ReadFile(
+            handle,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            size as u32,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = last_error();
+        // ERROR_IO_PENDING = 997：已投递，等完成。
+        if code != 997 {
+            return Err(raise_win(instance, code));
+        }
+    }
+    memory.buffer = buffer;
+    memory.handle = handle;
+    memory.kind = 1;
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn overlapped_write_file(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.WriteFile", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let handle = int_arg(instance, "Overlapped.WriteFile", rest, 0)? as HandleRaw;
+    let data = arg(instance, "Overlapped.WriteFile", rest, 1)?;
+    let bytes = instance.bytes_like_value(data).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "WriteFile 需要 bytes-like 对象")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: 同上。
+    let memory = unsafe { &mut *memory };
+    let mut transferred = 0u32;
+    let ok = unsafe {
+        sys::WriteFile(
+            handle,
+            bytes.as_ptr().cast::<c_void>(),
+            bytes.len() as u32,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = last_error();
+        if code != 997 {
+            return Err(raise_win(instance, code));
+        }
+    }
+    memory.buffer = bytes;
+    memory.handle = handle;
+    memory.kind = 2;
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn overlapped_get_result_common(
+    instance: &Instance,
+    this: NonNull<Header>,
+    wait: i32,
+    bytes_for_read: bool,
+) -> Result<NonNull<Header>, ExecError> {
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: 同上。
+    let memory = unsafe { &mut *memory };
+    let mut transferred = 0u32;
+    let ok = unsafe {
+        sys::GetOverlappedResult(memory.handle, &mut memory.raw, &mut transferred, wait)
+    };
+    if ok == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    if bytes_for_read && memory.kind == 1 {
+        let end = (transferred as usize).min(memory.buffer.len());
+        Ok(instance.new_bytes(&memory.buffer[..end]))
+    } else {
+        Ok(instance.new_int(i64::from(transferred)))
+    }
+}
+
+#[allow(unsafe_code)]
+fn overlapped_getresult(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.getresult", kwargs)?;
+    let (this, _rest) = split_self(instance, bound, args)?;
+    overlapped_get_result_common(instance, this, 1, true)
+}
+
+#[allow(unsafe_code)]
+fn overlapped_get_overlapped_result(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.GetOverlappedResult", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let wait = optional_int(instance, "Overlapped.GetOverlappedResult", rest, 0, 1)? as i32;
+    overlapped_get_result_common(instance, this, wait, false)
+}
+
 /// 数据面未接线的方法：**如实** `NotImplementedError`（不假装成功）。
 #[allow(unsafe_code)]
 fn overlapped_unwired(
@@ -574,6 +783,7 @@ fn module_namespace(instance: &Instance, name: &str) -> Option<NonNull<Header>> 
 pub fn install(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_winapi") {
         for (name, handler) in [
+            ("CreateFile", create_file as pyawa_core::NativeFn),
             ("CreateEvent", create_event as pyawa_core::NativeFn),
             ("SetEvent", set_event as pyawa_core::NativeFn),
             ("ResetEvent", reset_event as pyawa_core::NativeFn),
@@ -608,9 +818,10 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("Close", overlapped_close as pyawa_core::NativeFn),
         // `GetOverlappedResult` 也属于"数据面"（没有真实投递过的 OVERLAPPED ⇒ 如实未接线，
         // 不用事件句柄硬调出假语义）。
-        ("GetOverlappedResult", overlapped_unwired as pyawa_core::NativeFn),
-        ("ReadFile", overlapped_unwired as pyawa_core::NativeFn),
-        ("WriteFile", overlapped_unwired as pyawa_core::NativeFn),
+        ("GetOverlappedResult", overlapped_get_overlapped_result as pyawa_core::NativeFn),
+        ("getresult", overlapped_getresult as pyawa_core::NativeFn),
+        ("ReadFile", overlapped_read_file as pyawa_core::NativeFn),
+        ("WriteFile", overlapped_write_file as pyawa_core::NativeFn),
         ("WSARecv", overlapped_unwired as pyawa_core::NativeFn),
         ("WSASend", overlapped_unwired as pyawa_core::NativeFn),
         ("ConnectNamedPipe", overlapped_unwired as pyawa_core::NativeFn),
