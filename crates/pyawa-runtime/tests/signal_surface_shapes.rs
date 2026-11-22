@@ -314,26 +314,6 @@ swf-prev-unchanged -1
 wrapper-doc-empty True True
 "##;
 
-/// **Windows CLI**：CLI 为 Proactor 装了 `_signal.set_wakeup_fd` 兼容（只影响 CLI 便利路径），
-/// 因此非 -1 fd 被接受并返回 -1 占位；裸 `paL_newstate` 仍是记账桩（Unix 期望不变）。
-const ACCOUNTING_EXPECTED_WINDOWS: &str = r##"all-len 49
-hidden-keys ['__pyawa_signal_handlers__', '__pyawa_signal_wakeup_fd__']
-hidden-not-exported False False
-narrowed-in-signal False False False False False
-narrowed-other False False False False False
-no-delivery-api False False False
-present True True
-getsignal-no-error int
-register-no-error int
-registered-readback True
-swf-fd-0 => returned int -1
-swf-fd-2 => returned int -1
-swf-fd-neg2 !! ValueError False
-swf-fd-max => returned int -1
-swf-prev-unchanged -1
-wrapper-doc-empty True True
-"##;
-
 #[test]
 fn signal_face_matches_reference() {
     assert_eq!(run("face", FACE_SCRIPT), FACE_EXPECTED);
