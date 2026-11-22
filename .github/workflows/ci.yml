@@ -180,6 +180,22 @@ jobs:
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_probe.py
 
+      # 实验：asyncio.windows_utils.pipe()（Proactor subprocess 的管道构造基础）。
+      - name: Windows Proactor windows_utils.pipe 探针（实验）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cli-probe
+          cat > cli-probe/proactor_pipe_probe.py <<'PY'
+          import _winapi
+          import asyncio.windows_utils as wu
+          h1, h2 = wu.pipe()
+          _winapi.CloseHandle(h1)
+          _winapi.CloseHandle(h2)
+          print("windows_utils-pipe", isinstance(h1, int), isinstance(h2, int))
+          PY
+          timeout 30 target/debug/pyawa.exe cli-probe/proactor_pipe_probe.py
+
       - name: Windows 原生 CLI 冒烟（PLAN §12.23 选项 A）
         shell: bash
         run: |
