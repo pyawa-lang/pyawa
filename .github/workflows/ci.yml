@@ -223,6 +223,48 @@ jobs:
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_msvcrt_probe.py
 
+      # 诊断：Proactor subprocess 的创建/等待/管道三阶段。
+      - name: Windows Proactor subprocess 分阶段探针（实验）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cli-probe
+          cat > cli-probe/proactor_subprocess_stage.py <<'PY'
+          import asyncio
+          import asyncio.events
+          import asyncio.windows_events
+          asyncio.events._set_event_loop_policy(
+              asyncio.windows_events._WindowsProactorEventLoopPolicy())
+
+          async def probe(stdout):
+              label = "pipe" if stdout is not None else "none"
+              print("stage", label, "before-create", flush=True)
+              proc = await asyncio.create_subprocess_exec(
+                  "cmd.exe", "/d", "/c", "echo", "hi", stdout=stdout)
+              print("stage", label, "created", proc.pid, flush=True)
+              try:
+                  await asyncio.wait_for(proc.wait(), 3)
+                  print("stage", label, "waited", proc.returncode, flush=True)
+              except BaseException as exc:
+                  print("stage", label, "wait-error", type(exc).__name__, exc, flush=True)
+              if proc.stdout is not None:
+                  try:
+                      data = await asyncio.wait_for(proc.stdout.read(), 3)
+                      print("stage", label, "read", data, flush=True)
+                  except BaseException as exc:
+                      print("stage", label, "read-error", type(exc).__name__, exc, flush=True)
+
+          async def main():
+              await probe(None)
+              await probe(asyncio.subprocess.PIPE)
+
+          try:
+              asyncio.run(main())
+          except BaseException as exc:
+              print("stage top-error", type(exc).__name__, exc, flush=True)
+          PY
+          timeout 30 target/debug/pyawa.exe cli-probe/proactor_subprocess_stage.py
+
       - name: Windows 原生 CLI 冒烟（PLAN §12.23 选项 A）
         shell: bash
         run: |
