@@ -1517,6 +1517,48 @@ fn overlapped_read_file(
 }
 
 #[allow(unsafe_code)]
+fn overlapped_read_file_into(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.ReadFileInto", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let handle = int_arg(instance, "Overlapped.ReadFileInto", rest, 0)? as HandleRaw;
+    let buffer = arg(instance, "Overlapped.ReadFileInto", rest, 1)?;
+    let data = instance.bytes_like_value(buffer).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "ReadFileInto 需要 bytes-like 对象")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let mut read = vec![0u8; data.len()];
+    let mut transferred = 0u32;
+    let ok = unsafe {
+        sys::ReadFile(
+            handle,
+            read.as_mut_ptr().cast::<c_void>(),
+            read.len() as u32,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = last_error();
+        if code != 997 {
+            return Err(raise_win(instance, code));
+        }
+    }
+    memory.buffer = read;
+    memory.handle = handle;
+    memory.kind = 5;
+    memory.target = Some(buffer);
+    set_bool_attr(instance, this, "pending", true);
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
 fn overlapped_write_file(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1983,6 +2025,7 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("getresult", overlapped_getresult as pyawa_core::NativeFn),
         ("ReadFile", overlapped_read_file as pyawa_core::NativeFn),
         ("WriteFile", overlapped_write_file as pyawa_core::NativeFn),
+        ("ReadFileInto", overlapped_read_file_into as pyawa_core::NativeFn),
         ("WSARecv", overlapped_wsa_recv as pyawa_core::NativeFn),
         ("WSARecvInto", overlapped_wsa_recv_into as pyawa_core::NativeFn),
         ("WSASend", overlapped_wsa_send as pyawa_core::NativeFn),
