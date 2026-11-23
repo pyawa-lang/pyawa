@@ -657,12 +657,14 @@ fn duplicate_handle(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "DuplicateHandle", kwargs)?;
+    // CPython 形状：DuplicateHandle(process, handle, process, desired_access, inherit, options)
+    // —— **目标句柄是返回值**，不是入参。
     let source_process = int_arg(instance, "DuplicateHandle", args, 0)? as HandleRaw;
     let source_handle = int_arg(instance, "DuplicateHandle", args, 1)? as HandleRaw;
     let target_process = int_arg(instance, "DuplicateHandle", args, 2)? as HandleRaw;
-    let desired_access = optional_int(instance, "DuplicateHandle", args, 4, 0)? as u32;
-    let inherit = optional_int(instance, "DuplicateHandle", args, 5, 0)? as i32;
-    let options = optional_int(instance, "DuplicateHandle", args, 6, 0)? as u32;
+    let desired_access = optional_int(instance, "DuplicateHandle", args, 3, 0)? as u32;
+    let inherit = optional_int(instance, "DuplicateHandle", args, 4, 0)? as i32;
+    let options = optional_int(instance, "DuplicateHandle", args, 5, 0)? as u32;
     let mut target: HandleRaw = 0;
     // SAFETY: target 是活局部量。
     let ok = unsafe {
