@@ -356,6 +356,28 @@ pub(crate) fn memoryview_getitem_native(
     let count = nbytes / itemsize.max(1);
     let end = (offset + nbytes).min(bytes.len());
     let slice = &bytes[offset.min(end)..end];
+    if let Some(key) = args.first().copied() {
+        if instance.type_name(instance.type_of(key)) == "slice" {
+            let (start, stop, step) = crate::executor::slice_bounds(instance, key, count)?;
+            if step == 1 {
+                let start = start.max(0) as usize;
+                let stop = stop.max(0) as usize;
+                let stop = stop.min(count);
+                let start = start.min(stop);
+                // 子视图：共享同一源，只改 offset/nbytes。
+                let object = memoryview_new(instance, source)?;
+                let view = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
+                let Some(dict) = view.attributes() else {
+                    return Err(instance.raise_builtin_error("RuntimeError", "memoryview 没有实例字典"));
+                };
+                let new_offset = instance.new_int((offset + start * itemsize) as i64);
+                instance.dict_set(dict, "_offset", new_offset);
+                let new_nbytes = instance.new_int(((stop - start) * itemsize) as i64);
+                instance.dict_set(dict, "_nbytes", new_nbytes);
+                return Ok(object);
+            }
+        }
+    }
     let Some(index) = args.first().and_then(|value| instance.index_value(*value).ok().flatten()) else {
         return Err(instance.raise_builtin_error("TypeError", "memoryview 只接整数下标（切片随后补）"));
     };
