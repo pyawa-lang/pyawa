@@ -350,6 +350,18 @@ fn resolve_socket(handle: i64) -> HandleRaw {
     crate::net_windows::raw_socket_for_handle(handle).map(|socket| socket as HandleRaw).unwrap_or(handle as HandleRaw)
 }
 
+#[allow(unsafe_code)]
+mod ucrt {
+    use super::HandleRaw;
+
+    #[link(name = "ucrt")]
+    unsafe extern "system" {
+        pub fn _open_osfhandle(osfhandle: HandleRaw, flags: i32) -> i32;
+        pub fn _get_osfhandle(fd: i32) -> HandleRaw;
+        pub fn _close(fd: i32) -> i32;
+    }
+}
+
 // --------------------------------------------------------------------------- //
 // 参数工具（与 winreg 同口径：整数/字符串/None；不支持 kwargs）
 // --------------------------------------------------------------------------- //
@@ -883,6 +895,55 @@ fn create_process(
         instance.new_int(i64::from(process_info.process_id)),
         instance.new_int(i64::from(process_info.thread_id)),
     ]))
+}
+
+#[allow(unsafe_code)]
+fn msvcrt_open_osfhandle(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "msvcrt.open_osfhandle", kwargs)?;
+    let handle = int_arg(instance, "msvcrt.open_osfhandle", args, 0)? as HandleRaw;
+    let flags = optional_int(instance, "msvcrt.open_osfhandle", args, 1, 0)? as i32;
+    // SAFETY: Win32 句柄由宿主给。
+    let fd = unsafe { ucrt::_open_osfhandle(handle, flags) };
+    if fd == -1 {
+        return Err(instance.raise_builtin_error("OSError", "open_osfhandle 失败"));
+    }
+    Ok(instance.new_int(i64::from(fd)))
+}
+
+#[allow(unsafe_code)]
+fn msvcrt_get_osfhandle(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "msvcrt.get_osfhandle", kwargs)?;
+    let fd = int_arg(instance, "msvcrt.get_osfhandle", args, 0)? as i32;
+    // SAFETY: fd 由宿主给。
+    let handle = unsafe { ucrt::_get_osfhandle(fd) };
+    if handle == -1isize {
+        return Err(instance.raise_builtin_error("OSError", "get_osfhandle 失败"));
+    }
+    Ok(instance.new_int(handle as i64))
+}
+
+#[allow(unsafe_code)]
+fn msvcrt_close(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "msvcrt._close", kwargs)?;
+    let fd = int_arg(instance, "msvcrt._close", args, 0)? as i32;
+    // SAFETY: fd 由宿主给。
+    let _ = unsafe { ucrt::_close(fd) };
+    Ok(instance.new_none())
 }
 
 #[allow(unsafe_code)]
@@ -1737,6 +1798,20 @@ pub fn install(instance: &Instance) {
         }
         if let Some(class) = build_overlapped_class(instance) {
             instance.dict_set(namespace, "Overlapped", class);
+        }
+    }
+}
+
+/// **CLI 专用**的 msvcrt 句柄转换面（`asyncio.windows_utils.Popen` 需要把管道 HANDLE 变 CRT fd）。
+pub fn install_cli_msvcrt_compat(instance: &Instance) {
+    if let Some(namespace) = module_namespace(instance, "msvcrt") {
+        for (name, handler) in [
+            ("open_osfhandle", msvcrt_open_osfhandle as pyawa_core::NativeFn),
+            ("get_osfhandle", msvcrt_get_osfhandle as pyawa_core::NativeFn),
+            ("_close", msvcrt_close as pyawa_core::NativeFn),
+        ] {
+            let function = make_native(instance, name, handler);
+            instance.dict_set(namespace, name, function);
         }
     }
 }
