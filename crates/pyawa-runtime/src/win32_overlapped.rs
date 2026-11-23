@@ -1564,6 +1564,9 @@ fn overlapped_read_file_into(
     memory.kind = 5;
     memory.target = Some(buffer);
     set_bool_attr(instance, this, "pending", memory.completed.is_none());
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        eprintln!("ReadFileInto handle={handle} ok={ok} transferred={transferred} len={}", memory.buffer.len());
+    }
     Ok(instance.new_none())
 }
 
@@ -1774,6 +1777,9 @@ fn overlapped_get_result_common(
         let end = (transferred as usize).min(memory.buffer.len());
         Ok(instance.new_bytes(&memory.buffer[..end]))
     } else if memory.kind == 5 {
+        if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+            eprintln!("getresult kind5 transferred={transferred}");
+        }
         let end = (transferred as usize).min(memory.buffer.len());
         if let Some(target) = memory.target.take() {
             // 把内核读到的字节写进目标 bytearray，再归还本对象持有的引用。
