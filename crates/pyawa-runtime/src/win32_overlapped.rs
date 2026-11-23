@@ -354,7 +354,7 @@ fn resolve_socket(handle: i64) -> HandleRaw {
 mod ucrt {
     use super::HandleRaw;
 
-    #[link(name = "ucrtbase")]
+    #[link(name = "ucrt")]
     unsafe extern "system" {
         pub fn _open_osfhandle(osfhandle: HandleRaw, flags: i32) -> i32;
         pub fn _get_osfhandle(fd: i32) -> HandleRaw;
