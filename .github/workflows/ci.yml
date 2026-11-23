@@ -240,7 +240,8 @@ jobs:
               label = "pipe" if stdout is not None else "none"
               print("stage", label, "before-create", flush=True)
               proc = await asyncio.create_subprocess_exec(
-                  "cmd.exe", "/d", "/c", "echo", "hi", stdout=stdout)
+                  "cmd.exe", "/d", "/c", "echo", "hi",
+                  stdin=None, stdout=stdout, stderr=None)
               print("stage", label, "created", proc.pid, flush=True)
               try:
                   await asyncio.wait_for(proc.wait(), 3)
