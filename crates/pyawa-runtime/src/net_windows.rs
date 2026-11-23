@@ -516,11 +516,11 @@ fn wsa_socket_option(level: i32, name: i32) -> Option<(i32, i32)> {
 ///
 /// `_socket.fileno()` 给的是 provider 句柄；`_overlapped.WSARecv` 需要原生 SOCKET。
 /// 句柄号用**进程级**计数器保证跨实例唯一，桥表只为这一层服务，不改变脚本可见的 fd 语义。
-/// provider 句柄从 **高位** 起，避免与 Win32 原生 HANDLE（小整数、4 对齐）撞号：
-/// `_overlapped.CreateIoCompletionPort` 用 `raw_socket_for_handle` 判断“这是 socket 的
-/// provider 句柄”，撞号会把 pipe HANDLE 误当 socket，关联到错误的 IOCP（Proactor 管道
-/// 读完成包因此永远收不到）。
-static NEXT_SOCKET_HANDLE: AtomicU64 = AtomicU64::new(0x4000_0000);
+/// provider 句柄从 **3 起、步长 2（全奇数）**：Win32 原生 HANDLE 通常 4 对齐
+/// （低两位 00）⇒ 不会与 socket provider 句柄撞号。`_overlapped.CreateIoCompletionPort`
+/// 依赖 `raw_socket_for_handle` 判断“这是 socket 的 provider 句柄”；撞号会把 pipe HANDLE
+/// 误当 socket，关联到错误的 IOCP（Proactor 管道读完成包因此永远收不到）。
+static NEXT_SOCKET_HANDLE: AtomicU64 = AtomicU64::new(3);
 static RAW_SOCKETS: Mutex<Option<HashMap<u64, usize>>> = Mutex::new(None);
 
 fn raw_sockets() -> std::sync::MutexGuard<'static, Option<HashMap<u64, usize>>> {
@@ -592,7 +592,7 @@ impl WindowsNet {
 
     /// 收下一枚新 `SOCKET`，返回不透明句柄（`CP-31` 的句柄号段见模块文档）。
     fn insert(&self, socket: usize) -> SocketHandle {
-        let handle = NEXT_SOCKET_HANDLE.fetch_add(1, Ordering::Relaxed);
+        let handle = NEXT_SOCKET_HANDLE.fetch_add(2, Ordering::Relaxed);
         self.sockets
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
