@@ -71,6 +71,15 @@ struct HandleEntry {
 }
 
 static HANDLES: Mutex<Option<HashMap<u64, HandleEntry>>> = Mutex::new(None);
+/// **CRT fd 的旁表**：`msvcrt.open_osfhandle` 返回高位合成 fd，避免 `os.close(fd)` 把
+/// 能力表里同号段的 socket/pipe 句柄误关（Proactor 自管道曾被误关）。
+static NEXT_OSF_FD: AtomicU64 = AtomicU64::new(0x4000_0000);
+static OSF_HANDLES: Mutex<Option<HashMap<i32, HandleRaw>>> = Mutex::new(None);
+
+fn osf_table() -> std::sync::MutexGuard<'static, Option<HashMap<i32, HandleRaw>>> {
+    OSF_HANDLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 fn table() -> std::sync::MutexGuard<'static, Option<HashMap<u64, HandleEntry>>> {
@@ -350,17 +359,6 @@ fn resolve_socket(handle: i64) -> HandleRaw {
     crate::net_windows::raw_socket_for_handle(handle).map(|socket| socket as HandleRaw).unwrap_or(handle as HandleRaw)
 }
 
-#[allow(unsafe_code)]
-mod ucrt {
-    use super::HandleRaw;
-
-    #[link(name = "ucrt")]
-    unsafe extern "system" {
-        pub fn _open_osfhandle(osfhandle: HandleRaw, flags: i32) -> i32;
-        pub fn _get_osfhandle(fd: i32) -> HandleRaw;
-        pub fn _close(fd: i32) -> i32;
-    }
-}
 
 // --------------------------------------------------------------------------- //
 // 参数工具（与 winreg 同口径：整数/字符串/None；不支持 kwargs）
@@ -898,6 +896,7 @@ fn create_process(
 }
 
 #[allow(unsafe_code)]
+#[allow(unsafe_code)]
 fn msvcrt_open_osfhandle(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -906,12 +905,13 @@ fn msvcrt_open_osfhandle(
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "msvcrt.open_osfhandle", kwargs)?;
     let handle = int_arg(instance, "msvcrt.open_osfhandle", args, 0)? as HandleRaw;
-    let flags = optional_int(instance, "msvcrt.open_osfhandle", args, 1, 0)? as i32;
-    // SAFETY: Win32 句柄由宿主给。
-    let fd = unsafe { ucrt::_open_osfhandle(handle, flags) };
-    if fd == -1 {
-        return Err(instance.raise_builtin_error("OSError", "open_osfhandle 失败"));
+    if handle == 0 || handle == -1isize {
+        return Err(instance.raise_builtin_error("OSError", "open_osfhandle 收到无效句柄"));
     }
+    let fd = NEXT_OSF_FD.fetch_add(1, Ordering::Relaxed) as i32;
+    osf_table()
+        .get_or_insert_with(HashMap::new)
+        .insert(fd, handle);
     Ok(instance.new_int(i64::from(fd)))
 }
 
@@ -924,12 +924,11 @@ fn msvcrt_get_osfhandle(
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "msvcrt.get_osfhandle", kwargs)?;
     let fd = int_arg(instance, "msvcrt.get_osfhandle", args, 0)? as i32;
-    // SAFETY: fd 由宿主给。
-    let handle = unsafe { ucrt::_get_osfhandle(fd) };
-    if handle == -1isize {
-        return Err(instance.raise_builtin_error("OSError", "get_osfhandle 失败"));
+    let handle = osf_table().as_ref().and_then(|map| map.get(&fd).copied());
+    match handle {
+        Some(handle) => Ok(instance.new_int(handle as i64)),
+        None => Err(instance.raise_builtin_error("OSError", "get_osfhandle 收到未知 fd")),
     }
-    Ok(instance.new_int(handle as i64))
 }
 
 #[allow(unsafe_code)]
@@ -941,8 +940,11 @@ fn msvcrt_close(
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "msvcrt._close", kwargs)?;
     let fd = int_arg(instance, "msvcrt._close", args, 0)? as i32;
-    // SAFETY: fd 由宿主给。
-    let _ = unsafe { ucrt::_close(fd) };
+    let handle = osf_table().as_mut().and_then(|map| map.remove(&fd));
+    if let Some(handle) = handle {
+        // SAFETY: 句柄由 open_osfhandle 收下；关闭一次。
+        unsafe { sys::CloseHandle(handle) };
+    }
     Ok(instance.new_none())
 }
 
