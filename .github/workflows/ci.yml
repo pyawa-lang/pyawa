@@ -224,28 +224,18 @@ jobs:
           mkdir -p cli-probe
           cat > cli-probe/proactor_subprocess_probe.py <<'PY'
           import subprocess
-          try:
-              p = subprocess.Popen(["cmd.exe", "/d", "/c", "echo", "direct"], stdout=subprocess.PIPE)
-              out, _ = p.communicate()
-              print("direct-subprocess", out.strip())
-          except BaseException as exc:
-              print("direct-subprocess-error", type(exc).__name__, exc)
-
-          import asyncio
-          import asyncio.events
-          import asyncio.windows_events
-          asyncio.events._set_event_loop_policy(
-              asyncio.windows_events._WindowsProactorEventLoopPolicy())
-          async def main():
-              proc = await asyncio.create_subprocess_exec(
-                  "cmd.exe", "/d", "/c", "echo", "hi",
-                  stdout=asyncio.subprocess.PIPE)
-              out, _ = await proc.communicate()
-              return out.strip()
-          try:
-              print("proactor-subprocess", asyncio.run(main()))
-          except BaseException as exc:
-              print("proactor-subprocess-error", type(exc).__name__, exc)
+          for label, kwargs in [
+              ("pipe", {"stdout": subprocess.PIPE}),
+              ("pipe-noclose", {"stdout": subprocess.PIPE, "close_fds": False}),
+              ("plain-noclose", {"close_fds": False}),
+              ("plain", {}),
+          ]:
+              try:
+                  p = subprocess.Popen(["cmd.exe", "/d", "/c", "echo", label], **kwargs)
+                  out, _ = p.communicate()
+                  print("direct-subprocess", label, out.strip())
+              except BaseException as exc:
+                  print("direct-subprocess-error", label, type(exc).__name__, exc)
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_subprocess_probe.py
 
