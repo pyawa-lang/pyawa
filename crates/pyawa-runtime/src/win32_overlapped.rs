@@ -1060,6 +1060,31 @@ fn unregister_wait_ex(
 }
 
 #[allow(unsafe_code)]
+fn overlapped_create_event(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_overlapped.CreateEvent", kwargs)?;
+    let manual_reset = optional_int(instance, "_overlapped.CreateEvent", args, 1, 0)? as i32;
+    let initial_state = optional_int(instance, "_overlapped.CreateEvent", args, 2, 0)? as i32;
+    // SAFETY: security/name 传 NULL（事件不命名）。
+    let handle = unsafe {
+        sys::CreateEventW(
+            core::ptr::null_mut(),
+            manual_reset,
+            initial_state,
+            core::ptr::null(),
+        )
+    };
+    if handle == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(handle as i64))
+}
+
+#[allow(unsafe_code)]
 fn set_event(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1492,6 +1517,48 @@ fn overlapped_read_file(
 }
 
 #[allow(unsafe_code)]
+fn overlapped_read_file_into(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.ReadFileInto", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let handle = int_arg(instance, "Overlapped.ReadFileInto", rest, 0)? as HandleRaw;
+    let buffer = arg(instance, "Overlapped.ReadFileInto", rest, 1)?;
+    let data = instance.bytes_like_value(buffer).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "ReadFileInto 需要 bytes-like 对象")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let mut read = vec![0u8; data.len()];
+    let mut transferred = 0u32;
+    let ok = unsafe {
+        sys::ReadFile(
+            handle,
+            read.as_mut_ptr().cast::<c_void>(),
+            read.len() as u32,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = last_error();
+        if code != 997 {
+            return Err(raise_win(instance, code));
+        }
+    }
+    memory.buffer = read;
+    memory.handle = handle;
+    memory.kind = 5;
+    memory.target = Some(buffer);
+    set_bool_attr(instance, this, "pending", true);
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
 fn overlapped_write_file(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1906,6 +1973,7 @@ pub fn install(instance: &Instance) {
             ("CreateIoCompletionPort", overlapped_module_create_iocp as pyawa_core::NativeFn),
             ("GetQueuedCompletionStatus", overlapped_module_get_queued as pyawa_core::NativeFn),
             ("RegisterWaitWithQueue", register_wait_with_queue as pyawa_core::NativeFn),
+            ("CreateEvent", overlapped_create_event as pyawa_core::NativeFn),
             ("UnregisterWaitEx", unregister_wait_ex as pyawa_core::NativeFn),
             ("UnregisterWait", unregister_wait_ex as pyawa_core::NativeFn),
         ] {
@@ -1916,6 +1984,28 @@ pub fn install(instance: &Instance) {
             instance.dict_set(namespace, "Overlapped", class);
         }
     }
+}
+
+#[allow(unsafe_code)]
+fn cli_os_close(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "os.close", kwargs)?;
+    let fd = int_arg(instance, "os.close", args, 0)?;
+    let handle = osf_table()
+        .as_mut()
+        .and_then(|map| map.remove(&(fd as i32)));
+    if let Some(handle) = handle {
+        // SAFETY: 句柄由 msvcrt.open_osfhandle 收下。
+        unsafe { sys::CloseHandle(handle) };
+        return Ok(instance.new_none());
+    }
+    // 普通 fs fd 仍走能力域。
+    let _ = instance.fs_close(fd.max(0) as u64);
+    Ok(instance.new_none())
 }
 
 /// **CLI 专用**的 msvcrt 句柄转换面（`asyncio.windows_utils.Popen` 需要把管道 HANDLE 变 CRT fd）。
@@ -1929,6 +2019,10 @@ pub fn install_cli_msvcrt_compat(instance: &Instance) {
             let function = make_native(instance, name, handler);
             instance.dict_set(namespace, name, function);
         }
+    }
+    if let Some(namespace) = module_namespace(instance, "os") {
+        let function = make_native(instance, "close", cli_os_close as pyawa_core::NativeFn);
+        instance.dict_set(namespace, "close", function);
     }
 }
 
@@ -1957,6 +2051,7 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("getresult", overlapped_getresult as pyawa_core::NativeFn),
         ("ReadFile", overlapped_read_file as pyawa_core::NativeFn),
         ("WriteFile", overlapped_write_file as pyawa_core::NativeFn),
+        ("ReadFileInto", overlapped_read_file_into as pyawa_core::NativeFn),
         ("WSARecv", overlapped_wsa_recv as pyawa_core::NativeFn),
         ("WSARecvInto", overlapped_wsa_recv_into as pyawa_core::NativeFn),
         ("WSASend", overlapped_wsa_send as pyawa_core::NativeFn),
