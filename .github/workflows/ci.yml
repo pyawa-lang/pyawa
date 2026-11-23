@@ -216,13 +216,21 @@ jobs:
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_msvcrt_probe.py
 
-      # 实验：显式 Proactor 下 create_subprocess_exec（不切默认）。
+      # 实验：显式 Proactor 下 create_subprocess_exec（不切默认）；同时跑同步 Popen 隔离层。
       - name: Windows Proactor subprocess 探针（实验）
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p cli-probe
           cat > cli-probe/proactor_subprocess_probe.py <<'PY'
+          import subprocess, traceback
+          try:
+              p = subprocess.Popen(["cmd.exe", "/d", "/c", "echo", "direct"], stdout=subprocess.PIPE)
+              out, _ = p.communicate()
+              print("direct-subprocess", out.strip())
+          except BaseException:
+              traceback.print_exc()
+
           import asyncio
           import asyncio.events
           import asyncio.windows_events
@@ -234,7 +242,6 @@ jobs:
                   stdout=asyncio.subprocess.PIPE)
               out, _ = await proc.communicate()
               return out.strip()
-          import traceback
           try:
               print("proactor-subprocess", asyncio.run(main()))
           except BaseException:
