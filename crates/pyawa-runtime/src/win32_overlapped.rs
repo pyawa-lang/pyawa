@@ -1305,6 +1305,9 @@ fn overlapped_module_create_iocp(
     let file = if file == -1 { file } else { crate::net_windows::raw_socket_for_handle(file as i64).map(|raw| raw as HandleRaw).unwrap_or(file) };
     // SAFETY: 句柄按 Win32 契约；existing 为 0 或原生 IOCP。
     let handle = unsafe { sys::CreateIoCompletionPort(file, existing, key, threads) };
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        eprintln!("CreateIoCompletionPort file={file} existing={existing} -> {handle} err={}", last_error());
+    }
     if handle == 0 {
         return Err(raise_win(instance, last_error()));
     }
@@ -1329,6 +1332,9 @@ fn overlapped_module_get_queued(
     let status = unsafe {
         sys::GetQueuedCompletionStatus(iocp, &mut transferred, &mut key, &mut overlapped, timeout)
     };
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        eprintln!("GQCS status={status} err={last_error()} ov={overlapped:?}");
+    }
     if status == 0 {
         let code = last_error();
         if code == 258 {
@@ -1564,6 +1570,9 @@ fn overlapped_read_file_into(
     memory.kind = 5;
     memory.target = Some(buffer);
     set_bool_attr(instance, this, "pending", memory.completed.is_none());
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        eprintln!("ReadFileInto handle={handle} ok={ok} transferred={transferred} pending={memory.completed.is_none()}");
+    }
     Ok(instance.new_none())
 }
 
