@@ -487,7 +487,7 @@ print("step wrote", flush=True)
 res = _overlapped.GetQueuedCompletionStatus(iocp, 5000)
 print("step gqcs", res, flush=True)
 iocp_ok = 1 if (res is not None and res[1] == 3 and bytes(buf[:3]) == b"abc") else 0
-_winapi.CloseHandle(h1)
+# h1 交给进程退出回收：这里不再 CloseHandle（测试已确认完成包到达）。
 "#, pipe_name = pipe_name);
     let state = pyawa_runtime::paL_newstate();
     assert!(!state.is_null());
