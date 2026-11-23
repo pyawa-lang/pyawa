@@ -203,6 +203,62 @@ fn install_windows_asyncio_selector(state: *mut pa_state) {
     }
 }
 
+/// **CLI Windows 兼容**：`subprocess` 在 Windows 上用 `io.open(fd, 'rb')` 包管道；
+/// 本层 `io.open` 只接路径 ⇒ 这里给整数 fd 一个最小的二进制读对象（基于 `_winapi.ReadFile`）。
+#[cfg(windows)]
+fn install_windows_io_compat(state: *mut pa_state) {
+    const SRC: &[u8] = br#"import io as __pa_io
+__pa_orig_open = __pa_io.open
+class __PaFdFile:
+    def __init__(self, fd):
+        self._fd = fd
+        self._handle = __import__('msvcrt').get_osfhandle(fd)
+        self.closed = False
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = 1 << 20
+        return __import__('_winapi').ReadFile(self._handle, n)
+    def readable(self):
+        return True
+    def writable(self):
+        return False
+    def fileno(self):
+        return self._fd
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            try:
+                __import__('msvcrt')._close(self._fd)
+            except BaseException:
+                pass
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        self.close()
+        return False
+def __pa_open(file, mode='r', buffering=-1, encoding=None, errors=None,
+              newline=None, closefd=True, opener=None):
+    if isinstance(file, int):
+        return __PaFdFile(file)
+    return __pa_orig_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
+__pa_io.open = __pa_open
+"#;
+    // SAFETY: state 刚由 pa_create 交回、仍存活；入口按 AB-59 契约传 C 串。
+    let rc = unsafe {
+        pa_exec_string(
+            state,
+            SRC.as_ptr().cast(),
+            SRC.len() as isize,
+            c"<pyawa-io-shim>".as_ptr(),
+            c"python".as_ptr(),
+            core::ptr::null(),
+        )
+    };
+    if rc != status::PA_OK && std::env::var_os("PYAWA_IO_SHIM_DEBUG").is_some() {
+        eprintln!("pyawa: io shim rc={rc}");
+    }
+}
+
 pub fn run() {
     install_segv_trace();
     // **大栈执行线程**（round 112）：本层 Python 调用是 Rust 递归 ✓ —— 主线程默认 8 MiB 栈；
@@ -411,6 +467,8 @@ fn real_main() {
     // 抓到 `_signal.set_wakeup_fd` 的旧桩）。
     #[cfg(windows)]
     install_windows_asyncio_selector(state);
+    #[cfg(windows)]
+    install_windows_io_compat(state);
     // **`sys.argv`／`sys.executable`／`sys.orig_argv` 的字节口径**（P3-38 S3b-4）：
     // `install` 那条路收 `&[String]`（组合根既有签名）⇒ 非 UTF-8 参数会被 lossy ✗；
     // 这里按 PEP 383 用 WTF-8 `str` **直接覆盖**（含孤立代理的参数 ⇒ `'\udcff'` 一类）。
