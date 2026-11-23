@@ -454,13 +454,19 @@ fn create_file(
     let disposition = optional_int(instance, "CreateFile", args, 4, 3)? as u32; // OPEN_EXISTING
     let flags = optional_int(instance, "CreateFile", args, 5, 0)? as u32;
     let wide = wide_opt(Some(&path)).expect("路径非 None");
-    // SAFETY: wide 是 NUL 结尾 UTF-16；security/template 传 NULL/0。
+    // `subprocess` 的 stdio 句柄要能被 child 继承（windows_utils.pipe 的客户端端）。
+    let mut security = SecurityAttributes {
+        length: core::mem::size_of::<SecurityAttributes>() as u32,
+        descriptor: core::ptr::null_mut(),
+        inherit: 1,
+    };
+    // SAFETY: wide 是 NUL 结尾 UTF-16；security 是活局部量且 bInheritHandle=TRUE。
     let handle = unsafe {
         sys::CreateFileW(
             wide.as_ptr(),
             access,
             share,
-            core::ptr::null_mut(),
+            (&mut security as *mut SecurityAttributes).cast::<c_void>(),
             disposition,
             flags,
             0,
@@ -489,7 +495,13 @@ fn create_named_pipe(
     let in_size = optional_int(instance, "CreateNamedPipe", args, 5, 4096)? as u32;
     let timeout = optional_int(instance, "CreateNamedPipe", args, 6, 0)? as u32;
     let wide = wide_opt(Some(&name)).expect("名字非 None");
-    // SAFETY: wide 是 NUL 结尾 UTF-16；security 传 NULL。
+    // subprocess 的 pipe 句柄要能被 child 继承。
+    let mut security = SecurityAttributes {
+        length: core::mem::size_of::<SecurityAttributes>() as u32,
+        descriptor: core::ptr::null_mut(),
+        inherit: 1,
+    };
+    // SAFETY: wide 是 NUL 结尾 UTF-16；security 是活局部量且 bInheritHandle=TRUE。
     let handle = unsafe {
         sys::CreateNamedPipeW(
             wide.as_ptr(),
@@ -499,7 +511,7 @@ fn create_named_pipe(
             out_size,
             in_size,
             timeout,
-            core::ptr::null_mut(),
+            (&mut security as *mut SecurityAttributes).cast::<c_void>(),
         )
     };
     if handle == -1isize {
