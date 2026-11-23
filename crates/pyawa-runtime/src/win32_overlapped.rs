@@ -1060,6 +1060,31 @@ fn unregister_wait_ex(
 }
 
 #[allow(unsafe_code)]
+fn overlapped_create_event(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_overlapped.CreateEvent", kwargs)?;
+    let manual_reset = optional_int(instance, "_overlapped.CreateEvent", args, 1, 0)? as i32;
+    let initial_state = optional_int(instance, "_overlapped.CreateEvent", args, 2, 0)? as i32;
+    // SAFETY: security/name 传 NULL（事件不命名）。
+    let handle = unsafe {
+        sys::CreateEventW(
+            core::ptr::null_mut(),
+            manual_reset,
+            initial_state,
+            core::ptr::null(),
+        )
+    };
+    if handle == 0 {
+        return Err(raise_win(instance, last_error()));
+    }
+    Ok(instance.new_int(handle as i64))
+}
+
+#[allow(unsafe_code)]
 fn set_event(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -1906,6 +1931,7 @@ pub fn install(instance: &Instance) {
             ("CreateIoCompletionPort", overlapped_module_create_iocp as pyawa_core::NativeFn),
             ("GetQueuedCompletionStatus", overlapped_module_get_queued as pyawa_core::NativeFn),
             ("RegisterWaitWithQueue", register_wait_with_queue as pyawa_core::NativeFn),
+            ("CreateEvent", overlapped_create_event as pyawa_core::NativeFn),
             ("UnregisterWaitEx", unregister_wait_ex as pyawa_core::NativeFn),
             ("UnregisterWait", unregister_wait_ex as pyawa_core::NativeFn),
         ] {
