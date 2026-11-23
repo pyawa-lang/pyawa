@@ -259,6 +259,15 @@ mod sys {
             previous: *mut c_void,
             return_size: *mut usize,
         ) -> i32;
+        pub fn RegisterWaitForSingleObject(
+            wait_handle: *mut HandleRaw,
+            handle: HandleRaw,
+            callback: Option<unsafe extern "system" fn(*mut c_void, u8)>,
+            context: *mut c_void,
+            timeout: u32,
+            flags: u32,
+        ) -> i32;
+        pub fn UnregisterWaitEx(wait_handle: HandleRaw, completion_event: HandleRaw) -> i32;
         pub fn CreateProcessW(
             application_name: *const u16,
             command_line: *mut u16,
@@ -318,6 +327,24 @@ struct ProcessInformation {
     thread: HandleRaw,
     process_id: u32,
     thread_id: u32,
+}
+
+#[repr(C)]
+struct WaitContext {
+    iocp: HandleRaw,
+    overlapped: *mut OverlappedInner,
+}
+
+static WAIT_CONTEXTS: Mutex<Option<HashMap<HandleRaw, usize>>> = Mutex::new(None);
+
+#[allow(unsafe_code)]
+unsafe extern "system" fn wait_callback(context: *mut c_void, _timed_out: u8) {
+    // SAFETY: context 是 register_wait_with_queue 放进去的 WaitContext，注销前一直存活。
+    let context = unsafe { &*(context as *const WaitContext) };
+    // SAFETY: iocp/overlapped 均来自调用方活对象。
+    unsafe {
+        sys::PostQueuedCompletionStatus(context.iocp, 0, 0, context.overlapped);
+    }
 }
 
 #[repr(C)]
@@ -958,6 +985,76 @@ fn msvcrt_close(
     if let Some(handle) = handle {
         // SAFETY: 句柄由 open_osfhandle 收下；关闭一次。
         unsafe { sys::CloseHandle(handle) };
+    }
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn register_wait_with_queue(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_overlapped.RegisterWaitWithQueue", kwargs)?;
+    let handle = int_arg(instance, "_overlapped.RegisterWaitWithQueue", args, 0)? as HandleRaw;
+    let iocp = int_arg(instance, "_overlapped.RegisterWaitWithQueue", args, 1)? as HandleRaw;
+    let overlapped = int_arg(instance, "_overlapped.RegisterWaitWithQueue", args, 2)? as usize
+        as *mut OverlappedInner;
+    let timeout = u32::try_from(optional_int(
+        instance,
+        "_overlapped.RegisterWaitWithQueue",
+        args,
+        3,
+        u32::MAX as i64,
+    )?)
+    .map_err(|_| instance.raise_builtin_error("OverflowError", "超时超出 32 位"))?;
+    let context = Box::into_raw(Box::new(WaitContext { iocp, overlapped }));
+    let mut wait: HandleRaw = 0;
+    // SAFETY: context 交给 Win32，注销时回收；callback 只 post 完成包。
+    let ok = unsafe {
+        sys::RegisterWaitForSingleObject(
+            &mut wait,
+            handle,
+            Some(wait_callback),
+            context.cast::<c_void>(),
+            timeout,
+            0,
+        )
+    };
+    if ok == 0 {
+        // SAFETY: 注册失败，context 仍由本函数拥有。
+        drop(unsafe { Box::from_raw(context) });
+        return Err(raise_win(instance, last_error()));
+    }
+    WAIT_CONTEXTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(wait, context as usize);
+    Ok(instance.new_int(wait as i64))
+}
+
+#[allow(unsafe_code)]
+fn unregister_wait_ex(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_overlapped.UnregisterWaitEx", kwargs)?;
+    let wait = int_arg(instance, "_overlapped.UnregisterWaitEx", args, 0)? as HandleRaw;
+    let event = optional_int(instance, "_overlapped.UnregisterWaitEx", args, 1, -1)? as HandleRaw;
+    // SAFETY: 等待句柄来自 RegisterWaitWithQueue。
+    let _ = unsafe { sys::UnregisterWaitEx(wait, event) };
+    let context = WAIT_CONTEXTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_mut()
+        .and_then(|map| map.remove(&wait));
+    if let Some(context) = context {
+        // SAFETY: 注册时 Box::into_raw 的唯一所有权；注销后回收。
+        drop(unsafe { Box::from_raw(context as *mut WaitContext) });
     }
     Ok(instance.new_none())
 }
@@ -1808,6 +1905,8 @@ pub fn install(instance: &Instance) {
         for (name, handler) in [
             ("CreateIoCompletionPort", overlapped_module_create_iocp as pyawa_core::NativeFn),
             ("GetQueuedCompletionStatus", overlapped_module_get_queued as pyawa_core::NativeFn),
+            ("RegisterWaitWithQueue", register_wait_with_queue as pyawa_core::NativeFn),
+            ("UnregisterWaitEx", unregister_wait_ex as pyawa_core::NativeFn),
         ] {
             let function = make_native(instance, name, handler);
             instance.dict_set(namespace, name, function);
