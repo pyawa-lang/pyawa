@@ -1550,6 +1550,9 @@ fn overlapped_connect_named_pipe(
         let code = last_error();
         if code == 535 {
             // ERROR_PIPE_CONNECTED：客户端已在等待，连接立即完成，不需要等完成包。
+            // 但 windows_utils 仍会 `ov.GetOverlappedResult(True)` ⇒ 把事件置位，
+            // 否则它会永远等一个不会到来的完成包。
+            unsafe { sys::SetEvent(memory.raw.event) };
             memory.handle = pipe;
             memory.kind = 0;
             return Ok(instance.new_int(1));
