@@ -429,3 +429,30 @@ connect_ok = 1 if (ov is not None and ov.address != 0) else 0
     // SAFETY: state 由 paL_newstate 交出、只销毁一次。
     unsafe { pyawa_abi::pa_destroy(state) };
 }
+
+
+#[test]
+fn overlapped_read_file_into_named_pipe_through_the_abi() {
+    let pipe_name = format!(r"\\.\pipe\pyawa-readfileinto-{}", std::process::id());
+    let script = format!(r#"
+import _winapi
+import _overlapped
+
+h1 = _winapi.CreateNamedPipe({pipe_name:?}, 3 | 0x40000000, 0, 1, 4096, 4096, 0, None)
+h2 = _winapi.CreateFile({pipe_name:?}, 0xC0000000, 0, None, 3, 0x40000000, None)
+ov = _overlapped.Overlapped(0)
+buf = bytearray(16)
+ov.ReadFileInto(h1, buf)
+n = _winapi.WriteFile(h2, b"abc")
+got = ov.getresult()
+_winapi.CloseHandle(h2)
+_winapi.CloseHandle(h1)
+readfileinto_ok = 1 if (got == 3 and bytes(buf[:3]) == b"abc") else 0
+"#, pipe_name = pipe_name);
+    let state = pyawa_runtime::paL_newstate();
+    assert!(!state.is_null());
+    assert_eq!(abi_exec(state, &script), 0, "exec 失败：{}", abi_errmsg(state));
+    assert_eq!(abi_global_int(state, "readfileinto_ok"), Some(1));
+    // SAFETY: state 由 paL_newstate 交出、只销毁一次。
+    unsafe { pyawa_abi::pa_destroy(state) };
+}

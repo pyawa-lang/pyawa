@@ -1550,6 +1550,8 @@ fn overlapped_read_file_into(
             return Err(raise_win(instance, code));
         }
     }
+    // 目标 buffer 由本 Overlapped 持有到 getresult/Close；新增一份引用。
+    unsafe { instance.incref_object(buffer.as_ptr()) };
     memory.buffer = read;
     memory.handle = handle;
     memory.kind = 5;
