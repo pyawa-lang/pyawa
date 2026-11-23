@@ -1907,6 +1907,7 @@ pub fn install(instance: &Instance) {
             ("GetQueuedCompletionStatus", overlapped_module_get_queued as pyawa_core::NativeFn),
             ("RegisterWaitWithQueue", register_wait_with_queue as pyawa_core::NativeFn),
             ("UnregisterWaitEx", unregister_wait_ex as pyawa_core::NativeFn),
+            ("UnregisterWait", unregister_wait_ex as pyawa_core::NativeFn),
         ] {
             let function = make_native(instance, name, handler);
             instance.dict_set(namespace, name, function);
