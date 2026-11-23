@@ -55,6 +55,8 @@ struct OverlappedMemory {
     kind: u8,
     /// `WSARecvInto` 的目标 bytearray（持有引用；`getresult` 写入后释放）。
     target: Option<NonNull<Header>>,
+    /// 操作已同步完成时记录字节数（避免等一个不会到来的 IOCP 完成包）。
+    completed: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1429,6 +1431,7 @@ fn overlapped_init(
         handle: 0,
         kind: 0,
         target: None,
+        completed: None,
     });
     let address = Box::into_raw(memory) as usize;
     set_int_attr(instance, this, "_ptr", address as i64);
@@ -1549,6 +1552,10 @@ fn overlapped_read_file_into(
         if code != 997 {
             return Err(raise_win(instance, code));
         }
+    } else {
+        // ReadFile 同步完成：Proactor 不会再收到完成包，必须把 pending 置假，
+        // 否则 `_register` 会永远等一个不会到来的 IOCP 包。
+        memory.completed = Some(transferred);
     }
     // 目标 buffer 由本 Overlapped 持有到 getresult/Close；新增一份引用。
     unsafe { instance.incref_object(buffer.as_ptr()) };
@@ -1556,7 +1563,7 @@ fn overlapped_read_file_into(
     memory.handle = handle;
     memory.kind = 5;
     memory.target = Some(buffer);
-    set_bool_attr(instance, this, "pending", true);
+    set_bool_attr(instance, this, "pending", memory.completed.is_none());
     Ok(instance.new_none())
 }
 
@@ -1751,11 +1758,16 @@ fn overlapped_get_result_common(
     // SAFETY: 同上。
     let memory = unsafe { &mut *memory };
     let mut transferred = 0u32;
-    let ok = unsafe {
-        sys::GetOverlappedResult(memory.handle, &mut memory.raw, &mut transferred, wait)
-    };
-    if ok == 0 {
-        return Err(raise_win(instance, last_error()));
+    let completed = memory.completed.take();
+    if let Some(bytes) = completed {
+        transferred = bytes;
+    } else {
+        let ok = unsafe {
+            sys::GetOverlappedResult(memory.handle, &mut memory.raw, &mut transferred, wait)
+        };
+        if ok == 0 {
+            return Err(raise_win(instance, last_error()));
+        }
     }
     set_bool_attr(instance, this, "pending", false);
     if bytes_for_read && (memory.kind == 1 || memory.kind == 3) {
