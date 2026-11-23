@@ -1986,6 +1986,28 @@ pub fn install(instance: &Instance) {
     }
 }
 
+#[allow(unsafe_code)]
+fn cli_os_close(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "os.close", kwargs)?;
+    let fd = int_arg(instance, "os.close", args, 0)?;
+    let handle = osf_table()
+        .as_mut()
+        .and_then(|map| map.remove(&(fd as i32)));
+    if let Some(handle) = handle {
+        // SAFETY: 句柄由 msvcrt.open_osfhandle 收下。
+        unsafe { sys::CloseHandle(handle) };
+        return Ok(instance.new_none());
+    }
+    // 普通 fs fd 仍走能力域。
+    let _ = instance.fs_close(fd.max(0) as u64);
+    Ok(instance.new_none())
+}
+
 /// **CLI 专用**的 msvcrt 句柄转换面（`asyncio.windows_utils.Popen` 需要把管道 HANDLE 变 CRT fd）。
 pub fn install_cli_msvcrt_compat(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "msvcrt") {
@@ -1997,6 +2019,10 @@ pub fn install_cli_msvcrt_compat(instance: &Instance) {
             let function = make_native(instance, name, handler);
             instance.dict_set(namespace, name, function);
         }
+    }
+    if let Some(namespace) = module_namespace(instance, "os") {
+        let function = make_native(instance, "close", cli_os_close as pyawa_core::NativeFn);
+        instance.dict_set(namespace, "close", function);
     }
 }
 
