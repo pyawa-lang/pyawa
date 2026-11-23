@@ -166,6 +166,27 @@ jobs:
               print("wu-popen", out.strip())
           except BaseException as exc:
               print("wu-popen-error", type(exc).__name__, exc)
+          import asyncio.windows_utils as wu
+          try:
+              print("wu-none before", flush=True)
+              p = wu.Popen(["cmd.exe", "/d", "/c", "echo", "wu-none"])
+              print("wu-none created", p.pid, flush=True)
+              p.wait()
+              print("wu-none waited", p.returncode, flush=True)
+          except BaseException as exc:
+              print("wu-none-error", type(exc).__name__, exc, flush=True)
+          import asyncio.windows_events as we
+          try:
+              loop = we.ProactorEventLoop()
+              p = wu.Popen(["cmd.exe", "/d", "/c", "echo", "waitprobe"])
+              print("waitprobe before", flush=True)
+              f = loop._proactor.wait_for_handle(int(p._handle))
+              print("waitprobe future", type(f).__name__, flush=True)
+              p.wait()
+              f.cancel()
+              loop.close()
+          except BaseException as exc:
+              print("waitprobe-error", type(exc).__name__, exc, flush=True)
           import asyncio
           import asyncio.events
           import asyncio.windows_events
