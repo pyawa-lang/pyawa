@@ -466,17 +466,26 @@ import _winapi
 import _overlapped
 
 iocp = _overlapped.CreateIoCompletionPort(-1, 0, 0, 1)
+print("step iocp", iocp, flush=True)
 h1 = _winapi.CreateNamedPipe({pipe_name:?}, 3 | 0x40000000, 0, 1, 4096, 4096, 0, None)
+print("step h1", h1, flush=True)
 h2 = _winapi.CreateFile({pipe_name:?}, 0xC0000000, 0, None, 3, 0x40000000, None)
+print("step h2", h2, flush=True)
 ovc = _winapi.ConnectNamedPipe(h1, overlapped=True)
+print("step connect", flush=True)
 ovc.GetOverlappedResult(True)
+print("step connected", flush=True)
 _winapi.CreateIoCompletionPort(h1, iocp, 0, 0)
+print("step registered", flush=True)
 ov = _overlapped.Overlapped(0)
 buf = bytearray(16)
 ov.ReadFileInto(h1, buf)
+print("step read", flush=True)
 _winapi.WriteFile(h2, b"abc")
 _winapi.CloseHandle(h2)
+print("step wrote", flush=True)
 res = _overlapped.GetQueuedCompletionStatus(iocp, 5000)
+print("step gqcs", res, flush=True)
 iocp_ok = 1 if (res is not None and res[1] == 3 and bytes(buf[:3]) == b"abc") else 0
 _winapi.CloseHandle(h1)
 "#, pipe_name = pipe_name);
