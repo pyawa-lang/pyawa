@@ -256,7 +256,7 @@ import _winapi
 stdout = _winapi.GetStdHandle(_winapi.STD_OUTPUT_HANDLE)
 kind = _winapi.GetFileType(stdout)
 process = _winapi.GetCurrentProcess()
-dup = _winapi.DuplicateHandle(process, stdout, process, 0, 0, _winapi.DUPLICATE_SAME_ACCESS)
+dup = _winapi.DuplicateHandle(process, stdout, process, 0, 1, _winapi.DUPLICATE_SAME_ACCESS)
 kind2 = _winapi.GetFileType(dup)
 _winapi.CloseHandle(dup)
 handle_ok = 1 if (kind != 0 and kind2 == kind) else 0
