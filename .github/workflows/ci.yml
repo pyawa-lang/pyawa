@@ -244,6 +244,53 @@ jobs:
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_msvcrt_probe.py
 
+      # 诊断：Proactor connect_read_pipe 最小读（不涉及 subprocess）。
+      - name: Windows Proactor read_pipe 探针（实验）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cli-probe
+          cat > cli-probe/proactor_readpipe.py <<'PY'
+          import asyncio
+          import asyncio.events
+          import asyncio.windows_events
+          import asyncio.windows_utils as wu
+          import _winapi
+          asyncio.events._set_event_loop_policy(
+              asyncio.windows_events._WindowsProactorEventLoopPolicy())
+
+          class Proto(asyncio.Protocol):
+              def __init__(self):
+                  self.data = b""
+                  self.done = asyncio.get_running_loop().create_future()
+              def connection_made(self, transport):
+                  print("readpipe connected", flush=True)
+              def data_received(self, data):
+                  self.data += data
+                  print("readpipe data", data, flush=True)
+              def eof_received(self):
+                  print("readpipe eof", self.data, flush=True)
+                  if not self.done.done():
+                      self.done.set_result(self.data)
+                  return False
+
+          async def main():
+              r, w = wu.pipe(overlapped=(True, False))
+              proto = Proto()
+              transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+                  lambda: proto, wu.PipeHandle(r))
+              _winapi.WriteFile(w, b"hi")
+              _winapi.CloseHandle(w)
+              got = await asyncio.wait_for(proto.done, 5)
+              transport.close()
+              return got
+          try:
+              print("readpipe", asyncio.run(main()), flush=True)
+          except BaseException as exc:
+              print("readpipe-error", type(exc).__name__, exc, flush=True)
+          PY
+          timeout 20 target/debug/pyawa.exe cli-probe/proactor_readpipe.py
+
       - name: Windows 原生 CLI 冒烟（PLAN §12.23 选项 A）
         shell: bash
         run: |
