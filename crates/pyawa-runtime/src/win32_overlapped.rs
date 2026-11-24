@@ -1337,6 +1337,9 @@ fn overlapped_module_get_queued(
     };
     if status == 0 {
         let code = last_error();
+        if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+            eprintln!("GQCS status=0 code={code} ov={overlapped:?} transferred={transferred}");
+        }
         if code == 258 {
             return Ok(instance.new_none());
         }
@@ -1570,6 +1573,10 @@ fn overlapped_read_file_into(
     memory.kind = 5;
     memory.target = Some(buffer);
     set_bool_attr(instance, this, "pending", memory.completed.is_none());
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        let pending = memory.completed.is_none();
+        eprintln!("ReadFileInto handle={handle} ok={ok} transferred={transferred} pending={pending}");
+    }
     Ok(instance.new_none())
 }
 
