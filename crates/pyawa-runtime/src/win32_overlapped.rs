@@ -1305,6 +1305,10 @@ fn overlapped_module_create_iocp(
     // 不能先解析：provider 句柄号段很低，可能与 pipe 原生 HANDLE 撞号。
     // SAFETY: 句柄按 Win32 契约；existing 为 0 或原生 IOCP。
     let mut handle = unsafe { sys::CreateIoCompletionPort(file, existing, key, threads) };
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        let iocp_error = if handle == 0 { last_error() } else { 0 };
+        eprintln!("IOCP-raw file={file} existing={existing} handle={handle} err={iocp_error}");
+    }
     if handle == 0 {
         if let Some(raw) = crate::net_windows::raw_socket_for_handle(file as i64) {
             // SAFETY: raw 是该 provider 句柄对应的原生 SOCKET。
