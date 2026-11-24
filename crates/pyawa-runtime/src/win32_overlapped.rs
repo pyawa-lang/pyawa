@@ -1301,16 +1301,17 @@ fn overlapped_module_create_iocp(
     let existing = optional_int(instance, "_overlapped.CreateIoCompletionPort", args, 1, 0)? as HandleRaw;
     let key = optional_int(instance, "_overlapped.CreateIoCompletionPort", args, 2, 0)? as usize;
     let threads = optional_int(instance, "_overlapped.CreateIoCompletionPort", args, 3, 0)? as u32;
-    // **先按原生 HANDLE 试**（pipe 等）；失败再按 socket provider 句柄解析。
-    // 不能先解析：provider 句柄号段很低，可能与 pipe 原生 HANDLE 撞号。
+    // provider 句柄（socket）要换成原生 SOCKET 才能注册到 IOCP。
+    // provider 句柄全奇数、原生 HANDLE 4 对齐 ⇒ 不会撞号。
+    let file = if file == -1 {
+        file
+    } else {
+        crate::net_windows::raw_socket_for_handle(file as i64)
+            .map(|raw| raw as HandleRaw)
+            .unwrap_or(file)
+    };
     // SAFETY: 句柄按 Win32 契约；existing 为 0 或原生 IOCP。
     let mut handle = unsafe { sys::CreateIoCompletionPort(file, existing, key, threads) };
-    if handle == 0 {
-        if let Some(raw) = crate::net_windows::raw_socket_for_handle(file as i64) {
-            // SAFETY: raw 是该 provider 句柄对应的原生 SOCKET。
-            handle = unsafe { sys::CreateIoCompletionPort(raw as HandleRaw, existing, key, threads) };
-        }
-    }
     if handle == 0 {
         return Err(raise_win(instance, last_error()));
     }
