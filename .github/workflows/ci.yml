@@ -268,6 +268,8 @@ jobs:
                       self.done.set_result(True)
                   return False
           async def main():
+              asyncio.get_running_loop().set_exception_handler(
+                  lambda loop, ctx: print("readpipe-loop-error", ctx.get("message"), ctx.get("exception"), flush=True))
               r, w = wu.pipe(overlapped=(True, False))
               print("readpipe handles", r, w, flush=True)
               transport, _ = await asyncio.get_running_loop().connect_read_pipe(
