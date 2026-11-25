@@ -1353,6 +1353,9 @@ fn overlapped_module_get_queued(
             instance.new_int(overlapped as usize as i64),
         ]));
     }
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        eprintln!("GQCS-success transferred={transferred} key={key} ov={overlapped:?}");
+    }
     Ok(instance.new_tuple(vec![
         instance.new_int(0),
         instance.new_int(i64::from(transferred)),
@@ -1780,6 +1783,10 @@ fn overlapped_get_result_common(
         let end = (transferred as usize).min(memory.buffer.len());
         Ok(instance.new_bytes(&memory.buffer[..end]))
     } else if memory.kind == 5 {
+        if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+            let addr = memory as *mut OverlappedMemory as usize;
+            eprintln!("getresult kind5 transferred={transferred} addr={addr}");
+        }
         let end = (transferred as usize).min(memory.buffer.len());
         if let Some(target) = memory.target.take() {
             // 把内核读到的字节写进目标 bytearray，再归还本对象持有的引用。

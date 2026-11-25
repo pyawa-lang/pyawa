@@ -244,6 +244,45 @@ jobs:
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_msvcrt_probe.py
 
+      # 诊断：connect_read_pipe 的完成地址/缓存匹配。
+      - name: Windows Proactor read_pipe 地址探针（实验）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cli-probe
+          cat > cli-probe/proactor_readpipe_addr.py <<'PY'
+          import asyncio
+          import asyncio.events
+          import asyncio.windows_events
+          import asyncio.windows_utils as wu
+          import _winapi
+          asyncio.events._set_event_loop_policy(
+              asyncio.windows_events._WindowsProactorEventLoopPolicy())
+          class Proto(asyncio.Protocol):
+              def data_received(self, data):
+                  print("readpipe data", data, flush=True)
+              def eof_received(self):
+                  print("readpipe eof", flush=True)
+                  return False
+          async def main():
+              loop = asyncio.get_running_loop()
+              loop.set_exception_handler(
+                  lambda loop, ctx: print("readpipe-loop-error", ctx.get("message"), ctx.get("exception"), flush=True))
+              r, w = wu.pipe(overlapped=(True, False))
+              print("readpipe handles", r, w, flush=True)
+              transport, _ = await loop.connect_read_pipe(lambda: Proto(), wu.PipeHandle(r))
+              print("readpipe connected", flush=True)
+              _winapi.WriteFile(w, b"hi")
+              _winapi.CloseHandle(w)
+              await asyncio.wait_for(asyncio.sleep(0.5), 2)
+              transport.close()
+          try:
+              asyncio.run(main())
+          except BaseException as exc:
+              print("readpipe-error", type(exc).__name__, exc, flush=True)
+          PY
+          PYAWA_OVERLAPPED_DEBUG=1 timeout 20 target/debug/pyawa.exe cli-probe/proactor_readpipe_addr.py
+
       - name: Windows 原生 CLI 冒烟（PLAN §12.23 选项 A）
         shell: bash
         run: |
