@@ -203,6 +203,31 @@ fn install_windows_asyncio_selector(state: *mut pa_state) {
     }
 }
 
+/// **CLI Windows Proactor 兼容**：`Lib/asyncio/proactor_events.py` 的
+/// `_ProactorBasePipeTransport._force_close()` 会读 `self._empty_waiter`，但基类
+/// `__init__` 没有初始化它（CPython 3.14 里通常不会走到该路径）。Pyawa 的读传输在
+/// EOF/close 时会走到 ⇒ 在运行时给基类补一个类属性 `None`，不改 `Lib/`。
+#[cfg(windows)]
+fn install_windows_proactor_compat(state: *mut pa_state) {
+    const SRC: &[u8] = br#"import asyncio.proactor_events as __pa_pe
+__pa_pe._ProactorBasePipeTransport._empty_waiter = None
+"#;
+    // SAFETY: state 刚由 pa_create 交回、仍存活；入口按 AB-59 契约传 C 串。
+    let rc = unsafe {
+        pa_exec_string(
+            state,
+            SRC.as_ptr().cast(),
+            SRC.len() as isize,
+            c"<pyawa-proactor-shim>".as_ptr(),
+            c"python".as_ptr(),
+            core::ptr::null(),
+        )
+    };
+    if rc != status::PA_OK && std::env::var_os("PYAWA_PROACTOR_SHIM_DEBUG").is_some() {
+        eprintln!("pyawa: proactor shim rc={rc}");
+    }
+}
+
 /// **CLI Windows 兼容**：`subprocess` 在 Windows 上用 `io.open(fd, 'rb')` 包管道；
 /// 本层 `io.open` 只接路径 ⇒ 这里给整数 fd 一个最小的二进制读对象（基于 `_winapi.ReadFile`）。
 #[cfg(windows)]
@@ -469,6 +494,8 @@ fn real_main() {
     install_windows_asyncio_selector(state);
     #[cfg(windows)]
     install_windows_io_compat(state);
+    #[cfg(windows)]
+    install_windows_proactor_compat(state);
     // **`sys.argv`／`sys.executable`／`sys.orig_argv` 的字节口径**（P3-38 S3b-4）：
     // `install` 那条路收 `&[String]`（组合根既有签名）⇒ 非 UTF-8 参数会被 lossy ✗；
     // 这里按 PEP 383 用 WTF-8 `str` **直接覆盖**（含孤立代理的参数 ⇒ `'\udcff'` 一类）。
