@@ -1573,6 +1573,10 @@ fn overlapped_read_file_into(
     memory.kind = 5;
     memory.target = Some(buffer);
     set_bool_attr(instance, this, "pending", memory.completed.is_none());
+    if std::env::var_os("PYAWA_OVERLAPPED_DEBUG").is_some() {
+        let addr = memory as *mut OverlappedMemory as usize;
+        eprintln!("ReadFileInto handle={handle} ok={ok} transferred={transferred} pending={memory.completed.is_none()} addr={addr}");
+    }
     Ok(instance.new_none())
 }
 
