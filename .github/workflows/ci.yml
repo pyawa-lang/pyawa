@@ -140,132 +140,16 @@ jobs:
               for i in range(n):
                   yield i
           async def main():
-              await asyncio.sleep(0.01)
-              values = [x async for x in agen(3)]
-              gathered = await asyncio.gather(coro(1), coro(2), coro(3))
-              async with asyncio.TaskGroup() as tg:
-                  t1 = tg.create_task(coro(4))
-                  t2 = tg.create_task(coro(5))
-              return values, gathered, t1.result(), t2.result()
-          print("asyncio", asyncio.run(main()))
-          PY
-          out=$(target/debug/pyawa.exe cli-probe/asyncio_smoke.py)
-          test "$out" = "asyncio ([0, 1, 2], [2, 4, 6], 8, 10)"
-          echo "$out"
-      # 实验：显式 Proactor 策略跑最基本 asyncio.run（不切默认；超时保护）。
-      - name: Windows Proactor 基本运行探针（实验）
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p cli-probe
-          cat > cli-probe/proactor_probe.py <<'PY'
-          import asyncio.windows_utils as wu
-          try:
-              p = wu.Popen(["cmd.exe", "/d", "/c", "echo", "wu"], stdout=wu.PIPE)
-              out, _ = p.communicate()
-              print("wu-popen", out.strip())
-          except BaseException as exc:
-              print("wu-popen-error", type(exc).__name__, exc)
-          import asyncio.windows_utils as wu
-          try:
-              print("wu-none before", flush=True)
-              p = wu.Popen(["cmd.exe", "/d", "/c", "echo", "wu-none"])
-              print("wu-none created", p.pid, flush=True)
-              p.wait()
-              print("wu-none waited", p.returncode, flush=True)
-          except BaseException as exc:
-              print("wu-none-error", type(exc).__name__, exc, flush=True)
-          import asyncio.windows_events as we
-          try:
-              loop = we.ProactorEventLoop()
-              p = wu.Popen(["cmd.exe", "/d", "/c", "echo", "waitprobe"])
-              print("waitprobe before", flush=True)
-              f = loop._proactor.wait_for_handle(int(p._handle))
-              print("waitprobe future", type(f).__name__, flush=True)
-              p.wait()
-              f.cancel()
-              loop.close()
-          except BaseException as exc:
-              print("waitprobe-error", type(exc).__name__, exc, flush=True)
-          import asyncio
-          import asyncio.events
-          import asyncio.windows_events
-          asyncio.events._set_event_loop_policy(
-              asyncio.windows_events._WindowsProactorEventLoopPolicy())
-          async def coro(n):
-              return n * 2
-          async def main():
-              await asyncio.sleep(0.01)
-              got = await asyncio.gather(coro(1), coro(2))
-              async with asyncio.TaskGroup() as tg:
-                  task = tg.create_task(coro(3))
-              return got, task.result()
-          import traceback
-          try:
-              print("proactor", asyncio.run(main()))
-          except BaseException:
-              traceback.print_exc()
-          PY
-          timeout 30 target/debug/pyawa.exe cli-probe/proactor_probe.py
-
-      # 实验：asyncio.windows_utils.pipe()（Proactor subprocess 的管道构造基础）。
-      - name: Windows Proactor windows_utils.pipe 探针（实验）
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p cli-probe
-          cat > cli-probe/proactor_pipe_probe.py <<'PY'
-          import _winapi
-          import asyncio.windows_utils as wu
-          h1, h2 = wu.pipe()
-          _winapi.CloseHandle(h1)
-          _winapi.CloseHandle(h2)
-          print("windows_utils-pipe", isinstance(h1, int), isinstance(h2, int))
-          PY
-          timeout 30 target/debug/pyawa.exe cli-probe/proactor_pipe_probe.py
-
-      # 实验：msvcrt.open_osfhandle/get_osfhandle（windows_utils.Popen 的前置）。
-      - name: Windows Proactor msvcrt 句柄探针（实验）
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p cli-probe
-          cat > cli-probe/proactor_msvcrt_probe.py <<'PY'
-          import _winapi
-          import msvcrt
-          import os
-          r, w = _winapi.CreatePipe(None, 0)
-          fd = msvcrt.open_osfhandle(w, 0)
-          back = msvcrt.get_osfhandle(fd)
-          ok = (back == w)
-          os.close(fd)
-          _winapi.CloseHandle(r)
-          print("msvcrt-osfhandle", ok)
-          PY
-          timeout 30 target/debug/pyawa.exe cli-probe/proactor_msvcrt_probe.py
-
-      # 实验：Overlapped.address 修复后，Proactor subprocess 完整 piping。
-      - name: Windows Proactor subprocess 完整探针（实验）
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p cli-probe
-          cat > cli-probe/proactor_subprocess_final.py <<'PY'
-          import asyncio
-          import asyncio.events
-          import asyncio.windows_events
-          asyncio.events._set_event_loop_policy(
-              asyncio.windows_events._WindowsProactorEventLoopPolicy())
-          async def main():
+              print("final before-create", flush=True)
               proc = await asyncio.create_subprocess_exec(
                   "cmd.exe", "/d", "/c", "echo", "hi",
                   stdin=None, stdout=asyncio.subprocess.PIPE, stderr=None)
-              out, err = await asyncio.wait_for(proc.communicate(), 10)
-              return out.strip(), err
-          try:
-              print("proactor-subprocess-final", asyncio.run(main()), flush=True)
-          except BaseException as exc:
-              print("proactor-subprocess-final-error", type(exc).__name__, exc, flush=True)
+              print("final created", proc.pid, flush=True)
+              data = await asyncio.wait_for(proc.stdout.read(), 5)
+              print("final data", data, flush=True)
+              rc = await asyncio.wait_for(proc.wait(), 5)
+              print("final rc", rc, flush=True)
+              return data.strip()
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_subprocess_final.py
 
