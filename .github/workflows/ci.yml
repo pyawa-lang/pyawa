@@ -262,10 +262,10 @@ jobs:
                   "cmd.exe", "/d", "/c", "echo", "hi",
                   stdin=None, stdout=asyncio.subprocess.PIPE, stderr=None)
               print("final created", proc.pid, flush=True)
-              data = await asyncio.wait_for(proc.stdout.read(), 5)
-              print("final data", data, flush=True)
               rc = await asyncio.wait_for(proc.wait(), 5)
               print("final rc", rc, flush=True)
+              data = await asyncio.wait_for(proc.stdout.read(), 5)
+              print("final data", data, flush=True)
               return data.strip()
           try:
               print("proactor-subprocess-final", asyncio.run(main()), flush=True)
