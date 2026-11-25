@@ -45,6 +45,7 @@ struct OverlappedInner {
     event: HandleRaw,
 }
 
+#[repr(C)]
 struct OverlappedMemory {
     raw: OverlappedInner,
     /// 重叠 I/O 的缓冲区（必须活到完成包归还）。
@@ -1441,8 +1442,12 @@ fn overlapped_init(
     });
     let address = Box::into_raw(memory) as usize;
     set_int_attr(instance, this, "_ptr", address as i64);
-    // CPython 的 `Overlapped.address` 是只读 int（这里作为普通实例属性如实暴露同一地址）。
-    set_int_attr(instance, this, "address", address as i64);
+    // **`address` 必须是交给 Win32 的 `&mut raw` 地址**（IOCP 完成包回传的是它）；
+    // `_ptr` 才是 `Box<OverlappedMemory>` 的地址（Close 时回收用）。两者可能因字段
+    // 布局不同而不相等 —— 之前混用导致 `_cache` 键永远匹配不上完成包。
+    // SAFETY: address 刚由 Box::into_raw 交出、仍存活。
+    let raw_address = unsafe { core::ptr::addr_of_mut!((*(address as *mut OverlappedMemory)).raw) as usize };
+    set_int_attr(instance, this, "address", raw_address as i64);
     set_int_attr(instance, this, "event", handle as i64);
     set_int_attr(instance, this, "_owned_event", owned);
     set_int_attr(instance, this, "pending", 0);
