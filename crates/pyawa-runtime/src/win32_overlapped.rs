@@ -988,6 +988,9 @@ fn msvcrt_close(
     no_kwargs(instance, "msvcrt._close", kwargs)?;
     let fd = int_arg(instance, "msvcrt._close", args, 0)? as i32;
     let handle = osf_table().as_mut().and_then(|map| map.remove(&fd));
+    if std::env::var_os("PYAWA_OSF_DEBUG").is_some() {
+        eprintln!("msvcrt._close fd={fd} handle={handle:?}");
+    }
     if let Some(handle) = handle {
         // SAFETY: 句柄由 open_osfhandle 收下；关闭一次。
         unsafe { sys::CloseHandle(handle) };
