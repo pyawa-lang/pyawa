@@ -1560,6 +1560,10 @@ fn overlapped_read_file_into(
     };
     if ok == 0 {
         let code = last_error();
+        if code == 109 {
+            // ERROR_BROKEN_PIPE：对端已关；Proactor 的 recv_into 把 BrokenPipeError 当 EOF。
+            return Err(instance.raise_builtin_error("BrokenPipeError", "管道已关闭"));
+        }
         if code != 997 {
             return Err(raise_win(instance, code));
         }
@@ -1777,7 +1781,11 @@ fn overlapped_get_result_common(
             sys::GetOverlappedResult(memory.handle, &mut memory.raw, &mut transferred, wait)
         };
         if ok == 0 {
-            return Err(raise_win(instance, last_error()));
+            let code = last_error();
+            if code == 109 {
+                return Err(instance.raise_builtin_error("BrokenPipeError", "管道已关闭"));
+            }
+            return Err(raise_win(instance, code));
         }
     }
     set_bool_attr(instance, this, "pending", false);
