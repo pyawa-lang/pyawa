@@ -244,6 +244,44 @@ jobs:
           PY
           timeout 30 target/debug/pyawa.exe cli-probe/proactor_msvcrt_probe.py
 
+      # 诊断：Proactor TCP echo（AcceptEx/ConnectEx）。
+      - name: Windows Proactor TCP echo 探针（实验）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cli-probe
+          cat > cli-probe/proactor_tcp_echo.py <<'PY'
+          import asyncio
+          import asyncio.events
+          import asyncio.windows_events
+          asyncio.events._set_event_loop_policy(
+              asyncio.windows_events._WindowsProactorEventLoopPolicy())
+          async def handle(reader, writer):
+              data = await reader.readline()
+              writer.write(data)
+              await writer.drain()
+              writer.close()
+          async def main():
+              print("tcp before-server", flush=True)
+              server = await asyncio.start_server(handle, "127.0.0.1", 0)
+              port = server.sockets[0].getsockname()[1]
+              print("tcp server", port, flush=True)
+              reader, writer = await asyncio.open_connection("127.0.0.1", port)
+              print("tcp connected", flush=True)
+              writer.write(b"hello\n")
+              await writer.drain()
+              line = await asyncio.wait_for(reader.readline(), 5)
+              print("tcp line", line, flush=True)
+              writer.close()
+              server.close()
+              await server.wait_closed()
+          try:
+              asyncio.run(main())
+          except BaseException as exc:
+              print("tcp-error", type(exc).__name__, exc, flush=True)
+          PY
+          timeout 30 target/debug/pyawa.exe cli-probe/proactor_tcp_echo.py
+
       - name: Windows 原生 CLI 冒烟（PLAN §12.23 选项 A）
         shell: bash
         run: |
