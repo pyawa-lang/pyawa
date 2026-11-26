@@ -351,6 +351,15 @@ unsafe extern "system" fn wait_callback(context: *mut c_void, _timed_out: u8) {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+struct SockaddrIn {
+    family: u16,
+    port: u16,
+    addr: [u8; 4],
+    zero: [u8; 8],
+}
+
+#[repr(C)]
 struct WsaBuf {
     len: u32,
     buf: *mut u8,
@@ -381,6 +390,18 @@ mod winsock {
             completion: *mut c_void,
         ) -> i32;
         pub fn WSAGetLastError() -> i32;
+        pub fn WSAIoctl(
+            socket: HandleRaw,
+            code: u32,
+            in_buffer: *mut c_void,
+            in_size: u32,
+            out_buffer: *mut c_void,
+            out_size: u32,
+            bytes_returned: *mut u32,
+            overlapped: *mut OverlappedInner,
+            completion: *mut c_void,
+        ) -> i32;
+        pub fn bind(socket: usize, name: *const u8, name_len: i32) -> i32;
     }
 }
 
@@ -1622,6 +1643,195 @@ fn overlapped_write_file(
     Ok(instance.new_none())
 }
 
+const SIO_GET_EXTENSION_FUNCTION_POINTER: u32 = 0xC800_0006;
+const WSAID_ACCEPTEX: [u8; 16] = [
+    0xf1, 0x7d, 0x36, 0xb5, 0xca, 0xcb, 0xcf, 0x11,
+    0x95, 0xac, 0x00, 0x80, 0x5f, 0x48, 0xa1, 0x92,
+];
+const WSAID_CONNECTEX: [u8; 16] = [
+    0xb9, 0x07, 0xa2, 0x25, 0xf3, 0xdd, 0x60, 0x46,
+    0x8e, 0x76, 0xe9, 0xe5, 0x8c, 0x9b, 0x1a, 0x1a,
+];
+
+static ACCEPTEX_FN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+static CONNECTEX_FN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+#[allow(unsafe_code)]
+fn extension_fn(socket: HandleRaw, guid: &[u8; 16], cache: &'static std::sync::OnceLock<usize>) -> Option<usize> {
+    if let Some(pointer) = cache.get() {
+        return Some(*pointer);
+    }
+    let mut pointer: usize = 0;
+    let mut returned: u32 = 0;
+    // SAFETY: guid/pointer 都是活局部量；SIO_GET_EXTENSION_FUNCTION_POINTER 输出函数指针。
+    let rc = unsafe {
+        winsock::WSAIoctl(
+            socket,
+            SIO_GET_EXTENSION_FUNCTION_POINTER,
+            guid.as_ptr() as *mut c_void,
+            guid.len() as u32,
+            (&mut pointer as *mut usize).cast::<c_void>(),
+            core::mem::size_of::<usize>() as u32,
+            &mut returned,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        )
+    };
+    if rc == 0 && pointer != 0 {
+        let _ = cache.set(pointer);
+        Some(pointer)
+    } else {
+        None
+    }
+}
+
+#[allow(unsafe_code)]
+fn overlapped_bind_local(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.BindLocal", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let _ = this;
+    let handle = int_arg(instance, "Overlapped.BindLocal", rest, 0)?;
+    let family = optional_int(instance, "Overlapped.BindLocal", rest, 1, 2)? as u16;
+    let socket = resolve_socket(handle);
+    let address = SockaddrIn { family, port: 0, addr: [0; 4], zero: [0; 8] };
+    // SAFETY: address 是活局部量，长度 16。
+    let rc = unsafe {
+        winsock::bind(socket as usize, (&address as *const SockaddrIn).cast::<u8>(), core::mem::size_of::<SockaddrIn>() as i32)
+    };
+    if rc != 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        return Err(raise_win(instance, code as u32));
+    }
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn overlapped_accept_ex(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.AcceptEx", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let listener = resolve_socket(int_arg(instance, "Overlapped.AcceptEx", rest, 0)?);
+    let accept = resolve_socket(int_arg(instance, "Overlapped.AcceptEx", rest, 1)?);
+    let pointer = extension_fn(listener, &WSAID_ACCEPTEX, &ACCEPTEX_FN).ok_or_else(|| {
+        instance.raise_builtin_error("OSError", "WSAIoctl 取 AcceptEx 失败")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let mut buffer = vec![0u8; 2 * 256];
+    let mut transferred = 0u32;
+    type AcceptExFn = unsafe extern "system" fn(
+        HandleRaw,
+        HandleRaw,
+        *mut c_void,
+        u32,
+        u32,
+        u32,
+        *mut u32,
+        *mut OverlappedInner,
+    ) -> i32;
+    // SAFETY: pointer 来自 WSAIoctl 的 AcceptEx 指针；buffer 活到完成。
+    let accept_ex: AcceptExFn = unsafe { core::mem::transmute(pointer) };
+    let ok = unsafe {
+        accept_ex(
+            listener,
+            accept,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            0,
+            256,
+            256,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        if code != 997 {
+            return Err(raise_win(instance, code as u32));
+        }
+    }
+    memory.buffer = buffer;
+    memory.handle = listener;
+    memory.kind = 6;
+    set_bool_attr(instance, this, "pending", true);
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn overlapped_connect_ex(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.ConnectEx", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let socket = resolve_socket(int_arg(instance, "Overlapped.ConnectEx", rest, 0)?);
+    let address = arg(instance, "Overlapped.ConnectEx", rest, 1)?;
+    let parts = instance
+        .tuple_items(address)
+        .or_else(|| instance.list_items(address))
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "ConnectEx 的 address 要是 (host, port)"))?;
+    let host = parts.first().and_then(|value| instance.text_of(*value)).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "ConnectEx 的 host 要是 str")
+    })?;
+    let port = parts.get(1).and_then(|value| instance.int_value(*value)).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "ConnectEx 的 port 要是整数")
+    })? as u16;
+    let ip = host.parse::<std::net::Ipv4Addr>().map_err(|_| {
+        instance.raise_builtin_error("OSError", "ConnectEx 只接了 IPv4 字面量")
+    })?;
+    let pointer = extension_fn(socket, &WSAID_CONNECTEX, &CONNECTEX_FN).ok_or_else(|| {
+        instance.raise_builtin_error("OSError", "WSAIoctl 取 ConnectEx 失败")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let address = SockaddrIn { family: 2, port: port.to_be(), addr: ip.octets(), zero: [0; 8] };
+    let mut transferred = 0u32;
+    type ConnectExFn = unsafe extern "system" fn(
+        HandleRaw,
+        *const SockaddrIn,
+        i32,
+        *mut c_void,
+        u32,
+        *mut u32,
+        *mut OverlappedInner,
+    ) -> i32;
+    // SAFETY: pointer 来自 WSAIoctl 的 ConnectEx 指针。
+    let connect_ex: ConnectExFn = unsafe { core::mem::transmute(pointer) };
+    let ok = unsafe {
+        connect_ex(
+            socket,
+            &address,
+            core::mem::size_of::<SockaddrIn>() as i32,
+            core::ptr::null_mut(),
+            0,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        if code != 997 {
+            return Err(raise_win(instance, code as u32));
+        }
+    }
+    memory.handle = socket;
+    memory.kind = 7;
+    set_bool_attr(instance, this, "pending", true);
+    Ok(instance.new_none())
+}
+
 #[allow(unsafe_code)]
 fn overlapped_wsa_recv(
     instance: &Instance,
@@ -1792,6 +2002,8 @@ fn overlapped_get_result_common(
     if bytes_for_read && (memory.kind == 1 || memory.kind == 3) {
         let end = (transferred as usize).min(memory.buffer.len());
         Ok(instance.new_bytes(&memory.buffer[..end]))
+    } else if memory.kind == 6 || memory.kind == 7 {
+        Ok(instance.new_int(i64::from(transferred)))
     } else if memory.kind == 5 {
         let end = (transferred as usize).min(memory.buffer.len());
         if let Some(target) = memory.target.take() {
@@ -2087,6 +2299,9 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("ReadFileInto", overlapped_read_file_into as pyawa_core::NativeFn),
         ("WSARecv", overlapped_wsa_recv as pyawa_core::NativeFn),
         ("WSARecvInto", overlapped_wsa_recv_into as pyawa_core::NativeFn),
+        ("BindLocal", overlapped_bind_local as pyawa_core::NativeFn),
+        ("AcceptEx", overlapped_accept_ex as pyawa_core::NativeFn),
+        ("ConnectEx", overlapped_connect_ex as pyawa_core::NativeFn),
         ("WSASend", overlapped_wsa_send as pyawa_core::NativeFn),
         ("ConnectNamedPipe", overlapped_connect_named_pipe as pyawa_core::NativeFn),
         ("DisconnectNamedPipe", overlapped_unwired as pyawa_core::NativeFn),
