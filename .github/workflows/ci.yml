@@ -264,6 +264,8 @@ jobs:
               print("final created", proc.pid, flush=True)
               rc = await asyncio.wait_for(proc.wait(), 5)
               print("final rc", rc, flush=True)
+              part = await asyncio.wait_for(proc.stdout.read(2), 5)
+              print("final part", part, flush=True)
               data = await asyncio.wait_for(proc.stdout.read(), 5)
               print("final data", data, flush=True)
               return data.strip()
