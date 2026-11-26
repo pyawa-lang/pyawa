@@ -92,3 +92,26 @@ print(asyncio.run(main()))
 "#;
     assert_eq!(run("aexit-suppress", script), "(True, True)\n");
 }
+
+/// **Windows Proactor subprocess**：`create_subprocess_exec` + `communicate()`。
+/// 需要 CLI 的 Windows 兼容层（`os.close` 合成 fd、`_ProactorBasePipeTransport._empty_waiter`、
+/// `Overlapped.address`/`BrokenPipeError`）。默认策略仍是 selector，这里显式切 Proactor。
+#[cfg(windows)]
+#[test]
+fn proactor_subprocess_communicate_returns_stdout() {
+    let script = r#"
+import asyncio
+import asyncio.events
+import asyncio.windows_events
+asyncio.events._set_event_loop_policy(
+    asyncio.windows_events._WindowsProactorEventLoopPolicy())
+async def main():
+    proc = await asyncio.create_subprocess_exec(
+        "cmd.exe", "/d", "/c", "echo", "hi",
+        stdin=None, stdout=asyncio.subprocess.PIPE, stderr=None)
+    out, err = await asyncio.wait_for(proc.communicate(), 10)
+    return out.strip(), err, proc.returncode
+print(asyncio.run(main()))
+"#;
+    assert_eq!(run("proactor-subprocess", script), "(b'hi', None, 0)\n");
+}
