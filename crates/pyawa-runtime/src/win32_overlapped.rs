@@ -956,6 +956,9 @@ fn msvcrt_open_osfhandle(
     osf_table()
         .get_or_insert_with(HashMap::new)
         .insert(fd, handle);
+    if std::env::var_os("PYAWA_OSF_DEBUG").is_some() {
+        eprintln!("open_osfhandle fd={fd} handle={handle}");
+    }
     Ok(instance.new_int(i64::from(fd)))
 }
 
@@ -2024,9 +2027,15 @@ fn cli_os_close(
         .as_mut()
         .and_then(|map| map.remove(&(fd as i32)));
     if let Some(handle) = handle {
+        if std::env::var_os("PYAWA_OSF_DEBUG").is_some() {
+            eprintln!("os.close synthetic fd={fd} handle={handle}");
+        }
         // SAFETY: 句柄由 msvcrt.open_osfhandle 收下。
         unsafe { sys::CloseHandle(handle) };
         return Ok(instance.new_none());
+    }
+    if std::env::var_os("PYAWA_OSF_DEBUG").is_some() {
+        eprintln!("os.close ordinary fd={fd}");
     }
     // 普通 fs fd 仍走能力域。
     let _ = instance.fs_close(fd.max(0) as u64);
