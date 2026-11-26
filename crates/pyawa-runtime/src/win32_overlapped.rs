@@ -163,6 +163,8 @@ mod sys {
         pub fn SetEvent(handle: HandleRaw) -> i32;
         pub fn ResetEvent(handle: HandleRaw) -> i32;
         pub fn CloseHandle(handle: HandleRaw) -> i32;
+        pub fn LoadLibraryW(name: *const u16) -> isize;
+        pub fn GetProcAddress(module: isize, name: *const u8) -> isize;
         pub fn WaitForSingleObject(handle: HandleRaw, milliseconds: u32) -> u32;
         pub fn GetLastError() -> u32;
         pub fn CreateIoCompletionPort(
@@ -380,15 +382,6 @@ mod mswsock {
             local_address_length: u32,
             remote_address_length: u32,
             bytes_received: *mut u32,
-            overlapped: *mut OverlappedInner,
-        ) -> i32;
-        pub fn ConnectEx(
-            socket: HandleRaw,
-            name: *const SockaddrIn,
-            name_length: i32,
-            send_buffer: *mut c_void,
-            send_data_length: u32,
-            bytes_sent: *mut u32,
             overlapped: *mut OverlappedInner,
         ) -> i32;
     }
@@ -1792,6 +1785,32 @@ fn overlapped_accept_ex(
     Ok(instance.new_none())
 }
 
+static CONNECT_EX_PTR: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+#[allow(unsafe_code)]
+fn connect_ex_pointer() -> Option<usize> {
+    if let Some(pointer) = CONNECT_EX_PTR.get() {
+        return Some(*pointer);
+    }
+    // mswsock 的 import lib 不导出 ConnectEx；用 GetProcAddress 动态取。
+    let name = "mswsock.dll";
+    let mut wide: Vec<u16> = name.encode_utf16().collect();
+    wide.push(0);
+    // SAFETY: wide 是 NUL 结尾 UTF-16。
+    let module = unsafe { sys::LoadLibraryW(wide.as_ptr()) };
+    if module == 0 {
+        return None;
+    }
+    // SAFETY: 模块已加载；函数名 NUL 结尾 ASCII。
+    let pointer = unsafe { sys::GetProcAddress(module, c"ConnectEx".as_ptr().cast::<u8>()) };
+    if pointer == 0 {
+        return None;
+    }
+    let pointer = pointer as usize;
+    let _ = CONNECT_EX_PTR.set(pointer);
+    Some(pointer)
+}
+
 #[allow(unsafe_code)]
 fn overlapped_connect_ex(
     instance: &Instance,
@@ -1821,8 +1840,22 @@ fn overlapped_connect_ex(
     let memory = unsafe { &mut *memory };
     let address = SockaddrIn { family: 2, port: port.to_be(), addr: ip.octets(), zero: [0; 8] };
     let mut transferred = 0u32;
+    let pointer = connect_ex_pointer().ok_or_else(|| {
+        instance.raise_builtin_error("OSError", "mswsock!ConnectEx 不可用")
+    })?;
+    type ConnectExFn = unsafe extern "system" fn(
+        HandleRaw,
+        *const SockaddrIn,
+        i32,
+        *mut c_void,
+        u32,
+        *mut u32,
+        *mut OverlappedInner,
+    ) -> i32;
+    // SAFETY: pointer 来自 mswsock.dll 的 ConnectEx 导出。
+    let connect_ex: ConnectExFn = unsafe { core::mem::transmute(pointer) };
     let ok = unsafe {
-        mswsock::ConnectEx(
+        connect_ex(
             socket,
             &address,
             core::mem::size_of::<SockaddrIn>() as i32,
