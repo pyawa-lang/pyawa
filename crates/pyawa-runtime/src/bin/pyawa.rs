@@ -267,6 +267,15 @@ def __pa_open(file, mode='r', buffering=-1, encoding=None, errors=None,
         return __PaFdFile(file)
     return __pa_orig_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
 __pa_io.open = __pa_open
+import os as __pa_os
+__pa_orig_os_close = __pa_os.close
+def __pa_os_close(fd):
+    # msvcrt.open_osfhandle 的合成 fd 从 0x40000000 起；普通 fs fd 走原 close。
+    if isinstance(fd, int) and fd >= 0x40000000:
+        import msvcrt as __pa_msvcrt
+        return __pa_msvcrt._close(fd)
+    return __pa_orig_os_close(fd)
+__pa_os.close = __pa_os_close
 "#;
     // SAFETY: state 刚由 pa_create 交回、仍存活；入口按 AB-59 契约传 C 串。
     let rc = unsafe {
