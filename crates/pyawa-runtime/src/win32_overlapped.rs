@@ -1693,6 +1693,8 @@ fn extension_fn(socket: HandleRaw, guid: &[u8; 16], cache: &'static std::sync::O
         let _ = cache.set(pointer);
         Some(pointer)
     } else {
+        let code = unsafe { winsock::WSAGetLastError() };
+        eprintln!("extension_fn WSAIoctl failed rc={rc} code={code} pointer={pointer}");
         None
     }
 }
