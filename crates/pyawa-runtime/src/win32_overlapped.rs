@@ -402,6 +402,8 @@ mod winsock {
             completion: *mut c_void,
         ) -> i32;
         pub fn bind(socket: usize, name: *const u8, name_len: i32) -> i32;
+        pub fn inet_pton(family: i32, src: *const u8, dst: *mut u8) -> i32;
+        pub fn inet_ntop(family: i32, src: *const u8, dst: *mut u8, size: usize) -> *const u8;
     }
 }
 
@@ -2265,6 +2267,55 @@ fn cli_os_close(
     Ok(instance.new_none())
 }
 
+#[allow(unsafe_code)]
+fn socket_inet_pton(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_socket.inet_pton", kwargs)?;
+    let family = int_arg(instance, "_socket.inet_pton", args, 0)? as i32;
+    let text = optional_text(instance, "_socket.inet_pton", args, 1)?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "inet_pton 需要地址串"))?;
+    let mut buffer = [0u8; 16];
+    let c_text = std::ffi::CString::new(text).map_err(|_| {
+        instance.raise_builtin_error("ValueError", "地址串含 NUL")
+    })?;
+    // SAFETY: buffer 至少 16 字节；CString NUL 结尾。
+    let rc = unsafe { winsock::inet_pton(family, c_text.as_ptr().cast::<u8>(), buffer.as_mut_ptr()) };
+    if rc != 1 {
+        return Err(instance.raise_builtin_error("OSError", "inet_pton 失败"));
+    }
+    let length = if family == 2 { 4 } else { 16 };
+    Ok(instance.new_bytes(&buffer[..length]))
+}
+
+#[allow(unsafe_code)]
+fn socket_inet_ntop(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_socket.inet_ntop", kwargs)?;
+    let family = int_arg(instance, "_socket.inet_ntop", args, 0)? as i32;
+    let packed = arg(instance, "_socket.inet_ntop", args, 1)?;
+    let bytes = instance.bytes_like_value(packed).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "inet_ntop 需要 bytes-like")
+    })?;
+    let mut output = [0u8; 64];
+    // SAFETY: bytes 指针在调用期间有效；output 足够大。
+    let rc = unsafe {
+        winsock::inet_ntop(family, bytes.as_ptr(), output.as_mut_ptr(), output.len())
+    };
+    if rc.is_null() {
+        return Err(instance.raise_builtin_error("OSError", "inet_ntop 失败"));
+    }
+    let text = unsafe { std::ffi::CStr::from_ptr(rc.cast()) }.to_string_lossy();
+    Ok(instance.new_str(&text))
+}
+
 /// **CLI 专用**的 msvcrt 句柄转换面（`asyncio.windows_utils.Popen` 需要把管道 HANDLE 变 CRT fd）。
 pub fn install_cli_msvcrt_compat(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "msvcrt") {
@@ -2280,6 +2331,15 @@ pub fn install_cli_msvcrt_compat(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "os") {
         let function = make_native(instance, "close", cli_os_close as pyawa_core::NativeFn);
         instance.dict_set(namespace, "close", function);
+    }
+    if let Some(namespace) = module_namespace(instance, "_socket") {
+        for (name, handler) in [
+            ("inet_pton", socket_inet_pton as pyawa_core::NativeFn),
+            ("inet_ntop", socket_inet_ntop as pyawa_core::NativeFn),
+        ] {
+            let function = make_native(instance, name, handler);
+            instance.dict_set(namespace, name, function);
+        }
     }
 }
 
