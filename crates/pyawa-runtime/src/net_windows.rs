@@ -163,6 +163,14 @@ mod sys {
         pub fn WSAStartup(w_version_requested: u16, wsa_data: *mut c_void) -> i32;
         /// `socket(af, type, protocol)`；失败返回 `INVALID_SOCKET`。
         pub fn socket(af: i32, ty: i32, protocol: i32) -> usize;
+        pub fn WSASocketW(
+            af: i32,
+            ty: i32,
+            protocol: i32,
+            protocol_info: *mut core::ffi::c_void,
+            group: u32,
+            flags: u32,
+        ) -> usize;
         /// `bind(s, name, namelen)`。
         pub fn bind(s: usize, name: *const u8, namelen: i32) -> i32;
         /// `listen(s, backlog)`。
@@ -635,8 +643,12 @@ extern "C" fn net_socket(
         return CapStatus::Machine;
     }
     // `AF_INET`／`SOCK_STREAM` 的数值与 Winsock 同值（2／1）⇒ 原样转发；`proto` 交给内核判定。
-    // SAFETY: 三个整数原样转发给 Winsock；不涉及 Rust 引用。
-    let raw = unsafe { sys::socket(af, ty, proto) };
+    // **WSA_FLAG_OVERLAPPED**：AcceptEx/ConnectEx 要求 overlapped socket
+    // （CPython 的 socket.socket 也这样建）。普通阻塞 I/O 不受影响。
+    // SAFETY: 三个整数＋空协议信息转发给 Winsock。
+    let raw = unsafe {
+        sys::WSASocketW(af, ty, proto, core::ptr::null_mut(), 0, 1)
+    };
     if raw == INVALID_SOCKET {
         write_errno(errno_out, last_wsa_errno());
         return CapStatus::Machine;
@@ -1323,8 +1335,10 @@ extern "C" fn net_socketpair(
         unsafe { *errno_out = wsa_errno(code) };
         CapStatus::Machine
     };
-    // SAFETY: `socket(family=AF_INET, type=SOCK_STREAM, proto=0)`。
-    let listener = unsafe { sys::socket(family::AF_INET, kind, 0) };
+    // SAFETY: `WSASocketW(..., WSA_FLAG_OVERLAPPED)`。
+    let listener = unsafe {
+        sys::WSASocketW(family::AF_INET, kind, 0, core::ptr::null_mut(), 0, 1)
+    };
     if listener == INVALID_SOCKET {
         // SAFETY: 无创建的 socket 可回收。
         return fail(unsafe { sys::WSAGetLastError() }, &mut created, errno_out);
