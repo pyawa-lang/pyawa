@@ -1582,8 +1582,18 @@ fn overlapped_read_file_into(
     if ok == 0 {
         let code = last_error();
         if code == 109 {
-            // ERROR_BROKEN_PIPE：对端已关；Proactor 的 recv_into 把 BrokenPipeError 当 EOF。
-            return Err(instance.raise_builtin_error("BrokenPipeError", "管道已关闭"));
+            // ERROR_BROKEN_PIPE：对端已关。按 **0 字节完成** 收尾（Proactor 当 EOF），
+            // 不抛 BrokenPipeError（本层异常没有 `winerror` 属性，asyncio 会再炸）。
+            let mut read = Vec::new();
+            read.clear();
+            unsafe { instance.incref_object(buffer.as_ptr()) };
+            memory.buffer = read;
+            memory.handle = handle;
+            memory.kind = 5;
+            memory.target = Some(buffer);
+            memory.completed = Some(0);
+            set_bool_attr(instance, this, "pending", false);
+            return Ok(instance.new_none());
         }
         if code != 997 {
             return Err(raise_win(instance, code));
@@ -1993,9 +2003,11 @@ fn overlapped_get_result_common(
         if ok == 0 {
             let code = last_error();
             if code == 109 {
-                return Err(instance.raise_builtin_error("BrokenPipeError", "管道已关闭"));
+                // 同 ReadFileInto：把关闭当 0 字节完成。
+                transferred = 0;
+            } else {
+                return Err(raise_win(instance, code));
             }
-            return Err(raise_win(instance, code));
         }
     }
     set_bool_attr(instance, this, "pending", false);
