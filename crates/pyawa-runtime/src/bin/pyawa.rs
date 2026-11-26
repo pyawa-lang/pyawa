@@ -270,7 +270,7 @@ __pa_io.open = __pa_open
 import os as __pa_os
 __pa_orig_os_close = __pa_os.close
 def __pa_os_close(fd):
-    # msvcrt.open_osfhandle 的合成 fd 从 0x40000000 起；普通 fs fd 走原 close。
+    # synthetic fds from msvcrt.open_osfhandle start at 0x40000000; others use original close.
     if isinstance(fd, int) and fd >= 0x40000000:
         import msvcrt as __pa_msvcrt
         return __pa_msvcrt._close(fd)
