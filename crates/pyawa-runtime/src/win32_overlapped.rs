@@ -366,6 +366,35 @@ struct WsaBuf {
 }
 
 #[allow(unsafe_code)]
+#[allow(unsafe_code)]
+mod mswsock {
+    use super::{c_void, HandleRaw, OverlappedInner, SockaddrIn};
+
+    #[link(name = "mswsock")]
+    unsafe extern "system" {
+        pub fn AcceptEx(
+            listen_socket: HandleRaw,
+            accept_socket: HandleRaw,
+            output_buffer: *mut c_void,
+            receive_data_length: u32,
+            local_address_length: u32,
+            remote_address_length: u32,
+            bytes_received: *mut u32,
+            overlapped: *mut OverlappedInner,
+        ) -> i32;
+        pub fn ConnectEx(
+            socket: HandleRaw,
+            name: *const SockaddrIn,
+            name_length: i32,
+            send_buffer: *mut c_void,
+            send_data_length: u32,
+            bytes_sent: *mut u32,
+            overlapped: *mut OverlappedInner,
+        ) -> i32;
+    }
+}
+
+#[allow(unsafe_code)]
 mod winsock {
     use super::{c_void, HandleRaw, OverlappedInner, WsaBuf};
 
@@ -1733,28 +1762,13 @@ fn overlapped_accept_ex(
     let (this, rest) = split_self(instance, bound, args)?;
     let listener = resolve_socket(int_arg(instance, "Overlapped.AcceptEx", rest, 0)?);
     let accept = resolve_socket(int_arg(instance, "Overlapped.AcceptEx", rest, 1)?);
-    let pointer = extension_fn(listener, &WSAID_ACCEPTEX, &ACCEPTEX_FN).ok_or_else(|| {
-        instance.raise_builtin_error("OSError", "WSAIoctl 取 AcceptEx 失败")
-    })?;
     let memory = overlapped_ptr(instance, this)?;
     // SAFETY: memory 来自 Box，存活到 Close。
     let memory = unsafe { &mut *memory };
     let mut buffer = vec![0u8; 2 * 256];
     let mut transferred = 0u32;
-    type AcceptExFn = unsafe extern "system" fn(
-        HandleRaw,
-        HandleRaw,
-        *mut c_void,
-        u32,
-        u32,
-        u32,
-        *mut u32,
-        *mut OverlappedInner,
-    ) -> i32;
-    // SAFETY: pointer 来自 WSAIoctl 的 AcceptEx 指针；buffer 活到完成。
-    let accept_ex: AcceptExFn = unsafe { core::mem::transmute(pointer) };
     let ok = unsafe {
-        accept_ex(
+        mswsock::AcceptEx(
             listener,
             accept,
             buffer.as_mut_ptr().cast::<c_void>(),
@@ -1802,27 +1816,13 @@ fn overlapped_connect_ex(
     let ip = host.parse::<std::net::Ipv4Addr>().map_err(|_| {
         instance.raise_builtin_error("OSError", "ConnectEx 只接了 IPv4 字面量")
     })?;
-    let pointer = extension_fn(socket, &WSAID_CONNECTEX, &CONNECTEX_FN).ok_or_else(|| {
-        instance.raise_builtin_error("OSError", "WSAIoctl 取 ConnectEx 失败")
-    })?;
     let memory = overlapped_ptr(instance, this)?;
     // SAFETY: memory 来自 Box，存活到 Close。
     let memory = unsafe { &mut *memory };
     let address = SockaddrIn { family: 2, port: port.to_be(), addr: ip.octets(), zero: [0; 8] };
     let mut transferred = 0u32;
-    type ConnectExFn = unsafe extern "system" fn(
-        HandleRaw,
-        *const SockaddrIn,
-        i32,
-        *mut c_void,
-        u32,
-        *mut u32,
-        *mut OverlappedInner,
-    ) -> i32;
-    // SAFETY: pointer 来自 WSAIoctl 的 ConnectEx 指针。
-    let connect_ex: ConnectExFn = unsafe { core::mem::transmute(pointer) };
     let ok = unsafe {
-        connect_ex(
+        mswsock::ConnectEx(
             socket,
             &address,
             core::mem::size_of::<SockaddrIn>() as i32,
