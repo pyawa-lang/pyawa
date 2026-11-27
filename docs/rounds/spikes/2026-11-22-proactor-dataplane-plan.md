@@ -48,5 +48,7 @@
 
 - 不修改 `Lib/`（`CX-8`）；
 - 不在 P1–P3 未全绿时切默认策略（`P4` 的前置条件；2026-11-22–round 281 期间保持 selector）。
-- **不做**：IPv6 `ConnectEx`（当前只接数字 IPv4）；pipe 的少数边界分支；
-  `OSError.winerror` 只保证 Windows 平台层抛出的异常带该属性（见 `RELEASE.md` 已知限制）。
+- **已补（round 283）**：命名管道 client（`_overlapped.ConnectPipe`）＋ `OSError.winerror` 默认属性
+  （类属性 `None`，Win32 错误仍由实例属性覆盖）。
+- **不做**：IPv6 `ConnectEx`（需先改 `CP-39` 的地址线格式：v1 只支持 `AF_INET`／`AF_UNIX`；
+  见 `RELEASE.md` 已知限制）。
