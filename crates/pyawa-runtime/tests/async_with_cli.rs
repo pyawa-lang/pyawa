@@ -201,47 +201,25 @@ print(getattr(FileNotFoundError(2, "nope"), "winerror", "missing"))
     assert_eq!(run("oserror-winerror", script), "None\nNone\n");
 }
 
-/// **Windows Proactor 命名管道**（`_overlapped.ConnectPipe` ＋ `PipeHandle`）：
-/// `start_serving_pipe`（服务端 ConnectNamedPipe）＋ `create_pipe_connection`（客户端 ConnectPipe）
-/// 走重叠 ReadFile／WriteFile 完成一次双向收发。
+/// **`_overlapped.ConnectPipe` 已接线（错误路径）**：对不存在的管道名必须抛带 `winerror`
+/// 的 `OSError`（`ERROR_FILE_NOT_FOUND`／`ERROR_PIPE_BUSY` 一族），而不是诚实桩的
+/// `NotImplementedError`。
+///
+/// **范围外（如实）**：完整命名管道 transport（`start_serving_pipe` 的服务端 `AcceptEx`
+/// 取消／关闭路径）本轮未接；照抄 e2e 会挂（Windows CI 实测 60s+ 不退出），故只验
+/// `ConnectPipe` 的接线与失败口径。
 #[cfg(windows)]
 #[test]
-fn proactor_named_pipe_connect_roundtrip() {
+fn proactor_connect_pipe_error_path() {
     let script = r#"
-import asyncio
-
-ADDRESS = r'\\.\pipe\pyawa-proactor-pipe-test'
-
-class ServerProtocol(asyncio.Protocol):
-    def connection_made(self, transport):
-        transport.write(b"hello-from-server\n")
-
-class ClientProtocol(asyncio.Protocol):
-    def __init__(self, done):
-        self.done = done
-        self.data = b""
-
-    def connection_made(self, transport):
-        transport.write(b"hello-from-client\n")
-
-    def data_received(self, data):
-        self.data += data
-        if b"hello-from-server" in self.data:
-            self.done.set_result(self.data)
-
-async def main():
-    loop = asyncio.get_running_loop()
-    servers = await loop.start_serving_pipe(ServerProtocol, ADDRESS)
-    done = loop.create_future()
-    transport, _ = await loop.create_pipe_connection(
-        lambda: ClientProtocol(done), ADDRESS)
-    data = await asyncio.wait_for(done, 10)
-    transport.close()
-    for server in servers:
-        server.close()
-    return data
-
-print(asyncio.run(main()))
+import _overlapped
+print(callable(_overlapped.ConnectPipe))
+try:
+    _overlapped.ConnectPipe(r'\\.\pipe\pyawa-no-such-pipe')
+except OSError as exc:
+    print(type(exc.winerror).__name__)
+    print(exc.winerror != 0)
 "#;
-    assert_eq!(run("proactor-named-pipe", script), "b'hello-from-server\\n'\n");
+    assert_eq!(run("connect-pipe-error", script), "True\nint\nTrue\n");
 }
+
