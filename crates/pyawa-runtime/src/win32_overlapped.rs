@@ -52,7 +52,8 @@ struct OverlappedMemory {
     buffer: Vec<u8>,
     /// 发起 I/O 的原始 Win32 句柄（`GetOverlappedResult` 用）。
     handle: HandleRaw,
-    /// 操作种类：0=无、1=读、2=写、3=socket recv、4=socket send、5=recv_into。
+    /// 操作种类：0=无、1=读、2=写、3=socket recv、4=socket send、5=recv_into、
+    /// 6=AcceptEx、7=ConnectEx。
     kind: u8,
     /// `WSARecvInto` 的目标 bytearray（持有引用；`getresult` 写入后释放）。
     target: Option<NonNull<Header>>,
@@ -129,8 +130,48 @@ fn release_handle(instance: &Instance, value: i64) -> Result<HandleRaw, ExecErro
     Err(instance.raise_builtin_error("OSError", "[WinError 6] 无效的 Win32 句柄"))
 }
 
+/// 抛 `OSError` 一族的 Win32／WSA 错误，并带上 **`winerror` 属性**（CPython `_overlapped`／
+/// `_winapi` 口径：`PyErr_SetExcFromWindowsErr` 会写这个属性）。
+///
+/// `Lib/asyncio/windows_events.py` 的 `IocpProactor.finish_socket_func` 会对 `OSError`
+/// 直接读 `exc.winerror`（判断 `ERROR_NETNAME_DELETED`／`ERROR_OPERATION_ABORTED`）⇒ 没有
+/// 该属性时"连接被重置"会退化成 `AttributeError`，在事件循环回调里炸掉。
+///
+/// 构造走「正常类型调用 + 设属性」，失败时退回不带属性的诚实文本（不静默丢错误）。
+fn raise_win_typed(instance: &Instance, class_name: &str, code: u32) -> ExecError {
+    let message = format!("[WinError {code}] Win32 调用失败");
+    let Some(exception_type) = instance.type_named(class_name) else {
+        return instance.raise_builtin_error(class_name, &message);
+    };
+    let text = instance.new_str(&message);
+    let built = pyawa_core::call_value(instance, exception_type.cast::<Header>(), &[text], &[]);
+    instance.release(text);
+    let Ok(exception) = built else {
+        return instance.raise_builtin_error(class_name, &message);
+    };
+    // `set_attribute_value` 自己会为属性表持一份引用；这里只处置自己这份。
+    let winerror = instance.new_int(i64::from(code));
+    let attached = instance.set_attribute_value(exception, "winerror", winerror);
+    instance.release(winerror);
+    if attached.is_err() {
+        instance.release(exception);
+        return instance.raise_builtin_error(class_name, &message);
+    }
+    pyawa_core::raise_object_public(instance, exception)
+}
+
 fn raise_win(instance: &Instance, code: u32) -> ExecError {
-    instance.raise_builtin_error("OSError", &format!("[WinError {code}] Win32 调用失败"))
+    raise_win_typed(instance, "OSError", code)
+}
+
+/// `ERROR_BROKEN_PIPE`（对端已关）的 **同步** 失败：CPython `do_ReadFile`／`do_WSARecv`
+/// 在这里抛 `BrokenPipeError`，`asyncio` 的 `IocpProactor.recv()/recv_into()` 用
+/// `except BrokenPipeError` 把它当 EOF（`_result(b'')`／`_result(0)`）。
+///
+/// **不能**伪造成"0 字节完成"：那会往 Proactor 的 `_cache` 里塞一条永远等不到完成包的记录，
+/// `IocpProactor.close()` 的 `while self._cache: self._poll(...)` 会死循环（Windows CI 实测挂死）。
+fn raise_broken_pipe(instance: &Instance) -> ExecError {
+    raise_win_typed(instance, "BrokenPipeError", 109)
 }
 
 #[allow(unsafe_code)]
@@ -351,9 +392,37 @@ unsafe extern "system" fn wait_callback(context: *mut c_void, _timed_out: u8) {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+struct SockaddrIn {
+    family: u16,
+    port: u16,
+    addr: [u8; 4],
+    zero: [u8; 8],
+}
+
+#[repr(C)]
 struct WsaBuf {
     len: u32,
     buf: *mut u8,
+}
+
+#[allow(unsafe_code)]
+mod mswsock {
+    use super::{c_void, HandleRaw, OverlappedInner};
+
+    #[link(name = "mswsock")]
+    unsafe extern "system" {
+        pub fn AcceptEx(
+            listen_socket: HandleRaw,
+            accept_socket: HandleRaw,
+            output_buffer: *mut c_void,
+            receive_data_length: u32,
+            local_address_length: u32,
+            remote_address_length: u32,
+            bytes_received: *mut u32,
+            overlapped: *mut OverlappedInner,
+        ) -> i32;
+    }
 }
 
 #[allow(unsafe_code)]
@@ -381,6 +450,22 @@ mod winsock {
             completion: *mut c_void,
         ) -> i32;
         pub fn WSAGetLastError() -> i32;
+        pub fn socket(address_family: i32, socket_type: i32, protocol: i32) -> usize;
+        pub fn closesocket(socket: usize) -> i32;
+        pub fn WSAIoctl(
+            socket: HandleRaw,
+            code: u32,
+            in_buffer: *mut c_void,
+            in_size: u32,
+            out_buffer: *mut c_void,
+            out_size: u32,
+            bytes_returned: *mut u32,
+            overlapped: *mut OverlappedInner,
+            completion: *mut c_void,
+        ) -> i32;
+        pub fn bind(socket: usize, name: *const u8, name_len: i32) -> i32;
+        pub fn inet_pton(family: i32, src: *const u8, dst: *mut u8) -> i32;
+        pub fn inet_ntop(family: i32, src: *const u8, dst: *mut u8, size: usize) -> *const u8;
     }
 }
 
@@ -1518,7 +1603,11 @@ fn overlapped_read_file(
     };
     if ok == 0 {
         let code = last_error();
-        // ERROR_IO_PENDING = 997：已投递，等完成。
+        // ERROR_IO_PENDING = 997：已投递，等完成；ERROR_BROKEN_PIPE 同步失败按 CPython
+        // `do_ReadFile` 抛 BrokenPipeError（`asyncio` 的 `recv()` 会当 EOF）。
+        if code == 109 {
+            return Err(raise_broken_pipe(instance));
+        }
         if code != 997 {
             return Err(raise_win(instance, code));
         }
@@ -1561,8 +1650,9 @@ fn overlapped_read_file_into(
     if ok == 0 {
         let code = last_error();
         if code == 109 {
-            // ERROR_BROKEN_PIPE：对端已关；Proactor 的 recv_into 把 BrokenPipeError 当 EOF。
-            return Err(instance.raise_builtin_error("BrokenPipeError", "管道已关闭"));
+            // 同 CPython `do_ReadFile`：同步 ERROR_BROKEN_PIPE 抛 BrokenPipeError，
+            // 由 `asyncio` 的 `except BrokenPipeError` 当 EOF（见 `raise_broken_pipe`）。
+            return Err(raise_broken_pipe(instance));
         }
         if code != 997 {
             return Err(raise_win(instance, code));
@@ -1622,6 +1712,223 @@ fn overlapped_write_file(
     Ok(instance.new_none())
 }
 
+const SIO_GET_EXTENSION_FUNCTION_POINTER: u32 = 0xC800_0006;
+/// `WSAID_CONNECTEX` = `{25A207B9-DDF3-4660-8EE9-76E58C74063E}` 的 **GUID 内存布局**
+/// （`Data1`／`Data2`／`Data3` 小端，`Data4` 原序；`mswsock.h`、ReactOS 与 Wine 头文件同一份）。
+///
+/// **不能按名字 `GetProcAddress("ConnectEx")`**：`ConnectEx` 不是 `mswsock.dll` 的具名
+/// 导出（`WSAID_*` 只保证经 `WSAIoctl` 取）；标准取法见 CPython
+/// `Modules/overlapped.c` 的 `initialize_function_pointers`。
+const WSAID_CONNECTEX: [u8; 16] = [
+    0xb9, 0x07, 0xa2, 0x25, 0xf3, 0xdd, 0x60, 0x46,
+    0x8e, 0xe9, 0x76, 0xe5, 0x8c, 0x74, 0x06, 0x3e,
+];
+
+static CONNECTEX_FN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// `SIO_GET_EXTENSION_FUNCTION_POINTER` 取扩展函数指针（`Err` 是 `WSAGetLastError`）。
+#[allow(unsafe_code)]
+fn extension_fn(socket: HandleRaw, guid: &[u8; 16]) -> Result<usize, i32> {
+    let mut pointer: usize = 0;
+    let mut returned: u32 = 0;
+    // SAFETY: guid/pointer 都是活局部量；SIO_GET_EXTENSION_FUNCTION_POINTER 输出函数指针。
+    let rc = unsafe {
+        winsock::WSAIoctl(
+            socket,
+            SIO_GET_EXTENSION_FUNCTION_POINTER,
+            guid.as_ptr() as *mut c_void,
+            guid.len() as u32,
+            (&mut pointer as *mut usize).cast::<c_void>(),
+            core::mem::size_of::<usize>() as u32,
+            &mut returned,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        )
+    };
+    if rc == 0 && pointer != 0 {
+        Ok(pointer)
+    } else {
+        // SAFETY: 无参；WSAIoctl 失败时错误码在线程本地。
+        Err(unsafe { winsock::WSAGetLastError() })
+    }
+}
+
+/// 取 `ConnectEx` 指针（进程内取一次后缓存）。
+///
+/// 先用调用方给的客户端 socket 取；失败再用一枚临时 `AF_INET/SOCK_STREAM/IPPROTO_TCP`
+/// socket 取（与 CPython `initialize_function_pointers` 同法；扩展函数指针与 socket
+/// 实例无关，任一枚同族 socket 都行）。两条都失败时把 `WSAGetLastError` 一起报出去，
+/// 不猜、不静默给假值。
+#[allow(unsafe_code)]
+fn connect_ex_pointer(socket: HandleRaw) -> Result<usize, String> {
+    if let Some(pointer) = CONNECTEX_FN.get() {
+        return Ok(*pointer);
+    }
+    let mut codes = Vec::new();
+    match extension_fn(socket, &WSAID_CONNECTEX) {
+        Ok(pointer) => {
+            let _ = CONNECTEX_FN.set(pointer);
+            return Ok(pointer);
+        }
+        Err(code) => codes.push(code),
+    }
+    let probe = unsafe { winsock::socket(2, 1, 6) };
+    if probe == usize::MAX || probe == 0 {
+        return Err(format!(
+            "mswsock!ConnectEx 不可用（WSAIoctl 错误码 {codes:?}；临时 socket 创建失败）"
+        ));
+    }
+    let from_probe = extension_fn(probe as HandleRaw, &WSAID_CONNECTEX);
+    // SAFETY: probe 由上面的 socket() 新建，未移交他人。
+    unsafe { winsock::closesocket(probe) };
+    match from_probe {
+        Ok(pointer) => {
+            let _ = CONNECTEX_FN.set(pointer);
+            Ok(pointer)
+        }
+        Err(code) => {
+            codes.push(code);
+            Err(format!("mswsock!ConnectEx 不可用（WSAIoctl 错误码 {codes:?}）"))
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn overlapped_bind_local(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // **模块级函数**（`_overlapped.BindLocal(sock, family)`）：`asyncio` 在 `ConnectEx`
+    // 之前先本地绑定；CPython 同名函数直接收 `(SOCKET, family)`，没有 self。
+    no_kwargs(instance, "_overlapped.BindLocal", kwargs)?;
+    let handle = int_arg(instance, "_overlapped.BindLocal", args, 0)?;
+    let family = optional_int(instance, "_overlapped.BindLocal", args, 1, 2)? as u16;
+    let socket = resolve_socket(handle);
+    // 与 CPython 同法：`SOCKADDR_STORAGE`（128 字节）全零，只填 `sa_family` ⇒
+    // 通配地址 + 端口 0，IPv4/IPv6 都走同一条路径。
+    let mut address = [0u8; 128];
+    address[..2].copy_from_slice(&family.to_ne_bytes());
+    // SAFETY: address 是活局部量，长度 128。
+    let rc = unsafe {
+        winsock::bind(socket as usize, address.as_ptr(), address.len() as i32)
+    };
+    if rc != 0 {
+        // SAFETY: 无参；bind 失败时错误码在线程本地。
+        let code = unsafe { winsock::WSAGetLastError() };
+        return Err(raise_win(instance, code as u32));
+    }
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn overlapped_accept_ex(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.AcceptEx", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let listener = resolve_socket(int_arg(instance, "Overlapped.AcceptEx", rest, 0)?);
+    let accept = resolve_socket(int_arg(instance, "Overlapped.AcceptEx", rest, 1)?);
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let mut buffer = vec![0u8; 2 * 256];
+    let mut transferred = 0u32;
+    let ok = unsafe {
+        mswsock::AcceptEx(
+            listener,
+            accept,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            0,
+            256,
+            256,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        if code != 997 {
+            return Err(raise_win(instance, code as u32));
+        }
+    }
+    memory.buffer = buffer;
+    memory.handle = listener;
+    memory.kind = 6;
+    set_bool_attr(instance, this, "pending", true);
+    Ok(instance.new_none())
+}
+
+#[allow(unsafe_code)]
+fn overlapped_connect_ex(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "Overlapped.ConnectEx", kwargs)?;
+    let (this, rest) = split_self(instance, bound, args)?;
+    let socket = resolve_socket(int_arg(instance, "Overlapped.ConnectEx", rest, 0)?);
+    let address = arg(instance, "Overlapped.ConnectEx", rest, 1)?;
+    let parts = instance
+        .tuple_items(address)
+        .or_else(|| instance.list_items(address))
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "ConnectEx 的 address 要是 (host, port)"))?;
+    let host = parts.first().and_then(|value| instance.text_of(*value)).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "ConnectEx 的 host 要是 str")
+    })?;
+    let port = parts.get(1).and_then(|value| instance.int_value(*value)).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "ConnectEx 的 port 要是整数")
+    })? as u16;
+    let ip = host.parse::<std::net::Ipv4Addr>().map_err(|_| {
+        instance.raise_builtin_error("OSError", "ConnectEx 只接了 IPv4 字面量")
+    })?;
+    let memory = overlapped_ptr(instance, this)?;
+    // SAFETY: memory 来自 Box，存活到 Close。
+    let memory = unsafe { &mut *memory };
+    let address = SockaddrIn { family: 2, port: port.to_be(), addr: ip.octets(), zero: [0; 8] };
+    let mut transferred = 0u32;
+    let pointer = connect_ex_pointer(socket).map_err(|detail| {
+        instance.raise_builtin_error("OSError", &detail)
+    })?;
+    type ConnectExFn = unsafe extern "system" fn(
+        HandleRaw,
+        *const SockaddrIn,
+        i32,
+        *mut c_void,
+        u32,
+        *mut u32,
+        *mut OverlappedInner,
+    ) -> i32;
+    // SAFETY: pointer 来自 `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER)` 取出的 ConnectEx。
+    let connect_ex: ConnectExFn = unsafe { core::mem::transmute(pointer) };
+    let ok = unsafe {
+        connect_ex(
+            socket,
+            &address,
+            core::mem::size_of::<SockaddrIn>() as i32,
+            core::ptr::null_mut(),
+            0,
+            &mut transferred,
+            &mut memory.raw,
+        )
+    };
+    if ok == 0 {
+        let code = unsafe { winsock::WSAGetLastError() };
+        if code != 997 {
+            return Err(raise_win(instance, code as u32));
+        }
+    }
+    memory.handle = socket;
+    memory.kind = 7;
+    set_bool_attr(instance, this, "pending", true);
+    Ok(instance.new_none())
+}
+
 #[allow(unsafe_code)]
 fn overlapped_wsa_recv(
     instance: &Instance,
@@ -1656,7 +1963,11 @@ fn overlapped_wsa_recv(
         )
     };
     if ok != 0 {
+        // SAFETY: 无参；WSA 错误码在线程本地。
         let code = unsafe { winsock::WSAGetLastError() };
+        if code == 109 {
+            return Err(raise_broken_pipe(instance));
+        }
         if code != 997 && code != 10035 {
             return Err(raise_win(instance, code as u32));
         }
@@ -1703,7 +2014,11 @@ fn overlapped_wsa_recv_into(
         )
     };
     if ok != 0 {
+        // SAFETY: 无参；WSA 错误码在线程本地。
         let code = unsafe { winsock::WSAGetLastError() };
+        if code == 109 {
+            return Err(raise_broken_pipe(instance));
+        }
         if code != 997 && code != 10035 {
             return Err(raise_win(instance, code as u32));
         }
@@ -1777,21 +2092,31 @@ fn overlapped_get_result_common(
     if let Some(bytes) = completed {
         transferred = bytes;
     } else {
+        // CPython `_overlapped.getresult` 对所有类型（含 socket）都用 `GetOverlappedResult`；
+        // 它给出的错误码正是 `asyncio.finish_socket_func` 期待的 Win32 码（64／995 等）。
         let ok = unsafe {
             sys::GetOverlappedResult(memory.handle, &mut memory.raw, &mut transferred, wait)
         };
         if ok == 0 {
             let code = last_error();
-            if code == 109 {
-                return Err(instance.raise_builtin_error("BrokenPipeError", "管道已关闭"));
+            // CPython 口径：只有 **读**（TYPE_READ/TYPE_READINTO，kind 1/3/5）把
+            // ERROR_BROKEN_PIPE 当"读到 0 字节"（EOF）；写等其他操作如实抛 BrokenPipeError。
+            let is_read = matches!(memory.kind, 1 | 3 | 5);
+            if code == 109 && is_read {
+                transferred = 0;
+            } else if code == 109 {
+                return Err(raise_broken_pipe(instance));
+            } else {
+                return Err(raise_win(instance, code));
             }
-            return Err(raise_win(instance, code));
         }
     }
     set_bool_attr(instance, this, "pending", false);
     if bytes_for_read && (memory.kind == 1 || memory.kind == 3) {
         let end = (transferred as usize).min(memory.buffer.len());
         Ok(instance.new_bytes(&memory.buffer[..end]))
+    } else if memory.kind == 6 || memory.kind == 7 {
+        Ok(instance.new_int(i64::from(transferred)))
     } else if memory.kind == 5 {
         let end = (transferred as usize).min(memory.buffer.len());
         if let Some(target) = memory.target.take() {
@@ -2003,6 +2328,9 @@ pub fn install(instance: &Instance) {
     }
     if let Some(namespace) = module_namespace(instance, "_overlapped") {
         for (name, handler) in [
+            // **模块级 `BindLocal`**：`asyncio.windows_events.connect()` 在 `ConnectEx` 之前
+            // 直接调它（CPython 的 `_overlapped.BindLocal(sock, family)`；不是 `Overlapped` 方法）。
+            ("BindLocal", overlapped_bind_local as pyawa_core::NativeFn),
             ("CreateIoCompletionPort", overlapped_module_create_iocp as pyawa_core::NativeFn),
             ("GetQueuedCompletionStatus", overlapped_module_get_queued as pyawa_core::NativeFn),
             ("RegisterWaitWithQueue", register_wait_with_queue as pyawa_core::NativeFn),
@@ -2041,6 +2369,55 @@ fn cli_os_close(
     Ok(instance.new_none())
 }
 
+#[allow(unsafe_code)]
+fn socket_inet_pton(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_socket.inet_pton", kwargs)?;
+    let family = int_arg(instance, "_socket.inet_pton", args, 0)? as i32;
+    let text = optional_text(instance, "_socket.inet_pton", args, 1)?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "inet_pton 需要地址串"))?;
+    let mut buffer = [0u8; 16];
+    let c_text = std::ffi::CString::new(text).map_err(|_| {
+        instance.raise_builtin_error("ValueError", "地址串含 NUL")
+    })?;
+    // SAFETY: buffer 至少 16 字节；CString NUL 结尾。
+    let rc = unsafe { winsock::inet_pton(family, c_text.as_ptr().cast::<u8>(), buffer.as_mut_ptr()) };
+    if rc != 1 {
+        return Err(instance.raise_builtin_error("OSError", "inet_pton 失败"));
+    }
+    let length = if family == 2 { 4 } else { 16 };
+    Ok(instance.new_bytes(&buffer[..length]))
+}
+
+#[allow(unsafe_code)]
+fn socket_inet_ntop(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_socket.inet_ntop", kwargs)?;
+    let family = int_arg(instance, "_socket.inet_ntop", args, 0)? as i32;
+    let packed = arg(instance, "_socket.inet_ntop", args, 1)?;
+    let bytes = instance.bytes_like_value(packed).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "inet_ntop 需要 bytes-like")
+    })?;
+    let mut output = [0u8; 64];
+    // SAFETY: bytes 指针在调用期间有效；output 足够大。
+    let rc = unsafe {
+        winsock::inet_ntop(family, bytes.as_ptr(), output.as_mut_ptr(), output.len())
+    };
+    if rc.is_null() {
+        return Err(instance.raise_builtin_error("OSError", "inet_ntop 失败"));
+    }
+    let text = unsafe { std::ffi::CStr::from_ptr(rc.cast()) }.to_string_lossy();
+    Ok(instance.new_str(&text))
+}
+
 /// **CLI 专用**的 msvcrt 句柄转换面（`asyncio.windows_utils.Popen` 需要把管道 HANDLE 变 CRT fd）。
 pub fn install_cli_msvcrt_compat(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "msvcrt") {
@@ -2056,6 +2433,15 @@ pub fn install_cli_msvcrt_compat(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "os") {
         let function = make_native(instance, "close", cli_os_close as pyawa_core::NativeFn);
         instance.dict_set(namespace, "close", function);
+    }
+    if let Some(namespace) = module_namespace(instance, "_socket") {
+        for (name, handler) in [
+            ("inet_pton", socket_inet_pton as pyawa_core::NativeFn),
+            ("inet_ntop", socket_inet_ntop as pyawa_core::NativeFn),
+        ] {
+            let function = make_native(instance, name, handler);
+            instance.dict_set(namespace, name, function);
+        }
     }
 }
 
@@ -2087,6 +2473,8 @@ fn build_overlapped_class(instance: &Instance) -> Option<NonNull<Header>> {
         ("ReadFileInto", overlapped_read_file_into as pyawa_core::NativeFn),
         ("WSARecv", overlapped_wsa_recv as pyawa_core::NativeFn),
         ("WSARecvInto", overlapped_wsa_recv_into as pyawa_core::NativeFn),
+        ("AcceptEx", overlapped_accept_ex as pyawa_core::NativeFn),
+        ("ConnectEx", overlapped_connect_ex as pyawa_core::NativeFn),
         ("WSASend", overlapped_wsa_send as pyawa_core::NativeFn),
         ("ConnectNamedPipe", overlapped_connect_named_pipe as pyawa_core::NativeFn),
         ("DisconnectNamedPipe", overlapped_unwired as pyawa_core::NativeFn),
