@@ -140,10 +140,87 @@ print(asyncio.run(main()))
     assert_eq!(run("proactor-tcp-echo", script), "b'hello\\n'\n");
 }
 
+/// **guest `_socket` 的数字 IPv6 `getaddrinfo`（`R3`；`CP-47`）**：纯数据（不查 DNS、不发
+/// socket 系统调用），所以 **Linux／Windows 都能跑**。v6 的 sockaddr 是 **4 元组**
+/// `(host, port, 0, 0)`；IPv4 行为不变（2 元组）。
+#[test]
+fn socket_ipv6_numeric_getaddrinfo_is_pure_data() {
+    let script = r#"
+import _socket
+infos = _socket.getaddrinfo("::1", 8080, 0, _socket.SOCK_STREAM)
+af, kind, proto, canon, sa = infos[0]
+print(len(infos), af, kind, proto, repr(sa))
+print(repr(_socket.getaddrinfo("::1", 8080, _socket.AF_INET6, _socket.SOCK_STREAM)[0][4]))
+print(repr(_socket.getaddrinfo("127.0.0.1", 8080, 0, _socket.SOCK_STREAM)[0][4]))
+"#;
+    assert_eq!(
+        run("ipv6-getaddrinfo", script),
+        "1 10 1 6 ('::1', 8080, 0, 0)\n('::1', 8080, 0, 0)\n('127.0.0.1', 8080)\n"
+    );
+}
+
+/// **Windows asyncio IPv6 回环**（`R3`；`CP-47`）：`start_server("::1", 0)`（AcceptEx）＋
+/// `open_connection("::1", port)`（ConnectEx）＋ 双向读写。默认策略仍是 Proactor（`P4`），
+/// 与 IPv4 那例同形，只把地址换成 `::1`；顺带断言 `getsockname()` 是 **4 元组** 且地址文本
+/// 走 canonical 格式化（`"::1"`）。
+#[cfg(windows)]
+#[test]
+fn proactor_tcp_echo_ipv6_accept_connect() {
+    let script = r#"
+import asyncio
+async def handle(reader, writer):
+    data = await reader.readline()
+    writer.write(data)
+    await writer.drain()
+    writer.close()
+async def main():
+    server = await asyncio.start_server(handle, "::1", 0)
+    name = server.sockets[0].getsockname()
+    assert len(name) == 4, name
+    assert name[0] == "::1", name
+    port = name[1]
+    reader, writer = await asyncio.open_connection("::1", port)
+    writer.write(b"hello6\n")
+    await writer.drain()
+    line = await asyncio.wait_for(reader.readline(), 10)
+    writer.close()
+    server.close()
+    await server.wait_closed()
+    return line
+print(asyncio.run(main()))
+"#;
+    assert_eq!(run("proactor-tcp-echo-ipv6", script), "b'hello6\\n'\n");
+}
+
+/// **Windows guest `_socket` 的 IPv6 面（`R3`；`CP-47`）**：`inet_pton`／`inet_ntop`（真实实现在
+/// Windows CLI，`R2`）＋ `bind(("::1", 0))`（4 元组地址线）＋ `getsockname()`（4 元组出参）＋
+/// `getaddrinfo` 的 v6 4 元组 sockaddr。CLI 探针，不依赖事件循环。
+#[cfg(windows)]
+#[test]
+fn windows_socket_ipv6_guest_surface() {
+    let script = r#"
+import _socket
+import socket
+packed = _socket.inet_pton(_socket.AF_INET6, "::1")
+back = _socket.inet_ntop(_socket.AF_INET6, packed)
+sock = socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+sock.bind(("::1", 0))
+name = sock.getsockname()
+sock.close()
+infos = _socket.getaddrinfo("::1", 8080, 0, _socket.SOCK_STREAM)
+print(len(packed), back, len(name), name[0], name[2], name[3])
+print(len(infos), repr(infos[0][4]))
+"#;
+    assert_eq!(
+        run("socket-ipv6-surface", script),
+        "16 ::1 4 ::1 0 0\n1 ('::1', 8080, 0, 0)\n"
+    );
+}
+
 /// **IPv6 provider 数据面（R2；`CP-47`）**：`_socket` 能建 `AF_INET6`（guest 10 ⇒ Winsock 23）、
 /// `_overlapped.BindLocal` 按 canonical 族号绑定（10 ⇒ Winsock 23）、`inet_pton`／`inet_ntop`
-/// 支持 IPv6。只探 provider 已接的面：guest `_socket` 的 IPv6 地址线（R3）未接 ⇒ 这里不跑
-/// bind／connect／accept。
+/// 支持 IPv6。只探 provider 面；guest 地址线的端到端面由 `windows_socket_ipv6_guest_surface`
+/// 与 `proactor_tcp_echo_ipv6_accept_connect` 覆盖（`R3`）。
 #[cfg(windows)]
 #[test]
 fn windows_ipv6_provider_surface() {

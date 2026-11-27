@@ -39,6 +39,21 @@
 //!   "未接线"，**不返回假值**）；
 //! - `flags != 0` 的 `send`／`recv`：如实报未接线（首片只做 flags=0）。
 //!
+//! ## IPv6（`CP-47`；`R3`）
+//!
+//! guest 的 `AF_INET6` 常量是 **canonical 10**（Windows 参照 CPython 的 `socket.AF_INET6` 是 **23**，
+//! 可观测差异见 `tests/conformance/divergences.md` 的 `DIV-14`）。地址线：
+//! `bind`／`connect`／`connect_ex` 收 **4 元组** `(host, port[, flowinfo[, scopeid]])`
+//! （2 元组按参照当 flowinfo/scope＝0），`host` 用能力层的 `parse_ipv6_literal`（**纯数据**、
+//! 不做 DNS）；`flowinfo`／`scope_id` 非 0 如实 `OSError` 拒绝（`CP-47` v1 不带它们，link-local
+//! 另立条款）。出参（`accept`／`getsockname`／`getpeername`）按 provider 回的 **canonical**
+//! `out_family` 给 2 元组／4 元组，v6 文本走 `format_ipv6`（与 `inet_ntop` 同口径）。
+//! `getaddrinfo` 接**数字** IPv6 字面量（DNS 仍不在 v1）。
+//!
+//! **平台边界**：`inet_pton`／`inet_ntop` 的真实实现只在 Windows CLI（`pyawa-runtime` 的
+//! `install_cli_msvcrt_compat`，`R2`）；非 Windows 仍是如实桩（`NotImplementedError`）
+//! ⇒ **IPv6 的端到端承诺只在 Windows CLI**（`RELEASE.md` 已写）。
+//!
 //! ## 未落地（如实记）
 //!
 //! - `CAPI`：参照是 `PyCapsule`，VM 没有这个载荷 ⇒ **不登记**（不是"给个假的" ✗）。
@@ -731,27 +746,44 @@ fn getaddrinfo_native(
         },
         None => 0,
     };
-    // 数字 IPv4／localhost ⇒ 纯计算；其它主机名 ⇒ 如实报 DNS 未接线。
-    let literal = if host == "localhost" {
-        Some("127.0.0.1".to_owned())
-    } else if is_ipv4_literal(&host) {
-        Some(host.clone())
-    } else {
-        None
-    };
-    let Some(ipv4) = literal else {
-        return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "`_socket.getaddrinfo`：DNS 解析属网络能力域（CM-8）尚未接线；目前只支持数字 IPv4 与 `localhost`（纯计算，不发 socket 系统调用）✗",
-        ));
-    };
+    // 数字 IPv4／IPv6／localhost ⇒ 纯计算；其它主机名 ⇒ 如实报 DNS 未接线。
     let af_inet = i64::from(constant("AF_INET"));
-    if family != 0 && family != i64::from(constant("AF_UNSPEC")) && family != af_inet {
+    let af_inet6 = i64::from(constant("AF_INET6"));
+    let af_unspec = i64::from(constant("AF_UNSPEC"));
+    let requested_family = if family == af_inet {
+        Some(af_inet)
+    } else if family == af_inet6 {
+        Some(af_inet6)
+    } else if family == 0 || family == af_unspec {
+        None
+    } else {
         return Err(instance.raise_builtin_error(
             "NotImplementedError",
-            "`_socket.getaddrinfo`：目前只支持 AF_INET（IPv6／其它族未接线）✗",
+            "`_socket.getaddrinfo`：目前只支持 AF_INET／AF_INET6（其它族未接线）✗",
         ));
+    };
+    // 数字字面量 ⇒ 纯计算；`localhost` 仍只映射到 `127.0.0.1`（DNS 不在 v1）。
+    enum NumericAddress {
+        V4(String),
+        V6([u8; 16]),
     }
+    let host = if host == "localhost" { "127.0.0.1".to_owned() } else { host };
+    let (entry_family, numeric) = if is_ipv4_literal(&host) {
+        if requested_family == Some(af_inet6) {
+            return Err(getaddrinfo_family_mismatch(instance));
+        }
+        (af_inet, NumericAddress::V4(host))
+    } else if let Some(address) = pyawa_capabilities::net::parse_ipv6_literal(&host) {
+        if requested_family == Some(af_inet) {
+            return Err(getaddrinfo_family_mismatch(instance));
+        }
+        (af_inet6, NumericAddress::V6(address))
+    } else {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "`_socket.getaddrinfo`：DNS 解析属网络能力域（CM-8）尚未接线；目前只支持数字 IPv4／IPv6 与 `localhost`（纯计算，不发 socket 系统调用）✗",
+        ));
+    };
     let candidates = [
         (i64::from(constant("SOCK_STREAM")), i64::from(constant("IPPROTO_TCP"))),
         (i64::from(constant("SOCK_DGRAM")), i64::from(constant("IPPROTO_UDP"))),
@@ -764,10 +796,22 @@ fn getaddrinfo_native(
         if proto != 0 && proto != default_proto {
             continue;
         }
-        let sockaddr = instance.new_tuple(vec![instance.new_str(&ipv4), instance.new_int(port)]);
+        let sockaddr = match &numeric {
+            NumericAddress::V4(text) => {
+                instance.new_tuple(vec![instance.new_str(text), instance.new_int(port)])
+            }
+            NumericAddress::V6(address) => {
+                // `CP-47`：v1 的 guest 侧 sockaddr 是 4 元组；`format_ipv6` 与 `inet_ntop` 同口径。
+                let text = instance.new_str(&pyawa_capabilities::net::format_ipv6(address));
+                let port_value = instance.new_int(port);
+                let flowinfo = instance.new_int(0);
+                let scope_id = instance.new_int(0);
+                instance.new_tuple(vec![text, port_value, flowinfo, scope_id])
+            }
+        };
         let canonical = instance.new_str("");
         let entry = instance.new_tuple(vec![
-            instance.new_int(af_inet),
+            instance.new_int(entry_family),
             instance.new_int(kind),
             instance.new_int(default_proto),
             canonical,
@@ -776,6 +820,14 @@ fn getaddrinfo_native(
         entries.push(entry);
     }
     Ok(instance.new_list(entries))
+}
+
+/// `getaddrinfo` 的族不匹配（CPython 是 `gaierror`／`EAI_ADDRFAMILY`）：本层给同族 OSError 形状。
+fn getaddrinfo_family_mismatch(instance: &Instance) -> pyawa_core::ExecError {
+    instance.raise_builtin_error(
+        "OSError",
+        "getaddrinfo(): Address family for hostname not supported",
+    )
 }
 
 /// 是否**数字 IPv4 字面量**（四段十进制 0..=255 ✓；不做任何名字解析 ✓）。
@@ -1234,24 +1286,15 @@ fn socket_family(instance: &Instance, this: NonNull<Header>) -> i32 {
     socket_int_attribute(instance, this, "_family").unwrap_or(i64::from(constant("AF_INET"))) as i32
 }
 
-/// **Python 地址元组 ⇒ `CP-39` 线格式**（v1 只有 `AF_INET`：`(host, port)`）。
+/// **Python 地址元组 ⇒ `CP-39`／`CP-47` 线格式**（族分派：`AF_INET` 2 元组 6B、`AF_INET6` 4 元组 18B）。
 ///
-/// `host` 是点分四段字符串（`""`／`None` ＝ `0.0.0.0`，参照的 INADDR_ANY 口径 ✓）；
-/// 其它地址族 ⇒ `OSError(EAFNOSUPPORT)`（provider 的真实机器语义；IPv6 不在 `CP-39` v1 ✓）。
-fn socket_address_wire(
+/// 其它地址族 ⇒ `OSError(EAFNOSUPPORT)`（provider 的真实机器语义）—— 分派在调用方做；
+/// 本函数只给 v4 侧（`host` 是点分四段；`""`／`None` ＝ `0.0.0.0`，参照的 INADDR_ANY 口径 ✓）。
+fn ipv4_address_wire(
     instance: &Instance,
-    this: NonNull<Header>,
     value: NonNull<Header>,
     function: &str,
-) -> Result<(i32, Vec<u8>), pyawa_core::ExecError> {
-    let family = socket_family(instance, this);
-    if family != constant("AF_INET") {
-        let errno = instance.platform_constant("EAFNOSUPPORT").unwrap_or(97) as i32;
-        return Err(net_error(
-            instance,
-            pyawa_core::CapabilityCallError::Machine(errno),
-        ));
-    }
+) -> Result<Vec<u8>, pyawa_core::ExecError> {
     let Some(items) = instance.tuple_items(value) else {
         let name = instance.type_name(instance.type_of(value));
         return Err(type_error(
@@ -1309,17 +1352,122 @@ fn socket_address_wire(
             &format!("{function}(): port must be 0-65535."),
         ));
     }
-    Ok((
-        family,
-        pyawa_capabilities::net::encode_ipv4(address, port as u16).to_vec(),
+    Ok(pyawa_capabilities::net::encode_ipv4(address, port as u16).to_vec())
+}
+
+/// **IPv6 的 Python 地址元组 ⇒ `CP-47` 线格式（18B）**：`(host, port[, flowinfo[, scopeid]])`。
+///
+/// `host` 必须是 IPv6 **数字字面量**（`parse_ipv6_literal`；`""`／`None` ＝ `::` 通配）；
+/// `CP-47` v1 **不带** `flowinfo`／`scope_id`（link-local 另立条款）⇒ 非 0 如实拒绝，**不静默丢**。
+fn ipv6_address_wire(
+    instance: &Instance,
+    value: NonNull<Header>,
+    function: &str,
+) -> Result<Vec<u8>, pyawa_core::ExecError> {
+    let Some(items) = instance.tuple_items(value) else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(type_error(
+            instance,
+            format!("{function}() AF_INET6 address must be tuple, not {name}"),
+        ));
+    };
+    if items.len() != 2 && items.len() != 4 {
+        return Err(type_error(
+            instance,
+            "AF_INET6 address must be a tuple (host, port[, flowinfo[, scopeid]])".to_owned(),
+        ));
+    }
+    let mut address = [0u8; 16];
+    match items[0] {
+        host if is_none_value(instance, host) => {}
+        host => {
+            let Some(text) = instance.text_of(host) else {
+                let name = instance.type_name(instance.type_of(host));
+                return Err(type_error(
+                    instance,
+                    format!(
+                        "{function}() AF_INET6 address must be a tuple \
+                         (host, port[, flowinfo[, scopeid]]), not {name}"
+                    ),
+                ));
+            };
+            if !text.is_empty() {
+                let Some(parsed) = pyawa_capabilities::net::parse_ipv6_literal(&text) else {
+                    // 与 v4 的坏点分同口径：机器错误 EINVAL（v1 只接**数字**地址，不做 DNS）。
+                    return Err(net_error(
+                        instance,
+                        pyawa_core::CapabilityCallError::Machine(
+                            instance.platform_constant("EINVAL").unwrap_or(22) as i32,
+                        ),
+                    ));
+                };
+                address = parsed;
+            }
+        }
+    }
+    let port = socket_int(instance, items[1])?;
+    if !(0..=65535).contains(&port) {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            &format!("{function}(): port must be 0-65535."),
+        ));
+    }
+    let flowinfo = if items.len() == 4 {
+        socket_int(instance, items[2])?
+    } else {
+        0
+    };
+    let scope_id = if items.len() == 4 {
+        socket_int(instance, items[3])?
+    } else {
+        0
+    };
+    if flowinfo != 0 || scope_id != 0 {
+        // `CP-47`：v1 线格式里没有它们 ⇒ 拒绝比静默丢弃更诚实。
+        return Err(instance.raise_builtin_error(
+            "OSError",
+            &format!("{function}(): IPv6 flowinfo/scope_id 不在 CP-47 v1（必须为 0）"),
+        ));
+    }
+    Ok(pyawa_capabilities::net::encode_ipv6(address, port as u16).to_vec())
+}
+
+/// **Python 地址元组 ⇒ 线格式**（族分派）：`AF_INET` 6B／`AF_INET6` 18B；其它族 `EAFNOSUPPORT`。
+fn socket_address_wire(
+    instance: &Instance,
+    this: NonNull<Header>,
+    value: NonNull<Header>,
+    function: &str,
+) -> Result<(i32, Vec<u8>), pyawa_core::ExecError> {
+    let family = socket_family(instance, this);
+    if family == constant("AF_INET") {
+        return Ok((family, ipv4_address_wire(instance, value, function)?));
+    }
+    if family == constant("AF_INET6") {
+        return Ok((family, ipv6_address_wire(instance, value, function)?));
+    }
+    let errno = instance.platform_constant("EAFNOSUPPORT").unwrap_or(97) as i32;
+    Err(net_error(
+        instance,
+        pyawa_core::CapabilityCallError::Machine(errno),
     ))
 }
 
-/// `CP-39` 线格式 ⇒ Python 地址元组 `(dotted, port)` ✓。
+/// 线格式 ⇒ Python 地址元组（按 provider 回的 **canonical** `family` 分派）：
+/// v4 ⇒ `(dotted, port)` 2 元组；v6 ⇒ `(text, port, 0, 0)` 4 元组（`CP-47`：v1 不带 flowinfo/scope）。
 fn socket_address_tuple(
     instance: &Instance,
+    family: i32,
     wire: &[u8],
 ) -> NonNull<Header> {
+    if family == constant("AF_INET6") {
+        let (address, port) = pyawa_capabilities::net::decode_ipv6(wire).unwrap_or(([0u8; 16], 0));
+        let text = instance.new_str(&pyawa_capabilities::net::format_ipv6(&address));
+        let port = instance.new_int(i64::from(port));
+        let flowinfo = instance.new_int(0);
+        let scope_id = instance.new_int(0);
+        return instance.new_tuple(vec![text, port, flowinfo, scope_id]);
+    }
     let (address, port) = pyawa_capabilities::net::decode_ipv4(wire).unwrap_or(([0u8; 4], 0));
     let text = instance.new_str(&format!(
         "{}.{}.{}.{}",
@@ -1454,7 +1602,7 @@ fn socket_accept_native(
     match instance.net_accept(fd as u64) {
         Ok((new_fd, family, wire)) => {
             let connection = socket_from_fd(instance, new_fd, family)?;
-            let address = socket_address_tuple(instance, &wire);
+            let address = socket_address_tuple(instance, family, &wire);
             Ok(instance.new_tuple(vec![connection, address]))
         }
         Err(error) => Err(net_error(instance, error)),
@@ -1474,7 +1622,7 @@ fn socket_getsockname_native(
         return Err(raise_ebadf(instance));
     }
     match instance.net_getsockname(fd as u64) {
-        Ok((_family, wire)) => Ok(socket_address_tuple(instance, &wire)),
+        Ok((family, wire)) => Ok(socket_address_tuple(instance, family, &wire)),
         Err(error) => Err(net_error(instance, error)),
     }
 }
@@ -1492,7 +1640,7 @@ fn socket_getpeername_native(
         return Err(raise_ebadf(instance));
     }
     match instance.net_getpeername(fd as u64) {
-        Ok((_family, wire)) => Ok(socket_address_tuple(instance, &wire)),
+        Ok((family, wire)) => Ok(socket_address_tuple(instance, family, &wire)),
         Err(error) => Err(net_error(instance, error)),
     }
 }
@@ -1579,9 +1727,9 @@ fn socket_accept_fd_native(
         return Err(raise_ebadf(instance));
     }
     match instance.net_accept(fd as u64) {
-        Ok((new_fd, _family, wire)) => {
+        Ok((new_fd, family, wire)) => {
             let fd_value = instance.new_int(new_fd as i64);
-            let address = socket_address_tuple(instance, &wire);
+            let address = socket_address_tuple(instance, family, &wire);
             Ok(instance.new_tuple(vec![fd_value, address]))
         }
         Err(error) => Err(net_error(instance, error)),

@@ -123,6 +123,196 @@ pub fn decode_ipv6(bytes: &[u8]) -> Option<([u8; 16], u16)> {
     Some((addr, port))
 }
 
+/// 解析一个 IPv6 文本组（1–4 个十六进制字符）⇒ `u16`；空段／超长／非法字符返回 `None`。
+fn parse_ipv6_hex_group(segment: &str) -> Option<u16> {
+    if segment.is_empty() || segment.len() > 4 {
+        return None;
+    }
+    let mut value = 0u16;
+    for byte in segment.bytes() {
+        let digit = match byte {
+            b'0'..=b'9' => u16::from(byte - b'0'),
+            b'a'..=b'f' => u16::from(byte - b'a') + 10,
+            b'A'..=b'F' => u16::from(byte - b'A') + 10,
+            _ => return None,
+        };
+        value = value * 16 + digit;
+    }
+    Some(value)
+}
+
+/// 解析 IPv6 文本末尾内嵌的点分 IPv4（`::ffff:127.0.0.1`）⇒ 两个 `u16` 组；不是点分形式返回 `None`。
+fn parse_ipv4_tail(segment: &str) -> Option<(u16, u16)> {
+    let mut octets = [0u8; 4];
+    let mut seen = 0usize;
+    for part in segment.split('.') {
+        if seen >= 4 || part.is_empty() || part.len() > 3 {
+            return None;
+        }
+        let mut value = 0u16;
+        for byte in part.bytes() {
+            if !byte.is_ascii_digit() {
+                return None;
+            }
+            value = value * 10 + u16::from(byte - b'0');
+        }
+        if value > 255 {
+            return None;
+        }
+        octets[seen] = value as u8;
+        seen += 1;
+    }
+    if seen != 4 {
+        return None;
+    }
+    Some((
+        u16::from_be_bytes([octets[0], octets[1]]),
+        u16::from_be_bytes([octets[2], octets[3]]),
+    ))
+}
+
+/// **`CP-47`**：IPv6 文本（RFC 4291 的十六进制形式）⇒ 16 字节网络序地址；非法输入返回 `None`。
+///
+/// 这是**纯数据**解析（`CX-4`：不碰 `std::net`、不碰平台）：接受 1–8 个十六进制组、可用**一次**
+/// `::` 压缩（至少吞掉一组），末段允许内嵌点分 IPv4（`::ffff:127.0.0.1`）。IPv6 scope id
+/// （`%eth0`）**不在 v1**（`CP-47`：不带 `scope_id`）⇒ 含 `%` 一律 `None`。
+pub fn parse_ipv6_literal(text: &str) -> Option<[u8; 16]> {
+    if text.is_empty() || text.contains('%') {
+        return None;
+    }
+    let (head, tail, compressed) = match text.find("::") {
+        Some(index) => {
+            let tail = &text[index + 2..];
+            if tail.contains("::") {
+                return None; // 至多一次 `::`
+            }
+            (&text[..index], tail, true)
+        }
+        None => (text, "", false),
+    };
+    let head_parts: Vec<&str> = if head.is_empty() {
+        Vec::new()
+    } else {
+        head.split(':').collect()
+    };
+    let tail_parts: Vec<&str> = if tail.is_empty() {
+        Vec::new()
+    } else {
+        tail.split(':').collect()
+    };
+    let total = head_parts.len() + tail_parts.len();
+    if total == 0 {
+        // `::`（空串已在上面拒绝）⇒ 全零。
+        return compressed.then_some([0u8; 16]);
+    }
+    let mut groups: Vec<u16> = Vec::with_capacity(8);
+    let mut head_group_count = 0usize;
+    for (index, segment) in head_parts.iter().enumerate() {
+        if segment.is_empty() {
+            return None;
+        }
+        let is_last_overall = index + 1 == total;
+        if is_last_overall {
+            if let Some((high, low)) = parse_ipv4_tail(segment) {
+                groups.push(high);
+                groups.push(low);
+                head_group_count += 2;
+                continue;
+            }
+        }
+        groups.push(parse_ipv6_hex_group(segment)?);
+        head_group_count += 1;
+    }
+    for (index, segment) in tail_parts.iter().enumerate() {
+        if segment.is_empty() {
+            return None;
+        }
+        let is_last_overall = head_parts.len() + index + 1 == total;
+        if is_last_overall {
+            if let Some((high, low)) = parse_ipv4_tail(segment) {
+                groups.push(high);
+                groups.push(low);
+                continue;
+            }
+        }
+        groups.push(parse_ipv6_hex_group(segment)?);
+    }
+    if compressed {
+        if groups.len() > 7 {
+            return None; // `::` 至少吞掉一组
+        }
+    } else if groups.len() != 8 {
+        return None;
+    }
+    let mut address = [0u8; 16];
+    for (index, group) in groups[..head_group_count.min(groups.len())].iter().enumerate() {
+        address[index * 2..index * 2 + 2].copy_from_slice(&group.to_be_bytes());
+    }
+    let tail_groups = &groups[head_group_count.min(groups.len())..];
+    let start = 8 - tail_groups.len();
+    for (index, group) in tail_groups.iter().enumerate() {
+        let position = start + index;
+        address[position * 2..position * 2 + 2].copy_from_slice(&group.to_be_bytes());
+    }
+    Some(address)
+}
+
+/// **`CP-47`**：16 字节网络序地址 ⇒ IPv6 文本（CPython `inet_ntop` 口径：小写十六进制、
+/// **最长零段**压缩、`::`；最长零段并列时取**最左**）。
+///
+/// 与 `CPython`（libc／Winsock 的 `inet_ntop`）一致，IPv4-mapped 地址
+/// （`::ffff:a.b.c.d`）给**点分尾巴**；其它地址一律十六进制形式（不特判 v4-compatible）。
+pub fn format_ipv6(addr: &[u8; 16]) -> String {
+    // IPv4-mapped（`::ffff:a.b.c.d`）：与 CPython 的 `inet_ntop` 同口径。
+    if addr[..10].iter().all(|byte| *byte == 0) && addr[10] == 0xff && addr[11] == 0xff {
+        return format!(
+            "::ffff:{}.{}.{}.{}",
+            addr[12], addr[13], addr[14], addr[15]
+        );
+    }
+    let mut groups = [0u16; 8];
+    for (index, group) in groups.iter_mut().enumerate() {
+        *group = u16::from_be_bytes([addr[index * 2], addr[index * 2 + 1]]);
+    }
+    // 最长零段（至少 2 组；并列取最左）。
+    let mut best_start = 0usize;
+    let mut best_len = 0usize;
+    let mut index = 0usize;
+    while index < groups.len() {
+        if groups[index] != 0 {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < groups.len() && groups[index] == 0 {
+            index += 1;
+        }
+        let length = index - start;
+        if length > best_len {
+            best_start = start;
+            best_len = length;
+        }
+    }
+    let hex = |slice: &[u16]| {
+        slice
+            .iter()
+            .map(|group| format!("{group:x}"))
+            .collect::<Vec<String>>()
+            .join(":")
+    };
+    if best_len < 2 {
+        return hex(&groups);
+    }
+    let left = hex(&groups[..best_start]);
+    let right = hex(&groups[best_start + best_len..]);
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => "::".to_owned(),
+        (true, false) => format!("::{right}"),
+        (false, true) => format!("{left}::"),
+        (false, false) => format!("{left}::{right}"),
+    }
+}
+
 /// `poll(fds, timeout_ns)` 的**一项**：进参给 `events`，出参再由 `revents` 带回
 /// （`SPEC-capabilities.md` §9.2 的"就绪集合"）。
 #[repr(C)]
@@ -339,6 +529,81 @@ mod tests {
         assert_eq!(family::AF_INET6, 10);
         assert_eq!(family::AF_INET, 2);
         assert_eq!(family::AF_UNIX, 1);
+    }
+
+    /// `CP-47`：IPv6 文本 ⇔ 16 字节地址的解析／格式化（`format_ipv6` 与 CPython `inet_ntop` 同口径）。
+    #[test]
+    fn ipv6_text_round_trips_through_wire_format() {
+        // 常见形态（`::1`／`::`／`fe80::1`／全零段压缩）。
+        let cases: &[(&str, [u8; 16])] = &[
+            ("::1", {
+                let mut bytes = [0u8; 16];
+                bytes[15] = 1;
+                bytes
+            }),
+            ("::", [0u8; 16]),
+            ("fe80::1", {
+                let mut bytes = [0u8; 16];
+                bytes[0] = 0xfe;
+                bytes[1] = 0x80;
+                bytes[15] = 1;
+                bytes
+            }),
+            ("2001:db8::1", {
+                let mut bytes = [0u8; 16];
+                bytes[0] = 0x20;
+                bytes[1] = 0x01;
+                bytes[2] = 0x0d;
+                bytes[3] = 0xb8;
+                bytes[15] = 1;
+                bytes
+            }),
+            ("1:2:3:4:5:6:7:8", [0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]),
+        ];
+        for (text, address) in cases {
+            assert_eq!(parse_ipv6_literal(text), Some(*address), "解析 {text}");
+            assert_eq!(format_ipv6(address), *text, "格式化 {address:?}");
+            // 与 wire 编解码一致：地址段原样进 18B 线格式再取回。
+            let wire = encode_ipv6(*address, 8080);
+            assert_eq!(decode_ipv6(&wire).map(|(addr, _)| addr), Some(*address));
+        }
+        // 全零段压缩：最长零段（并列取最左）；单组 0 不压缩。
+        assert_eq!(format_ipv6(&parse_ipv6_literal("1:0:0:2:0:0:0:3").unwrap()), "1:0:0:2::3");
+        assert_eq!(format_ipv6(&parse_ipv6_literal("0:0:1:0:0:0:0:1").unwrap()), "0:0:1::1");
+        assert_eq!(
+            format_ipv6(&parse_ipv6_literal("1:0:2:0:3:0:4:0").unwrap()),
+            "1:0:2:0:3:0:4:0"
+        );
+        // IPv4-mapped：CPython 的 `inet_ntop` 给点分尾巴。
+        let mapped = parse_ipv6_literal("::ffff:127.0.0.1").expect("v4-mapped");
+        assert_eq!(format_ipv6(&mapped), "::ffff:127.0.0.1");
+        // 末段内嵌点分 IPv4 的解析。
+        let mut dotted = [0u8; 16];
+        dotted[10] = 0xff;
+        dotted[11] = 0xff;
+        dotted[12..].copy_from_slice(&[127, 0, 0, 1]);
+        assert_eq!(parse_ipv6_literal("::ffff:127.0.0.1"), Some(dotted));
+    }
+
+    /// `CP-47`：非法 IPv6 文本 ⇒ `None`（不 panic、不猜）。
+    #[test]
+    fn ipv6_text_rejects_invalid_input() {
+        for text in [
+            "",
+            ":",
+            "::1:",
+            "1::2::3",
+            "1:2:3:4:5:6:7",     // 不足 8 组且无 `::`
+            "1:2:3:4:5:6:7:8:9", // 超过 8 组
+            "12345::1",          // 组超 4 个十六进制字符
+            "fe80::1%eth0",      // scope id 不在 v1
+            "::g",
+            "1.2.3.4",
+            "1:2:3:4:5:6:7:8::", // `::` 至少吞一组
+            "::1.2.3.256",
+        ] {
+            assert_eq!(parse_ipv6_literal(text), None, "应拒绝 {text:?}");
+        }
     }
 
     /// `CP-12`：形状层只有类型与函数指针 ⇒ 未实现 vtable 的槽位全 `None`（`CP-2`／`CP-3`）。
