@@ -25,11 +25,22 @@
 //! `10035→EWOULDBLOCK`、`10040→EMSGSIZE`、`10022→EINVAL`、`10014→EFAULT`、`10024→EMFILE`、
 //! `10055→ENOBUFS`，其余（含 `WSAEINTR=10004` 之外的未知码）→ `EIO`。
 //!
-//! # 地址线（`CP-39`）
+//! # 地址线（`CP-39`／`CP-47`）
 //!
-//! 只有 `AF_INET`：`decode_ipv4` ⇒ WinSock `SOCKADDR_IN`（`sin_family=2`、`sin_port` 网络序、
-//! `sin_addr` 4 字节）；反方向用 `encode_ipv4` 回写。IPv6／`AF_UNIX` **不在 v1**
-//! （`socket` 对其它族回 `EAFNOSUPPORT`）。
+//! guest／线格式的族号是 **canonical**（POSIX）取值：`AF_INET`＝2、`AF_INET6`＝**10**。Winsock 的
+//! `AF_INET` 同值，但 `AF_INET6` 是 **23** ⇒ 所有进内核的 `sa_family` 必须经
+//! [`winsock_family_of_guest`] 映射；出参 `out_family` 一律回 **canonical**（2／10），不泄漏 23。
+//!
+//! - IPv4（`CP-39`）：`decode_ipv4` ⇒ `SOCKADDR_IN`（16B；`sin_family=2`、`sin_port` 网络序、
+//!   `sin_addr` 4 字节）；反方向 `encode_ipv4` 回写 6B 线格式。
+//! - IPv6（`CP-47`）：`decode_ipv6` ⇒ `SOCKADDR_IN6`（**28B**；`sin6_family=23`、`sin6_port`
+//!   网络序、`sin6_addr` 16 字节、`sin6_flowinfo`／`sin6_scope_id` 置 0 —— v1 不带它们）；
+//!   反方向 `encode_ipv6` 回写 18B 线格式。
+//! - 其它族（`AF_UNIX` 等）**不支持** ⇒ 机器错误 `EAFNOSUPPORT`（`CP-6`，不假装成功）。
+//!
+//! 地址**出参**统一用 128B `SOCKADDR_STORAGE` 收：内核按族回填 16／28B 与 `length`；只用 16B
+//! 缓冲接 IPv6 会让 `getsockname`／`accept` 报 `WSAEFAULT` 或截断。族由内核回填的 `sa_family`
+//! 判定（2／23）⇒ 再解出 v4／v6 线格式。
 //!
 //! # `poll`（`SPEC-capabilities.md` §9.2）
 //!
@@ -47,9 +58,10 @@
 //! guest 侧（`pyawa-stdlib` 的 `_socket_module`）传的是 **POSIX 选项号**；Winsock 的选项号
 //! 是另一套（`SOL_SOCKET=0xFFFF` 等）⇒ 必须翻译，**不能原样转发**（转错会静默设错选项）。
 //! 本片接：`SOL_SOCKET` 的 `SO_REUSEADDR`／`SO_TYPE`／`SO_ERROR`／`SO_SNDBUF`／`SO_RCVBUF`／
-//! `SO_SNDTIMEO`／`SO_RCVTIMEO` 与 `IPPROTO_TCP` 的 `TCP_NODELAY`；其余按机器错误
-//! `ENOPROTOOPT` 如实拒绝（`CP-6`：不假装成功）。超时选项按 Win32 **`DWORD` 毫秒**位传值
-//! （guest 的 int 毫秒 ⇒ `u32`；负值夹 `0`＝无超时）。
+//! `SO_SNDTIMEO`／`SO_RCVTIMEO`、`IPPROTO_TCP` 的 `TCP_NODELAY`，以及 `IPPROTO_IPV6` 的
+//! `IPV6_V6ONLY`（guest 26 ⇒ Winsock **27**；`CP-47` 的 asyncio `start_server("::1")` 依赖它）；
+//! 其余按机器错误 `ENOPROTOOPT` 如实拒绝（`CP-6`：不假装成功）。超时选项按 Win32
+//! **`DWORD` 毫秒**位传值（guest 的 int 毫秒 ⇒ `u32`；负值夹 `0`＝无超时）。
 //!
 //! # 如实边界
 //!
@@ -68,8 +80,8 @@
 
 use core::ffi::c_void;
 use pyawa_capabilities::net::{
-    decode_ipv4, encode_ipv4, family, socket_type, CapStatus, CpNetVtable, PollFd, SocketHandle,
-    SOCKADDR_V1_IPV4_LEN,
+    decode_ipv4, decode_ipv6, encode_ipv4, encode_ipv6, family, socket_type, CapStatus, CpNetVtable,
+    PollFd, SocketHandle, SOCKADDR_V1_IPV4_LEN, SOCKADDR_V1_IPV6_LEN,
 };
 use pyawa_core::Instance;
 use std::collections::HashMap;
@@ -82,8 +94,12 @@ const WSA_VERSION: u16 = 0x0202;
 const INVALID_SOCKET: usize = usize::MAX;
 /// `WSADATA` 出参缓冲的字节数：真结构 x64 上 408B、x86 上 400B ⇒ 512B ＋ 8 字节对齐足够。
 const WSA_DATA_BYTES: usize = 512;
-/// WinSock `SOCKADDR_IN` 的字节数（`bind`／`connect`／`accept` 的地址长度）。
+/// WinSock `SOCKADDR_IN` 的字节数（`bind`／`connect` 的 IPv4 地址长度）。
 const SOCKADDR_IN_LEN: i32 = 16;
+/// WinSock `SOCKADDR_IN6` 的字节数（IPv6 地址长度；`CP-47` 的 16B 地址 ＋ 2B 端口 ＋ flowinfo/scope）。
+const SOCKADDR_IN6_LEN: i32 = 28;
+/// Winsock 的 `AF_INET6` 数值（**23**）：guest／canonical 是 10（`CP-47`），必须映射。
+const WSA_AF_INET6: i32 = 23;
 
 // --------------------------------------------------------------------------- //
 // POSIX（guest 侧）选项号：与 `pyawa-stdlib` `_socket_module` 的常量表同一口径
@@ -109,6 +125,10 @@ const SO_SNDTIMEO_POSIX: i32 = 21;
 const IPPROTO_TCP_POSIX: i32 = 6;
 /// `TCP_NODELAY`（POSIX 取值；与 Winsock 同值）。
 const TCP_NODELAY_POSIX: i32 = 1;
+/// `IPPROTO_IPV6`（POSIX 取值；与 Winsock 同值 41）。
+const IPPROTO_IPV6_POSIX: i32 = 41;
+/// `IPV6_V6ONLY`（POSIX 取值 26；Winsock 是 **27**）。
+const IPV6_V6ONLY_POSIX: i32 = 26;
 
 // --------------------------------------------------------------------------- //
 // Winsock 选项号（`winsock2.h`）：与 POSIX 编号**不同**，必须翻译
@@ -130,6 +150,11 @@ const WSA_SO_RCVTIMEO: i32 = 0x1006;
 const WSA_SO_ERROR: i32 = 0x1007;
 /// Winsock `SO_TYPE`。
 const WSA_SO_TYPE: i32 = 0x1008;
+/// Winsock `IPV6_V6ONLY`（**27**；POSIX 是 26）。
+///
+/// `Lib/asyncio/base_events.py:1619-1624` 的 `start_server("::1")` 依赖它；编号不翻译会把
+/// 26 当成别的 IPv6 选项。
+const WSA_IPV6_V6ONLY: i32 = 27;
 /// **Proactor 桥（P2）**：`_overlapped.SO_UPDATE_ACCEPT_CONTEXT` 的 Winsock 取值。
 ///
 /// `Lib/asyncio/windows_events.py:559` 在 `AcceptEx` 完成后调用
@@ -215,7 +240,7 @@ struct WsaData {
 
 /// 内核 `SOCKADDR_IN`（`winsock2.h`；16 字节）。
 ///
-/// `port` 用整数存**网络序**（见 [`port_to_net`]／[`port_from_net`]）：在 x86/x64 这类小端宿主上，
+/// `port` 用整数存**网络序**（见 [`port_to_net`]）：在 x86/x64 这类小端宿主上，
 /// 写进去的数值内存形态就是大端字节序；`addr` 直接用字节数组，避开主机字节序。
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -230,8 +255,85 @@ struct SockaddrIn {
     zero: [u8; 8],
 }
 
-// `SOCKADDR_IN` 是 16 字节；WinSock 的 `bind`／`connect`／`accept` 都按这个长度收地址。
+// `SOCKADDR_IN` 是 16 字节；WinSock 的 `bind`／`connect` 按这个长度收 IPv4 地址。
 const _: () = assert!(core::mem::size_of::<SockaddrIn>() == SOCKADDR_IN_LEN as usize);
+
+/// 内核 `SOCKADDR_IN6`（`winsock2.h`；**28 字节**；`CP-47`）。
+///
+/// `sin6_family` 是 **Winsock 的 23**（不是 canonical 的 10）；`sin6_port` 与 IPv4 一样存
+/// **网络序的数值**；`sin6_flowinfo`／`sin6_scope_id` 不在 v1 ⇒ 置 0（link-local 另立条款）。
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SockaddrIn6 {
+    /// `sin6_family`（Winsock `AF_INET6` ＝ 23）。
+    family: u16,
+    /// `sin6_port`（网络字节序的数值，见 [`port_to_net`]）。
+    port: u16,
+    /// `sin6_flowinfo`（v1 不带 ⇒ 0）。
+    flowinfo: u32,
+    /// `sin6_addr`（16 字节地址，网络序原样）。
+    addr: [u8; 16],
+    /// `sin6_scope_id`（v1 不带 ⇒ 0）。
+    scope_id: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<SockaddrIn6>() == SOCKADDR_IN6_LEN as usize);
+
+/// 出参方向（`bind`／`connect`）的地址：按族二选一（`CP-39`／`CP-47`）。
+#[derive(Clone, Copy)]
+enum Sockaddr {
+    /// IPv4（`SOCKADDR_IN`，16B）。
+    V4(SockaddrIn),
+    /// IPv6（`SOCKADDR_IN6`，28B）。
+    V6(SockaddrIn6),
+}
+
+impl Sockaddr {
+    /// 交给 Winsock 的地址指针（活到调用返回）。
+    fn as_ptr(&self) -> *const u8 {
+        match self {
+            Sockaddr::V4(value) => (value as *const SockaddrIn).cast::<u8>(),
+            Sockaddr::V6(value) => (value as *const SockaddrIn6).cast::<u8>(),
+        }
+    }
+
+    /// 交给 Winsock 的地址长度（16／28）。
+    fn len(&self) -> i32 {
+        match self {
+            Sockaddr::V4(_) => SOCKADDR_IN_LEN,
+            Sockaddr::V6(_) => SOCKADDR_IN6_LEN,
+        }
+    }
+}
+
+/// WinSock 通用地址缓冲（`SOCKADDR_STORAGE` 的 128B 子集）：`accept`／`getsockname`／
+/// `getpeername` 的出参统一用它接，再按内核回填的 `sa_family`（2／23）判族。
+///
+/// 只用 16B 缓冲接 IPv6 会被 `WSAEFAULT` 或截断（`CP-47`：IPv6 是 28B）。
+#[repr(C, align(8))]
+struct SockaddrStorage {
+    /// 128B 原始缓冲（`SOCKADDR_STORAGE`；本实现不解释前 2 字节以外的布局）。
+    bytes: [u8; 128],
+}
+
+impl SockaddrStorage {
+    /// 全零缓冲（内核只按族写前 16／28B）。
+    fn zeroed() -> Self {
+        Self { bytes: [0u8; 128] }
+    }
+
+    /// 交给内核的可写指针。
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.bytes.as_mut_ptr()
+    }
+
+    /// 交给内核的缓冲长度（`SOCKADDR_STORAGE` 的 128）。
+    fn capacity() -> i32 {
+        128
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<SockaddrStorage>() == 128);
 
 /// Winsock `WSAPOLLFD`（`SOCKET fd; SHORT events; SHORT revents;`）。
 ///
@@ -375,47 +477,108 @@ fn port_to_net(port: u16) -> u16 {
     port.to_be()
 }
 
-/// 网络字节序（[`SockaddrIn::port`] 的数值）⇒ 主机端口。
-fn port_from_net(port: u16) -> u16 {
-    u16::from_be(port)
-}
-
-/// `CP-39` 的 v1 线格式 ⇒ WinSock `SOCKADDR_IN`。
+/// guest（canonical，`CP-47`）族号 ⇒ Winsock 族号；不支持的族返回 `None`。
 ///
-/// 只有 `AF_INET` 在 v1 里：其它族按真实机器语义回 `EAFNOSUPPORT`（`CP-6`）；长度不符回 `EINVAL`。
-#[allow(unsafe_code)]
-fn sockaddr_in_of(af: i32, addr: *const u8, addr_len: usize) -> Result<SockaddrIn, i32> {
-    if af != family::AF_INET {
-        return Err(errno_named("EAFNOSUPPORT"));
+/// **10 ≠ 23**：IPv6 的 guest／线格式族号是 POSIX 的 10，Winsock 的 `AF_INET6` 是 23，必须映射。
+fn winsock_family_of_guest(af: i32) -> Option<i32> {
+    match af {
+        family::AF_INET => Some(family::AF_INET),
+        family::AF_INET6 => Some(WSA_AF_INET6),
+        _ => None,
     }
-    if addr.is_null() || addr_len != SOCKADDR_V1_IPV4_LEN {
-        return Err(errno_named("EINVAL"));
-    }
-    // SAFETY: 上面已判空且长度恰为 v1 IPv4 线长度；调用方按 vtable 契约保证缓冲在调用期间有效。
-    let wire = unsafe { core::slice::from_raw_parts(addr, addr_len) };
-    let Some((address, port)) = decode_ipv4(wire) else {
-        return Err(errno_named("EINVAL"));
-    };
-    Ok(SockaddrIn {
-        family: family::AF_INET as u16,
-        port: port_to_net(port),
-        addr: address,
-        zero: [0; 8],
-    })
 }
 
-/// `SOCKADDR_IN` 出参 ⇒ `CP-39` 线格式（**两段式**：只写 `min(总长, 容量)`，`out_len` 回总长）。
+/// `CP-39`／`CP-47` 的 v1 线格式 ⇒ WinSock `SOCKADDR_IN`／`SOCKADDR_IN6`。
+///
+/// 族分派：2 ⇒ 16B（线格式 6B）、10 ⇒ 28B（线格式 18B）；其它族按真实机器语义回
+/// `EAFNOSUPPORT`（`CP-6`）；长度与族不符回 `EINVAL`。
+#[allow(unsafe_code)]
+fn sockaddr_of(af: i32, addr: *const u8, addr_len: usize) -> Result<Sockaddr, i32> {
+    if addr.is_null() {
+        return Err(errno_named("EINVAL"));
+    }
+    match af {
+        family::AF_INET => {
+            if addr_len != SOCKADDR_V1_IPV4_LEN {
+                return Err(errno_named("EINVAL"));
+            }
+            // SAFETY: 上面已判空且长度恰为 v1 IPv4 线长度；调用方按 vtable 契约保证缓冲在调用期间有效。
+            let wire = unsafe { core::slice::from_raw_parts(addr, addr_len) };
+            let Some((address, port)) = decode_ipv4(wire) else {
+                return Err(errno_named("EINVAL"));
+            };
+            Ok(Sockaddr::V4(SockaddrIn {
+                family: family::AF_INET as u16,
+                port: port_to_net(port),
+                addr: address,
+                zero: [0; 8],
+            }))
+        }
+        family::AF_INET6 => {
+            if addr_len != SOCKADDR_V1_IPV6_LEN {
+                return Err(errno_named("EINVAL"));
+            }
+            // SAFETY: 同上（长度恰为 v1.1 IPv6 线长度）。
+            let wire = unsafe { core::slice::from_raw_parts(addr, addr_len) };
+            let Some((address, port)) = decode_ipv6(wire) else {
+                return Err(errno_named("EINVAL"));
+            };
+            Ok(Sockaddr::V6(SockaddrIn6 {
+                family: WSA_AF_INET6 as u16,
+                port: port_to_net(port),
+                // `CP-47`：`flowinfo`／`scope_id` 不在 v1 ⇒ 0（link-local 另立条款）。
+                flowinfo: 0,
+                addr: address,
+                scope_id: 0,
+            }))
+        }
+        _ => Err(errno_named("EAFNOSUPPORT")),
+    }
+}
+
+/// 内核回填的 `SOCKADDR_STORAGE` ⇒ `(canonical 族号, `CP-39`／`CP-47` 线格式字节)`。
+///
+/// 族按内核写的 `sa_family` 判（2 ＝ IPv4、23 ＝ Winsock IPv6）⇒ `out_family` 回 canonical 2／10。
+/// 未知族／长度不足按机器错误拒绝（不静默截断）。
+fn sockaddr_from_kernel(storage: &SockaddrStorage, length: i32) -> Result<(i32, Vec<u8>), i32> {
+    if length < 2 {
+        return Err(errno_named("EINVAL"));
+    }
+    let family_raw = u16::from_ne_bytes([storage.bytes[0], storage.bytes[1]]);
+    match i32::from(family_raw) {
+        family::AF_INET => {
+            if length < SOCKADDR_IN_LEN {
+                return Err(errno_named("EINVAL"));
+            }
+            let mut address = [0u8; 4];
+            address.copy_from_slice(&storage.bytes[4..8]);
+            let port = u16::from_be_bytes([storage.bytes[2], storage.bytes[3]]);
+            Ok((family::AF_INET, encode_ipv4(address, port).to_vec()))
+        }
+        WSA_AF_INET6 => {
+            if length < SOCKADDR_IN6_LEN {
+                return Err(errno_named("EINVAL"));
+            }
+            let mut address = [0u8; 16];
+            address.copy_from_slice(&storage.bytes[8..24]);
+            let port = u16::from_be_bytes([storage.bytes[2], storage.bytes[3]]);
+            Ok((family::AF_INET6, encode_ipv6(address, port).to_vec()))
+        }
+        _ => Err(errno_named("EAFNOSUPPORT")),
+    }
+}
+
+/// 线格式字节 ⇒ 出参（**两段式**：只写 `min(总长, 容量)`，`out_len` 回总长）。
 #[allow(unsafe_code)]
 fn write_sockaddr_out(
-    sockaddr: &SockaddrIn,
+    wire: &[u8],
     out: *mut u8,
     capacity: usize,
     out_len: *mut usize,
 ) -> CapStatus {
-    let wire = encode_ipv4(sockaddr.addr, port_from_net(sockaddr.port));
     let written = wire.len().min(capacity);
     if !out.is_null() && written > 0 {
-        // SAFETY: `out` 由调用方按 `capacity` 给出；源（局部数组）与目标不重叠。
+        // SAFETY: `out` 由调用方按 `capacity` 给出；源（局部缓冲）与目标不重叠。
         unsafe { core::ptr::copy_nonoverlapping(wire.as_ptr(), out, written) };
     }
     // SAFETY: 出参由调用方提供。
@@ -509,6 +672,11 @@ fn wsa_socket_option(level: i32, name: i32) -> Option<(i32, i32)> {
         // `TCP_NODELAY` 在两套 ABI 里同值（1），`IPPROTO_TCP` 也同值（6）。
         IPPROTO_TCP_POSIX => match name {
             TCP_NODELAY_POSIX => Some((IPPROTO_TCP_POSIX, TCP_NODELAY_POSIX)),
+            _ => None,
+        },
+        // `IPPROTO_IPV6` 同值（41），但 `IPV6_V6ONLY` 的编号不同（26 ⇒ 27）。
+        IPPROTO_IPV6_POSIX => match name {
+            IPV6_V6ONLY_POSIX => Some((IPPROTO_IPV6_POSIX, WSA_IPV6_V6ONLY)),
             _ => None,
         },
         _ => None,
@@ -620,9 +788,10 @@ impl Default for WindowsNet {
 // 槽位实现（逐条对齐 net_posix.rs）
 // --------------------------------------------------------------------------- //
 
-/// `socket(af, type, proto)`：只接受 `AF_INET` ＋ `SOCK_STREAM`（v1 的 TCP 面）。
+/// `socket(af, type, proto)`：接受 `AF_INET`／`AF_INET6` ＋ `SOCK_STREAM`（v1.1 的 TCP 面）。
 ///
-/// 其它族／类型**如实拒绝**（`EAFNOSUPPORT`／`EPROTONOSUPPORT`），不假装成功（`CP-6`）。
+/// 族号是 canonical（`CP-47`）⇒ 进 Winsock 前必须映射（10 ⇒ 23）；其它族／类型**如实拒绝**
+/// （`EAFNOSUPPORT`／`EPROTONOSUPPORT`），不假装成功（`CP-6`）。
 #[allow(unsafe_code)]
 extern "C" fn net_socket(
     state: *mut c_void,
@@ -636,17 +805,17 @@ extern "C" fn net_socket(
         write_errno(errno_out, errno);
         return CapStatus::Machine;
     }
-    if af != family::AF_INET {
+    let Some(win_af) = winsock_family_of_guest(af) else {
         write_errno(errno_out, errno_named("EAFNOSUPPORT"));
         return CapStatus::Machine;
-    }
+    };
     if ty != socket_type::SOCK_STREAM {
         write_errno(errno_out, errno_named("EPROTONOSUPPORT"));
         return CapStatus::Machine;
     }
-    // `AF_INET`／`SOCK_STREAM` 的数值与 Winsock 同值（2／1）⇒ 原样转发；`proto` 交给内核判定。
+    // `SOCK_STREAM` 的数值与 Winsock 同值（1）⇒ 原样转发；族号经上一步映射；`proto` 交给内核判定。
     // SAFETY: 三个整数原样转发给 Winsock；不涉及 Rust 引用。
-    let raw = unsafe { sys::socket(af, ty, proto) };
+    let raw = unsafe { sys::socket(win_af, ty, proto) };
     if raw == INVALID_SOCKET {
         write_errno(errno_out, last_wsa_errno());
         return CapStatus::Machine;
@@ -657,7 +826,7 @@ extern "C" fn net_socket(
     CapStatus::Ok
 }
 
-/// `bind(sock, af, addr)`：`AF_INET` 的 `CP-39` 线格式 ⇒ 真 `bind`。
+/// `bind(sock, af, addr)`：`CP-39`／`CP-47` 线格式 ⇒ 真 `bind`（族分派，IPv6 28B）。
 #[allow(unsafe_code)]
 extern "C" fn net_bind(
     state: *mut c_void,
@@ -677,21 +846,15 @@ extern "C" fn net_bind(
         write_errno(errno_out, errno_named("EBADF"));
         return CapStatus::Machine;
     };
-    let sockaddr = match sockaddr_in_of(af, addr, addr_len) {
+    let sockaddr = match sockaddr_of(af, addr, addr_len) {
         Ok(value) => value,
         Err(errno) => {
             write_errno(errno_out, errno);
             return CapStatus::Machine;
         }
     };
-    // SAFETY: `sockaddr` 是有效的 WinSock `SOCKADDR_IN`（16B），在调用期间活着。
-    let result = unsafe {
-        sys::bind(
-            fd,
-            (&sockaddr as *const SockaddrIn).cast::<u8>(),
-            SOCKADDR_IN_LEN,
-        )
-    };
+    // SAFETY: `sockaddr` 是有效的 WinSock `SOCKADDR_IN`／`SOCKADDR_IN6`（16／28B），调用期间活着。
+    let result = unsafe { sys::bind(fd, sockaddr.as_ptr(), sockaddr.len()) };
     if result == 0 {
         CapStatus::Ok
     } else {
@@ -700,7 +863,7 @@ extern "C" fn net_bind(
     }
 }
 
-/// `connect(sock, af, addr)`：`AF_INET` 的 `CP-39` 线格式 ⇒ 真 `connect`。
+/// `connect(sock, af, addr)`：`CP-39`／`CP-47` 线格式 ⇒ 真 `connect`（族分派，IPv6 28B）。
 #[allow(unsafe_code)]
 extern "C" fn net_connect(
     state: *mut c_void,
@@ -720,7 +883,7 @@ extern "C" fn net_connect(
         write_errno(errno_out, errno_named("EBADF"));
         return CapStatus::Machine;
     };
-    let sockaddr = match sockaddr_in_of(af, addr, addr_len) {
+    let sockaddr = match sockaddr_of(af, addr, addr_len) {
         Ok(value) => value,
         Err(errno) => {
             write_errno(errno_out, errno);
@@ -729,13 +892,7 @@ extern "C" fn net_connect(
     };
     loop {
         // SAFETY: 同 `net_bind`；`EINTR` 重试口径同 `net_posix`。
-        let result = unsafe {
-            sys::connect(
-                fd,
-                (&sockaddr as *const SockaddrIn).cast::<u8>(),
-                SOCKADDR_IN_LEN,
-            )
-        };
+        let result = unsafe { sys::connect(fd, sockaddr.as_ptr(), sockaddr.len()) };
         if result == 0 {
             return CapStatus::Ok;
         }
@@ -777,6 +934,9 @@ extern "C" fn net_listen(
 }
 
 /// `accept(sock)` ⇒ 新 socket 能力 ＋ 地址（**两段式**出参，同 `net_posix`）。
+///
+/// 地址用 128B `SOCKADDR_STORAGE` 收（IPv4／IPv6 都够），按内核回填的族解成 6B／18B 线格式
+/// （`CP-39`／`CP-47`）。
 #[allow(unsafe_code)]
 extern "C" fn net_accept(
     state: *mut c_void,
@@ -798,21 +958,12 @@ extern "C" fn net_accept(
         write_errno(errno_out, errno_named("EBADF"));
         return CapStatus::Machine;
     };
-    let mut sockaddr = SockaddrIn {
-        family: 0,
-        port: 0,
-        addr: [0; 4],
-        zero: [0; 8],
-    };
-    let mut length = SOCKADDR_IN_LEN;
+    let mut storage = SockaddrStorage::zeroed();
     loop {
-        // SAFETY: `sockaddr`／`length` 是本函数持有的可写出参（尺寸与 WinSock 一致）。
+        let mut length = SockaddrStorage::capacity();
+        // SAFETY: `storage`（128B）与 `length` 是本函数持有的可写出参；内核最多写 `length` 字节。
         let raw = unsafe {
-            sys::accept(
-                fd,
-                (&mut sockaddr as *mut SockaddrIn).cast::<u8>(),
-                &mut length,
-            )
+            sys::accept(fd, storage.as_mut_ptr(), &mut length)
         };
         if raw == INVALID_SOCKET {
             let errno = last_wsa_errno();
@@ -822,10 +973,21 @@ extern "C" fn net_accept(
             write_errno(errno_out, errno);
             return CapStatus::Machine;
         }
+        let decoded = sockaddr_from_kernel(&storage, length);
+        let (canonical_family, wire) = match decoded {
+            Ok(value) => value,
+            Err(errno) => {
+                // 不应发生（内核只会回 2／23）；刚收下的 socket 必须关掉，不能泄漏。
+                // SAFETY: `raw` 是刚由 `accept` 创建、尚未交给句柄表。
+                unsafe { sys::closesocket(raw) };
+                write_errno(errno_out, errno);
+                return CapStatus::Machine;
+            }
+        };
         let handle = provider.insert(raw);
         write_out(out_socket, handle);
-        write_out(out_family, family::AF_INET);
-        return write_sockaddr_out(&sockaddr, out_addr, out_capacity, out_len);
+        write_out(out_family, canonical_family);
+        return write_sockaddr_out(&wire, out_addr, out_capacity, out_len);
     }
 }
 
@@ -850,27 +1012,24 @@ extern "C" fn net_getsockname(
         write_errno(errno_out, errno_named("EBADF"));
         return CapStatus::Machine;
     };
-    let mut sockaddr = SockaddrIn {
-        family: 0,
-        port: 0,
-        addr: [0; 4],
-        zero: [0; 8],
-    };
-    let mut length = SOCKADDR_IN_LEN;
-    // SAFETY: `sockaddr`／`length` 是本函数持有的可写出参。
-    let result = unsafe {
-        sys::getsockname(
-            fd,
-            (&mut sockaddr as *mut SockaddrIn).cast::<u8>(),
-            &mut length,
-        )
-    };
+    let mut storage = SockaddrStorage::zeroed();
+    let mut length = SockaddrStorage::capacity();
+    // SAFETY: `storage`（128B）与 `length` 是本函数持有的可写出参；内核最多写 `length` 字节。
+    let result = unsafe { sys::getsockname(fd, storage.as_mut_ptr(), &mut length) };
     if result != 0 {
         write_errno(errno_out, last_wsa_errno());
         return CapStatus::Machine;
     }
-    write_out(out_family, family::AF_INET);
-    write_sockaddr_out(&sockaddr, out_addr, out_capacity, out_len)
+    match sockaddr_from_kernel(&storage, length) {
+        Ok((canonical_family, wire)) => {
+            write_out(out_family, canonical_family);
+            write_sockaddr_out(&wire, out_addr, out_capacity, out_len)
+        }
+        Err(errno) => {
+            write_errno(errno_out, errno);
+            CapStatus::Machine
+        }
+    }
 }
 
 /// `getpeername(sock)` ⇒ 对端地址（**两段式**出参）。
@@ -894,27 +1053,24 @@ extern "C" fn net_getpeername(
         write_errno(errno_out, errno_named("EBADF"));
         return CapStatus::Machine;
     };
-    let mut sockaddr = SockaddrIn {
-        family: 0,
-        port: 0,
-        addr: [0; 4],
-        zero: [0; 8],
-    };
-    let mut length = SOCKADDR_IN_LEN;
-    // SAFETY: `sockaddr`／`length` 是本函数持有的可写出参。
-    let result = unsafe {
-        sys::getpeername(
-            fd,
-            (&mut sockaddr as *mut SockaddrIn).cast::<u8>(),
-            &mut length,
-        )
-    };
+    let mut storage = SockaddrStorage::zeroed();
+    let mut length = SockaddrStorage::capacity();
+    // SAFETY: `storage`（128B）与 `length` 是本函数持有的可写出参；内核最多写 `length` 字节。
+    let result = unsafe { sys::getpeername(fd, storage.as_mut_ptr(), &mut length) };
     if result != 0 {
         write_errno(errno_out, last_wsa_errno());
         return CapStatus::Machine;
     }
-    write_out(out_family, family::AF_INET);
-    write_sockaddr_out(&sockaddr, out_addr, out_capacity, out_len)
+    match sockaddr_from_kernel(&storage, length) {
+        Ok((canonical_family, wire)) => {
+            write_out(out_family, canonical_family);
+            write_sockaddr_out(&wire, out_addr, out_capacity, out_len)
+        }
+        Err(errno) => {
+            write_errno(errno_out, errno);
+            CapStatus::Machine
+        }
+    }
 }
 
 /// `shutdown(sock, how)`：`SHUT_RD=0`／`SHUT_WR=1`／`SHUT_RDWR=2` 与 WinSock

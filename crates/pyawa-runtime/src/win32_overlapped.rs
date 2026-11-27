@@ -16,6 +16,9 @@
 //! - **P1 文件重叠 I/O（2026-11-22）**：`_winapi.CreateFile`＋`Overlapped.ReadFile`／
 //!   `WriteFile`／`GetOverlappedResult`／`getresult` 已接真实 Win32；Windows 测试见
 //!   `crates/pyawa-runtime/tests/windows_overlapped.rs`。
+//! - **P5 IPv6 数据面（R2；`CP-47`）**：`ConnectEx`（IPv6 4 元组）／`BindLocal`／
+//!   `inet_pton`／`inet_ntop` 支持 IPv6；guest 族号是 canonical 10、Winsock 是 23 ⇒
+//!   进内核前**必须映射**。guest `_socket` 的 IPv6 地址线（`R3`）未接 ⇒ asyncio IPv6 仍不可用。
 //!
 //! # 如实边界（`DIV-` 口径）
 //!
@@ -30,6 +33,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use pyawa_capabilities::net::family;
 use pyawa_core::{BuiltinFunctionObject, ExecError, Header, Instance};
 
 /// `_winapi` 的句柄（Win32 `HANDLE`）。
@@ -398,6 +402,58 @@ struct SockaddrIn {
     port: u16,
     addr: [u8; 4],
     zero: [u8; 8],
+}
+
+/// Winsock `SOCKADDR_IN6`（**28 字节**；`CP-47`：16B 地址 ＋ 2B 端口 ＋ flowinfo/scope）。
+///
+/// `sin6_family` 必须写 **Winsock 的 23**（guest／canonical 是 10）。
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SockaddrIn6 {
+    family: u16,
+    port: u16,
+    flowinfo: u32,
+    addr: [u8; 16],
+    scope_id: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<SockaddrIn6>() == 28);
+
+/// Winsock 的 `AF_INET6`（**23**；guest／canonical 是 10，见 `CP-47`）。
+const WSA_AF_INET6: u16 = 23;
+
+/// `ConnectEx`／`BindLocal` 的地址族映射：guest（canonical，`CP-47`）⇒ Winsock。
+///
+/// **10 ≠ 23**：IPv6 的 guest 族号是 POSIX 的 10，Winsock 的 `AF_INET6` 是 23。
+fn winsock_family_of_guest(af: i32) -> Option<u16> {
+    match af {
+        family::AF_INET => Some(family::AF_INET as u16),
+        family::AF_INET6 => Some(WSA_AF_INET6),
+        _ => None,
+    }
+}
+
+/// `ConnectEx` 的出站地址：按族二选一（`CP-39`／`CP-47`）。
+#[derive(Clone, Copy)]
+enum ConnectSockaddr {
+    V4(SockaddrIn),
+    V6(SockaddrIn6),
+}
+
+impl ConnectSockaddr {
+    fn as_ptr(&self) -> *const c_void {
+        match self {
+            ConnectSockaddr::V4(value) => (value as *const SockaddrIn).cast::<c_void>(),
+            ConnectSockaddr::V6(value) => (value as *const SockaddrIn6).cast::<c_void>(),
+        }
+    }
+
+    fn len(&self) -> i32 {
+        match self {
+            ConnectSockaddr::V4(_) => core::mem::size_of::<SockaddrIn>() as i32,
+            ConnectSockaddr::V6(_) => core::mem::size_of::<SockaddrIn6>() as i32,
+        }
+    }
 }
 
 #[repr(C)]
@@ -1804,12 +1860,18 @@ fn overlapped_bind_local(
     // 之前先本地绑定；CPython 同名函数直接收 `(SOCKET, family)`，没有 self。
     no_kwargs(instance, "_overlapped.BindLocal", kwargs)?;
     let handle = int_arg(instance, "_overlapped.BindLocal", args, 0)?;
-    let family = optional_int(instance, "_overlapped.BindLocal", args, 1, 2)? as u16;
+    let guest_family = optional_int(instance, "_overlapped.BindLocal", args, 1, 2)? as i32;
     let socket = resolve_socket(handle);
+    // guest 族号是 canonical（`AF_INET6`＝10，`CP-47`）⇒ `sa_family` 必须写 Winsock 的 2／23。
+    // 不映射会让 IPv6 绑定报 `WSAEAFNOSUPPORT`，而 asyncio 只吞 `WSAEINVAL`，极难定位。
+    let Some(win_family) = winsock_family_of_guest(guest_family) else {
+        // 未知族按真实机器语义回 Winsock 的 `WSAEAFNOSUPPORT`（10047）。
+        return Err(raise_win(instance, 10047));
+    };
     // 与 CPython 同法：`SOCKADDR_STORAGE`（128 字节）全零，只填 `sa_family` ⇒
     // 通配地址 + 端口 0，IPv4/IPv6 都走同一条路径。
     let mut address = [0u8; 128];
-    address[..2].copy_from_slice(&family.to_ne_bytes());
+    address[..2].copy_from_slice(&win_family.to_ne_bytes());
     // SAFETY: address 是活局部量，长度 128。
     let rc = unsafe {
         winsock::bind(socket as usize, address.as_ptr(), address.len() as i32)
@@ -1836,6 +1898,8 @@ fn overlapped_accept_ex(
     let memory = overlapped_ptr(instance, this)?;
     // SAFETY: memory 来自 Box，存活到 Close。
     let memory = unsafe { &mut *memory };
+    // `AcceptEx` 的地址区 = local(256) ＋ remote(256)：IPv6 的 `SOCKADDR_IN6` 只有 **28B**
+    // （`CP-47`），512B 缓冲对 v4／v6 都够，**不要**按 IPv4 的 16B 缩。
     let mut buffer = vec![0u8; 2 * 256];
     let mut transferred = 0u32;
     let ok = unsafe {
@@ -1884,20 +1948,41 @@ fn overlapped_connect_ex(
     let port = parts.get(1).and_then(|value| instance.int_value(*value)).ok_or_else(|| {
         instance.raise_builtin_error("TypeError", "ConnectEx 的 port 要是整数")
     })? as u16;
-    let ip = host.parse::<std::net::Ipv4Addr>().map_err(|_| {
-        instance.raise_builtin_error("OSError", "ConnectEx 只接了 IPv4 字面量")
-    })?;
+    // 字面量判族与 CPython `_overlapped.parse_address` 同法：先 IPv4、再 IPv6。
+    // IPv6 地址是 4 元组 `(host, port, flowinfo, scopeid)`（`CP-47`：v1 不带它们 ⇒ 默认 0）。
+    let address = if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        ConnectSockaddr::V4(SockaddrIn {
+            family: family::AF_INET as u16,
+            port: port.to_be(),
+            addr: ip.octets(),
+            zero: [0; 8],
+        })
+    } else if let Ok(ip) = host.parse::<std::net::Ipv6Addr>() {
+        let flowinfo = optional_int(instance, "Overlapped.ConnectEx", &parts, 2, 0)?;
+        let scope_id = optional_int(instance, "Overlapped.ConnectEx", &parts, 3, 0)?;
+        if !(0..=u32::MAX as i64).contains(&flowinfo) || !(0..=u32::MAX as i64).contains(&scope_id) {
+            return Err(instance.raise_builtin_error("OverflowError", "IPv6 flowinfo/scopeid 越界"));
+        }
+        ConnectSockaddr::V6(SockaddrIn6 {
+            family: WSA_AF_INET6,
+            port: port.to_be(),
+            flowinfo: flowinfo as u32,
+            addr: ip.octets(),
+            scope_id: scope_id as u32,
+        })
+    } else {
+        return Err(instance.raise_builtin_error("OSError", "ConnectEx 只接了 IPv4／IPv6 字面量"));
+    };
     let memory = overlapped_ptr(instance, this)?;
     // SAFETY: memory 来自 Box，存活到 Close。
     let memory = unsafe { &mut *memory };
-    let address = SockaddrIn { family: 2, port: port.to_be(), addr: ip.octets(), zero: [0; 8] };
     let mut transferred = 0u32;
     let pointer = connect_ex_pointer(socket).map_err(|detail| {
         instance.raise_builtin_error("OSError", &detail)
     })?;
     type ConnectExFn = unsafe extern "system" fn(
         HandleRaw,
-        *const SockaddrIn,
+        *const c_void,
         i32,
         *mut c_void,
         u32,
@@ -1909,8 +1994,8 @@ fn overlapped_connect_ex(
     let ok = unsafe {
         connect_ex(
             socket,
-            &address,
-            core::mem::size_of::<SockaddrIn>() as i32,
+            address.as_ptr(),
+            address.len(),
             core::ptr::null_mut(),
             0,
             &mut transferred,
@@ -2428,19 +2513,25 @@ fn socket_inet_pton(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "_socket.inet_pton", kwargs)?;
-    let family = int_arg(instance, "_socket.inet_pton", args, 0)? as i32;
+    let guest_family = int_arg(instance, "_socket.inet_pton", args, 0)? as i32;
+    // guest 族号是 canonical（`CP-47`）：2 ⇒ 4B、10 ⇒ 16B；进 Winsock 前映射 10 ⇒ 23。
+    let (win_family, length) = match guest_family {
+        family::AF_INET => (family::AF_INET, 4usize),
+        family::AF_INET6 => (i32::from(WSA_AF_INET6), 16usize),
+        // 其它族按真实机器语义回 `EAFNOSUPPORT`（CPython 同一口径）。
+        _ => return Err(raise_win(instance, 10047)),
+    };
     let text = optional_text(instance, "_socket.inet_pton", args, 1)?
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "inet_pton 需要地址串"))?;
     let mut buffer = [0u8; 16];
     let c_text = std::ffi::CString::new(text).map_err(|_| {
         instance.raise_builtin_error("ValueError", "地址串含 NUL")
     })?;
-    // SAFETY: buffer 至少 16 字节；CString NUL 结尾。
-    let rc = unsafe { winsock::inet_pton(family, c_text.as_ptr().cast::<u8>(), buffer.as_mut_ptr()) };
+    // SAFETY: buffer 16 字节（≥ 该族要求的 4／16）；CString NUL 结尾。
+    let rc = unsafe { winsock::inet_pton(win_family, c_text.as_ptr().cast::<u8>(), buffer.as_mut_ptr()) };
     if rc != 1 {
         return Err(instance.raise_builtin_error("OSError", "inet_pton 失败"));
     }
-    let length = if family == 2 { 4 } else { 16 };
     Ok(instance.new_bytes(&buffer[..length]))
 }
 
@@ -2452,15 +2543,32 @@ fn socket_inet_ntop(
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     no_kwargs(instance, "_socket.inet_ntop", kwargs)?;
-    let family = int_arg(instance, "_socket.inet_ntop", args, 0)? as i32;
+    let guest_family = int_arg(instance, "_socket.inet_ntop", args, 0)? as i32;
     let packed = arg(instance, "_socket.inet_ntop", args, 1)?;
     let bytes = instance.bytes_like_value(packed).ok_or_else(|| {
         instance.raise_builtin_error("TypeError", "inet_ntop 需要 bytes-like")
     })?;
+    // 族与 packed 长度**必须先校验**：Winsock 的 `inet_ntop` 不接源长度，族和长度不符会越界读。
+    let (win_family, expected) = match guest_family {
+        family::AF_INET => (family::AF_INET, 4usize),
+        family::AF_INET6 => (i32::from(WSA_AF_INET6), 16usize),
+        other => {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!("unknown address family {other}"),
+            ))
+        }
+    };
+    if bytes.len() != expected {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "invalid length of packed IP address string",
+        ));
+    }
     let mut output = [0u8; 64];
     // SAFETY: bytes 指针在调用期间有效；output 足够大。
     let rc = unsafe {
-        winsock::inet_ntop(family, bytes.as_ptr(), output.as_mut_ptr(), output.len())
+        winsock::inet_ntop(win_family, bytes.as_ptr(), output.as_mut_ptr(), output.len())
     };
     if rc.is_null() {
         return Err(instance.raise_builtin_error("OSError", "inet_ntop 失败"));

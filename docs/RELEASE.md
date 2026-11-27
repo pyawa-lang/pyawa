@@ -81,7 +81,7 @@ cargo build --workspace
   ＋ `_winapi`/`_overlapped` 最小真实语义 ＋ **平台面补齐第一批**（`clock` 日历三槽、`fs.pipe`、
   `net.socketpair`、`dev`/`ino` 真值，§12.20 W2–W4）。conformance 在 Windows **是必需步骤且绿**
   （408 例、0 新差异；`DIV-12`＝guest 路径表现）。**已接**：`_overlapped` 数据面（P1 文件/pipe→P2 socket→P3 subprocess）与 Windows CLI asyncio **默认 Proactor**（`P4`，round 282）；
-  **仍如实边界**：IPv6 的线格式已定（`CP-47`；`P5`）但 provider 数据面／guest `_socket` **未接**（`R2`／`R3` 待做，当前只接数字 IPv4）；`_overlapped.ConnectPipe`（客户端接线）与 `OSError.winerror` 默认属性已补（round 284），但**完整命名管道 transport（服务端 accept／取消／关闭）未承诺**；`errno` 数值表仍由 Linux
+  **仍如实边界**：IPv6 的线格式已定（`CP-47`；`P5`）且 Windows provider 数据面已接（`R2`，round 285：socket/bind/connect/accept、ConnectEx/BindLocal、inet_pton/ntop），但 guest `_socket` 的 IPv6 地址线与 asyncio e2e **未接**（`R3` 待做）⇒ **IPv6 / asyncio IPv6 仍不可用**；`_overlapped.ConnectPipe`（客户端接线）与 `OSError.winerror` 默认属性已补（round 284），但**完整命名管道 transport（服务端 accept／取消／关闭）未承诺**；`errno` 数值表仍由 Linux
   探测生成；`ntpath` 的 `splitroot`/`normpath` 盘符语义有差；`symlink` 需特权；Windows 不做 memcheck。
 - **脚本可移植性（生死线）**：可移植子集内脚本无修改、可观测行为一致；平台查询如实回答；后端
   选型不属于脚本契约。承诺目标含 Linux/Windows（运行档）、wasm/Android/iOS（库嵌入，分阶段
