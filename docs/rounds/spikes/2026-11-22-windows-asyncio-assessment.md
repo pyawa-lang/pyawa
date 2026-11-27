@@ -66,7 +66,7 @@ P1 文件/pipe、P2 socket（AcceptEx/ConnectEx/BindLocal）、P3 subprocess 数
 - selector 保留为**脚本显式逃生口**（`_set_event_loop_policy(_WindowsSelectorEventLoopPolicy())`），
   由 `windows_selector_opt_in_still_works` 验收；
 - Windows 测试新增（`crates/pyawa-runtime/tests/async_with_cli.rs`）：
-  `windows_default_loop_policy_is_proactor`（策略名＋ loop 类型）、
+  `windows_default_loop_policy_is_proactor`（`new_event_loop()` 的 loop 类型）、
   `windows_default_proactor_timer_runs`（真实 `sleep(0.01)`）、
   `windows_selector_opt_in_still_works`；subprocess／TCP echo 两例改为**不显式设策略**
   （直接验默认路径）。

@@ -140,21 +140,21 @@ print(asyncio.run(main()))
     assert_eq!(run("proactor-tcp-echo", script), "b'hello\\n'\n");
 }
 
-/// **Windows 默认事件循环策略 = Proactor**（`P4`，round 282）：CLI 不再用 selector shim。
+/// **Windows 默认事件循环 = Proactor**（`P4`，round 282）：CLI 不再用 selector shim。
+///
+/// 只断言 loop 类型（`new_event_loop` 走默认策略）；不调 `get_event_loop_policy`——
+/// 它在本层（CPython 3.14 口径）已弃用，会往 stderr 打 `DeprecationWarning`，而 `run` 要求
+/// stderr 为空。
 #[cfg(windows)]
 #[test]
 fn windows_default_loop_policy_is_proactor() {
     let script = r#"
 import asyncio
-print(type(asyncio.get_event_loop_policy()).__name__)
 loop = asyncio.new_event_loop()
 print(type(loop).__name__)
 loop.close()
 "#;
-    assert_eq!(
-        run("default-policy", script),
-        "_WindowsProactorEventLoopPolicy\nProactorEventLoop\n"
-    );
+    assert_eq!(run("default-policy", script), "ProactorEventLoop\n");
 }
 
 /// **Proactor 默认策略下真实定时器可用**（selector 时代 `sleep(>0)` 曾有 `InvalidStateError`）。
