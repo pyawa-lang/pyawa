@@ -1,6 +1,6 @@
 # Proactor 数据面实施计划（Windows asyncio 剩余项，2026-11-22）
 
-**状态**：**P1–P4 已落地 ✓**（round 282）。P1 文件/pipe（#69／#72）、P2 socket
+**状态**：**P1–P4 已落地 ✓**（round 282）；**P5 规格＋provider 面已落地 ✓**（round 283／285）。P1 文件/pipe（#69／#72）、P2 socket
 （AcceptEx/ConnectEx/BindLocal，#79）、P3 subprocess（#72／#79）已进 main；P4 已把 Windows CLI
 默认策略从 selector 切回 **CPython 默认 Proactor**（round 282）。selector 仅保留为脚本显式逃生口。
 
@@ -51,4 +51,4 @@
 - **已补（round 284）**：`_overlapped.ConnectPipe` 客户端接线＋ `OSError.winerror` 默认属性
   （类属性 `None`，Win32 错误仍由实例属性覆盖）。**仍不做**：完整命名管道 transport
   （`start_serving_pipe` 服务端 `AcceptEx` 的取消／关闭路径；照抄 e2e 会挂）。
-- **P5（待做）**：IPv6（`CP-47` 规格已定；`R2`／`R3` 实现待做；当前只接数字 IPv4 的 `ConnectEx`）。
+- **P5（进行中）**：IPv6（`CP-47` 规格 ✓、`R2` Windows provider 数据面 ✓（round 285：canonical 10 ⇒ Winsock 23 映射、28B `SOCKADDR_IN6`、128B storage、`IPV6_V6ONLY` 26⇒27、`ConnectEx`/`BindLocal`/`inet_pton`/`inet_ntop`）；`R3`（guest `_socket` 地址线＋asyncio e2e）待做 ⇒ asyncio IPv6 仍不可用）。

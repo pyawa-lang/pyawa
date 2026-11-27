@@ -140,6 +140,31 @@ print(asyncio.run(main()))
     assert_eq!(run("proactor-tcp-echo", script), "b'hello\\n'\n");
 }
 
+/// **IPv6 provider 数据面（R2；`CP-47`）**：`_socket` 能建 `AF_INET6`（guest 10 ⇒ Winsock 23）、
+/// `_overlapped.BindLocal` 按 canonical 族号绑定（10 ⇒ Winsock 23）、`inet_pton`／`inet_ntop`
+/// 支持 IPv6。只探 provider 已接的面：guest `_socket` 的 IPv6 地址线（R3）未接 ⇒ 这里不跑
+/// bind／connect／accept。
+#[cfg(windows)]
+#[test]
+fn windows_ipv6_provider_surface() {
+    let script = r#"
+import _overlapped
+import _socket
+packed = _socket.inet_pton(_socket.AF_INET6, "::1")
+text = _socket.inet_ntop(_socket.AF_INET6, packed)
+sock = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM, 0)
+family = sock.family
+try:
+    _overlapped.BindLocal(sock.fileno(), family)
+    bound = 1
+except OSError as exc:
+    bound = "error(%s)" % exc.winerror if hasattr(exc, "winerror") else "error"
+sock.close()
+print(len(packed), text, family, bound)
+"#;
+    assert_eq!(run("ipv6-provider", script), "16 ::1 10 1\n");
+}
+
 /// **Windows 默认事件循环 = Proactor**（`P4`，round 282）：CLI 不再用 selector shim。
 ///
 /// 只断言 loop 类型（`new_event_loop` 走默认策略）；不调 `get_event_loop_policy`——
