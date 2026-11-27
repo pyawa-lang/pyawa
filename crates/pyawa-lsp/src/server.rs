@@ -380,8 +380,8 @@ impl Server {
             return "null".to_owned();
         };
         let (Some(line), Some(character)) = (
-            position.get("line").and_then(Value::as_u32),
-            position.get("character").and_then(Value::as_u32),
+            position.get("line").and_then(json::as_u32),
+            position.get("character").and_then(json::as_u32),
         ) else {
             return "null".to_owned();
         };
@@ -415,14 +415,14 @@ fn notification(method: &str, params: String) -> String {
 }
 
 fn respond(outgoing: &mut Vec<String>, id: Option<&Value>, result: String) {
-    let id = id.map(Value::to_json).unwrap_or_else(|| "null".to_owned());
+    let id = id.map(json::to_json).unwrap_or_else(|| "null".to_owned());
     outgoing.push(format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{result}}}"
     ));
 }
 
 fn respond_error(outgoing: &mut Vec<String>, id: Option<&Value>, code: i32, message: &str) {
-    let id = id.map(Value::to_json).unwrap_or_else(|| "null".to_owned());
+    let id = id.map(json::to_json).unwrap_or_else(|| "null".to_owned());
     outgoing.push(format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"error\":{{\"code\":{code},\"message\":{}}}}}",
         json_string(message)
@@ -540,8 +540,8 @@ fn text_position(params: Option<&Value>) -> Option<(&str, u32, u32)> {
         .and_then(|document| document.get("uri"))
         .and_then(Value::as_str)?;
     let position = params.get("position")?;
-    let line = position.get("line").and_then(Value::as_u32)?;
-    let character = position.get("character").and_then(Value::as_u32)?;
+    let line = position.get("line").and_then(json::as_u32)?;
+    let character = position.get("character").and_then(json::as_u32)?;
     Some((uri, line, character))
 }
 

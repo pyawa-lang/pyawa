@@ -82,7 +82,7 @@ impl Client {
         ));
         loop {
             let message = self.recv();
-            if message.get("id").and_then(Value::as_u32) == Some(id as u32) {
+            if message.get("id").and_then(json::as_u32) == Some(id as u32) {
                 return message;
             }
         }
@@ -169,7 +169,7 @@ fn diagnostics_and_hover_end_to_end() {
         "应声明 hoverProvider"
     );
     let sync = capabilities.get("textDocumentSync").expect("textDocumentSync");
-    assert_eq!(sync.get("change").and_then(Value::as_u32), Some(1), "全量同步");
+    assert_eq!(sync.get("change").and_then(json::as_u32), Some(1), "全量同步");
     client.notify("initialized", "{}");
 
     // 打开一个故意写错的 `.pyawa` ⇒ 一次 ≥2 条诊断。
@@ -188,14 +188,14 @@ fn diagnostics_and_hover_end_to_end() {
     let diagnostics = diagnostics_of(&published);
     assert_eq!(diagnostics.len(), 2, "应一次报 2 条：{diagnostics:?}");
     let first = &diagnostics[0];
-    assert_eq!(first.get("severity").and_then(Value::as_u32), Some(1));
+    assert_eq!(first.get("severity").and_then(json::as_u32), Some(1));
     assert_eq!(first.get("code").and_then(Value::as_str), Some("type"));
     assert_eq!(first.get("source").and_then(Value::as_str), Some("pyawa"));
     let start_line = first
         .get("range")
         .and_then(|range| range.get("start"))
         .and_then(|start| start.get("line"))
-        .and_then(Value::as_u32);
+        .and_then(json::as_u32);
     assert_eq!(start_line, Some(0), "LSP 行是 0 基：{first:?}");
 
     // 全量 didChange 修正后 ⇒ 0 条诊断。
@@ -279,10 +279,7 @@ fn unknown_method_gets_a_jsonrpc_error() {
     let code = response
         .get("error")
         .and_then(|error| error.get("code"))
-        .and_then(|code| match code {
-            Value::Number(number) => Some(*number as i32),
-            _ => None,
-        });
+        .and_then(|code| code.as_i64().map(|code| code as i32));
     assert_eq!(code, Some(-32601), "{response:?}");
     client.shutdown();
 }
@@ -349,7 +346,7 @@ fn completion_definition_and_rename() {
         .get("range")
         .and_then(|range| range.get("start"))
         .and_then(|start| start.get("line"))
-        .and_then(Value::as_u32);
+        .and_then(json::as_u32);
     assert_eq!(line, Some(0), "应跳到注释（定义）行：{result:?}");
 
     // 重命名：`x` ⇒ `counter`，单文件两处（注解行 ＋ 使用行）。
@@ -425,9 +422,9 @@ fn unicode_positions_use_utf16_code_units() {
         .and_then(|result| result.get("range"))
         .and_then(|range| range.get("start"))
         .expect("definition start");
-    assert_eq!(start.get("line").and_then(Value::as_u32), Some(0));
+    assert_eq!(start.get("line").and_then(json::as_u32), Some(0));
     assert_eq!(
-        start.get("character").and_then(Value::as_u32),
+        start.get("character").and_then(json::as_u32),
         Some(6),
         "emoji 之后的名字在 UTF-16 里是第 6 列：{start:?}"
     );
@@ -454,13 +451,13 @@ fn unicode_positions_use_utf16_code_units() {
         .get("range")
         .and_then(|range| range.get("start"))
         .and_then(|start| start.get("character"))
-        .and_then(Value::as_u32);
+        .and_then(json::as_u32);
     assert_eq!(first_start, Some(6), "第一处 UTF-16 列：{edits:?}");
     let second_start = edits[1]
         .get("range")
         .and_then(|range| range.get("start"))
         .and_then(|start| start.get("character"))
-        .and_then(Value::as_u32);
+        .and_then(json::as_u32);
     assert_eq!(second_start, Some(4), "第二处 UTF-16 列：{edits:?}");
 
     // 诊断：emoji 后的 `a` 类型错，LSP 起始列同样应为 6。
@@ -478,9 +475,9 @@ fn unicode_positions_use_utf16_code_units() {
         .get("range")
         .and_then(|range| range.get("start"))
         .expect("diagnostic start");
-    assert_eq!(start.get("line").and_then(Value::as_u32), Some(0));
+    assert_eq!(start.get("line").and_then(json::as_u32), Some(0));
     assert_eq!(
-        start.get("character").and_then(Value::as_u32),
+        start.get("character").and_then(json::as_u32),
         Some(6),
         "诊断列应按 UTF-16 报：{start:?}"
     );

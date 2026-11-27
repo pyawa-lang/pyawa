@@ -1,7 +1,7 @@
 # `pyawa-lsp` —— Pyawa 的 LSP 服务（PLAN §11 梯②：诊断 ＋ hover）
 
-**零第三方依赖**（手写 JSON-RPC 2.0／`Content-Length` 帧）；只依赖 `pyawa-core` 的编译期 API。
-**只编译不执行**：本服务不建 VM 实例、不跑字节码 ✓。
+`Content-Length` 帧与 JSON-RPC 2.0 分派手写；**JSON 编解码用 `serde_json`**（`CX-27`：第三方只许在本 crate）。
+只依赖 `pyawa-core` 的编译期 API。**只编译不执行**：本服务不建 VM 实例、不跑字节码 ✓。
 
 ## 编辑器接入
 
@@ -52,5 +52,6 @@ cargo build -p pyawa-lsp --bin pyawa-lsp
 
 ## 依赖隔离（`CX-27`／`T-CX-17`）
 
-第三方依赖只**允许**出现在本 crate；当前实现**一个第三方也没用**。`pyawa-core`／`pyawa-abi`／
-`pyawa-stdlib`／`pyawa-runtime`／`pyawa-capabilities` **不依赖**本 crate（`T-CX-17` 反向依赖检查 ✓）。
+第三方依赖只**允许**出现在本 crate；当前只用 `serde_json`（JSON 编解码；round 281 替换手写解析）。
+`pyawa-core`／`pyawa-abi`／`pyawa-stdlib`／`pyawa-runtime`／`pyawa-capabilities` **不依赖**本 crate
+（`T-CX-17` 反向依赖检查 ✓）。
