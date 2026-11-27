@@ -167,8 +167,6 @@ mod sys {
         pub fn SetEvent(handle: HandleRaw) -> i32;
         pub fn ResetEvent(handle: HandleRaw) -> i32;
         pub fn CloseHandle(handle: HandleRaw) -> i32;
-        pub fn LoadLibraryW(name: *const u16) -> isize;
-        pub fn GetProcAddress(module: isize, name: *const u8) -> isize;
         pub fn WaitForSingleObject(handle: HandleRaw, milliseconds: u32) -> u32;
         pub fn GetLastError() -> u32;
         pub fn CreateIoCompletionPort(
@@ -1692,13 +1690,15 @@ fn overlapped_write_file(
 }
 
 const SIO_GET_EXTENSION_FUNCTION_POINTER: u32 = 0xC800_0006;
-/// `WSAID_CONNECTEX`（`{25A207B9-DDF3-4660-8E76-E9E58C9B1A1A}` 的内存字节序）。
+/// `WSAID_CONNECTEX` = `{25A207B9-DDF3-4660-8EE9-76E58C74063E}` 的 **GUID 内存布局**
+/// （`Data1`／`Data2`／`Data3` 小端，`Data4` 原序；`mswsock.h`、ReactOS 与 Wine 头文件同一份）。
 ///
-/// **不按名字 `GetProcAddress("ConnectEx")`**：`ConnectEx` 不是 `mswsock.dll` 的具名
-/// 导出，标准取法是 `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER, WSAID_CONNECTEX)`。
+/// **不能按名字 `GetProcAddress("ConnectEx")`**：`ConnectEx` 不是 `mswsock.dll` 的具名
+/// 导出（`WSAID_*` 只保证经 `WSAIoctl` 取）；标准取法见 CPython
+/// `Modules/overlapped.c` 的 `initialize_function_pointers`。
 const WSAID_CONNECTEX: [u8; 16] = [
     0xb9, 0x07, 0xa2, 0x25, 0xf3, 0xdd, 0x60, 0x46,
-    0x8e, 0x76, 0xe9, 0xe5, 0x8c, 0x9b, 0x1a, 0x1a,
+    0x8e, 0xe9, 0x76, 0xe5, 0x8c, 0x74, 0x06, 0x3e,
 ];
 
 static CONNECTEX_FN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -1730,47 +1730,44 @@ fn extension_fn(socket: HandleRaw, guid: &[u8; 16]) -> Result<usize, i32> {
     }
 }
 
-/// 取 `ConnectEx` 指针：优先用调用方给的（已绑定的）客户端 socket，失败再用一枚临时
-/// `AF_INET/SOCK_STREAM` socket（CPython `_overlapped` 的取法；扩展函数指针与 socket
-/// 无关，任一枚同族 socket 都行）。两条都失败才退回 `GetProcAddress` 兜底。
+/// 取 `ConnectEx` 指针（进程内取一次后缓存）。
+///
+/// 先用调用方给的客户端 socket 取；失败再用一枚临时 `AF_INET/SOCK_STREAM/IPPROTO_TCP`
+/// socket 取（与 CPython `initialize_function_pointers` 同法；扩展函数指针与 socket
+/// 实例无关，任一枚同族 socket 都行）。两条都失败时把 `WSAGetLastError` 一起报出去，
+/// 不猜、不静默给假值。
 #[allow(unsafe_code)]
 fn connect_ex_pointer(socket: HandleRaw) -> Result<usize, String> {
     if let Some(pointer) = CONNECTEX_FN.get() {
         return Ok(*pointer);
     }
     let mut codes = Vec::new();
-    if let Some(pointer) = extension_fn(socket, &WSAID_CONNECTEX).ok() {
-        let _ = CONNECTEX_FN.set(pointer);
-        return Ok(pointer);
+    match extension_fn(socket, &WSAID_CONNECTEX) {
+        Ok(pointer) => {
+            let _ = CONNECTEX_FN.set(pointer);
+            return Ok(pointer);
+        }
+        Err(code) => codes.push(code),
     }
     let probe = unsafe { winsock::socket(2, 1, 6) };
-    if probe != usize::MAX && probe != 0 {
-        let from_probe = extension_fn(probe as HandleRaw, &WSAID_CONNECTEX);
-        // SAFETY: probe 由上面的 socket() 新建，未移交他人。
-        unsafe { winsock::closesocket(probe) };
-        match from_probe {
-            Ok(pointer) => {
-                let _ = CONNECTEX_FN.set(pointer);
-                return Ok(pointer);
-            }
-            Err(code) => codes.push(code),
+    if probe == usize::MAX || probe == 0 {
+        return Err(format!(
+            "mswsock!ConnectEx 不可用（WSAIoctl 错误码 {codes:?}；临时 socket 创建失败）"
+        ));
+    }
+    let from_probe = extension_fn(probe as HandleRaw, &WSAID_CONNECTEX);
+    // SAFETY: probe 由上面的 socket() 新建，未移交他人。
+    unsafe { winsock::closesocket(probe) };
+    match from_probe {
+        Ok(pointer) => {
+            let _ = CONNECTEX_FN.set(pointer);
+            Ok(pointer)
+        }
+        Err(code) => {
+            codes.push(code);
+            Err(format!("mswsock!ConnectEx 不可用（WSAIoctl 错误码 {codes:?}）"))
         }
     }
-    // 兜底：老路径（`mswsock.dll` 的具名导出；部分 Windows 版本有）。
-    let name = "mswsock.dll";
-    let mut wide: Vec<u16> = name.encode_utf16().collect();
-    wide.push(0);
-    // SAFETY: wide 是 NUL 结尾 UTF-16。
-    let module = unsafe { sys::LoadLibraryW(wide.as_ptr()) };
-    if module != 0 {
-        // SAFETY: 模块已加载；函数名 NUL 结尾 ASCII。
-        let pointer = unsafe { sys::GetProcAddress(module, c"ConnectEx".as_ptr().cast::<u8>()) };
-        if pointer != 0 {
-            let _ = CONNECTEX_FN.set(pointer as usize);
-            return Ok(pointer as usize);
-        }
-    }
-    Err(format!("mswsock!ConnectEx 不可用（WSAIoctl 错误码 {codes:?}）"))
 }
 
 #[allow(unsafe_code)]
