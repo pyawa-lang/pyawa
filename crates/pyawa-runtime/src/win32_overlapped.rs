@@ -55,9 +55,6 @@ struct OverlappedMemory {
     /// 操作种类：0=无、1=读、2=写、3=socket recv、4=socket send、5=recv_into、
     /// 6=AcceptEx、7=ConnectEx。
     kind: u8,
-    /// 是否为 **Winsock 重叠操作**：socket 的完成查询必须走 `WSAGetOverlappedResult`
-    /// （`GetOverlappedResult` 只对文件/管道有文档保证），错误码也从 `WSAGetLastError` 取。
-    socket_op: bool,
     /// `WSARecvInto` 的目标 bytearray（持有引用；`getresult` 写入后释放）。
     target: Option<NonNull<Header>>,
     /// 操作已同步完成时记录字节数（避免等一个不会到来的 IOCP 完成包）。
@@ -133,8 +130,48 @@ fn release_handle(instance: &Instance, value: i64) -> Result<HandleRaw, ExecErro
     Err(instance.raise_builtin_error("OSError", "[WinError 6] 无效的 Win32 句柄"))
 }
 
+/// 抛 `OSError` 一族的 Win32／WSA 错误，并带上 **`winerror` 属性**（CPython `_overlapped`／
+/// `_winapi` 口径：`PyErr_SetExcFromWindowsErr` 会写这个属性）。
+///
+/// `Lib/asyncio/windows_events.py` 的 `IocpProactor.finish_socket_func` 会对 `OSError`
+/// 直接读 `exc.winerror`（判断 `ERROR_NETNAME_DELETED`／`ERROR_OPERATION_ABORTED`）⇒ 没有
+/// 该属性时"连接被重置"会退化成 `AttributeError`，在事件循环回调里炸掉。
+///
+/// 构造走「正常类型调用 + 设属性」，失败时退回不带属性的诚实文本（不静默丢错误）。
+fn raise_win_typed(instance: &Instance, class_name: &str, code: u32) -> ExecError {
+    let message = format!("[WinError {code}] Win32 调用失败");
+    let Some(exception_type) = instance.type_named(class_name) else {
+        return instance.raise_builtin_error(class_name, &message);
+    };
+    let text = instance.new_str(&message);
+    let built = pyawa_core::call_value(instance, exception_type.cast::<Header>(), &[text], &[]);
+    instance.release(text);
+    let Ok(exception) = built else {
+        return instance.raise_builtin_error(class_name, &message);
+    };
+    // `set_attribute_value` 自己会为属性表持一份引用；这里只处置自己这份。
+    let winerror = instance.new_int(i64::from(code));
+    let attached = instance.set_attribute_value(exception, "winerror", winerror);
+    instance.release(winerror);
+    if attached.is_err() {
+        instance.release(exception);
+        return instance.raise_builtin_error(class_name, &message);
+    }
+    pyawa_core::raise_object_public(instance, exception)
+}
+
 fn raise_win(instance: &Instance, code: u32) -> ExecError {
-    instance.raise_builtin_error("OSError", &format!("[WinError {code}] Win32 调用失败"))
+    raise_win_typed(instance, "OSError", code)
+}
+
+/// `ERROR_BROKEN_PIPE`（对端已关）的 **同步** 失败：CPython `do_ReadFile`／`do_WSARecv`
+/// 在这里抛 `BrokenPipeError`，`asyncio` 的 `IocpProactor.recv()/recv_into()` 用
+/// `except BrokenPipeError` 把它当 EOF（`_result(b'')`／`_result(0)`）。
+///
+/// **不能**伪造成"0 字节完成"：那会往 Proactor 的 `_cache` 里塞一条永远等不到完成包的记录，
+/// `IocpProactor.close()` 的 `while self._cache: self._poll(...)` 会死循环（Windows CI 实测挂死）。
+fn raise_broken_pipe(instance: &Instance) -> ExecError {
+    raise_win_typed(instance, "BrokenPipeError", 109)
 }
 
 #[allow(unsafe_code)]
@@ -413,13 +450,6 @@ mod winsock {
             completion: *mut c_void,
         ) -> i32;
         pub fn WSAGetLastError() -> i32;
-        pub fn WSAGetOverlappedResult(
-            socket: HandleRaw,
-            overlapped: *mut OverlappedInner,
-            transferred: *mut u32,
-            wait: i32,
-            flags: *mut u32,
-        ) -> i32;
         pub fn socket(address_family: i32, socket_type: i32, protocol: i32) -> usize;
         pub fn closesocket(socket: usize) -> i32;
         pub fn WSAIoctl(
@@ -1492,7 +1522,6 @@ fn overlapped_init(
         buffer: Vec::new(),
         handle: 0,
         kind: 0,
-        socket_op: false,
         target: None,
         completed: None,
     });
@@ -1574,7 +1603,11 @@ fn overlapped_read_file(
     };
     if ok == 0 {
         let code = last_error();
-        // ERROR_IO_PENDING = 997：已投递，等完成。
+        // ERROR_IO_PENDING = 997：已投递，等完成；ERROR_BROKEN_PIPE 同步失败按 CPython
+        // `do_ReadFile` 抛 BrokenPipeError（`asyncio` 的 `recv()` 会当 EOF）。
+        if code == 109 {
+            return Err(raise_broken_pipe(instance));
+        }
         if code != 997 {
             return Err(raise_win(instance, code));
         }
@@ -1617,18 +1650,9 @@ fn overlapped_read_file_into(
     if ok == 0 {
         let code = last_error();
         if code == 109 {
-            // ERROR_BROKEN_PIPE：对端已关。按 **0 字节完成** 收尾（Proactor 当 EOF），
-            // 不抛 BrokenPipeError（本层异常没有 `winerror` 属性，asyncio 会再炸）。
-            let mut read = Vec::new();
-            read.clear();
-            unsafe { instance.incref_object(buffer.as_ptr()) };
-            memory.buffer = read;
-            memory.handle = handle;
-            memory.kind = 5;
-            memory.target = Some(buffer);
-            memory.completed = Some(0);
-            set_bool_attr(instance, this, "pending", false);
-            return Ok(instance.new_none());
+            // 同 CPython `do_ReadFile`：同步 ERROR_BROKEN_PIPE 抛 BrokenPipeError，
+            // 由 `asyncio` 的 `except BrokenPipeError` 当 EOF（见 `raise_broken_pipe`）。
+            return Err(raise_broken_pipe(instance));
         }
         if code != 997 {
             return Err(raise_win(instance, code));
@@ -1835,7 +1859,6 @@ fn overlapped_accept_ex(
     memory.buffer = buffer;
     memory.handle = listener;
     memory.kind = 6;
-    memory.socket_op = true;
     set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
@@ -1902,7 +1925,6 @@ fn overlapped_connect_ex(
     }
     memory.handle = socket;
     memory.kind = 7;
-    memory.socket_op = true;
     set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
@@ -1941,7 +1963,11 @@ fn overlapped_wsa_recv(
         )
     };
     if ok != 0 {
+        // SAFETY: 无参；WSA 错误码在线程本地。
         let code = unsafe { winsock::WSAGetLastError() };
+        if code == 109 {
+            return Err(raise_broken_pipe(instance));
+        }
         if code != 997 && code != 10035 {
             return Err(raise_win(instance, code as u32));
         }
@@ -1949,7 +1975,6 @@ fn overlapped_wsa_recv(
     memory.buffer = buffer;
     memory.handle = resolve_socket(handle);
     memory.kind = 3;
-    memory.socket_op = true;
     set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
@@ -1989,7 +2014,11 @@ fn overlapped_wsa_recv_into(
         )
     };
     if ok != 0 {
+        // SAFETY: 无参；WSA 错误码在线程本地。
         let code = unsafe { winsock::WSAGetLastError() };
+        if code == 109 {
+            return Err(raise_broken_pipe(instance));
+        }
         if code != 997 && code != 10035 {
             return Err(raise_win(instance, code as u32));
         }
@@ -1999,7 +2028,6 @@ fn overlapped_wsa_recv_into(
     memory.buffer = buffer;
     memory.handle = resolve_socket(handle);
     memory.kind = 5;
-    memory.socket_op = true;
     set_bool_attr(instance, this, "pending", true);
     memory.target = Some(target);
     Ok(instance.new_none())
@@ -2045,7 +2073,6 @@ fn overlapped_wsa_send(
     memory.buffer = bytes;
     memory.handle = resolve_socket(handle);
     memory.kind = 4;
-    memory.socket_op = true;
     set_bool_attr(instance, this, "pending", true);
     Ok(instance.new_none())
 }
@@ -2064,34 +2091,21 @@ fn overlapped_get_result_common(
     let completed = memory.completed.take();
     if let Some(bytes) = completed {
         transferred = bytes;
-    } else if memory.socket_op {
-        // socket 的重叠完成必须用 `WSAGetOverlappedResult` 查询（Win32 文档只对
-        // 文件/管道保证 `GetOverlappedResult`），错误码也从 `WSAGetLastError` 取。
-        let mut flags = 0u32;
-        // SAFETY: memory.handle 是发起该操作的原始 SOCKET；出参都是活局部量。
-        let ok = unsafe {
-            winsock::WSAGetOverlappedResult(
-                memory.handle,
-                &mut memory.raw,
-                &mut transferred,
-                wait,
-                &mut flags,
-            )
-        };
-        if ok == 0 {
-            // SAFETY: 无参；WSA 错误码在线程本地。
-            let code = unsafe { winsock::WSAGetLastError() } as u32;
-            return Err(raise_win(instance, code));
-        }
     } else {
+        // CPython `_overlapped.getresult` 对所有类型（含 socket）都用 `GetOverlappedResult`；
+        // 它给出的错误码正是 `asyncio.finish_socket_func` 期待的 Win32 码（64／995 等）。
         let ok = unsafe {
             sys::GetOverlappedResult(memory.handle, &mut memory.raw, &mut transferred, wait)
         };
         if ok == 0 {
             let code = last_error();
-            if code == 109 {
-                // 同 ReadFileInto：把关闭当 0 字节完成。
+            // CPython 口径：只有 **读**（TYPE_READ/TYPE_READINTO，kind 1/3/5）把
+            // ERROR_BROKEN_PIPE 当"读到 0 字节"（EOF）；写等其他操作如实抛 BrokenPipeError。
+            let is_read = matches!(memory.kind, 1 | 3 | 5);
+            if code == 109 && is_read {
                 transferred = 0;
+            } else if code == 109 {
+                return Err(raise_broken_pipe(instance));
             } else {
                 return Err(raise_win(instance, code));
             }
