@@ -21,6 +21,10 @@
 //!   因此**不适用** §9.2 的地址线格式。
 //! - **`CP-39`**：`sockaddr` 的 v1 线格式 —— "地址族编号 ＋ 裸字节"；IPv4 ＝ 4 字节地址 ＋
 //!   2 字节端口、**大端**；v1 只 `AF_INET`／`AF_UNIX`；IPv6／其它族与 DNS **不在 v1**。
+//! - **`CP-47`**：IPv6 的 v1.1 线格式 —— canonical（guest／线格式）族号 `AF_INET6`＝**10**；
+//!   16 字节地址（网络序原样）＋ 2 字节端口（**大端**）＝ **18 字节**；`flowinfo`／`scope_id`
+//!   **不在 v1**；`AF_UNIX` 仍按 `CP-21`；旧 provider 对 IPv6 仍 `EAFNOSUPPORT`。本文件只做
+//!   **纯数据编解码**（无平台、无状态），provider 数据面归 `R2`。
 //!
 //! **本片（`P3-29` 首片）落地范围**：`socketpair`／`send`／`recv`／`close` 四槽由
 //! `pyawa-runtime::net_posix` 提供真实现；`socket`／`connect`／`bind`／`listen`／`accept`／
@@ -40,12 +44,16 @@ pub use super::fs::CapStatus;
 #[repr(C)]
 pub struct SocketHandle(pub u64);
 
-/// **`CP-39`**：v1 支持的地址族（只有这两族，IPv6 及其它族**不在 v1**）。
+/// **`CP-39`**：v1 支持的地址族（IPv6 见 `CP-47`；其它族**不在 v1**）。
 pub mod family {
     /// `AF_UNIX`（Linux 取值）。
     pub const AF_UNIX: i32 = 1;
     /// `AF_INET`（Linux 取值）。
     pub const AF_INET: i32 = 2;
+    /// `AF_INET6`（**canonical** 取值＝POSIX 的 **10**，`CP-47`）。
+    ///
+    /// Windows／Winsock 的 `AF_INET6`＝23 只是 provider 适配层的映射，**不进入** guest／线格式。
+    pub const AF_INET6: i32 = 10;
 }
 
 /// socket 类型（`socket(2)` 的 `type`；v1 首片主要用 `SOCK_STREAM`）。
@@ -85,6 +93,33 @@ pub fn decode_ipv4(bytes: &[u8]) -> Option<([u8; 4], u16)> {
     let mut addr = [0u8; 4];
     addr.copy_from_slice(&bytes[..4]);
     let port = u16::from_be_bytes([bytes[4], bytes[5]]);
+    Some((addr, port))
+}
+
+/// **`CP-47`**：IPv6 的 v1.1 地址线长度＝16 字节地址 ＋ 2 字节端口（**大端**）。
+pub const SOCKADDR_V1_IPV6_LEN: usize = 18;
+
+/// **`CP-47`**：把 IPv6 地址编码成 v1.1 线格式（16B 地址原样 ＋ 2B 端口，大端）。
+///
+/// 纯格式编解码，不是机器实现（不碰平台）；`flowinfo`／`scope_id` **不在 v1**，
+/// 地址按网络序原样透传。
+pub fn encode_ipv6(addr: [u8; 16], port: u16) -> [u8; SOCKADDR_V1_IPV6_LEN] {
+    let mut out = [0u8; SOCKADDR_V1_IPV6_LEN];
+    out[..16].copy_from_slice(&addr);
+    let [high, low] = port.to_be_bytes();
+    out[16] = high;
+    out[17] = low;
+    out
+}
+
+/// **`CP-47`**：把 v1.1 的 IPv6 线格式解回 `(地址, 端口)`；长度不符返回 `None`。
+pub fn decode_ipv6(bytes: &[u8]) -> Option<([u8; 16], u16)> {
+    if bytes.len() != SOCKADDR_V1_IPV6_LEN {
+        return None;
+    }
+    let mut addr = [0u8; 16];
+    addr.copy_from_slice(&bytes[..16]);
+    let port = u16::from_be_bytes([bytes[16], bytes[17]]);
     Some((addr, port))
 }
 
@@ -277,6 +312,33 @@ mod tests {
         // 端口大端：0x0102 ⇒ 字节 0x01 在前
         assert_eq!(encode_ipv4([0, 0, 0, 0], 0x0102)[4..], [0x01, 0x02]);
         assert_eq!(decode_ipv4(&[127, 0, 0, 1]), None, "长度不符 ⇒ 拒绝");
+    }
+
+    /// `CP-47`：IPv6 线格式是 16B 地址（原样）＋ 2B 端口（**大端**），共 18B；往返不丢信息。
+    #[test]
+    fn ipv6_wire_format_is_sixteen_bytes_then_big_endian_port() {
+        let addr = [
+            0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        ];
+        let encoded = encode_ipv6(addr, 8080);
+        assert_eq!(SOCKADDR_V1_IPV6_LEN, 18, "CP-47：16B 地址 ＋ 2B 端口");
+        assert_eq!(&encoded[..16], &addr, "地址网络序原样透传（无 scope_id／flowinfo）");
+        assert_eq!(&encoded[16..], &[0x1F, 0x90], "端口大端");
+        assert_eq!(decode_ipv6(&encoded), Some((addr, 8080)));
+        // 端口大端：0x0102 ⇒ 字节 0x01 在前
+        assert_eq!(encode_ipv6([0u8; 16], 0x0102)[16..], [0x01, 0x02]);
+        // 长度不符（IPv4 的 6B／17B／19B）⇒ 拒绝
+        assert_eq!(decode_ipv6(&[0u8; 6]), None, "6B ⇒ 拒绝");
+        assert_eq!(decode_ipv6(&[0u8; 17]), None, "17B ⇒ 拒绝");
+        assert_eq!(decode_ipv6(&[0u8; 19]), None, "19B ⇒ 拒绝");
+    }
+
+    /// `CP-47`：canonical 族号取 POSIX 的 10（Winsock 23 的映射归 provider，不进线格式）。
+    #[test]
+    fn ipv6_canonical_family_number_is_posix_ten() {
+        assert_eq!(family::AF_INET6, 10);
+        assert_eq!(family::AF_INET, 2);
+        assert_eq!(family::AF_UNIX, 1);
     }
 
     /// `CP-12`：形状层只有类型与函数指针 ⇒ 未实现 vtable 的槽位全 `None`（`CP-2`／`CP-3`）。

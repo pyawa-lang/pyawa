@@ -48,8 +48,7 @@
 
 - 不修改 `Lib/`（`CX-8`）；
 - 不在 P1–P3 未全绿时切默认策略（`P4` 的前置条件；2026-11-22–round 281 期间保持 selector）。
-- **已补（round 283）**：`_overlapped.ConnectPipe` 客户端接线＋ `OSError.winerror` 默认属性
+- **已补（round 284）**：`_overlapped.ConnectPipe` 客户端接线＋ `OSError.winerror` 默认属性
   （类属性 `None`，Win32 错误仍由实例属性覆盖）。**仍不做**：完整命名管道 transport
   （`start_serving_pipe` 服务端 `AcceptEx` 的取消／关闭路径；照抄 e2e 会挂）。
-- **不做**：IPv6 `ConnectEx`（需先改 `CP-39` 的地址线格式：v1 只支持 `AF_INET`／`AF_UNIX`；
-  见 `RELEASE.md` 已知限制）。
+- **P5（待做）**：IPv6（`CP-47` 规格已定；`R2`／`R3` 实现待做；当前只接数字 IPv4 的 `ConnectEx`）。

@@ -97,7 +97,16 @@
 - **CP-39** **`sockaddr` 的 v1 地址线格式**（**用户拍板 A3**）：`sockaddr` 走 §9.2 的"地址族编号 ＋ 裸字节"——
   **IPv4 ＝ 4 字节地址 ＋ 2 字节端口，大端**；**v1 只支持 `AF_INET` 与 `AF_UNIX`**（`AF_UNIX` 路径按 `CP-21`
   的根能力解析 ✓）；IPv6 及其它族**不在 v1**。**`getaddrinfo`／DNS 不在 v1**（**A2 推迟** ✓）：v1 只接受
-  **数字地址**。
+  **数字地址**。（IPv6 扩展见 `CP-47`；其余不变）
+- **CP-47** **IPv6 `sockaddr` 的 v1.1 线格式**（**用户拍板 A5**；`P5`）：在 `CP-39` 的"地址族编号 ＋
+  裸字节"上**只扩一族**——canonical（guest／线格式）族号取 POSIX 的 **`AF_INET6`＝10**；**IPv6 ＝
+  16 字节地址（网络序原样）＋ 2 字节端口，大端**，共 **18 字节**。**`flowinfo`／`scope_id` 不在 v1**
+  （link-local 与 scope 另立条款，仍只接受**数字地址**、无 `getaddrinfo`／DNS）；`AF_UNIX` 仍按 `CP-21`；
+  Winsock 的 `AF_INET6`＝23 只是 provider 适配层的映射，**不进入** guest／线格式（归 `R2`，本层只用 10）。
+  **ABI 不升版**：族号与线格式是**数据约定**，不新增 vtable 槽位、不改任何函数签名与结构体布局
+  ⇒ `PA_ABI_MINOR` 保持 **18**（`AB-41` 的升版判据是"追加槽位／改布局"，本条不在其内；alpha 未冻结，
+  `AB-81` 亦不构成冻结承诺）。旧 provider 对 IPv6 仍表现为 `EAFNOSUPPORT`（＝今日行为，不构成对既有
+  槽位的语义变更）。
 - **CP-10** 接口面只允许**裸数据**与**不透明句柄**：**禁止**泛型／单态化（`REQUIREMENTS.md` 后果 4）；可异步化路径上**禁止**传递或触碰 VM 对象（`DESIGN.md` §3 不变量 4）。
 - **CP-11** 每个能力调用点**必须** `catch_unwind`：Rust panic **禁止**穿过 provider 边界，宿主侧异常也**禁止**穿进 VM（`DESIGN.md` §3 不变量 3 的对偶）。
 - **CP-12** 接口 crate（能力形状）**必须**只含类型与函数指针，**禁止**含任何真实机器实现；真实机器实现只允许在独立运行时 crate（`DESIGN.md` §7）。
@@ -185,7 +194,7 @@
 | `socketpair(family, type, proto)` | 返回**一对** socket 能力（local-only，**无地址**）；语义见 `CP-38` |
 | `close(handle)` | 释放（CP-17） |
 
-地址**必须**是"地址族编号 ＋ 裸字节"，**禁止**在接口里出现 Python 对象。
+地址**必须**是"地址族编号 ＋ 裸字节"（IPv6 见 `CP-47`），**禁止**在接口里出现 Python 对象。
 可异步化：`poll` 之外全部；`poll` 是"等待"，其取消走 CP-27。
 
 ### 9.3 `proc` —— 进程（`posix`(fork/exec)、`_signal`）
@@ -338,6 +347,7 @@
 | T-CP-14 | `event` 未注册 ⇒ 实例可创建、调用"未实现"；注册后 `wait` 的就绪/超时两段式语义符合 CP-42（S3 实现后） |
 | T-CP-15 | `event.wait` 的取消与超时**可区分**：`pa_interrupt` ⇒ 取消口径，超时 ⇒ 空集合 `PA_OK`（CP-44） |
 | T-CP-16 | `notify`／`cancel` 为 `None` 时调用返回"未实现"，不假装成功（CP-45） |
+| T-CP-17 | IPv6 `sockaddr` v1.1 线格式：18 字节往返不丢信息、端口大端、长度不符**拒绝**；族号 canonical＝10（`out_family` 口径同此）；旧 provider 对 IPv6 回 `EAFNOSUPPORT`（CP-47） |
 
 ---
 

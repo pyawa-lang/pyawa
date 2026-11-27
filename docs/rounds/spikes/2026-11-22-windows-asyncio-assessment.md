@@ -72,7 +72,7 @@ P1 文件/pipe、P2 socket（AcceptEx/ConnectEx/BindLocal）、P3 subprocess 数
   （直接验默认路径）。
 
 **state（round 282 后）**：Windows CLI asyncio **默认 Proactor**；嵌入 API（`pa_create`／
-`paL_newstate`）仍不自动设策略，宿主需自设。**round 283 补**：`_overlapped.ConnectPipe`
+`paL_newstate`）仍不自动设策略，宿主需自设。**round 284 补**：`_overlapped.ConnectPipe`
 客户端接线＋ `OSError.winerror` 默认属性（类属性 `None`）。**仍如实边界**：完整命名管道
 transport（服务端 accept／取消／关闭）未承诺；IPv6 `ConnectEx` 未接（需先扩 `CP-39` 的地址线格式）；
 `Lib/` 未改（`CX-8`）。
