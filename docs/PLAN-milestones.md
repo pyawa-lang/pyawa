@@ -714,8 +714,8 @@ fast／wasm／windows 全绿；同一处 3 轮不过则停手升级。**开发�
 | **S3 实现 ✓（2026-11-21）** | `pa_resume`/`pa_throw`（1.15）、`event` 域（1.16）、`await_fn`＋VM await＋`await_cancel_fn` 派发（1.17）；参考 C 宿主（resume/event/await，event provider 参与 token 等待）＋测试；旧 ABI 宿主零回归；多协程同对象/按帧取消/u64 token 测试 | `crates/pyawa-abi/tests/`（coroutine_resume／event_domain／host_awaitable／host_awaitable_cancel／legacy_host_ops）；`tests/ci/t_ref_host_async.py`；check.py 20/20；slowcheck 12/12；CI 全绿 |
 | **宿主 loop 参考适配器 ✓（2026-11-22；await 场景补齐 2026-11-27）** | native `poll(2)` event provider、任务表、超时，以及宿主 loop 驱动含 `await` 协程的正常完成／多次 resume／错误与 THROW 传播／INTERRUPT 取消与恢复／DESTROY 派发；`examples/reference_host_loop.c`＋`t_ref_host_loop.py` | 真编译真运行；CI fast |
 | **asyncgen/嵌套 await ✓（2026-11-22）** | `asend` 内 host await token 冒泡＋外层送值路由；`host_await_asyncgen.rs` | 测试全绿 |
-| **Proactor 数据面计划（未实现）** | Windows Proactor／subprocess／pipe 的数据面分阶段计划（P1 文件/pipe→P2 socket→P3 subprocess→P4 默认策略）；当前仍走 selector | 计划：`docs/rounds/spikes/2026-11-22-proactor-dataplane-plan.md` |
-| **Windows asyncio 评估＋selector 落地 ✓（2026-11-22）** | CLI 启动 shim 切 `WindowsSelectorEventLoopPolicy`；Windows CI `asyncio.run` 冒烟；Proactor/`_overlapped` 数据面仍不承诺 | 评估＋代码；见 `docs/rounds/spikes/2026-11-22-windows-asyncio-assessment.md` |
+| **Proactor 数据面计划 ✓（P1–P4 已落地）** | Windows Proactor／subprocess／pipe 数据面：P1 文件/pipe ＃69／＃72、P2 socket（AcceptEx/ConnectEx/BindLocal）＃79、P3 subprocess ＃72／＃79、**P4 默认策略已切 Proactor**（round 282） | 计划：`docs/rounds/spikes/2026-11-22-proactor-dataplane-plan.md` |
+| **Windows asyncio 评估＋selector 落地 ✓（2026-11-22）**；**round 282 切回 Proactor 默认 ✓** | 2026-11-22 selector shim（P1–P3 未接时的临时策略；Windows CI `asyncio.run` 冒烟）；P1–P3 全绿后按 `P4` 删除 shim，CLI 走 CPython 默认 Proactor（round 282），selector 保留为脚本显式逃生口 | 评估＋代码；见 `docs/rounds/spikes/2026-11-22-windows-asyncio-assessment.md`、`docs/rounds/spikes/2026-11-22-proactor-dataplane-plan.md` |
 | **S4 文档/承诺 ✓（2026-11-21）** | DESIGN/PLAN/RELEASE/NEXT 收口；CLI asyncio 模式 B 不变，L3 不承诺 | 文档一致；本行即收口记录 |
 
 

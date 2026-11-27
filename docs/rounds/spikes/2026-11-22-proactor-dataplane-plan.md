@@ -1,14 +1,15 @@
 # Proactor 数据面实施计划（Windows asyncio 剩余项，2026-11-22）
 
-**状态**：计划，**未实现**。Windows CLI asyncio 当前走 selector 子集；Proactor
-（`asyncio.windows_events`、subprocess／pipe transport）仍不承诺。
+**状态**：**P1–P4 已落地 ✓**（round 282）。P1 文件/pipe（#69／#72）、P2 socket
+（AcceptEx/ConnectEx/BindLocal，#79）、P3 subprocess（#72／#79）已进 main；P4 已把 Windows CLI
+默认策略从 selector 切回 **CPython 默认 Proactor**（round 282）。selector 仅保留为脚本显式逃生口。
 
 ## 当前证据
 
-- `crates/pyawa-runtime/src/win32_overlapped.rs`：`_winapi` 的事件／IOCP 句柄与
-  `_overlapped.Overlapped` 的最小真实语义已有；但 `ReadFile`／`WriteFile`／
-  `WSARecv`／`WSASend`／`ConnectNamedPipe` 仍如实 `NotImplementedError`
-  （文件头“如实边界”）。
+- `crates/pyawa-runtime/src/win32_overlapped.rs`：`ReadFile`／`WriteFile`／`WSARecv`／
+  `WSASend`／`AcceptEx`／`ConnectEx`／`BindLocal`／`ConnectNamedPipe`／`GetOverlappedResult`
+  已接真实语义（P1–P3）；`ERROR_BROKEN_PIPE` 按 CPython 分读/写口径抛 `BrokenPipeError`、
+  `OSError.winerror` 已在 Windows 平台层补齐。
 - `pyawa-stdlib` 的 Windows 桩由 `paL_newstate`／CLI 覆盖；裸 `pa_create` 不自动安装
   Proactor 相关模块。
 - `asyncio.windows_events` 的 Proactor 路径需要：
@@ -27,7 +28,7 @@
 | **P1 文件/pipe 重叠 I/O（进行中）** | **文件部分 ✓**：`CreateFile`＋`ReadFile`／`WriteFile`／`GetOverlappedResult`／`getresult`（Windows 测试 `windows_overlapped.rs`）；**pipe 部分待做**：`CreatePipe`／`ConnectNamedPipe` | 文件读写 ✓；pipe/cancel/GC 待补 |
 | **P2 socket 重叠 I/O** | `WSARecv`／`WSASend`（含 Into 变体）、`WSARecvFrom`／`WSASendTo` | 本机 loopback 连接读写；与 selector 结果对拍 |
 | **P3 subprocess/pipe transports** | `asyncio.create_subprocess_exec` 的 stdin/stdout/stderr pipes | `asyncio.run` 跑子进程 echo；取消与超时 |
-| **P4 默认策略** | 若 P1–P3 全绿，才评估把 Windows 默认从 selector 切回 Proactor；否则保持 selector | 文档更新 + Windows CI 全绿 |
+| **P4 默认策略 ✓（round 282）** | P1–P3 全绿后删除 CLI 的 selector shim ⇒ 走 CPython 默认 **Proactor**；selector 保留为脚本显式逃生口（`_set_event_loop_policy(_WindowsSelectorEventLoopPolicy())`） | 文档更新 ✓；Windows CI（`asyncio.run` 冒烟＋运行矩阵）全绿 ✓；新增 4 个 Windows 测试（默认策略／真实定时器／selector 逃生口／默认 Proactor 下 subprocess＋TCP echo）|
 
 ## 风险
 
@@ -45,6 +46,7 @@
 
 ## 不做
 
-- 不修改 `Lib/`（CX-8）；
-- 不在 selector 子集已够用时盲目切默认策略；
-- 不把 Proactor 作为 Windows asyncio 承诺，直到 P1–P3 全绿并进入 RELEASE。
+- 不修改 `Lib/`（`CX-8`）；
+- 不在 P1–P3 未全绿时切默认策略（`P4` 的前置条件；2026-11-22–round 281 期间保持 selector）。
+- **不做**：IPv6 `ConnectEx`（当前只接数字 IPv4）；pipe 的少数边界分支；
+  `OSError.winerror` 只保证 Windows 平台层抛出的异常带该属性（见 `RELEASE.md` 已知限制）。

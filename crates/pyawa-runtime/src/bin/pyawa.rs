@@ -171,38 +171,13 @@ fn memory_limit_from_env() -> Option<u64> {
     number.trim().parse::<u64>().ok().map(|value| value.saturating_mul(multiplier))
 }
 
-/// **Windows CLI asyncio 兼容 shim**（2026-11-22）：默认 selector 而不是 Proactor。
+/// **Windows CLI asyncio 默认策略 = CPython 默认（Proactor）**（`P4`，round 282）。
 ///
-/// CPython Windows 默认策略是 Proactor，但本层的 `_overlapped` 数据面未接
-/// （`win32_overlapped.rs` 的如实边界）⇒ 直接用默认策略会在 `asyncio.run` 失败。
-/// 这里在 CLI 启动时（仅 Windows、仅便利路径）把策略切到 `WindowsSelectorEventLoopPolicy`；
-/// **不改 `Lib/`**，也不给核心加导入钩子（与 ADR-002 的核心边界一致）。失败时静默回退，
-/// 后续 `import asyncio` 仍会如实报错。
-#[cfg(windows)]
-fn install_windows_asyncio_selector(state: *mut pa_state) {
-    const SRC: &[u8] = b"try:\n    __pa_asyncio = __import__('asyncio')\n    __pa_events = __pa_asyncio.events\n    __pa_windows = __pa_asyncio.windows_events\n    __pa_events._set_event_loop_policy(__pa_windows._WindowsSelectorEventLoopPolicy())\nfinally:\n    try:\n        del __pa_asyncio\n    except NameError:\n        pass\n    try:\n        del __pa_events\n    except NameError:\n        pass\n    try:\n        del __pa_windows\n    except NameError:\n        pass\n";
-    // SAFETY: state 刚由 pa_create 交回、仍存活；入口按 AB-59 契约传 C 串。
-    let rc = unsafe {
-        pa_exec_string(
-            state,
-            SRC.as_ptr().cast(),
-            SRC.len() as isize,
-            c"<pyawa-asyncio-shim>".as_ptr(),
-            c"python".as_ptr(),
-            core::ptr::null(),
-        )
-    };
-    if rc != status::PA_OK && std::env::var_os("PYAWA_ASYNCIO_SHIM_DEBUG").is_some() {
-        let pointer = unsafe { pa_errmsg(state) };
-        let message = if pointer.is_null() {
-            String::new()
-        } else {
-            unsafe { core::ffi::CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
-        };
-        eprintln!("pyawa: asyncio shim rc={rc}: {message}");
-    }
-}
-
+/// 2026-11-22 的 selector shim（`_WindowsSelectorEventLoopPolicy`）已删除：P1 文件/pipe、
+/// P2 socket（AcceptEx/ConnectEx/BindLocal）、P3 subprocess 数据面已全部落地并进 main
+/// （`docs/rounds/spikes/2026-11-22-proactor-dataplane-plan.md` 的 P4）。因此 CLI 不再改策略，
+/// 直接用 `asyncio` 在 Windows 上的默认 Proactor；要回到 selector 可在脚本里显式
+/// `_set_event_loop_policy(_WindowsSelectorEventLoopPolicy())`（保留为逃生口 ✓）。
 /// **CLI Windows Proactor 兼容**：`Lib/asyncio/proactor_events.py` 的
 /// `_ProactorBasePipeTransport._force_close()` 会读 `self._empty_waiter`，但基类
 /// `__init__` 没有初始化它（CPython 3.14 里通常不会走到该路径）。Pyawa 的读传输在
@@ -497,10 +472,8 @@ fn real_main() {
     }
     #[cfg(windows)]
     pyawa_runtime::win32_overlapped::install_cli_msvcrt_compat(instance);
-    // Windows CLI：asyncio 默认 selector（**在平台模块覆盖之后**设，避免 asyncio 导入期
-    // 抓到 `_signal.set_wakeup_fd` 的旧桩）。
-    #[cfg(windows)]
-    install_windows_asyncio_selector(state);
+    // Windows CLI：asyncio 用平台默认策略（Proactor，`P4`）；下面的兼容层在平台模块覆盖
+    // 之后安装，避免 asyncio 导入期抓到 `_signal.set_wakeup_fd` 的旧桩。
     #[cfg(windows)]
     install_windows_io_compat(state);
     #[cfg(windows)]
