@@ -48,5 +48,6 @@
 
 - 不修改 `Lib/`（`CX-8`）；
 - 不在 P1–P3 未全绿时切默认策略（`P4` 的前置条件；2026-11-22–round 281 期间保持 selector）。
-- **不做**：IPv6 `ConnectEx`（当前只接数字 IPv4）；pipe 的少数边界分支；
+- **不做**：pipe 的少数边界分支；
   `OSError.winerror` 只保证 Windows 平台层抛出的异常带该属性（见 `RELEASE.md` 已知限制）。
+- **P5（待做）**：IPv6（`CP-47` 规格已定；`R2`／`R3` 实现待做；当前只接数字 IPv4 的 `ConnectEx`）。
