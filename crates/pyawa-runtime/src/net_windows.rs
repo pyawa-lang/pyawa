@@ -130,6 +130,16 @@ const WSA_SO_RCVTIMEO: i32 = 0x1006;
 const WSA_SO_ERROR: i32 = 0x1007;
 /// Winsock `SO_TYPE`。
 const WSA_SO_TYPE: i32 = 0x1008;
+/// **Proactor 桥（P2）**：`_overlapped.SO_UPDATE_ACCEPT_CONTEXT` 的 Winsock 取值。
+///
+/// `Lib/asyncio/windows_events.py:559` 在 `AcceptEx` 完成后调用
+/// `conn.setsockopt(socket.SOL_SOCKET, _overlapped.SO_UPDATE_ACCEPT_CONTEXT, struct.pack('@P', listener.fileno()))`；
+/// 值里的 listener 是 **provider 句柄**，这里要翻成原生 `SOCKET` 再转给 Winsock。
+const SO_UPDATE_ACCEPT_CONTEXT: i32 = 0x700B;
+/// **Proactor 桥（P2）**：`_overlapped.SO_UPDATE_CONNECT_CONTEXT` 的 Winsock 取值。
+///
+/// `Lib/asyncio/windows_events.py:602` 在 `ConnectEx` 完成后调用；Winsock 要 `optval=NULL, optlen=0`。
+const SO_UPDATE_CONNECT_CONTEXT: i32 = 0x7010;
 
 // --------------------------------------------------------------------------- //
 // Winsock poll 位（`winsock2.h`）：语义与 Linux 同名位一样，**数值不同**
@@ -1053,10 +1063,19 @@ extern "C" fn net_setsockopt(
         write_errno(errno_out, errno_named("EBADF"));
         return CapStatus::Machine;
     };
-    let Some((win_level, win_name)) = wsa_socket_option(level, name) else {
-        // 不认识的选项**不原样转发**（两套编号不同，转错会静默设错选项）⇒ 如实拒绝。
-        write_errno(errno_out, errno_named("ENOPROTOOPT"));
-        return CapStatus::Machine;
+    // **Proactor 桥（P2）**：`_overlapped` 暴露的是 Winsock 原生选项号（0x700B／0x7010），
+    // 不在 guest 侧 POSIX 选项号空间 ⇒ 这两枚单独翻译，不走 `wsa_socket_option`。
+    let proactor_context = level == SOL_SOCKET_POSIX
+        && (name == SO_UPDATE_ACCEPT_CONTEXT || name == SO_UPDATE_CONNECT_CONTEXT);
+    let (win_level, win_name) = if proactor_context {
+        (WSA_SOL_SOCKET, name)
+    } else {
+        let Some(pair) = wsa_socket_option(level, name) else {
+            // 不认识的选项**不原样转发**（两套编号不同，转错会静默设错选项）⇒ 如实拒绝。
+            write_errno(errno_out, errno_named("ENOPROTOOPT"));
+            return CapStatus::Machine;
+        };
+        pair
     };
     if value.is_null() && value_len > 0 {
         write_errno(errno_out, errno_named("EFAULT"));
@@ -1068,7 +1087,30 @@ extern "C" fn net_setsockopt(
     } else {
         unsafe { core::slice::from_raw_parts(value, value_len) }
     };
-    let result = if name == SO_RCVTIMEO_POSIX || name == SO_SNDTIMEO_POSIX {
+    let result = if proactor_context {
+        // ACCEPT 上下文：值是按 `@P` 打包的 **provider 句柄**（listener 的 `fileno()`）；
+        // Winsock 要原生 `SOCKET` ⇒ 经进程级桥表翻译（与 `_overlapped` 的 `resolve_socket` 同口径）。
+        // CONNECT 上下文：按文档传 `optval=NULL, optlen=0`（guest 侧给整数 0，其 4 字节丢弃）。
+        let mut packed: Vec<u8> = Vec::new();
+        if name == SO_UPDATE_ACCEPT_CONTEXT {
+            if bytes.len() < 8 {
+                write_errno(errno_out, errno_named("EINVAL"));
+                return CapStatus::Machine;
+            }
+            let mut packed_handle = [0u8; 8];
+            packed_handle.copy_from_slice(&bytes[..8]);
+            let handle = u64::from_ne_bytes(packed_handle);
+            let raw = raw_socket_for_handle(handle as i64).unwrap_or(handle as usize);
+            packed.extend_from_slice(&(raw as u64).to_ne_bytes());
+        }
+        let (optval, optlen) = if packed.is_empty() {
+            (core::ptr::null(), 0)
+        } else {
+            (packed.as_ptr(), packed.len() as i32)
+        };
+        // SAFETY: optval 要么 NULL，要么指向本函数持有的 8 字节 SOCKET 缓冲（调用期间活着）。
+        unsafe { sys::setsockopt(fd, win_level, win_name, optval, optlen) }
+    } else if name == SO_RCVTIMEO_POSIX || name == SO_SNDTIMEO_POSIX {
         // 超时：guest 的 int 毫秒 ⇒ Win32 `DWORD` 毫秒（负值夹 0＝不设超时）。
         if bytes.len() < 4 {
             write_errno(errno_out, errno_named("EINVAL"));

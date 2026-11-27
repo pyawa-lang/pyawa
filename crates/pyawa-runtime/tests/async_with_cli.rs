@@ -115,3 +115,34 @@ print(asyncio.run(main()))
 "#;
     assert_eq!(run("proactor-subprocess", script), "(b'hi', None, 0)\n");
 }
+
+/// **Windows Proactor TCP echo**：`start_server`（AcceptEx）＋ `open_connection`（ConnectEx）。
+#[cfg(windows)]
+#[test]
+fn proactor_tcp_echo_accept_connect() {
+    let script = r#"
+import asyncio
+import asyncio.events
+import asyncio.windows_events
+asyncio.events._set_event_loop_policy(
+    asyncio.windows_events._WindowsProactorEventLoopPolicy())
+async def handle(reader, writer):
+    data = await reader.readline()
+    writer.write(data)
+    await writer.drain()
+    writer.close()
+async def main():
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(b"hello\n")
+    await writer.drain()
+    line = await asyncio.wait_for(reader.readline(), 10)
+    writer.close()
+    server.close()
+    await server.wait_closed()
+    return line
+print(asyncio.run(main()))
+"#;
+    assert_eq!(run("proactor-tcp-echo", script), "b'hello\\n'\n");
+}
