@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""P0-3 参考宿主 loop 验收：native poll(2) event provider＋任务表＋超时。"""
+"""P0-3 参考宿主 loop 验收：native poll(2) event provider＋任务表＋超时，
+以及宿主 loop 驱动含 `await` 协程的场景（正常完成／多次 resume／错误与 THROW 传播／
+INTERRUPT 取消与恢复／销毁派发）。"""
 from __future__ import annotations
 import pathlib, subprocess, sys
 
@@ -8,13 +10,22 @@ SRC = ROOT / "examples" / "reference_host_loop.c"
 INCLUDE = ROOT / "crates" / "pyawa-abi" / "include"
 LIB = ROOT / "target" / "release"
 BIN = ROOT / "target" / "reference_host_loop"
-EXPECTED = """ref-loop: tasks=2
-ref-loop: ready=2
+EXPECTED = """ref-loop: tasks=3
+ref-loop: ready=3
 ref-loop: f=42
 ref-loop: g=44
+ref-loop: multi-yields=2
+ref-loop: multi=4
+ref-loop: error-status=1
+ref-loop: error-msg=LookupError: after
+ref-loop: throw-status=1
+ref-loop: throw-reason=2
+ref-loop: interrupt-status=4
+ref-loop: interrupt-reason=0
+ref-loop: after-cancel=6
+ref-loop: recovered=44
 ref-loop: timeout=0
-ref-loop: cancel-status=1
-ref-loop: cancel-callback=1
+ref-loop: destroy-reason=1
 ref-loop: OK"""
 
 def main() -> int:

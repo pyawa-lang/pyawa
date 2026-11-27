@@ -712,7 +712,7 @@ fast／wasm／windows 全绿；同一处 3 轮不过则停手升级。**开发�
 | **S1.1 规格 ✓（2026-11-21）** | host awaitable 对象协议：`await_fn`/`await_cancel_fn`、token/恢复/异常/取消生命周期、追加式 ABI | `SPEC-c-abi.md` §11.1（`AB-88`…`AB-91`）；T-AB-24…26 |
 | **S2 Spike C ✓（2026-11-21）** | 宿主 loop 驱动含 `await` 的脚本协程；yield/恢复/完成/异常/取消五态；参考 C 宿主 | 报告：`docs/rounds/spikes/2026-11-21-host-awaitable-loop.md` |
 | **S3 实现 ✓（2026-11-21）** | `pa_resume`/`pa_throw`（1.15）、`event` 域（1.16）、`await_fn`＋VM await＋`await_cancel_fn` 派发（1.17）；参考 C 宿主（resume/event/await，event provider 参与 token 等待）＋测试；旧 ABI 宿主零回归；多协程同对象/按帧取消/u64 token 测试 | `crates/pyawa-abi/tests/`（coroutine_resume／event_domain／host_awaitable／host_awaitable_cancel／legacy_host_ops）；`tests/ci/t_ref_host_async.py`；check.py 20/20；slowcheck 12/12；CI 全绿 |
-| **宿主 loop 参考适配器 ✓（2026-11-22）** | native `poll(2)` event provider、任务表、超时＋取消示例（`pa_throw`/`await_cancel_fn`）；`examples/reference_host_loop.c`＋`t_ref_host_loop.py` | 真编译真运行；CI fast |
+| **宿主 loop 参考适配器 ✓（2026-11-22；await 场景补齐 2026-11-27）** | native `poll(2)` event provider、任务表、超时，以及宿主 loop 驱动含 `await` 协程的正常完成／多次 resume／错误与 THROW 传播／INTERRUPT 取消与恢复／DESTROY 派发；`examples/reference_host_loop.c`＋`t_ref_host_loop.py` | 真编译真运行；CI fast |
 | **asyncgen/嵌套 await ✓（2026-11-22）** | `asend` 内 host await token 冒泡＋外层送值路由；`host_await_asyncgen.rs` | 测试全绿 |
 | **Proactor 数据面计划（未实现）** | Windows Proactor／subprocess／pipe 的数据面分阶段计划（P1 文件/pipe→P2 socket→P3 subprocess→P4 默认策略）；当前仍走 selector | 计划：`docs/rounds/spikes/2026-11-22-proactor-dataplane-plan.md` |
 | **Windows asyncio 评估＋selector 落地 ✓（2026-11-22）** | CLI 启动 shim 切 `WindowsSelectorEventLoopPolicy`；Windows CI `asyncio.run` 冒烟；Proactor/`_overlapped` 数据面仍不承诺 | 评估＋代码；见 `docs/rounds/spikes/2026-11-22-windows-asyncio-assessment.md` |
