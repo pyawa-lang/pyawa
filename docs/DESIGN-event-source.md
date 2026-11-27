@@ -69,7 +69,9 @@ S1 规格、S1.1 规格、S2 Spike C、S3 实现、S4 文档/承诺均已收口�
 `pa_resume`/`pa_throw`（1.15）、`event` 域（1.16）、host awaitable `await_fn`/`await_cancel_fn`
 ＋VM await 派发（1.17）；参考 C 宿主（`examples/reference_host_async.c`）覆盖 resume/event/await；
 旧 ABI 宿主零回归。**宿主 loop 参考适配器**（`examples/reference_host_loop.c`）用真实
-`poll(2)` 作 event provider，演示任务表、超时与取消（`pa_throw` → `await_cancel_fn`）；**CLI asyncio 仍为模式 B**（Pyawa 循环、
+`poll(2)` 作 event provider，演示任务表、超时，以及宿主 loop 驱动含 `await` 协程的六类场景
+（正常完成／多次 resume／脚本错误传播／`pa_throw` 传播／`pa_interrupt` 取消与恢复／
+`pa_destroy` 派发 `await_cancel_fn(DESTROY)`）；**CLI asyncio 仍为模式 B**（Pyawa 循环、
 Linux 可用）；**L3 不承诺**。
 
 ## 分阶段（PLAN §12.27）
