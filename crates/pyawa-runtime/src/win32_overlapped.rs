@@ -2289,6 +2289,47 @@ fn winapi_connect_named_pipe(
     Ok(object)
 }
 
+/// `_overlapped.ConnectPipe(address)`：打开**命名管道客户端端**（CPython `do_ConnectPipe` 同参数：
+/// `CreateFileW(..., GENERIC_READ|GENERIC_WRITE, OPEN_EXISTING, FILE_FLAG_OVERLAPPED)`），返回裸
+/// Win32 HANDLE；`Lib/asyncio/windows_events.py:644` 的 `create_pipe_connection()` 用它，再由
+/// `windows_utils.PipeHandle` 包成可读写的管道对象（读／写走已有的重叠 `ReadFile`／`WriteFile`）。
+///
+/// 失败必须带 `winerror`：`windows_events.py:650` 靠 `exc.winerror == _overlapped.ERROR_PIPE_BUSY`
+/// 退避重试；`ERROR_PIPE_BUSY` 等值来自 stdlib 桩里已登记的真实常量。
+#[allow(unsafe_code)]
+fn overlapped_connect_pipe(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    no_kwargs(instance, "_overlapped.ConnectPipe", kwargs)?;
+    let address = optional_text(instance, "_overlapped.ConnectPipe", args, 0)?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "ConnectPipe 需要管道地址"))?;
+    let wide = wide_opt(Some(&address)).expect("地址非 None");
+    // SAFETY: wide 是 NUL 结尾 UTF-16；参数与 CPython `do_ConnectPipe` 一致。
+    let handle = unsafe {
+        sys::CreateFileW(
+            wide.as_ptr(),
+            0x8000_0000 | 0x4000_0000, // GENERIC_READ|GENERIC_WRITE
+            0,                          // 不共享
+            core::ptr::null_mut(),      // 默认安全属性
+            3,                          // OPEN_EXISTING
+            0x4000_0000,                // FILE_FLAG_OVERLAPPED
+            0,                          // 无模板
+        )
+    };
+    if handle == -1isize {
+        return Err(raise_win_typed(instance, "OSError", last_error()));
+    }
+    // CPython 口径：不是管道 ⇒ 关句柄并抛 OSError("Not a pipe")（`FILE_TYPE_PIPE` ＝ 3）。
+    if unsafe { sys::GetFileType(handle) } != 3 {
+        unsafe { sys::CloseHandle(handle) };
+        return Err(instance.raise_builtin_error("OSError", "Not a pipe"));
+    }
+    Ok(instance.new_int(handle as i64))
+}
+
 /// **安装真实面**（只由便利装配路径调用；裸 ABI 宿主仍拿到 stdlib 的诚实桩）。
 pub fn install(instance: &Instance) {
     if let Some(namespace) = module_namespace(instance, "_winapi") {
@@ -2337,12 +2378,22 @@ pub fn install(instance: &Instance) {
             ("CreateEvent", overlapped_create_event as pyawa_core::NativeFn),
             ("UnregisterWaitEx", unregister_wait_ex as pyawa_core::NativeFn),
             ("UnregisterWait", unregister_wait_ex as pyawa_core::NativeFn),
+            ("ConnectPipe", overlapped_connect_pipe as pyawa_core::NativeFn),
         ] {
             let function = make_native(instance, name, handler);
             instance.dict_set(namespace, name, function);
         }
         if let Some(class) = build_overlapped_class(instance) {
             instance.dict_set(namespace, "Overlapped", class);
+        }
+    }
+    // **Windows 口径：`OSError.winerror` 属性恒存在**（CPython 里非 Win32 错误读作 `None`）。
+    // 平台层抛错用实例属性覆盖（`raise_win_typed`）；`_socket`／`net` 等其它层抛的 `OSError`
+    // 读到类属性 `None` ⇒ `Lib/asyncio/windows_events.py` 的 `exc.winerror` 分支不会 AttributeError。
+    if let Some(os_error) = instance.type_named("OSError") {
+        let none = instance.new_none();
+        if let Some(old) = instance.set_type_attribute(os_error, "winerror", none) {
+            instance.release(old);
         }
     }
 }

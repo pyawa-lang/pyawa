@@ -188,3 +188,38 @@ print(asyncio.run(main()))
 "#;
     assert_eq!(run("selector-opt-in", script), "selector-ok\n");
 }
+
+/// **Windows 口径的 `OSError.winerror`**：属性恒存在（非 Win32 错误为 `None`），子类继承。
+/// asyncio 的 `exc.winerror` 分支（`windows_events.py:591`／`:650`）因此不会 AttributeError。
+#[cfg(windows)]
+#[test]
+fn windows_oserror_has_winerror_attribute() {
+    let script = r#"
+print(getattr(OSError("x"), "winerror", "missing"))
+print(getattr(FileNotFoundError(2, "nope"), "winerror", "missing"))
+"#;
+    assert_eq!(run("oserror-winerror", script), "None\nNone\n");
+}
+
+/// **`_overlapped.ConnectPipe` 已接线（错误路径）**：对不存在的管道名必须抛带 `winerror`
+/// 的 `OSError`（`ERROR_FILE_NOT_FOUND`／`ERROR_PIPE_BUSY` 一族），而不是诚实桩的
+/// `NotImplementedError`。
+///
+/// **范围外（如实）**：完整命名管道 transport（`start_serving_pipe` 的服务端 `AcceptEx`
+/// 取消／关闭路径）本轮未接；照抄 e2e 会挂（Windows CI 实测 60s+ 不退出），故只验
+/// `ConnectPipe` 的接线与失败口径。
+#[cfg(windows)]
+#[test]
+fn proactor_connect_pipe_error_path() {
+    let script = r#"
+import _overlapped
+print(callable(_overlapped.ConnectPipe))
+try:
+    _overlapped.ConnectPipe(r'\\.\pipe\pyawa-no-such-pipe')
+except OSError as exc:
+    print(type(exc.winerror).__name__)
+    print(exc.winerror != 0)
+"#;
+    assert_eq!(run("connect-pipe-error", script), "True\nint\nTrue\n");
+}
+
