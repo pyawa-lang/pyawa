@@ -1,13 +1,14 @@
 [package]
 name = "pyawa-lsp"
-description = "Pyawa 的 LSP 服务（LSP 线②：诊断＋hover；零第三方依赖的手写 JSON-RPC 2.0／LSP 帧）"
+description = "Pyawa 的 LSP 服务（LSP 线②：诊断＋hover；手写 JSON-RPC 2.0／LSP 帧，JSON 编解码用 serde_json）"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-# 只依赖 workspace 内部（`CX-27`：第三方只许在 pyawa-lsp，但本实现**零第三方** ⇒ 不新增依赖）
+# `CX-27`：第三方只许在 pyawa-lsp。JSON 编解码用 `serde_json`（round 281 替换手写解析）。
 pyawa-core = { path = "../pyawa-core" }
+serde_json = "1"
 
 [[bin]]
 name = "pyawa-lsp"
