@@ -370,7 +370,6 @@ struct WsaBuf {
 }
 
 #[allow(unsafe_code)]
-#[allow(unsafe_code)]
 mod mswsock {
     use super::{c_void, HandleRaw, OverlappedInner};
 
