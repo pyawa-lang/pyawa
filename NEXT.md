@@ -1,13 +1,14 @@
 # NEXT（2026-11-21 · alpha 迁移完成；工作流＝main + feat/spike）
 
-- **HEAD**：`a8d6ad8a`（wasm P1 采用；本收口文档提交见 `git log`）· **工作区**：干净
+- **HEAD**：`c17dd7d8`（LSP serde_json ＃82；本笔前）· **工作区**：干净
 - **当前主线**：`main`（受保护，PR-only，squash-only；既有 m1–m6/alpha 历史与 tag 未改写）
 - **分支模型**：`main` ＋ `feat/*`（短命）＋ `spike/*`（永不合并）；见 `docs/WORKFLOW.md`
 - **历史**：`archive/pre-alpha-dev` = `cea7e306`；`dev` 已删除（ADR-003）；安全网
   `target/archive/dev-full.bundle`
 - **已采用**：portability／frame-stack／windows-platform＋平台补齐／win32-real-semantics／
   wasm E1–E8（见 `docs/migrations/STATUS.md`）
-- **仅报告不采用**：JSPI／asyncio-on-wasm／Windows asyncio 后端（`docs/rounds/spikes/`）
+- **已采用（round 282）**：Windows CLI asyncio **默认 Proactor**（P1–P3 数据面全绿后切回；selector 仅作脚本显式逃生口）
+- **仅报告不采用**：JSPI／asyncio-on-wasm（`docs/rounds/spikes/`）
 - **架构决定（2026-11-21）**：ADR-005 accepted；长期目标＝L2 宿主拥有事件循环，
   L1 event 域为底座，L3 不承诺；详见 `docs/DESIGN-event-source.md`、`PLAN §12.27`。
 - **下一步（按序）**：

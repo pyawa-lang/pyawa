@@ -55,3 +55,22 @@ CLI 启动时（仅 Windows、仅便利路径）把 asyncio 默认策略切到
 
 - 已知边界：Proactor／`_overlapped` 数据面未接；`subprocess`、pipe transport、部分 `add_reader`
   不承诺；嵌入 API 不自动设策略（CLI shim 只在 CLI）。
+
+## 更新（round 282）：默认切回 Proactor ✓
+
+P1 文件/pipe、P2 socket（AcceptEx/ConnectEx/BindLocal）、P3 subprocess 数据面全部进 main 后，
+按 `2026-11-22-proactor-dataplane-plan.md` 的 **P4** 删除 CLI 的 selector shim：
+
+- `crates/pyawa-runtime/src/bin/pyawa.rs`：`install_windows_asyncio_selector` 与其调用删除；
+  CLI 不再改策略 ⇒ 走 CPython 默认 `_WindowsProactorEventLoopPolicy`／`ProactorEventLoop`；
+- selector 保留为**脚本显式逃生口**（`_set_event_loop_policy(_WindowsSelectorEventLoopPolicy())`），
+  由 `windows_selector_opt_in_still_works` 验收；
+- Windows 测试新增（`crates/pyawa-runtime/tests/async_with_cli.rs`）：
+  `windows_default_loop_policy_is_proactor`（`new_event_loop()` 的 loop 类型）、
+  `windows_default_proactor_timer_runs`（真实 `sleep(0.01)`）、
+  `windows_selector_opt_in_still_works`；subprocess／TCP echo 两例改为**不显式设策略**
+  （直接验默认路径）。
+
+**state（round 282 后）**：Windows CLI asyncio **默认 Proactor**；嵌入 API（`pa_create`／
+`paL_newstate`）仍不自动设策略，宿主需自设。**仍如实边界**：IPv6 `ConnectEx` 未接、
+pipe 少数分支、`OSError.winerror` 只在 Windows 平台层补齐；`Lib/` 未改（`CX-8`）。

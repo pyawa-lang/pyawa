@@ -54,7 +54,7 @@ cargo build --workspace
 
 | 项 | 状态 |
 |---|---|
-| 平台 | **Linux x86_64（已验证）**；**Web／浏览器（`wasm32-unknown-unknown`，实验性）**：E1–E8 库嵌入档已进 main（`4f9490cc`／`a8d6ad8a`），E8 子集同结果；**Windows x86_64：W1–W6＋原生 CLI（§12.23）＋runtime 运行矩阵（必需）＋§12.24 真实语义＋平台面补齐**——CI `windows` job **全绿**；**Windows CLI asyncio**：selector 策略 shim＋CI `asyncio.run` 冒烟（**Proactor 不承诺**；嵌入 API 需宿主自设策略）；**脚本可移植性（Linux×Windows）**：24/24 一致（main `7d1b0f0e`）。内存口径＝Windows 不做 memcheck |
+| 平台 | **Linux x86_64（已验证）**；**Web／浏览器（`wasm32-unknown-unknown`，实验性）**：E1–E8 库嵌入档已进 main（`4f9490cc`／`a8d6ad8a`），E8 子集同结果；**Windows x86_64：W1–W6＋原生 CLI（§12.23）＋runtime 运行矩阵（必需）＋§12.24 真实语义＋平台面补齐**——CI `windows` job **全绿**；**Windows CLI asyncio**：**默认 Proactor**（`P4`，round 282；P1–P3 数据面已进 main）＋ CI `asyncio.run` 冒烟；嵌入 API 不自动设策略（宿主自设）；**脚本可移植性（Linux×Windows）**：24/24 一致（main `7d1b0f0e`）。内存口径＝Windows 不做 memcheck |
 | 宿主语言 | C／C++（`pa.h`，含异步宿主驱动：`pa_resume`／`event`／host awaitable）；CPython 经 ctypes（已验证）；**JS（WASM，实验性）** |
 | ABI | **1.18**，**alpha 期未冻结**（1.15 `pa_resume`/`pa_throw`；1.16 `event` 域；1.17 host awaitable；1.18 `pa_clear_interrupt`） |
 | 指令集 | 2 |
@@ -80,8 +80,8 @@ cargo build --workspace
 - Windows：**W1–W6 已完成** ＋ 原生 CLI（§12.23）＋ runtime 必需矩阵 ＋ `winreg` 真实语义首批
   ＋ `_winapi`/`_overlapped` 最小真实语义 ＋ **平台面补齐第一批**（`clock` 日历三槽、`fs.pipe`、
   `net.socketpair`、`dev`/`ino` 真值，§12.20 W2–W4）。conformance 在 Windows **是必需步骤且绿**
-  （408 例、0 新差异；`DIV-12`＝guest 路径表现）。**仍如实未接**：`_overlapped` 数据面（Proactor
-  不能真跑；asyncio 的 Windows 默认后端**未承诺**（`ADR-002`，dev 上的 selector 后端实验仅报告、代码不进 main）；`errno` 数值表仍由 Linux
+  （408 例、0 新差异；`DIV-12`＝guest 路径表现）。**已接**：`_overlapped` 数据面（P1 文件/pipe→P2 socket→P3 subprocess）与 Windows CLI asyncio **默认 Proactor**（`P4`，round 282）；
+  **仍如实边界**：IPv6 `ConnectEx` 未接、pipe 少数分支、`OSError.winerror` 只在 Windows 平台层补；`errno` 数值表仍由 Linux
   探测生成；`ntpath` 的 `splitroot`/`normpath` 盘符语义有差；`symlink` 需特权；Windows 不做 memcheck。
 - **脚本可移植性（生死线）**：可移植子集内脚本无修改、可观测行为一致；平台查询如实回答；后端
   选型不属于脚本契约。承诺目标含 Linux/Windows（运行档）、wasm/Android/iOS（库嵌入，分阶段
