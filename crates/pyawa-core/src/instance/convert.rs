@@ -143,6 +143,7 @@ impl Instance {
     /// `bool` 的**值**（不是 `bool` 就给 `None`）。
     /// **迭代推进**（第 142 轮）：直接复用执行器那份（`executor::runtime::advance` ✓ **一处真相** ✓）——
     /// 内建 `next()` 要的就是它 ✓。
+#[inline]
     pub fn advance_iterator(
         &self,
         object: NonNull<Header>,
@@ -277,11 +278,25 @@ impl Instance {
         }
     }
 
+#[inline]
     pub fn order_of(
         &self,
         left: NonNull<Header>,
         right: NonNull<Header>,
-    ) -> Option<core::cmp::Ordering> {
+    ) -> Result<Option<core::cmp::Ordering>, ExecError> {
+        self.order_of_at(left, right, 0)
+    }
+
+    /// 带**原生递归深度**的 `order_of`（序列字典序递归；A-0）。
+    fn order_of_at(
+        &self,
+        left: NonNull<Header>,
+        right: NonNull<Header>,
+        depth: usize,
+    ) -> Result<Option<core::cmp::Ordering>, ExecError> {
+        if depth > self.recursion_limit() {
+            return Err(crate::executor::native_recursion_error(self));
+        }
         // **整数优先按整数比** ✓（第 632 轮真 bug 修 ✗）：先前一律转 `f64` ✗ ⇒ 大整数（`int_value`
         // 只认小整数 ✓ ⇒ 给 `None` ✗）落进"比不了" ✗ ⇒ `min(1 << 100, 5)` 报
         // `'<' not supported between instances of 'int' and 'int'` ✗（`Lib/re` 就断在这 ✓）；
@@ -296,7 +311,7 @@ impl Instance {
             None
         };
         if let (Some(left_integer), Some(right_integer)) = (integer(left), integer(right)) {
-            return Some(left_integer.cmp(&right_integer));
+            return Ok(Some(left_integer.cmp(&right_integer)));
         }
         let number = |object: NonNull<Header>| -> Option<f64> {
             // SAFETY: object 是存活对象。
@@ -314,7 +329,7 @@ impl Instance {
             None
         };
         if let (Some(left_number), Some(right_number)) = (number(left), number(right)) {
-            return left_number.partial_cmp(&right_number);
+            return Ok(left_number.partial_cmp(&right_number));
         }
         // **序列字典序** ✓（task-23 ✓）：`tuple` 之间、`list` 之间（各自子类也算同族 ✓）逐元素比 ✓，
         // 首个不等元素定序（递归走本函数 ✓）、一方是前缀 ⇒ 短的更小 ✓。`sorted`／`list.sort` 走的
@@ -327,18 +342,18 @@ impl Instance {
             let right_sequence = if right_is_tuple { self.tuple_items(right) } else { self.list_items(right) };
             if let (Some(left_items), Some(right_items)) = (left_sequence, right_sequence) {
                 for (first, second) in left_items.iter().zip(right_items.iter()) {
-                    if crate::executor::values_equal_public(self, *first, *second) {
+                    if crate::executor::values_equal_public(self, *first, *second)? {
                         continue;
                     }
-                    return self.order_of(*first, *second);
+                    return self.order_of_at(*first, *second, depth + 1);
                 }
-                return Some(left_items.len().cmp(&right_items.len()));
+                return Ok(Some(left_items.len().cmp(&right_items.len())));
             }
         }
         // **`str` 的码点序**（Task-66 ✓）：合法 UTF-8 走 `str::cmp`（字节序＝码点序 ⇒ 旧行为零变化 ✓），
         // 含孤立代理按码点逐位比（不再经 `value()` ⇒ 不 panic ✓）。
         if let Some(ordering) = self.str_order_cmp(left, right) {
-            return Some(ordering);
+            return Ok(Some(ordering));
         }
         // **富比较协议**（task-12 ✓）：内建快速路径都判不出时，照 `COMPARE_OP` 的**同一处真相**
         // （`executor::compare_public`：正向方法 → `NotImplemented` 走反向 → 再判不出报 `TypeError`）
@@ -351,10 +366,10 @@ impl Instance {
         //（`pprint` 的 `_safe_key` 就是！）被判"比不了" ✗（`test_pprint` 的 `compact_width`／
         // `set_of_sets_reprs` 报 `'<' not supported between instances of '_safe_key'` ✗）。
         match crate::executor::compare_public(self, left, right, "<", 0) {
-            Ok(true) => return Some(core::cmp::Ordering::Less),
+            Ok(true) => return Ok(Some(core::cmp::Ordering::Less)),
             Ok(false) => match crate::executor::compare_public(self, left, right, ">", 0) {
-                Ok(true) => return Some(core::cmp::Ordering::Greater),
-                Ok(false) => return Some(core::cmp::Ordering::Equal),
+                Ok(true) => return Ok(Some(core::cmp::Ordering::Greater)),
+                Ok(false) => return Ok(Some(core::cmp::Ordering::Equal)),
                 Err(error) => {
                     crate::executor::runtime::discard_error(self, &error);
                 }
@@ -363,7 +378,7 @@ impl Instance {
                 crate::executor::runtime::discard_error(self, &error);
             }
         }
-        None
+        Ok(None)
     }
 
     /// **取属性（可选）**（第 148 轮）：直接复用执行器那条属性通道 ✓（**一处真相** ✓）——

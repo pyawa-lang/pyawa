@@ -179,7 +179,7 @@ pub unsafe fn build_class_native(
                 instance.release(method);
                 let namespace = outcome?;
                 crate::executor::run_class_body(instance, body, namespace)?;
-                pop_classdictcell(instance, namespace);
+                pop_classdictcell(instance, namespace)?;
                 return finish_callable_metaclass(
                     instance,
                     meta,
@@ -264,7 +264,7 @@ pub unsafe fn build_class_native(
     // 类字典当**根** ⇒ 穿过类字典的环（`__del__` 闭包 → 生成器 → 实例）永远收不掉 ✗
     //（`test_userlist.test_free_after_iterating` ✓；round 120 实测 `root=dict rc=2`、
     //  `root_referrers=[cell(value=dict)]` 正是它 ✓）。
-    pop_classdictcell(instance, namespace);
+    pop_classdictcell(instance, namespace)?;
 
     // **PEP 560：基类先解析** ✓（task-24 尾件 ✓）：自定义元类与建类核心都收**解析后**的基类 ✓
     // （参照实测 `class SupportsAbs[T](Protocol)` 的 `_ProtocolMeta.__new__` 只收到 `(Protocol,)` ✓，
@@ -833,11 +833,16 @@ pub fn build_class_from_parts(
 /// **把 `__classdictcell__` 从类命名空间里摘掉**（round 120，照参照 `type_new`）：本层类体收尾会把
 /// `__classdict__` cell 挂进命名空间，而 cell 的载荷就是命名空间本身 ⇒ `dict ↔ cell` 自环 ✓。
 /// 参照在 `type.__new__` 里 pop（`C.__dict__` 里看不到它 ✓）；这里同口径，**顺带释放字典交出的那份** ✓。
-fn pop_classdictcell(instance: &Instance, namespace: NonNull<Header>) {
+fn pop_classdictcell(
+    instance: &Instance,
+    namespace: NonNull<Header>,
+) -> Result<(), crate::ExecError> {
     let key = instance.new_str("__classdictcell__");
-    instance.dict_remove_key(namespace, key);
-    // SAFETY: key 是上面刚造的新引用，`dict_remove_key` 借用查找、不接手。
+    let outcome = instance.dict_remove_key(namespace, key);
+    // SAFETY: key 是上面刚造的新引用，`dict_remove_key` 借用查找、不接手（错误路径也要还）。
     unsafe { instance.release_object(key.as_ptr()) };
+    outcome?;
+    Ok(())
 }
 
 pub fn build_class_from_parts_with_keywords(

@@ -707,20 +707,20 @@ pub(crate) fn set_operation(
     left: NonNull<Header>,
     right: NonNull<Header>,
     symbol: &str,
-) -> NonNull<Header> {
+) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: 调用方刚核过两边都是 set 族，载荷就是 `SetObject` ✓。
     let left_set = unsafe { &*left.as_ptr().cast::<SetObject>() };
     // SAFETY: 同上。
     let right_set = unsafe { &*right.as_ptr().cast::<SetObject>() };
-    let in_right = |value: NonNull<Header>| {
-        right_set
-            .position_of(|item| values_equal(instance, item, value))
-            .is_some()
+    let in_right = |value: NonNull<Header>| -> Result<bool, ExecError> {
+        Ok(right_set
+            .position_of_checked(|item| values_equal(instance, item, value))?
+            .is_some())
     };
-    let in_left = |value: NonNull<Header>| {
-        left_set
-            .position_of(|item| values_equal(instance, item, value))
-            .is_some()
+    let in_left = |value: NonNull<Header>| -> Result<bool, ExecError> {
+        Ok(left_set
+            .position_of_checked(|item| values_equal(instance, item, value))?
+            .is_some())
     };
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let push = |value: NonNull<Header>, items: &mut Vec<NonNull<Header>>| {
@@ -728,6 +728,8 @@ pub(crate) fn set_operation(
         unsafe { instance.incref_object(value.as_ptr()) };
         items.push(value);
     };
+    // **A-0**：比较可能报 `RecursionError` ⇒ 失败时把已 `incref` 的元素都还掉（别漏引用）。
+    let build = (|| -> Result<(), ExecError> {
     match symbol {
         "|" => {
             for index in 0..left_set.len() {
@@ -737,7 +739,7 @@ pub(crate) fn set_operation(
             }
             for index in 0..right_set.len() {
                 if let Some(item) = right_set.item(index) {
-                    if !in_left(item) {
+                    if !in_left(item)? {
                         push(item, &mut items);
                     }
                 }
@@ -746,7 +748,7 @@ pub(crate) fn set_operation(
         "&" => {
             for index in 0..left_set.len() {
                 if let Some(item) = left_set.item(index) {
-                    if in_right(item) {
+                    if in_right(item)? {
                         push(item, &mut items);
                     }
                 }
@@ -755,7 +757,7 @@ pub(crate) fn set_operation(
         "-" => {
             for index in 0..left_set.len() {
                 if let Some(item) = left_set.item(index) {
-                    if !in_right(item) {
+                    if !in_right(item)? {
                         push(item, &mut items);
                     }
                 }
@@ -765,21 +767,30 @@ pub(crate) fn set_operation(
             // `^`（对称差）
             for index in 0..left_set.len() {
                 if let Some(item) = left_set.item(index) {
-                    if !in_right(item) {
+                    if !in_right(item)? {
                         push(item, &mut items);
                     }
                 }
             }
             for index in 0..right_set.len() {
                 if let Some(item) = right_set.item(index) {
-                    if !in_left(item) {
+                    if !in_left(item)? {
                         push(item, &mut items);
                     }
                 }
             }
         }
     }
-    instance.new_set(items)
+        Ok(())
+    })();
+    if let Err(error) = build {
+        for value in items {
+            // SAFETY: 上面每个元素各 `incref` 了一份。
+            unsafe { instance.release_object(value.as_ptr()) };
+        }
+        return Err(error);
+    }
+    Ok(instance.new_set(items))
 }
 
 /// **通用比较**（`TS-40`）：`int`／`bool`／`str` **按值**比较，其余类型报**参照实测**的
@@ -906,15 +917,15 @@ fn push_union_member(
     instance: &Instance,
     members: &mut Vec<NonNull<Header>>,
     member: NonNull<Header>,
-) {
-    if members
-        .iter()
-        .any(|existing| values_equal_public(instance, *existing, member))
-    {
-        return;
+) -> Result<(), ExecError> {
+    for existing in members.iter() {
+        if values_equal_public(instance, *existing, member)? {
+            return Ok(());
+        }
     }
     instance.retain(member);
     members.push(member);
+    Ok(())
 }
 
 /// 造一个 `types.UnionType` 实例：成员表按给定顺序进 `__args__`（成员是**新引用**，由本函数接手）。
@@ -949,7 +960,7 @@ fn pep604_union_or(
     instance: &Instance,
     left: NonNull<Header>,
     right: NonNull<Header>,
-) -> Option<NonNull<Header>> {
+) -> Result<Option<NonNull<Header>>, ExecError> {
     let left_operand = or_operand(instance, left);
     let right_operand = or_operand(instance, right);
     // 先行排除"没有一方是类型/union"与"裸类型/None 对任意值"的组合 ⇒ 那些必须落回算术报 TypeError。
@@ -959,32 +970,41 @@ fn pep604_union_or(
         | (OrOperand::NoneValue, OrOperand::Other(_))
         | (OrOperand::Other(_), OrOperand::Type(_))
         | (OrOperand::Other(_), OrOperand::NoneValue)
-        | (OrOperand::Other(_), OrOperand::Other(_)) => return None,
+        | (OrOperand::Other(_), OrOperand::Other(_)) => return Ok(None),
         _ => {}
     }
     let mut members: Vec<NonNull<Header>> = Vec::new();
+    let fill = (|| -> Result<(), ExecError> {
     for operand in [left_operand, right_operand] {
         match operand {
             OrOperand::NoneValue => {
                 // `None` ⇒ `NoneType` 那个**类**（参照 `__args__` 里就是这个类）。
                 let none_type = instance.type_value(instance.singletons().none_type());
-                push_union_member(instance, &mut members, none_type);
+                push_union_member(instance, &mut members, none_type)?;
                 release(instance, none_type);
             }
-            OrOperand::Type(label) => push_union_member(instance, &mut members, label),
+            OrOperand::Type(label) => push_union_member(instance, &mut members, label)?,
             OrOperand::Union(items) => {
                 for item in items {
-                    push_union_member(instance, &mut members, item);
+                    push_union_member(instance, &mut members, item)?;
                 }
             }
-            OrOperand::Other(value) => push_union_member(instance, &mut members, value),
+            OrOperand::Other(value) => push_union_member(instance, &mut members, value)?,
         }
+    }
+    Ok(())
+    })();
+    if let Err(error) = fill {
+        for member in members {
+            instance.release(member);
+        }
+        return Err(error);
     }
     // 去重后只剩一个成员 ⇒ 就是那个类型本身（参照：`int | int` 给 `int`）。
     if members.len() == 1 {
-        return members.pop();
+        return Ok(members.pop());
     }
-    Some(new_union_of(instance, members))
+    Ok(Some(new_union_of(instance, members)))
 }
 
 /// **未捕获异常**的宿主诊断文本（`pa_errmsg` 用）：`<类型名>: <str(exception)>`。
@@ -1384,7 +1404,7 @@ pub(crate) fn bind_arguments(
             let name_object = instance.alloc(StrObject::new(instance.singletons().str_type(), name.clone()));
             let name_raw = name_object.as_ptr().cast::<Header>();
             let position = dict
-                .find_live_position(|existing| values_equal(instance, existing, name_raw));
+                .find_live_position_checked(|existing| values_equal(instance, existing, name_raw))?;
             if let Some(position) = position {
                 found = dict.entry(position).map(|(_, value)| value);
             }

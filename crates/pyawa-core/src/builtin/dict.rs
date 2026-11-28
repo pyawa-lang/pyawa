@@ -81,7 +81,7 @@ pub(crate) fn dict_position_with_protocol(
 ) -> Result<(Option<usize>, Option<u64>), crate::ExecError> {
     // 返回算好的哈希一起给调用方 ✓（插入时复用 ⇒ 每键只算一次 `__hash__` ✓）。
     let Some(hash) = crate::executor::values::key_hash_checked(instance, key)? else {
-        return Ok((dict_position(instance, mapping, key), None));
+        return Ok((dict_position(instance, mapping, key)?, None));
     };
     // SAFETY: 调用方保证 mapping 是存活的 dict。
     let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
@@ -95,7 +95,7 @@ pub(crate) fn dict_position_with_protocol(
         {
             crate::executor::protocol::equality_public(instance, candidate, key)?
         } else {
-            crate::executor::values::values_equal_public(instance, candidate, key)
+            crate::executor::values::values_equal_public(instance, candidate, key)?
         };
         if same {
             return Ok((Some(position), Some(hash)));
@@ -108,7 +108,7 @@ pub(crate) fn dict_position(
     instance: &Instance,
     mapping: NonNull<Header>,
     key: NonNull<Header>,
-) -> Option<usize> {
+) -> Result<Option<usize>, crate::ExecError> {
     // **哈希索引 ＋ 用户 `__eq__`**（round 71）：先前**线性扫** ✗ ⇒ `dict(可迭代)`／
     // `dict.__init__`／`update`／下标写都 O(n²)（8000 项 2.6 s；`namedtuple._asdict()` 的
     // 15 万字段因此拖死 `test_collections.test_large_size` ✗）。可哈希走索引 ✓、不可哈希退回线性 ✓。
@@ -124,17 +124,17 @@ pub(crate) fn dict_position(
             {
                 crate::executor::protocol::equality_public(instance, candidate, key).unwrap_or(false)
             } else {
-                crate::executor::values::values_equal_public(instance, candidate, key)
+                crate::executor::values::values_equal_public(instance, candidate, key)?
             };
             if same {
-                return Some(position);
+                return Ok(Some(position));
             }
         }
-        return None;
+        return Ok(None);
     }
     // SAFETY: mapping 由调用方保证是本实例的 dict。
     let dict = unsafe { &*mapping.as_ptr().cast::<crate::builtin_objects::DictObject>() };
-    dict.find_live_position(|candidate| {
+    dict.find_live_position_checked(|candidate| {
         crate::executor::values::values_equal_public(instance, candidate, key)
     })
 }
@@ -286,10 +286,10 @@ fn dict_put_owned(
     mapping: NonNull<Header>,
     key: NonNull<Header>,
     value: NonNull<Header>,
-) {
+) -> Result<(), crate::ExecError> {
     // SAFETY: 调用方保证 mapping 是本实例的 dict。
     let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-    match dict_position(instance, mapping, key) {
+    match dict_position(instance, mapping, key)? {
         Some(index) => {
             if let Some(old) = object.set_value_at(index, value) {
                 // SAFETY: 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓。
@@ -309,6 +309,7 @@ fn dict_put_owned(
             }
         }
     }
+    Ok(())
 }
 
 /// **`left | right`（`PEP 584`，task-13）**：**新建**一个 dict —— 先左后右，右侧**覆盖**同名键 ✓；
@@ -322,17 +323,17 @@ pub(crate) fn dict_merge(
     instance: &Instance,
     left: NonNull<Header>,
     right: NonNull<Header>,
-) -> NonNull<Header> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     let merged = instance.new_dict();
     for source in [left, right] {
         for (key, value) in instance.dict_entries(source).unwrap_or_default() {
             // **借用 ⇒ 各留一份** ✓：结果字典持有自己的键、值引用 ✓。
             instance.retain(key);
             instance.retain(value);
-            dict_put_owned(instance, merged, key, value);
+            dict_put_owned(instance, merged, key, value)?;
         }
     }
-    merged
+    Ok(merged)
 }
 
 /// **键值对可迭代 ⇒ 逐对并入**（task-25 ① ✓）：`dict.update` 与 `dict |=` 的**同一处真相** ✓
@@ -387,7 +388,7 @@ pub(crate) fn dict_update_sequence(
             ));
         }
         // key／value 两份转交 ✓；本项集合那份（pair）随之归还 ✓。
-        dict_put_owned(instance, mapping, parts[0], parts[1]);
+        dict_put_owned(instance, mapping, parts[0], parts[1])?;
         // SAFETY: pair 那份由 `iterable_items` 给出。
         unsafe { instance.release_object(pair.as_ptr()) };
     }
@@ -581,7 +582,7 @@ pub(crate) fn dict_lookup(
     }
     // SAFETY: 同上。
     let dict = unsafe { &*mapping.as_ptr().cast::<crate::builtin_objects::DictObject>() };
-    Ok(dict_position(instance, mapping, key).and_then(|position| dict.entry(position).map(|(_, value)| value)))
+    Ok(dict_position(instance, mapping, key)?.and_then(|position| dict.entry(position).map(|(_, value)| value)))
 }
 pub(crate) fn dict_get_native(
     instance: &Instance,
@@ -684,7 +685,7 @@ pub(crate) fn dict_or_native(
     if !instance.is_subtype(instance.type_of(*right), dict_type) {
         return Ok(instance.retain(instance.not_implemented()));
     }
-    Ok(dict_merge(instance, left, *right))
+    dict_merge(instance, left, *right)
 }
 
 /// **`dict.__ror__(self, other)`**：`other | d` —— 镜像 seq：右侧（self）覆盖 ✓。
@@ -704,7 +705,7 @@ pub(crate) fn dict_ror_native(
     if !instance.is_subtype(instance.type_of(*left), dict_type) {
         return Ok(instance.retain(instance.not_implemented()));
     }
-    Ok(dict_merge(instance, *left, right_dict))
+    dict_merge(instance, *left, right_dict)
 }
 
 /// `dict.__getitem__(self, key)`（`obj[key]` 的同一实现 ✓）。
@@ -807,9 +808,9 @@ pub fn dict_setitem_native(
     // ⇒ 容器先拿一份值的引用 ✓（实参那份归调用方 ✓）；键只在**插入**那一支添引用 ✓。
     // SAFETY: container／key／value 都由调用方保证存活。
     let object = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DictObject>() };
-    let position = object.find_live_position(|existing| {
+    let position = object.find_live_position_checked(|existing| {
         crate::executor::values_equal_public(instance, existing, *key)
-    });
+    })?;
     unsafe { instance.incref_object(value.as_ptr()) };
     match position {
         Some(slot) => {
@@ -878,7 +879,7 @@ pub fn dict_init_native(
             for key in keys {
                 let value = crate::executor::subscript::subscript_read(instance, source, key)?;
                 instance.retain(key);
-                dict_put_owned(instance, target, key, value);
+                dict_put_owned(instance, target, key, value)?;
             }
         } else if let Some(entries) = instance.dict_entries(source) {
             for (key, value) in entries {
@@ -889,7 +890,7 @@ pub fn dict_init_native(
                 }
                 // **按"已存在就换值"写** ✓：`dict.__init__` 是 update 语义 ✓
                 //（对**已有内容的字典**再 `__init__` 不该长出重复键 ✓）。
-                dict_put_owned(instance, target, key, value);
+                dict_put_owned(instance, target, key, value)?;
             }
         } else {
             let Some(items) = instance.iterable_items(source)? else {
@@ -927,7 +928,7 @@ pub fn dict_init_native(
                 }
                 // 同上 ✓：成对可迭代里的**重复键 ⇒ 后者覆盖** ✓（参照实测：
                 // `dict([("a",1),("a",2)])` ⇒ `{"a": 2}` ✓）。
-                dict_put_owned(instance, target, parts[0], parts[1]);
+                dict_put_owned(instance, target, parts[0], parts[1])?;
             }
         }
     }
@@ -945,7 +946,7 @@ pub fn dict_init_native(
         }
         instance.retain(*key);
         instance.retain(*value);
-        dict_put_owned(instance, target, *key, *value);
+        dict_put_owned(instance, target, *key, *value)?;
     }
     Ok(instance.retain(instance.singletons().none()))
 }

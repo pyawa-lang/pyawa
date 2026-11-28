@@ -20,6 +20,7 @@ fn advance_dedicated(
     instance: &Instance,
     iterator: NonNull<Header>,
     opcode: u8,
+    depth: usize,
 ) -> Option<Result<Option<NonNull<Header>>, ExecError>> {
     // SAFETY: iterator 是存活对象（调用方已确认是迭代器）✓。
     let ty = unsafe { iterator.as_ref() }.ty();
@@ -41,7 +42,7 @@ fn advance_dedicated(
     if instance.hot_type_is(HotId::Islice, ty)
         || instance.hot_type_is(HotId::RangeIterator, ty)
         || instance.hot_type_is(HotId::LongRangeIterator, ty) {
-        return Some(advance_islice(instance, iterator, opcode));
+        return Some(advance_islice(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Product, ty) {
         return Some(advance_product(instance, iterator, opcode));
@@ -50,56 +51,73 @@ fn advance_dedicated(
         return Some(advance_permutations(instance, iterator, opcode));
     }
     if instance.hot_type_is(HotId::Compress, ty) {
-        return Some(advance_compress(instance, iterator, opcode));
+        return Some(advance_compress(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Combinations, ty)
         || instance.hot_type_is(HotId::CombinationsWithReplacement, ty) {
         return Some(advance_combinations(instance, iterator, opcode));
     }
     if instance.hot_type_is(HotId::Zip, ty) {
-        return Some(advance_zip(instance, iterator, opcode));
+        return Some(advance_zip(instance, iterator, opcode, depth));
     }
     // **内建 `map`／`filter`**（`P3-41` round 41）：参照里它们是**惰性迭代器** ✓。
     if instance.hot_type_is(HotId::Map, ty) {
-        return Some(advance_map(instance, iterator, opcode));
+        return Some(advance_map(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Filter, ty) {
-        return Some(advance_filter(instance, iterator, opcode));
+        return Some(advance_filter(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::ZipLongest, ty) {
-        return Some(advance_zip_longest(instance, iterator, opcode));
+        return Some(advance_zip_longest(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Pairwise, ty) {
-        return Some(advance_pairwise(instance, iterator, opcode));
+        return Some(advance_pairwise(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Batched, ty) {
-        return Some(advance_batched(instance, iterator, opcode));
+        return Some(advance_batched(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Cycle, ty) {
-        return Some(advance_cycle(instance, iterator, opcode));
+        return Some(advance_cycle(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Accumulate, ty) {
-        return Some(advance_accumulate(instance, iterator, opcode));
+        return Some(advance_accumulate(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Starmap, ty) {
-        return Some(advance_starmap(instance, iterator, opcode));
+        return Some(advance_starmap(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Takewhile, ty)
         || instance.hot_type_is(HotId::Dropwhile, ty)
         || instance.hot_type_is(HotId::Filterfalse, ty) {
-        return Some(advance_takewhile(instance, iterator, opcode));
+        return Some(advance_takewhile(instance, iterator, opcode, depth));
     }
     if instance.hot_type_is(HotId::Chain, ty) {
-        return Some(advance_chain(instance, iterator, opcode));
+        return Some(advance_chain(instance, iterator, opcode, depth));
     }
     None
 }
 
+#[inline]
 pub(crate) fn advance_iterator(
     instance: &Instance,
     iterator: NonNull<Header>,
     opcode: u8,
 ) -> Result<Option<NonNull<Header>>, ExecError> {
+    advance_iterator_at(instance, iterator, opcode, 0)
+}
+
+/// 带**原生递归深度**的迭代器推进（内建迭代器链／trampoline 之前；A-0）。
+///
+/// 嵌套内建迭代器（`map(map(...))`、`zip`、`islice` 等）靠本函数递归推进；超过
+/// `recursion_limit` ⇒ 可捕获 `RecursionError`（不再让原生栈溢出 abort）。
+fn advance_iterator_at(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+    depth: usize,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    if depth > instance.recursion_limit() {
+        return Err(crate::executor::native_recursion_error(instance));
+    }
     // SAFETY: iterator 是存活对象。
     let ty = unsafe { iterator.as_ref() }.ty();
     if !is_iterator_type(instance, ty) {
@@ -160,11 +178,11 @@ pub(crate) fn advance_iterator(
     if instance.hot_type_is(HotId::RangeIterator, ty)
         || instance.hot_type_is(HotId::LongRangeIterator, ty)
     {
-        return advance_islice(instance, iterator, opcode);
+        return advance_islice(instance, iterator, opcode, depth);
     }
     // **专用分支过滤**（round 145 性能）：普通迭代器一次哈希查就跳过整条链 ✓。
     if instance.is_dedicated_iterator_type(ty) {
-        if let Some(result) = advance_dedicated(instance, iterator, opcode) {
+        if let Some(result) = advance_dedicated(instance, iterator, opcode, depth) {
             return result;
         }
     }
@@ -230,10 +248,17 @@ pub(crate) fn advance_iterator(
             release(instance, result);
             return Ok(None);
         }
-        if crate::executor::values_equal_public(instance, result, sentinel) {
-            release(instance, result);
-            object.set_exhausted();
-            return Ok(None);
+        match crate::executor::values_equal_public(instance, result, sentinel) {
+            Ok(true) => {
+                release(instance, result);
+                object.set_exhausted();
+                return Ok(None);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                release(instance, result);
+                return Err(error);
+            }
         }
         return Ok(Some(result));
     }
@@ -385,7 +410,7 @@ fn advance_repeat(instance: &Instance, iterator: NonNull<Header>, opcode: u8) ->
 }
 
 /// `islice` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_islice(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_islice(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -413,7 +438,7 @@ fn advance_islice(instance: &Instance, iterator: NonNull<Header>, opcode: u8) ->
                 return Ok(None);
             }
             // 从内层取一个：内层耗尽也 ⇒ 耗尽（短输入照参照）
-            let Some(item) = advance_iterator(instance, inner, opcode)? else {
+            let Some(item) = advance_iterator_at(instance, inner, opcode, depth + 1)? else {
                 return Ok(None);
             };
             let position = position + 1;
@@ -660,7 +685,7 @@ fn advance_permutations(instance: &Instance, iterator: NonNull<Header>, opcode: 
 }
 
 /// `compress` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_compress(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_compress(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -676,10 +701,10 @@ fn advance_compress(instance: &Instance, iterator: NonNull<Header>, opcode: u8) 
         };
         loop {
             // 选择器或数据任一先尽 ⇒ 结束（实测短选择器就停）
-            let Some(selector) = advance_iterator(instance, selectors, opcode)? else {
+            let Some(selector) = advance_iterator_at(instance, selectors, opcode, depth + 1)? else {
                 return Ok(None);
             };
-            let Some(item) = advance_iterator(instance, data, opcode)? else {
+            let Some(item) = advance_iterator_at(instance, data, opcode, depth + 1)? else {
                 release(instance, selector);
                 return Ok(None);
             };
@@ -820,7 +845,7 @@ fn advance_combinations(instance: &Instance, iterator: NonNull<Header>, opcode: 
 }
 
 /// `zip` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_zip(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_zip(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // **`zip` 取最短** ✓（第 229 轮）：与 `zip_longest` 同一份载荷 ✓ ⇒ 区别只在"**缺项就收摊**" ✓。
         // SAFETY: 类型身份刚确认。
         let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
@@ -836,7 +861,7 @@ fn advance_zip(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Re
         let mut row: Vec<NonNull<Header>> = Vec::with_capacity(list.len());
         for index in 0..list.len() {
             let inner = list.item(index).expect("下标在范围内");
-            match advance_iterator(instance, inner, opcode)? {
+            match advance_iterator_at(instance, inner, opcode, depth + 1)? {
                 Some(item) => row.push(item),
                 None => {
                     // **取最短** ✓：有一个到头 ⇒ 本轮已取的**都归还** ✓、整个迭代器收摊 ✓。
@@ -858,6 +883,7 @@ fn advance_map(
     instance: &Instance,
     iterator: NonNull<Header>,
     opcode: u8,
+    depth: usize,
 ) -> Result<Option<NonNull<Header>>, ExecError> {
     // SAFETY: 类型身份刚确认。
     let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
@@ -880,7 +906,7 @@ fn advance_map(
     let mut row: Vec<NonNull<Header>> = Vec::with_capacity(list.len());
     for index in 0..list.len() {
         let inner = list.item(index).expect("下标在范围内");
-        match advance_iterator(instance, inner, opcode)? {
+        match advance_iterator_at(instance, inner, opcode, depth + 1)? {
             Some(item) => row.push(item),
             None => {
                 for item in row {
@@ -908,6 +934,7 @@ fn advance_filter(
     instance: &Instance,
     iterator: NonNull<Header>,
     opcode: u8,
+    depth: usize,
 ) -> Result<Option<NonNull<Header>>, ExecError> {
     // SAFETY: 类型身份刚确认。
     let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
@@ -918,7 +945,7 @@ fn advance_filter(
         });
     };
     loop {
-        let Some(item) = advance_iterator(instance, inner, opcode)? else {
+        let Some(item) = advance_iterator_at(instance, inner, opcode, depth + 1)? else {
             return Ok(None);
         };
         // **真值判定与"让出那份引用"是两件事**（round 88 真 bug 修 ✗）：先前 `predicate is None`
@@ -965,7 +992,7 @@ fn advance_filter(
 }
 
 /// `zip_longest` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_zip_longest(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_zip_longest(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -993,7 +1020,7 @@ fn advance_zip_longest(instance: &Instance, iterator: NonNull<Header>, opcode: u
         let mut any = false;
         for index in 0..list.len() {
             let inner = list.item(index).expect("下标在范围内");
-            match advance_iterator(instance, inner, opcode)? {
+            match advance_iterator_at(instance, inner, opcode, depth + 1)? {
                 Some(item) => {
                     any = true;
                     items.push(Some(item));
@@ -1023,7 +1050,7 @@ fn advance_zip_longest(instance: &Instance, iterator: NonNull<Header>, opcode: u
 }
 
 /// `pairwise` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_pairwise(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_pairwise(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1039,7 +1066,7 @@ fn advance_pairwise(instance: &Instance, iterator: NonNull<Header>, opcode: u8) 
                     what: "pairwise 的状态不对",
                 });
             };
-            let Some(item) = advance_iterator(instance, inner, opcode)? else {
+            let Some(item) = advance_iterator_at(instance, inner, opcode, depth + 1)? else {
                 // 内层耗尽：上一项那份引用随迭代器一起放着（等 `clear`）
                 return Ok(None);
             };
@@ -1073,7 +1100,7 @@ fn advance_pairwise(instance: &Instance, iterator: NonNull<Header>, opcode: u8) 
 }
 
 /// `batched` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_batched(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_batched(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1092,7 +1119,7 @@ fn advance_batched(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -
         }
         let mut batch: Vec<NonNull<Header>> = Vec::with_capacity(size as usize);
         while (batch.len() as i64) < size {
-            match advance_iterator(instance, inner, opcode)? {
+            match advance_iterator_at(instance, inner, opcode, depth + 1)? {
                 Some(item) => batch.push(item),
                 None => {
                     state.set_kind(crate::builtin_objects::ItStateKind::Batched {
@@ -1112,7 +1139,7 @@ fn advance_batched(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -
 }
 
 /// `cycle` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_cycle(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_cycle(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1134,7 +1161,7 @@ fn advance_cycle(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> 
             };
             if filling {
                 // 还在从内层取：取到就**边取边缓存**（惰性，实测如此）
-                match advance_iterator(instance, inner, opcode)? {
+                match advance_iterator_at(instance, inner, opcode, depth + 1)? {
                     Some(item) => {
                         // 缓存接手一份引用（`ListObject::append` 的约定），返回值自己那份
                         // SAFETY: item 是存活对象。
@@ -1175,7 +1202,7 @@ fn advance_cycle(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> 
 }
 
 /// `accumulate` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_accumulate(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_accumulate(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1193,7 +1220,7 @@ fn advance_accumulate(instance: &Instance, iterator: NonNull<Header>, opcode: u8
                 what: "accumulate 的状态不对",
             });
         };
-        let Some(item) = advance_iterator(instance, inner, opcode)? else {
+        let Some(item) = advance_iterator_at(instance, inner, opcode, depth + 1)? else {
             return Ok(None);
         };
         let Some(previous) = total else {
@@ -1230,7 +1257,7 @@ fn advance_accumulate(instance: &Instance, iterator: NonNull<Header>, opcode: u8
 }
 
 /// `starmap` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_starmap(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_starmap(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1243,7 +1270,7 @@ fn advance_starmap(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -
                 what: "starmap 的状态不对",
             });
         };
-        let Some(item) = advance_iterator(instance, inner, opcode)? else {
+        let Some(item) = advance_iterator_at(instance, inner, opcode, depth + 1)? else {
             return Ok(None);
         };
         // 元素要能**展开**成实参：本层认 tuple 与 list（实测 `starmap(pow, [1])` ⇒
@@ -1281,7 +1308,7 @@ fn advance_starmap(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -
 }
 
 /// `takewhile` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_takewhile(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_takewhile(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1305,7 +1332,7 @@ fn advance_takewhile(instance: &Instance, iterator: NonNull<Header>, opcode: u8)
             if mode == 0 && flag {
                 return Ok(None);
             }
-            let Some(item) = advance_iterator(instance, inner, opcode)? else {
+            let Some(item) = advance_iterator_at(instance, inner, opcode, depth + 1)? else {
                 return Ok(None);
             };
             // 谓词走**普通调用**（`OM-11` 的 call 槽；异常照上抛）
@@ -1370,7 +1397,7 @@ fn advance_takewhile(instance: &Instance, iterator: NonNull<Header>, opcode: u8)
 }
 
 /// `chain` 的推进分支（从 `advance_iterator` 原样搬来）。
-fn advance_chain(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> Result<Option<NonNull<Header>>, ExecError> {
+fn advance_chain(instance: &Instance, iterator: NonNull<Header>, opcode: u8, depth: usize) -> Result<Option<NonNull<Header>>, ExecError> {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1385,7 +1412,7 @@ fn advance_chain(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> 
                 });
             };
             if let Some(inner) = current {
-                if let Some(item) = advance_iterator(instance, inner, opcode)? {
+                if let Some(item) = advance_iterator_at(instance, inner, opcode, depth + 1)? {
                     return Ok(Some(item));
                 }
                 // 内层用完 ⇒ 放掉它，换下一个（`None` 那份引用归本迭代器，这里归还）
@@ -1396,7 +1423,7 @@ fn advance_chain(instance: &Instance, iterator: NonNull<Header>, opcode: u8) -> 
                 });
                 continue;
             }
-            let Some(next_iterable) = advance_iterator(instance, outer, opcode)? else {
+            let Some(next_iterable) = advance_iterator_at(instance, outer, opcode, depth + 1)? else {
                 return Ok(None);
             };
             // 元素必须是可迭代：`iter_value` 借用入参、返回新引用；不是可迭代就按实测消息报错

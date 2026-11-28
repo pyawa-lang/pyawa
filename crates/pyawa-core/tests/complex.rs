@@ -266,13 +266,13 @@ fn comparisons_match_the_reference() {
     let text = vm.instance.new_str("x");
 
     // 相等：复数升到复数塔比 ✓
-    assert!(values_equal_public(&vm.instance, one_zero, one));
-    assert!(values_equal_public(&vm.instance, one_zero, one_float));
-    assert!(values_equal_public(&vm.instance, one_zero, truth));
-    assert!(values_equal_public(&vm.instance, one_two, complex(&vm, 1.0, 2.0)));
-    assert!(!values_equal_public(&vm.instance, one_two, one));
-    assert!(!values_equal_public(&vm.instance, one_zero, one_two));
-    assert!(!values_equal_public(&vm.instance, one_two, text));
+    assert!(values_equal_public(&vm.instance, one_zero, one).expect("值比较不该失败"));
+    assert!(values_equal_public(&vm.instance, one_zero, one_float).expect("值比较不该失败"));
+    assert!(values_equal_public(&vm.instance, one_zero, truth).expect("值比较不该失败"));
+    assert!(values_equal_public(&vm.instance, one_two, complex(&vm, 1.0, 2.0)).expect("值比较不该失败"));
+    assert!(!values_equal_public(&vm.instance, one_two, one).expect("值比较不该失败"));
+    assert!(!values_equal_public(&vm.instance, one_zero, one_two).expect("值比较不该失败"));
+    assert!(!values_equal_public(&vm.instance, one_two, text).expect("值比较不该失败"));
 
     // 排序：参照的 TypeError 文案（左右类型名都照实）✓
     for (symbol, expected) in [

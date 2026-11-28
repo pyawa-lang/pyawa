@@ -94,7 +94,7 @@ fn remove_dead_weakref_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     if let (Some(mapping), Some(key)) = (args.first().copied(), args.get(1).copied()) {
-        instance.dict_remove_key(mapping, key);
+        instance.dict_remove_key(mapping, key)?;
     }
     Ok(instance.retain(instance.singletons().none()))
 }

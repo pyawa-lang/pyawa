@@ -70,11 +70,11 @@ fn ordering_on_wtf8_is_safe() {
     }
     // `order_of`（sorted/min/max/list.sort 的同一处真相）也不 panic ✓
     assert_eq!(
-        instance.order_of(a, object),
+        instance.order_of(a, object).expect("order_of 不该失败"),
         Some(core::cmp::Ordering::Less)
     );
     assert_eq!(
-        instance.order_of(object, a),
+        instance.order_of(object, a).expect("order_of 不该失败"),
         Some(core::cmp::Ordering::Greater)
     );
 }

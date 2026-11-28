@@ -251,7 +251,7 @@ fn comparison_matches_the_reference() {
                 .unwrap_or_else(|error| panic!("{symbol} 应当可比：{error:?}"));
             assert_eq!(observed, row.key(field).as_bool(), "{symbol} 与参照不一致");
         }
-        let equal = values_equal_public(&vm.instance, left, right);
+        let equal = values_equal_public(&vm.instance, left, right).expect("值比较不该失败");
         assert_eq!(equal, row.key("eq").as_bool(), "== 与参照不一致");
         assert_eq!(!equal, row.key("ne").as_bool(), "!= 与参照不一致");
     }

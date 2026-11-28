@@ -713,7 +713,7 @@ fn inplace_set_operation(
         // ⇒ 每项先 `retain` 再交给 `SetObject` 持有 ✓（`OM-16`）。
         for item in right_items {
             let known = left_set
-                .position_of(|candidate| values_equal_public(instance, candidate, item))
+                .position_of_checked(|candidate| values_equal_public(instance, candidate, item))?
                 .is_some();
             if !known {
                 instance.retain(item);
@@ -724,7 +724,7 @@ fn inplace_set_operation(
         // **交／差／对称差**：先按**基运算**算出新集合（**一处真相**：`set_operation` ✓，
         // 它照参照给一个**自有引用**的新 `set` ✓），再把 `left` 的内容**整体换掉** ✓ ——
         // 这样 `&= s`／`^= s` 这类自身别名也安全（两边都读完之后才动 `left` ✓）。
-        let fresh = set_operation(instance, left, right, symbol);
+        let fresh = set_operation(instance, left, right, symbol)?;
         let fresh_items = instance.set_items(fresh).expect("刚由 set_operation 造出的 set");
         // 清空 `left`：每个元素那份引用由本对象持有 ⇒ 归还引擎 ✓（照 `OM-20` 的纪律）。
         while let Some(removed) = left_set.remove(0) {
@@ -754,10 +754,10 @@ fn dict_put_owned(
     mapping: NonNull<Header>,
     key: NonNull<Header>,
     value: NonNull<Header>,
-) {
+) -> Result<(), ExecError> {
     // SAFETY: 调用方保证 mapping 是本实例的 dict。
     let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-    match crate::builtin::dict::dict_position(instance, mapping, key) {
+    match crate::builtin::dict::dict_position(instance, mapping, key)? {
         Some(index) => {
             if let Some(old) = object.set_value_at(index, value) {
                 // SAFETY: 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓。
@@ -769,6 +769,7 @@ fn dict_put_owned(
         }
         None => object.insert_raw(key, value),
     }
+    Ok(())
 }
 
 /// **`dict` 的 `|=`**（`NB_INPLACE_OR`）：就地并入，返回时**同一个对象** ✓（参照：`d is d_old` ✓）。
@@ -819,7 +820,7 @@ fn inplace_dict_merge(
                 }
             };
             // key／value 两份引用都转交出去 ✓。
-            dict_put_owned(instance, left, *key, value);
+            dict_put_owned(instance, left, *key, value)?;
         }
         // SAFETY: keys 是本函数刚拿到的新引用。
         unsafe { instance.release_object(keys.as_ptr()) };
@@ -1260,13 +1261,27 @@ pub(crate) fn has_custom_eq(instance: &Instance, value: NonNull<Header>) -> bool
         .is_some_and(|found| Some(found) != object_eq)
 }
 
+#[inline]
 pub(crate) fn equality_public(
     instance: &Instance,
     left: NonNull<Header>,
     right: NonNull<Header>,
 ) -> Result<bool, ExecError> {
+    equality_public_at(instance, left, right, 0)
+}
+
+/// 带**原生递归深度**的 [`equality_public`]（容器逐元素比较；A-0）。
+fn equality_public_at(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    depth: usize,
+) -> Result<bool, ExecError> {
     if left == right {
         return Ok(true);
+    }
+    if depth > instance.recursion_limit() {
+        return Err(crate::executor::native_recursion_error(instance));
     }
     let left_ty = instance.type_of(left);
     let right_ty = instance.type_of(right);
@@ -1308,7 +1323,7 @@ pub(crate) fn equality_public(
                     instance.incref_object(first.as_ptr());
                     instance.incref_object(second.as_ptr());
                 }
-                let verdict = equality_public(instance, first, second);
+                let verdict = equality_public_at(instance, first, second, depth + 1);
                 unsafe {
                     instance.release_object(first.as_ptr());
                     instance.release_object(second.as_ptr());
@@ -1342,7 +1357,7 @@ pub(crate) fn equality_public(
             }
             let mut answer = Ok(true);
             for (first, second) in &retained {
-                match equality_public(instance, *first, *second) {
+                match equality_public_at(instance, *first, *second, depth + 1) {
                     Ok(true) => {}
                     Ok(false) => {
                         answer = Ok(false);
@@ -1405,17 +1420,21 @@ pub(crate) fn equality_public(
                             };
                             dict.entry(position).map(|(_, value)| value)
                         }
-                        None => b
-                            .iter()
-                            .find(|(other_key, _)| {
-                                values_equal_public(instance, *key, *other_key)
-                            })
-                            .map(|(_, value)| *value),
+                        None => {
+                            let mut found = None;
+                            for (other_key, other_value) in b.iter() {
+                                if values_equal_public(instance, *key, *other_key)? {
+                                    found = Some(*other_value);
+                                    break;
+                                }
+                            }
+                            found
+                        }
                     };
                     let Some(other_value) = other_value else {
                         return Ok(false);
                     };
-                    if !equality_public(instance, *value, other_value)? {
+                    if !equality_public_at(instance, *value, other_value, depth + 1)? {
                         return Ok(false);
                     }
                 }
@@ -1445,7 +1464,7 @@ pub(crate) fn equality_public(
             return Ok(verdict);
         }
     }
-    Ok(values_equal_public(instance, left, right))
+    values_equal_public(instance, left, right)
 }
 
 pub fn compare_public(
@@ -1530,13 +1549,28 @@ pub fn compare_public(
     // ⇒ 先前只有**标量**那一支 ✗ ⇒ 报 `TypeError: '<=' not supported between instances of 'set' and 'set'` ✗。
     // 口径与参照一致 ✓：`<=` 子集、`<` 真子集、`>=` 超集、`>` 真超集、`==` 两边互相包含 ✓、`!=` 取反 ✓。
     if let (Some(left_items), Some(right_items)) = (set_items_of(instance, left), set_items_of(instance, right)) {
-        let contains = |haystack: &[NonNull<Header>], needle: NonNull<Header>| {
-            haystack
-                .iter()
-                .any(|other| values_equal_public(instance, needle, *other))
+        let contains = |haystack: &[NonNull<Header>], needle: NonNull<Header>| -> Result<bool, ExecError> {
+            for other in haystack {
+                if values_equal_public(instance, needle, *other)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         };
-        let left_subset = left_items.iter().all(|item| contains(&right_items, *item));
-        let right_subset = right_items.iter().all(|item| contains(&left_items, *item));
+        let mut left_subset = true;
+        for item in &left_items {
+            if !contains(&right_items, *item)? {
+                left_subset = false;
+                break;
+            }
+        }
+        let mut right_subset = true;
+        for item in &right_items {
+            if !contains(&left_items, *item)? {
+                right_subset = false;
+                break;
+            }
+        }
         return match symbol {
             "==" => Ok(left_subset && right_subset),
             "!=" => Ok(!(left_subset && right_subset)),
@@ -1597,7 +1631,7 @@ pub fn compare_public(
                     instance.incref_object(first.as_ptr());
                     instance.incref_object(second.as_ptr());
                 }
-                let equal = values_equal_public(instance, first, second);
+                let equal = values_equal_public(instance, first, second)?;
                 let outcome = if equal {
                     Ok(None)
                 } else {
