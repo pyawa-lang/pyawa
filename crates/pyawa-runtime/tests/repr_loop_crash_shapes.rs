@@ -2,12 +2,12 @@
 //!
 //! ① **深嵌套容器的 `repr`**：`Lib/test/mapping_tests.py::test_repr_deep`（`test_frame`
 //!    的 `FrameLocalsProxyMappingTests` 走它 ✓）先建 `support.exceeds_recursion_limit()` ＝
-//!    **150,000** 层嵌套 `dict`，再断言 `repr` 报 `RecursionError` ✓。本层的 `repr` 是原生递归，
-//!    额度＝原生递归预算（`OM-11`，与参照的 `Py_EnterRecursiveCall` 同口径）⇒ 超限报
-//!    `RecursionError`、不中止 ✓。
-//!    **`D1`（round 289）**：CLI 在 512 MiB 线程里声明 `PYAWA_NATIVE_DEPTH=1000` ⇒ 200 层深容器
-//!    `repr` 与参照一样**成功**；150,000 层仍在额度处报可捕获 `RecursionError`（进程不中止）。
-//!    ABI／嵌入／wasm 未声明预算 ⇒ 默认 64（与参照的差异收窄为"未声明预算的宿主"，见 `DIV-11`）。
+//!    **150,000** 层嵌套 `dict`，再断言 `repr` 报 `RecursionError` ✓。
+//!    **A-1（round 292）**：内建容器 `repr` 已改**堆上显式 worklist**（不再彼此 Rust 递归）
+//!    ⇒ 深度口径＝语义额度 `recursion_limit`（默认 1000；`setrecursionlimit` 可到 10000），
+//!    200 层深容器与参照一样**成功**、150,000 层在额度处报可捕获 `RecursionError`（进程不中止）。
+//!    ABI／嵌入／wasm 这类**未声明原生预算**的宿主现在也按同一语义额度走（见
+//!    `repr_worklist_shapes.rs`）；用户 `__repr__` 回调的原生栈仍受 `D1`（round 289）守。
 //!
 //! ② **`for` 体末尾 `if …: break` 前面还夹着 `try`** ✗：`try` 的余部重放会让末尾那条 `if`
 //!    走**非反转**形态（不回发回边 ✗），而循环臂按"末尾 if 会代发回边"**让位** ✗ ⇒ 整段
@@ -38,8 +38,8 @@ fn run(name: &str, script: &str) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// 深嵌套 `dict`／`list`／`tuple`／`frozenset` 的 `repr`：CLI 声明原生预算 1000 ⇒ 200 层**成功**；
-/// 150,000 层（参照 `exceeds_recursion_limit()` 口径）仍 `RecursionError`、进程不中止。
+/// 深嵌套 `dict`／`list`／`tuple`／`frozenset` 的 `repr`（A-1 后走堆上 worklist）：
+/// 200 层**成功**；150,000 层（参照 `exceeds_recursion_limit()` 口径）仍 `RecursionError`、进程不中止。
 const DEEP_REPR_SCRIPT: &str = r#"d = {}
 for _ in range(200):
     previous = d

@@ -1020,35 +1020,15 @@ pub unsafe fn list_new(
     )
 }
 /// `list` 的 `repr`：`[a, b]`；自引用给 `[...]`（实测）。
+///
+/// **A-1（round 292）起**：实际生成在 [`crate::builtin_objects::repr_worklist`] 的显式 worklist 里
+/// （嵌套容器不再彼此 Rust 递归）；活体遍历／元素持引用／守卫语义都搬在那里（同一个入口）。
 pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<ListObject>() };
-    // `P3-41`：自引用 ⇒ `[...]`；嵌套太深 ⇒ `RecursionError`（**不得**顶穿原生栈 ✗）；
-    // 守卫用 RAII 摘除（任何提前 `?` 返回都不留脏条目）。
-    let _guard = match instance.enter_repr(ptr as usize) {
-        crate::instance::ReprEntry::Cycle => return Ok("[...]".to_owned()),
-        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
-        crate::instance::ReprEntry::Entered(scope) => scope,
-    };
-    // **活体遍历**（round 110 真 bug 修 ✗）：元素的 `__repr__` 可能**改表**（`test_list.test_repr_mutate`
-    // 的元素会 `mylist.pop()` ✓）—— 参照 `list_repr` 每轮重读 `Py_SIZE` ✓、且比较期间元素要自己持一份 ✓；
-    // 先前借 `object.items()` 快照（无引用）✗ ⇒ 元素被 pop 释放后 `element_repr` 读悬垂指针 ✗
-    //（实测 68 GB 分配失败 abort ✗）。
-    let mut text = String::from("[");
-    let mut index = 0usize;
-    while index < object.len() {
-        let item = object.item(index).expect("刚查过长度，下标在范围内");
-        // SAFETY: 元素由列表持有；`__repr__` 期间本函数自己持一份 ✓。
-        unsafe { instance.incref_object(item.as_ptr()) };
-        if index > 0 {
-            text.push_str(", ");
-        }
-        let rendered = crate::executor::protocol::element_repr(instance, item);
-        // SAFETY: 归还本函数那一份。
-        unsafe { instance.release_object(item.as_ptr()) };
-        text.push_str(&rendered?);
-        index += 1;
-    }
-    text.push(']');
-    Ok(text)
+    // SAFETY: 槽位契约 ⇒ ptr 指向本类型的存活对象。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    crate::builtin_objects::repr_worklist::container_repr(
+        instance,
+        object,
+        crate::builtin_objects::repr_worklist::ContainerKind::List,
+    )
 }

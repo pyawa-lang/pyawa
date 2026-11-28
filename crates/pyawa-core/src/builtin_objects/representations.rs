@@ -49,30 +49,17 @@ pub unsafe fn str_str(ptr: *mut Header, _instance: &Instance) -> Result<String, 
 
 
 /// `tuple` 的 `repr`：空是 `()`、单个是 `(x,)`（实测）。
+///
+/// **A-1（round 292）起**：实际生成在 [`crate::builtin_objects::repr_worklist`] 的显式 worklist 里
+/// （嵌套容器不再彼此 Rust 递归；单元素逗号／循环标记在原处复刻）。
 pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<TupleObject>() };
-    // `P3-41`：自引用 ⇒ `(...)`；嵌套太深 ⇒ `RecursionError`；守卫 RAII 摘除。
-    let _guard = match instance.enter_repr(ptr as usize) {
-        crate::instance::ReprEntry::Cycle => return Ok("(...)".to_owned()),
-        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
-        crate::instance::ReprEntry::Entered(scope) => scope,
-    };
-    let mut text = String::from("(");
-    for index in 0..object.len() {
-        if index > 0 {
-            text.push_str(", ");
-        }
-        text.push_str(&crate::executor::protocol::element_repr(
-            instance,
-            object.item(index).expect("下标在范围内"),
-        )?);
-    }
-    if object.len() == 1 {
-        text.push(',');
-    }
-    text.push(')');
-    Ok(text)
+    // SAFETY: 槽位契约 ⇒ ptr 指向本类型的存活对象。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    crate::builtin_objects::repr_worklist::container_repr(
+        instance,
+        object,
+        crate::builtin_objects::repr_worklist::ContainerKind::Tuple,
+    )
 }
 
 /// **`tuple` 的方法面** ✓（第 413 轮，task-26 ② ✓）：`count`／`index`。
@@ -251,26 +238,17 @@ pub unsafe fn tuple_index_native(
 }
 
 /// `dict` 的 `repr`：`{k: v}`；自引用给 `{'k': {...}}`（实测）。
+///
+/// **A-1（round 292）起**：实际生成在 [`crate::builtin_objects::repr_worklist`] 的显式 worklist 里
+/// （`k` 与 `v` 分两步压帧 ⇒ 深层嵌套字典不再吃原生栈；`mappingproxy` 也复用这个槽入口）。
 pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<DictObject>() };
-    // `P3-41`：自引用 ⇒ `{...}`；嵌套太深 ⇒ `RecursionError`；守卫 RAII 摘除。
-    let _guard = match instance.enter_repr(ptr as usize) {
-        crate::instance::ReprEntry::Cycle => return Ok("{...}".to_owned()),
-        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
-        crate::instance::ReprEntry::Entered(scope) => scope,
-    };
-    let mut text = String::from("{");
-    for (index, (key, value)) in object.entries().into_iter().enumerate() {
-        if index > 0 {
-            text.push_str(", ");
-        }
-        text.push_str(&crate::executor::protocol::element_repr(instance, key)?);
-        text.push_str(": ");
-        text.push_str(&crate::executor::protocol::element_repr(instance, value)?);
-    }
-    text.push('}');
-    Ok(text)
+    // SAFETY: 槽位契约 ⇒ ptr 指向本类型的存活对象（`mappingproxy` 载荷同构）。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    crate::builtin_objects::repr_worklist::container_repr(
+        instance,
+        object,
+        crate::builtin_objects::repr_worklist::ContainerKind::Dict,
+    )
 }
 
 /// 类型对象的 `repr`：`<class 'int'>`（实测）。
