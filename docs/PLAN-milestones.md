@@ -627,6 +627,12 @@ os **1/1**；首跑暴露的 CRLF 问题已由 `ee2c809e` 的 universal-newlines
 `MAX_NATIVE_DEPTH`／`MAX_CALL_DEPTH`，A（原生→脚本显式帧栈）未做。
 正文归档：`docs/rounds/04-post-m6-01.md` 的 round 288／289 节。
 
+**round 290（编译期栈守卫）**：parser/emitter 仍是 Rust 递归，深嵌套源码此前在 debug CLI 实测
+`stack overflow, aborting`（参照抛 `MemoryError: Parser stack overflowed - Python source too complex
+to parse`）。已加**实际栈用量预算**（`PYAWA_PARSE_STACK`；默认 512 KiB，CLI／对拍 64 MiB），
+parser 递归入口（表达式/一元/原子/语句/模式）超预算即报同文案 `CompileError::Memory`（
+`DIV-15`），不再撞穿原生栈。
+
 ### 12.23 Windows 原生 CLI：**已落地（2026-11-17，选项 A）**
 
 **现状**：`crates/pyawa-runtime/src/bin/pyawa.rs` 依赖**真实能力域 provider**（`fs`／`clock`／`net` 的

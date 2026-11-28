@@ -80,6 +80,7 @@ pub(crate) fn try_parse_match(
 
 /// **一个模式**（第 290 轮，最小面）：`或` 在最外层 ✓（`case "a" | "b":`）。
 pub(crate) fn parse_pattern(lexed: &Lexed, cursor: usize) -> Result<(Pattern, usize), CompileError> {
+    lexed.check_parse_stack()?;
     let (first, mut at) = parse_pattern_primary(lexed, cursor)?;
     let mut alternatives: Vec<Pattern> = vec![first];
     while lexed.lexemes.get(at) == Some(&Lexeme::Pipe) {

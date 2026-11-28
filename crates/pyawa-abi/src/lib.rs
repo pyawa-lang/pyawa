@@ -2543,6 +2543,12 @@ pub unsafe extern "C" fn pa_exec_string(
                 state.set_message(&message);
                 return status::PA_ERR_SYNTAX;
             }
+            // 编译期栈预算超限（深嵌套源码）：同样属 `AB-20` 的"编译期错误"档；消息是参照的
+            // `Parser stack overflowed - Python source too complex to parse` 文案。
+            Err(CompileError::Memory(message)) => {
+                state.set_message(&message);
+                return status::PA_ERR_SYNTAX;
+            }
         };
         let Some(frame_type) = state.instance.type_named("frame") else {
             state.set_message("引导期没有登记 frame 类型（内部缺陷）");

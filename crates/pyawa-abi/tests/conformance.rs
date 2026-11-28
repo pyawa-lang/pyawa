@@ -476,6 +476,8 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
     // **`D1`（round 289）**：对拍子进程用 64 MiB 大栈线程 ⇒ 声明原生回调预算 1000，
     // 与参照默认对齐（未声明时默认 64；见 `docs/RELEASE.md` 与 `DIV-11`）。
     command.env("PYAWA_NATIVE_DEPTH", "1000");
+    // 同理由：对拍子进程的 64 MiB 线程声明编译期栈预算 64 MiB（parser/emitter 递归守卫）。
+    command.env("PYAWA_PARSE_STACK", "67108864");
     let Some(output) = output_with_timeout(command, TIMEOUT) else {
         return Observation::timeout(case.probes.len());
     };

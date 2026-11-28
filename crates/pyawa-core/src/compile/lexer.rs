@@ -128,6 +128,46 @@ pub(super) struct Lexed {
     /// **只在括号深度 > 0 时记**（深度 0 的换行本来就是 `Newline` 词素 ✓）；纯 Python 模式
     /// 也照记，但只有扩展模式的 `lambda` 体读它 ⇒ `.py` 的解析与产物**逐字节不变**（`TS-5`）。
     pub(super) line_breaks: Vec<usize>,
+    /// **编译期栈预算**（parser/emitter 递归守卫；`PYAWA_PARSE_STACK`，默认 512 KiB）：
+    /// `stack_base` 是 `lex` 入口处的栈地址近似值（本轮之前没有更早的编译帧持有点）。
+    pub(super) stack_base: usize,
+    pub(super) stack_budget: usize,
+}
+
+/// 当前栈地址的近似值（`&局部变量` 即可）——只用于**相对**比较，不要求精确。
+fn stack_address() -> usize {
+    let marker = 0u8;
+    core::ptr::addr_of!(marker) as usize
+}
+
+/// 编译期栈预算（字节）：默认 512 KiB（小栈宿主也留余量）；`PYAWA_PARSE_STACK` 覆盖，
+/// 夹到 [64 KiB, 256 MiB]。CLI／对拍 harness 声明 64 MiB（512 MiB／64 MiB 线程）。
+fn parse_stack_budget() -> usize {
+    const DEFAULT: usize = 512 * 1024;
+    std::env::var("PYAWA_PARSE_STACK")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(64 * 1024, 256 * 1024 * 1024))
+        .unwrap_or(DEFAULT)
+}
+
+impl Lexed {
+    /// **编译期栈守卫**（parser 的递归下降入口调用）：已用栈超过预算 ⇒
+    /// `CompileError::Memory`（参照同文案的 `MemoryError`，不再撞穿原生栈）。
+    pub(super) fn check_parse_stack(&self) -> Result<(), CompileError> {
+        let here = stack_address();
+        let used = if self.stack_base > here {
+            self.stack_base - here
+        } else {
+            here - self.stack_base
+        };
+        if used > self.stack_budget {
+            return Err(CompileError::Memory(
+                "Parser stack overflowed - Python source too complex to parse".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// 解一个 `bytes` 字面量里的转义（`characters` 从**反斜杠**那一位开始）。
@@ -1354,7 +1394,14 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
     }
     lexemes.push(Lexeme::End);
     spans.push(end_span);
-    Ok(Lexed { lexemes, spans, mode, line_breaks })
+    Ok(Lexed {
+        lexemes,
+        spans,
+        mode,
+        line_breaks,
+        stack_base: stack_address(),
+        stack_budget: parse_stack_budget(),
+    })
 }
 
 // ---- 语法 ----

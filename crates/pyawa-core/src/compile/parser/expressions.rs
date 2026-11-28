@@ -224,6 +224,7 @@ pub(crate) fn parse_or_test(lexed: &Lexed, cursor: usize) -> Result<(Expression,
 
 /// 表达式入口（`or` 层；`BC-63` 的 `??` 在它**之下**）。
 pub(crate) fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    lexed.check_parse_stack()?;
     let (value, cursor) = parse_or_test(lexed, cursor)?;
     // **`BC-63` 空合并 `??`**：**低于 `or`／`and`**、**右结合**（`a ?? b ?? c` ＝ `a ?? (b ?? c)`）。
     // 「右结合」由"右侧递归回 `parse_expression`"实现；词法上是同一个 token 连写两枚 `?`。
@@ -414,6 +415,7 @@ pub(crate) fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
 
 /// 一元 `+`／`-`／`~`（Python 的 `factor`；它在 `**` **之上** ⇒ `-2 ** 2 == -4`）。
 pub(crate) fn parse_factor(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    lexed.check_parse_stack()?;
     let operator = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Minus) => UnaryOperator::Negative,
         Some(Lexeme::Plus) => UnaryOperator::Positive,
