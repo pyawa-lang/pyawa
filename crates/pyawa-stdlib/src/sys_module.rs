@@ -454,7 +454,7 @@ fn is_finalizing_native(
     Ok(instance.new_bool(false))
 }
 
-/// **`sys.getrecursionlimit()`** ✓（task-20 第 3 轮 ✓）：给当前**有效**上限 ✓（默认 64 ✓）。
+/// **`sys.getrecursionlimit()`**：给当前**有效**上限（默认 1000，`PLAN §12.22` S3 口径）。
 fn getrecursionlimit_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -470,8 +470,8 @@ fn getrecursionlimit_native(
     Ok(instance.new_int(instance.recursion_limit() as i64))
 }
 
-/// **`sys.setrecursionlimit(n)`** ✓（task-20 第 3 轮 ✓）：**只降不升** ✓（夹到 `MAX_CALL_DEPTH` ✓，
-/// 理由见那一处：本层 Python 调用吃原生栈 ✗）。回 `None` ✓。
+/// **`sys.setrecursionlimit(n)`**：**可升**（纯脚本递归只吃堆帧），夹到
+/// `MAX_SAFE_RECURSION_LIMIT`（10000；`PLAN §12.22` S3）。回 `None` ✓。
 /// `sys.displayhook(value)`：`None` 不打印；否则把 `repr(value)` 打印出来，并把 `builtins._`
 /// 置成该值（参照口径 ✓）。**经内建 `print`** ⇒ 与 `print` 同一条 `sys.stdout` 现取路径 ✓
 /// （doctest 把 `sys.stdout` 换成 `StringIO` 来捕获输出 ✓；round 51 修 ✗：先前直写 `fs` ⇒
@@ -1520,8 +1520,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         clear_type_descriptors_native,
     );
     instance.dict_set(namespace, "_clear_type_descriptors", clear_type_descriptors);
-    // **递归上限两口** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py` 一族要 `getrecursionlimit` ✓。
-    // **如实** ✗：`setrecursionlimit` **只降不升** ✓（有效上限受 `MAX_CALL_DEPTH` 夹住 ✓）。
+    // **递归上限两口**：`Lib/dataclasses.py` 一族要 `getrecursionlimit` ✓；`setrecursionlimit`
+    // **可升**、夹到 `MAX_SAFE_RECURSION_LIMIT`（`PLAN §12.22` S3）。
     let get_recursionlimit = make_native(instance, "getrecursionlimit", getrecursionlimit_native);
     instance.dict_set(namespace, "getrecursionlimit", get_recursionlimit);
     let set_recursionlimit = make_native(instance, "setrecursionlimit", setrecursionlimit_native);

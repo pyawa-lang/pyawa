@@ -468,10 +468,10 @@ impl Instance {
         self.deferred_call_target.set(target);
     }
 
-    /// **进入一层 `execute`**（原生递归记账；超 [`MAX_NATIVE_DEPTH`] ⇒ `false`）。
+    /// **进入一层 `execute`**（原生递归记账；超宿主声明预算 ⇒ `false`）。
     pub fn enter_native_execute(&self) -> bool {
         let depth = self.native_execute_depth.get();
-        if depth >= MAX_NATIVE_DEPTH {
+        if depth >= self.native_depth_limit() {
             return false;
         }
         self.native_execute_depth.set(depth + 1);

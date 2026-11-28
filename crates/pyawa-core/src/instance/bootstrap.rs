@@ -80,6 +80,17 @@ impl Instance {
             call_depth: Cell::new(0),
             deferred_call_target: Cell::new(None),
             native_execute_depth: Cell::new(0),
+            // **原生递归预算（`D1`，round 289）**：默认 `MAX_NATIVE_DEPTH=64`；宿主可用
+            // `PYAWA_NATIVE_DEPTH` 声明自己的栈预算（CLI 512 MiB 线程／对拍 64 MiB 线程声明 1000）。
+            // 夹到 [1, `MAX_SAFE_RECURSION_LIMIT`]，有效值再与 `recursion_limit` 取小。
+            native_depth_limit: Cell::new(
+                std::env::var("PYAWA_NATIVE_DEPTH")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .filter(|value| *value >= 1)
+                    .map(|value| value.min(crate::instance::MAX_SAFE_RECURSION_LIMIT))
+                    .unwrap_or(crate::instance::MAX_NATIVE_DEPTH),
+            ),
             // **默认深度上限的环境覆盖**（round 112）：本层上限低是因为每层 Python 调用吃不少
             // **原生栈** ✓ —— 宿主（`pyawa` CLI）可以给执行线程开大栈并用
             // `PYAWA_RECURSION_LIMIT` 提高上限 ✓（`pprint` 一族正常嵌套就要 30+ 层 ✓）；

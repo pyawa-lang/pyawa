@@ -614,8 +614,10 @@ os **1/1**；首跑暴露的 CRLF 问题已由 `ee2c809e` 的 universal-newlines
 **状态 ✓**：S1–S4 全部达成——① 回调深度守卫（统一 `call_depth` 覆盖内建→脚本路径＋专项测试）；
 ② **显式帧栈**（`execute` 驱动循环压帧／弹帧，脚本调用不吃原生栈；深递归 900 在 CLI／ABI／wasm
 三处通过）；③ 深度语义对齐参照（默认 **1000**、`setrecursionlimit` **可升**、安全上限 **10000**、
-超限可捕获 `RecursionError`）；④ wasm 小栈验证（`tests/wasm/e6_recursion.js` 进 CI）。`DIV-11`
-收窄为"原生回调路径 64 层守卫＋安全上限"；可见语义已补进 `SPEC-c-modules.md` §5.2.3。
+超限可捕获 `RecursionError`）；④ wasm 小栈验证（`tests/wasm/e6_recursion.js` 进 CI）。**`D1`（round 289）**：
+「内建→脚本」回调路径改为**宿主声明预算**（`PYAWA_NATIVE_DEPTH`：CLI 512 MiB 线程与对拍 harness
+声明 1000 ⇒ 与参照对齐；ABI／嵌入／wasm 未声明默认 64）⇒ `DIV-11` 收窄为"未声明预算的宿主"。
+可见语义见 round 289 台账与 `tests/conformance/divergences.md` 的 `DIV-11`。
 正文归档：`docs/rounds/04-post-m6-01.md` 的 12.22-调用栈收口 节。
 
 ### 12.23 Windows 原生 CLI：**已落地（2026-11-17，选项 A）**

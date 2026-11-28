@@ -81,13 +81,10 @@ impl Instance {
         if guard.contains(&address) {
             return ReprEntry::Cycle;
         }
-        // **原生递归**（`repr` 是 Rust 递归）单独用保守上限：脚本递归已改显式帧栈（默认 1000），
-        // 但原生路径还不能跟着放到 1000（8 MiB 栈会先崩）⇒ 取
-        // `min(recursion_limit, MAX_NATIVE_DEPTH)`（`PLAN §12.22` S2／S3 的边界）。
-        let native_limit = self
-            .recursion_limit
-            .get()
-            .min(crate::instance::MAX_NATIVE_DEPTH);
+        // **原生递归**（`repr` 是 Rust 递归）用宿主声明的预算（`D1`，round 289）：
+        // CLI／对拍 harness 声明 1000，ABI／嵌入／wasm 默认仍 64；有效值还与
+        // `recursion_limit` 取小（见 [`Instance::native_depth_limit`]）。
+        let native_limit = self.native_depth_limit();
         if guard.len() >= native_limit {
             return ReprEntry::TooDeep;
         }
@@ -138,14 +135,29 @@ impl Instance {
         self.recursion_limit.get()
     }
 
-    /// **`sys.setrecursionlimit(n)`** ✓：**只降不升** ✓（本层的 Python 调用吃原生栈 ✗ ——
-    /// 见 [`MAX_CALL_DEPTH`] 那段 ✓；调高会顶穿 ⇒ 如实夹住 ✓）。
+    /// **`sys.setrecursionlimit(n)`**：可升（纯脚本递归只吃堆帧），夹到 `MAX_SAFE_RECURSION_LIMIT`。
     pub fn set_recursion_limit(&self, value: usize) -> usize {
         // **S3 口径**：可升（纯脚本递归只吃堆帧），但夹到**安全上限**（超限如实夹住，不编造无限）。
         let clamped = value
             .min(crate::instance::MAX_SAFE_RECURSION_LIMIT)
             .max(1);
         self.recursion_limit.set(clamped);
+        clamped
+    }
+
+    /// **原生递归有效预算**（`D1`，round 289）：宿主声明值（`PYAWA_NATIVE_DEPTH`，默认
+    /// [`crate::instance::MAX_NATIVE_DEPTH`]）与 `recursion_limit` 取小 —— 原生路径不能比
+    /// 语义上限更宽。`enter_native_execute` 与 `repr` 守卫共用这一个口径。
+    pub fn native_depth_limit(&self) -> usize {
+        self.native_depth_limit.get().min(self.recursion_limit.get())
+    }
+
+    /// 宿主显式设原生预算（测试／宿主用）：夹到 [1, `MAX_SAFE_RECURSION_LIMIT`]。
+    pub fn set_native_depth_limit(&self, value: usize) -> usize {
+        let clamped = value
+            .min(crate::instance::MAX_SAFE_RECURSION_LIMIT)
+            .max(1);
+        self.native_depth_limit.set(clamped);
         clamped
     }
 

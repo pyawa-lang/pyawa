@@ -274,14 +274,19 @@ pub fn run() {
     // 给执行线程开 **512 MiB** 栈以留余量 ✓（默认递归上限仍是保守的 `MAX_CALL_DEPTH=64` ✓，
     // 深容器 `repr` 仍按参照报 `RecursionError` ✓ —— 见 `repr_loop_crash_shapes` 的守卫 ✓）。
     // **默认递归上限 1000**（`PLAN §12.22` S2 后）：脚本→脚本调用走**显式帧栈**（堆上，不再吃
-    // 原生栈）⇒ 可以对齐参照默认 1000；只有"原生（内建回调）→ 脚本"仍受 `MAX_NATIVE_DEPTH`
-    // 单独守卫（见 `pyawa-core` 的 `execute`）。这条 512 MiB 线程栈留给那类回调与深 `repr`。
+    // 原生栈）⇒ 可以对齐参照默认 1000；"原生（内建回调）→ 脚本"仍靠 Rust 递归 ⇒ **D1（round 289）**
+    // 由本线程声明 `PYAWA_NATIVE_DEPTH=1000`（这条 512 MiB 线程栈承接它；未声明的宿主默认 64）。
     // SAFETY: 单线程启动阶段设环境变量。
     unsafe {
         // **外部可覆盖**（round 138 起）：默认 1000（S3 的参照口径）；调用方仍可设
         // `PYAWA_RECURSION_LIMIT`（上限由 `MAX_SAFE_RECURSION_LIMIT` 夹住）。
         if std::env::var_os("PYAWA_RECURSION_LIMIT").is_none() {
             std::env::set_var("PYAWA_RECURSION_LIMIT", "1000");
+        }
+        // **`D1`（round 289）**：本线程是 512 MiB 大栈 ⇒ 声明原生回调预算 1000（与参照对齐）；
+        // 外部可覆盖（上限由 `MAX_SAFE_RECURSION_LIMIT` 夹住）。
+        if std::env::var_os("PYAWA_NATIVE_DEPTH").is_none() {
+            std::env::set_var("PYAWA_NATIVE_DEPTH", "1000");
         }
         // **主机名**（round 117）：`_socket.gethostname()` 的取值来源（stdlib 不碰文件系统 ✓）；
         // 只读 `/proc/sys/kernel/hostname`（Linux；失败就给 `localhost` ✓）。
