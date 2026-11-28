@@ -1,13 +1,15 @@
 //! **递归上限／回调深度守卫的形状**（`PLAN §12.22` 的 S1／S3 前置；跨平台）。
 //!
-//! 现状（`DIV-11` 如实登记）：本层的 Python 调用是 **Rust 递归** ⇒ 上限 `MAX_CALL_DEPTH=64`
-//! （参照 1000），`sys.setrecursionlimit` **只降不升**。S1 要钉的是**守卫行为**：
+//! 现状（`DIV-11` 如实登记）：脚本→脚本调用走**显式帧栈**（默认 1000、`setrecursionlimit` 可升）；
+//! 「内建→脚本」回调仍靠 Rust 递归，受**宿主声明预算** `PYAWA_NATIVE_DEPTH`（`D1`，round 289；
+//! 默认 64；CLI／对拍 harness 声明 1000）。本测试跑在 **ABI（`paL_newstate`，不声明预算）** 上，
+//! 钉住默认 64 的**守卫行为**：
 //! ① 深递归在到达上限时抛**可捕获**的 `RecursionError`（不是原生栈崩）；
 //! ② **内建 → 脚本回调**这条路径也吃同一个守卫（`sorted`／`map` 里无限自递归不能崩宿主）；
 //! ③ 异常之后实例仍可用（没有栈／引用计数损坏）；
-//! ④ `sys.getrecursionlimit`／`setrecursionlimit` 的**现行口径**（可降；升被夹回上限）。
+//! ④ `sys.getrecursionlimit`／`setrecursionlimit` 的**现行口径**（默认 1000、可升、夹 10000）。
 //!
-//! 这些断言在 S2（显式帧栈）后应更新为参照口径（默认 1000、可升），本条目前钉住"不崩"。
+//! CLI 侧声明 1000 的行为由 `native_callback_depth.rs` 钉住；ABI 默认 64 不变。
 #![allow(unused_unsafe)]
 
 fn abi_c_string(text: &str) -> std::ffi::CString {
@@ -56,9 +58,9 @@ fn abi_global_int(state: *mut pyawa_abi::pa_state, name: &str) -> Option<i64> {
 
 #[test]
 fn recursion_guard_is_catchable_and_keeps_the_instance_usable() {
-    // **必须在"大栈"线程里跑**（同 `conformance` 的 `pyawa_side_runner`）：本层的 Python 调用是
+    // **必须在"大栈"线程里跑**（同 `conformance` 的 `pyawa_side_runner`）：原生回调路径是
     // Rust 递归，libtest 的测试线程栈偏小（实测默认测试线程上**守卫之前**就顶穿 2 MiB）。
-    // 这只给够栈，不改守卫语义（`MAX_CALL_DEPTH` 仍应更早触发）。
+    // 这只给够栈，不改守卫语义（ABI 默认预算 64 仍应更早触发）。
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(body)

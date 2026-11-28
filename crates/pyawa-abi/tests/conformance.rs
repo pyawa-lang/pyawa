@@ -473,6 +473,9 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
     command.args(["--exact", "pyawa_side_runner", "--nocapture"]);
     command.env("PYAWA_CONFORMANCE_SOURCE", &path);
     command.env("PYAWA_CONFORMANCE_PROBES", case.probes.len().to_string());
+    // **`D1`（round 289）**：对拍子进程用 64 MiB 大栈线程 ⇒ 声明原生回调预算 1000，
+    // 与参照默认对齐（未声明时默认 64；见 `docs/RELEASE.md` 与 `DIV-11`）。
+    command.env("PYAWA_NATIVE_DEPTH", "1000");
     let Some(output) = output_with_timeout(command, TIMEOUT) else {
         return Observation::timeout(case.probes.len());
     };

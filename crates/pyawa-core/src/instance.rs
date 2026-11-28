@@ -101,23 +101,28 @@ pub enum CapabilityCallError {
     Machine(i32),
 }
 
-/// **Python 层调用深度上限**（`PLAN §12.22` S2／S3 后）。
+/// **Python 层调用深度上限的默认值**（`sys.getrecursionlimit()`；`PLAN §12.22` S2／S3 后）。
 ///
 /// 语义对齐参照（默认 **1000**；`sys.setrecursionlimit` **可升**，安全上限见
 /// [`MAX_SAFE_RECURSION_LIMIT`]）。脚本→脚本调用已走**显式帧栈**（不吃原生栈）⇒ 这个数只表示
 /// 参照口径的"Python 调用深度"，不再是原生栈的安全值。
 ///
-/// **注意**：原生栈的安全由 [`MAX_NATIVE_DEPTH`] 单独负责（只约束"原生→脚本"回调链）；
-/// 内部原生递归（容器相等／哈希／迭代器链）另由**深度参数守卫**（round 288，A-0）兜住。
+/// **原生栈安全分两层**：① "原生→脚本"回调链由 [`MAX_NATIVE_DEPTH`]（`D1` round 289 起可按宿主
+/// 声明预算，见 [`Instance::native_depth_limit`]）守住；② 不经过 `execute` 的内部原生递归
+/// （容器相等／哈希／迭代器链）由**深度参数守卫**（round 288，A-0）兜住。
 pub const MAX_CALL_DEPTH: usize = 1000;
 
-/// **原生递归深度的安全上限**（`PLAN §12.22` S2 后）：脚本→脚本调用已走**显式帧栈**（不增加
-/// 原生栈），只有"原生（内建回调）→ 脚本"这条链仍靠 Rust 递归 ⇒ 单独守卫，超限抛**可捕获**
-/// `RecursionError`（比参照早，但**绝不让原生栈崩**；`DIV-11` 如实收窄）。
+/// **原生递归深度的默认预算**（`PLAN §12.22` S2 后；`D1` round 289 起**宿主可声明**）：
+/// 脚本→脚本调用已走**显式帧栈**（不增加原生栈），只有"原生（内建回调）→ 脚本"这条链仍靠
+/// Rust 递归 ⇒ 单独守卫，超限抛**可捕获** `RecursionError`（**绝不让原生栈崩**；`DIV-11`）。
 ///
-/// round 288（A-0）起：**不经过 `execute` 的内部原生递归**（`equality_public`／`values_equal`／
+/// `D1`（round 289）：本常量只是**默认值**——宿主可用 `PYAWA_NATIVE_DEPTH` 声明自己的栈预算
+/// （CLI 的 512 MiB 线程与对拍 harness 的 64 MiB 线程声明 1000；ABI／嵌入／wasm 不声明即 64）。
+/// 有效值＝`min(声明值, recursion_limit)`（见 [`Instance::native_depth_limit`]）。
+///
+/// round 288（A-0）：**不经过 `execute` 的内部原生递归**（`equality_public`／`values_equal`／
 /// `key_hash_checked`／`hash_object`／`order_of`／`advance_iterator`）也各自带深度守卫，口径用
-/// `recursion_limit`（见 `values::native_recursion_error`）——它们与这个常量无关。
+/// `recursion_limit`——它们与本常量无关。
 pub const MAX_NATIVE_DEPTH: usize = 64;
 
 /// **`sys.setrecursionlimit` 的安全上限**（`PLAN §12.22` S3 的"可升＋安全上限"）：
@@ -341,11 +346,14 @@ pub struct Instance {
     /// **字节码 CALL 的延迟目标**（`PLAN §12.22` S2；见 `Instance::deferred_call_target`）。
     deferred_call_target: Cell<Option<NonNull<Header>>>,
     /// **原生递归深度**（= 嵌套的 `execute` 层数）：脚本调用改显式帧栈后，只有"原生 → 脚本"
-    /// 这条回调路还会吃原生栈 ⇒ 单独守卫（`MAX_NATIVE_DEPTH`），避免回调递归顶穿栈。
+    /// 这条回调路还会吃原生栈 ⇒ 单独守卫，避免回调递归顶穿栈（上限见 `native_depth_limit`）。
     native_execute_depth: Cell<usize>,
-    /// **`sys.getrecursionlimit()` 的口径** ✓（task-20 第 3 轮 ✓）：有效上限就是它 ✓，
-    /// 默认 [`MAX_CALL_DEPTH`] ✓；`sys.setrecursionlimit` **只降不升** ✓（理由见 `MAX_CALL_DEPTH`
-    /// 那段：本层的 Python 调用吃**原生栈** ✗ ⇒ 调高会顶穿 ✓ —— 比参照小是**如实口径** ✓）。
+    /// **原生递归预算**（`D1`，round 289）：宿主声明的"我的栈能承受多少层原生递归"。
+    /// 默认 [`MAX_NATIVE_DEPTH`]；`PYAWA_NATIVE_DEPTH` 覆盖（夹到 [1, `MAX_SAFE_RECURSION_LIMIT`]）。
+    /// 语义计数仍由 `recursion_limit` 管，这里只防原生栈崩（有效值再与 `recursion_limit` 取小）。
+    native_depth_limit: Cell<usize>,
+    /// **`sys.getrecursionlimit()` 的口径**：有效上限就是它（默认 [`MAX_CALL_DEPTH`]=1000）；
+    /// `sys.setrecursionlimit` **可升**（夹到 `MAX_SAFE_RECURSION_LIMIT`，见 round 台账 `PLAN §12.22`）。
     recursion_limit: Cell<usize>,
     /// **OM-26**：阈值可配置。
     gc_threshold: Cell<(usize, usize, usize)>,

@@ -1,13 +1,13 @@
 //! **`P3-41` 官方套件的崩溃面**（2026-10-31 第 1 轮 ✓）：两处**不得中止**的形态。
 //!
-//! ① **深嵌套容器的 `repr`** ✗✗：`Lib/test/mapping_tests.py::test_repr_deep`（`test_frame`
+//! ① **深嵌套容器的 `repr`**：`Lib/test/mapping_tests.py::test_repr_deep`（`test_frame`
 //!    的 `FrameLocalsProxyMappingTests` 走它 ✓）先建 `support.exceeds_recursion_limit()` ＝
-//!    **150,000** 层嵌套 `dict`，再断言 `repr` 报 `RecursionError` ✓。本层的 `repr` 是原生递归 ✗
-//!    ⇒ 先前直接顶穿 8 MiB 原生栈、进程 `SIGABRT`（exit 134 ✗，实测 29.85–34 s）。
-//!    修法：`OM-11` 的递归守卫**同时当深度计**（额度＝`sys.getrecursionlimit()`，与参照的
-//!    `Py_EnterRecursiveCall` 同口径 ✓）⇒ 超限报 `RecursionError` ✓，并改 **RAII** 摘守卫
-//!    （`?` 提前返回不再把地址留在守卫里 ✓）。**如实**：本层额度默认 64（参照 1000）；
-//!    所以本测试**不与参照对拍** 200 层的结论，只钉"必定 `RecursionError`、不中止" ✓。
+//!    **150,000** 层嵌套 `dict`，再断言 `repr` 报 `RecursionError` ✓。本层的 `repr` 是原生递归，
+//!    额度＝原生递归预算（`OM-11`，与参照的 `Py_EnterRecursiveCall` 同口径）⇒ 超限报
+//!    `RecursionError`、不中止 ✓。
+//!    **`D1`（round 289）**：CLI 在 512 MiB 线程里声明 `PYAWA_NATIVE_DEPTH=1000` ⇒ 200 层深容器
+//!    `repr` 与参照一样**成功**；150,000 层仍在额度处报可捕获 `RecursionError`（进程不中止）。
+//!    ABI／嵌入／wasm 未声明预算 ⇒ 默认 64（与参照的差异收窄为"未声明预算的宿主"，见 `DIV-11`）。
 //!
 //! ② **`for` 体末尾 `if …: break` 前面还夹着 `try`** ✗：`try` 的余部重放会让末尾那条 `if`
 //!    走**非反转**形态（不回发回边 ✗），而循环臂按"末尾 if 会代发回边"**让位** ✗ ⇒ 整段
@@ -38,7 +38,8 @@ fn run(name: &str, script: &str) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// 深嵌套 `dict`／`list`／`tuple`／`frozenset` 的 `repr` ⇒ `RecursionError`，进程不中止。
+/// 深嵌套 `dict`／`list`／`tuple`／`frozenset` 的 `repr`：CLI 声明原生预算 1000 ⇒ 200 层**成功**；
+/// 150,000 层（参照 `exceeds_recursion_limit()` 口径）仍 `RecursionError`、进程不中止。
 const DEEP_REPR_SCRIPT: &str = r#"d = {}
 for _ in range(200):
     previous = d
@@ -46,47 +47,52 @@ for _ in range(200):
     d[1] = previous
 try:
     repr(d)
+    print("dict: ok")
 except RecursionError:
     print("dict: caught")
-else:
-    print("dict: no-error")
 
 items = []
 for _ in range(200):
     items = [items]
 try:
     repr(items)
+    print("list: ok")
 except RecursionError:
     print("list: caught")
-else:
-    print("list: no-error")
 
 values = ()
 for _ in range(200):
     values = (values,)
 try:
     repr(values)
+    print("tuple: ok")
 except RecursionError:
     print("tuple: caught")
-else:
-    print("tuple: no-error")
 
 frozen = frozenset()
 for _ in range(200):
     frozen = frozenset((frozen,))
 try:
     repr(frozen)
+    print("frozenset: ok")
 except RecursionError:
     print("frozenset: caught")
-else:
-    print("frozenset: no-error")
+
+big = {}
+for _ in range(150000):
+    big = {1: big}
+try:
+    repr(big)
+    print("deep: no-error")
+except RecursionError:
+    print("deep: caught")
 
 print(repr({1: {2: 3}}))
 print(repr([[[1]]]))
 "#;
 
 /// 浅层容器照旧（递归守卫不能把正常 `repr` 也挡掉）。
-const DEEP_REPR_EXPECTED: &str = "dict: caught\nlist: caught\ntuple: caught\nfrozenset: caught\n{1: {2: 3}}\n[[[1]]]\n";
+const DEEP_REPR_EXPECTED: &str = "dict: ok\nlist: ok\ntuple: ok\nfrozenset: ok\ndeep: caught\n{1: {2: 3}}\n[[[1]]]\n";
 
 #[test]
 fn deep_container_repr_raises_recursion_error_instead_of_aborting() {
