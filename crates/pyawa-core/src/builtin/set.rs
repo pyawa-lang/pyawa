@@ -536,48 +536,17 @@ pub unsafe fn set_new(
 }
 
 /// `set` 的 `repr`：空是 `set()`、否则 `{a, b}`（实测）。
+///
+/// **A-1（round 292）起**：实际生成在 [`crate::builtin_objects::repr_worklist`] 的显式 worklist 里
+/// （精确 `set`／`frozenset`／子类三种形式与空集形式都在帧里复刻，输出逐字节不变）。
 pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<SetObject>() };
-    // `P3-41`：与 `list`／`tuple`／`dict` 同口径的递归守卫（自引用 ⇒ `{...}`；
-    // 嵌套太深 ⇒ `RecursionError`，**不得**顶穿原生栈；守卫 RAII 摘除）。
-    let _guard = match instance.enter_repr(ptr as usize) {
-        crate::instance::ReprEntry::Cycle => return Ok("{...}".to_owned()),
-        crate::instance::ReprEntry::TooDeep => return Err(instance.repr_recursion_error()),
-        crate::instance::ReprEntry::Entered(scope) => scope,
-    };
-    // **子类的 repr 用子类名** ✓（第 410 轮，task-21 G2 顺带 ✓）：参照实测
-    // `class St(set): pass` ⇒ `repr(St())` ＝ `'St()'` ✓（先前硬编码 `set()` ✗）。
-    // 精确的 `set`／`frozenset` 保持原来的形式 ✓（`set()`／`frozenset()`）。
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let class = unsafe { &*ptr }.ty();
-    let exact_set = Some(class) == instance.hot_type(HotId::Set);
-    let exact_frozenset = Some(class) == instance.hot_type(HotId::FrozenSet);
-    let class_text = instance.type_name(class).to_owned();
-    let items = object.items();
-    if items.is_empty() {
-        return Ok(format!("{class_text}()"));
-    }
-    // **精确 `frozenset` 的 repr 要带 `frozenset(`** ✓（task-46 顺带修 ✗：先前与 `set` 同形 ⇒
-    // `repr(frozenset({1, 2}))` 给 `{1, 2}` ✗，参照给 `frozenset({1, 2})` ✓）。
-    let mut text = if exact_set {
-        String::from("{")
-    } else if exact_frozenset {
-        String::from("frozenset({")
-    } else {
-        format!("{class_text}({{")
-    };
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            text.push_str(", ");
-        }
-        text.push_str(&crate::executor::protocol::element_repr(instance, *item)?);
-    }
-    text.push('}');
-    if !exact_set {
-        text.push(')');
-    }
-    Ok(text)
+    // SAFETY: 槽位契约 ⇒ ptr 指向本类型的存活对象。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    crate::builtin_objects::repr_worklist::container_repr(
+        instance,
+        object,
+        crate::builtin_objects::repr_worklist::ContainerKind::Set,
+    )
 }
 
 /// **`set.union(*others)`**（task-46）：返回**新** `set` = 自己 ∪ 其余可迭代实参 ✓

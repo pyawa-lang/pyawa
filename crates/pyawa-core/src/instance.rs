@@ -39,7 +39,7 @@ pub(crate) use refcount::poison_refcount;
 mod gc;
 mod context;
 // `P3-41`：`repr` 递归守卫的三支结果（`OM-11`）。
-pub(crate) use context::ReprEntry;
+pub(crate) use context::{ReprEntry, ReprScope};
 mod accessors;
 mod constructors;
 mod query;
@@ -107,9 +107,11 @@ pub enum CapabilityCallError {
 /// [`MAX_SAFE_RECURSION_LIMIT`]）。脚本→脚本调用已走**显式帧栈**（不吃原生栈）⇒ 这个数只表示
 /// 参照口径的"Python 调用深度"，不再是原生栈的安全值。
 ///
-/// **原生栈安全分两层**：① "原生→脚本"回调链由 [`MAX_NATIVE_DEPTH`]（`D1` round 289 起可按宿主
+/// **原生栈安全分层**：① "原生→脚本"回调链由 [`MAX_NATIVE_DEPTH`]（`D1` round 289 起可按宿主
 /// 声明预算，见 [`Instance::native_depth_limit`]）守住；② 不经过 `execute` 的内部原生递归
-/// （容器相等／哈希／迭代器链）由**深度参数守卫**（round 288，A-0）兜住。
+/// （容器相等／哈希／迭代器链）由**深度参数守卫**（round 288，A-0）兜住；③ **内建容器 `repr`**
+/// 自 A-1（round 292）起改**堆上显式 worklist**（不再吃原生栈），其嵌套深度按本常量
+/// （`recursion_limit`）算 —— 小栈宿主也能到 1000 层。
 pub const MAX_CALL_DEPTH: usize = 1000;
 
 /// **原生递归深度的默认预算**（`PLAN §12.22` S2 后；`D1` round 289 起**宿主可声明**）：

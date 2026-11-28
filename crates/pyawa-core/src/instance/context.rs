@@ -12,6 +12,10 @@ use super::*;
 /// * `Cycle`：同一个对象已在生成中 ⇒ 容器按参照给 `[...]`／`{...}` ✓；
 /// * `TooDeep`：嵌套深度达到 [`Instance::recursion_limit`] ⇒ 按参照报 `RecursionError` ✓
 ///   （参照里 `repr` 的 C 递归与 Python 调用共用同一个额度 ⇒ 这里同口径 ✓）。
+///
+/// **A-1（round 292）起**：内建容器 `repr` 已改**堆上 worklist**（不再彼此 Rust 递归）⇒
+/// 深度额度改为纯语义额度 [`Instance::recursion_limit`]（默认 1000，`setrecursionlimit` 可到
+/// 10000）；用户 `__repr__` 回调那部分原生栈仍由 `D1`（`native_depth_limit`）另守。
 pub enum ReprEntry<'a> {
     /// 进入成功（离开时由作用域守卫摘除）。
     Entered(ReprScope<'a>),
@@ -72,20 +76,20 @@ impl Instance {
     /// （容器据此给出 `[...]`／`{...}`，与参照实现一致）；
     /// 嵌套深度超过有效递归上限给 [`ReprEntry::TooDeep`]（调用方报 `RecursionError`）。
     ///
-    /// **为什么深度要设限**（`P3-41` ✗✗）：本层 `repr` 是**原生递归** ⇒ 深嵌套容器（如
-    /// `test_frame` 的 15 万层嵌套 `dict`）会在守卫来得及之前顶穿 8 MiB 原生栈，
-    /// 进程以 `SIGABRT` 退出 ✗。参照的 C 递归守卫与 Python 调用的额度**同一个**
-    /// （`Py_EnterRecursiveCall`）⇒ 这里也照 [`Instance::recursion_limit`] 算 ✓。
+    /// **为什么深度要设限**（`P3-41` ✗✗）：深嵌套容器（如 `test_frame` 的 15 万层嵌套 `dict`）
+    /// 必须报参照同文案的可捕获 `RecursionError`，不能把宿主栈打穿。
+    ///
+    /// **A-1（round 292）**：内建容器 `repr` 已堆化（`repr_worklist`）⇒ 这里按**语义**额度
+    /// [`Instance::recursion_limit`] 算（与参照 `Py_EnterRecursiveCall` 的 repr 递归额度同口径；
+    /// 默认 1000，`setrecursionlimit` 可到 10000）。**不再**与宿主声明的原生预算取小 ——
+    /// 那条预算（`D1`）只守 `execute` 内部的"内建→脚本"回调原生递归。
     pub fn enter_repr(&self, address: usize) -> ReprEntry<'_> {
         let mut guard = self.repr_guard.borrow_mut();
         if guard.contains(&address) {
             return ReprEntry::Cycle;
         }
-        // **原生递归**（`repr` 是 Rust 递归）用宿主声明的预算（`D1`，round 289）：
-        // CLI／对拍 harness 声明 1000，ABI／嵌入／wasm 默认仍 64；有效值还与
-        // `recursion_limit` 取小（见 [`Instance::native_depth_limit`]）。
-        let native_limit = self.native_depth_limit();
-        if guard.len() >= native_limit {
+        // 内建容器嵌套只吃堆（worklist）⇒ 深度口径＝语义额度 `recursion_limit`。
+        if guard.len() >= self.recursion_limit.get() {
             return ReprEntry::TooDeep;
         }
         guard.push(address);

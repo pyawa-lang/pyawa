@@ -638,6 +638,15 @@ parser 递归入口（表达式/一元/原子/语句/模式）超预算即报同
 exceeded`（宿主引擎 wasm 调用栈，trap 不可捕获）⇒ wasm 保持默认 64；要 wasm 上千层只能靠 A 本体
 （原生→脚本显式帧栈）。结论登记 `DIV-11` ③。
 
+**round 292（A-1：内建容器 `repr` 显式 worklist）**：A 本体的第一轮。此前内建容器
+（`list`／`tuple`／`dict`／`set`／`frozenset`）的 `repr` 彼此 **Rust 递归**，深度上限与宿主声明的
+原生预算取小（ABI／嵌入／wasm 未声明 ⇒ **64**，到不了语义额度 1000）。已改为**堆上的显式
+worklist**（`crates/pyawa-core/src/builtin_objects/repr_worklist.rs`：每帧只记位置／已写文本／
+待写后缀；循环检测仍走 `enter_repr` 的地址链 RAII）：内建容器嵌套**不吃原生栈**，深度口径＝
+`recursion_limit`（默认 1000，`setrecursionlimit` 可到 10000，超限报可捕获 `RecursionError`）；
+用户 `__repr__` 回调仍走原协议，其原生栈仍由 `D1` 声明预算守（不改 D1）。输出逐字节不变
+（conformance 407 语料 0 diff）。A-2／A-3／A-4 未做。
+
 ### 12.23 Windows 原生 CLI：**已落地（2026-11-17，选项 A）**
 
 **现状**：`crates/pyawa-runtime/src/bin/pyawa.rs` 依赖**真实能力域 provider**（`fs`／`clock`／`net` 的
