@@ -633,6 +633,11 @@ to parse`）。已加**实际栈用量预算**（`PYAWA_PARSE_STACK`；默认 51
 parser 递归入口（表达式/一元/原子/语句/模式）超预算即报同文案 `CompileError::Memory`（
 `DIV-15`），不再撞穿原生栈。
 
+**2026-11-28 wasm 栈 spike**：`-zstack-size`（1／2／4／8 MiB）只扩线性内存栈；Node v24.22.1 上
+把 native 预算调到 100000 后，约 500–600 层 Python 回调即 `RangeError: Maximum call stack size
+exceeded`（宿主引擎 wasm 调用栈，trap 不可捕获）⇒ wasm 保持默认 64；要 wasm 上千层只能靠 A 本体
+（原生→脚本显式帧栈）。结论登记 `DIV-11` ③。
+
 ### 12.23 Windows 原生 CLI：**已落地（2026-11-17，选项 A）**
 
 **现状**：`crates/pyawa-runtime/src/bin/pyawa.rs` 依赖**真实能力域 provider**（`fs`／`clock`／`net` 的
