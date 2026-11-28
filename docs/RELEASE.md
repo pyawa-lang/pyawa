@@ -72,7 +72,10 @@ cargo build --workspace
   的种子在 wasm 上退化为**进程内计数器**（不是熵源）；⑤ wasm32 强制 `panic=abort` ⇒ ABI 的
   `catch_unwind` 兜底**失效**（Rust panic ＝ trap，不可恢复）；⑥ 纯 Python `Lib/` 的 `import` 依赖
   `fs` ⇒ **浏览器内不可用**（内置 C 层模块可用）；⑦ `sys.platform` 仍报 `"linux"`（未按目标改写）；
-  ⑧ wasm32 的 `usize` 是 32 位 ⇒ ABI 值线格式按 **wasm32 布局**（`pa_host` **12 字节**），JS 侧不得
+  ⑧ **wasm 的原生递归深度受宿主引擎限制**：脚本→脚本递归走显式帧栈（可 1000），但「内建回调
+  → 脚本」仍靠 Rust 递归；`-zstack-size` 只扩线性内存栈，**扩不了宿主引擎的 wasm 调用栈** ⇒
+  实测（Node v24.22.1）约 500–600 层 Python 回调即 `RangeError` trap（不可捕获）⇒ wasm 保持
+  `PYAWA_NATIVE_DEPTH` 默认 64（详见 `DIV-11`）；⑨ wasm32 的 `usize` 是 32 位 ⇒ ABI 值线格式按 **wasm32 布局**（`pa_host` **12 字节**），JS 侧不得
   按 64 位宿主布局读写。
 - **Windows 上不做 memcheck（W6 口径）**：Windows 无 valgrind，Rust 1.98 stable 也无可用 ASan ⛔
   工具链 ⇒ 内存错误闸门仍以 **Linux `slowcheck`／valgrind** 为准；Windows CI job 只做**功能测试**
