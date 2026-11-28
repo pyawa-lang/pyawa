@@ -529,7 +529,7 @@ fn dd_eq_native(
         return Ok(instance.singletons().boolean(false));
     };
     let data = data_of(instance, this)?;
-    let equal = crate::executor::values_equal_public(instance, data, other_entries);
+    let equal = crate::executor::values_equal_public(instance, data, other_entries)?;
     Ok(instance.singletons().boolean(equal))
 }
 

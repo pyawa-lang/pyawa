@@ -353,11 +353,12 @@ pub(crate) unsafe fn deque_count_native(
     let Some(needle) = args.first() else {
         return Err(instance.raise_builtin_error("TypeError", "count expected 1 argument"));
     };
-    let found = object
-        .items()
-        .iter()
-        .filter(|value| crate::executor::values::values_equal_public(instance, **value, *needle))
-        .count();
+    let mut found = 0usize;
+    for value in object.items() {
+        if crate::executor::values::values_equal_public(instance, value, *needle)? {
+            found += 1;
+        }
+    }
     Ok(instance.new_int(found as i64))
 }
 /// `deque.remove(x)` ✓（找不到 ⇒ `ValueError: deque.remove(x): x not in deque` ✓）。
@@ -372,10 +373,14 @@ pub(crate) unsafe fn deque_remove_native(
         return Err(instance.raise_builtin_error("TypeError", "remove expected 1 argument"));
     };
     let mut items = object.items.borrow_mut();
-    let Some(position) = items
-        .iter()
-        .position(|value| crate::executor::values::values_equal_public(instance, *value, *needle))
-    else {
+    let mut found = None;
+    for (index, value) in items.iter().enumerate() {
+        if crate::executor::values::values_equal_public(instance, *value, *needle)? {
+            found = Some(index);
+            break;
+        }
+    }
+    let Some(position) = found else {
         drop(items);
         return Err(instance.raise_builtin_error("ValueError", "deque.remove(x): x not in deque"));
     };
@@ -411,7 +416,7 @@ pub(crate) unsafe fn deque_index_native(
         .unwrap_or(items.len())
         .min(items.len());
     for position in start.min(items.len())..stop {
-        if crate::executor::values::values_equal_public(instance, items[position], *needle) {
+        if crate::executor::values::values_equal_public(instance, items[position], *needle)? {
             return Ok(instance.new_int(position as i64));
         }
     }

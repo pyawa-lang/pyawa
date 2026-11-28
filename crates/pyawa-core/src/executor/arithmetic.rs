@@ -98,7 +98,7 @@ pub fn arithmetic_public(
             })
         };
         if is_set(instance.type_of(left)) && is_set(instance.type_of(right)) {
-            return Ok(set_operation(instance, left, right, symbol));
+            return set_operation(instance, left, right, symbol);
         }
     }
     // **`dict | dict`**（`PEP 584` ✓，task-13）：两边都是 **dict 族**（子类也算 ✓）⇒ **新建** dict，
@@ -113,7 +113,7 @@ pub fn arithmetic_public(
         dict_type.is_some_and(|base| instance.is_subtype(instance.type_of(value), base))
     };
     if symbol == "|" && is_dict(left) && is_dict(right) {
-        return Ok(crate::builtin::dict::dict_merge(instance, left, right));
+        return crate::builtin::dict::dict_merge(instance, left, right);
     }
     // **序列重复 `*`**（第 305 轮）：`"-" * 40`、`[0] * 3`、`b"ab" * 2` —— `Lib/` 里遍地都是。
     // 实测第一处撞上的是 `Lib/traceback.py` 的 `f"{'a' * 3}"`：先前直接落到整数那条路 ⇒

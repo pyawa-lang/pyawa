@@ -233,9 +233,11 @@ pub(crate) fn list_sort_native(
     // 可能 `append`／`clear` 本表（`list_tests.test_sort` 的 `selfmodifyingComparison` ✓）。
     let original_length = object.len();
     let mut failure: Option<String> = None;
+    // **A-0**：比较可能报 `RecursionError`（内部原生递归超限）⇒ 先记下，排序结束后优先上抛。
+    let mut sort_error: Option<crate::ExecError> = None;
     decorated.sort_by(|left, right| match instance.order_of(left.1, right.1) {
-        Some(ordering) => ordering,
-        None => {
+        Ok(Some(ordering)) => ordering,
+        Ok(None) => {
             failure.get_or_insert_with(|| {
                 format!(
                     "'<' not supported between instances of '{}' and '{}'",
@@ -245,7 +247,20 @@ pub(crate) fn list_sort_native(
             });
             core::cmp::Ordering::Equal
         }
+        Err(error) => {
+            sort_error.get_or_insert(error);
+            core::cmp::Ordering::Equal
+        }
     });
+    if let Some(error) = sort_error {
+        for (item, item_key) in decorated {
+            unsafe {
+                instance.release_object(item.as_ptr());
+                instance.release_object(item_key.as_ptr());
+            }
+        }
+        return Err(error);
+    }
     if reverse {
         decorated.reverse();
     }

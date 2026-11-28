@@ -30,7 +30,7 @@ fn map_lookup_with_protocol(
         {
             crate::executor::protocol::equality_public(instance, existing, key)?
         } else {
-            values_equal(instance, existing, key)
+            values_equal(instance, existing, key)?
         };
         if same {
             return Ok((Some(position), Some(hash)));

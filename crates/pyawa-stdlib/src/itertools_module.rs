@@ -436,8 +436,28 @@ fn groupby_native(
             }
             None => instance.retain(item),
         };
-        let same = current
-            .is_some_and(|previous| pyawa_core::executor::values::values_equal_public(instance, previous, key));
+        let same = match current {
+            Some(previous) => {
+                match pyawa_core::executor::values::values_equal_public(instance, previous, key) {
+                    Ok(same) => same,
+                    Err(error) => {
+                        instance.release(key);
+                        instance.release(iterator);
+                        for (group_key, group) in &groups {
+                            instance.release(*group_key);
+                            for value in group {
+                                instance.release(*value);
+                            }
+                        }
+                        if let Some(previous) = current {
+                            instance.release(previous);
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            None => false,
+        };
         if same {
             groups
                 .last_mut()

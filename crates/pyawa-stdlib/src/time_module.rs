@@ -1185,7 +1185,7 @@ fn struct_time_eq(
         return Ok(instance.new_bool(false));
     }
     for (a, b) in left.iter().zip(right.iter()) {
-        if !pyawa_core::executor::values::values_equal_public(instance, *a, *b) {
+        if !pyawa_core::executor::values::values_equal_public(instance, *a, *b)? {
             return Ok(instance.new_bool(false));
         }
     }
@@ -1225,7 +1225,7 @@ fn struct_time_contains(
     };
     let items = struct_time_items(instance, this).unwrap_or_default();
     for item in items {
-        if pyawa_core::executor::values::values_equal_public(instance, item, wanted) {
+        if pyawa_core::executor::values::values_equal_public(instance, item, wanted)? {
             return Ok(instance.new_bool(true));
         }
     }

@@ -143,7 +143,7 @@ pub(super) fn step_operators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                             "NB_AND" => arithmetic_public(instance, left, right, "&", opcode_number),
                             // **`PEP 604`**：`X | None`／`None | X`／union 再 `|` ⇒ union（参照口径）；
                             // 不是类型/union 语境（`1 | 2`、`int | 5`）⇒ 落回算术（`TypeError` 消息照旧）。
-                            "NB_OR" => match pep604_union_or(instance, left, right) {
+                            "NB_OR" => match pep604_union_or(instance, left, right)? {
                                 Some(union) => Ok(union),
                                 None => arithmetic_public(instance, left, right, "|", opcode_number),
                             },

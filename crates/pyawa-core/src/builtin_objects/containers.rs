@@ -588,6 +588,22 @@ impl SetObject {
         self.items.borrow().iter().position(|item| predicate(*item))
     }
 
+    /// **带错误传播的** [`Self::position_of`]（A-0：元素比较可能报 `RecursionError`）。
+    ///
+    /// 调用方**必须**传播错误；**禁止**包装成 `false`（那会把"递归超限"伪装成"不相等"）。
+    pub fn position_of_checked(
+        &self,
+        mut predicate: impl FnMut(NonNull<Header>) -> Result<bool, crate::ExecError>,
+    ) -> Result<Option<usize>, crate::ExecError> {
+        let items = self.items.borrow();
+        for (index, item) in items.iter().enumerate() {
+            if predicate(*item)? {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
+
     /// 元素个数。
     pub fn len(&self) -> usize {
         self.items.borrow().len()
@@ -748,6 +764,25 @@ impl DictObject {
             }
         }
         None
+    }
+
+    /// **带错误传播的** [`Self::find_live_position`]（A-0：键比较可能报 `RecursionError`）。
+    ///
+    /// 调用方**必须**传播错误；**禁止**包装成 `false`（那会把"递归超限"伪装成"找不到键"）。
+    pub fn find_live_position_checked(
+        &self,
+        mut predicate: impl FnMut(NonNull<Header>) -> Result<bool, crate::ExecError>,
+    ) -> Result<Option<usize>, crate::ExecError> {
+        let entries = self.entries.borrow();
+        for (position, (key, _)) in entries.iter().enumerate() {
+            if Self::is_tombstone(*key) {
+                continue;
+            }
+            if predicate(*key)? {
+                return Ok(Some(position));
+            }
+        }
+        Ok(None)
     }
 
     fn compact_if_needed(&self) {

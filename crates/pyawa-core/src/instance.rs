@@ -101,20 +101,23 @@ pub enum CapabilityCallError {
     Machine(i32),
 }
 
-/// **Python 层调用深度上限**（第 319 轮）。
+/// **Python 层调用深度上限**（`PLAN §12.22` S2／S3 后）。
 ///
-/// 取值依据（**实测**，不是照抄参照的 1000 ✗）：本层每次 Python 调用要吃好几层 Rust 栈 ✓，
-/// 而对拍的 `pyawa_side_runner` 在**测试线程**上跑（栈比主线程小 ✓）。实测给它
-/// `RUST_MIN_STACK=67108864` 后 `import collections` 不再崩 ✓ ⇒ 崩溃点落在默认栈上；
-/// **取值 64 是量出来的** ✗：本层每层 Python 调用要吃掉相当一块原生栈 ✓（实测上限 200 时，
-/// 主线程 8 MiB 栈在**触发守卫之前**就已经顶穿 ✗）⇒ 取 64 让守卫来得比栈崩**早** ✓；
-/// 而 `Lib/` 里真实模块的调用深度都在几十层以内 ✓（导入链不是嵌套调用 ✓，不计深度 ✓）。
-/// **如实登记**：参照默认 1000 且可用 `sys.setrecursionlimit` 调 ✗ —— 本层上限更低、且该接口还没接 ✗。
+/// 语义对齐参照（默认 **1000**；`sys.setrecursionlimit` **可升**，安全上限见
+/// [`MAX_SAFE_RECURSION_LIMIT`]）。脚本→脚本调用已走**显式帧栈**（不吃原生栈）⇒ 这个数只表示
+/// 参照口径的"Python 调用深度"，不再是原生栈的安全值。
+///
+/// **注意**：原生栈的安全由 [`MAX_NATIVE_DEPTH`] 单独负责（只约束"原生→脚本"回调链）；
+/// 内部原生递归（容器相等／哈希／迭代器链）另由**深度参数守卫**（round 288，A-0）兜住。
 pub const MAX_CALL_DEPTH: usize = 1000;
 
 /// **原生递归深度的安全上限**（`PLAN §12.22` S2 后）：脚本→脚本调用已走**显式帧栈**（不增加
 /// 原生栈），只有"原生（内建回调）→ 脚本"这条链仍靠 Rust 递归 ⇒ 单独守卫，超限抛**可捕获**
 /// `RecursionError`（比参照早，但**绝不让原生栈崩**；`DIV-11` 如实收窄）。
+///
+/// round 288（A-0）起：**不经过 `execute` 的内部原生递归**（`equality_public`／`values_equal`／
+/// `key_hash_checked`／`hash_object`／`order_of`／`advance_iterator`）也各自带深度守卫，口径用
+/// `recursion_limit`（见 `values::native_recursion_error`）——它们与这个常量无关。
 pub const MAX_NATIVE_DEPTH: usize = 64;
 
 /// **`sys.setrecursionlimit` 的安全上限**（`PLAN §12.22` S3 的"可升＋安全上限"）：

@@ -450,7 +450,7 @@ fn membership_and_equality_use_wtf8_code_points() {
     );
     // `==`／`!=`：WTF-8 字节相等（`values_equal_public` 走 `str_equals` ✓）
     let same = lone_surrogate_object(&instance);
-    assert!(values_equal_public(&instance, whole, same));
+    assert!(values_equal_public(&instance, whole, same).expect("值比较不该失败"));
     let other = instance.new_str_wtf8(b"a\xED\xA0\x81b").expect("合法 WTF-8");
-    assert!(!values_equal_public(&instance, whole, other));
+    assert!(!values_equal_public(&instance, whole, other).expect("值比较不该失败"));
 }
