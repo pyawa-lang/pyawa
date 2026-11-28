@@ -589,25 +589,79 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                     }
                     if !is_generator && !is_coroutine && !is_async_generator {
                         // 普通迭代器：参照实现的语义是"取下一个"（`yield from [1, 2]` 就走这条）。
-                        // 送进去的值对没有 `send` 的对象没有去处——本层只接受 `None`（如实报其余）。
                         let sent_is_none =
                             unsafe { sent.as_ref() }.ty() == instance.singletons().none_type();
-                        if !sent_is_none {
+                        if sent_is_none {
                             release(instance, sent);
-                            return Err(ExecError::Unsupported {
-                                opcode: opcode_number,
-                                what: "SEND 送非 None 给普通迭代器（参照实现走 `send`／`next` 协议）",
-                            });
-                        }
-                        release(instance, sent);
-                        match advance_iterator(instance, receiver, opcode_number)? {
-                            Some(item) => frame.get().push(item)?,
-                            None => {
-                                // 耗尽：压"迭代器的返回值"——普通迭代器没有返回值，压 `None`
-                                // （`yield from` 的 `END_SEND` 会把接收者收掉、留下这一格）
-                                push(instance, frame.get(), instance.singletons().none())?;
-                                decoder.set_position(target);
+                            match advance_iterator(instance, receiver, opcode_number)? {
+                                Some(item) => frame.get().push(item)?,
+                                None => {
+                                    // 耗尽：压"迭代器的返回值"——普通迭代器没有返回值，压 `None`
+                                    // （`yield from` 的 `END_SEND` 会把接收者收掉、留下这一格）
+                                    push(instance, frame.get(), instance.singletons().none())?;
+                                    decoder.set_position(target);
+                                }
                             }
+                            return Ok(Step::Continue);
+                        }
+                        // **A-2a（PEP 380 的"子迭代器 send"）**：送非 None 时参照走
+                        // `receiver.send(sent)`（没有 `send` 属性 ⇒ `AttributeError`）；返回的值
+                        // 就是本次让出值，`StopIteration` 的 `value` 就是 `SEND` 的返回值。
+                        // 先前这里一律报 `Unsupported` ✗ —— canonical 循环修好后送非 None 的值
+                        // 会真的流到这里（`yield from [1, 2]` 后 `send(5)` ⇒ 参照 `AttributeError`）。
+                        let method = match attribute_optional(instance, receiver, "send") {
+                            Ok(Some(method)) => method,
+                            Ok(None) => {
+                                let receiver_type = unsafe { receiver.as_ref() }.ty();
+                                let name = instance.type_name(receiver_type);
+                                release(instance, sent);
+                                return Err(raise_builtin(
+                                    instance,
+                                    "AttributeError",
+                                    &format!("'{name}' object has no attribute 'send'"),
+                                ));
+                            }
+                            Err(error) => {
+                                release(instance, sent);
+                                return Err(error);
+                            }
+                        };
+                        let outcome = call_value(instance, method, &[sent], &[]);
+                        release(instance, method);
+                        release(instance, sent);
+                        match outcome {
+                            Ok(value) => {
+                                // 子迭代器 send 返回的让出值 ⇒ push 后继续（下一条 `YIELD_VALUE`）。
+                                frame.get().push(value)?;
+                            }
+                            Err(ExecError::Raised { exception }) => {
+                                // SAFETY: exception 是存活对象。
+                                let raised = unsafe { exception.get().as_ref() }.ty();
+                                let stop_iteration = instance
+                                    .hot_type(HotId::StopIteration)
+                                    .expect("StopIteration 已登记");
+                                if instance.is_subtype(raised, stop_iteration) {
+                                    // `StopIteration(value)` ⇒ 压 value（没有实参 ⇒ `None`），跳 END_SEND。
+                                    // SAFETY: 类型已确认 ⇒ 载荷是 `ExceptionObject`。
+                                    let exception_object = unsafe {
+                                        &*exception.get().as_ptr().cast::<ExceptionObject>()
+                                    };
+                                    let value = match exception_object.args().first().copied() {
+                                        Some(value) => {
+                                            // SAFETY: 值由异常对象持有；这里新增一份交给帧。
+                                            unsafe { instance.incref_object(value.as_ptr()) };
+                                            value
+                                        }
+                                        None => instance.singletons().none(),
+                                    };
+                                    exception.discard();
+                                    frame.get().push(value)?;
+                                    decoder.set_position(target);
+                                } else {
+                                    return Err(ExecError::Raised { exception });
+                                }
+                            }
+                            Err(other) => return Err(other),
                         }
                         return Ok(Step::Continue);
                     }
@@ -620,7 +674,42 @@ pub(super) fn step_iterators<'a>(instance: &'a Instance, frame: &Owned<'a, Frame
                         decoder.set_position(target);
                         return Ok(Step::Continue);
                     }
-                    // 复用"恢复生成器"的同一段逻辑（`send`／`__next__` 走的是它）
+                    // **A-2a**：`yield from` 的委托链改**显式推进**（内联进 `execute_stack` 的
+                    // 委托帧），不再 `resume_generator → execute` 递归（深链会吃 D1 原生预算）。
+                    // 只有**精确 generator** 走这条；`coroutine`／`async_generator`／`asend` 的
+                    // SEND 分支原样保留（await／async for 的递归不受影响）。
+                    if is_generator {
+                        // 重入守卫（与 `resume_generator` 同一文案：`ValueError: … already executing`）。
+                        if generator.running() {
+                            release(instance, sent);
+                            let word = instance.type_name(unsafe { receiver.as_ref() }.ty());
+                            return Err(raise_builtin(
+                                instance,
+                                "ValueError",
+                                &format!("{word} already executing"),
+                            ));
+                        }
+                        // 委托帧计入**语义**递归额度（`recursion_limit`；与 CPython `SEND_GEN` 里
+                        // `py_recursion_remaining--` 同口径）。**不碰** D1／`MAX_NATIVE_DEPTH`。
+                        if instance.enter_call().is_err() {
+                            release(instance, sent);
+                            return Err(instance.raise_builtin_error(
+                                "RecursionError",
+                                "maximum recursion depth exceeded",
+                            ));
+                        }
+                        // `running` 在委托帧出栈时由 `FrameSlot::finish_delegate` 清掉；
+                        // 生成器引用新增一份交给委托帧（出栈时归还）。
+                        generator.set_running(true);
+                        // SAFETY: receiver 在父帧值栈上，存活；新增一份交给委托帧。
+                        unsafe { instance.incref_object(receiver.as_ptr()) };
+                        return Err(ExecError::DeferredGeneratorSend {
+                            generator: receiver,
+                            sent,
+                            return_target: target,
+                        });
+                    }
+                    // 协程／异步生成器：沿用原"恢复生成器"的同一段逻辑（`send`／`__next__` 同一条）。
                     match resume_generator(instance, receiver, Some(sent))? {
                         GeneratorOutcome::Yielded(value) => {
                             // 让出的值是**新引用**，裸 `Frame::push` 正好接手
