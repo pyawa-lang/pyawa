@@ -1,6 +1,6 @@
 # NEXT（2026-11-21 · alpha 迁移完成；工作流＝main + feat/spike）
 
-- **HEAD**：`ef42f587`（本笔前）· **工作区**：干净
+- **HEAD**：`1456939e`（本笔前）· **工作区**：干净
 - **当前主线**：`main`（受保护，PR-only，squash-only；既有 m1–m6/alpha 历史与 tag 未改写）
 - **分支模型**：`main` ＋ `feat/*`（短命）＋ `spike/*`（永不合并）；见 `docs/WORKFLOW.md`
 - **历史**：`archive/pre-alpha-dev` = `cea7e306`；`dev` 已删除（ADR-003）；安全网
@@ -10,11 +10,12 @@
 - **已采用（round 282）**：Windows CLI asyncio **默认 Proactor**（P1–P3 数据面全绿后切回；selector 仅作脚本显式逃生口）
 - **已采用（round 286）**：Windows CLI asyncio **数字 IPv6**（`CP-47`：4 元组 ⇔ 18B wire；DNS／`scope_id`／`flowinfo` 仍不在）
 - **已采用（round 292／A-1）**：内建容器 `repr` 改**堆上显式 worklist**（`recursion_limit` 深度口径；ABI／wasm 也能到 1000；输出逐字节不变）
+- **已采用（round 293／A-2a）**：`yield from` 的 **send 向下传**＋**委托链显式委托帧**（堆上 `execute_stack`，不吃 D1；ABI 200／900 层成功）；`throw`／`close` 链路由（A-2b）仍未做
 - **仅报告不采用**：JSPI／asyncio-on-wasm（`docs/rounds/spikes/`）
 - **架构决定（2026-11-21）**：ADR-005 accepted；长期目标＝L2 宿主拥有事件循环，
   L1 event 域为底座，L3 不承诺；详见 `docs/DESIGN-event-source.md`、`PLAN §12.27`。
 - **下一步（按序）**：
-  0. A 本体后续轮（A-2 …，待排期）；A-1 ✓ 已落地（round 292）；
+  0. A 本体后续轮：A-1 ✓（round 292）、A-2a ✓（round 293）；下一步 **A-2b**（`yield from` 的 `throw`/`close` 链路由）→ **D**（`next(gen)` 的 `StopIteration.value`）→ A-3／A-4；
   1. S1 规格 ✓ 草案：`SPEC-capabilities.md` §9.10（`CP-40`…`CP-46`）＋`SPEC-c-abi.md`
      §15.6（`AB-82`…`AB-87`）；host awaitable 不在 S1（`AB-86`）；
   2. S1.1 规格 ✓ 草案：host awaitable 对象协议（`AB-88`…`AB-91`）；

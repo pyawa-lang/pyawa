@@ -577,3 +577,61 @@ fn tuples_of_values(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec
 
 
 
+
+/// **A-2a**：`yield from` 的降级形状必须与 CPython 3.14 一致
+/// （`GET_YIELD_FROM_ITER; LOAD_CONST None; L: SEND L_done; YIELD_VALUE 1; RESUME 2;
+/// JUMP_BACKWARD_NO_INTERRUPT L; L_done: END_SEND` —— 循环标签在 `SEND` 上、循环尾**无**
+/// `POP_TOP`）。
+///
+/// 旧形状把标签打在 `LOAD_CONST None` 前、循环尾多一条 `POP_TOP` ⇒ 恢复时送进去的值被吃掉，
+/// `gen.send(x)` 到不了被委托的生成器（A-2a 修）；这里钉住一个反回退的形状检查。
+#[test]
+fn yield_from_lowering_has_the_canonical_send_loop() {
+    let unit = compile(
+        "def outer():\n    yield from inner()\n",
+        "<test>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect("编译失败");
+    let outer_unit = unit
+        .constants
+        .iter()
+        .find_map(|constant| match constant {
+            Constant::Code(code) => Some(&**code),
+            _ => None,
+        })
+        .expect("模块常量里应有 outer 的 code object");
+    let outer = instruction_stream(outer_unit);
+    let names: Vec<&str> = outer.iter().map(|(_, _, name, _)| name.as_str()).collect();
+    let position = |name: &str| {
+        names
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap_or_else(|| panic!("outer 里没有 {name}：{names:?}"))
+    };
+    let cache_units = |index: usize| -> usize {
+        pyawa_core::opcode::inline_cache_entries(u16::from(outer[index].1)) as usize
+    };
+    // ① `GET_YIELD_FROM_ITER` 后紧接 `LOAD_CONST`（None），再紧接 `SEND`（循环标签在 SEND 上）。
+    let get_iter = position("GET_YIELD_FROM_ITER");
+    assert_eq!(names[get_iter + 1], "LOAD_CONST", "GET_YIELD_FROM_ITER 后应是 LOAD_CONST None：{names:?}");
+    let send = position("SEND");
+    assert_eq!(send, get_iter + 2, "循环标签必须在 SEND 上（LOAD_CONST 与 SEND 相邻）：{names:?}");
+    // ② `SEND` 后是 `YIELD_VALUE 1`（挂起于 yield from）、`RESUME`、**直接**回边（无 POP_TOP）。
+    assert_eq!(names[send + 1], "YIELD_VALUE", "SEND 后应是 YIELD_VALUE：{names:?}");
+    assert_eq!(outer[send + 1].3, 1, "yield from 的 YIELD_VALUE oparg 应为 1：{names:?}");
+    assert_eq!(names[send + 2], "RESUME", "YIELD_VALUE 后应是 RESUME：{names:?}");
+    assert_eq!(
+        names[send + 3], "JUMP_BACKWARD_NO_INTERRUPT",
+        "RESUME 后必须直接回边（旧形状在这里多一条 POP_TOP 吃掉了 send 值）：{names:?}"
+    );
+    // ③ 回边目标＝`SEND` 的码元；`SEND` 的前向目标＝`END_SEND`。
+    let jump = &outer[send + 3];
+    let back_target = jump.0 + 1 + cache_units(send + 3) - jump.3 as usize;
+    assert_eq!(back_target, outer[send].0, "回边应跳回 SEND：{names:?}");
+    let forward_target = outer[send].0 + 1 + cache_units(send) + outer[send].3 as usize;
+    let end_send = position("END_SEND");
+    assert_eq!(forward_target, outer[end_send].0, "SEND 的前向目标应是 END_SEND：{names:?}");
+}

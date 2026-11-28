@@ -645,7 +645,19 @@ worklist**（`crates/pyawa-core/src/builtin_objects/repr_worklist.rs`：每帧�
 待写后缀；循环检测仍走 `enter_repr` 的地址链 RAII）：内建容器嵌套**不吃原生栈**，深度口径＝
 `recursion_limit`（默认 1000，`setrecursionlimit` 可到 10000，超限报可捕获 `RecursionError`）；
 用户 `__repr__` 回调仍走原协议，其原生栈仍由 `D1` 声明预算守（不改 D1）。输出逐字节不变
-（conformance 407 语料 0 diff）。A-2／A-3／A-4 未做。
+（conformance 407 语料 0 diff）。
+
+**round 293（A-2a：`yield from` send ＋ 显式委托帧）**：A 本体拆分后的第一轮（Lead 拍板：
+A-2a ＝ emitter 规范形状 ＋ `execute_stack` 委托帧，只修 **send 向下传**与**深度**；A-2b 的
+`throw`／`close` 链路由下一轮）。此前 `yield from` 每层委托走 `SEND → resume_generator → execute`
+**Rust 递归**（深度吃 `D1`：ABI／嵌入／wasm 默认 64），且 emitter 循环标签打在 `LOAD_CONST`
+前、循环尾多 `POP_TOP` ⇒ `gen.send(x)` 的值到不了被委托的生成器。已把委托链改为
+**堆上 `execute_stack` 委托帧**（内层 yield 回填父帧继续 `YIELD_VALUE`、return 回填并跳
+`END_SEND`、异常按 `SEND` 偏移走父帧异常表；`enter_call/leave_call` 计 `recursion_limit`，
+**不碰 D1**），emitter 改回 CPython 3.14 规范形状（标签在 `SEND`、循环尾无 `POP_TOP`）。
+⇒ ABI（未声明预算）200／900 层链成功、CLI 990 层成功、1200＋层可捕获 `RecursionError`；
+send 逐层传递与参照一致（conformance 407 0 新差异）。**A-2b（`throw`/`close`）与 A-4 仍未做**；
+`coroutine`／`await` 的 SEND 仍原生递归。
 
 ### 12.23 Windows 原生 CLI：**已落地（2026-11-17，选项 A）**
 

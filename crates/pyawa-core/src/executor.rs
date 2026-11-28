@@ -101,6 +101,18 @@ pub enum ExecError {
     ///
     /// **只在 `execute` 里被消费**：其它任何地方看到它都说明代码路径错了（不该被当作机器错误）。
     DeferredScriptCall { frame: NonNull<Header> },
+    /// **A-2a（`yield from` 显式委托）**：字节码 `SEND` 命中的是**生成器** ⇒ 把内层生成器帧
+    /// 作为**委托帧**压进同一个 [`execute`] 驱动栈（不再 `resume_generator → execute` 递归，
+    /// 深链因此不吃 D1 原生预算）。
+    ///
+    /// `generator`／`sent` 都是**新引用**（`SEND` 交接给委托帧；消费方负责归还）；
+    /// `return_target` 是内层 `return` 时父帧要跳到的 `END_SEND` 码元位置。
+    /// **只在 `execute_stack` 里被消费**（同 `DeferredScriptCall` 口径：不该被当作机器错误）。
+    DeferredGeneratorSend {
+        generator: NonNull<Header>,
+        sent: NonNull<Header>,
+        return_target: usize,
+    },
 }
 
 impl From<DecodeError> for ExecError {
@@ -2154,6 +2166,18 @@ fn instruction_term(opcode_number: u8) -> Option<(OpGroup, &'static str)> {
 /// 把原先 `execute` 里的"装守卫 → 解码 → 跑循环"拆成可复用的一份：单帧运行仍与旧实现
 /// **逐条等价**（守卫顺序／异常派发／生成器挂起都在同一位置），但状态现在能放进栈里——
 /// 下一阶段"压帧＋回主循环"（脚本调用不吃原生栈）就以此为底座。
+/// **A-2a**：`SEND` 命中生成器时压进来的**委托帧**记账。
+///
+/// 委托帧与脚本调用帧共用同一个 [`FrameSlot`]／`execute_stack`：让出值回填父帧继续父帧的
+/// `YIELD_VALUE`、返回时回填并跳 `END_SEND`、异常按 `SEND` 偏移走父帧异常表；**每帧不新开
+/// 原生 `execute`**（因此不吃 D1；深度计 `recursion_limit`）。
+struct DelegateSlot {
+    /// 被委托的生成器（本槽持有一份引用：出栈时清 `running`、按需标 `finished` 并归还）。
+    generator: NonNull<Header>,
+    /// 内层 `return` 时父帧要跳到的 `END_SEND` 码元位置。
+    return_target: usize,
+}
+
 struct FrameSlot<'a> {
     /// 本帧的全局映射守卫（`globals()`；`Drop` 恢复调用者那份）。
     _globals_guard: CurrentGlobalsGuard<'a>,
@@ -2172,6 +2196,8 @@ struct FrameSlot<'a> {
     forced_raise: Option<NonNull<Header>>,
     /// 本帧**最近一条指令的字节偏移**（S2 的 CALL 展开要在调用者这一偏移上派发异常）。
     call_offset: usize,
+    /// **A-2a**：`Some` ⇒ 本槽是 `SEND` 内联的**生成器委托帧**（不是脚本调用帧）。
+    delegate: Option<DelegateSlot>,
 }
 
 impl<'a> FrameSlot<'a> {
@@ -2201,7 +2227,60 @@ impl<'a> FrameSlot<'a> {
             decoder,
             forced_raise,
             call_offset: 0,
+            delegate: None,
         })
+    }
+
+    /// **A-2a**：建一个**委托帧**。`generator`／`sent` 的**新引用**由本函数接手
+    /// （任何失败路径都归还，不在半途泄引用）。
+    fn new_delegate(
+        instance: &'a Instance,
+        frame: Owned<'a, Frame>,
+        generator: NonNull<Header>,
+        sent: NonNull<Header>,
+        return_target: usize,
+    ) -> Result<Self, ExecError> {
+        let mut slot = match Self::new(instance, frame) {
+            Ok(slot) => slot,
+            Err(error) => {
+                // SAFETY: 两个都是调用方交来的新引用，本函数未接手成功 ⇒ 归还。
+                unsafe {
+                    instance.release_object(sent.as_ptr());
+                    instance.release_object(generator.as_ptr());
+                }
+                return Err(error);
+            }
+        };
+        // "送进去的值"交给内层帧值栈（`Frame::push` 接手**新引用**；失败时引用还在我们手里）。
+        if let Err(error) = slot.frame.get().push(sent) {
+            // SAFETY: push 失败没有接手 sent；generator 也尚未交给任何地方。
+            unsafe {
+                instance.release_object(sent.as_ptr());
+                instance.release_object(generator.as_ptr());
+            }
+            return Err(error.into());
+        }
+        slot.delegate = Some(DelegateSlot { generator, return_target });
+        Ok(slot)
+    }
+
+    /// **A-2a**：收掉委托帧的生成器记账（出栈时调用）。
+    ///
+    /// * `finished`：内层**返回／异常**（生成器就此作废）⇒ 置 `finished`；
+    ///   让出（yield）则只清 `running`、生成器保持挂起。
+    /// * 同时归还本槽持有的那份生成器引用。
+    fn finish_delegate(&mut self, instance: &Instance, finished: bool) {
+        let Some(delegate) = self.delegate.take() else {
+            return;
+        };
+        // SAFETY: 本槽持有一份引用，生成器存活。
+        let object = unsafe { &*delegate.generator.as_ptr().cast::<GeneratorObject>() };
+        object.set_running(false);
+        if finished {
+            object.mark_finished();
+        }
+        // SAFETY: 归还本槽那一份引用。
+        unsafe { instance.release_object(delegate.generator.as_ptr()) };
     }
 }
 
@@ -2406,11 +2485,13 @@ fn execute_stack<'a>(
         // 调用者自己的异常表；处理不了就把异常记回 `pending_raise` 继续往上一层弹。
         if let Some(exception) = pending_raise.take() {
             let is_base = stack.len() == 1;
-            let child = stack.pop().expect("栈里至少有一帧");
+            let mut child = stack.pop().expect("栈里至少有一帧");
             if !is_base {
                 // 只有**延迟帧**在 `call_callable` 里记过 `enter_call`（底帧由它的调用方记）。
                 instance.leave_call();
             }
+            // **A-2a**：异常逃出委托帧 ⇒ 生成器作废（置 finished／清 running／还引用）。
+            child.finish_delegate(instance, true);
             drop(child);
             if stack.is_empty() {
                 // 底帧没接住 ⇒ 交回 `call_callable`（它会按"调用者上下文"补链并上抛）。
@@ -2451,30 +2532,88 @@ fn execute_stack<'a>(
                 }
                 // 先取成**新引用**（`value` 借用子帧值栈），再弹帧释放那一份。
                 let raw = runtime::value_into_raw(instance, value);
-                let child = stack.pop().expect("上面已判非底");
+                let mut child = stack.pop().expect("上面已判非底");
                 instance.leave_call();
+                // **A-2a**：委托帧要收生成器记账（置 finished／清 running／还引用）。
+                let delegate_target = child
+                    .delegate
+                    .as_ref()
+                    .map(|delegate| delegate.return_target);
+                child.finish_delegate(instance, true);
                 drop(child);
                 let parent = stack.last_mut().expect("父帧存在");
                 // **接管语义**（与 `CALL` 指令同款）：`raw` 是 `value_into_raw` 交出的**新引用**，
                 // `Frame::push` 直接接手；不能用借用语义的 `runtime::push`（那会再加一份 ⇒ 每次
                 // 脚本调用漏一个返回值引用——`bad_exit_does_not_leak` 实测抓到的就是这个）。
                 parent.frame.get().push(raw)?;
+                // **A-2a**：内层生成器返回 ⇒ 父帧跳 `END_SEND`（把返回值从"接收者"里摘出来）。
+                if let Some(target) = delegate_target {
+                    parent.decoder.set_position(target);
+                }
                 continue;
             }
             Ok(FrameEvent::Yield(value)) => {
                 if stack.len() == 1 {
                     return Ok(ExecOutcome::Yielded(value));
                 }
-                return Err(ExecError::Unsupported {
-                    opcode: 0,
-                    what: "显式帧栈里的内层帧让出（生成器函数在 call_callable 里已提前交出对象，不该发生）",
-                });
+                // **A-2a**：委托帧让出 ⇒ 值回填父帧值栈，继续父帧（父帧下一条就是
+                // `YIELD_VALUE`，会把它逐层让出去）；内层生成器保持挂起。
+                let is_delegate = stack
+                    .last()
+                    .is_some_and(|slot| slot.delegate.is_some());
+                if !is_delegate {
+                    return Err(ExecError::Unsupported {
+                        opcode: 0,
+                        what: "显式帧栈里的内层帧让出（生成器函数在 call_callable 里已提前交出对象，不该发生）",
+                    });
+                }
+                // `FrameEvent::Yield` 交的已经是**新引用**（`YIELD_VALUE` 刚从值栈弹出）。
+                let raw = value;
+                let mut child = stack.pop().expect("已判非底");
+                instance.leave_call();
+                // 让出只是挂起：清 running、保留生成器（不标 finished）。
+                child.finish_delegate(instance, false);
+                drop(child);
+                let parent = stack.last_mut().expect("父帧存在");
+                // 接管语义：raw 是新引用，父帧下一条 `YIELD_VALUE` 会把它弹出去。
+                parent.frame.get().push(raw)?;
+                continue;
             }
             Err(ExecError::DeferredScriptCall { frame: child_frame }) => {
                 // SAFETY: `call_callable` 用 `mem::forget` **转移**了这份引用（新引用契约）。
                 // SAFETY: `child_frame` 是 `call_callable` 用 `mem::forget` 转移过来的**新引用**。
                 let child: Owned<'a, Frame> = Owned::new(child_frame.cast::<Frame>(), instance);
                 let slot = FrameSlot::new(instance, child)?;
+                stack.push(slot);
+                continue;
+            }
+            Err(ExecError::DeferredGeneratorSend {
+                generator,
+                sent,
+                return_target,
+            }) => {
+                // **A-2a**：`SEND` 命中生成器 ⇒ 压**委托帧**（帧已在堆上；不新开原生 `execute`）。
+                // SAFETY: generator 是活着的生成器（`SEND` 里刚做的 `running` 校验）；其帧由它持有。
+                let frame_header =
+                    unsafe { (&*generator.as_ptr().cast::<GeneratorObject>()).frame() };
+                // SAFETY: 帧由生成器持有，这里新增一份引用交给守卫。
+                unsafe { instance.incref_object(frame_header.as_ptr()) };
+                let child: Owned<'a, Frame> = Owned::new(frame_header.cast::<Frame>(), instance);
+                let slot = match FrameSlot::new_delegate(
+                    instance,
+                    child,
+                    generator,
+                    sent,
+                    return_target,
+                ) {
+                    Ok(slot) => slot,
+                    Err(error) => {
+                        // `SEND` 已经为本帧记过 `enter_call` ⇒ 建槽失败要还回去
+                        //（`new_delegate` 自己负责归还 generator／sent 两张新引用）。
+                        instance.leave_call();
+                        return Err(error);
+                    }
+                };
                 stack.push(slot);
                 continue;
             }
@@ -2485,8 +2624,9 @@ fn execute_stack<'a>(
             Err(other) => {
                 // 机器级错误：不再逐帧派发；按 LIFO 收掉延迟帧的 `enter_call` 记账后原样上抛。
                 while stack.len() > 1 {
-                    let child = stack.pop().expect("非空");
+                    let mut child = stack.pop().expect("非空");
                     instance.leave_call();
+                    child.finish_delegate(instance, true);
                     drop(child);
                 }
                 return Err(other);
