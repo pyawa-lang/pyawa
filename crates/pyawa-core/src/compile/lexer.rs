@@ -143,6 +143,12 @@ fn stack_address() -> usize {
 /// 编译期栈预算（字节）：默认 512 KiB（小栈宿主也留余量）；`PYAWA_PARSE_STACK` 覆盖，
 /// 夹到 [64 KiB, 256 MiB]。CLI／对拍 harness 声明 64 MiB（512 MiB／64 MiB 线程）。
 fn parse_stack_budget() -> usize {
+    // **profile 相关默认**：debug 的 parser 帧大得多（Windows debug 实测：Lib 模块的正常嵌套
+    // 解析超过 512 KiB ⇒ 误报），故 debug 默认 4 MiB；release 帧小，默认 512 KiB（小栈宿主更安全）。
+    // 两者都可用 `PYAWA_PARSE_STACK` 覆盖（CLI／对拍 harness 声明 64 MiB）。
+    #[cfg(debug_assertions)]
+    const DEFAULT: usize = 4 * 1024 * 1024;
+    #[cfg(not(debug_assertions))]
     const DEFAULT: usize = 512 * 1024;
     std::env::var("PYAWA_PARSE_STACK")
         .ok()
