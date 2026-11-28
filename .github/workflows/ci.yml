@@ -12,6 +12,9 @@ on:
 #  - windows：每次 push/PR —— Windows 最小"能编译"＋ provider／os 形状测试 ＋ core/lsp 测试
 #              ＋ 参考宿主（MSVC）（PLAN §12.20 W1–W6 首批；M3-COVERAGE 显式 SKIP；
 #              Windows 不做 memcheck——口径见 RELEASE）
+#  - mobile：**仅 main push 与 workflow_dispatch** —— Android NDK（ubuntu）／iOS（macOS）交叉
+#            构建档：staticlib＋cdylib 产物 ＋ ABI 导出符号检查（PLAN §12.26 P2）。
+#            **PR 不跑**（macOS runner 分钟数贵），且**不是**必需检查（WORKFLOW 的必需检查不变）。
 #  - full：PR／手动／每周 —— slowcheck 11 项（含基准闸：性能回退 + memcheck 子集）
 # 同一 PR 的新 push 取消旧 run（文档/提交迭代时尤其省时间；不取消 main 的独立 run）。
 concurrency:
@@ -106,6 +109,41 @@ jobs:
           name: portability-wasm
           path: portability-wasm.json
           if-no-files-found: error
+
+  # **移动端构建档**（`PLAN §12.26` P2）：aarch64-linux-android（Android NDK）／
+  # aarch64-apple-ios（Xcode）交叉构建 staticlib＋cdylib，并用 llvm-nm 检查 ABI 导出符号。
+  # **只在 main push 与 workflow_dispatch 跑**——PR 不跑（macOS runner 分钟数贵）；
+  # 本 job **不是**必需检查（WORKFLOW 的必需检查清单不变）。
+  mobile:
+    name: 移动端构建档（${{ matrix.label }}）
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Android aarch64
+            os: ubuntu-latest
+            target: android
+          - label: iOS aarch64
+            os: macos-latest
+            target: ios
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+      # 符号检查优先用与 rustc **同 LLVM 版本**的 llvm-nm（rust 的 LLVM 常比宿主新）。
+      - name: llvm-tools（llvm-nm，符号检查用）
+        run: rustup component add llvm-tools-preview
+      # rust-std 目标缺失时由脚本自行 `rustup target add`；Android 的 NDK／linker 也由脚本探测。
+      - name: 交叉构建＋产物＋导出符号检查（${{ matrix.target }}）
+        run: tools/ci/mobile_build.sh ${{ matrix.target }}
+        shell: bash
 
   # Windows 拆分：并行子 job ＋ **同名聚合门**（required check 不变）。
   windows-build:
