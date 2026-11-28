@@ -180,7 +180,7 @@ fn proxy_delete(instance: &Instance, proxy: NonNull<Header>, key: NonNull<Header
     match found {
         Some(_) => {
             let shadow_key = instance.new_str(&proxy_key_text(instance, key));
-            instance.dict_remove_key(object.shadow(), shadow_key);
+            instance.dict_remove_key(object.shadow(), shadow_key)?;
             // SAFETY: shadow_key 是本函数的新引用。
             unsafe { instance.release_object(shadow_key.as_ptr()) };
             Ok(())
@@ -627,9 +627,9 @@ fn proxy_eq_native(
         Some(other) => {
             let snapshot = proxy_snapshot(instance, proxy);
             let result = crate::executor::values_equal_public(instance, snapshot, other);
-            // SAFETY: snapshot 是本函数的新引用。
+            // SAFETY: snapshot 是本函数的新引用（错误路径也要还）。
             unsafe { instance.release_object(snapshot.as_ptr()) };
-            result
+            result?
         }
         None => false,
     };

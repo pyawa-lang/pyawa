@@ -106,7 +106,7 @@ pub fn object_eq_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
     };
-    Ok(instance.new_bool(crate::executor::values::values_equal_public(instance, left, *right)))
+    Ok(instance.new_bool(crate::executor::values::values_equal_public(instance, left, *right)?))
 }
 /// `object.__ne__(self, other)`：**`==` 的结果取反** ✓（参照文档的默认语义 ✓ —— "delegates to
 /// `__eq__()` and reverses the result" ✓）。

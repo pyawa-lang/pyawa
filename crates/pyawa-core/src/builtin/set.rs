@@ -190,7 +190,7 @@ pub(crate) fn set_contains(
     instance: &Instance,
     set: NonNull<Header>,
     item: NonNull<Header>,
-) -> Option<NonNull<Header>> {
+) -> Result<Option<NonNull<Header>>, crate::ExecError> {
     // SAFETY: 调用方保证 set 是本实例的 `set`。
     let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
     if crate::diag::flag_site!("PYAWA_SET_TRACE") {
@@ -205,15 +205,17 @@ pub(crate) fn set_contains(
     if let Some(hash) = crate::executor::values::key_hash(instance, item) {
         object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
         for existing in object.candidates(hash) {
-            if crate::executor::values::values_equal_public(instance, existing, item) {
-                return Some(existing);
+            if crate::executor::values::values_equal_public(instance, existing, item)? {
+                return Ok(Some(existing));
             }
         }
-        return None;
+        return Ok(None);
     }
-    object
-        .position_of(|candidate| crate::executor::values::values_equal_public(instance, candidate, item))
-        .and_then(|position| object.item(position))
+    Ok(object
+        .position_of_checked(|candidate| {
+            crate::executor::values::values_equal_public(instance, candidate, item)
+        })?
+        .and_then(|position| object.item(position)))
 }
 
 /// **往集合里加一项**（round 70）：已存在 ⇒ 归还这份引用并给 `Ok(false)` ✓；
@@ -232,7 +234,7 @@ pub(crate) fn set_insert(
         {
             return crate::executor::protocol::equality_public(instance, candidate, item);
         }
-        Ok(crate::executor::values::values_equal_public(instance, candidate, item))
+        crate::executor::values::values_equal_public(instance, candidate, item)
     };
     if let Some(hash) = crate::executor::values::key_hash(instance, item) {
         object.ensure_index(|candidate| crate::executor::values::key_hash(instance, candidate));
@@ -299,7 +301,7 @@ pub(crate) fn set_discard_native(
             "discard() takes exactly one argument (0 given)",
         ));
     };
-    if let Some(existing) = set_contains(instance, set, *item) {
+    if let Some(existing) = set_contains(instance, set, *item)? {
         // SAFETY: 上面刚确认是本实例的 set。
         let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
         // **指针索引删除**（round 88）：只摘那一个指针 ✓（下标不参与 ✓）；可哈希时 O(桶长) ✓。
@@ -359,7 +361,7 @@ pub(crate) fn set_update_native(
     // `iterable_items` 交的是**新引用** ⇒ 重复项归还、新项由 `set_insert_raw` 接手 ✓
     //（先前重复项既不放、新项又多 retain 一次 ✗ ⇒ 两处泄漏；round 58 统一口径 ✓）。
     for item in items {
-        if set_contains(instance, set, item).is_some() {
+        if set_contains(instance, set, item)?.is_some() {
             instance.release(item);
         } else {
             instance.set_insert_raw(set, item);
@@ -416,9 +418,13 @@ pub(crate) fn set_issuperset_native(
     let Some(items) = instance.iterable_items(*other)? else {
         return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
     };
-    let superset = items
-        .iter()
-        .all(|item| set_contains(instance, set, *item).is_some());
+    let mut superset = true;
+    for item in &items {
+        if !set_contains(instance, set, *item)?.is_some() {
+            superset = false;
+            break;
+        }
+    }
     Ok(instance.retain(instance.singletons().boolean(superset)))
 }
 
@@ -604,7 +610,7 @@ fn set_binary_op_native(
             &format!("{symbol} expected 1 argument, got 0"),
         ));
     };
-    Ok(crate::executor::set_operation(instance, left, *right, symbol))
+    crate::executor::set_operation(instance, left, *right, symbol)
 }
 
 pub(crate) fn set_sub_native(
@@ -668,18 +674,18 @@ pub(crate) fn set_union_native(
         },
     };
     let mut accumulated: Vec<NonNull<Header>> = Vec::new();
-    let mut push_unique = |item: NonNull<Header>| -> bool {
-        if accumulated.iter().any(|existing| {
-            crate::executor::values::values_equal_public(instance, *existing, item)
-        }) {
-            return false;
+    let mut push_unique = |item: NonNull<Header>| -> Result<bool, ExecError> {
+        for existing in &accumulated {
+            if crate::executor::values::values_equal_public(instance, *existing, item)? {
+                return Ok(false);
+            }
         }
         accumulated.push(item);
-        true
+        Ok(true)
     };
     // 自己那份是**借用** ⇒ 进新集合前各留一份 ✓。
     for item in instance.set_items(this).unwrap_or_default() {
-        if push_unique(item) {
+        if push_unique(item)? {
             instance.retain(item);
         }
     }
@@ -714,7 +720,7 @@ pub(crate) fn set_union_native(
                             ),
                         ));
                     }
-                    if !push_unique(item) {
+                    if !push_unique(item)? {
                         instance.release(item);
                     }
                 }
@@ -834,14 +840,24 @@ pub(crate) fn set_intersection_native(
     for argument in &rest {
         others.push(collect_iterable_owned(instance, *argument)?);
     }
-    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| {
-        items.iter().any(|existing| {
-            crate::executor::values::values_equal_public(instance, *existing, wanted)
-        })
+    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| -> Result<bool, ExecError> {
+        for existing in items {
+            if crate::executor::values::values_equal_public(instance, *existing, wanted)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     };
     let mut kept: Vec<NonNull<Header>> = Vec::new();
     for item in instance.set_items(this).unwrap_or_default() {
-        if others.iter().all(|other| contains(other, item)) {
+        let mut in_all = true;
+        for other in &others {
+            if !contains(other, item)? {
+                in_all = false;
+                break;
+            }
+        }
+        if in_all {
             instance.retain(item);
             kept.push(item);
         }
@@ -872,14 +888,24 @@ pub(crate) fn set_difference_native(
     for argument in &rest {
         others.push(collect_iterable_owned(instance, *argument)?);
     }
-    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| {
-        items.iter().any(|existing| {
-            crate::executor::values::values_equal_public(instance, *existing, wanted)
-        })
+    let contains = |items: &[NonNull<Header>], wanted: NonNull<Header>| -> Result<bool, ExecError> {
+        for existing in items {
+            if crate::executor::values::values_equal_public(instance, *existing, wanted)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     };
     let mut kept: Vec<NonNull<Header>> = Vec::new();
     for item in instance.set_items(this).unwrap_or_default() {
-        if !others.iter().any(|other| contains(other, item)) {
+        let mut in_any = false;
+        for other in &others {
+            if contains(other, item)? {
+                in_any = true;
+                break;
+            }
+        }
+        if !in_any {
             instance.retain(item);
             kept.push(item);
         }
@@ -907,11 +933,20 @@ pub(crate) fn set_issubset_native(
         ));
     };
     let other = collect_iterable_owned(instance, argument)?;
-    let missing = instance.set_items(this).unwrap_or_default().iter().any(|item| {
-        !other.iter().any(|existing| {
-            crate::executor::values::values_equal_public(instance, *existing, *item)
-        })
-    });
+    let mut missing = false;
+    for item in instance.set_items(this).unwrap_or_default() {
+        let mut present = false;
+        for existing in &other {
+            if crate::executor::values::values_equal_public(instance, *existing, item)? {
+                present = true;
+                break;
+            }
+        }
+        if !present {
+            missing = true;
+            break;
+        }
+    }
     for item in other {
         instance.release(item);
     }
@@ -933,11 +968,18 @@ pub(crate) fn set_isdisjoint_native(
         ));
     };
     let other = collect_iterable_owned(instance, argument)?;
-    let shared = instance.set_items(this).unwrap_or_default().iter().any(|item| {
-        other.iter().any(|existing| {
-            crate::executor::values::values_equal_public(instance, *existing, *item)
-        })
-    });
+    let mut shared = false;
+    for item in instance.set_items(this).unwrap_or_default() {
+        for existing in &other {
+            if crate::executor::values::values_equal_public(instance, *existing, item)? {
+                shared = true;
+                break;
+            }
+        }
+        if shared {
+            break;
+        }
+    }
     for item in other {
         instance.release(item);
     }

@@ -430,7 +430,7 @@ fn is_normalized_native(
     let original = args.get(1).copied().unwrap_or_else(|| normalized);
     let equal = pyawa_core::executor::values::values_equal_public(instance, normalized, original);
     instance.release(normalized);
-    Ok(instance.new_bool(equal))
+    Ok(instance.new_bool(equal?))
 }
 unimplemented_native!(mirrored_native => "mirrored", "本层没有镜像（mirrored）表");
 

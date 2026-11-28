@@ -294,9 +294,21 @@ fn view_contains_native(
     let mut found = false;
     for element in elements {
         let equal = if object.kind() == 1 {
-            crate::executor::protocol::equality_public(instance, item, element)?
+            match crate::executor::protocol::equality_public(instance, item, element) {
+                Ok(equal) => equal,
+                Err(error) => {
+                    instance.release(element);
+                    return Err(error);
+                }
+            }
         } else {
-            crate::executor::values_equal_public(instance, item, element)
+            match crate::executor::values_equal_public(instance, item, element) {
+                Ok(equal) => equal,
+                Err(error) => {
+                    instance.release(element);
+                    return Err(error);
+                }
+            }
         };
         instance.release(element);
         if equal {

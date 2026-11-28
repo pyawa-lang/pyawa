@@ -86,6 +86,7 @@ fn order_of_handles_wtf8_str_for_sorted_and_list_sort() {
     items.sort_by(|left, right| {
         instance
             .order_of(*left, *right)
+            .expect("order_of 不该失败")
             .expect("含代理的 str 之间必须可比")
     });
     let expected = [

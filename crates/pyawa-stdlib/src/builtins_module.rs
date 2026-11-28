@@ -755,6 +755,21 @@ fn hash_native(
 }
 
 pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Result<i64, ExecError> {
+    hash_object_at(instance, object, 0)
+}
+
+/// 带**原生递归深度**的 [`hash_object`]（`tuple`／`weakref` 目标链／`frozenset`；A-0）。
+fn hash_object_at(
+    instance: &Instance,
+    object: NonNull<Header>,
+    depth: usize,
+) -> Result<i64, ExecError> {
+    if depth > instance.recursion_limit() {
+        return Err(instance.raise_builtin_error(
+            "RecursionError",
+            "maximum recursion depth exceeded",
+        ));
+    }
     let ty = instance.type_of(object);
     if ty == instance.singletons().none_type() {
         return Ok(HASH_NONE);
@@ -774,7 +789,7 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
     if let Some(items) = instance.tuple_items(object) {
         let mut lanes = Vec::with_capacity(items.len());
         for item in items {
-            lanes.push(hash_object(instance, item)?);
+            lanes.push(hash_object_at(instance, item, depth + 1)?);
         }
         return Ok(hash_tuple(&lanes));
     }
@@ -793,7 +808,7 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
         }
         return match pyawa_core::weakref_state(instance, object).flatten() {
             Some(target) => {
-                let value = hash_object(instance, target)?;
+                let value = hash_object_at(instance, target, depth + 1)?;
                 pyawa_core::weakref_store_hash(instance, object, value);
                 Ok(value)
             }
@@ -811,7 +826,7 @@ pub(crate) fn hash_object(instance: &Instance, object: NonNull<Header>) -> Resul
             let n = items.len() as u64;
             let mut h = 1_927_868_237u64.wrapping_mul(n + 1);
             for item in items {
-                let hash = hash_object(instance, item)? as u64;
+                let hash = hash_object_at(instance, item, depth + 1)? as u64;
                 let mixed = (hash ^ (hash << 16) ^ 89869747).wrapping_mul(3_644_798_167);
                 h ^= mixed;
             }
@@ -3189,7 +3204,18 @@ fn extremum(
     let mut best_key = decorated_key(instance, best, key)?;
     for item in items.iter().skip(1) {
         let item_key = decorated_key(instance, *item, key)?;
-        match instance.order_of(item_key, best_key) {
+        let ordering = match instance.order_of(item_key, best_key) {
+            Ok(ordering) => ordering,
+            Err(error) => {
+                instance.release(item_key);
+                instance.release(best_key);
+                for item in &items {
+                    instance.release(*item);
+                }
+                return Err(error);
+            }
+        };
+        match ordering {
             Some(ordering) if ordering == want => {
                 instance.release(best_key);
                 best = *item;
@@ -3275,9 +3301,11 @@ fn sorted_native(
         decorated.push((*item, item_key));
     }
     let mut failure: Option<String> = None;
+    // **A-0**：比较可能报 `RecursionError`（内部原生递归超限）⇒ 先记下，排序结束后优先上抛。
+    let mut sort_error: Option<ExecError> = None;
     decorated.sort_by(|left, right| match instance.order_of(left.1, right.1) {
-        Some(ordering) => ordering,
-        None => {
+        Ok(Some(ordering)) => ordering,
+        Ok(None) => {
             failure.get_or_insert_with(|| {
                 format!(
                     "'<' not supported between instances of '{}' and '{}'",
@@ -3287,7 +3315,20 @@ fn sorted_native(
             });
             core::cmp::Ordering::Equal
         }
+        Err(error) => {
+            sort_error.get_or_insert(error);
+            core::cmp::Ordering::Equal
+        }
     });
+    if let Some(error) = sort_error {
+        for (_, item_key) in &decorated {
+            instance.release(*item_key);
+        }
+        for item in &items {
+            instance.release(*item);
+        }
+        return Err(error);
+    }
     if let Some(message) = failure {
         for (_, item_key) in &decorated {
             instance.release(*item_key);

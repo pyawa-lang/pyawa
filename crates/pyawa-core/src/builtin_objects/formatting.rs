@@ -608,22 +608,43 @@ pub fn generic_alias_eq(
     ) else {
         return Ok(instance.not_implemented());
     };
-    let origins_equal = crate::executor::values::values_equal_public(instance, our_origin, their_origin);
+    let origins_equal =
+        match crate::executor::values::values_equal_public(instance, our_origin, their_origin) {
+            Ok(equal) => equal,
+            Err(error) => {
+                for value in [our_origin, our_args, their_origin, their_args] {
+                    instance.release(value);
+                }
+                return Err(error);
+            }
+        };
     let items = instance.tuple_items(our_args);
     let their_items = instance.tuple_items(their_args);
-    let equal = origins_equal
-        && match (items, their_items) {
-            (Some(items), Some(their_items)) => {
-                items.len() == their_items.len()
-                    && items
-                        .iter()
-                        .zip(their_items.iter())
-                        .all(|(left, right)| {
-                            crate::executor::values::values_equal_public(instance, *left, *right)
-                        })
+    let mut equal = false;
+    if origins_equal {
+        if let (Some(items), Some(their_items)) = (items, their_items) {
+            if items.len() != their_items.len() {
+                equal = false;
+            } else {
+                equal = true;
+                for (left, right) in items.iter().zip(their_items.iter()) {
+                    match crate::executor::values::values_equal_public(instance, *left, *right) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            equal = false;
+                            break;
+                        }
+                        Err(error) => {
+                            for value in [our_origin, our_args, their_origin, their_args] {
+                                instance.release(value);
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
             }
-            _ => false,
-        };
+        }
+    }
     // 四个属性各是新引用 ⇒ 比完逐个还 ✓（先前漏还 ⇒ 每次别名比较漏 4 份 ✗，round 222 实测
     // 在 `test_collections` 里累积到 `malloc(): unaligned tcache chunk detected` ✗）。
     for value in [our_origin, our_args, their_origin, their_args] {

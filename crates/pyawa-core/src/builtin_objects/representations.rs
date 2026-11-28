@@ -180,10 +180,12 @@ pub unsafe fn tuple_count_native(
     }
     let wanted = rest[0];
     let items = instance.tuple_items(this).unwrap_or_default();
-    let count = items
-        .into_iter()
-        .filter(|item| crate::executor::values::values_equal_public(instance, *item, wanted))
-        .count() as i64;
+    let mut count = 0i64;
+    for item in items {
+        if crate::executor::values::values_equal_public(instance, item, wanted)? {
+            count += 1;
+        }
+    }
     Ok(instance.new_int(count))
 }
 
@@ -237,7 +239,7 @@ pub unsafe fn tuple_index_native(
     for index in start..stop.min(length) {
         // SAFETY: 下标在范围内 ⇒ item 由本对象持有。
         if let Some(item) = items.get(index as usize).copied() {
-            if crate::executor::values::values_equal_public(instance, item, wanted) {
+            if crate::executor::values::values_equal_public(instance, item, wanted)? {
                 return Ok(instance.new_int(index));
             }
         }

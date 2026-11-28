@@ -5076,6 +5076,12 @@ pub unsafe extern "C" fn pa_rawget(state: *mut pa_state, index: i32) -> i32 {
         let Some(key) = state.stack.get(-1).map(|slot| slot.object) else {
             return status::PA_ERR_INVALID;
         };
+        // **只认 `dict`**（`raw` 语义）：不是 dict ⇒ 如实报用法错误（既有口径，`PA_ERR_INVALID`）。
+        // SAFETY: container 是栈上的存活对象。
+        let container_type = unsafe { container.as_ref() }.ty();
+        if Some(container_type) != state.instance.type_named("dict") {
+            return status::PA_ERR_INVALID;
+        }
         let outcome = raw_lookup(&state.instance, container, key);
         match outcome {
             Ok(Some(value)) => {
@@ -5102,7 +5108,12 @@ pub unsafe extern "C" fn pa_rawget(state: *mut pa_state, index: i32) -> i32 {
                 unsafe { state.instance.incref_object(nil.as_ptr()) };
                 state.stack.push_owned(nil)
             }
-            Err(code) => code,
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                state.message =
+                    std::ffi::CString::new(exception_message(&state.instance, exception.get())).ok();
+                status::PA_ERR_RUNTIME
+            }
+            Err(_) => status::PA_ERR_RUNTIME,
         }
     })
 }
@@ -5125,16 +5136,12 @@ fn raw_lookup(
     instance: &Instance,
     container: NonNull<Header>,
     key: NonNull<Header>,
-) -> Result<Option<NonNull<Header>>, i32> {
-    // SAFETY: container 是存活对象。
-    let container_type = unsafe { container.as_ref() }.ty();
-    if Some(container_type) != instance.type_named("dict") {
-        return Err(status::PA_ERR_INVALID);
-    }
+) -> Result<Option<NonNull<Header>>, pyawa_core::ExecError> {
+    // 调用方（`pa_rawget`）已核过是 `dict`。
     // SAFETY: 类型身份已确认。
     let mapping = unsafe { &*container.as_ptr().cast::<DictObject>() };
     for (existing, value) in mapping.entries() {
-        if pyawa_core::values_equal_public(instance, existing, key) {
+        if pyawa_core::values_equal_public(instance, existing, key)? {
             return Ok(Some(value));
         }
     }

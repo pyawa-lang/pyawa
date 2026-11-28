@@ -252,7 +252,7 @@ fn comparison_and_equality_through_the_object_model_match_the_reference() {
                 .unwrap_or_else(|error| panic!("{symbol} 应当可比：{error:?}"));
             assert_eq!(result, expected, "{symbol}");
         }
-        let equal = values_equal_public(&vm.instance, left, right);
+        let equal = values_equal_public(&vm.instance, left, right).expect("值比较不该失败");
         assert_eq!(equal, row.key("eq").as_bool(), "== 与参照不一致");
         assert_eq!(!equal, row.key("ne").as_bool(), "!= 与参照不一致");
     }

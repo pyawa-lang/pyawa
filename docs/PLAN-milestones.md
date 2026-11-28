@@ -618,7 +618,14 @@ os **1/1**；首跑暴露的 CRLF 问题已由 `ee2c809e` 的 universal-newlines
 「内建→脚本」回调路径改为**宿主声明预算**（`PYAWA_NATIVE_DEPTH`：CLI 512 MiB 线程与对拍 harness
 声明 1000 ⇒ 与参照对齐；ABI／嵌入／wasm 未声明默认 64）⇒ `DIV-11` 收窄为"未声明预算的宿主"。
 可见语义见 round 289 台账与 `tests/conformance/divergences.md` 的 `DIV-11`。
-正文归档：`docs/rounds/04-post-m6-01.md` 的 12.22-调用栈收口 节。
+
+**round 288（A-0，2026-11-28）补充**：S2/S3 只管"脚本帧"；**不经过 `execute` 的内部原生递归**
+此前无守卫（环状容器 `a=[]; a.append(a); b=[]; b.append(b); a==b` 实测 debug/release CLI 都
+`stack overflow, aborting`；参照报 `RecursionError`）。已给 `equality_public`／`values_equal`／
+`key_hash_checked`／`hash_object`／`order_of`／`advance_iterator` 加**深度参数守卫**（口径用现成
+`recursion_limit`，超限抛可捕获 `RecursionError`），错误经 `Result` 全链传播；**未**改
+`MAX_NATIVE_DEPTH`／`MAX_CALL_DEPTH`，A（原生→脚本显式帧栈）未做。
+正文归档：`docs/rounds/04-post-m6-01.md` 的 round 288／289 节。
 
 ### 12.23 Windows 原生 CLI：**已落地（2026-11-17，选项 A）**
 

@@ -790,7 +790,7 @@ pub(crate) fn contains(
         // **哈希索引**（round 70）：先前逐元素线性扫 ⇒ `name in seen` 在 8000 项集合上
         // 2.5 s ⇒ O(n²) ✗（`test_collections.test_large_size` 因此超时）；走
         // `set_contains`（惰性哈希索引 ✓，不可哈希退回线性 ✓）。
-        return Ok(crate::builtin::set::set_contains(instance, container, item).is_some());
+        return Ok(crate::builtin::set::set_contains(instance, container, item)?.is_some());
     }
     // **协议回退**（第 514 轮真 bug 修 ✗）：类型自带 `__contains__` ⇒ 调它 ✓
     // （参照口径：`in` **先**走 `__contains__` ✓、再走 `__iter__` ✓）。

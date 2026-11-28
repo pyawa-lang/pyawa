@@ -23,9 +23,38 @@ use crate::type_object::TypeObject;
 /// 参照实现的 `==` 走 `__eq__` 槽位（随类型系统接线）；本层先按载荷比，
 /// 但**必须**保留 `TS-40` 的可观察后果（`True == 1`、`1 == 1.0` 为真）——
 /// 否则 `{1: 'a', True: 'b'}` 这类字面量会多出一个键，属于对拍里的新差异。
-pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Header>) -> bool {
+#[inline]
+pub(crate) fn values_equal(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+) -> Result<bool, crate::executor::ExecError> {
+    values_equal_at(instance, left, right, 0)
+}
+
+/// **内部原生递归的守卫**（A-0）：超过 `recursion_limit`（默认 1000，`sys.setrecursionlimit` 同口径）
+/// 报**可捕获**的 `RecursionError`，而不是让原生栈溢出 abort。
+///
+/// `depth` 是**参数**而不是实例字段：热路径不引入实例状态，也不需要在错误/中断路径清理。
+pub(crate) fn native_recursion_error(instance: &Instance) -> crate::executor::ExecError {
+    instance.raise_builtin_error(
+        "RecursionError",
+        "maximum recursion depth exceeded",
+    )
+}
+
+/// 带**原生递归深度**的 `values_equal`（见 [`native_recursion_error`]）。
+pub(crate) fn values_equal_at(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    depth: usize,
+) -> Result<bool, crate::executor::ExecError> {
     if left == right {
-        return true;
+        return Ok(true);
+    }
+    if depth > instance.recursion_limit() {
+        return Err(native_recursion_error(instance));
     }
     let (left_int, right_int) = (
         integer_payload(instance, left),
@@ -33,7 +62,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     );
     if let (Some(a), Some(b)) = (left_int, right_int) {
         // 走 `BigInt` 比：`IntValue` 的两种载荷（内联／大整数）数值相等就是相等
-        return a.to_bigint() == b.to_bigint();
+        return Ok(a.to_bigint() == b.to_bigint());
     }
     // **复数相等**（task-30）：任一边是 `complex` ⇒ 两边升到复数塔比 ✓（实测
     // `(1+0j) == 1`／`== 1.0`／`== True` 都真 ✓，`(1+2j) == 1` 假 ✓；与 `str` 等比较一律假 ✓）。
@@ -54,10 +83,10 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
                 }
             }
         };
-        return match (convert(left_complex, left), convert(right_complex, right)) {
+        return Ok(match (convert(left_complex, left), convert(right_complex, right)) {
             (Some(a), Some(b)) => a.0 == b.0 && a.1 == b.1,
             _ => false,
-        };
+        });
     }
     let (left_number, right_number) = (
         numeric_payload(instance, left),
@@ -65,7 +94,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     );
     if let (Some(a), Some(b)) = (left_number, right_number) {
         // *临时*：整数与浮点比时按 f64 走（超大整数与浮点混用时会有精度话题，随协议槽位收口）
-        return a == b;
+        return Ok(a == b);
     }
     // **`bytes`／`bytearray`（含子类）按字节内容相等** ✓（round 100）：参照 `bytearray(b"ab") ==
     // b"ab"` 为真 ✓、`bytearray(b"a") == bytearray(b"a")` 真 ✓ —— 先前只认精确 `bytes` ✗。
@@ -73,7 +102,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         instance.bytes_like_value(left),
         instance.bytes_like_value(right),
     ) {
-        return left_bytes == right_bytes;
+        return Ok(left_bytes == right_bytes);
     }
     let str_type = instance.singletons().str_type();
     // SAFETY: 两个都是存活对象。
@@ -87,7 +116,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     if subtype_of_str(left_type) && subtype_of_str(right_type) {
         // P3-38 S2a-2：按 **WTF-8 字节**相等判 ✓（合法 UTF-8 与旧口径一致；含孤立代理的串也能
         // 正确比较 ✓）。辅助 API 见 `Instance::str_equals`。
-        return instance.str_equals(left, right).unwrap_or(false);
+        return Ok(instance.str_equals(left, right).unwrap_or(false));
     }
     // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
     let subtype_of_bytes = |ty: NonNull<crate::TypeObject>| {
@@ -103,7 +132,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
                 &*right.as_ptr().cast::<BytesObject>(),
             )
         };
-        return left_bytes.value() == right_bytes.value();
+        return Ok(left_bytes.value() == right_bytes.value());
     }
     // **容器按值比**（实测 3.14.4）：`list` 与 `list`、`tuple` 与 `tuple` **递归逐项**比；
     // **不同种类**一律不等（`[1] == (1,)` ⇒ `False`）。`dict`／`set` 仍需 `OM-11` 的
@@ -131,36 +160,52 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
             )
         };
         if a.len() != b.len() {
-            return false;
+            return Ok(false);
         }
         let left_items = a.items();
         let right_items = b.items();
-        return left_items
-            .iter()
-            .zip(right_items.iter())
-            .all(|(left, right)| values_equal(instance, *left, *right));
+        for (left_item, right_item) in left_items.iter().zip(right_items.iter()) {
+            if !values_equal_at(instance, *left_item, *right_item, depth + 1)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
     }
     if is_list(left_type) && is_list(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe { (&*left.as_ptr().cast::<ListObject>(), &*right.as_ptr().cast::<ListObject>()) };
         if a.len() != b.len() {
-            return false;
+            return Ok(false);
         }
-        return (0..a.len()).all(|index| match (a.item(index), b.item(index)) {
-            (Some(x), Some(y)) => values_equal(instance, x, y),
-            _ => false,
-        });
+        for index in 0..a.len() {
+            match (a.item(index), b.item(index)) {
+                (Some(x), Some(y)) => {
+                    if !values_equal_at(instance, x, y, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                _ => return Ok(false),
+            }
+        }
+        return Ok(true);
     }
     if is_tuple(left_type) && is_tuple(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe { (&*left.as_ptr().cast::<TupleObject>(), &*right.as_ptr().cast::<TupleObject>()) };
         if a.len() != b.len() {
-            return false;
+            return Ok(false);
         }
-        return (0..a.len()).all(|index| match (a.item(index), b.item(index)) {
-            (Some(x), Some(y)) => values_equal(instance, x, y),
-            _ => false,
-        });
+        for index in 0..a.len() {
+            match (a.item(index), b.item(index)) {
+                (Some(x), Some(y)) => {
+                    if !values_equal_at(instance, x, y, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                _ => return Ok(false),
+            }
+        }
+        return Ok(true);
     }
 
     // **`GenericAlias` 按值比**（round 222）：参照里 `list[int] == list[int]` 为真 ✓
@@ -181,26 +226,43 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
             attribute(right, "__origin__"),
             attribute(right, "__args__"),
         ) else {
-            return false;
+            return Ok(false);
         };
-        let origins_equal = values_equal(instance, our_origin, their_origin);
+        let origins_equal = match values_equal_at(instance, our_origin, their_origin, depth + 1) {
+            Ok(equal) => equal,
+            Err(error) => {
+                for value in [our_origin, our_args, their_origin, their_args] {
+                    instance.release(value);
+                }
+                return Err(error);
+            }
+        };
         let items = instance.tuple_items(our_args);
         let their_items = instance.tuple_items(their_args);
-        let equal = origins_equal
-            && match (items, their_items) {
+        let mut equal = origins_equal;
+        if equal {
+            equal = match (items, their_items) {
                 (Some(items), Some(their_items)) => {
-                    items.len() == their_items.len()
-                        && items
-                            .iter()
-                            .zip(their_items.iter())
-                            .all(|(left, right)| values_equal(instance, *left, *right))
+                    if items.len() != their_items.len() {
+                        false
+                    } else {
+                        let mut all = true;
+                        for (left_item, right_item) in items.iter().zip(their_items.iter()) {
+                            if !values_equal_at(instance, *left_item, *right_item, depth + 1)? {
+                                all = false;
+                                break;
+                            }
+                        }
+                        all
+                    }
                 }
                 _ => false,
             };
+        }
         for value in [our_origin, our_args, their_origin, their_args] {
             instance.release(value);
         }
-        return equal;
+        return Ok(equal);
     }
 
     // **`dict` 按值比**（实测）：长度相等 ＋ 每个键在右边**按键值相等**找到、且对应值递归相等。
@@ -213,23 +275,23 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
             )
         };
         if a.len() != b.len() {
-            return false;
+            return Ok(false);
         }
         // **按哈希索引查**（`P3-41` round 42）：先前对每个键**线性扫右表** ⇒ `d == d2`
         // 是 O(n²)（`test_dict.test_copy_fuzz` 的 10 万项两个 O(n²) 之一 ✓）。
         let right_mapping = right;
         for (key, value) in a.entries() {
-            let Some(position) = instance.dict_lookup_key(right_mapping, key) else {
-                return false;
+            let Some(position) = instance.dict_lookup_key(right_mapping, key)? else {
+                return Ok(false);
             };
             let Some((_, other_value)) = b.entry(position) else {
-                return false;
+                return Ok(false);
             };
-            if !values_equal(instance, value, other_value) {
-                return false;
+            if !values_equal_at(instance, value, other_value, depth + 1)? {
+                return Ok(false);
             }
         }
-        return true;
+        return Ok(true);
     }
     // **`weakref.ref` 按"指称对象"比** ✓（`P3-41` round 40 修 ✗）：参照的 `ref.__eq__` 比的是
     // **目标**（`weakref.ref(a) == weakref.ref(b)` ⇔ `a == b`；同一目标的两个不同 `ref` 对象也相等 ✓）。
@@ -252,9 +314,9 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         // 才相等（身份；上面 `left == right` 已先判过 ⇒ 这里一律不等 ✓，与参照一致 ✓）。
         return match (a.target(), b.target()) {
             (Some(left_target), Some(right_target)) => {
-                values_equal(instance, left_target, right_target)
+                values_equal_at(instance, left_target, right_target, depth + 1)
             }
-            _ => false,
+            _ => Ok(false),
         };
     }
     // **`set`／`frozenset`**：同族（含跨 `set`／`frozenset`——Python 允许，`{1} == frozenset({1})`
@@ -272,18 +334,30 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
             )
         };
         if a.len() != b.len() {
-            return false;
+            return Ok(false);
         }
-        return (0..a.len()).all(|index| match a.item(index) {
-            Some(item) => (0..b.len()).any(|other| match b.item(other) {
-                Some(candidate) => values_equal(instance, item, candidate),
-                None => false,
-            }),
-            None => false,
-        });
+        for index in 0..a.len() {
+            let Some(item) = a.item(index) else {
+                return Ok(false);
+            };
+            let mut found = false;
+            for other in 0..b.len() {
+                let Some(candidate) = b.item(other) else {
+                    continue;
+                };
+                if values_equal_at(instance, item, candidate, depth + 1)? {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
     }
 
-    false
+    Ok(false)
 }
 
 /// **`str` 文本的哈希**（FNV-1a 64；与 [`key_hash`] 用同一个 ⇒ 调用方可直接按 `&str` 查字典 ✓）。
@@ -407,10 +481,23 @@ fn mix64(mut value: u64) -> u64 {
 /// `bytes`（含子类）／`tuple`（递归）／`weakref`（按**目标**哈希，与 round 40 的相等口径一致 ✓）；
 /// `list`／`dict`／`set`／`bytearray` **不可哈希** ⇒ `None`（调用方退回线性扫；设置键时已由
 /// `reject_unhashable_key` 拒掉 ✓）；其余按**身份**哈希（与 `values_equal` 的"其余按身份"一致 ✓）。
+#[inline]
 pub(crate) fn key_hash_checked(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Result<Option<u64>, crate::ExecError> {
+    key_hash_checked_at(instance, object, 0)
+}
+
+/// 带**原生递归深度**的 `key_hash_checked`（`tuple`／`weakref` 目标链；A-0）。
+fn key_hash_checked_at(
+    instance: &Instance,
+    object: NonNull<Header>,
+    depth: usize,
+) -> Result<Option<u64>, crate::ExecError> {
+    if depth > instance.recursion_limit() {
+        return Err(native_recursion_error(instance));
+    }
     let ty = instance.type_of(object);
     if ty == instance.singletons().none_type() {
         return Ok(Some(mix64(0x4e4f_4e45)));
@@ -438,7 +525,7 @@ pub(crate) fn key_hash_checked(
     if let Some(items) = instance.tuple_items(object) {
         let mut hash = mix64(0x7475_706c_6500_0000);
         for item in items {
-            let Some(lane) = key_hash_checked(instance, item)? else {
+            let Some(lane) = key_hash_checked_at(instance, item, depth + 1)? else {
                 return Ok(None);
             };
             hash = mix64(hash ^ lane);
@@ -455,7 +542,7 @@ pub(crate) fn key_hash_checked(
         }
         match crate::builtin_objects::weakref_state(instance, object).flatten() {
             Some(target) => {
-                let Some(hash) = key_hash_checked(instance, target)? else {
+                let Some(hash) = key_hash_checked_at(instance, target, depth + 1)? else {
                     return Ok(None);
                 };
                 crate::builtin_objects::weakref_store_key_hash(instance, object, hash);
@@ -556,11 +643,15 @@ pub(crate) fn is_iterator_type(instance: &Instance, ty: NonNull<TypeObject>) -> 
 }
 
 /// **相等性**（本层的临时口径，随 `richcompare` 槽位收口）：给宿主面用。
+///
+/// **A-0**：内部容器递归超过 `recursion_limit` ⇒ `Err(RecursionError)`（可捕获；不再让原生栈
+/// 溢出 abort）。调用方**必须**传播这个错误，**禁止**当成 `false` 吞掉（否则环状容器会"静默不等"）。
+#[inline]
 pub fn values_equal_public(
     instance: &Instance,
     left: NonNull<Header>,
     right: NonNull<Header>,
-) -> bool {
+) -> Result<bool, crate::ExecError> {
     values_equal(instance, left, right)
 }
 

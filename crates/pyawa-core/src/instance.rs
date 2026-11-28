@@ -101,20 +101,28 @@ pub enum CapabilityCallError {
     Machine(i32),
 }
 
-/// **Python 层调用深度上限的默认值**（`sys.getrecursionlimit()`；`PLAN §12.22` S2／S3）。
+/// **Python 层调用深度上限的默认值**（`sys.getrecursionlimit()`；`PLAN §12.22` S2／S3 后）。
 ///
-/// 脚本→脚本调用走**显式帧栈**（堆帧，不吃原生栈）⇒ 已对齐参照默认 **1000**；
-/// `sys.setrecursionlimit` **可升**（夹到 `MAX_SAFE_RECURSION_LIMIT`）。原生的
-/// "内建回调→脚本"路径另由 `native_depth_limit`（`D1`）按宿主栈预算守卫。
+/// 语义对齐参照（默认 **1000**；`sys.setrecursionlimit` **可升**，安全上限见
+/// [`MAX_SAFE_RECURSION_LIMIT`]）。脚本→脚本调用已走**显式帧栈**（不吃原生栈）⇒ 这个数只表示
+/// 参照口径的"Python 调用深度"，不再是原生栈的安全值。
+///
+/// **原生栈安全分两层**：① "原生→脚本"回调链由 [`MAX_NATIVE_DEPTH`]（`D1` round 289 起可按宿主
+/// 声明预算，见 [`Instance::native_depth_limit`]）守住；② 不经过 `execute` 的内部原生递归
+/// （容器相等／哈希／迭代器链）由**深度参数守卫**（round 288，A-0）兜住。
 pub const MAX_CALL_DEPTH: usize = 1000;
 
-/// **原生递归深度的默认预算**（`PLAN §12.22` S2 后；`D1` round 289 变为**宿主可声明**）：
+/// **原生递归深度的默认预算**（`PLAN §12.22` S2 后；`D1` round 289 起**宿主可声明**）：
 /// 脚本→脚本调用已走**显式帧栈**（不增加原生栈），只有"原生（内建回调）→ 脚本"这条链仍靠
 /// Rust 递归 ⇒ 单独守卫，超限抛**可捕获** `RecursionError`（**绝不让原生栈崩**；`DIV-11`）。
 ///
 /// `D1`（round 289）：本常量只是**默认值**——宿主可用 `PYAWA_NATIVE_DEPTH` 声明自己的栈预算
 /// （CLI 的 512 MiB 线程与对拍 harness 的 64 MiB 线程声明 1000；ABI／嵌入／wasm 不声明即 64）。
 /// 有效值＝`min(声明值, recursion_limit)`（见 [`Instance::native_depth_limit`]）。
+///
+/// round 288（A-0）：**不经过 `execute` 的内部原生递归**（`equality_public`／`values_equal`／
+/// `key_hash_checked`／`hash_object`／`order_of`／`advance_iterator`）也各自带深度守卫，口径用
+/// `recursion_limit`——它们与本常量无关。
 pub const MAX_NATIVE_DEPTH: usize = 64;
 
 /// **`sys.setrecursionlimit` 的安全上限**（`PLAN §12.22` S3 的"可升＋安全上限"）：

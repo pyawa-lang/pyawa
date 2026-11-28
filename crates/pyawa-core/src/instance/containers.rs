@@ -307,8 +307,18 @@ impl Instance {
         let hash = crate::executor::values::hash_i64(key);
         // 先造一个探针键：命中时它只用于比较（比较完归还）；未命中时**直接当存储键**（省一次分配 ✓）。
         let probe = self.new_int(key);
+        // **A-0**：`probe` 是全新的 `int` ⇒ 结构比较**不可能**进入容器递归分支（`Err` 不可达：
+        // 递归只发生在"两侧同族容器"时）。这里保留 bool 谓词，并用 debug 断言把不可达钉住；
+        // 真出现错误时当"不相等"（探测面不抛），错误载荷显式 drop（不静默、不误报）。
         if let Some(position) = self.dict_lookup_hashed(mapping, hash, |existing| {
-            crate::executor::values_equal_public(self, existing, probe)
+            match crate::executor::values_equal_public(self, existing, probe) {
+                Ok(equal) => equal,
+                Err(error) => {
+                    debug_assert!(false, "dict_set_int 的 int 探针不该触发递归错误");
+                    drop(error);
+                    false
+                }
+            }
         }) {
             // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
             let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
@@ -359,10 +369,34 @@ impl Instance {
         None
     }
 
+    /// **带错误传播的** [`Self::dict_lookup_hashed`]（A-0：键比较可能报 `RecursionError`）。
+    fn dict_lookup_hashed_checked(
+        &self,
+        mapping: NonNull<Header>,
+        hash: u64,
+        mut matches: impl FnMut(NonNull<Header>) -> Result<bool, crate::ExecError>,
+    ) -> Result<Option<usize>, crate::ExecError> {
+        // SAFETY: 调用方保证 mapping 存活。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        dict.ensure_index(|candidate| crate::executor::values::key_hash(self, candidate));
+        for position in dict.candidates(hash) {
+            if let Some((existing, _)) = dict.entry(position) {
+                if matches(existing)? {
+                    return Ok(Some(position));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// **按键对象查字典**（`values_equal` 口径 ✓；不可哈希的键退回线性扫 ✓）。
     /// **按对象键删一项**（round 59，给 `_remove_dead_weakref` 用）：找到就删并归还键值引用 ✓。
     /// 返回是否删掉 ✓。
-    pub fn dict_remove_key(&self, mapping: NonNull<Header>, key: NonNull<Header>) -> bool {
+    pub fn dict_remove_key(
+        &self,
+        mapping: NonNull<Header>,
+        key: NonNull<Header>,
+    ) -> Result<bool, crate::ExecError> {
         // SAFETY: mapping 由调用方保证是本实例的 dict（`dict_entries` 口径 ✓）。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
         // **按哈希索引删**（round 256 性能真 bug 修 ✗）：先前这里走 `find_live_position`
@@ -370,51 +404,54 @@ impl Instance {
         // `WeakValueDictionary` 批量失效是 O(n²)（实测 70k 条目的 copy 测试 **154 s** ✗）。
         // 有哈希就查索引（与 `dict_lookup_key` 同口径 ✓），取不到哈希（不可哈希的怪键）才回退线性 ✓。
         let position = match crate::executor::values::key_hash(self, key) {
-            Some(hash) => self.dict_lookup_hashed(mapping, hash, |candidate| {
+            Some(hash) => self.dict_lookup_hashed_checked(mapping, hash, |candidate| {
                 crate::executor::values::values_equal_public(self, candidate, key)
-            }),
-            None => dict.find_live_position(|candidate| {
+            })?,
+            None => dict.find_live_position_checked(|candidate| {
                 crate::executor::values::values_equal_public(self, candidate, key)
-            }),
+            })?,
         };
         let Some(position) = position else {
-            return false;
+            return Ok(false);
         };
         // SAFETY: `mapping` 由调用方保证是本实例的 dict（`dict_entries` 刚确认过 ✓）。
         let Some((old_key, old_value)) =
             (unsafe { &*mapping.as_ptr().cast::<DictObject>() }).remove(position)
         else {
-            return false;
+            return Ok(false);
         };
         // SAFETY: 这两份引用由字典交出。
         unsafe {
             self.release_object(old_key.as_ptr());
             self.release_object(old_value.as_ptr());
         }
-        true
+        Ok(true)
     }
 
     pub fn dict_lookup_key(
         &self,
         mapping: NonNull<Header>,
         key: NonNull<Header>,
-    ) -> Option<usize> {
+    ) -> Result<Option<usize>, crate::ExecError> {
         if let Some(hash) = crate::executor::values::key_hash(self, key) {
-            return self.dict_lookup_hashed(mapping, hash, |existing| {
+            return self.dict_lookup_hashed_checked(mapping, hash, |existing| {
                 // **键查找按 `==` 语义**（round 116 真 bug 修 ✗）：先前只比"结构相等" ✗ ⇒
                 // 只覆写 `__hash__`／`__eq__` 的用户键（`test_dict.test_str_nonstr` 的 `Key3` ✓）
                 // 明明哈希相同却查不到 ✗。先走结构快路（内建标量／字符串 ✓），不中再走**完整
-                // `==` 协议**（用户 `__eq__`／反射 ✓）；异常按"不相等"处理（查找面不抛 ✓）。
-                if crate::executor::values_equal_public(self, existing, key) {
-                    return true;
+                // `==` 协议**（用户 `__eq__`／反射 ✓）；结构快路的**递归超限**（A-0）照常上抛，
+                // 协议异常仍按"不相等"处理（查找面不抛 ✓）。
+                if crate::executor::values_equal_public(self, existing, key)? {
+                    return Ok(true);
                 }
-                crate::executor::protocol::equality_public(self, existing, key).unwrap_or(false)
+                Ok(crate::executor::protocol::equality_public(self, existing, key).unwrap_or(false))
             });
         }
         // 不可哈希／没覆盖的键 ⇒ 线性兜底（正常路径：设置键时已被拒 ✓）。
         // SAFETY: 调用方保证 mapping 存活。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        dict.find_live_position(|existing| crate::executor::values_equal_public(self, existing, key))
+        dict.find_live_position_checked(|existing| {
+            crate::executor::values_equal_public(self, existing, key)
+        })
     }
 
     /// **可失败的 `dict_lookup_key`**（round 120）：键的 `__hash__`／`__eq__` 抛异常时**原样上抛** ✓
@@ -451,8 +488,9 @@ impl Instance {
                 // 不可哈希 ⇒ 线性兜底（设置键时已被拒 ✓）。
                 // SAFETY: 调用方保证 mapping 存活。
                 let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-                Ok(dict
-                    .find_live_position(|existing| crate::executor::values_equal_public(self, existing, key)))
+                dict.find_live_position_checked(|existing| {
+                    crate::executor::values_equal_public(self, existing, key)
+                })
             }
         }
     }

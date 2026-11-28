@@ -529,7 +529,7 @@ fn operator_element_equals(
             instance.release(value);
             Ok(truth)
         }
-        _ => Ok(pyawa_core::values_equal_public(instance, item, target)),
+        _ => pyawa_core::values_equal_public(instance, item, target),
     }
 }
 
@@ -1160,7 +1160,8 @@ mod tests {
         // stdlib 禁 `unsafe` ⇒ 用**安全**的 `values_equal_public` 间接核对：拼出来的是新列表且两项
         let expected = instance.new_list(vec![instance.new_str("x"), instance.new_str("y")]);
         assert!(
-            pyawa_core::executor::values::values_equal_public(&instance, joined, expected),
+            pyawa_core::executor::values::values_equal_public(&instance, joined, expected)
+                .expect("值比较不该失败"),
             "两个列表拼接应当与 [\"x\", \"y\"] 值相等"
         );
         // `add` 走同一条路（序列也是拼接）
