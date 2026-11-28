@@ -156,11 +156,12 @@ impl Lexed {
     /// `CompileError::Memory`（参照同文案的 `MemoryError`，不再撞穿原生栈）。
     pub(super) fn check_parse_stack(&self) -> Result<(), CompileError> {
         let here = stack_address();
-        let used = if self.stack_base > here {
-            self.stack_base - here
-        } else {
-            here - self.stack_base
-        };
+        // **只算"比 lexer 基准更深"的部分**：`stack_base` 记在 `lex` 帧里，而 parser 是在
+        // `lex` 返回后、从更浅的 `compile` 帧开始的（栈向下增长 ⇒ parser 初始地址比 base 高）。
+        // 若把两者绝对差当用量，会把 **lexer 帧大小**误算成 parser 用量（Windows debug 的 lexer
+        // 帧更大 ⇒ ABI 小脚本误报 MemoryError，PR CI 实测）。⇒ 用 `saturating_sub`，只有 parser
+        // 递归深过 base 才开始计数。
+        let used = self.stack_base.saturating_sub(here);
         if used > self.stack_budget {
             return Err(CompileError::Memory(
                 "Parser stack overflowed - Python source too complex to parse".to_owned(),
