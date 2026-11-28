@@ -110,9 +110,27 @@ pub(crate) fn exception_instance(
 }
 
 /// 造一个 `StopIteration`（可选带返回值——参照实现把它放进 `.value`）。
+///
+/// **round 294**：`value` 是 `None` 单例时按参照**不带实参**（`args == ()`、`exc.value is None`）
+/// —— 参照 3.14.4 实测：隐式 `return`／裸 `return`／`return None`／`return <值为 None 的变量>`
+/// 的生成器收尾都给 `StopIteration()`，只有非 `None` 的值才进 `args[0]`（`send()` 与 `next()`
+/// 同一处）。`Some` 那份是**调用方交来的新引用**；转成"无实参"时必须归还它（否则每次 `None`
+/// 收尾漏一份单例引用）。
 pub(crate) fn stop_iteration(instance: &Instance, value: Option<NonNull<Header>>) -> ExecError {
     let ty = instance.hot_type(HotId::StopIteration)
         .expect("异常层次在引导期已登记");
+    let value = match value {
+        Some(value) => {
+            if value == instance.singletons().none() {
+                // 归还调用方交来的那份 `None` 单例引用（见上）。
+                instance.release(value);
+                None
+            } else {
+                Some(value)
+            }
+        }
+        None => None,
+    };
     let args: Vec<NonNull<Header>> = match value {
         Some(value) => vec![value],
         None => Vec::new(),

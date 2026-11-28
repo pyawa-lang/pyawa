@@ -2646,8 +2646,11 @@ fn round_native(
     }
 }
 
-/// `next(iterator[, default])`（第 142 轮）：走执行器**同一处** `advance` ✓（内建迭代器 ＋
-/// `__next__` 协议 ✓）；耗尽时有 `default` 给 `default` ✓，没有就抛 `StopIteration` ✓。
+/// `next(iterator[, default])`（第 142 轮；round 294 修 `StopIteration.value`）：推进语义在
+/// 核心的 `next_value`（`for` 循环与 `next()` 共用同一套内建迭代器推进；差别只在耗尽时
+/// `StopIteration` 的处置 —— `next()` 要把生成器 `return` 值作为 `.value` **原样**抛回／有
+/// `default` 时吞掉）。此前这里拿 `Option` 的 `None` 就造空 `StopIteration` ⇒ `.value` 是
+/// 空串 ✗（生成器 `return 42` 的 `.value` 丢了）。
 fn next_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -2655,13 +2658,7 @@ fn next_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "next", args, 1)?;
-    match instance.advance_iterator(args[0])? {
-        Some(item) => Ok(item),
-        None => match args.get(1) {
-            Some(default) => Ok(*default),
-            None => Err(instance.raise_builtin_error("StopIteration", "")),
-        },
-    }
+    pyawa_core::executor::iter_advance::next_value(instance, args[0], args.get(1).copied())
 }
 
 /// `list([iterable])`（第 130 轮）：空表或把可迭代项收进来 ✓。

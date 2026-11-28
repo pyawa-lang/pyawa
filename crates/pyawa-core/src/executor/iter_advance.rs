@@ -4,6 +4,10 @@
 //! itertools 状态机），与 `format` 族无关；先前它随 format 族一起落在 `format.rs` ⇒ 文件职责错位
 //! （`format.rs` 1358 行里 1024 行是它）。调用方仍走 `crate::executor::advance_iterator`
 //! （父模块 `pub(crate) use` 再导出）✓。
+//!
+//! **round 294 追加**（独立旧 bug 修，不是上面的"原样搬来"口径）：`next()` 内建改用
+//! [`next_value`] —— 耗尽时把 `__next__` 抛的 `StopIteration` **原样**抛回（生成器 `return x`
+//! 的 `.value` 就是 `x`），而 `for` 循环仍走 [`advance_iterator`]（不需要结束值，行为不变）。
 
 use crate::executor::*;
 use crate::HotId;
@@ -105,6 +109,63 @@ pub(crate) fn advance_iterator(
     advance_iterator_at(instance, iterator, opcode, 0)
 }
 
+/// **`next(iterator[, default])` 的推进语义**（round 294 旧 bug 修 —— `next(gen)` 丢掉
+/// `StopIteration.value`）。
+///
+/// 与 [`advance_iterator`] 的唯一差别是"**耗尽时怎么处置 `StopIteration`**"：
+/// - **内建迭代器**耗尽（`tp_iternext` 返回 NULL 的口径）⇒ `Ok(None)`，由本函数造
+///   **无实参**的 `StopIteration()` ⇒ `.value is None`、`args == ()`（与参照一致 ✓）；
+/// - **`__next__` 协议**（生成器／用户迭代器）抛 `StopIteration`：
+///   - 无 `default` ⇒ 把那个异常**原样抛回**：`.value`＝生成器 `return` 值（无 `return` ⇒
+///     `None`），`args`／子类／异常身份都不丢 ✓ —— 参照就是"传播同一个异常对象"；
+///   - 有 `default` ⇒ 吞掉它（连 `pending_exception` 槽那份一起还，round 169 口径）并交
+///     `default` ✓。
+/// - 其余错误原样上抛；`for` 循环**不走这里**（它不需要 `.value`，见 [`advance_iterator`]）。
+pub fn next_value(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    default: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: iterator 是存活对象（调用方契约同 `advance_iterator`）。
+    let ty = unsafe { iterator.as_ref() }.ty();
+    if is_iterator_type(instance, ty) {
+        return match advance_iterator(instance, iterator, 0)? {
+            Some(item) => Ok(item),
+            None => match default {
+                Some(default) => Ok(default),
+                // **无实参**的 `StopIteration()`（`.value is None`）；走公共构造函数 ⇒ 与旧路径
+                // 同样挂回溯／写 `pending_exception` 槽（`args` 由 `['']` 改成 `[]` 才是修的那一格）。
+                None => Err(crate::executor::raise_builtin_with_args_public(
+                    instance,
+                    "StopIteration",
+                    Vec::new(),
+                )),
+            },
+        };
+    }
+    match call_next_method(instance, iterator, 0) {
+        Ok(value) => Ok(value),
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 是存活对象。
+            let raised = unsafe { exception.get().as_ref() }.ty();
+            let stop = instance.hot_type(HotId::StopIteration).expect("StopIteration 已登记");
+            if !instance.is_subtype(raised, stop) {
+                return Err(ExecError::Raised { exception });
+            }
+            match default {
+                Some(default) => {
+                    // 吞异常要连 `pending_exception` 槽那份一起还（round 169 的真 bug 口径）。
+                    exception.discard();
+                    Ok(default)
+                }
+                // **原样抛回**：生成器 `return x` 的 `x` 就是 `StopIteration.value`（`args[0]`）✓。
+                None => Err(ExecError::Raised { exception }),
+            }
+        }
+        Err(other) => Err(other),
+    }
+}
+
 /// 带**原生递归深度**的迭代器推进（内建迭代器链／trampoline 之前；A-0）。
 ///
 /// 嵌套内建迭代器（`map(map(...))`、`zip`、`islice` 等）靠本函数递归推进；超过
@@ -122,41 +183,9 @@ fn advance_iterator_at(
     let ty = unsafe { iterator.as_ref() }.ty();
     if !is_iterator_type(instance, ty) {
         // 不是内建迭代器 ⇒ 走 **`__next__` 协议**（`OM-11` 的属性通道）；
-        // 耗尽（`StopIteration`）与参照一致地给 `None`。
-        let method = match attribute_optional(instance, iterator, "__next__") {
-            Ok(Some(method)) => method,
-            Ok(None) => {
-                let iterator_type = unsafe { iterator.as_ref() }.ty();
-                let name = instance.type_name(iterator_type).to_owned();
-                if crate::diag::flag_site!("PYAWA_ITER_DEBUG") {
-                    eprintln!(
-                        "[advance_iterator] 不可迭代：type={name} site={}",
-                        instance.current_site()
-                    );
-                }
-                // **用户自定义类的迭代器 ⇒ 参照口径的 `TypeError`**（round 135）：`test_iter.test_3720`
-                // 的 `BadIterator` 在 `__next__` 里 `del BadIterator.__next__` ⇒ 参照抛
-                // `TypeError: 'BadIterator' object is not iterable` 且被测试捕获 ✓；先前落 `Unsupported`
-                //（宿主当"未接线"直接 abort）✗ ⇒ `test_iter` 整档被首格截断 ✓。
-                // **内建迭代器保持 `Unsupported`**（既有口径）：改成 `TypeError` 会让 `test_itertools`
-                // 的 10M 空链用例走异常路径变慢（113 s ⇒ 越过 120 s 线 ⇒ 该套件 ok→timeout ✗，实测过 ✓）。
-                if instance.is_user_type_object(iterator_type) {
-                    instance.release(iterator);
-                    return Err(instance.raise_builtin_error(
-                        "TypeError",
-                        &format!("'{name}' object is not iterable"),
-                    ));
-                }
-                return Err(ExecError::Unsupported {
-                    opcode,
-                    what: "这个对象既不是内建迭代器，也没有 `__next__`",
-                });
-            }
-            Err(error) => return Err(error),
-        };
-        let result = call_value(instance, method, &[], &[]);
-        release(instance, method);
-        return match result {
+        // 耗尽（`StopIteration`）与参照一致地给 `None`（结束值在**这里不要**：`for` 循环不用
+        // `.value`；`next()` 走 [`next_value`]，那里把异常原样抛回、`.value` 不丢）。
+        return match call_next_method(instance, iterator, opcode) {
             Ok(value) => Ok(Some(value)),
             Err(ExecError::Raised { exception }) => {
                 // SAFETY: exception 是存活对象。
@@ -324,6 +353,52 @@ fn advance_iterator_at(
         item
     };
     Ok(Some(item))
+}
+
+/// 调一次 **`__next__` 协议**（`OM-11` 的属性通道）：返回下一个值（新引用）或**原样**的错误。
+///
+/// 只做"找方法 → 调 → 还方法"；`StopIteration` 怎么处置由**调用方**决定：
+/// `for` 循环吞掉（[`advance_iterator_at`]），`next()` **原样抛回**（[`next_value`]，round 294）。
+fn call_next_method(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let method = match attribute_optional(instance, iterator, "__next__") {
+        Ok(Some(method)) => method,
+        Ok(None) => {
+            // SAFETY: iterator 是存活对象。
+            let iterator_type = unsafe { iterator.as_ref() }.ty();
+            let name = instance.type_name(iterator_type).to_owned();
+            if crate::diag::flag_site!("PYAWA_ITER_DEBUG") {
+                eprintln!(
+                    "[advance_iterator] 不可迭代：type={name} site={}",
+                    instance.current_site()
+                );
+            }
+            // **用户自定义类的迭代器 ⇒ 参照口径的 `TypeError`**（round 135）：`test_iter.test_3720`
+            // 的 `BadIterator` 在 `__next__` 里 `del BadIterator.__next__` ⇒ 参照抛
+            // `TypeError: 'BadIterator' object is not iterable` 且被测试捕获 ✓；先前落 `Unsupported`
+            //（宿主当"未接线"直接 abort）✗ ⇒ `test_iter` 整档被首格截断 ✓。
+            // **内建迭代器保持 `Unsupported`**（既有口径）：改成 `TypeError` 会让 `test_itertools`
+            // 的 10M 空链用例走异常路径变慢（113 s ⇒ 越过 120 s 线 ⇒ 该套件 ok→timeout ✗，实测过 ✓）。
+            if instance.is_user_type_object(iterator_type) {
+                instance.release(iterator);
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{name}' object is not iterable"),
+                ));
+            }
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "这个对象既不是内建迭代器，也没有 `__next__`",
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    let result = call_value(instance, method, &[], &[]);
+    release(instance, method);
+    result
 }
 
 /// `list_reverseiterator` 的推进分支（从 `advance_iterator` 原样搬来）。
