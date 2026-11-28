@@ -781,16 +781,17 @@ impl Emitter {
         self.emit_named(span, "GET_YIELD_FROM_ITER", 0);
         let loop_label = self.new_label();
         let done = self.new_label();
-        self.mark_label(loop_label);
+        // **A-2a：与 CPython 3.14 同形状**（`...; LOAD_CONST None; L: SEND; YIELD_VALUE 1;
+        // RESUME 2; JUMP_BACKWARD L; END_SEND` —— **循环标签在 `SEND` 上**、循环尾**没有**
+        // `POP_TOP`）。旧形状把标签打在 `LOAD_CONST None` 前、循环尾多一条 `POP_TOP`：
+        // 恢复时送进来的值被 POP_TOP 吃掉、下一轮又重压 `None` ⇒ `gen.send(x)` 的值到不了
+        // 被委托的生成器（对照 python3 3.14.4 实测 ✗；A-2a 修）。
         let none_index = self.intern_constant(Constant::None);
         self.emit_indexed(span, "LOAD_CONST", none_index);
+        self.mark_label(loop_label);
         self.emit_directed_jump(span, opcode::opcode("SEND").expect("SEND 在表里"), done, false);
         self.emit_named(span, "YIELD_VALUE", 1);
         self.emit_named(span, "RESUME", 2);
-        // **收走"恢复时送进来的值"**：本层 `YIELD_VALUE`／`RESUME` 的语义与参照不同 ⇒ 不收走的话，
-        // 下一轮 `SEND` 会把那个值当迭代器 ⇒ 报"既不是内建迭代器，也没有 `__next__`" ✗
-        // （实测：去掉它 `yield from [1, 2]` 当场坏 ✓）。
-        self.emit_named(span, "POP_TOP", 0);
         self.emit_directed_jump(
             span,
             opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT").expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
