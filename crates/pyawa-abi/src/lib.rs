@@ -2383,8 +2383,11 @@ fn exec_error_status(error: &ExecError) -> i32 {
         ExecError::Interrupted => status::PA_ERR_INTERRUPT,
         ExecError::Raised { .. } => status::PA_ERR_RUNTIME,
         ExecError::Decode(_) | ExecError::Frame(_) | ExecError::FellOffEnd => status::PA_ERR_RUNTIME,
-        // **不该逃到 ABI 边界**（`PLAN §12.22` S2 的内部信号；`execute` 驱动会消费它）⇒ 如实当内部错误。
-        ExecError::DeferredScriptCall { .. } => status::PA_ERR_RUNTIME,
+        // **不该逃到 ABI 边界**（`PLAN §12.22` S2／A-2a 的内部信号；`execute` 驱动会消费它们）
+        // ⇒ 如实当内部错误。
+        ExecError::DeferredScriptCall { .. } | ExecError::DeferredGeneratorSend { .. } => {
+            status::PA_ERR_RUNTIME
+        }
     }
 }
 
@@ -2405,6 +2408,9 @@ fn exec_error_text(error: &ExecError) -> String {
         ExecError::Raised { .. } => "脚本抛出异常".to_owned(),
         ExecError::DeferredScriptCall { .. } => {
             "内部错误：延迟脚本调用逃逸到 ABI 边界（驱动未消费）".to_owned()
+        }
+        ExecError::DeferredGeneratorSend { .. } => {
+            "内部错误：延迟生成器委托逃逸到 ABI 边界（驱动未消费）".to_owned()
         }
     }
 }
