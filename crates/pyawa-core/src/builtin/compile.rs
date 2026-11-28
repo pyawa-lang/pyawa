@@ -40,6 +40,7 @@ fn compile_error_text(error: &crate::compile::CompileError) -> String {
         crate::compile::CompileError::Syntax(message) => message.clone(),
         crate::compile::CompileError::Unsupported(message) => message.clone(),
         crate::compile::CompileError::TypeAssignment(message) => message.clone(),
+        crate::compile::CompileError::Memory(message) => message.clone(),
     }
 }
 
@@ -292,8 +293,11 @@ pub fn eval_source_public(
         crate::compile::CheckTier::Shallow,
         0,
     )
-    .map_err(|error| {
-        instance.raise_builtin_error("SyntaxError", &compile_error_text(&error))
+    .map_err(|error| match error {
+        crate::compile::CompileError::Memory(message) => {
+            instance.raise_builtin_error("MemoryError", &message)
+        }
+        _ => instance.raise_builtin_error("SyntaxError", &compile_error_text(&error)),
     })?;
     let template = crate::compile::instantiate(instance, &unit);
     let code = code_with_filename(instance, &template, "<eval>");
@@ -536,7 +540,12 @@ pub fn compile_native(
             optimization,
         )
     }
-    .map_err(|error| syntax_error(instance, &filename, &wrapped, &compile_error_text(&error)))?;
+    .map_err(|error| match error {
+        crate::compile::CompileError::Memory(message) => {
+            instance.raise_builtin_error("MemoryError", &message)
+        }
+        _ => syntax_error(instance, &filename, &wrapped, &compile_error_text(&error)),
+    })?;
     let template = crate::compile::instantiate(instance, &unit);
     Ok(code_with_filename(instance, &template, &filename))
 }

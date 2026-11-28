@@ -94,6 +94,7 @@ pub(crate) fn parse_statements(
     // **到行尾即止** ✓（第 174 轮）：单行体（`def f(): pass` ✓）用 ✓ —— 走到 `Newline` 就交给调用方 ✓。
     stop_at_newline: bool,
 ) -> Result<Vec<Statement>, CompileError> {
+    lexed.check_parse_stack()?;
     let tokens = &lexed.lexemes;
     let mut statements = Vec::new();
     loop {

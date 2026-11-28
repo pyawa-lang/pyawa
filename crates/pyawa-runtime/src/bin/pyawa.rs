@@ -288,6 +288,11 @@ pub fn run() {
         if std::env::var_os("PYAWA_NATIVE_DEPTH").is_none() {
             std::env::set_var("PYAWA_NATIVE_DEPTH", "1000");
         }
+        // **编译期栈预算**（parser/emitter 递归守卫）：CLI 执行线程 512 MiB ⇒ 声明 64 MiB
+        // （超限报参照同文案的 `MemoryError: Parser stack overflowed`，不再 abort）。
+        if std::env::var_os("PYAWA_PARSE_STACK").is_none() {
+            std::env::set_var("PYAWA_PARSE_STACK", "67108864");
+        }
         // **主机名**（round 117）：`_socket.gethostname()` 的取值来源（stdlib 不碰文件系统 ✓）；
         // 只读 `/proc/sys/kernel/hostname`（Linux；失败就给 `localhost` ✓）。
         if std::env::var_os("PYAWA_HOSTNAME").is_none() {

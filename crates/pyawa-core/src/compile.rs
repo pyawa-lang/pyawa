@@ -281,6 +281,12 @@ pub enum CompileError {
     /// 也不是"还没接线"，而是**程序写错了类型**（消息含变量名／期望／实际／位置）。
     /// 导入时映射成 `TypeAssignmentError`（与运行期赋值检查同族，`TS-47`）。
     TypeAssignment(String),
+    /// **编译期栈预算超限**（深嵌套源码；消息对齐参照的
+    /// `MemoryError: Parser stack overflowed - Python source too complex to parse`）。
+    ///
+    /// 本层的 parser/emitter 是 Rust 递归 ⇒ 用**实际栈用量预算**守住（`PYAWA_PARSE_STACK`，
+    /// 见 `Lexed::check_parse_stack`）；参照用堆上的 parser stack，超限同样报 `MemoryError`。
+    Memory(String),
 }
 
 /// 源码里的一段跨度（行从 1 起、列从 0 起）。
@@ -517,6 +523,7 @@ fn diagnostic_from_error(filename: &str, error: &CompileError) -> Diagnostic {
         CompileError::Syntax(message) => ("syntax", message.clone()),
         CompileError::Unsupported(message) => ("unsupported", message.clone()),
         CompileError::TypeAssignment(message) => ("type", message.clone()),
+        CompileError::Memory(message) => ("memory", message.clone()),
     };
     let (line, col) = extract_message_location(&message);
     Diagnostic {

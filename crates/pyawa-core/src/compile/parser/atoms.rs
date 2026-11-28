@@ -159,6 +159,7 @@ pub(crate) fn constant_slice(
 }
 
 pub(crate) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    lexed.check_parse_stack()?;
     let span = lexed
         .spans
         .get(cursor)

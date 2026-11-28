@@ -128,6 +128,53 @@ pub(super) struct Lexed {
     /// **只在括号深度 > 0 时记**（深度 0 的换行本来就是 `Newline` 词素 ✓）；纯 Python 模式
     /// 也照记，但只有扩展模式的 `lambda` 体读它 ⇒ `.py` 的解析与产物**逐字节不变**（`TS-5`）。
     pub(super) line_breaks: Vec<usize>,
+    /// **编译期栈预算**（parser/emitter 递归守卫；`PYAWA_PARSE_STACK`，默认 512 KiB）：
+    /// `stack_base` 是 `lex` 入口处的栈地址近似值（本轮之前没有更早的编译帧持有点）。
+    pub(super) stack_base: usize,
+    pub(super) stack_budget: usize,
+}
+
+/// 当前栈地址的近似值（`&局部变量` 即可）——只用于**相对**比较，不要求精确。
+fn stack_address() -> usize {
+    let marker = 0u8;
+    core::ptr::addr_of!(marker) as usize
+}
+
+/// 编译期栈预算（字节）：默认 512 KiB（小栈宿主也留余量）；`PYAWA_PARSE_STACK` 覆盖，
+/// 夹到 [64 KiB, 256 MiB]。CLI／对拍 harness 声明 64 MiB（512 MiB／64 MiB 线程）。
+fn parse_stack_budget() -> usize {
+    // **profile 相关默认**：debug 的 parser 帧大得多（Windows debug 实测：Lib 模块的正常嵌套
+    // 解析超过 512 KiB ⇒ 误报），故 debug 默认 4 MiB；release 帧小，默认 512 KiB（小栈宿主更安全）。
+    // 两者都可用 `PYAWA_PARSE_STACK` 覆盖（CLI／对拍 harness 声明 64 MiB）。
+    #[cfg(debug_assertions)]
+    const DEFAULT: usize = 4 * 1024 * 1024;
+    #[cfg(not(debug_assertions))]
+    const DEFAULT: usize = 512 * 1024;
+    std::env::var("PYAWA_PARSE_STACK")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(64 * 1024, 256 * 1024 * 1024))
+        .unwrap_or(DEFAULT)
+}
+
+impl Lexed {
+    /// **编译期栈守卫**（parser 的递归下降入口调用）：已用栈超过预算 ⇒
+    /// `CompileError::Memory`（参照同文案的 `MemoryError`，不再撞穿原生栈）。
+    pub(super) fn check_parse_stack(&self) -> Result<(), CompileError> {
+        let here = stack_address();
+        // **只算"比 lexer 基准更深"的部分**：`stack_base` 记在 `lex` 帧里，而 parser 是在
+        // `lex` 返回后、从更浅的 `compile` 帧开始的（栈向下增长 ⇒ parser 初始地址比 base 高）。
+        // 若把两者绝对差当用量，会把 **lexer 帧大小**误算成 parser 用量（Windows debug 的 lexer
+        // 帧更大 ⇒ ABI 小脚本误报 MemoryError，PR CI 实测）。⇒ 用 `saturating_sub`，只有 parser
+        // 递归深过 base 才开始计数。
+        let used = self.stack_base.saturating_sub(here);
+        if used > self.stack_budget {
+            return Err(CompileError::Memory(
+                "Parser stack overflowed - Python source too complex to parse".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// 解一个 `bytes` 字面量里的转义（`characters` 从**反斜杠**那一位开始）。
@@ -1354,7 +1401,14 @@ pub(super) fn lex(source: &str, mode: Mode) -> Result<Lexed, CompileError> {
     }
     lexemes.push(Lexeme::End);
     spans.push(end_span);
-    Ok(Lexed { lexemes, spans, mode, line_breaks })
+    Ok(Lexed {
+        lexemes,
+        spans,
+        mode,
+        line_breaks,
+        stack_base: stack_address(),
+        stack_budget: parse_stack_budget(),
+    })
 }
 
 // ---- 语法 ----

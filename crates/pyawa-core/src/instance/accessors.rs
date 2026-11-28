@@ -106,6 +106,9 @@ impl Instance {
             // 交回消息（参照 `exec("...")` 的 `.msg` 就是语法错误原文，不带 `Syntax(...)` 包装）。
             let message = match &error {
                 crate::compile::CompileError::Syntax(message) => message.clone(),
+                crate::compile::CompileError::Memory(message) => {
+                    return self.raise_builtin_error("MemoryError", message);
+                }
                 _ => format!("{error:?}"),
             };
             self.raise_builtin_error("SyntaxError", &message)
@@ -150,6 +153,9 @@ impl Instance {
             // 交回消息（参照 `exec("...")` 的 `.msg` 就是语法错误原文，不带 `Syntax(...)` 包装）。
             let message = match &error {
                 crate::compile::CompileError::Syntax(message) => message.clone(),
+                crate::compile::CompileError::Memory(message) => {
+                    return self.raise_builtin_error("MemoryError", message);
+                }
                 _ => format!("{error:?}"),
             };
             self.raise_builtin_error("SyntaxError", &message)
